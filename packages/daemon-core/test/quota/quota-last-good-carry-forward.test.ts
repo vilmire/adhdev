@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { carryForwardLastGoodWindows } from '../../src/quota/refresh.js';
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
@@ -25,7 +26,7 @@ const okReading = (): MeshNodeFactsProviderQuota => ({
     weekly: { usedPercent: 71, windowMinutes: 10080, resetsAt: null },
     updatedAt: 1_700_000,
     error: null,
-    metadata: { source: 'oauth' },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'oauth' },
 });
 
 const failure = (failureKind: string): MeshNodeFactsProviderQuota => ({
@@ -35,7 +36,7 @@ const failure = (failureKind: string): MeshNodeFactsProviderQuota => ({
     weekly: null,
     updatedAt: 2_000_000,
     error: `kimi ${failureKind}`,
-    metadata: { source: 'oauth', failureKind },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'oauth', failureKind },
 });
 
 describe('carryForwardLastGoodWindows', () => {

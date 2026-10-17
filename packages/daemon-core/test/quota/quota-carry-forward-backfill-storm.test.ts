@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 /**
  * THE CARRY-FORWARD BACKFILL STORM — regression cover for the defect that
  * defeated the 2026-08-21 axis split on exactly the providers it was built to
@@ -33,7 +34,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const fetchKimiQuota = vi.fn()
 const fetchCodexQuota = vi.fn()
 
-vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
+vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota, readKimiQuotaAccountLineage: () => CONFIRMED_FIXTURE_LINEAGE }))
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 
 const { QUOTA_FAILURE_MAX_RETRIES, QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, isSnapshotStaleForRouting, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
@@ -50,7 +51,7 @@ const okQuota = (provider: string, updatedAt: number) => ({
     updatedAt,
     error: null,
     status: 'ok' as const,
-    metadata: {},
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE },
 })
 
 /** A transient failure of the kind kimi's expiring OAuth token produces. */
@@ -61,7 +62,7 @@ const expiredToken = (provider: string, updatedAt: number) => ({
     updatedAt,
     error: 'token expired',
     status: 'error' as const,
-    metadata: { failureKind: 'expired-token' as const, retryAtMs: updatedAt + 1000 },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'expired-token' as const, retryAtMs: updatedAt + 1000 },
 })
 
 const allEnabled = () => true

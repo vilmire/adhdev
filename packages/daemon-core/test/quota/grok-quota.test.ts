@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fetchGrokQuota } from '../../src/quota/fetchers/grok';
+import { fetchGrokQuota, readGrokQuotaAccountLineage } from '../../src/quota/fetchers/grok';
 import type { QuotaFetch, QuotaFetchResponse } from '../../src/quota/fetchers/deps';
+import { clearQuotaCache, hydrateQuotaCacheFromDisk, readQuotaCache, refreshQuotaCacheOnce } from '../../src/quota/refresh.js';
 import { WEEKLY_WINDOW_MINUTES } from '../../src/quota/types';
 
 const NOW = Date.UTC(2026, 7, 15, 8, 0, 0);
@@ -110,6 +111,7 @@ function liveBillingBodyWithTier() {
 }
 
 afterEach(() => {
+    clearQuotaCache();
     while (tempDirs.length > 0) {
         const dir = tempDirs.pop();
         if (dir) {
@@ -420,4 +422,72 @@ describe('fetchGrokQuota', () => {
         expect(quota.metadata?.failureKind).toBe('parse');
         expect(stub.calls).toEqual([]);
     });
+});
+
+
+describe('Grok credential lineage during collection', () => {
+    const jwt = (subject: string, nonce: string) => ['e30', Buffer.from(JSON.stringify({ iss: 'https://auth.x.ai', sub: subject, jti: nonce })).toString('base64url'), 'signature'].join('.');
+    it.each(['success', 'network', 'expired'])('discards %s under an account changed during the attempt', async (kind) => {
+        const home = makeGrokHome(authFile({ key: jwt('fixture-a', 'one'), ...(kind === 'expired' ? { expires_at: new Date(NOW - 10_000).toISOString() } : {}) }));
+        const replace = () => writeFileSync(join(home, 'auth.json'), JSON.stringify(authFile({ key: jwt('fixture-b', 'two') })));
+        const fetch: QuotaFetch = async () => { replace(); if (kind === 'network') throw new Error('fixture network failure'); return jsonResponse(liveBillingBody()); };
+        const promise = fetchGrokQuota(deps(home, fetch));
+        if (kind === 'expired') replace(); // the async result has not been published yet
+        const result = await promise;
+        expect(result.weekly).toBeNull();
+        expect(result.session).toBeNull();
+        expect(result.metadata?.lineageUncertain).toBe(true);
+        expect(result.error).not.toMatch(/signed.out|log.in/i);
+    });
+    it('accepts rotation for the same issuer/subject without storing credentials or identifiers', async () => {
+        const token = jwt('fixture-same', 'before');
+        const home = makeGrokHome(authFile({ key: token }));
+        const result = await fetchGrokQuota(deps(home, async () => {
+            writeFileSync(join(home, 'auth.json'), JSON.stringify(authFile({ key: jwt('fixture-same', 'after') })));
+            return jsonResponse(liveBillingBody());
+        }));
+        expect(result.status).toBe('ok');
+        expect(result.session).toBeNull();
+        expect(result.metadata?.accountLineage?.kind).toBe('account');
+        expect(JSON.stringify(result)).not.toMatch(/fixture-same|signature|before|after|grok-access-token/);
+    });
+});
+
+
+describe('Grok local cache lineage validation', () => {
+    it('reads stable identity from the selected owning-CLI credential without a network call, including expiry', () => {
+        const jwt = (subject: string, exp: number) => ['e30', Buffer.from(JSON.stringify({ iss: 'https://auth.x.ai', sub: subject, exp })).toString('base64url'), 'signature'].join('.');
+        const home = makeGrokHome(authFile({ key: jwt('fixture-owner', 1), expires_at: new Date(NOW - 10_000).toISOString() }));
+        const before = readGrokQuotaAccountLineage({ env: { GROK_HOME: home }, now: () => NOW });
+        writeFileSync(join(home, 'auth.json'), JSON.stringify(authFile({ key: jwt('fixture-owner', 2) })));
+        expect(readGrokQuotaAccountLineage({ env: { GROK_HOME: home }, now: () => NOW })).toEqual(before);
+        writeFileSync(join(home, 'auth.json'), JSON.stringify(authFile({ key: jwt('different-fixture', 3) })));
+        expect(readGrokQuotaAccountLineage({ env: { GROK_HOME: home }, now: () => NOW })).not.toEqual(before);
+        expect(before.kind).toBe('account');
+        expect(JSON.stringify(before)).not.toMatch(/fixture|auth.x.ai|signature/);
+    });
+});
+
+
+it('keeps Grok account billing through same-account restart and refuses a different local account at hydration', async () => {
+    const jwt = (sub: string, nonce: string) => ['e30', Buffer.from(JSON.stringify({ iss: 'https://auth.x.ai', sub, jti: nonce })).toString('base64url'), 'signature'].join('.');
+    const home = makeGrokHome(authFile({ key: jwt('fixture-a', 'before') }));
+    const configEnv = { ADHDEV_CONFIG_DIR: process.env.ADHDEV_CONFIG_DIR!, GROK_HOME: home };
+    await refreshQuotaCacheOnce([{ provider: 'grok-cli', fetch: () => fetchGrokQuota(deps(home, async () => jsonResponse(liveBillingBody()))) }], undefined,
+        { readAccountLineage: () => readGrokQuotaAccountLineage({ env: configEnv, now: () => NOW }) });
+    const measured = readQuotaCache()?.['grok-cli'];
+    expect(measured?.weekly?.usedPercent).toBe(1);
+    expect(measured?.session).toBeNull();
+    expect(measured?.updatedAt).toBe(NOW);
+    const attemptedAt = measured?.metadata?.fetchedAt;
+    writeFileSync(join(home, 'auth.json'), JSON.stringify(authFile({ key: jwt('fixture-a', 'rotated') })));
+    clearQuotaCache();
+    hydrateQuotaCacheFromDisk(configEnv);
+    expect(readQuotaCache()?.['grok-cli']).toEqual(measured);
+    expect(readQuotaCache()?.['grok-cli'].metadata?.fetchedAt).toBe(attemptedAt);
+    writeFileSync(join(home, 'auth.json'), JSON.stringify(authFile({ key: jwt('fixture-b', 'new-account') })));
+    clearQuotaCache();
+    hydrateQuotaCacheFromDisk(configEnv);
+    expect(readQuotaCache()?.['grok-cli'].weekly).toBeNull();
+    expect(readQuotaCache()?.['grok-cli'].metadata?.lineageUncertain).toBe(true);
 });

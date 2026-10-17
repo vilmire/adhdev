@@ -41,6 +41,7 @@
 'use strict';
 
 import * as fs from 'node:fs';
+import { accountLineageFromCliJwt, settleCredentialQuota, UNKNOWN_ACCOUNT_LINEAGE, withQuotaAccountLineage, type QuotaAccountLineage } from '../account-lineage.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -292,11 +293,7 @@ function mapBillingResponse(data: unknown, measuredAt: number): ProviderQuota {
  * a snapshot whose `status` is 'error' or 'unavailable', so a quota problem can
  * never exclude the provider from routing (fail-open).
  */
-export async function fetchGrokQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
-    assertInjectedNetworkFetchInTest(overrides, 'fetchGrokQuota');
-    const deps = resolveDeps(overrides);
-
-    const credentialsResult = readCredentials(deps);
+async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentialsResult: CredentialsResult): Promise<ProviderQuota> {
     if (credentialsResult.kind === 'missing') {
         return quotaFailure('grok-cli', 'unavailable', 'Not signed in to Grok', {
             source: 'oauth',
@@ -368,4 +365,33 @@ export async function fetchGrokQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
             failureKind: 'network',
         });
     }
+}
+
+/** Read-only identity check for hydration/publication; never an API probe. */
+export function readGrokQuotaAccountLineage(overrides: QuotaFetchDeps = {}): QuotaAccountLineage {
+    // Tests must opt into a synthetic file, never the owner's default home.
+    if ((process.env.VITEST || process.env.NODE_TEST_CONTEXT)
+        && !overrides.env?.GROK_HOME && !overrides.env?.GROK_AUTH_PATH) return UNKNOWN_ACCOUNT_LINEAGE;
+    const deps = resolveDeps(overrides);
+    const result = readCredentials(deps);
+    return result.kind === 'ok'
+        ? accountLineageFromCliJwt('grok-cli', result.credentials.accessToken, baseUrl(deps.env))
+        : UNKNOWN_ACCOUNT_LINEAGE;
+}
+
+export async function fetchGrokQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    assertInjectedNetworkFetchInTest(overrides, 'fetchGrokQuota');
+    const deps = resolveDeps(overrides);
+    const before = readCredentials(deps);
+    const authority = baseUrl(deps.env);
+    const quota = await fetchForCredentials(deps, before);
+    if (before.kind !== 'ok') return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
+    const after = readCredentials(deps);
+    return settleCredentialQuota(quota, {
+        token: before.credentials.accessToken, authority,
+        lineage: accountLineageFromCliJwt('grok-cli', before.credentials.accessToken, authority),
+    }, after.kind === 'ok' ? {
+        token: after.credentials.accessToken, authority: baseUrl(deps.env),
+        lineage: accountLineageFromCliJwt('grok-cli', after.credentials.accessToken, baseUrl(deps.env)),
+    } : null);
 }

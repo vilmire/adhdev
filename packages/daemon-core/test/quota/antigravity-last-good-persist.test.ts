@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -53,7 +54,7 @@ function okBucketsOnly(overrides: Record<string, unknown> = {}) {
         buckets: BUCKETS,
         updatedAt: 1_700_000_000_000,
         error: null,
-        metadata: { source: 'oauth' },
+        metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'oauth' },
     } as any;
 }
 
@@ -65,7 +66,7 @@ function expiredTokenFailure(overrides: Record<string, unknown> = {}) {
         weekly: null,
         updatedAt: 1_700_000_900_000,
         error: 'Antigravity access token expired — run `agy` once to refresh it, then quota will report again.',
-        metadata: { source: 'oauth', failureKind: 'expired-token' },
+        metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'oauth', failureKind: 'expired-token' },
         ...overrides,
     } as any;
 }
@@ -126,7 +127,7 @@ describe('carry-forward counts a buckets-only reading as real', () => {
         const signedOut = expiredTokenFailure({
             status: 'unavailable',
             error: 'Not signed in to Antigravity',
-            metadata: { source: 'oauth', failureKind: 'missing-credentials' },
+            metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'oauth', failureKind: 'missing-credentials' },
         });
         const out = carryForwardLastGoodWindows(okBucketsOnly(), signedOut);
 
@@ -204,7 +205,7 @@ describe('★restart + expired token + prior buckets → chips, not an error wal
         // ── Process 2: daemon restarts, hydrates, and the token is STILL expired.
         clearQuotaCache();
         __resetQuotaHydrationForTests();
-        expect(hydrateQuotaCacheFromDisk()).toBe(1);
+        expect(hydrateQuotaCacheFromDisk(undefined, undefined, () => CONFIRMED_FIXTURE_LINEAGE)).toBe(1);
         await refreshQuotaCacheOnce(
             [{ provider: 'antigravity-cli' as any, fetch: async () => expiredTokenFailure() }],
         );
@@ -219,16 +220,10 @@ describe('★restart + expired token + prior buckets → chips, not an error wal
         expect(loadQuotaCache()?.['antigravity-cli']?.buckets).toEqual(BUCKETS);
     });
 
-    it('keeps the numbers on disk when a fetcher THROWS', async () => {
-        // ★This is the path the in-memory carry-forward cannot cover, and the
-        // one the persist barrier exists for. A fetcher that breaks its
-        // never-throw contract is caught in refreshQuotaCacheOnce and recorded
-        // as a numberless `failureKind: 'unknown'` snapshot written STRAIGHT
-        // into the cache — carryForwardLastGoodWindows is never consulted. Left
-        // to persist blind, that erased the stored reading; with antigravity
-        // there is no second source to rebuild it from, so the numbers were
-        // gone for good. Verified by reverting the barrier: this reads
-        // `undefined`.
+    it('does not transfer stored numbers to a throwing fetcher with unknown account lineage', async () => {
+        // A contract-violating fetcher provides no identity evidence. The
+        // persisted clobber barrier must not attach the previous account's
+        // pools to that unknown failure, even though the old numbers exist.
         await refreshQuotaCacheOnce(
             [{ provider: 'antigravity-cli' as any, fetch: async () => okBucketsOnly() }],
         );
@@ -237,8 +232,9 @@ describe('★restart + expired token + prior buckets → chips, not an error wal
             fetch: async () => { throw new Error('contract violation'); },
         }]);
 
-        expect(loadQuotaCache()?.['antigravity-cli']?.buckets).toEqual(BUCKETS);
-        expect(loadQuotaCache()?.['antigravity-cli']?.metadata?.lastGoodWindows).toBe(true);
+        expect(loadQuotaCache()?.['antigravity-cli']?.buckets).toBeUndefined();
+        expect(loadQuotaCache()?.['antigravity-cli']?.metadata?.lastGoodWindows).toBeUndefined();
+        expect(loadQuotaCache()?.['antigravity-cli']?.metadata?.lineageUncertain).toBe(true);
     });
 });
 

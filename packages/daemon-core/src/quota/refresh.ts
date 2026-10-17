@@ -36,14 +36,15 @@
 
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { LOG } from '../logging/logger.js';
+import { canTransferQuotaReading, quotaAccountLineage, sameQuotaAccount, unconfirmedQuotaReading, UNKNOWN_ACCOUNT_LINEAGE, type QuotaAccountLineage } from './account-lineage.js';
 import type { ProviderQuota, QuotaProvider } from './types.js';
 import { QUOTA_TRANSIENT_RETRY_DELAY_MS, TRANSIENT_QUOTA_FAILURE_KINDS } from './types.js';
 import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from './fetchers/antigravity.js';
 import { fetchClaudeQuota } from './fetchers/claude.js';
 import { fetchCodexQuota } from './fetchers/codex.js';
 import { fetchCursorQuota } from './fetchers/cursor.js';
-import { fetchGrokQuota, readGrokCredentialMtimeMs } from './fetchers/grok.js';
-import { fetchKimiQuota, readKimiCredentialMtimeMs } from './fetchers/kimi.js';
+import { fetchGrokQuota, readGrokCredentialMtimeMs, readGrokQuotaAccountLineage } from './fetchers/grok.js';
+import { fetchKimiQuota, readKimiCredentialMtimeMs, readKimiQuotaAccountLineage } from './fetchers/kimi.js';
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
 import { lastGoodProvenanceOf, loadQuotaCache, mergeLastGoodForPersist, quotaEntryHoldsReading, saveQuotaCache } from './persist.js';
 import { revalidateInFlight } from './refresh-triggers.js';
@@ -269,8 +270,8 @@ function toWireQuota(quota: ProviderQuota): MeshNodeFactsProviderQuota {
  * When the fresh read is a transient failure AND we still hold a real reading
  * — either a fresh 'ok' snapshot, or an ALREADY-carried-forward entry from a
  * prior transient failure (metadata.lastGoodWindows, still holding a window)
- * — keep those windows and the ORIGINAL updatedAt, but surface the fresh
- * failure's status/error/kind so the reader can render "28% used ·
+ * — and BOTH have confirmed matching account lineage, keep those windows
+ * and the ORIGINAL updatedAt, but surface the fresh failure's status/error/kind so the reader can render "28% used ·
  * (refreshing)" rather than either a stale-looking OK or a numberless error.
  * Chaining off an already-carried entry (not just a fresh 'ok') is what makes
  * this survive an unbounded run of consecutive transient failures — with only
@@ -287,7 +288,7 @@ export function carryForwardLastGoodWindows(
     if (fresh.status === 'ok') return fresh;
     const kind = typeof fresh.metadata?.failureKind === 'string' ? fresh.metadata.failureKind : '';
     const transient = TRANSIENT_QUOTA_FAILURE_KINDS.has(kind as any);
-    if (!transient) return fresh;
+    if (!transient || !canTransferQuotaReading(prev, fresh)) return fresh;
     const prevIsFreshOk = !!prev && prev.status === 'ok';
     const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
     // ★A REAL READING IS NOT ONLY session/weekly (owner report 2026-09-13:
@@ -509,6 +510,7 @@ export function hasFreshlyMeasuredQuota(): boolean {
 /** Test seam: drop all cached snapshots. */
 export function clearQuotaCache(): void {
     cache.clear();
+    latestQuotaAttempts.clear(); // late responses cannot repopulate a reset cache
     hydratedOnly.clear();
     hydrated = false;
     for (const state of failureRetries.values()) {
@@ -529,7 +531,8 @@ export function clearQuotaCache(): void {
  * synchronous Map lookup with no file I/O (see the module header).
  *
  * Never overwrites a live entry: anything already measured in this process is
- * newer than anything on disk, so hydration only fills gaps. That also makes a
+ * newer than anything on disk, so hydration only fills gaps. Account-scoped
+ * readings are restored only with current owning-CLI identity proof. That also makes a
  * late call harmless.
  *
  * Fail-soft by construction — `loadQuotaCache` resolves every error to "no
@@ -540,6 +543,9 @@ let hydrated = false;
 export function hydrateQuotaCacheFromDisk(
     env: NodeJS.ProcessEnv = process.env,
     isEnabled?: QuotaProviderEnabled,
+    readLineage: (provider: string) => QuotaAccountLineage = (provider) =>
+        provider === 'grok-cli' ? readGrokQuotaAccountLineage({ env })
+            : provider === 'kimi' ? readKimiQuotaAccountLineage({ env }) : UNKNOWN_ACCOUNT_LINEAGE,
 ): number {
     if (hydrated) return 0;
     hydrated = true;
@@ -561,7 +567,14 @@ export function hydrateQuotaCacheFromDisk(
         // provider this machine no longer runs — the exact phantom-failure
         // noise the enable gate exists to remove.
         if (isEnabled && !isEnabled(provider as QuotaProvider)) continue;
-        cache.set(provider, quota);
+        // Disk belongs to an earlier process/account epoch. Unknown/legacy
+        // lineage and a changed account can restore diagnostic state, never
+        // account-scoped numbers, usage, or labels. No token/mtime equality.
+        let current = UNKNOWN_ACCOUNT_LINEAGE;
+        try { current = readLineage(provider); } catch { /* uncertainty stays explicit */ }
+        const confirmed = quota.provider === provider && quota.metadata?.lineageUncertain !== true
+            && sameQuotaAccount(quota.metadata?.accountLineage, current);
+        cache.set(provider, confirmed ? quota : unconfirmedQuotaReading(quota, current));
         hydratedOnly.add(provider);
         count += 1;
     }
@@ -595,7 +608,13 @@ export function __resetQuotaHydrationForTests(): void {
     hydrated = false;
 }
 
+// Each provider has one current publication right. A newer attempt, disable,
+// or cache clear invalidates it; a late success/failure must not win by timing.
+const latestQuotaAttempts = new Map<string, symbol>();
+
 export interface RefreshQuotaCacheOptions {
+    /** Read-only local identity check, injectable for synthetic account-switch tests. */
+    readAccountLineage?: (provider: QuotaProvider) => QuotaAccountLineage;
     /**
      * Restrict which of `fetchers` are actually PROBED, without narrowing which
      * are considered for the disabled-provider prune below.
@@ -644,6 +663,7 @@ export async function refreshQuotaCacheOnce(
         for (const { provider } of fetchers) {
             if (!isEnabled(provider)) {
                 cache.delete(provider);
+                latestQuotaAttempts.delete(provider);
                 hydratedOnly.delete(provider);
                 cancelFailureRetry(provider);
             }
@@ -655,10 +675,29 @@ export async function refreshQuotaCacheOnce(
     // refreshing. Re-hitting the same method is what kept Antigravity's quota
     // endpoint in RESOURCE_EXHAUSTED while the CLI itself throttled to ~7 min.
     const active = enabled.filter(({ provider }) => !isRateLimitedCooldownActive(cache.get(provider)));
+    const committed = new Map<QuotaProvider, symbol>();
     await Promise.all(
         active.map(async ({ provider, fetch }) => {
+            const attempt = Symbol(provider);
+            latestQuotaAttempts.set(provider, attempt);
+            const canPublish = (): boolean => latestQuotaAttempts.get(provider) === attempt
+                && (!isEnabled || isEnabled(provider));
             try {
-                const fresh = toWireQuota(await fetch());
+                let fresh = toWireQuota(await fetch());
+                if (!canPublish()) return;
+                // Grok/Kimi CLI stable subjects are locally available. Other
+                // fetchers must explicitly establish their own identity; an
+                // unknown identity never becomes a signed-out/account-switch
+                // claim. Fetchers also recheck their credential after HTTP.
+                if (options.readAccountLineage || ((provider === 'grok-cli' || provider === 'kimi')
+                    && quotaAccountLineage(fresh.metadata?.accountLineage).kind === 'account')) {
+                    let current = UNKNOWN_ACCOUNT_LINEAGE;
+                    try { current = options.readAccountLineage ? options.readAccountLineage(provider)
+                        : provider === 'grok-cli' ? readGrokQuotaAccountLineage() : readKimiQuotaAccountLineage(); } catch { /* no proof */ }
+                    if (!sameQuotaAccount(fresh.metadata?.accountLineage, current)) {
+                        fresh = unconfirmedQuotaReading(fresh, current);
+                    }
+                }
                 // stampFetchedAt runs AFTER the carry-forward so the attempt
                 // clock always describes THIS attempt: carry-forward
                 // deliberately keeps the previous entry's `updatedAt` (the data
@@ -669,8 +708,11 @@ export async function refreshQuotaCacheOnce(
                     provider,
                     stampFetchedAt(carryForwardLastGoodWindows(cache.get(provider), fresh), Date.now()),
                 );
+                committed.set(provider, attempt);
                 hydratedOnly.delete(provider); // measured in this process now
             } catch (e: any) {
+                if (!canPublish()) return;
+                committed.set(provider, attempt);
                 // Contract violation, not an ordinary quota failure — record it
                 // as one so the provider still reports a definite "could not
                 // read" instead of silently vanishing from the bundle.
@@ -682,7 +724,7 @@ export async function refreshQuotaCacheOnce(
                     weekly: null,
                     updatedAt: now,
                     error: `Quota fetch threw: ${e?.message || e}`,
-                    metadata: { failureKind: 'unknown', fetchedAt: now },
+                    metadata: { failureKind: 'unknown', fetchedAt: now, accountLineage: UNKNOWN_ACCOUNT_LINEAGE, lineageUncertain: true },
                 });
                 hydratedOnly.delete(provider);
             }
@@ -692,6 +734,7 @@ export async function refreshQuotaCacheOnce(
     // recorded (success resets, persistent failure cancels, transient failure
     // schedules a bounded retry — see updateFailureRetry).
     for (const { provider, fetch } of active) {
+        if (!committed.has(provider) || latestQuotaAttempts.get(provider) !== committed.get(provider)) continue;
         updateFailureRetry(provider, fetch, isEnabled);
     }
     // Persist whatever this tick produced, including per-provider failures —

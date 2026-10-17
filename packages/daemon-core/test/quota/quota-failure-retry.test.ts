@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -20,7 +21,7 @@ vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_A
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/cursor.js', () => ({ fetchCursorQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
-vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
+vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota, readKimiQuotaAccountLineage: () => CONFIRMED_FIXTURE_LINEAGE }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
 const { QUOTA_FAILURE_MAX_RETRIES, clearQuotaCache, hydrateQuotaCacheFromDisk, isFailureRetryDue, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
@@ -43,7 +44,7 @@ const okQuota = (provider: string) => ({
     updatedAt: Date.now(),
     error: null,
     status: 'ok',
-    metadata: {},
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE },
 })
 
 const allEnabled = () => true
@@ -80,7 +81,7 @@ describe('refreshQuotaCacheOnce — last-good carry-forward (wiring)', () => {
 
         // Token expired mid-cycle — transient, empty windows.
         fetchKimiQuota.mockResolvedValueOnce(
-            quotaFailure('kimi', 'error', 'token expired', { failureKind: 'expired-token' }),
+            quotaFailure('kimi', 'error', 'token expired', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'expired-token' }),
         );
         await refreshQuotaCacheOnce([kimiFetch], allEnabled);
 
@@ -97,7 +98,7 @@ describe('refreshQuotaCacheOnce — last-good carry-forward (wiring)', () => {
         await refreshQuotaCacheOnce([kimiFetch], allEnabled);
 
         fetchKimiQuota.mockResolvedValueOnce(
-            quotaFailure('kimi', 'unavailable', 'not signed in', { failureKind: 'missing-credentials' }),
+            quotaFailure('kimi', 'unavailable', 'not signed in', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'missing-credentials' }),
         );
         await refreshQuotaCacheOnce([kimiFetch], allEnabled);
 
@@ -113,7 +114,7 @@ describe('refreshQuotaCacheOnce — last-good carry-forward (wiring)', () => {
 
         fetchAntigravityQuota.mockResolvedValueOnce(
             quotaFailure('antigravity-cli', 'error', 'Antigravity quota request was rate limited', {
-                failureKind: 'rate-limited',
+                accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited',
             }),
         );
         await refreshQuotaCacheOnce([agyFetch], allEnabled);
@@ -131,7 +132,7 @@ describe('refreshQuotaCacheOnce — last-good carry-forward (wiring)', () => {
         await refreshQuotaCacheOnce([kimiFetch], allEnabled);
 
         fetchKimiQuota.mockResolvedValueOnce(
-            quotaFailure('kimi', 'error', 'usage limit reached', { failureKind: 'quota-exhausted' }),
+            quotaFailure('kimi', 'error', 'usage limit reached', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'quota-exhausted' }),
         );
         await refreshQuotaCacheOnce([kimiFetch], allEnabled);
 
@@ -159,14 +160,14 @@ describe('quotaFailure retry classification', () => {
 
     it('stamps rate-limited without Retry-After at the CLI-level 7-minute floor, not the 2-minute token-race fuse', () => {
         const before = Date.now()
-        const failure = quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' })
+        const failure = quotaFailure('antigravity-cli', 'error', 'rate limited', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited' })
         expect(failure.metadata?.retryAtMs).toBeGreaterThanOrEqual(before + QUOTA_RATE_LIMIT_RETRY_DELAY_MS)
         expect(QUOTA_RATE_LIMIT_RETRY_DELAY_MS).toBe(7 * 60 * 1000)
         expect(QUOTA_RATE_LIMIT_RETRY_DELAY_MS).toBeGreaterThan(QUOTA_TRANSIENT_RETRY_DELAY_MS)
     })
 
     it('never overrides a server-dictated retryAtMs (HTTP Retry-After)', () => {
-        const failure = quotaFailure('kimi', 'error', 'x', { failureKind: 'rate-limited', retryAtMs: 123_456 })
+        const failure = quotaFailure('kimi', 'error', 'x', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited', retryAtMs: 123_456 })
         expect(failure.metadata?.retryAtMs).toBe(123_456)
     })
 })
@@ -179,7 +180,7 @@ describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in th
         await refreshQuotaCacheOnce([agyFetch], allEnabled)
 
         fetchAntigravityQuota.mockResolvedValueOnce(
-            quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' }),
+            quotaFailure('antigravity-cli', 'error', 'rate limited', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited' }),
         )
         await refreshQuotaCacheOnce([agyFetch], allEnabled)
         expect(fetchAntigravityQuota).toHaveBeenCalledTimes(2)
@@ -194,7 +195,7 @@ describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in th
     it('event-driven refresh does not re-probe a cached rate-limited provider', async () => {
         const agyFetch = { provider: 'antigravity-cli' as const, fetch: fetchAntigravityQuota }
         fetchAntigravityQuota.mockResolvedValueOnce(
-            quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' }),
+            quotaFailure('antigravity-cli', 'error', 'rate limited', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited' }),
         )
         await refreshQuotaCacheOnce([agyFetch], allEnabled)
         expect(fetchAntigravityQuota).toHaveBeenCalledTimes(1)
@@ -216,7 +217,7 @@ describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in th
         fetchOpencodeUsage.mockResolvedValue(okQuota('opencode'))
         fetchKimiQuota.mockResolvedValue(okQuota('kimi'))
         fetchAntigravityQuota.mockImplementation(() =>
-            Promise.resolve(quotaFailure('antigravity-cli', 'error', 'rate limited', { failureKind: 'rate-limited' })),
+            Promise.resolve(quotaFailure('antigravity-cli', 'error', 'rate limited', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited' })),
         )
 
         await refreshQuotaCacheOnce()
@@ -232,10 +233,10 @@ describe('rate-limited cooldown — do not re-hit a 429 whose retryAtMs is in th
     it('boot refresh skips a hydrated rate-limited snapshot (restart cannot lift a 429)', async () => {
         saveQuotaCache({
             'antigravity-cli': quotaFailure('antigravity-cli', 'error', 'rate limited', {
-                failureKind: 'rate-limited',
+                accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited',
             }) as any,
         }, { ADHDEV_CONFIG_DIR: home })
-        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled)
+        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled, () => CONFIRMED_FIXTURE_LINEAGE)
         expect(readQuotaCache()?.['antigravity-cli']?.metadata?.failureKind).toBe('rate-limited')
 
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
@@ -321,7 +322,7 @@ describe('transient-failure retry — the 22-second token race', () => {
         vi.useFakeTimers()
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
         fetchCodexQuota.mockResolvedValue(okQuota('codex-cli'))
-        fetchKimiQuota.mockResolvedValue(quotaFailure('kimi', 'error', 'boom', { failureKind: 'network' }))
+        fetchKimiQuota.mockResolvedValue(quotaFailure('kimi', 'error', 'boom', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'network' }))
 
         await refreshQuotaCacheOnce() // failure #1 → retry in 2m
         expect(fetchKimiQuota).toHaveBeenCalledTimes(1)
@@ -357,11 +358,11 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
             'claude-cli': okQuota('claude-cli') as any,
             'codex-cli': okQuota('codex-cli') as any,
             kimi: {
-                ...quotaFailure('kimi', 'error', 'Kimi access token expired', { failureKind: 'expired-token' }),
-                metadata: { failureKind: 'expired-token', retryAtMs: Date.now() - 1000 },
+                ...quotaFailure('kimi', 'error', 'Kimi access token expired', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'expired-token' }),
+                metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'expired-token', retryAtMs: Date.now() - 1000 },
             } as any,
         }, { ADHDEV_CONFIG_DIR: home })
-        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled)
+        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled, () => CONFIRMED_FIXTURE_LINEAGE)
         expect(isFailureRetryDue('kimi')).toBe(true)
 
         fetchClaudeQuota.mockResolvedValue(okQuota('claude-cli'))
@@ -395,7 +396,7 @@ describe('needsBackfill — a cached failure is not a usable snapshot', () => {
                 failureKind: 'missing-credentials',
             }) as any,
         }, { ADHDEV_CONFIG_DIR: home })
-        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled)
+        hydrateQuotaCacheFromDisk({ ADHDEV_CONFIG_DIR: home }, allEnabled, () => CONFIRMED_FIXTURE_LINEAGE)
         expect(isFailureRetryDue('kimi')).toBe(false)
 
         const loop = startQuotaRefreshLoop({
@@ -639,7 +640,7 @@ describe('transient-failure retry window — timer and refresh-loop chain agree 
             // While a probe is in flight the backfill gate must not call the same retry "due".
             dueWhileInFlight.push(isFailureRetryDue('kimi', Date.now() + 60 * 60_000))
             await new Promise((resolve) => setTimeout(resolve, 500))
-            return quotaFailure('kimi', 'error', 'Kimi access token expired', { failureKind: 'expired-token' })
+            return quotaFailure('kimi', 'error', 'Kimi access token expired', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'expired-token' })
         })
 
         const first = refreshQuotaCacheOnce([{ provider: 'kimi', fetch: fetchKimiQuota }], allEnabled)
@@ -667,7 +668,7 @@ describe('transient-failure retry window — timer and refresh-loop chain agree 
 
     it('the cached entry\'s retryAtMs follows the backoff (4m after the 2nd failure), so isFailureRetryDue agrees with the timer', async () => {
         vi.useFakeTimers()
-        fetchKimiQuota.mockResolvedValue(quotaFailure('kimi', 'error', 'boom', { failureKind: 'network' }))
+        fetchKimiQuota.mockResolvedValue(quotaFailure('kimi', 'error', 'boom', { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'network' }))
         const fetchers = [{ provider: 'kimi' as const, fetch: fetchKimiQuota }]
 
         await refreshQuotaCacheOnce(fetchers, allEnabled) // failure #1

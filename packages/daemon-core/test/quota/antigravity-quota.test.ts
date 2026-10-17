@@ -281,7 +281,7 @@ describe('fetchAntigravityQuota', () => {
 
         await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(spawn.calls).toHaveLength(1);
+        expect(spawn.calls).toHaveLength(2);
         expect(spawn.calls[0].command).toBe('/usr/bin/security');
         expect(spawn.calls[0].args).toEqual([
             'find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w',
@@ -524,7 +524,7 @@ describe('fetchAntigravityQuota', () => {
         expect(quota.weekly?.windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
         expect(quota.session?.windowMinutes).toBe(SESSION_WINDOW_MINUTES);
         expect(quota.weekly?.usedPercent).toBeCloseTo(2.354, 2);
-        expect(file.paths).toEqual([LINUX_TOKEN_PATH]);
+        expect(file.paths).toEqual([LINUX_TOKEN_PATH, LINUX_TOKEN_PATH]);
         expect(spawn.calls).toEqual([]);
         expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
     });
@@ -542,7 +542,7 @@ describe('fetchAntigravityQuota', () => {
         );
 
         expect(spawn.calls).toEqual([]);
-        expect(file.paths).toHaveLength(1);
+        expect(file.paths).toHaveLength(2);
     });
 
     it('reports missing-credentials on linux when the token file is absent', async () => {
@@ -655,7 +655,7 @@ describe('fetchAntigravityQuota', () => {
 
         expect(quota.status).toBe('ok');
         expect(quota.metadata?.source).toBe('oauth');
-        expect(spawn.calls).toHaveLength(1);
+        expect(spawn.calls).toHaveLength(2);
         expect(spawn.calls[0].command).toBe('powershell.exe');
         expect(spawn.calls[0].args).toContain('-EncodedCommand');
         // The encoded script targets the surveyed wincred item.
@@ -811,7 +811,7 @@ describe('fetchAntigravityQuota', () => {
             expect(call.args.join(' ')).not.toMatch(/CredWrite/);
         }
         // Reading the credential is the only reason to spawn anything.
-        expect(spawn.calls).toHaveLength(1);
+        expect(spawn.calls).toHaveLength(2);
         expect(spawn.calls[0].args).toContain('find-generic-password');
     });
 
@@ -1013,5 +1013,33 @@ describe('readAntigravityKeychainMtimeMs — metadata only', () => {
             expect(mtime, platform).toBeNull();
             expect(spawn.calls, platform).toEqual([]);
         }
+    });
+});
+
+
+describe('Antigravity account uncertainty and credential continuity', () => {
+    it('preserves the same response groups/windows/source/clock but never invents account equality', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+        expect(quota.status).toBe('ok');
+        expect(quota.metadata?.accountLineage).toEqual({ version: 1, kind: 'unknown' });
+        expect(quota.metadata?.source).toBe('oauth');
+        expect(quota.buckets?.filter(b => b.name.startsWith('Gemini Models')).length).toBe(2);
+        expect(fetch.calls).toHaveLength(1);
+        expect(spawn.calls).toHaveLength(2); // owning store re-read, no exchange
+    });
+    it('discards the response when an opaque credential changed during collection, without calling it a sign-out or account switch', async () => {
+        const spawn = stubSpawn(null);
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        let reads = 0;
+        const readFile: QuotaReadFile = async () => JSON.stringify(credentialPayload({ access_token: ++reads === 1 ? 'before' : 'after' }));
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch, { ADHDEV_ANTIGRAVITY_PLATFORM: 'linux', HOME: LINUX_FIXTURE_HOME }, readFile));
+        expect(quota.weekly).toBeNull();
+        expect(quota.buckets).toEqual([]);
+        expect(quota.metadata?.lineageUncertain).toBe(true);
+        expect(quota.error).not.toMatch(/signed.out|log.in|account switch/i);
+        expect(fetch.calls).toHaveLength(1);
+        expect(spawn.calls).toEqual([]);
     });
 });

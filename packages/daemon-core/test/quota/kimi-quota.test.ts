@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fetchKimiQuota } from '../../src/quota/fetchers/kimi';
+import { fetchKimiQuota, readKimiQuotaAccountLineage } from '../../src/quota/fetchers/kimi';
 import type { QuotaFetch, QuotaFetchResponse } from '../../src/quota/fetchers/deps';
 
 const NOW = Date.UTC(2026, 7, 3, 12, 0, 0);
@@ -307,5 +307,51 @@ describe('fetchKimiQuota', () => {
 
         expect(stub.calls).toHaveLength(1);
         expect(quota.status).toBe('ok');
+    });
+});
+
+
+describe('Kimi uncertain account lineage', () => {
+    it('does not claim stable account identity from an opaque credential and rejects an in-flight replacement', async () => {
+        const home = makeKimiHome({ access_token: 'before', expires_at: FRESH_EXPIRY });
+        const result = await fetchKimiQuota(deps(home, async () => {
+            writeFileSync(join(home, 'credentials', 'kimi-code.json'), JSON.stringify({ access_token: 'after', expires_at: FRESH_EXPIRY }));
+            return jsonResponse({ usage: { used: 1, limit: 10 } });
+        }));
+        expect(result.weekly).toBeNull();
+        expect(result.metadata?.accountLineage).toEqual({ version: 1, kind: 'unknown' });
+        expect(result.metadata?.lineageUncertain).toBe(true);
+        expect(result.error).not.toMatch(/signed.out|log.in|account switch/i);
+    });
+});
+
+
+describe('Kimi stable owning-CLI lineage', () => {
+    const jwt = (sub: string, nonce: string) => ['e30', Buffer.from(JSON.stringify({ iss: 'https://issuer.kimi.test', sub, jti: nonce })).toString('base64url'), 'signature'].join('.');
+    it('follows the managed OAuth ref and keeps identity across rotation without trusting a leftover credential', () => {
+        const home = makeKimiHome({ access_token: jwt('unused-fixture', 'old'), expires_at: FRESH_EXPIRY });
+        writeManagedKimiConfig(home, 'oauth/current-fixture', 'https://quota.kimi.test');
+        const file = join(home, 'credentials', 'current-fixture.json');
+        writeFileSync(file, JSON.stringify({ access_token: jwt('fixture-owner', 'before'), expires_at: FRESH_EXPIRY }));
+        const configEnv = { KIMI_CODE_HOME: home };
+        const before = readKimiQuotaAccountLineage({ env: configEnv });
+        writeFileSync(file, JSON.stringify({ access_token: jwt('fixture-owner', 'rotated'), expires_at: FRESH_EXPIRY }));
+        expect(readKimiQuotaAccountLineage({ env: configEnv })).toEqual(before);
+        writeFileSync(file, JSON.stringify({ access_token: jwt('other-fixture', 'new'), expires_at: FRESH_EXPIRY }));
+        expect(readKimiQuotaAccountLineage({ env: configEnv })).not.toEqual(before);
+        expect(before.kind).toBe('account');
+        expect(JSON.stringify(before)).not.toMatch(/fixture|issuer|quota.kimi/);
+    });
+    it('accepts same-account rotation during a request and discards a different subject', async () => {
+        for (const [subject, expected] of [['fixture-owner', 'ok'], ['other-fixture', 'unavailable']] as const) {
+            const home = makeKimiHome({ access_token: jwt('fixture-owner', 'before'), expires_at: FRESH_EXPIRY });
+            const result = await fetchKimiQuota(deps(home, async () => {
+                writeFileSync(join(home, 'credentials', 'kimi-code.json'), JSON.stringify({ access_token: jwt(subject, 'after'), expires_at: FRESH_EXPIRY }));
+                return jsonResponse({ usage: { used: 1, limit: 10 } });
+            }));
+            expect(result.status).toBe(expected);
+            expect(result.metadata?.accountLineage?.kind).toBe('account');
+            if (expected === 'unavailable') expect(result.weekly).toBeNull();
+        }
     });
 });

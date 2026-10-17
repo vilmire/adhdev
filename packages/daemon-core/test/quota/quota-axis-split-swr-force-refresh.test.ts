@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 /**
  * ★AXIS SPLIT + STALE-WHILE-REVALIDATE + FORCE REFRESH (2026-08-21).
  *
@@ -40,7 +41,7 @@ vi.mock('../../src/quota/fetchers/claude.js', () => ({ fetchClaudeQuota, STALE_A
 vi.mock('../../src/quota/fetchers/codex.js', () => ({ fetchCodexQuota }))
 vi.mock('../../src/quota/fetchers/cursor.js', () => ({ fetchCursorQuota }))
 vi.mock('../../src/quota/fetchers/grok.js', () => ({ fetchGrokQuota }))
-vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota }))
+vi.mock('../../src/quota/fetchers/kimi.js', () => ({ fetchKimiQuota, readKimiQuotaAccountLineage: () => CONFIRMED_FIXTURE_LINEAGE }))
 vi.mock('../../src/quota/fetchers/opencode.js', () => ({ fetchOpencodeUsage, OPENCODE_USAGE_DAYS: 7 }))
 
 const { QUOTA_AXIS, QUOTA_AXIS_TTL_MS, QUOTA_SWR_TTL_MS, QUOTA_ROUTABLE_MAX_AGE_MS, clearQuotaCache, isDueByAxisTtl, readQuotaCache, refreshQuotaCacheOnce, __resetQuotaAmbientEnableGateForTests, __resetQuotaHydrationForTests } = await import('../../src/quota/refresh.js')
@@ -56,7 +57,7 @@ const okQuota = (provider: string, updatedAt: number) => ({
     updatedAt,
     error: null,
     status: 'ok' as const,
-    metadata: {},
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE },
 })
 
 /** A cached 429 exactly as a fetcher records one, cooldown still running. */
@@ -67,7 +68,7 @@ const rateLimited = (provider: string, now: number, retryInMs: number) => ({
     updatedAt: now,
     error: 'rate limited',
     status: 'error' as const,
-    metadata: { failureKind: 'rate-limited' as const, retryAtMs: now + retryInMs },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'rate-limited' as const, retryAtMs: now + retryInMs },
 })
 
 const allEnabled = () => true
@@ -489,7 +490,7 @@ describe('★file-source updatedAt must not be misread as "never refreshed"', ()
         vi.useFakeTimers()
         vi.setSystemTime(START)
         // Simulates an on-disk cache written by a daemon predating the field.
-        fetchCodexQuota.mockResolvedValue({ ...okQuota('codex-cli', START), metadata: {} })
+        fetchCodexQuota.mockResolvedValue({ ...okQuota('codex-cli', START), metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE } })
         await refreshQuotaCacheOnce([{ provider: 'codex-cli', fetch: fetchCodexQuota }], allEnabled)
         // The stamp is applied on write, so this asserts the fallback path
         // directly instead: an entry whose fetchedAt is absent is dated by
@@ -516,7 +517,7 @@ describe('carry-forward and the attempt clock coexist', () => {
             updatedAt: later,
             error: 'token expired',
             status: 'error' as const,
-            metadata: { failureKind: 'expired-token' as const, retryAtMs: later + 60_000 },
+            metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'expired-token' as const, retryAtMs: later + 60_000 },
         })
         await refreshQuotaCacheOnce([{ provider: 'kimi', fetch: fetchKimiQuota }], allEnabled)
 

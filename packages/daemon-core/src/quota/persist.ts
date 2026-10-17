@@ -21,6 +21,7 @@
 'use strict';
 
 import * as fs from 'node:fs';
+import { canTransferQuotaReading } from './account-lineage.js';
 import * as path from 'node:path';
 
 import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
@@ -112,8 +113,9 @@ export function lastGoodProvenanceOf(prior: MeshNodeFactsProviderQuota): NonNull
  * rollout logs). Once the file lost the numbers they were gone until the user
  * ran `agy` by hand.
  *
- * So: a provider entry that holds NO reading never overwrites a stored entry
- * that does. The fresh failure's status/error/failureKind still win — we keep
+ * So: a provider entry that holds NO reading keeps a stored reading only
+ * with confirmed matching account lineage. Unknown/legacy identity cannot
+ * authorize that transfer. The fresh failure's status/error/failureKind still win — we keep
  * the numbers and their original `updatedAt`, not the stale verdict — which is
  * the same "retained numbers, fresh failure signal" contract carry-forward
  * applies in memory, and the retained axes are marked `lastGoodWindows` so no
@@ -127,7 +129,7 @@ export function mergeLastGoodForPersist(
     const merged: Record<string, MeshNodeFactsProviderQuota> = {};
     for (const [provider, entry] of Object.entries(fresh)) {
         const prior = stored[provider];
-        if (holdsReading(entry) || !holdsReading(prior)) {
+        if (holdsReading(entry) || !holdsReading(prior) || !canTransferQuotaReading(prior, entry)) {
             merged[provider] = entry;
             continue;
         }

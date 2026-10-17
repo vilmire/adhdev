@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -42,7 +43,7 @@ function makeQuota(overrides: Record<string, unknown> = {}) {
         weekly: { usedPercent: 12, windowMinutes: 10080, resetsAt: null },
         updatedAt: 1_700_000_000_000,
         error: null,
-        metadata: { source: 'app-server', planType: 'plus' },
+        metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'app-server', planType: 'plus' },
         ...overrides,
     } as any;
 }
@@ -74,7 +75,7 @@ describe('quota cache storage', () => {
         saveQuotaCache({ 'codex-cli': makeQuota() }, env);
         expect(readQuotaCache()).toBeUndefined(); // nothing measured in-process
 
-        expect(hydrateQuotaCacheFromDisk(env)).toBe(1);
+        expect(hydrateQuotaCacheFromDisk(env, undefined, () => CONFIRMED_FIXTURE_LINEAGE)).toBe(1);
         expect(readQuotaCache()?.['codex-cli']).toMatchObject({ provider: 'codex-cli', status: 'ok' });
     });
 
@@ -112,11 +113,11 @@ describe('quota cache storage', () => {
         const providers = {
             'codex-cli': makeQuota({
                 status: 'unavailable', session: null, weekly: null,
-                error: 'Not signed in to Codex', metadata: { source: 'app-server', failureKind: 'missing-credentials' },
+                error: 'Not signed in to Codex', metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'app-server', failureKind: 'missing-credentials' },
             }),
             kimi: makeQuota({
                 provider: 'kimi', status: 'error', session: null, weekly: null,
-                error: 'request failed', metadata: { source: 'oauth', failureKind: 'expired-token' },
+                error: 'request failed', metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'oauth', failureKind: 'expired-token' },
             }),
         };
         saveQuotaCache(providers, env);
@@ -134,7 +135,7 @@ describe('quota cache storage', () => {
     // ── Contract 2: fail-soft on every file problem ─────────────────────────
     it('returns no cache when the file is absent', () => {
         expect(loadQuotaCache(env)).toBeUndefined();
-        expect(() => hydrateQuotaCacheFromDisk(env)).not.toThrow();
+        expect(() => hydrateQuotaCacheFromDisk(env, undefined, () => CONFIRMED_FIXTURE_LINEAGE)).not.toThrow();
         expect(readQuotaCache()).toBeUndefined();
     });
 
@@ -142,7 +143,7 @@ describe('quota cache storage', () => {
         mkdirSync(join(home, 'quota'), { recursive: true });
         writeFileSync(quotaCachePath(env), '{ not json', 'utf-8');
         expect(loadQuotaCache(env)).toBeUndefined();
-        expect(() => hydrateQuotaCacheFromDisk(env)).not.toThrow();
+        expect(() => hydrateQuotaCacheFromDisk(env, undefined, () => CONFIRMED_FIXTURE_LINEAGE)).not.toThrow();
         expect(readQuotaCache()).toBeUndefined();
     });
 
@@ -187,19 +188,19 @@ describe('quota cache storage', () => {
     });
 
     it('hydration is one-shot and never overwrites a live measurement', async () => {
-        saveQuotaCache({ 'codex-cli': makeQuota({ metadata: { source: 'from-disk' } }) }, env);
+        saveQuotaCache({ 'codex-cli': makeQuota({ metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'from-disk' } }) }, env);
 
         // A real fetch lands first…
         await refreshQuotaCacheOnce([
-            { provider: 'codex-cli' as const, fetch: async () => makeQuota({ metadata: { source: 'live' } }) },
+            { provider: 'codex-cli' as const, fetch: async () => makeQuota({ metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'live' } }) },
         ]);
         // …so hydration must not clobber it.
-        expect(hydrateQuotaCacheFromDisk(env)).toBe(0);
+        expect(hydrateQuotaCacheFromDisk(env, undefined, () => CONFIRMED_FIXTURE_LINEAGE)).toBe(0);
         expect(readQuotaCache()?.['codex-cli'].metadata?.source).toBe('live');
 
         // And a second hydration call is a no-op.
         __resetQuotaHydrationForTests();
-        expect(hydrateQuotaCacheFromDisk(env)).toBe(0);
+        expect(hydrateQuotaCacheFromDisk(env, undefined, () => CONFIRMED_FIXTURE_LINEAGE)).toBe(0);
     });
 
     it('a refresh WRITES the cache file, including per-provider failures', async () => {

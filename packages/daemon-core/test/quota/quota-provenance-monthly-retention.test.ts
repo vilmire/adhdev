@@ -1,3 +1,4 @@
+import { CONFIRMED_FIXTURE_LINEAGE } from './lineage-fixtures.js';
 /**
  * rc12 quota provenance (2026-10-13) — two consumer gaps, synthetic data only.
  *
@@ -37,7 +38,7 @@ const codexOk = (): MeshNodeFactsProviderQuota => ({
     weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: null },
     updatedAt: MEASURED_AT,
     error: null,
-    metadata: { source: 'rollout', planType: 'plus' },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'rollout', planType: 'plus' },
 });
 
 const codexCollector401 = (): MeshNodeFactsProviderQuota => ({
@@ -47,7 +48,7 @@ const codexCollector401 = (): MeshNodeFactsProviderQuota => ({
     weekly: null,
     updatedAt: MEASURED_AT + 3_600_000,
     error: 'Codex usage lookup by the background quota collector was refused (401)',
-    metadata: { source: 'app-server', collectorScope: 'background-collector', failureKind: 'unauthorized' },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'app-server', collectorScope: 'background-collector', failureKind: 'unauthorized' },
 });
 
 const cursorMonthlyOk = (): MeshNodeFactsProviderQuota => ({
@@ -58,7 +59,7 @@ const cursorMonthlyOk = (): MeshNodeFactsProviderQuota => ({
     monthly: { usedPercent: 41, windowMinutes: 43200, resetsAt: null },
     updatedAt: MEASURED_AT,
     error: null,
-    metadata: { source: 'api', planType: 'pro' },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'api', planType: 'pro' },
 });
 
 const cursorTransient = (): MeshNodeFactsProviderQuota => ({
@@ -68,7 +69,7 @@ const cursorTransient = (): MeshNodeFactsProviderQuota => ({
     weekly: null,
     updatedAt: MEASURED_AT + 600_000,
     error: 'Cursor usage request failed: network',
-    metadata: { source: 'api', failureKind: 'network' },
+    metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'api', failureKind: 'network' },
 });
 
 describe('(2) retained last-good keeps its ORIGINAL provenance', () => {
@@ -86,7 +87,7 @@ describe('(2) retained last-good keeps its ORIGINAL provenance', () => {
 
     it('a chain of consecutive failures keeps naming the ORIGINAL measurement', () => {
         const once = carryForwardLastGoodWindows(codexOk(), codexCollector401());
-        const twice = carryForwardLastGoodWindows(once, { ...codexCollector401(), metadata: { source: 'other', failureKind: 'network' } });
+        const twice = carryForwardLastGoodWindows(once, { ...codexCollector401(), metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, source: 'other', failureKind: 'network' } });
         expect(twice.metadata?.lastGood).toEqual({ measuredAt: MEASURED_AT, source: 'rollout', planType: 'plus' });
     });
 
@@ -123,7 +124,7 @@ describe('(3) a monthly-only cursor reading counts as a reading', () => {
     });
 
     it('a non-transient failure still replaces it wholesale', () => {
-        const fresh = { ...cursorTransient(), metadata: { failureKind: 'missing-credentials' } };
+        const fresh = { ...cursorTransient(), metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'missing-credentials' } };
         expect(carryForwardLastGoodWindows(cursorMonthlyOk(), fresh)).toBe(fresh);
     });
 
@@ -151,7 +152,7 @@ describe('(3) a monthly-only cursor reading counts as a reading', () => {
     });
 
     it('the shared freshness cue treats retained monthly numbers as numbers (mesh-shared)', () => {
-        const noData = { ...cursorMonthlyOk(), status: 'error', metadata: { failureKind: 'no-data' } };
+        const noData = { ...cursorMonthlyOk(), status: 'error', metadata: { accountLineage: CONFIRMED_FIXTURE_LINEAGE, failureKind: 'no-data' } };
         expect(assessQuotaFreshness(noData, MEASURED_AT + 60_000)).toEqual({ cue: 'stale', userMustAct: true });
         // Unknown monthly percentage is not a reading: no cue is invented for it.
         const unknown = { ...noData, monthly: { usedPercent: null as unknown as number, windowMinutes: 43200, resetsAt: null } };

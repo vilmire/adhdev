@@ -298,6 +298,7 @@
  */
 'use strict';
 
+import { settleCredentialQuota, UNKNOWN_ACCOUNT_LINEAGE, withQuotaAccountLineage } from '../account-lineage.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -1028,11 +1029,7 @@ function mapQuotaSummary(data: unknown): ProviderQuota {
  * resolves to a snapshot whose `status` is 'error' or 'unavailable', so a quota
  * problem can never exclude the provider from routing (fail-open).
  */
-export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
-    assertInjectedNetworkFetchInTest(overrides, 'fetchAntigravityQuota');
-    const deps = resolveDeps(overrides);
-
-    const credentialsResult = await readCredentials(deps);
+async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentialsResult: CredentialsResult): Promise<ProviderQuota> {
     if (credentialsResult.kind === 'unsupported-platform') {
         // Explicit, not silent — and specific about WHY per platform, because
         // "unverified" and "structurally impossible" call for different
@@ -1154,4 +1151,17 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
             failureKind: 'network',
         });
     }
+}
+
+export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    assertInjectedNetworkFetchInTest(overrides, 'fetchAntigravityQuota');
+    const deps = resolveDeps(overrides);
+    const before = await readCredentials(deps);
+    const authority = baseUrl(deps.env);
+    const quota = await fetchForCredentials(deps, before);
+    if (before.kind !== 'ok') return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
+    const after = await readCredentials(deps);
+    // The store label and consumer auth_method are not account identity.
+    return settleCredentialQuota(quota, { token: before.credentials.accessToken, authority, lineage: UNKNOWN_ACCOUNT_LINEAGE },
+        after.kind === 'ok' ? { token: after.credentials.accessToken, authority: baseUrl(deps.env), lineage: UNKNOWN_ACCOUNT_LINEAGE } : null);
 }

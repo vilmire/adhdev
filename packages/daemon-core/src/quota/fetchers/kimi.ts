@@ -17,6 +17,7 @@
 'use strict';
 
 import * as fs from 'node:fs';
+import { accountLineageFromCliJwt, settleCredentialQuota, UNKNOWN_ACCOUNT_LINEAGE, withQuotaAccountLineage, type QuotaAccountLineage } from '../account-lineage.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -306,12 +307,7 @@ async function readErrorBody(response: { text?(): Promise<string> }): Promise<st
  * Fetch Kimi Code subscription usage. Never throws — every failure path
  * resolves to a snapshot whose `status` is 'error' or 'unavailable'.
  */
-export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
-    assertInjectedNetworkFetchInTest(overrides, 'fetchKimiQuota');
-    const deps = resolveDeps(overrides);
-
-    const settings = readManagedKimiSettings(deps.env);
-    const credentialsResult = readCredentials(deps, settings.oauthKey);
+async function fetchForCredentials(deps: Required<QuotaFetchDeps>, settings: ManagedKimiSettings, credentialsResult: CredentialsResult): Promise<ProviderQuota> {
     if (credentialsResult.kind === 'missing') {
         return quotaFailure('kimi', 'unavailable', 'Not signed in to Kimi Code', {
             source: 'oauth',
@@ -401,4 +397,32 @@ export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<Pr
             failureKind: 'network',
         });
     }
+}
+
+export async function fetchKimiQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    assertInjectedNetworkFetchInTest(overrides, 'fetchKimiQuota');
+    const deps = resolveDeps(overrides);
+    const settings = readManagedKimiSettings(deps.env);
+    const before = readCredentials(deps, settings.oauthKey);
+    const authority = baseUrl(deps.env, settings.baseUrl);
+    const quota = await fetchForCredentials(deps, settings, before);
+    if (before.kind !== 'ok') return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
+    const currentSettings = readManagedKimiSettings(deps.env);
+    const after = readCredentials(deps, currentSettings.oauthKey);
+    return settleCredentialQuota(quota, { token: before.credentials.accessToken, authority,
+        lineage: accountLineageFromCliJwt('kimi', before.credentials.accessToken, authority) },
+        after.kind === 'ok' ? { token: after.credentials.accessToken,
+            authority: baseUrl(deps.env, currentSettings.baseUrl),
+            lineage: accountLineageFromCliJwt('kimi', after.credentials.accessToken, baseUrl(deps.env, currentSettings.baseUrl)) } : null);
+}
+
+/** Read the managed owning-CLI OAuth ref; no API or token exchange. */
+export function readKimiQuotaAccountLineage(overrides: QuotaFetchDeps = {}): QuotaAccountLineage {
+    if ((process.env.VITEST || process.env.NODE_TEST_CONTEXT) && !overrides.env?.KIMI_CODE_HOME) return UNKNOWN_ACCOUNT_LINEAGE;
+    const deps = resolveDeps(overrides);
+    const settings = readManagedKimiSettings(deps.env);
+    const result = readCredentials(deps, settings.oauthKey);
+    return result.kind === 'ok'
+        ? accountLineageFromCliJwt('kimi', result.credentials.accessToken, baseUrl(deps.env, settings.baseUrl))
+        : UNKNOWN_ACCOUNT_LINEAGE;
 }

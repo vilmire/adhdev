@@ -15,6 +15,8 @@
  */
 'use strict';
 
+import type { QuotaAccountLineage } from './account-lineage.js';
+
 /** Providers that can report a quota. Kept narrow on purpose — adding one
  *  means an actual fetcher exists, not just a CLI we support. */
 export type QuotaProvider = 'kimi' | 'claude-cli' | 'codex-cli' | 'antigravity-cli' | 'opencode' | 'grok-cli' | 'cursor-cli';
@@ -172,6 +174,10 @@ export interface QuotaLastGoodProvenance {
 
 /** Extra provenance/diagnostic detail; never required to render a snapshot. */
 export interface QuotaMetadata {
+    /** Opaque, stable owning-CLI issuer/subject scope. Unknown never proves equality. */
+    accountLineage?: QuotaAccountLineage;
+    /** Account/source continuity could not be confirmed; no last-good transfer is allowed. */
+    lineageUncertain?: boolean;
     /**
      * Absolute usage over a trailing window, for providers with no
      * rate-limit concept to report a percentage against (opencode is a
