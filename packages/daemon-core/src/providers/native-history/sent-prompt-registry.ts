@@ -14,6 +14,36 @@ const MIN_SNIPPET_CHARS = 8;
 const MAX_SNIPPET_CHARS = 80;
 
 const promptsByInstance = new Map<string, string[]>();
+// Keep complete input separately: the first line is often a shared worker wrapper.
+const inputsByInstance = new Map<string, string[]>();
+
+function normalizeInput(text: string): string {
+    return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Ownership evidence must include the whole sent input, in one user record.
+ * Shared inputs cannot distinguish their senders; only session-specific input
+ * can establish ownership. The legacy snippet API remains unchanged.
+ */
+export function hasExclusiveSentInput(instanceId: string, userMessages: string[]): boolean {
+    const id = instanceId.trim();
+    if (!inputsByInstance.has(id)) return false;
+    const users = userMessages.map(normalizeInput);
+    let matchedOwner = '';
+    for (const [sender, inputs] of inputsByInstance) {
+        for (const input of inputs) {
+            if (!users.some(user => user.includes(input))) continue;
+            const shared = [...inputsByInstance].some(([otherId, otherInputs]) =>
+                otherId !== sender && otherInputs.some(other => other.includes(input)));
+            if (shared) continue;
+            // One store containing distinct input from multiple owners is also
+            // ambiguous, even if only one conversation UUID matches this reader.
+            if (matchedOwner && matchedOwner !== sender) return false;
+            matchedOwner = sender;
+        }
+    }
+    return matchedOwner === id;
+}
 
 /** First non-empty line, whitespace-collapsed and capped — robust to the
  *  wrappers CLIs add around a prompt (timestamps, tags, trailing context). */
@@ -24,6 +54,13 @@ export function promptSnippet(text: string): string {
 
 export function recordSentPrompt(instanceId: string | undefined, text: string): void {
     const id = typeof instanceId === 'string' ? instanceId.trim() : '';
+    const input = normalizeInput(String(text || ''));
+    if (id && input.length >= MIN_SNIPPET_CHARS) {
+        const inputs = inputsByInstance.get(id) ?? [];
+        if (inputs[inputs.length - 1] !== input) inputs.push(input);
+        if (inputs.length > MAX_PROMPTS_PER_SESSION) inputs.splice(0, inputs.length - MAX_PROMPTS_PER_SESSION);
+        inputsByInstance.set(id, inputs);
+    }
     const snippet = promptSnippet(text);
     if (!id || !snippet) return;
     const list = promptsByInstance.get(id) ?? [];
@@ -47,9 +84,13 @@ export function containsSentPrompt(haystack: string, snippets: string[]): boolea
 
 export function releaseSentPrompts(instanceId: string | undefined): void {
     const id = typeof instanceId === 'string' ? instanceId.trim() : '';
-    if (id) promptsByInstance.delete(id);
+    if (id) {
+        promptsByInstance.delete(id);
+        inputsByInstance.delete(id);
+    }
 }
 
 export function __resetSentPromptRegistry(): void {
     promptsByInstance.clear();
+    inputsByInstance.clear();
 }

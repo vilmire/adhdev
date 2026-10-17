@@ -25,6 +25,7 @@ import {
     listSessionsAllWorkspaces as listGrokCliSessionsAllWorkspaces,
     resolveGrokPath,
 } from './grok-cli-transcript.js';
+import { hasExclusiveSentInput } from './sent-prompt-registry.js';
 import { SPAWN_BIND_GRACE_MS } from './constants.js';
 import {
     antigravityOwnerToken,
@@ -95,18 +96,8 @@ export interface NativeHistoryResult {
     sourcePath: string;
     sourceMtimeMs: number;
     nativeHistoryCoverage?: 'full' | 'partial' | 'best-effort';
-    /**
-     * True only when the resolved conversation is confirmed to belong to THIS
-     * reading session by the owner-token identity (an exact uuid bind, or a
-     * spawn-floor/birth-time pick born after this session started). False for a
-     * bare recency/newest-by-mtime pick made with no spawn floor — that pick may
-     * alias a co-located concurrent session (the antigravity coordinator↔replica
-     * crosswire), so its uuid must NEVER be recorded as a pin nor trusted to
-     * satisfy the same-pass safe-mapping identity check. Read-path callers gate
-     * the workspace-latest pin + first-read trust on this flag. Non-antigravity
-     * readers leave it undefined (their existing exact-file resolution is
-     * unaffected by this signal).
-     */
+    /** True for an accepted authoritative handle or unique full sent-input
+     * evidence. Spawn time and claim exclusivity alone never prove ownership. */
     ownerConfirmed?: boolean;
     /**
      * (NATIVE-TURN-SIGNAL) The provider's own turn-terminal records, when its reader
@@ -185,7 +176,7 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             : typeof input.args?.instanceId === 'string'
                 ? (input.args.instanceId as string)
                 : '';
-        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId);
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
         // Owner-confirmation only meaningful for antigravity (see resolveAntigravityPath).
@@ -196,7 +187,10 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             try { fs.statSync(sourcePath); } catch { /* best-effort metadata refresh */ }
         }
 
-        const session = readByReader(reader, sourcePath, sessionId, workspace);
+        const readSessionId = reader === 'antigravity-cli'
+            ? extractAntigravityConversationUuid(sourcePath) || sessionId
+            : sessionId;
+        const session = readByReader(reader, sourcePath, readSessionId, workspace);
         if (!session) return null;
 
         if (requestedProviderSid && session.providerSessionId && session.providerSessionId !== requestedProviderSid) {
@@ -247,11 +241,11 @@ interface ResolvedSource {
     ownerConfirmed?: boolean;
 }
 
-function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string): ResolvedSource | null {
+function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string, providerSessionId: string): ResolvedSource | null {
     switch (reader) {
         case 'claude-cli':   { const p = resolveClaudePath(workspace, sessionId); return p ? { path: p } : null; }
         case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs); return p ? { path: p } : null; }
-        case 'antigravity-cli': return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
+        case 'antigravity-cli': return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId);
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
         // the filename, so resolution lives in the reader module.
@@ -262,7 +256,7 @@ function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: strin
 /**
  * Exported for the background-task detector (providers/spec): resolve THIS
  * session's antigravity conversation store with the exact same binding,
- * claim-exclusion and spawn-floor rules the read path uses, so the detector
+ * claim-exclusion and sent-input ownership rules the read path uses, so the detector
  * never scans a sibling session's conversation. `sessionId` is the provider
  * session id (the on-disk conversation uuid) when known.
  */
@@ -485,13 +479,7 @@ function extractAntigravityConversationUuid(sourcePath: string): string {
     return '';
 }
 
-/**
- * The daemon may stamp a session's spawn time a hair before the CLI child
- * actually creates its conversation .db, so treat a store born within this
- * grace of the spawn floor as still belonging to this session. Kept small
- * (< a typical concurrent-spawn gap) so a sibling's PRE-spawn store is still
- * excluded rather than mis-bound.
- */
+/** Time only excludes pre-spawn stores; it never establishes attribution. */
 const AGY_SPAWN_CLAIM_GRACE_MS = 2000;
 
 function resolveAntigravityPath(
@@ -499,183 +487,69 @@ function resolveAntigravityPath(
     sessionId: string,
     sessionStartedAtMs: number,
     instanceId: string,
+    allowDiscovery = true,
 ): ResolvedSource | null {
     const agyRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli');
-    // Owner token identifies THIS reading session. The provider instance derives
-    // the identical token (workspace + startedAt, or instanceId) so it can
-    // release these claims on shutdown. '' when there is no stable identity to
-    // key on — claiming is then skipped but exclusion still runs.
     const owner = antigravityOwnerToken(workspace, sessionStartedAtMs, instanceId);
+    const brainPath = (uuid: string) => path.join(agyRoot, 'brain', uuid, '.system_generated', 'logs', 'transcript.jsonl');
+    const accept = (uuid: string, sourcePath: string): ResolvedSource | null => {
+        if (isAntigravityConversationClaimedByOther(uuid, owner)) return null;
+        if (owner && !claimAntigravityConversation(uuid, owner)) return null;
+        return { path: sourcePath, ownerConfirmed: true };
+    };
 
-    // (1) Exact session bind + LOCK: current antigravity writes a per-session
-    //     SQLite db at conversations/<uuid>.db. Once the caller knows the session
-    //     id, bind straight to it — this is authoritative and never re-resolves
-    //     by mtime, so an already-bound session cannot be hijacked by a newer
-    //     .db on a later read. Claim it so a concurrent unbound sibling can never
-    //     grab this same conversation.
+    // Explicit persisted/provider handles remain authoritative, but never
+    // override another live owner's claim. Apply the same rule to both layouts.
     if (sessionId && isUuidLike(sessionId)) {
-        const dbPath = path.join(agyRoot, 'conversations', `${sessionId}.db`);
-        if (fs.existsSync(dbPath)) {
-            if (owner) claimAntigravityConversation(sessionId, owner);
-            // Exact uuid bind — the caller named this conversation, so it is
-            // authoritatively this session's own. Owner-confirmed.
-            return { path: dbPath, ownerConfirmed: true };
-        }
+        const db = path.join(agyRoot, 'conversations', `${sessionId}.db`);
+        if (fs.existsSync(db)) return accept(sessionId, db);
+        const brain = brainPath(sessionId);
+        if (safeSize(brain) > 0) return accept(sessionId, brain);
     }
 
-    // (2) brain/<uuid>/.system_generated/logs/transcript.jsonl (legacy full source).
-    //     Only bind to a brain transcript that is NON-EMPTY (antigravity may leave
-    //     it 0 bytes when the real data lives in the per-session .db). Exclude any
-    //     brain conversation already claimed by a DIFFERENT live session.
-    //
-    //     Selection MUST mirror pickUnboundConversationDb (step 3): when a spawn
-    //     floor is known, a brain dir born at/after the floor is THIS session's own,
-    //     and among those the OLDEST-created wins (the store created first after the
-    //     session started). The previous newest-by-mtime sort silently mis-bound: in
-    //     a mesh with several co-located antigravity sessions (coordinator + workers)
-    //     every one has a non-empty brain transcript, and the worker that finished its turn
-    //     last has the newest mtime — so a coordinator's read grabbed the replica's
-    //     transcript here, BEFORE step 3's floor-aware pick could run. That is the
-    //     antigravity coordinator↔replica crosswire, and it lives in THIS step, not
-    //     step 3. Keep newest-by-mtime only in the floor-less legacy path.
-    const brainRoot = path.join(agyRoot, 'brain');
-    if (fs.existsSync(brainRoot)) {
-        const cutoff = spawnAwareCutoff(sessionStartedAtMs);
-        const nonEmptyBrain = (p: string): string | null => {
-            const t = path.join(p, '.system_generated', 'logs', 'transcript.jsonl');
-            return (fs.existsSync(t) && safeSize(t) > 0) ? t : null;
-        };
-        const all = fs.readdirSync(brainRoot, { withFileTypes: true })
-            .filter(e => e.isDirectory() && isUuidLike(e.name))
-            .filter(e => !isAntigravityConversationClaimedByOther(e.name, owner))
-            .map(e => {
-                const p = path.join(brainRoot, e.name);
-                return { uuid: e.name, p, mtime: safeMtime(p), birth: safeBirthtime(p) };
-            })
-            .filter(e => e.mtime >= cutoff);
-        let ordered: Array<{ uuid: string; p: string }> = [];
-        // Floor branch (sessionStartedAtMs > 0) is birth-confirmed as this
-        // session's own store → owner-confirmed. Floor-less newest-by-mtime is a
-        // bare recency pick that can alias a co-located session → NOT confirmed.
-        const brainOwnerConfirmed = sessionStartedAtMs > 0;
+    if (!allowDiscovery || !owner) return null;
+    const candidates = new Map<string, string[]>();
+    const add = (uuid: string, sourcePath: string, birthPath: string) => {
         if (sessionStartedAtMs > 0) {
-            // Floor branch: this session's own = born at/after (floor - grace),
-            // oldest-birth first. Mirrors pickUnboundConversationDb exactly so the
-            // two steps can never resolve DIFFERENT conversations for one session.
-            const floor = sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS;
-            ordered = all
-                .filter(e => (e.birth > 0 ? e.birth : e.mtime) >= floor)
-                .sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
-        } else {
-            // Floor-less legacy/unpinned discovery: newest-by-mtime (single-session).
-            ordered = [...all].sort((a, b) => b.mtime - a.mtime);
-        }
-        for (const e of ordered) {
-            const t = nonEmptyBrain(e.p);
-            if (t) {
-                if (owner) claimAntigravityConversation(e.uuid, owner);
-                return { path: t, ownerConfirmed: brainOwnerConfirmed };
-            }
-        }
-    }
-
-    // (3) No brain transcript and no bound session id: pick a conversations/<uuid>.db
-    //     that is NOT claimed by another live session, guarded by this session's
-    //     spawn time so we never mis-bind to a sibling's earlier store.
+            if (safeBirthtime(birthPath) < sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS) return;
+        } else if (safeMtime(sourcePath) < Date.now() - RECENT_WINDOW_MS) return;
+        const paths = candidates.get(uuid) ?? [];
+        paths.push(sourcePath);
+        candidates.set(uuid, paths);
+    };
+    const entries = (root: string): fs.Dirent[] => {
+        try { return fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+    };
     const convRoot = path.join(agyRoot, 'conversations');
-    const picked = pickUnboundConversationDb(convRoot, sessionStartedAtMs, owner);
-    if (picked) {
-        if (owner) claimAntigravityConversation(picked.uuid, owner);
-        return { path: picked.path, ownerConfirmed: picked.ownerConfirmed };
-    }
-
-    return null;
-}
-
-/**
- * Choose the conversations/<uuid>.db for an as-yet-unbound antigravity session.
- *
- * Two isolation rules keep concurrent sessions apart:
- *   - claim exclusion: skip any .db already owned by a DIFFERENT live session,
- *     so two sessions can never resolve to the same conversation;
- *   - spawn-window guard: a session's own store is created at/after it spawned,
- *     so when a spawn floor is known, only stores born at/after (floor - grace)
- *     are eligible. A store that predates this session's spawn belongs to an
- *     earlier session and is never bound — if none qualifies we return null
- *     (native_history_empty) and let the caller retry once this session's own
- *     store appears, rather than binding a sibling's conversation.
- *
- * Among eligible unclaimed stores the OLDEST-created wins: in the normal case
- * (each session polls native history only after its own store exists, and an
- * earlier-spawned session polls earlier) this hands each session the first
- * store created after it started — its own. When no spawn floor is available
- * (legacy/unpinned discovery) we fall back to newest-by-mtime within the
- * recency window, preserving the original single-session behaviour.
- */
-function pickUnboundConversationDb(
-    convRoot: string,
-    sessionFloorMs: number,
-    owner: string,
-): { path: string; uuid: string; ownerConfirmed: boolean } | null {
-    let entries: fs.Dirent[] = [];
-    try { entries = fs.readdirSync(convRoot, { withFileTypes: true }); } catch { return null; }
-
-    // A known spawn floor already pins a candidate to THIS session by birth time
-    // (a store created at/after the session spawned is its own). Once that floor
-    // is available, the recency window is not just unnecessary but harmful: an
-    // antigravity session that has sat idle longer than RECENT_WINDOW_MS still
-    // owns its conversation .db, but the recency cutoff would drop it from the
-    // candidate set, collapsing the read to native_history_empty and forcing the
-    // dashboard onto the PTY parse (user echo only, assistant tail lost —
-    // ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP, most visible right after a daemon
-    // restart clears the in-memory read pin). So only apply the recency cutoff in
-    // the floor-less (legacy/unpinned) discovery path, where it is the sole guard
-    // against binding an unrelated old store. When a floor is known the birth-time
-    // filter below is the authoritative, idle-agnostic owner check.
-    const applyRecencyCutoff = !(sessionFloorMs > 0);
-    const recencyCutoff = Date.now() - RECENT_WINDOW_MS;
-    const candidates: Array<{ path: string; uuid: string; mtime: number; birth: number }> = [];
-    for (const entry of entries) {
-        if (!entry.isFile()) continue;
+    for (const entry of entries(convRoot)) {
         const match = /^([0-9a-f-]+)\.db$/i.exec(entry.name);
-        if (!match || !isUuidLike(match[1])) continue;
-        const uuid = match[1];
-        // (isolation) never consider a conversation a different live session owns.
-        if (isAntigravityConversationClaimedByOther(uuid, owner)) continue;
-        const p = path.join(convRoot, entry.name);
-        const mtime = safeMtime(p);
-        if (applyRecencyCutoff && mtime < recencyCutoff) continue;
-        candidates.push({ path: p, uuid, mtime, birth: safeBirthtime(p) });
+        if (!entry.isFile() || !match || !isUuidLike(match[1])) continue;
+        const db = path.join(convRoot, entry.name);
+        add(match[1].toLowerCase(), db, db);
     }
-    if (candidates.length === 0) return null;
-
-    if (sessionFloorMs > 0) {
-        const floor = sessionFloorMs - AGY_SPAWN_CLAIM_GRACE_MS;
-        const own = candidates.filter(c => (c.birth > 0 ? c.birth : c.mtime) >= floor);
-        // A store created before this session spawned belongs to an earlier
-        // session — do NOT bind to it. Wait for our own store on the next read.
-        if (own.length === 0) return null;
-        own.sort((a, b) => (a.birth || a.mtime) - (b.birth || b.mtime));
-        // Birth-time confirmed as this session's own store → owner-confirmed.
-        return { path: own[0].path, uuid: own[0].uuid, ownerConfirmed: true };
+    const brainRoot = path.join(agyRoot, 'brain');
+    for (const entry of entries(brainRoot)) {
+        if (!entry.isDirectory() || !isUuidLike(entry.name)) continue;
+        const brain = brainPath(entry.name);
+        if (safeSize(brain) > 0) add(entry.name.toLowerCase(), brain, path.join(brainRoot, entry.name));
     }
 
-    // Floor-less newest-by-mtime: a bare recency pick with no per-session
-    // guarantee — it can alias a co-located concurrent session, so it is NOT
-    // owner-confirmed and must not be pinned/trusted by the read-path callers.
-    candidates.sort((a, b) => b.mtime - a.mtime);
-    return { path: candidates[0].path, uuid: candidates[0].uuid, ownerConfirmed: false };
-}
-
-/**
- * mtime floor for the brain-transcript scan: the later of the recency window
- * and this session's spawn floor (minus the claim grace), so a fresh read
- * cannot surface a brain dir last touched before this session started.
- */
-function spawnAwareCutoff(sessionStartedAtMs: number): number {
-    const recency = Date.now() - RECENT_WINDOW_MS;
-    if (sessionStartedAtMs > 0) return Math.max(recency, sessionStartedAtMs - AGY_SPAWN_CLAIM_GRACE_MS);
-    return recency;
+    // Prove identity BEFORE any claim or owner-confirmed result can create a
+    // sticky read pin. Check all stores, including claimed siblings: exclusivity
+    // cannot turn ambiguous evidence into positive attribution. DB and brain
+    // copies of one UUID count as one conversation.
+    const matches: Array<{ uuid: string; sourcePath: string }> = [];
+    for (const [uuid, paths] of candidates) {
+        for (const sourcePath of paths) {
+            const session = readAntigravityCliSession(sourcePath, uuid, workspace || undefined);
+            const users = session?.messages.filter(m => m.role === 'user').map(m => m.content) ?? [];
+            if (!hasExclusiveSentInput(instanceId, users)) continue;
+            matches.push({ uuid, sourcePath });
+            break;
+        }
+    }
+    if (matches.length !== 1) return null;
+    return accept(matches[0].uuid, matches[0].sourcePath);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

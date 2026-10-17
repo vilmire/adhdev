@@ -1,18 +1,4 @@
-/**
- * Owner-confirmation signal for the antigravity native-history dispatcher.
- *
- * The read-path (chat-commands-read.ts) pins a conversation uuid on a
- * workspace-latest read — and trusts it in the same-pass safe-mapping check —
- * ONLY when the dispatcher confirmed that conversation belongs to THIS reading
- * session by the owner token. This is the safety hinge of the coordinator-pin
- * fix: an exact/birth-confirmed pick is owner-confirmed (safe to pin/trust); a
- * bare recency/newest-by-mtime pick (no spawn floor) is NOT (it could alias a
- * co-located replica, so it must never be pinned).
- *
- * These tests assert the dispatcher sets NativeHistoryResult.ownerConfirmed
- * correctly for each resolution branch, mirroring the live coordinator case:
- * two co-located conversations/<uuid>.db (owner + replica) in one workspace.
- */
+/** Owner confirmation requires an accepted handle or unique sent input. */
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -118,12 +104,10 @@ describe('antigravity dispatcher — ownerConfirmed signal', () => {
     expect(result!.ownerConfirmed).toBe(true);
   });
 
-  it('spawn-floor (birth) pick → resolves a birth-confirmed store, ownerConfirmed=true', async () => {
-    // With a spawn floor, pickUnboundConversationDb admits only stores born
-    // at/after (floor - grace) and picks a birth-confirmed own store — the key
-    // property is that the resolution is owner-confirmed (this session's own),
-    // NOT a bare recency guess.
+  it('sent-input evidence confirms a store within the spawn floor', async () => {
     const ownerPath = await makeConversationDb(OWNER, ownerSteps('owner'));
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('coordinator-instance-1', 'owner prompt');
     const ownerBirthMs = Math.floor(fs.statSync(ownerPath).birthtimeMs || fs.statSync(ownerPath).mtimeMs);
 
     const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
@@ -137,8 +121,24 @@ describe('antigravity dispatcher — ownerConfirmed signal', () => {
     });
     expect(result).not.toBeNull();
     expect(result!.providerSessionId).toBe(OWNER);
-    // Floor-aware pick is birth-confirmed as this session's own → owner-confirmed.
+    // The sent input confirms ownership; birth time only excludes older stores.
     expect(result!.ownerConfirmed).toBe(true);
+  });
+
+  it('a spawn floor without sent input cannot confirm or claim a store', async () => {
+    await makeConversationDb(OWNER, ownerSteps('owner'));
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const { antigravityConversationOwner } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+    expect(createNativeHistoryDispatcher('antigravity-cli')({ instanceId: 'coordinator', workspace: '/ws', sessionStartedAtMs: Date.now() - 1000 })).toBeNull();
+    expect(antigravityConversationOwner(OWNER)).toBeUndefined();
+  });
+
+  it('a rejected exact claim never returns an owner-confirmed result', async () => {
+    await makeConversationDb(OWNER, ownerSteps('owner'));
+    const claims = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+    vi.spyOn(claims, 'claimAntigravityConversation').mockReturnValue(false);
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    expect(createNativeHistoryDispatcher('antigravity-cli')({ sessionId: OWNER, instanceId: 'coordinator', workspace: '/ws' })).toBeNull();
   });
 
   it('spawn-floor excludes a store born BEFORE the floor (a replica\'s prior store is never bound)', async () => {
@@ -146,6 +146,8 @@ describe('antigravity dispatcher — ownerConfirmed signal', () => {
     // must exclude it, so discovery returns null (native_history_empty) rather than
     // binding a sibling's conversation. This is the crosswire guard at the resolver.
     const replicaPath = await makeConversationDb(REPLICA, ownerSteps('replica'));
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('coordinator-instance-1', 'replica prompt');
     const replicaBirthMs = Math.floor(fs.statSync(replicaPath).birthtimeMs || fs.statSync(replicaPath).mtimeMs);
 
     const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
@@ -162,10 +164,7 @@ describe('antigravity dispatcher — ownerConfirmed signal', () => {
     expect(result).toBeNull();
   });
 
-  it('floor-less newest-by-mtime pick (no spawn floor) → ownerConfirmed=false (bare recency; must NOT be pinned)', async () => {
-    // No sessionStartedAtMs and no exact uuid: discovery falls to the floor-less
-    // newest-by-mtime path — a bare recency pick that could be a co-located
-    // session's store. The read-path must never pin/trust this.
+  it('floor-less read without sent evidence returns no native choice', async () => {
     await makeConversationDb(OWNER, ownerSteps('owner'));
     const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
@@ -176,8 +175,6 @@ describe('antigravity dispatcher — ownerConfirmed signal', () => {
       // sessionStartedAtMs omitted → floor-less discovery.
       instanceId: 'coordinator-instance-1',
     });
-    expect(result).not.toBeNull();
-    expect(result!.providerSessionId).toBe(OWNER);
-    expect(result!.ownerConfirmed).toBe(false);
+    expect(result).toBeNull();
   });
 });

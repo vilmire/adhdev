@@ -1,18 +1,4 @@
-/**
- * Regression: antigravity conversation-binding isolation.
- *
- * Two concurrent antigravity-cli sessions on ONE daemon each write their own
- * conversations/<uuid>.db, but before either resolved its provider session id
- * the discovery fallback picked "the newest .db on disk by mtime" — so two
- * sessions started a few ms apart both grabbed the SAME store and their inputs
- * / completions cross-routed (RCA: a coordinator session read the owner's
- * conversation, and its own injected instruction was absent from the bound db).
- *
- * The fix binds+locks each session to a distinct conversation via a daemon-local
- * claim registry plus a spawn-window guard. These tests exercise that through
- * the dispatcher — the layer the live daemon calls — and directly against the
- * registry primitives.
- */
+/** Native ownership requires sent-input attribution before exclusive claims. */
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -110,12 +96,138 @@ describe('antigravity conversation-binding isolation', () => {
     tmpDir = '';
   });
 
+  for (const format of ['db', 'brain'] as const) {
+    async function store(uuid: string, prompt: string) {
+      if (format === 'db') return makeConversationDb(uuid, turn(prompt, 'answer'));
+      const dir = path.join(antigravityRoot(), 'brain', uuid, '.system_generated', 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'transcript.jsonl'), [
+        { source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: prompt },
+        { source: 'MODEL', type: 'MODEL_RESPONSE', status: 'DONE', content: 'answer' },
+      ].map(row => JSON.stringify(row)).join('\n'));
+    }
+
+    it.each(['workspace', 'task'])(`${format}: common worker wrappers differing by %s require full sent input`, async (difference) => {
+      const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+      const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+      const wrapper = 'You are a delegated worker. Follow the worker protocol and preserve all existing sessions.\n';
+      const a = wrapper + 'Workspace: /ws/a\nTask: task-a fix the admission guard';
+      const b = wrapper + (difference === 'workspace' ? 'Workspace: /ws/b\nTask: task-a fix the admission guard' : 'Workspace: /ws/a\nTask: task-b recover CI');
+      recordSentPrompt('a', a);
+      recordSentPrompt('b', b);
+      await store(SESSION_B, b);
+      await store(SESSION_A, a);
+      const dispatch = createNativeHistoryDispatcher('antigravity-cli');
+      const input = { workspace: '/ws/a', sessionStartedAtMs: Date.now() - 1000 };
+      expect(dispatch({ ...input, instanceId: 'a' })).toMatchObject({ providerSessionId: SESSION_A, ownerConfirmed: true });
+      expect(dispatch({ ...input, instanceId: 'b', workspace: difference === 'workspace' ? '/ws/b' : '/ws/a' })).toMatchObject({ providerSessionId: SESSION_B, ownerConfirmed: true });
+    });
+
+    it(`${format}: old unbound runtime cannot steal a worker store; delayed first store recovers`, async () => {
+      const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+      const { antigravityConversationOwner } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+      const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+      recordSentPrompt('old', 'Older runtime task: unrelated CI recovery');
+      recordSentPrompt('worker', 'Worker task: fix-autolaunch-admission-guard task d015');
+      await store(SESSION_A, 'Worker task: fix-autolaunch-admission-guard task d015');
+      const dispatch = createNativeHistoryDispatcher('antigravity-cli');
+      const old = { instanceId: 'old', workspace: '/ws', sessionStartedAtMs: Date.now() - 60000 };
+      expect(dispatch(old)).toBeNull();
+      expect(antigravityConversationOwner(SESSION_A)).toBeUndefined();
+      expect(dispatch({ instanceId: 'worker', workspace: '/ws', sessionStartedAtMs: Date.now() - 1000 })).toMatchObject({ providerSessionId: SESSION_A, ownerConfirmed: true });
+      await store(SESSION_B, 'Older runtime task: unrelated CI recovery');
+      expect(dispatch(old)).toMatchObject({ providerSessionId: SESSION_B, ownerConfirmed: true });
+    });
+
+    it(`${format}: ambiguous matching conversations produce no choice or claims`, async () => {
+      const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+      const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+      const { antigravityConversationOwner } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+      recordSentPrompt('a', 'Identical task input with no unique conversation');
+      await store(SESSION_A, 'Identical task input with no unique conversation');
+      await store(SESSION_B, 'Identical task input with no unique conversation');
+      expect(createNativeHistoryDispatcher('antigravity-cli')({ instanceId: 'a', workspace: '/ws', sessionStartedAtMs: Date.now() - 1000 })).toBeNull();
+      expect(antigravityConversationOwner(SESSION_A)).toBeUndefined();
+      expect(antigravityConversationOwner(SESSION_B)).toBeUndefined();
+    });
+
+    it(`${format}: a store containing different owners' sent inputs is ambiguous`, async () => {
+      const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+      recordSentPrompt('a', 'Workspace /ws/a task admission guard');
+      recordSentPrompt('b', 'Workspace /ws/b task CI recovery');
+      await store(SESSION_A, 'Workspace /ws/a task admission guard\nWorkspace /ws/b task CI recovery');
+      const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+      const { antigravityConversationOwner } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+      expect(createNativeHistoryDispatcher('antigravity-cli')({ instanceId: 'a', workspace: '/ws/a' })).toBeNull();
+      expect(antigravityConversationOwner(SESSION_A)).toBeUndefined();
+    });
+
+    it(`${format}: authoritative handle works without sent evidence and respects providerSessionId`, async () => {
+      await store(SESSION_A, 'Authoritative handle task');
+      const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+      const dispatch = createNativeHistoryDispatcher('antigravity-cli');
+      expect(dispatch({ sessionId: SESSION_A, instanceId: 'a', workspace: '/ws' })).toMatchObject({ providerSessionId: SESSION_A, ownerConfirmed: true });
+      expect(dispatch({ sessionId: 'runtime-id', providerSessionId: SESSION_A, instanceId: 'a', workspace: '/ws' })).toMatchObject({ providerSessionId: SESSION_A, ownerConfirmed: true });
+    });
+
+    it(`${format}: exact UUID cannot override a rejected claim`, async () => {
+      await store(SESSION_A, 'Authoritative handle task');
+      const { claimAntigravityConversation, antigravityConversationOwner } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+      claimAntigravityConversation(SESSION_A, 'iid:other');
+      const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+      expect(createNativeHistoryDispatcher('antigravity-cli')({ sessionId: SESSION_A, instanceId: 'a', workspace: '/ws' })).toBeNull();
+      expect(antigravityConversationOwner(SESSION_A)).toBe('iid:other');
+    });
+  }
+
+  it('assistant text quoting sent input cannot establish ownership', async () => {
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('a', 'Workspace /ws/a task admission guard');
+    await makeConversationDb(SESSION_A, turn('An unrelated task input', 'Workspace /ws/a task admission guard'));
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    expect(createNativeHistoryDispatcher('antigravity-cli')({ instanceId: 'a', workspace: '/ws/a' })).toBeNull();
+  });
+
+  it('a missing explicit provider handle never claims a different matching store', async () => {
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const { antigravityConversationOwner } = await import('../../../src/providers/native-history/antigravity-claim-registry.js');
+    recordSentPrompt('a', 'A task with a missing persisted handle');
+    await makeConversationDb(SESSION_A, turn('A task with a missing persisted handle', 'answer'));
+    expect(createNativeHistoryDispatcher('antigravity-cli')({ instanceId: 'a', providerSessionId: SESSION_B, workspace: '/ws' })).toBeNull();
+    expect(antigravityConversationOwner(SESSION_A)).toBeUndefined();
+  });
+
+  it('DB and brain for different matching UUIDs stay ambiguous across layouts', async () => {
+    const prompt = 'Cross-layout task input requiring one conversation';
+    await makeConversationDb(SESSION_A, turn(prompt, 'DB answer'));
+    const dir = path.join(antigravityRoot(), 'brain', SESSION_B, '.system_generated', 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'transcript.jsonl'), JSON.stringify({ source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: prompt }));
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('a', prompt);
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    expect(createNativeHistoryDispatcher('antigravity-cli')({ instanceId: 'a', workspace: '/ws' })).toBeNull();
+  });
+
+  it('identical inputs sent by different runtimes cannot prove an owner; release clears evidence', async () => {
+    const { recordSentPrompt, releaseSentPrompts } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    const { createNativeHistoryDispatcher } = await import('../../../src/providers/native-history/dispatcher.js');
+    const prompt = 'A common instruction sent to multiple workers';
+    recordSentPrompt('a', prompt);
+    recordSentPrompt('b', prompt);
+    await makeConversationDb(SESSION_A, turn(prompt, 'answer'));
+    const dispatch = createNativeHistoryDispatcher('antigravity-cli');
+    expect(dispatch({ instanceId: 'a', workspace: '/ws' })).toBeNull();
+    releaseSentPrompts('a');
+    releaseSentPrompts('b');
+    expect(dispatch({ instanceId: 'a', workspace: '/ws' })).toBeNull();
+  });
+
   it('(a) two concurrent unbound sessions never resolve to the same conversation uuid', async () => {
     // Two conversations exist on disk; both sessions read UNBOUND (no provider
     // conv id yet) in the same workspace, started ~94ms apart. Each carries its
-    // own stable instanceId (== its ADHDev sessionId — what every real read
-    // passes), which is the SOLE isolation key: the claim registry excludes the
-    // second from the conversation the first already claimed under its iid token.
+    // own stable instanceId and sent input. Read order must not choose identity.
     await makeConversationDb(SESSION_A, turn('prompt A', 'answer A'));
     await makeConversationDb(SESSION_B, turn('prompt B', 'answer B'));
 
@@ -124,6 +236,9 @@ describe('antigravity conversation-binding isolation', () => {
     );
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
 
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('agy-session-a', 'prompt A');
+    recordSentPrompt('agy-session-b', 'prompt B');
     const startedA = Date.now() - 1000;
     const startedB = startedA + 94; // sibling spawned 94ms later
 
@@ -169,6 +284,8 @@ describe('antigravity conversation-binding isolation', () => {
 
   it('(c) a single unbound session still resolves its own conversation (no regression)', async () => {
     await makeConversationDb(SESSION_A, turn('solo prompt', 'solo answer'));
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('solo', 'solo prompt');
 
     const { createNativeHistoryDispatcher } = await import(
       '../../../src/providers/native-history/dispatcher.js'
@@ -179,6 +296,7 @@ describe('antigravity conversation-binding isolation', () => {
       agentType: 'antigravity-cli',
       sessionId: '',
       workspace: '/workspaces/agy',
+      instanceId: 'solo',
       sessionStartedAtMs: Date.now() - 500, // store created ~now, within spawn window
     });
 
@@ -193,6 +311,8 @@ describe('antigravity conversation-binding isolation', () => {
     // earlier session — the resolver must return null (native_history_empty)
     // rather than mis-bind to a sibling's conversation.
     await makeConversationDb(SESSION_A, turn('earlier prompt', 'earlier answer'));
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('later', 'earlier prompt');
 
     const { createNativeHistoryDispatcher } = await import(
       '../../../src/providers/native-history/dispatcher.js'
@@ -203,20 +323,22 @@ describe('antigravity conversation-binding isolation', () => {
       agentType: 'antigravity-cli',
       sessionId: '',
       workspace: '/workspaces/agy',
+      instanceId: 'later',
       sessionStartedAtMs: Date.now() + 60_000, // spawned "after" the store existed
     });
 
     expect(result).toBeNull();
   });
 
-  it('(e) idle store past the recency window still binds when a spawn floor owns it (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP)', async () => {
+  it('(e) idle store past the recency window still binds when sent-input evidence identifies it (ANTIGRAVITY-FINAL-MESSAGE-TAIL-GAP)', async () => {
     // The session's own conversation .db has sat idle far longer than
-    // RECENT_WINDOW_MS (5 min) — e.g. right after a daemon restart cleared the
-    // in-memory read pin, so the read cannot exact-bind and falls to
-    // pickUnboundConversationDb. The store is still THIS session's (birth after
-    // its spawn), so a floor-aware read must return it (assistant tail intact)
-    // rather than recency-exclude it into native_history_empty.
+    // RECENT_WINDOW_MS (5 min). This runtime still has its sent-input evidence,
+    // so an unpinned read may recover its idle store without trusting recency.
+    // An attached runtime with neither evidence nor an explicit handle waits.
     const dbPath = await makeConversationDb(SESSION_A, turn('idle prompt', 'idle answer'));
+
+    const { recordSentPrompt } = await import('../../../src/providers/native-history/sent-prompt-registry.js');
+    recordSentPrompt('idle', 'idle prompt');
 
     // Backdate the store ~30 min so it is well past the 5-min recency window,
     // while its birth time still sits after the (older) spawn floor below.
@@ -230,11 +352,12 @@ describe('antigravity conversation-binding isolation', () => {
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
 
     // Spawn floor is OLDER than the store (session started before it wrote its
-    // .db), so the birth-time owner check accepts it. Idle age is irrelevant.
+    // .db), so the birth-time exclusion allows it; sent input proves ownership. Idle age is irrelevant.
     const result = dispatch({
       agentType: 'antigravity-cli',
       sessionId: '',
       workspace: '/workspaces/agy',
+      instanceId: 'idle',
       sessionStartedAtMs: idleMs - 60_000,
     });
 

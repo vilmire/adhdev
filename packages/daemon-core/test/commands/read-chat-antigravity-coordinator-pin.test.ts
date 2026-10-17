@@ -1,29 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Root fix for "antigravity COORDINATOR chat shows only the user message".
-//
-// A coordinator agy session has NO pin (agy takes no --session-id, so
-// state.json sessionProviderSessionPins is empty for it) and after attach-restore
-// spawnedAtMs is 0. Its post-turn read (no live adapter) therefore resolves the
-// conversation via the workspace-latest fallback (lookup === 'workspace'). The
-// dispatcher STILL surfaces the on-disk conversation uuid there and flags whether
-// it was OWNER-token-confirmed as this session's own (an exact/birth pick) vs a
-// bare recency pick (which could be a co-located replica's conversation).
-//
-// Before the fix: the workspace-latest read blanked identity into the safe-mapping
-// check (lookup === 'workspace' → historySessionId/providerSessionId undefined) →
-// the check fell to the workspace-overlap branch → the PTY snapshot has only the
-// user runtime_input_ack echo → hasSafeNativeHistoryMapping failed closed → the
-// source machine regressed to pty-parser → the dashboard saw only the user echo,
-// and NO pin was ever recorded (self-perpetuating trap).
-//
-// After the fix: an OWNER-CONFIRMED workspace-latest uuid is (a) fed as the
-// explicit identity to the safe-mapping check so it trusts the assistant on the
-// FIRST read, and (b) recorded as the pin. A NON-owner-confirmed (bare recency)
-// uuid does NEITHER — the coordinator↔replica crosswire guard stays intact.
-//
-// These tests drive the history-only read path (getCliAdapter → null) with
-// readProviderChatHistory mocked to reproduce the two dispatcher outcomes.
+// Workspace discovery may create a sticky pin only after the dispatcher proves
+// ownership with unique sent input. A spawn floor alone cannot authorize it.
+// These tests cover how the read path consumes that result.
 
 const mocks = vi.hoisted(() => ({
   readProviderChatHistory: vi.fn(),
@@ -123,7 +102,7 @@ describe('read_chat antigravity coordinator pin + owner-confirmed safe-mapping (
     // No pin exists for the coordinator, so the history-only path takes the
     // workspace-latest fallback (no explicit historySessionId → the dispatcher
     // resolved the owner conversation). ownerConfirmed=true (the dispatcher's
-    // exact/birth branch), so identity is trusted uuid-to-uuid on this FIRST read.
+    // exact/sent-input branch), so identity is trusted uuid-to-uuid on this FIRST read.
     mocks.readProviderChatHistory.mockImplementation((_agent: string, _options: any) => ownerConversationRead(true))
 
     const helpers = createHelpers((id: string) => id === COORDINATOR_SESSION
@@ -189,13 +168,7 @@ describe('read_chat antigravity coordinator pin + owner-confirmed safe-mapping (
     expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBeUndefined()
   })
 
-  it('(a2) D3: a coordinator carrying a REAL session-host floor (registry spawnedAtMs > 0) resolves ownerConfirmed and records the pin', async () => {
-    // The D3 fix threads the runtime's real (PAST) startedAt into the session
-    // registry's spawnedAtMs on attach, so the coordinator's read now carries a
-    // POSITIVE floor (instead of the old attach-collapsed 0). With a valid floor
-    // the dispatcher's birth-branch confirms the coordinator's OWN conv
-    // (ownerConfirmed:true) — modeled here by the owner-confirmed read — and the
-    // pin gets recorded, breaking the self-perpetuating user-only trap.
+  it('(a2) a proven sent-input owner with a runtime floor records the pin', async () => {
     mocks.readProviderChatHistory.mockImplementation((_agent: string, _options: any) => ownerConversationRead(true))
 
     const realFloorMs = 1_900_000_000_000 // a PAST timestamp — the runtime's true birth
@@ -214,6 +187,22 @@ describe('read_chat antigravity coordinator pin + owner-confirmed safe-mapping (
     expect((result.messages as any[]).map((m) => m.content)).toContain('coordinator answer: dispatched 3 tasks')
     // The D3 outcome: the coordinator's own conv is pinned.
     expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBe(OWNER_UUID)
+  })
+
+  it('delayed ownership proof leaves no pin until a later confirmed read', async () => {
+    mocks.readProviderChatHistory.mockReturnValue({ messages: [], hasMore: false, source: 'provider-native', lookup: 'workspace' })
+    const helpers = createHelpers((id: string) => id === COORDINATOR_SESSION
+      ? { sessionId: COORDINATOR_SESSION, providerType: 'antigravity-cli', transport: 'pty', workspace: WORKSPACE, spawnedAtMs: 1_900_000_000_000 }
+      : undefined)
+    const input = { agentType: 'antigravity-cli', targetSessionId: COORDINATOR_SESSION, workspace: WORKSPACE, tailLimit: 20 }
+    const first = await handleReadChat(helpers as any, input)
+    expect(first.success).toBe(true)
+    expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBeUndefined()
+    mocks.readProviderChatHistory.mockReturnValue(ownerConversationRead(true))
+    const second = await handleReadChat(helpers as any, input)
+    expect(second.success).toBe(true)
+    expect(__getProviderSessionPinForTest(COORDINATOR_SESSION)).toBe(OWNER_UUID)
+    expect((second.messages as any[]).some(m => m.content === 'coordinator answer: dispatched 3 tasks')).toBe(true)
   })
 
   it('(c) once the owner-confirmed pin is recorded, the next read exact-binds via the pin (no more workspace-latest)', async () => {
