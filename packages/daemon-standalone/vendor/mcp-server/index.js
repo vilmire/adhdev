@@ -27401,6 +27401,9 @@ ${renderWorkerProtocolFooter2(input)}`;
     var MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES;
     var MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES;
     var DEFAULT_NODE_MAX_CONCURRENT_SESSIONS;
+    var DEFAULT_MESH_MAX_NODES;
+    var MESH_MAX_NODES_MIN;
+    var MESH_MAX_NODES_MAX;
     var DEFAULT_MESH_POLICY;
     var DEFAULT_QUOTA_ROUTING_POLICY2;
     var SILENT_IDLE_PUSH_TTL_MS;
@@ -27419,6 +27422,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         MESH_DELEGATED_SESSION_IDLE_TTL_MIN_MINUTES = 5;
         MESH_DELEGATED_SESSION_IDLE_TTL_MAX_MINUTES = 7 * 24 * 60;
         DEFAULT_NODE_MAX_CONCURRENT_SESSIONS = 12;
+        DEFAULT_MESH_MAX_NODES = 32;
+        MESH_MAX_NODES_MIN = 1;
+        MESH_MAX_NODES_MAX = 64;
         DEFAULT_MESH_POLICY = {
           requireApprovalForPush: true,
           allowAutoPublishSubmoduleMainCommits: false,
@@ -27428,6 +27434,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           // API only to impose a deliberate mesh-wide cap. Resolved through
           // resolveMaxParallelTasks, which clamps it to MESH_MAX_PARALLEL_TASKS_MAX (64).
           maxParallelTasks: 200,
+          // Per-mesh node limit (base + worktree nodes). See DEFAULT_MESH_MAX_NODES.
+          maxNodes: DEFAULT_MESH_MAX_NODES,
           // Coordinator-spawned worker sessions default to hidden so the dashboard is not
           // flooded with mesh noise tabs/notifications. Users can still surface or unmute
           // any specific session manually; that override is preserved per-device.
@@ -27535,6 +27543,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       const raw = value === void 0 || value === null ? DEFAULT_MESH_POLICY.maxParallelTasks : Number(value);
       const n = Number.isFinite(raw) ? raw : DEFAULT_MESH_POLICY.maxParallelTasks;
       return Math.max(MESH_MAX_PARALLEL_TASKS_MIN, Math.min(MESH_MAX_PARALLEL_TASKS_MAX, Math.floor(n)));
+    }
+    function resolveMaxNodes(value) {
+      const raw = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+      const n = Number.isFinite(raw) ? raw : DEFAULT_MESH_MAX_NODES;
+      return Math.max(MESH_MAX_NODES_MIN, Math.min(MESH_MAX_NODES_MAX, Math.floor(n)));
     }
     function resolveDelegatedSessionIdleTtlMinutes(value) {
       if (value === false || value === 0) return 0;
@@ -27745,6 +27758,19 @@ ${renderWorkerProtocolFooter2(input)}`;
           requireApprovalForPush: boolDefault(DEFAULT_MESH_POLICY.requireApprovalForPush),
           allowAutoPublishSubmoduleMainCommits: { effective: (v) => v === true },
           maxParallelTasks: { effective: (v) => resolveMaxParallelTasks(v) },
+          maxNodes: {
+            effective: (v) => resolveMaxNodes(v),
+            // A safety limit must not be silently re-interpreted: a write outside the range
+            // (or a non-integer) fails with the range instead of being clamped to something
+            // the owner never asked for. Reads of an already-stored odd value still clamp.
+            stored: (v) => {
+              const n = typeof v === "number" || typeof v === "string" ? Number(v) : Number.NaN;
+              if (Number.isInteger(n) && n >= MESH_MAX_NODES_MIN && n <= MESH_MAX_NODES_MAX) return n;
+              throw new Error(
+                `invalid_max_nodes: policy.maxNodes must be a whole number from ${MESH_MAX_NODES_MIN} to ${MESH_MAX_NODES_MAX} (got ${JSON.stringify(v)}). Send null to reset it to the default (${DEFAULT_MESH_MAX_NODES}).`
+              );
+            }
+          },
           schedulingStrategy: { effective: (v) => normalizeMeshSchedulingStrategy(v) },
           spawnedSessionVisibility: {
             effective: (v) => SPAWNED_SESSION_VISIBILITY_MODES.has(v) ? v : DEFAULT_MESH_POLICY.spawnedSessionVisibility
@@ -27925,18 +27951,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (cwd && cwd !== ws) bases.push(cwd);
       for (const base of bases) {
-        for (const relative13 of MESH_JSON_CONFIG_LOCATIONS) {
-          const configPath = (0, import_path.join)(base, relative13);
+        for (const relative14 of MESH_JSON_CONFIG_LOCATIONS) {
+          const configPath = (0, import_path.join)(base, relative14);
           if (!(0, import_fs.existsSync)(configPath)) continue;
           try {
             const parsed = parseConfigText(configPath, (0, import_fs.readFileSync)(configPath, "utf-8"));
             const result = normalizeRepoMeshDeclarativeConfig(parsed);
             if (!result.valid || !result.config) {
-              return { source: relative13, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
+              return { source: relative14, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
             }
-            return { config: result.config, source: relative13, sourceType: "repo_file", path: configPath };
+            return { config: result.config, source: relative14, sourceType: "repo_file", path: configPath };
           } catch (error) {
-            return { source: relative13, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+            return { source: relative14, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
           }
         }
       }
@@ -28166,8 +28192,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return String(value).replace(/\r\n/g, "\n");
     }
     function isPathInside(parent, child) {
-      const relative13 = path3.relative(path3.resolve(parent), path3.resolve(child));
-      return relative13 === "" || !relative13.startsWith("..") && !path3.isAbsolute(relative13);
+      const relative14 = path3.relative(path3.resolve(parent), path3.resolve(child));
+      return relative14 === "" || !relative14.startsWith("..") && !path3.isAbsolute(relative14);
     }
     async function validateWorkspace(workspace) {
       if (typeof workspace !== "string" || workspace.length === 0 || workspace.includes("\0")) {
@@ -28413,8 +28439,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : void 0 };
     }
     function loadChangeImpactConfig(repoRoot) {
-      for (const relative13 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path2.join)(repoRoot, relative13);
+      for (const relative14 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path2.join)(repoRoot, relative14);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
           const text4 = (0, import_fs2.readFileSync)(configPath, "utf-8");
@@ -28425,10 +28451,10 @@ ${renderWorkerProtocolFooter2(input)}`;
             mtimeMs = text4.length;
           }
           const parsed = parseConfigText(configPath, text4);
-          const validation = validateChangeImpactConfig(parsed, relative13);
+          const validation = validateChangeImpactConfig(parsed, relative14);
           if (!validation.valid) {
             return {
-              source: relative13,
+              source: relative14,
               sourceType: "invalid",
               path: configPath,
               error: validation.errors.join("; "),
@@ -28437,14 +28463,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           }
           return {
             config: validation.config,
-            source: relative13,
+            source: relative14,
             sourceType: "repo_file",
             path: configPath,
             sourceKey: `file:${configPath}:${mtimeMs}`
           };
         } catch (error) {
           return {
-            source: relative13,
+            source: relative14,
             sourceType: "invalid",
             path: configPath,
             error: error?.message || String(error),
@@ -30131,6 +30157,69 @@ ${renderWorkerProtocolFooter2(input)}`;
         interceptorInstalled = false;
       }
     });
+    function accountLineageFromCliJwt(provider, token, authority) {
+      try {
+        const parts = token.split(".");
+        if (parts.length !== 3) return UNKNOWN_ACCOUNT_LINEAGE;
+        const claims = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+        if (typeof claims?.iss !== "string" || !claims.iss.trim() || typeof claims?.sub !== "string" || !claims.sub.trim()) return UNKNOWN_ACCOUNT_LINEAGE;
+        const key4 = (0, import_node_crypto5.createHash)("sha256").update(JSON.stringify([
+          "adhdev-quota-account-v1",
+          provider,
+          authority,
+          claims.iss,
+          claims.sub
+        ])).digest("hex");
+        return { version: 1, kind: "account", key: key4 };
+      } catch {
+        return UNKNOWN_ACCOUNT_LINEAGE;
+      }
+    }
+    function quotaAccountLineage(value) {
+      if (!value || typeof value !== "object") return UNKNOWN_ACCOUNT_LINEAGE;
+      const v = value;
+      return v.version === 1 && v.kind === "account" && typeof v.key === "string" && /^[a-f0-9]{64}$/.test(v.key) ? { version: 1, kind: "account", key: v.key } : UNKNOWN_ACCOUNT_LINEAGE;
+    }
+    function sameQuotaAccount(a, b) {
+      const left = quotaAccountLineage(a);
+      const right = quotaAccountLineage(b);
+      return left.kind === "account" && right.kind === "account" && left.key === right.key;
+    }
+    function canTransferQuotaReading(prior, fresh) {
+      return !!prior && prior.provider === fresh.provider && fresh.metadata?.lineageUncertain !== true && prior.metadata?.lineageUncertain !== true && sameQuotaAccount(prior.metadata?.accountLineage, fresh.metadata?.accountLineage);
+    }
+    function unconfirmedQuotaReading(quota, lineage = UNKNOWN_ACCOUNT_LINEAGE) {
+      const metadata = { ...quota.metadata, accountLineage: lineage, lineageUncertain: true };
+      for (const field3 of ["lastGood", "lastGoodWindows", "accountEmail", "planType", "usage", "cursorUsage"]) delete metadata[field3];
+      return {
+        ...quota,
+        session: null,
+        weekly: null,
+        monthly: null,
+        buckets: [],
+        status: "unavailable",
+        error: "Quota account lineage could not be confirmed; previous readings were not transferred.",
+        // A provider-method 429 cooldown is not account headroom. Retain its
+        // retry bookkeeping even when its account numbers cannot be restored.
+        metadata: { ...metadata, failureKind: quota.metadata?.failureKind === "rate-limited" ? "rate-limited" : "no-data" }
+      };
+    }
+    function withQuotaAccountLineage(quota, lineage) {
+      return { ...quota, metadata: { ...quota.metadata, accountLineage: lineage } };
+    }
+    function settleCredentialQuota(quota, before, after) {
+      const continuous = after && before.authority === after.authority && (sameQuotaAccount(before.lineage, after.lineage) || before.lineage.kind === "unknown" && after.lineage.kind === "unknown" && before.token === after.token);
+      return continuous ? withQuotaAccountLineage(quota, before.lineage) : unconfirmedQuotaReading(quota, after?.lineage ?? UNKNOWN_ACCOUNT_LINEAGE);
+    }
+    var import_node_crypto5;
+    var UNKNOWN_ACCOUNT_LINEAGE;
+    var init_account_lineage = __esm2({
+      "src/quota/account-lineage.ts"() {
+        "use strict";
+        import_node_crypto5 = require("crypto");
+        UNKNOWN_ACCOUNT_LINEAGE = Object.freeze({ version: 1, kind: "unknown" });
+      }
+    });
     function defaultRetryDelayMs(kind) {
       return kind === "rate-limited" ? QUOTA_RATE_LIMIT_RETRY_DELAY_MS : QUOTA_TRANSIENT_RETRY_DELAY_MS;
     }
@@ -31008,10 +31097,7 @@ ${res.stderr}`);
         metadata: { source: "oauth" }
       };
     }
-    async function fetchAntigravityQuota(overrides = {}) {
-      assertInjectedNetworkFetchInTest(overrides, "fetchAntigravityQuota");
-      const deps = resolveDeps(overrides);
-      const credentialsResult = await readCredentials(deps);
+    async function fetchForCredentials(deps, credentialsResult) {
       if (credentialsResult.kind === "unsupported-platform") {
         return quotaFailure(
           "antigravity-cli",
@@ -31096,6 +31182,20 @@ ${res.stderr}`);
         });
       }
     }
+    async function fetchAntigravityQuota(overrides = {}) {
+      assertInjectedNetworkFetchInTest(overrides, "fetchAntigravityQuota");
+      const deps = resolveDeps(overrides);
+      const before = await readCredentials(deps);
+      const authority = baseUrl(deps.env);
+      const quota = await fetchForCredentials(deps, before);
+      if (before.kind !== "ok") return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
+      const after = await readCredentials(deps);
+      return settleCredentialQuota(
+        quota,
+        { token: before.credentials.accessToken, authority, lineage: UNKNOWN_ACCOUNT_LINEAGE },
+        after.kind === "ok" ? { token: after.credentials.accessToken, authority: baseUrl(deps.env), lineage: UNKNOWN_ACCOUNT_LINEAGE } : null
+      );
+    }
     var os4;
     var path4;
     var DEFAULT_BASE_URL;
@@ -31112,6 +31212,7 @@ ${res.stderr}`);
     var init_antigravity = __esm2({
       "src/quota/fetchers/antigravity.ts"() {
         "use strict";
+        init_account_lineage();
         os4 = __toESM2(require("os"));
         path4 = __toESM2(require("path"));
         init_config_dir();
@@ -32974,10 +33075,7 @@ child.on('exit', () => process.exit(0));
         metadata: { source: "oauth", ...tier ? { planType: tier } : {} }
       };
     }
-    async function fetchGrokQuota(overrides = {}) {
-      assertInjectedNetworkFetchInTest(overrides, "fetchGrokQuota");
-      const deps = resolveDeps(overrides);
-      const credentialsResult = readCredentials3(deps);
+    async function fetchForCredentials2(deps, credentialsResult) {
       if (credentialsResult.kind === "missing") {
         return quotaFailure("grok-cli", "unavailable", "Not signed in to Grok", {
           source: "oauth",
@@ -33042,6 +33140,30 @@ child.on('exit', () => process.exit(0));
         });
       }
     }
+    function readGrokQuotaAccountLineage(overrides = {}) {
+      if ((process.env.VITEST || process.env.NODE_TEST_CONTEXT) && !overrides.env?.GROK_HOME && !overrides.env?.GROK_AUTH_PATH) return UNKNOWN_ACCOUNT_LINEAGE;
+      const deps = resolveDeps(overrides);
+      const result = readCredentials3(deps);
+      return result.kind === "ok" ? accountLineageFromCliJwt("grok-cli", result.credentials.accessToken, baseUrl3(deps.env)) : UNKNOWN_ACCOUNT_LINEAGE;
+    }
+    async function fetchGrokQuota(overrides = {}) {
+      assertInjectedNetworkFetchInTest(overrides, "fetchGrokQuota");
+      const deps = resolveDeps(overrides);
+      const before = readCredentials3(deps);
+      const authority = baseUrl3(deps.env);
+      const quota = await fetchForCredentials2(deps, before);
+      if (before.kind !== "ok") return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
+      const after = readCredentials3(deps);
+      return settleCredentialQuota(quota, {
+        token: before.credentials.accessToken,
+        authority,
+        lineage: accountLineageFromCliJwt("grok-cli", before.credentials.accessToken, authority)
+      }, after.kind === "ok" ? {
+        token: after.credentials.accessToken,
+        authority: baseUrl3(deps.env),
+        lineage: accountLineageFromCliJwt("grok-cli", after.credentials.accessToken, baseUrl3(deps.env))
+      } : null);
+    }
     var fs8;
     var os7;
     var path10;
@@ -33052,6 +33174,7 @@ child.on('exit', () => process.exit(0));
       "src/quota/fetchers/grok.ts"() {
         "use strict";
         fs8 = __toESM2(require("fs"));
+        init_account_lineage();
         os7 = __toESM2(require("os"));
         path10 = __toESM2(require("path"));
         init_types();
@@ -33237,11 +33360,7 @@ child.on('exit', () => process.exit(0));
         return "";
       }
     }
-    async function fetchKimiQuota(overrides = {}) {
-      assertInjectedNetworkFetchInTest(overrides, "fetchKimiQuota");
-      const deps = resolveDeps(overrides);
-      const settings2 = readManagedKimiSettings(deps.env);
-      const credentialsResult = readCredentials4(deps, settings2.oauthKey);
+    async function fetchForCredentials3(deps, settings2, credentialsResult) {
       if (credentialsResult.kind === "missing") {
         return quotaFailure("kimi", "unavailable", "Not signed in to Kimi Code", {
           source: "oauth",
@@ -33320,6 +33439,37 @@ child.on('exit', () => process.exit(0));
         });
       }
     }
+    async function fetchKimiQuota(overrides = {}) {
+      assertInjectedNetworkFetchInTest(overrides, "fetchKimiQuota");
+      const deps = resolveDeps(overrides);
+      const settings2 = readManagedKimiSettings(deps.env);
+      const before = readCredentials4(deps, settings2.oauthKey);
+      const authority = baseUrl4(deps.env, settings2.baseUrl);
+      const quota = await fetchForCredentials3(deps, settings2, before);
+      if (before.kind !== "ok") return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
+      const currentSettings = readManagedKimiSettings(deps.env);
+      const after = readCredentials4(deps, currentSettings.oauthKey);
+      return settleCredentialQuota(
+        quota,
+        {
+          token: before.credentials.accessToken,
+          authority,
+          lineage: accountLineageFromCliJwt("kimi", before.credentials.accessToken, authority)
+        },
+        after.kind === "ok" ? {
+          token: after.credentials.accessToken,
+          authority: baseUrl4(deps.env, currentSettings.baseUrl),
+          lineage: accountLineageFromCliJwt("kimi", after.credentials.accessToken, baseUrl4(deps.env, currentSettings.baseUrl))
+        } : null
+      );
+    }
+    function readKimiQuotaAccountLineage(overrides = {}) {
+      if ((process.env.VITEST || process.env.NODE_TEST_CONTEXT) && !overrides.env?.KIMI_CODE_HOME) return UNKNOWN_ACCOUNT_LINEAGE;
+      const deps = resolveDeps(overrides);
+      const settings2 = readManagedKimiSettings(deps.env);
+      const result = readCredentials4(deps, settings2.oauthKey);
+      return result.kind === "ok" ? accountLineageFromCliJwt("kimi", result.credentials.accessToken, baseUrl4(deps.env, settings2.baseUrl)) : UNKNOWN_ACCOUNT_LINEAGE;
+    }
     var fs9;
     var os8;
     var path11;
@@ -33331,6 +33481,7 @@ child.on('exit', () => process.exit(0));
       "src/quota/fetchers/kimi.ts"() {
         "use strict";
         fs9 = __toESM2(require("fs"));
+        init_account_lineage();
         os8 = __toESM2(require("os"));
         path11 = __toESM2(require("path"));
         init_types();
@@ -33504,7 +33655,7 @@ child.on('exit', () => process.exit(0));
       const merged = {};
       for (const [provider, entry] of Object.entries(fresh)) {
         const prior = stored[provider];
-        if (holdsReading(entry) || !holdsReading(prior)) {
+        if (holdsReading(entry) || !holdsReading(prior) || !canTransferQuotaReading(prior, entry)) {
           merged[provider] = entry;
           continue;
         }
@@ -33579,6 +33730,7 @@ child.on('exit', () => process.exit(0));
       "src/quota/persist.ts"() {
         "use strict";
         fs10 = __toESM2(require("fs"));
+        init_account_lineage();
         path12 = __toESM2(require("path"));
         init_logger();
         init_paths();
@@ -33731,7 +33883,7 @@ child.on('exit', () => process.exit(0));
       if (fresh.status === "ok") return fresh;
       const kind = typeof fresh.metadata?.failureKind === "string" ? fresh.metadata.failureKind : "";
       const transient = TRANSIENT_QUOTA_FAILURE_KINDS.has(kind);
-      if (!transient) return fresh;
+      if (!transient || !canTransferQuotaReading(prev, fresh)) return fresh;
       const prevIsFreshOk = !!prev && prev.status === "ok";
       const prevIsCarriedForward = !!prev && prev.metadata?.lastGoodWindows === true;
       const prevHasWindows = (prevIsFreshOk || prevIsCarriedForward) && quotaEntryHoldsReading(prev);
@@ -33806,7 +33958,7 @@ child.on('exit', () => process.exit(0));
       }
       return false;
     }
-    function hydrateQuotaCacheFromDisk(env2 = process.env, isEnabled) {
+    function hydrateQuotaCacheFromDisk(env2 = process.env, isEnabled, readLineage = (provider) => provider === "grok-cli" ? readGrokQuotaAccountLineage({ env: env2 }) : provider === "kimi" ? readKimiQuotaAccountLineage({ env: env2 }) : UNKNOWN_ACCOUNT_LINEAGE) {
       if (hydrated) return 0;
       hydrated = true;
       let restored;
@@ -33821,7 +33973,13 @@ child.on('exit', () => process.exit(0));
       for (const [provider, quota] of Object.entries(restored)) {
         if (cache.has(provider)) continue;
         if (isEnabled && !isEnabled(provider)) continue;
-        cache.set(provider, quota);
+        let current4 = UNKNOWN_ACCOUNT_LINEAGE;
+        try {
+          current4 = readLineage(provider);
+        } catch {
+        }
+        const confirmed = quota.provider === provider && quota.metadata?.lineageUncertain !== true && sameQuotaAccount(quota.metadata?.accountLineage, current4);
+        cache.set(provider, confirmed ? quota : unconfirmedQuotaReading(quota, current4));
         hydratedOnly.add(provider);
         count += 1;
       }
@@ -33843,22 +34001,41 @@ child.on('exit', () => process.exit(0));
         for (const { provider } of fetchers) {
           if (!isEnabled(provider)) {
             cache.delete(provider);
+            latestQuotaAttempts.delete(provider);
             hydratedOnly.delete(provider);
             cancelFailureRetry(provider);
           }
         }
       }
       const active = enabled.filter(({ provider }) => !isRateLimitedCooldownActive(cache.get(provider)));
+      const committed = /* @__PURE__ */ new Map();
       await Promise.all(
         active.map(async ({ provider, fetch: fetch2 }) => {
+          const attempt = Symbol(provider);
+          latestQuotaAttempts.set(provider, attempt);
+          const canPublish = () => latestQuotaAttempts.get(provider) === attempt && (!isEnabled || isEnabled(provider));
           try {
-            const fresh = toWireQuota(await fetch2());
+            let fresh = toWireQuota(await fetch2());
+            if (!canPublish()) return;
+            if (options.readAccountLineage || (provider === "grok-cli" || provider === "kimi") && quotaAccountLineage(fresh.metadata?.accountLineage).kind === "account") {
+              let current4 = UNKNOWN_ACCOUNT_LINEAGE;
+              try {
+                current4 = options.readAccountLineage ? options.readAccountLineage(provider) : provider === "grok-cli" ? readGrokQuotaAccountLineage() : readKimiQuotaAccountLineage();
+              } catch {
+              }
+              if (!sameQuotaAccount(fresh.metadata?.accountLineage, current4)) {
+                fresh = unconfirmedQuotaReading(fresh, current4);
+              }
+            }
             cache.set(
               provider,
               stampFetchedAt(carryForwardLastGoodWindows(cache.get(provider), fresh), Date.now())
             );
+            committed.set(provider, attempt);
             hydratedOnly.delete(provider);
           } catch (e) {
+            if (!canPublish()) return;
+            committed.set(provider, attempt);
             const now = Date.now();
             cache.set(provider, {
               provider,
@@ -33867,13 +34044,14 @@ child.on('exit', () => process.exit(0));
               weekly: null,
               updatedAt: now,
               error: `Quota fetch threw: ${e?.message || e}`,
-              metadata: { failureKind: "unknown", fetchedAt: now }
+              metadata: { failureKind: "unknown", fetchedAt: now, accountLineage: UNKNOWN_ACCOUNT_LINEAGE, lineageUncertain: true }
             });
             hydratedOnly.delete(provider);
           }
         })
       );
       for (const { provider, fetch: fetch2 } of active) {
+        if (!committed.has(provider) || latestQuotaAttempts.get(provider) !== committed.get(provider)) continue;
         updateFailureRetry(provider, fetch2, isEnabled);
       }
       const snapshot = readQuotaCache();
@@ -33993,6 +34171,7 @@ child.on('exit', () => process.exit(0));
     var quotaCacheChangedListener;
     var hydratedOnly;
     var hydrated;
+    var latestQuotaAttempts;
     var QUOTA_FAILURE_MAX_RETRIES;
     var failureRetries;
     var CREDENTIAL_RENEWAL_FAILURE_KINDS;
@@ -34004,6 +34183,7 @@ child.on('exit', () => process.exit(0));
       "src/quota/refresh.ts"() {
         "use strict";
         init_logger();
+        init_account_lineage();
         init_types();
         init_antigravity();
         init_claude();
@@ -34055,6 +34235,7 @@ child.on('exit', () => process.exit(0));
         cache = /* @__PURE__ */ new Map();
         hydratedOnly = /* @__PURE__ */ new Set();
         hydrated = false;
+        latestQuotaAttempts = /* @__PURE__ */ new Map();
         QUOTA_FAILURE_MAX_RETRIES = 4;
         failureRetries = /* @__PURE__ */ new Map();
         CREDENTIAL_RENEWAL_FAILURE_KINDS = /* @__PURE__ */ new Set([
@@ -35542,6 +35723,7 @@ ${error.message || ""}`;
     var mesh_config_store_exports = {};
     __export2(mesh_config_store_exports, {
       MeshConfigStrictLockError: () => MeshConfigStrictLockError,
+      getMeshConfigPath: () => getMeshConfigPath,
       loadMeshConfig: () => loadMeshConfig,
       migrateMeshPolicyStorage: () => migrateMeshPolicyStorage,
       migrateProviderRolesToSlots: () => migrateProviderRolesToSlots,
@@ -35874,6 +36056,101 @@ ${error.message || ""}`;
         strictMeshWriteDepth = 0;
       }
     });
+    function worktreeLabel(node) {
+      const where = [node.branch, node.machine ? `@${node.machine}` : ""].filter(Boolean).join(" ");
+      const verdict = node.convergence && node.convergence !== "cleanup_candidate" ? ` [${node.convergence}]` : "";
+      return `${node.nodeId}${where ? ` (${where})` : ""}${verdict}`;
+    }
+    function listNodes(nodes) {
+      const shown = nodes.slice(0, LISTED_PER_GROUP).map(worktreeLabel).join(", ");
+      return nodes.length > LISTED_PER_GROUP ? `${shown}, +${nodes.length - LISTED_PER_GROUP} more` : shown;
+    }
+    function formatMeshNodeLimitMessage(details) {
+      const raisable = details.limit < MESH_MAX_NODES_MAX;
+      const parts = [
+        `${MESH_NODE_LIMIT_CODE}: mesh "${details.meshName}" already holds ${details.count} of its ${details.limit} allowed nodes (${details.baseNodes} base, ${details.worktreeNodes} worktree), so no node can be added.`,
+        raisable ? `To raise the limit, set policy.maxNodes (${details.limitIsOverride ? "set on this mesh" : `default ${DEFAULT_MESH_MAX_NODES}`}, max ${MESH_MAX_NODES_MAX}): edit this mesh's "policy" block in ${details.configPath ?? "meshes.json"} (no restart needed) or send update_mesh {"meshId":"${details.meshId}","policy":{"maxNodes":<N>}}; null resets it to the default.` : `policy.maxNodes is already at its maximum (${MESH_MAX_NODES_MAX}), so the limit cannot be raised further.`
+      ];
+      const instead = raisable ? "To free slots instead" : "To free slots";
+      if (details.worktrees.length === 0) {
+        parts.push(`${instead}, remove a node that is no longer in use with mesh_remove_node (every node here is a base node, so there is no worktree to clean up).`);
+      } else {
+        const candidates = details.worktrees.filter((w) => w.convergence === "cleanup_candidate");
+        const others = details.worktrees.filter((w) => w.convergence !== "cleanup_candidate");
+        const judged = details.worktrees.some((w) => w.convergence);
+        parts.push(`${instead}, finish worktree nodes that are no longer needed.`);
+        if (candidates.length > 0) parts.push(`cleanup_candidate worktrees (${candidates.length}): ${listNodes(candidates)}.`);
+        if (others.length > 0) {
+          parts.push(
+            `${candidates.length > 0 ? "Other worktree nodes" : "Worktree nodes"} (${others.length}): ${listNodes(others)}${judged ? "" : " \u2014 no git evidence was held here to tell which are cleanup_candidate; mesh_status shows it"}.`
+          );
+        }
+        parts.push(
+          "mesh_refine_node merges a finished branch and removes its worktree, mesh_cleanup_worktree_nodes (dry-run by default) reclaims worktrees that are already converged, mesh_remove_node removes a single node."
+        );
+      }
+      return parts.join(" ");
+    }
+    function buildMeshNodeLimitDetails(mesh) {
+      const nodes = Array.isArray(mesh.nodes) ? mesh.nodes : [];
+      const worktrees = [];
+      for (const node of nodes) {
+        if (node.isLocalWorktree !== true) continue;
+        const branch = typeof node.worktreeBranch === "string" ? node.worktreeBranch.trim() : "";
+        const machine = typeof node.machineNickname === "string" ? node.machineNickname.trim() : "";
+        worktrees.push({
+          nodeId: node.id,
+          ...branch ? { branch } : {},
+          ...machine ? { machine } : {}
+        });
+      }
+      const raw = mesh.policy?.maxNodes;
+      let configPath;
+      try {
+        configPath = getMeshConfigPath();
+      } catch {
+      }
+      return {
+        meshId: mesh.id,
+        meshName: mesh.name,
+        count: nodes.length,
+        limit: resolveMaxNodes(raw),
+        baseNodes: nodes.length - worktrees.length,
+        worktreeNodes: worktrees.length,
+        limitIsOverride: raw !== void 0 && raw !== null,
+        ...configPath ? { configPath } : {},
+        worktrees
+      };
+    }
+    function isMeshNodeLimitError(error) {
+      const candidate = error;
+      return !!candidate && candidate.code === MESH_NODE_LIMIT_CODE && !!candidate.details && Array.isArray(candidate.details.worktrees);
+    }
+    function assertMeshNodeCapacity(mesh) {
+      const count = Array.isArray(mesh.nodes) ? mesh.nodes.length : 0;
+      if (count < resolveMaxNodes(mesh.policy?.maxNodes)) return;
+      throw new MeshNodeLimitError(buildMeshNodeLimitDetails(mesh));
+    }
+    var MESH_NODE_LIMIT_CODE;
+    var LISTED_PER_GROUP;
+    var MeshNodeLimitError;
+    var init_mesh_node_limit = __esm2({
+      "src/config/mesh-node-limit.ts"() {
+        "use strict";
+        init_repo_mesh_types();
+        init_mesh_config_store();
+        MESH_NODE_LIMIT_CODE = "mesh_node_limit_exceeded";
+        LISTED_PER_GROUP = 8;
+        MeshNodeLimitError = class extends Error {
+          constructor(details) {
+            super(formatMeshNodeLimitMessage(details));
+            this.details = details;
+            this.name = "MeshNodeLimitError";
+          }
+          code = MESH_NODE_LIMIT_CODE;
+        };
+      }
+    });
     var mesh_config_exports = {};
     __export2(mesh_config_exports, {
       addNode: () => addNode,
@@ -35971,9 +36248,7 @@ ${error.message || ""}`;
       const config = loadMeshConfig();
       const mesh = config.meshes.find((m) => m.id === meshId);
       if (!mesh) return void 0;
-      if (mesh.nodes.length >= 10) {
-        throw new Error("Maximum 10 nodes per mesh");
-      }
+      assertMeshNodeCapacity(mesh);
       if (mesh.nodes.some((n) => n.workspace === opts.workspace)) {
         throw new Error("This workspace is already in the mesh");
       }
@@ -36083,6 +36358,7 @@ ${error.message || ""}`;
         init_repo_mesh_types();
         init_mesh_host_ownership();
         init_mesh_config_store();
+        init_mesh_node_limit();
         init_mesh_json_config();
         listMeshesDiskReadCount = 0;
       }
@@ -41245,10 +41521,10 @@ ${pattern}
               // grok rewrites this file, and it is 0644 so it must not assert
               // owner-only.
               { relativePath: path24.join(".grok", "config.toml"), mode: "copy" },
-              // Installed-build identity, so the worker resolves the same version
-              // and channel rather than reporting `[unknown]`.
-              { relativePath: path24.join(".grok", "version.json"), mode: "symlink" },
-              { relativePath: path24.join(".grok", "bin"), mode: "symlink" }
+              // Never expose the real install to a worker's updater. The launch
+              // resolves the executable before redirecting HOME; no bin link is
+              // needed. Build metadata is a private snapshot, never write-through.
+              { relativePath: path24.join(".grok", "version.json"), mode: "copy" }
             ],
             // The ISOLATED surfaces: empty means grok's harness-compatibility layer
             // has no owner cursor/claude config to import — neither MCP servers nor
@@ -41534,18 +41810,107 @@ ${pattern}
       }
     });
     function sha256Hex(input) {
-      return (0, import_node_crypto5.createHash)("sha256").update(input).digest("hex");
+      return (0, import_node_crypto22.createHash)("sha256").update(input).digest("hex");
     }
     function shortHash(input, length = 16) {
       return sha256Hex(input).slice(0, length);
     }
-    var import_node_crypto5;
+    var import_node_crypto22;
     var init_hash = __esm2({
       "src/system/hash.ts"() {
         "use strict";
-        import_node_crypto5 = require("crypto");
+        import_node_crypto22 = require("crypto");
       }
     });
+    function privateDirectory(home, relative14 = "") {
+      const target = path25.resolve(home, relative14);
+      const within = path25.relative(path25.resolve(home), target);
+      if (within === ".." || within.startsWith(`..${path25.sep}`) || path25.isAbsolute(within)) {
+        throw new Error("worker_private_home_path_escape");
+      }
+      for (const dir of [home, ...within.split(path25.sep).filter(Boolean).map((_, i, parts) => path25.join(home, ...parts.slice(0, i + 1)))]) {
+        let stat2;
+        try {
+          stat2 = (0, import_fs14.lstatSync)(dir);
+        } catch (err) {
+          if (err?.code !== "ENOENT") throw err;
+        }
+        if (stat2 && (stat2.isSymbolicLink() || !stat2.isDirectory())) {
+          throw new Error("worker_private_home_unsafe_directory");
+        }
+        if (!stat2) (0, import_fs14.mkdirSync)(dir, { recursive: true });
+      }
+    }
+    function removePrivateEntry(target) {
+      try {
+        if ((0, import_fs14.lstatSync)(target).isSymbolicLink()) (0, import_fs14.unlinkSync)(target);
+        else (0, import_fs14.rmSync)(target, { force: true, recursive: true });
+      } catch (err) {
+        if (err?.code !== "ENOENT") throw err;
+      }
+    }
+    function physicalPath(target) {
+      try {
+        return (0, import_fs14.realpathSync)(target);
+      } catch (err) {
+        if (err?.code !== "ENOENT") throw err;
+        const parent = path25.dirname(target);
+        if (parent === target) throw err;
+        return path25.join(physicalPath(parent), path25.basename(target));
+      }
+    }
+    function setGrokConfigValue(contents, table, key4, value) {
+      if (contents.includes('"""') || contents.includes("'''")) {
+        throw new Error("worker_private_home_unsupported_grok_config");
+      }
+      const lines = contents.split(/\r?\n/);
+      const tablePattern = new RegExp(`^\\s*\\[\\s*(?:${table}|"${table}"|'${table}')\\s*\\]\\s*(?:#.*)?$`);
+      const keyPattern = new RegExp(`^\\s*(?:${key4}|"${key4}"|'${key4}')\\s*=`);
+      const unsupportedTablePattern = new RegExp(`^\\s*(?:${table}|"${table}"|'${table}')\\s*(?:\\.|=)`);
+      let inTable = false;
+      let sawTable = false;
+      const result = [];
+      for (const line of lines) {
+        if (/^\s*\[/.test(line)) {
+          inTable = tablePattern.test(line);
+          if (inTable) {
+            if (sawTable) throw new Error("worker_private_home_duplicate_grok_table");
+            sawTable = true;
+            result.push(line);
+            if (value !== null) result.push(`${key4} = ${value}`);
+            continue;
+          }
+        }
+        if (inTable && keyPattern.test(line)) continue;
+        if (unsupportedTablePattern.test(line)) {
+          throw new Error("worker_private_home_unsupported_grok_table");
+        }
+        result.push(line);
+      }
+      if (!sawTable && value !== null) result.push("", `[${table}]`, `${key4} = ${value}`);
+      return `${result.join("\n").trimEnd()}
+`;
+    }
+    function grokAccountOptedOut(authPath3) {
+      try {
+        const auth = JSON.parse((0, import_fs14.readFileSync)(authPath3, "utf8"));
+        if (!auth || typeof auth !== "object" || Array.isArray(auth)) return false;
+        const accounts = Object.values(auth);
+        return accounts.length > 0 && accounts.every((account) => account && typeof account === "object" && account.coding_data_retention_opt_out === true);
+      } catch {
+        return false;
+      }
+    }
+    function grokPrivacyAcknowledgment(contents) {
+      let inPrivacy = false;
+      for (const line of contents.split(/\r?\n/)) {
+        if (/^\s*\[/.test(line)) inPrivacy = /^\s*\[\s*(?:privacy|"privacy"|'privacy')\s*\]\s*(?:#.*)?$/.test(line);
+        if (!inPrivacy) continue;
+        const existing = /^\s*(?:privacy_banner_acked|"privacy_banner_acked"|'privacy_banner_acked')\s*=\s*["'](\d{4}-\d{2}-\d{2}T[\d:.]+Z)["']\s*(?:#.*)?$/.exec(line);
+        if (existing && Number.isFinite(Date.parse(existing[1]))) return existing[1];
+      }
+      return (/* @__PURE__ */ new Date()).toISOString();
+    }
     function materializeWorkerHomeLink(source2, target) {
       if (process.platform !== "win32") {
         (0, import_fs14.symlinkSync)(source2, target);
@@ -41583,10 +41948,23 @@ ${pattern}
     }
     function materializePrivateHome(spec, opts) {
       const realHome = opts.realHome || os14.homedir();
-      const home = opts.home;
-      (0, import_fs14.mkdirSync)(home, { recursive: true });
+      const home = path25.resolve(opts.home);
+      const canonicalHome = physicalPath(home);
+      const canonicalReal = physicalPath(path25.resolve(realHome));
+      const relativeReal = path25.relative(canonicalHome, canonicalReal);
+      const grokRelative = path25.relative(path25.join(canonicalReal, ".grok"), canonicalHome);
+      if (relativeReal === "" || !relativeReal.startsWith(`..${path25.sep}`) && relativeReal !== ".." && !path25.isAbsolute(relativeReal) || spec.providerType === "grok-cli" && grokRelative !== ".." && !grokRelative.startsWith(`..${path25.sep}`) && !path25.isAbsolute(grokRelative)) {
+        throw new Error("worker_private_home_overlaps_real_home");
+      }
+      privateDirectory(home);
       for (const dir of spec.ensureDirs || []) {
-        (0, import_fs14.mkdirSync)(path25.join(home, dir), { recursive: true });
+        privateDirectory(home, dir);
+      }
+      if (spec.providerType === "grok-cli") {
+        privateDirectory(home, ".grok");
+        for (const name of ["bin", "version.json"]) {
+          removePrivateEntry(path25.join(home, ".grok", name));
+        }
       }
       const imported = [];
       const skipped = [];
@@ -41620,11 +41998,8 @@ ${pattern}
             );
           }
         }
-        (0, import_fs14.mkdirSync)(path25.dirname(target), { recursive: true });
-        try {
-          (0, import_fs14.rmSync)(target, { force: true });
-        } catch {
-        }
+        privateDirectory(home, path25.dirname(entry.relativePath));
+        removePrivateEntry(target);
         try {
           if (entry.mode === "symlink") {
             const kind = materializeWorkerHomeLink(source2, target);
@@ -41655,6 +42030,23 @@ ${pattern}
         }
         imported.push(entry.relativePath);
       }
+      if (spec.providerType === "grok-cli") {
+        const configPath = path25.join(home, ".grok", "config.toml");
+        const config = (0, import_fs14.existsSync)(configPath) ? (0, import_fs14.readFileSync)(configPath, "utf8") : "";
+        removePrivateEntry(configPath);
+        const optedOut = grokAccountOptedOut(path25.join(realHome, ".grok", "auth.json"));
+        const privateConfig = setGrokConfigValue(config, "cli", "auto_update", "false");
+        (0, import_fs14.writeFileSync)(configPath, setGrokConfigValue(
+          privateConfig,
+          "privacy",
+          "privacy_banner_acked",
+          optedOut ? JSON.stringify(grokPrivacyAcknowledgment(config)) : null
+        ), { mode: 384 });
+        if (!optedOut) {
+          failed.push(".grok/config.toml (privacy banner acknowledgment pending: account opt-out unconfirmed)");
+          LOG.warn("WorkerMcp", "[grok-cli] account opt-out unconfirmed; privacy banner requires owner attention");
+        }
+      }
       for (const link of spec.workspaceLinks || []) {
         const slug = deriveCursorWorkspaceSlug(opts.workspace || "");
         if (!slug) continue;
@@ -41663,11 +42055,8 @@ ${pattern}
         const target = path25.join(home, rel);
         try {
           (0, import_fs14.mkdirSync)(source2, { recursive: true });
-          (0, import_fs14.mkdirSync)(path25.dirname(target), { recursive: true });
-          try {
-            (0, import_fs14.rmSync)(target, { force: true, recursive: true });
-          } catch {
-          }
+          privateDirectory(home, path25.dirname(rel));
+          removePrivateEntry(target);
           materializeWorkerHomeLink(source2, target);
           imported.push(rel);
         } catch (err) {
@@ -58286,7 +58675,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return JSON.stringify(value) ?? "null";
     }
     function bridgeDigest(envelope) {
-      return (0, import_node_crypto22.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
+      return (0, import_node_crypto32.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
     }
     function ensureBridgeSchema(db) {
       db.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_policy (mesh_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL);
@@ -58344,7 +58733,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         openAttempts: attempts.filter((a) => a.terminal_outcome === null).length,
         correctionOrLivenessHolds: holds.length,
         pendingDeliveries: pending.n,
-        ledgerDigest: (0, import_node_crypto22.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
+        ledgerDigest: (0, import_node_crypto32.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
       };
     }
     function findBridgeMemberDelivery(db, senderId, deliveryId) {
@@ -58376,7 +58765,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     }
     async function queryBridgePeer(dispatch2, peerId, meshId, policy, deliveryClaim) {
-      const nonce = (0, import_node_crypto22.randomUUID)();
+      const nonce = (0, import_node_crypto32.randomUUID)();
       const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce, ...deliveryClaim ? { deliveryClaim } : {} }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
       const valid = reply.success === true && reply.protocol === BRIDGE_PROTOCOL && reply.meshId === meshId && reply.nonce === nonce && reply.rolloutId === policy.rolloutId && typeof reply.daemonId === "string" && daemonIdsEquivalent4(reply.daemonId, peerId) && admitted(policy, reply);
       return valid ? reply : null;
@@ -58456,7 +58845,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const pending = db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member' AND state!='receipted' AND (reason IS NULL OR reason!='delivery_time_expired')").all();
       for (const item of pending) await sendBridgeDelivery(db, JSON.parse(item.envelope_json), dispatch2);
     }
-    var import_node_crypto22;
+    var import_node_crypto32;
     var BRIDGE_CAPABILITY_COMMAND;
     var BRIDGE_DELIVERY_COMMAND;
     var BRIDGE_MAX_AGE_MS;
@@ -58467,7 +58856,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       "src/mesh/worker-bridge.ts"() {
         "use strict";
         init_worker_bridge_transaction();
-        import_node_crypto22 = require("crypto");
+        import_node_crypto32 = require("crypto");
         init_dist();
         init_mesh_runtime_store();
         init_build_info();
@@ -59225,10 +59614,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (rejectedCommands.length) errors.push("one or more validation commands are invalid");
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function readConfigFromBaseRef(gitCwd, ref, relative13) {
+    function readConfigFromBaseRef(gitCwd, ref, relative14) {
       if (!ref || ref.startsWith("-")) return void 0;
       try {
-        return (0, import_child_process5.execFileSync)("git", ["show", `${ref}:${relative13}`], {
+        return (0, import_child_process5.execFileSync)("git", ["show", `${ref}:${relative14}`], {
           cwd: gitCwd,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -59268,26 +59657,26 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.refineConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
-      for (const relative13 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path10.join)(workspace, relative13);
+      for (const relative14 of MESH_REFINE_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path10.join)(workspace, relative14);
         if (!(0, import_fs16.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs16.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshRefineConfig(parsed, relative13);
-          if (!validation.valid) return { source: relative13, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative13, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshRefineConfig(parsed, relative14);
+          if (!validation.valid) return { source: relative14, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative14, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative13, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative14, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
       for (const ref of baseRefs) {
-        for (const relative13 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text4 = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative13);
+        for (const relative14 of MESH_REFINE_CONFIG_LOCATIONS) {
+          const text4 = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative14);
           if (text4 === void 0) continue;
-          const source2 = `${ref.trim()}:${relative13}`;
+          const source2 = `${ref.trim()}:${relative14}`;
           try {
-            const parsed = parseConfigText(relative13, text4);
+            const parsed = parseConfigText(relative14, text4);
             const validation = validateMeshRefineConfig(parsed, source2);
             if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref.trim() };
@@ -59714,28 +60103,28 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (!validation.valid) return { source: "mesh.policy.worktreeBootstrapConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
-      for (const relative13 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path11.join)(workspace, relative13);
+      for (const relative14 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path11.join)(workspace, relative14);
         if (!(0, import_fs17.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs17.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative13);
-          if (!validation.valid) return { source: relative13, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative13, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative14);
+          if (!validation.valid) return { source: relative14, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative14, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative13, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative14, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest4 = {};
-      for (const relative13 of staleInputs ?? []) {
-        const filePath2 = (0, import_path11.join)(workspace, relative13);
+      for (const relative14 of staleInputs ?? []) {
+        const filePath2 = (0, import_path11.join)(workspace, relative14);
         try {
-          digest4[relative13] = (0, import_node_crypto32.createHash)("sha256").update((0, import_fs17.readFileSync)(filePath2)).digest("hex");
+          digest4[relative14] = (0, import_node_crypto42.createHash)("sha256").update((0, import_fs17.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest4[relative13] = "absent";
+          digest4[relative14] = "absent";
         }
       }
       return digest4;
@@ -59900,7 +60289,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var import_fs17;
     var import_path11;
     var import_node_child_process4;
-    var import_node_crypto32;
+    var import_node_crypto42;
     var import_node_util3;
     var WORKTREE_BOOTSTRAP_STALE_RUNNING_MS;
     var SUBMODULE_DEFAULT_BRANCH_FALLBACK;
@@ -59917,7 +60306,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         import_fs17 = require("fs");
         import_path11 = require("path");
         import_node_child_process4 = require("child_process");
-        import_node_crypto32 = require("crypto");
+        import_node_crypto42 = require("crypto");
         import_node_util3 = require("util");
         init_config_text();
         init_resolve_executable();
@@ -61475,8 +61864,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename26 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename26 || (nodeId ? nodeId.slice(0, 8) : "node");
+      const basename28 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename28 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
     function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
       return buildMeshNodeMachineLabel(node, nodeId);
@@ -63946,7 +64335,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative13) => (0, import_fs19.existsSync)((0, import_path13.join)(workspace, relative13)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative14) => (0, import_fs19.existsSync)((0, import_path13.join)(workspace, relative14)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -67023,7 +67412,7 @@ ${upstream}`;
           if (e.code !== "EEXIST") throw e;
         }
         syncDir2();
-        const tmp = path27.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto42.randomUUID)()}.tmp`), fd = fs18.openSync(tmp, "wx", 384);
+        const tmp = path27.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto52.randomUUID)()}.tmp`), fd = fs18.openSync(tmp, "wx", 384);
         try {
           fs18.writeFileSync(fd, JSON.stringify(state2));
           fs18.fsyncSync(fd);
@@ -67045,12 +67434,12 @@ ${upstream}`;
       const h = s2.retainedHost;
       if (facts.pid !== h.pid || facts.socketOwnerPid !== h.pid || facts.birth !== h.birth || facts.entryPath !== h.entryPath || facts.nodePath !== h.nodePath || facts.hostEntryPath !== h.entryPath || facts.hostStartedAt !== h.hostStartedAt || facts.endpoint !== h.endpoint) throw new Error("maintenance_retained_host_identity_changed");
       for (const f of h.files) {
-        if (fs18.realpathSync(f.path) !== f.path || !fs18.statSync(f.path).isFile() || (0, import_node_crypto42.createHash)("sha256").update(fs18.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
+        if (fs18.realpathSync(f.path) !== f.path || !fs18.statSync(f.path).isFile() || (0, import_node_crypto52.createHash)("sha256").update(fs18.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
       }
     }
     var fs18;
     var path27;
-    var import_node_crypto42;
+    var import_node_crypto52;
     var import_node_async_hooks;
     var MAINTENANCE_BOOT_NONCE;
     var MAINTENANCE_FILE;
@@ -67066,18 +67455,18 @@ ${upstream}`;
         "use strict";
         fs18 = __toESM2(require("fs"));
         path27 = __toESM2(require("path"));
-        import_node_crypto42 = require("crypto");
+        import_node_crypto52 = require("crypto");
         import_node_async_hooks = require("async_hooks");
         init_dist();
         init_config();
         init_load_better_sqlite3();
-        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto42.randomUUID)();
+        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto52.randomUUID)();
         MAINTENANCE_FILE = "cooperative-maintenance.json";
         marker = "cooperative-maintenance.enrolled";
         seen = /* @__PURE__ */ new Set();
         context = new import_node_async_hooks.AsyncLocalStorage();
         activeAdmissions = 0;
-        sha2 = (s2) => (0, import_node_crypto42.createHash)("sha256").update(s2).digest("hex");
+        sha2 = (s2) => (0, import_node_crypto52.createHash)("sha256").update(s2).digest("hex");
         hash2 = (s2) => typeof s2 === "string" && /^[a-f0-9]{64}$/.test(s2);
         id3 = (s2) => typeof s2 === "string" && !!s2 && s2.trim() === s2;
       }
@@ -70591,7 +70980,10 @@ ${upstream}`;
           worktreeBootstrap: node.worktreeBootstrap
         });
         return added ? "persisted" : "no_config_mesh";
-      } catch {
+      } catch (error) {
+        if (isMeshNodeLimitError(error)) {
+          LOG.warn("Mesh", `[RemoteWorktree] node ${node.id} was not persisted to mesh=${meshId}: ${error.message}`);
+        }
         return "failed";
       }
     }
@@ -70602,7 +70994,10 @@ ${upstream}`;
       "src/mesh/mesh-remote-worktree-membership.ts"() {
         "use strict";
         init_dist();
-        MEMBER_WORKTREE_REPORT_MAX_NODES = 10;
+        init_repo_mesh_policy();
+        init_mesh_node_limit();
+        init_logger();
+        MEMBER_WORKTREE_REPORT_MAX_NODES = MESH_MAX_NODES_MAX;
         MAX_ID_CHARS2 = 200;
         MAX_PATH_CHARS = 4096;
       }
@@ -85391,7 +85786,7 @@ ${body}`;
     }
     var import_node_fs5;
     var import_node_path5;
-    var import_node_crypto16;
+    var import_node_crypto17;
     var entryKeys;
     var origins;
     var integer;
@@ -85401,7 +85796,7 @@ ${body}`;
         "use strict";
         import_node_fs5 = require("fs");
         import_node_path5 = require("path");
-        import_node_crypto16 = require("crypto");
+        import_node_crypto17 = require("crypto");
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
         origins = ["human", "relay", "review", "review_tainted", "owner"];
@@ -85477,7 +85872,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto16.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto17.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs5.openSync)(temp, "wx", 384);
@@ -85616,7 +86011,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto17.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto18.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -85629,7 +86024,7 @@ ${body}`;
     }
     var import_node_fs6;
     var import_node_path6;
-    var import_node_crypto17;
+    var import_node_crypto18;
     var ID;
     var proposalKeys;
     var text2;
@@ -85640,7 +86035,7 @@ ${body}`;
         "use strict";
         import_node_fs6 = require("fs");
         import_node_path6 = require("path");
-        import_node_crypto17 = require("crypto");
+        import_node_crypto18 = require("crypto");
         init_config();
         init_launch_defaults();
         ID = /^ldf-[a-f0-9]{32}-[a-f0-9]{64}$/;
@@ -85669,7 +86064,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto17.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto18.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -85680,7 +86075,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs6.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto17.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto18.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs6.openSync)(tmp, "wx", 384);
               try {
@@ -86335,6 +86730,9 @@ ${body}`;
       return matches.map((t, i) => ({ t, i })).sort((a, b) => (b.t.priority ?? 0) - (a.t.priority ?? 0) || a.i - b.i).map((x) => x.t);
     }
     function statusForState(state2) {
+      if (state2.owner_attention === true && (state2.status === "waiting_external" || state2.status === "owner_attention")) {
+        return "owner_attention";
+      }
       if (state2.status) return state2.status;
       if (state2.modal) return "approval";
       if (state2.id === "busy" || state2.id === "generating") return "generating";
@@ -86349,7 +86747,7 @@ ${body}`;
     var init_fsm_types = __esm2({
       "src/providers/spec/fsm-types.ts"() {
         "use strict";
-        FSM_STATUS_VALUES = ["idle", "generating", "approval", "waiting_external"];
+        FSM_STATUS_VALUES = ["idle", "generating", "approval", "waiting_external", "owner_attention"];
       }
     });
     var fsm_loader_exports = {};
@@ -86454,6 +86852,16 @@ ${body}`;
         }
         if (s2.status === "waiting_external" && s2.modal) {
           errs.push(`states[${i}] ("${s2.id}") declares status:"waiting_external" with modal:true \u2014 an external-auth wait has no on-screen buttons to press; drop modal (and modal_kind/extract.buttons) or use a different status`);
+        }
+        const ownerAttention = s2.owner_attention === true || s2.status === "owner_attention";
+        if (s2.owner_attention !== void 0 && typeof s2.owner_attention !== "boolean") {
+          errs.push(`states[${i}] ("${s2.id}") owner_attention must be a boolean`);
+        }
+        if (s2.owner_attention === true && s2.status !== "waiting_external" && s2.status !== "owner_attention") {
+          errs.push(`states[${i}] ("${s2.id}") declares owner_attention:true without status:"waiting_external" \u2014 declare both so daemons without owner-attention support keep a buttonless park`);
+        }
+        if (ownerAttention && (s2.modal || s2.modal_kind || s2.extract?.buttons)) {
+          errs.push(`states[${i}] ("${s2.id}") is an owner-attention park \u2014 it must not declare modal, modal_kind or extract.buttons (nothing may answer it automatically)`);
         }
       }
       if (initialCount === 0) errs.push("exactly one state must have initial:true (none found)");
@@ -87682,7 +88090,7 @@ ${detail.join("\n")}` : stripped;
         node.policy = { ...node.policy || {}, ...opts.memberNode.policy || {} };
         node.role = "member";
       } else {
-        if (mesh.nodes.length >= 10) throw new Error("Maximum 10 nodes per mesh");
+        assertMeshNodeCapacity(mesh);
         node = {
           id: memberId || `node_${(0, import_crypto29.randomUUID)().replace(/-/g, "")}`,
           workspace,
@@ -87831,6 +88239,7 @@ ${detail.join("\n")}` : stripped;
         init_mesh_host_endpoints();
         init_hash();
         init_mesh_config_store();
+        init_mesh_node_limit();
         init_mesh_host_ownership();
         import_crypto29 = require("crypto");
         init_dist();
@@ -93498,7 +93907,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises8.lstat)(root)).isSymbolicLink() || await (0, import_promises8.realpath)(root) !== (0, import_node_path8.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key4 = (0, import_node_crypto19.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
+      const key4 = (0, import_node_crypto20.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
       return (0, import_node_path8.join)(root, key4);
     }
     async function verifyCheckout(workspace, identity2) {
@@ -93562,7 +93971,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises8.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto19.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto20.randomUUID)() };
         await (0, import_promises8.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -93672,7 +94081,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process13;
     var import_node_util7;
-    var import_node_crypto19;
+    var import_node_crypto20;
     var import_promises8;
     var import_node_path8;
     var exec5;
@@ -93689,7 +94098,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process13 = require("child_process");
         import_node_util7 = require("util");
-        import_node_crypto19 = require("crypto");
+        import_node_crypto20 = require("crypto");
         import_promises8 = require("fs/promises");
         import_node_path8 = require("path");
         init_config();
@@ -93720,13 +94129,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity2) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key4 = (0, import_node_crypto20.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto20.createHmac)("sha256", key4).update(`${grant.target}
+      const key4 = (0, import_node_crypto21.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto21.createHmac)("sha256", key4).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto20.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto21.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity2) {
       const hostId = str9(args?.hostDaemonId);
@@ -93755,7 +94164,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto20;
+    var import_node_crypto21;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -93764,7 +94173,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto20 = require("crypto");
+        import_node_crypto21 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -94462,7 +94871,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto21.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto222.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -94570,7 +94979,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto21.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto222.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -94629,7 +95038,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto21;
+    var import_node_crypto222;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -94638,7 +95047,7 @@ ${b.text}`).join("\n\n");
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
-        import_node_crypto21 = require("crypto");
+        import_node_crypto222 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -95750,7 +96159,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         RELAY_AUDIT_RETENTION_MS = 24 * 60 * 6e4;
       }
     });
-    var import_node_crypto222;
+    var import_node_crypto23;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -95763,7 +96172,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/assistant/assistant-relay.ts"() {
         "use strict";
         init_report_continuation();
-        import_node_crypto222 = require("crypto");
+        import_node_crypto23 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -95775,7 +96184,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto222.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto23.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -100529,6 +100938,7 @@ ${tail}` : ""
       DEFAULT_GIT_REFRESH_CONCURRENCY: () => DEFAULT_GIT_REFRESH_CONCURRENCY,
       DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS: () => DEFAULT_GIT_WORKSPACE_POLL_INTERVAL_MS,
       DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS: () => DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
+      DEFAULT_MESH_MAX_NODES: () => DEFAULT_MESH_MAX_NODES,
       DEFAULT_MESH_POLICY: () => DEFAULT_MESH_POLICY,
       DEFAULT_MESH_SCHEDULING_STRATEGY: () => DEFAULT_MESH_SCHEDULING_STRATEGY,
       DEFAULT_PROVIDER_CHANNEL: () => DEFAULT_PROVIDER_CHANNEL,
@@ -100605,11 +101015,14 @@ ${tail}` : ""
       MESH_JOIN_TRANSPORT: () => MESH_JOIN_TRANSPORT,
       MESH_JSON_CONFIG_LOCATIONS: () => MESH_JSON_CONFIG_LOCATIONS,
       MESH_JSON_CONFIG_SCHEMA: () => MESH_JSON_CONFIG_SCHEMA,
+      MESH_MAX_NODES_MAX: () => MESH_MAX_NODES_MAX,
+      MESH_MAX_NODES_MIN: () => MESH_MAX_NODES_MIN,
       MESH_MAX_PARALLEL_TASKS_MAX: () => MESH_MAX_PARALLEL_TASKS_MAX,
       MESH_MAX_PARALLEL_TASKS_MIN: () => MESH_MAX_PARALLEL_TASKS_MIN,
       MESH_MISSION_LIST_HISTORY_ID_LIMIT: () => MESH_MISSION_LIST_HISTORY_ID_LIMIT,
       MESH_MISSION_LIST_STATUS_LIMIT: () => MESH_MISSION_LIST_STATUS_LIMIT,
       MESH_MISSION_STATUSES: () => MESH_MISSION_STATUSES22,
+      MESH_NODE_LIMIT_CODE: () => MESH_NODE_LIMIT_CODE,
       MESH_NODE_LIVE_TRUTH_MARKER: () => MESH_NODE_LIVE_TRUTH_MARKER,
       MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT: () => MESH_ON_DEPENDENCY_FAILURE_PUBLIC_TEXT,
       MESH_PEER_SECRETS_FILE: () => MESH_PEER_SECRETS_FILE,
@@ -100631,6 +101044,7 @@ ${tail}` : ""
       MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS: () => MIN_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
       MODEL_AXIS_SOURCES: () => MODEL_AXIS_SOURCES,
       MeshHandshakeError: () => MeshHandshakeError,
+      MeshNodeLimitError: () => MeshNodeLimitError,
       MeshRpcEndpoint: () => MeshRpcEndpoint,
       MeshTopicActivationError: () => MeshTopicActivationError,
       MeshTopicIndex: () => MeshTopicIndex,
@@ -100919,6 +101333,7 @@ ${tail}` : ""
       formatBytes: () => formatBytes,
       formatLifecycleTraceLine: () => formatLifecycleTraceLine,
       formatManifestValidationIssues: () => formatManifestValidationIssues,
+      formatMeshNodeLimitMessage: () => formatMeshNodeLimitMessage,
       formatMeshTaskModeViolations: () => formatMeshTaskModeViolations,
       formatSessionBusyWithTaskToken: () => formatSessionBusyWithTaskToken,
       formatTurnLedgerMigrationLine: () => formatTurnLedgerMigrationLine,
@@ -101012,6 +101427,7 @@ ${tail}` : ""
       isManagedStatusWorking: () => isManagedStatusWorking,
       isMeshNodeFreshEnoughToLaunch: () => isMeshNodeFreshEnoughToLaunch2,
       isMeshNodeHealthLaunchable: () => isMeshNodeHealthLaunchable,
+      isMeshNodeLimitError: () => isMeshNodeLimitError,
       isMeshPublisherArmed: () => isMeshPublisherArmed,
       isMeshSenderRefusalResult: () => isMeshSenderRefusalResult,
       isMeshTestPollution: () => isMeshTestPollution,
@@ -101237,6 +101653,7 @@ ${tail}` : ""
       resolveInstanceContext: () => resolveInstanceContext,
       resolveInstanceDir: () => resolveInstanceDir,
       resolveInterruptCapability: () => resolveInterruptCapability,
+      resolveMaxNodes: () => resolveMaxNodes,
       resolveMaxParallelTasks: () => resolveMaxParallelTasks,
       resolveMeshConnectWaitMs: () => resolveMeshConnectWaitMs,
       resolveMeshHostStatus: () => resolveMeshHostStatus,
@@ -102945,6 +103362,7 @@ ${tail}` : ""
     init_mesh_config();
     init_mesh_config_routing();
     init_mesh_config_store();
+    init_mesh_node_limit();
     init_dist();
     init_dist();
     init_dist();
@@ -104495,7 +104913,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         logMeshCommandEvent(event, fields);
       }
     };
-    var import_node_crypto52 = require("crypto");
+    var import_node_crypto6 = require("crypto");
     var import_ws2 = __toESM2(require_ws());
     init_dist();
     init_logger();
@@ -104867,7 +105285,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         this.pingIntervalMs = options.pingIntervalMs ?? WS_MESH_PING_INTERVAL_MS;
         this.maxMissedPongs = options.maxMissedPongs ?? WS_MESH_MAX_MISSED_PONGS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
-        this.idNonce = `${this.idNonce}_${(0, import_node_crypto52.randomBytes)(3).toString("hex")}`;
+        this.idNonce = `${this.idNonce}_${(0, import_node_crypto6.randomBytes)(3).toString("hex")}`;
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       /** Register the inbound-command handler. It returns a result or throws. */
@@ -105636,7 +106054,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var import_node_child_process8 = require("child_process");
     var fs39 = __toESM2(require("fs"));
     var path44 = __toESM2(require("path"));
-    var import_node_crypto10 = require("crypto");
+    var import_node_crypto11 = require("crypto");
     init_dist();
     init_mesh_queue_trigger();
     init_mesh_queue_autolaunch();
@@ -106597,11 +107015,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_install();
     var fs28 = __toESM2(require("fs"));
     var path33 = __toESM2(require("path"));
-    var import_node_crypto6 = require("crypto");
+    var import_node_crypto7 = require("crypto");
     var import_node_child_process6 = require("child_process");
     init_config();
     init_cooperative_gate();
-    var sha3 = (v) => (0, import_node_crypto6.createHash)("sha256").update(v).digest("hex");
+    var sha3 = (v) => (0, import_node_crypto7.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
       const nodePath = fs28.realpathSync(process.execPath), entryPath = fs28.realpathSync(process.argv[1]);
       const birth = (0, import_node_child_process6.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
@@ -106647,7 +107065,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return r;
     }
     function durable(file, r) {
-      const temp = file + "." + (0, import_node_crypto6.randomUUID)() + ".tmp", fd = fs28.openSync(temp, "wx", 384);
+      const temp = file + "." + (0, import_node_crypto7.randomUUID)() + ".tmp", fd = fs28.openSync(temp, "wx", 384);
       try {
         fs28.writeFileSync(fd, JSON.stringify(r));
         fs28.fsyncSync(fd);
@@ -106670,7 +107088,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return out;
     }
     function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
-      const dir = ensureDirectory(root), operationId = (0, import_node_crypto6.randomUUID)();
+      const dir = ensureDirectory(root), operationId = (0, import_node_crypto7.randomUUID)();
       const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path33.join(dir, operationId + ".json"), r);
       return operationId;
@@ -108358,9 +108776,9 @@ ${marker2}`,
       for (const shim of backup.binShims) {
         try {
           const entry = fs35.realpathSync(shim);
-          const relative13 = path40.relative(backup.packageRoot, entry);
-          if (relative13.startsWith("..") || path40.isAbsolute(relative13)) continue;
-          const previousFirstLine = fs35.readFileSync(path40.join(backup.backupDir, "package", relative13), "utf8").split("\n", 1)[0];
+          const relative14 = path40.relative(backup.packageRoot, entry);
+          if (relative14.startsWith("..") || path40.isAbsolute(relative14)) continue;
+          const previousFirstLine = fs35.readFileSync(path40.join(backup.backupDir, "package", relative14), "utf8").split("\n", 1)[0];
           if (!/^#!\/\S*node$/.test(previousFirstLine)) continue;
           const current4 = fs35.readFileSync(entry, "utf8");
           const currentFirstLine = current4.split("\n", 1)[0];
@@ -109604,18 +110022,18 @@ ${marker2}`,
     }, { meshSender: "authenticated_peer" });
     var fs37 = __toESM2(require("fs"));
     var path42 = __toESM2(require("path"));
-    var import_node_crypto8 = require("crypto");
+    var import_node_crypto9 = require("crypto");
     init_config();
     init_cooperative_gate();
     var fs36 = __toESM2(require("fs"));
     var path41 = __toESM2(require("path"));
     init_config();
-    var import_node_crypto7 = require("crypto");
+    var import_node_crypto8 = require("crypto");
     var import_session_host_core7 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
-    var digest = (value) => (0, import_node_crypto7.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+    var digest = (value) => (0, import_node_crypto8.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     var text = (v) => typeof v === "string" ? v.trim() : "";
     function freshCoordinators(state2) {
       const select = (e) => ({ sessionId: e.sessionId, meshId: e.meshId, workspace: e.workspace, cliType: e.cliType, startedAt: e.startedAt });
@@ -109829,7 +110247,7 @@ ${marker2}`,
     }
     var ACTOR_CONFIG_FILE = "cooperative-maintenance-actor.json";
     var used = /* @__PURE__ */ new Map();
-    var hash22 = (s2) => (0, import_node_crypto8.createHash)("sha256").update(s2).digest("hex");
+    var hash22 = (s2) => (0, import_node_crypto9.createHash)("sha256").update(s2).digest("hex");
     function privateFile(file) {
       const s2 = fs37.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.nlink !== 1 || s2.size > 256 * 1024 || s2.mode & 63 || process.getuid && s2.uid !== process.getuid() || fs37.realpathSync(file) !== file) throw new Error("maintenance_actor_private_pin_required");
@@ -109849,8 +110267,8 @@ ${marker2}`,
       if (key4.length !== 32 || hash22(key4) !== config.observationKey?.sha256) throw new Error("maintenance_actor_key_changed");
       if (request.schema !== 1 || request.operation !== operation || request.daemonId !== state2.daemonId || request.planDigest !== state2.planDigest || request.epoch !== state2.epoch || !/^[a-f0-9-]{36}$/.test(request.nonce) || !Number.isSafeInteger(request.sentAt) || Math.abs(Date.now() - request.sentAt) > 1e4 || !/^[a-f0-9]{64}$/.test(request.mac)) throw new Error("maintenance_actor_challenge_invalid");
       if ((request.body !== void 0 || request.bodyDigest !== void 0) && (request.bodyDigest !== hash22(JSON.stringify(request.body)) || JSON.stringify(request.body).length > 256 * 1024)) throw new Error("maintenance_collection_body_invalid");
-      const expected = (0, import_node_crypto8.createHmac)("sha256", key4).update(actorObservationChallengeBytes(request)).digest();
-      if (!(0, import_node_crypto8.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
+      const expected = (0, import_node_crypto9.createHmac)("sha256", key4).update(actorObservationChallengeBytes(request)).digest();
+      if (!(0, import_node_crypto9.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
       for (const [nonce, at] of used) if (Date.now() - at > 2e4) used.delete(nonce);
       const replayKey = `${root}:${request.nonce}`;
       if (used.has(replayKey) || used.size >= 4096) throw new Error("maintenance_actor_challenge_replayed");
@@ -109870,7 +110288,7 @@ ${marker2}`,
           entryPath: process.argv[1],
           observedAt: Date.now()
         };
-        return { success: true, reply, mac: (0, import_node_crypto8.createHmac)("sha256", key4).update(JSON.stringify(reply)).digest("hex") };
+        return { success: true, reply, mac: (0, import_node_crypto9.createHmac)("sha256", key4).update(JSON.stringify(reply)).digest("hex") };
       } };
     }
     async function authenticatedActorObservation(host, request) {
@@ -109880,8 +110298,8 @@ ${marker2}`,
     }
     var fs38 = __toESM2(require("fs"));
     var path43 = __toESM2(require("path"));
-    var import_node_crypto9 = require("crypto");
-    var sha4 = (x) => (0, import_node_crypto9.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
+    var import_node_crypto10 = require("crypto");
+    var sha4 = (x) => (0, import_node_crypto10.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
     function validateMcpIdentity(value) {
       if (!value || typeof value.birth !== "string" || !/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value.birth) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[a-f0-9-]{36}$/.test(value.bootNonce) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0 || !path43.isAbsolute(value.entryPath ?? "") || !path43.isAbsolute(value.nodePath ?? "") || ![value.entrySha256, value.nodeSha256].every((v) => /^[a-f0-9]{64}$/.test(v))) throw new Error("maintenance_mcp_identity_invalid");
       return { pid: value.pid, bootNonce: value.bootNonce, birth: value.birth, startedAt: value.startedAt, entryPath: value.entryPath, entrySha256: value.entrySha256, nodePath: value.nodePath, nodeSha256: value.nodeSha256 };
@@ -109963,7 +110381,7 @@ ${marker2}`,
       const membershipDigest = sha4(records), members = await Promise.all(records.map((identity2) => new Promise((resolve43) => {
         const name = `${root}:${key2(identity2)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
-        const nonce = (0, import_node_crypto9.randomUUID)(), timer = setTimeout(() => {
+        const nonce = (0, import_node_crypto10.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
           resolve43({ identity: identity2, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
@@ -109975,7 +110393,7 @@ ${marker2}`,
     init_cooperative_gate();
     var MAINTENANCE_DRAIN_CHANNELS = ["runnableQueue", "claims", "launches", "submits", "attempts", "corrections", "livenessHolds", "reportOutboxes", "progressOutboxes", "unreadableOutboxes", "temporaryOutboxes", "memoryOnlyOutboxes", "coordinatorNotices", "pendingNotifications", "adapterOutbound", "adapterSubmit", "turnEvents", "deferredLifecycle", "refineJobs"];
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
-    var digest2 = (v) => (0, import_node_crypto10.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
+    var digest2 = (v) => (0, import_node_crypto11.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
     function census(components, state2, root, nonce) {
       const identity2 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
@@ -110201,10 +110619,10 @@ ${marker2}`,
       const drain = await withMaintenanceObservation((state2) => collectTargetDrain(components, state2, auth.root, request.nonce));
       return auth.reply({ drain });
     }
-    var import_node_crypto11 = require("crypto");
+    var import_node_crypto12 = require("crypto");
     init_cooperative_gate();
     init_dist();
-    var sha5 = (b) => (0, import_node_crypto11.createHash)("sha256").update(b).digest("hex");
+    var sha5 = (b) => (0, import_node_crypto12.createHash)("sha256").update(b).digest("hex");
     var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     var fail = (s2) => {
       throw Error(s2);
@@ -110231,16 +110649,16 @@ ${marker2}`,
           daemonId: peer.daemonId,
           planDigest: s2.planDigest,
           epoch: s2.epoch,
-          nonce: (0, import_node_crypto11.randomUUID)(),
+          nonce: (0, import_node_crypto12.randomUUID)(),
           sentAt: Date.now(),
           configSha256: peerConfigSha,
           body: { action: "peer", fleetChallenge: b.fleetChallenge, expectedBoot: peer.bootNonce, roster: s2.roster, nodeRoster: s2.nodeRoster }
         };
         const challenge = { ...q, bodyDigest: sha5(JSON.stringify(q.body)) };
-        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto11.createHmac)("sha256", key4).update(actorObservationChallengeBytes(challenge)).digest("hex") });
+        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto12.createHmac)("sha256", key4).update(actorObservationChallengeBytes(challenge)).digest("hex") });
         if (sha5(fs40.readFileSync(pin.path)) !== pin.sha256 || sha5(fs40.readFileSync(cfg.observationKey.path)) !== cfg.observationKey.sha256 || sha5(fs40.readFileSync(cfg.actorConfigPath)) !== peerConfigSha) fail("maintenance_control_peer_config_changed");
         const r = answer?.reply;
-        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto11.timingSafeEqual)((0, import_node_crypto11.createHmac)("sha256", key4).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
+        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto12.timingSafeEqual)((0, import_node_crypto12.createHmac)("sha256", key4).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
         if (["verify-committed", "open", "verify-open"].includes(b.action) && (!r.commitment || r.commitment.epoch !== s2.epoch || r.commitment.bootNonce !== peer.bootNonce || r.commitment.decisionDigest !== b.decisionDigest || !equal(r.commitment.ready, b.ready))) fail("maintenance_control_peer_commitment_missing");
         if (!r.observation) fail("maintenance_control_peer_observation_missing");
         peerObservations.push(r.observation);
@@ -116644,17 +117062,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function readSession(sessionPath) {
       if (!sessionPath || !path55.isAbsolute(sessionPath)) return null;
-      const basename26 = path55.basename(sessionPath, ".jsonl");
-      if (!isSafeFilename(basename26)) return null;
+      const basename28 = path55.basename(sessionPath, ".jsonl");
+      if (!isSafeFilename(basename28)) return null;
       if (!fs51.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename26, void 0, sourceMtimeMs);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename28, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
         messages,
-        providerSessionId: basename26,
+        providerSessionId: basename28,
         source: "provider-native",
         sourcePath: sessionPath,
         sourceMtimeMs,
@@ -116663,7 +117081,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
       if (usageRecords.length > 0) {
         session.usage = foldUsageRecords(usageRecords, {
-          providerSessionId: basename26,
+          providerSessionId: basename28,
           agent: "claude-cli"
         });
       }
@@ -117049,8 +117467,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!fs52.existsSync(sessionPath)) return null;
       const meta = readSessionMeta(sessionPath);
       const metaId = String(meta?.id ?? "").trim();
-      const basename26 = path56.basename(sessionPath, ".jsonl");
-      const uuidMatch = basename26.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const basename28 = path56.basename(sessionPath, ".jsonl");
+      const uuidMatch = basename28.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       const filenameUuid2 = uuidMatch ? uuidMatch[1] : "";
       if (metaId && filenameUuid2 && metaId !== filenameUuid2) return null;
       const sessionId = metaId || filenameUuid2;
@@ -118009,8 +118427,8 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const brainRootPath = brainRoot();
       if (sessionPath.startsWith(brainRootPath + path58.sep) && sessionPath.endsWith(".jsonl")) {
-        const relative13 = sessionPath.slice(brainRootPath.length + 1);
-        const uuidFromPath = relative13.split(path58.sep)[0];
+        const relative14 = sessionPath.slice(brainRootPath.length + 1);
+        const uuidFromPath = relative14.split(path58.sep)[0];
         const resolvedSessionId = sessionId || (isUuidLike(uuidFromPath) ? uuidFromPath : "");
         if (!resolvedSessionId) return null;
         const messages = parseBrainTranscript(sessionPath, resolvedSessionId, workspace);
@@ -122239,7 +122657,7 @@ ${output}` : "";
     }
     var fs67 = __toESM2(require("fs"));
     var path71 = __toESM2(require("path"));
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto15 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -123220,7 +123638,7 @@ ${output}` : "";
       };
     }
     var fs66 = __toESM2(require("fs"));
-    var import_node_crypto13 = require("crypto");
+    var import_node_crypto14 = require("crypto");
     init_logger();
     var import_crypto23 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -123959,11 +124377,11 @@ ${output}` : "";
     function parseChatKey(key4) {
       if (key4.startsWith("m:") && key4.length > 2) return { id: key4.slice(2), k: null };
       if (key4.startsWith("p:")) {
-        const sep18 = key4.lastIndexOf(":");
-        if (sep18 <= 2) return null;
-        const k = Number(key4.slice(sep18 + 1));
+        const sep19 = key4.lastIndexOf(":");
+        if (sep19 <= 2) return null;
+        const k = Number(key4.slice(sep19 + 1));
         if (!Number.isSafeInteger(k) || k < 0) return null;
-        return { id: key4.slice(2, sep18), k };
+        return { id: key4.slice(2, sep19), k };
       }
       return null;
     }
@@ -124262,10 +124680,10 @@ ${output}` : "";
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto12 = require("crypto");
+    var import_node_crypto13 = require("crypto");
     init_dist2();
     function sha1(text4) {
-      return (0, import_node_crypto12.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto13.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -124896,7 +125314,7 @@ ${output}` : "";
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto13.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto14.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     var TranscriptProjectionService = class {
       deps;
@@ -127055,7 +127473,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto14.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto15.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -127347,14 +127765,14 @@ ${output}` : "";
     }
     var import_node_fs4 = __toESM2(require("fs"));
     var import_node_path4 = __toESM2(require("path"));
-    var import_node_crypto15 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     var OutgoingReceiptStore = class {
       constructor(directory2) {
         this.directory = directory2;
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path4.default.join(this.directory, (0, import_node_crypto15.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path4.default.join(this.directory, (0, import_node_crypto16.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -127387,8 +127805,8 @@ ${output}` : "";
           messageId,
           sessionId,
           inputDigest,
-          attemptId: (0, import_node_crypto15.randomUUID)(),
-          generation: (0, import_node_crypto15.randomUUID)(),
+          attemptId: (0, import_node_crypto16.randomUUID)(),
+          generation: (0, import_node_crypto16.randomUUID)(),
           state: "accepted",
           revision: 1,
           proof: "acceptance"
@@ -127424,7 +127842,7 @@ ${output}` : "";
         };
         if (this.directory) {
           const file = this.filename(current4.messageId);
-          const staging = `${file}.${(0, import_node_crypto15.randomUUID)()}.tmp`;
+          const staging = `${file}.${(0, import_node_crypto16.randomUUID)()}.tmp`;
           const fd = import_node_fs4.default.openSync(staging, "wx", 384);
           try {
             import_node_fs4.default.writeFileSync(fd, JSON.stringify(next));
@@ -132962,7 +133380,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db) {
@@ -132970,7 +133388,7 @@ ${output}` : "";
     }
     function key3(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto18.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto19.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db, credential, claim) {
       schema2(db);
@@ -134686,6 +135104,77 @@ ${output}` : "";
     init_command_registry();
     init_dist();
     init_mesh_host_ownership();
+    init_dist();
+    init_repo_mesh_types();
+    init_mesh_node_limit();
+    init_mesh_node_identity();
+    function findNode2(nodes, nodeId) {
+      return Array.isArray(nodes) ? nodes.find((node) => meshNodeIdMatches7(node, nodeId)) : void 0;
+    }
+    function judgeWorktree(nodeId, evidence) {
+      const configNode = findNode2(evidence.configMesh?.nodes, nodeId);
+      const heldNode = findNode2(evidence.inlineNodes, nodeId) ?? configNode;
+      const git4 = heldNode ? buildInlineMeshTransitGitStatus(heldNode) : void 0;
+      if (git4) {
+        const status = { git: git4 };
+        applyInlineMeshBranchConvergence({ defaultBranch: evidence.configMesh?.defaultBranch }, heldNode, status);
+        const verdict = readStringValue(readObjectRecord(status.branchConvergence).status);
+        if (verdict && verdict !== "unknown") return verdict;
+      }
+      const selfDaemonId = readStringValue(evidence.selfDaemonId);
+      const ownerDaemonId = readStringValue(configNode?.daemonId);
+      if (configNode && selfDaemonId && ownerDaemonId && daemonIdsEquivalent4(ownerDaemonId, selfDaemonId) && isDeadLocalWorktreeNode(configNode)) {
+        return "cleanup_candidate";
+      }
+      return void 0;
+    }
+    function classifyWorktreesForNodeLimit(details, evidence) {
+      return {
+        ...details,
+        worktrees: details.worktrees.map((worktree) => {
+          const convergence = judgeWorktree(worktree.nodeId, evidence);
+          return convergence ? { ...worktree, convergence } : worktree;
+        })
+      };
+    }
+    function meshNodeLimitFailure(details, evidence) {
+      const judged = classifyWorktreesForNodeLimit(details, evidence);
+      return {
+        success: false,
+        code: MESH_NODE_LIMIT_CODE,
+        error: formatMeshNodeLimitMessage(judged),
+        meshId: judged.meshId,
+        nodeLimit: {
+          count: judged.count,
+          limit: judged.limit,
+          baseNodes: judged.baseNodes,
+          worktreeNodes: judged.worktreeNodes,
+          limitIsOverride: judged.limitIsOverride,
+          defaultLimit: DEFAULT_MESH_MAX_NODES,
+          maxAllowed: MESH_MAX_NODES_MAX,
+          raiseWith: { command: "update_mesh", args: { meshId: judged.meshId, policy: { maxNodes: "<N>" } } },
+          // The same change by hand: this mesh's policy block in this instance's meshes.json.
+          ...judged.configPath ? { configPath: judged.configPath } : {},
+          worktrees: judged.worktrees
+        },
+        cleanupCandidates: judged.worktrees.filter((worktree) => worktree.convergence === "cleanup_candidate")
+      };
+    }
+    async function nodeLimitFailureFromError(error, args) {
+      if (!isMeshNodeLimitError(error)) return null;
+      let configMesh = null;
+      try {
+        const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
+        configMesh = getMesh2(args.meshId) ?? null;
+      } catch {
+      }
+      return meshNodeLimitFailure(error.details, {
+        configMesh,
+        inlineNodes: args.inlineNodes,
+        selfDaemonId: args.selfDaemonId
+      });
+    }
+    init_mesh_node_limit();
     init_config();
     init_command_args();
     init_mesh_relay_result();
@@ -134960,6 +135449,14 @@ ${output}` : "";
           ctx.invalidateAggregateMeshStatus(meshId);
           return { success: true, node };
         } catch (e) {
+          if (isMeshNodeLimitError(e)) {
+            const limitFailure = await nodeLimitFailureFromError(e, {
+              meshId,
+              inlineNodes: ctx.getCachedInlineMesh(meshId)?.nodes,
+              selfDaemonId: ctx.deps.statusInstanceId
+            });
+            if (limitFailure) return limitFailure;
+          }
           return { success: false, error: e.message };
         }
       },
@@ -135081,6 +135578,7 @@ ${output}` : "";
     init_logger();
     init_mesh_events();
     init_mesh_clone_grace();
+    init_mesh_node_limit();
     init_config();
     init_command_args();
     init_mesh_relay_result();
@@ -135527,6 +136025,14 @@ ${output}` : "";
             worktreeBootstrap: bootstrapState
           };
         } catch (e) {
+          if (isMeshNodeLimitError(e)) {
+            const limitFailure = await nodeLimitFailureFromError(e, {
+              meshId,
+              inlineNodes: ctx.getCachedInlineMesh(meshId)?.nodes,
+              selfDaemonId: ctx.deps.statusInstanceId
+            });
+            if (limitFailure) return limitFailure;
+          }
           return { success: false, error: e.message };
         }
       },
@@ -135930,8 +136436,8 @@ ${output}` : "";
           let baseDoc = { version: 1 };
           let existingPath = join122(workspace, relativePath);
           let existedAsYaml = false;
-          for (const relative13 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join122(workspace, relative13);
+          for (const relative14 of MESH_JSON_CONFIG_LOCATIONS2) {
+            const candidate = join122(workspace, relative14);
             if (!existsSync116(candidate)) continue;
             try {
               const text4 = readFileSync101(candidate, "utf-8");
@@ -135942,7 +136448,7 @@ ${output}` : "";
                 existedAsYaml = !/\.json$/i.test(candidate);
               }
             } catch (e) {
-              return { success: false, error: `existing ${relative13} is unparseable, refusing to overwrite: ${e?.message || e}` };
+              return { success: false, error: `existing ${relative14} is unparseable, refusing to overwrite: ${e?.message || e}` };
             }
             break;
           }
@@ -145955,7 +146461,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs98 = __toESM2(require("fs"));
     var path87 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto23 = require("crypto");
+    var import_node_crypto24 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -145996,7 +146502,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto23.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto24.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -147333,11 +147839,31 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs89 = __toESM2(require("fs"));
     var os322 = __toESM2(require("os"));
     var path80 = __toESM2(require("path"));
+    var import_node_child_process16 = require("child_process");
     function realWorkspacePath(workingDir) {
       try {
         return fs89.realpathSync(workingDir);
       } catch {
         return path80.resolve(workingDir);
+      }
+    }
+    function registeredGrokRepoRoot(workingDir, registeredRoots) {
+      if (!registeredRoots.length) return null;
+      try {
+        const gitPath = (flag) => (0, import_node_child_process16.execFileSync)("git", ["-C", workingDir, "rev-parse", flag], {
+          encoding: "utf8",
+          timeout: 2e3,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"]
+        }).trim();
+        const top = realWorkspacePath(gitPath("--show-toplevel"));
+        const common2 = realWorkspacePath(path80.resolve(workingDir, gitPath("--git-common-dir")));
+        const candidates = [top];
+        if (path80.basename(common2) === ".git") candidates.push(realWorkspacePath(path80.dirname(common2)));
+        const registered = new Set(registeredRoots.filter(path80.isAbsolute).map(realWorkspacePath));
+        return candidates.reverse().find((candidate) => registered.has(candidate) && !isOverBroadTrustRoot(candidate)) || null;
+      } catch {
+        return null;
       }
     }
     function isOverBroadTrustRoot(real, configRoot) {
@@ -147417,13 +147943,32 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     function hasTrustEntry(contents, real) {
       return hasTomlTrustTable(contents, "folders", real);
     }
+    function hasDistrustEntry(contents, real) {
+      const header = `[folders."${escapeTomlKey(real)}"]`;
+      let matching = false;
+      for (const line of contents.split(/\r?\n/)) {
+        if (line.trim().startsWith("[")) matching = line.trim() === header;
+        if (matching && /^\s*trusted\s*=\s*false\s*(?:#.*)?$/.test(line)) return true;
+      }
+      return false;
+    }
+    function planGrokTrustAppend(existing, roots, decidedAt = Math.floor(Date.now() / 1e3)) {
+      if (roots.some((root) => hasDistrustEntry(existing, root))) return { refused: true };
+      const missing = [...new Set(roots)].filter((root) => !hasTrustEntry(existing, root));
+      if (!missing.length) return { refused: false, append: null };
+      const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+      return {
+        refused: false,
+        append: `${separator}${missing.map((root) => serializeGrokWorkspaceTrust(root, decidedAt)).join("")}`
+      };
+    }
     function serializeGrokWorkspaceTrust(real, decidedAt = Math.floor(Date.now() / 1e3)) {
       return `[folders."${escapeTomlKey(real)}"]
 trusted = true
 decided_at = ${decidedAt}
 `;
     }
-    function applyGrokWorkspaceTrust(workingDir, env2 = process.env) {
+    function applyGrokWorkspaceTrust(workingDir, env2 = process.env, registeredRepoRoots = []) {
       const real = realWorkspacePath(workingDir);
       if (isOverBroadRoot(real, env2)) {
         LOG.warn("grok-workspace-trust", `refusing to pre-trust over-broad root ${real}`);
@@ -147437,14 +147982,12 @@ decided_at = ${decidedAt}
         } catch (err) {
           if (err?.code !== "ENOENT") throw err;
         }
-        if (hasTrustEntry(existing, real)) {
-          LOG.debug("grok-workspace-trust", `${real} already has a trust entry \u2014 no change`);
-          return null;
-        }
-        const entry = serializeGrokWorkspaceTrust(real);
-        const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+        const repoRoot = registeredGrokRepoRoot(workingDir, registeredRepoRoots);
+        const roots = [.../* @__PURE__ */ new Set([real, ...repoRoot && !isOverBroadRoot(repoRoot, env2) ? [repoRoot] : []])];
+        const decision = planGrokTrustAppend(existing, roots);
+        if (decision.refused || !decision.append) return null;
         fs91.mkdirSync(path82.dirname(storePath), { recursive: true });
-        fs91.appendFileSync(storePath, `${separator}${entry}`, { encoding: "utf8", mode: 384 });
+        fs91.appendFileSync(storePath, decision.append, { encoding: "utf8", mode: 384 });
         LOG.info("grok-workspace-trust", `pre-trusted workspace ${real}`);
         return real;
       } catch (err) {
@@ -147592,25 +148135,39 @@ trust_level = "trusted"
             return real;
           }
           if (trust.scheme === "grok_toml_file") {
+            const configRoot = path85.dirname(settingsPath);
+            const root = plan.authorizedRepoRoot?.realpath;
+            const roots = [real, ...root && root !== real ? [root] : []];
+            if (roots.some((candidate) => !path85.isAbsolute(candidate) || isOverBroadTrustRoot(candidate, configRoot))) {
+              LOG.warn("pre-launch-trust", `refusing grok trust plan with an over-broad root in ${settingsPath}`);
+              return null;
+            }
+            try {
+              if (fs94.lstatSync(settingsPath).isSymbolicLink()) {
+                LOG.warn("pre-launch-trust", `refusing to write grok trust through symlinked store ${settingsPath}`);
+                return null;
+              }
+            } catch (err) {
+              if (err?.code !== "ENOENT") throw err;
+            }
             let existing2 = "";
             try {
               existing2 = fs94.readFileSync(settingsPath, "utf8");
             } catch (err) {
               if (err?.code !== "ENOENT") throw err;
             }
-            const header = `[folders."${real.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
-            if (existing2.split(/\r?\n/).some((line) => line.trim() === header)) {
+            const decision = planGrokTrustAppend(existing2, roots);
+            if (decision.refused) {
+              LOG.info("pre-launch-trust", `[${settingsPath}] explicit grok distrust present \u2014 no trust written`);
+              return null;
+            }
+            if (!decision.append) {
               LOG.debug("pre-launch-trust", `[${settingsPath}] ${real} already trusted \u2014 no change`);
               return null;
             }
-            const separator = existing2.length === 0 || existing2.endsWith("\n") ? "" : "\n";
-            fs94.mkdirSync(path85.dirname(settingsPath), { recursive: true });
-            fs94.appendFileSync(
-              settingsPath,
-              `${separator}${serializeGrokWorkspaceTrust(real)}`,
-              { encoding: "utf8", mode: 384 }
-            );
-            LOG.info("pre-launch-trust", `materialized ${plan.origin} grok folder trust in ${settingsPath}`);
+            fs94.mkdirSync(configRoot, { recursive: true });
+            fs94.appendFileSync(settingsPath, decision.append, { encoding: "utf8", mode: 384 });
+            LOG.info("pre-launch-trust", `materialized ${plan.origin} grok folder trust in ${settingsPath}` + (root && root !== real ? " (with owner-registered repository root)" : ""));
             return real;
           }
           if (trust.scheme === "codex_toml_file") {
@@ -147710,9 +148267,19 @@ trust_level = "trusted"
           ...opts.extraEnv || {}
         });
       } else if ("scheme" in trust && trust.scheme === "grok_toml_file") {
+        const extraEnv = opts.extraEnv || {};
+        const delegatedGrok = typeof extraEnv.GROK_AUTH_PATH === "string" && extraEnv.GROK_AUTH_PATH.trim() !== "";
+        const privateStore = Boolean(extraEnv.GROK_HOME?.trim() || extraEnv.HOME?.trim());
+        if (delegatedGrok && !privateStore) {
+          LOG.warn(
+            "pre-launch-trust",
+            `[${specTag}] skipping grok trust for a delegated launch without a private GROK_HOME/HOME (workspace=${opts.workingDir}) \u2014 refusing to write the owner's trust store.`
+          );
+          return;
+        }
         applyGrokWorkspaceTrust(opts.workingDir, {
           ...process.env,
-          ...opts.extraEnv || {}
+          ...extraEnv
         });
       } else if ("scheme" in trust && trust.scheme === "codex_toml_file") {
         applyCodexWorkspaceTrust(opts.workingDir, {
@@ -150153,7 +150720,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs97 = __toESM2(require("fs"));
-    var import_node_crypto24 = require("crypto");
+    var import_node_crypto25 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -150180,7 +150747,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto24.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto25.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -150474,6 +151041,15 @@ ${text4}` : text4;
       }
       if (state2.status === "waiting_external") {
         return { ...base, status: "waiting_approval" };
+      }
+      if (state2.status === "owner_attention") {
+        return {
+          ...base,
+          status: "waiting_choice",
+          activeModal: null,
+          activeInteractivePrompt: null,
+          ownerAttention: { stateId: state2.id, message: state2.label }
+        };
       }
       const readySeen = input.readySeen();
       if (readySeen === false) {
@@ -152307,8 +152883,8 @@ ${text4}` : text4;
     };
     init_logger();
     init_track_identity();
-    var import_node_child_process16 = require("child_process");
-    var import_node_crypto25 = require("crypto");
+    var import_node_child_process17 = require("child_process");
+    var import_node_crypto26 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -152318,12 +152894,12 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto25.randomUUID)();
+      generation = (0, import_node_crypto26.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
         const launch = resolveWin32ExecFileSpawn(this.options.command, this.options.args);
-        this.child = (0, import_node_child_process16.spawn)(launch.file, launch.args, {
+        this.child = (0, import_node_child_process17.spawn)(launch.file, launch.args, {
           cwd: this.options.cwd,
           env: this.options.env,
           stdio: "pipe",
@@ -152379,7 +152955,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto25.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto26.randomUUID)()}`;
         return new Promise((resolve43, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -152415,7 +152991,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto26 = require("crypto");
+    var import_node_crypto27 = require("crypto");
     init_dist();
     function record2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -152546,7 +153122,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto26.randomUUID)(),
+          promptId: (0, import_node_crypto27.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -154162,7 +154738,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto27 = require("crypto");
+    var import_node_crypto28 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -154360,7 +154936,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto27.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto28.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -157402,6 +157978,7 @@ ${buttons.join("\n")}`;
     init_worker_mcp_isolation();
     init_mesh_coordinator();
     init_logger();
+    init_mesh_config_store();
     var crypto13 = __toESM2(require("crypto"));
     var fs101 = __toESM2(require("fs"));
     var path89 = __toESM2(require("path"));
@@ -157421,13 +157998,38 @@ ${buttons.join("\n")}`;
       return path89.resolve(workspaceRealpath, trimmed2);
     }
     function resolveLaunchTrustPlan(input) {
-      if ("scheme" in input.trust) return null;
+      if ("scheme" in input.trust) {
+        if (input.trust.scheme !== "grok_toml_file" || input.scope !== "worker") return null;
+        return resolveGrokWorkerTrustPlan(input);
+      }
       const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
       const storePath = resolveSettingsStorePath(input.trust.settings_path, input.storeHome, workspaceRealpath);
       if (!path89.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
       return {
         provider: input.provider,
         workspaceRealpath,
+        storePath,
+        scope: input.scope,
+        origin: input.origin,
+        sessionKey: input.sessionKey,
+        lifecycle: { ...input.lifecycle }
+      };
+    }
+    function resolveGrokWorkerTrustPlan(input) {
+      const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
+      const configRoot = path89.resolve(input.storeHome, ".grok");
+      const storePath = path89.join(configRoot, "trusted_folders.toml");
+      if (!path89.isAbsolute(storePath)) throw new Error("resolved trust store path must be absolute");
+      const repoRoot = registeredGrokRepoRoot(input.workspace, input.registeredRepoRoots || []);
+      const authorizedRepoRoot = repoRoot && repoRoot !== workspaceRealpath && !isOverBroadTrustRoot(repoRoot, configRoot) ? {
+        realpath: repoRoot,
+        authority: "owner_registered_mesh_node",
+        ...input.lifecycle.meshId ? { meshId: input.lifecycle.meshId } : {}
+      } : void 0;
+      return {
+        provider: input.provider,
+        workspaceRealpath,
+        ...authorizedRepoRoot ? { authorizedRepoRoot } : {},
         storePath,
         scope: input.scope,
         origin: input.origin,
@@ -157524,6 +158126,8 @@ ${buttons.join("\n")}`;
         grant.lastUsedAt = now;
         grant.lifecycle = { ...plan.lifecycle };
       }
+      if (plan.authorizedRepoRoot) grant.authorizedRepoRoot = { ...plan.authorizedRepoRoot };
+      else delete grant.authorizedRepoRoot;
       if (usage) {
         usage.lastUsedAt = now;
         usage.storePath = plan.storePath;
@@ -157613,6 +158217,27 @@ ${buttons.join("\n")}`;
       }
       return renderedArgs;
     }
+    var GROK_PROVIDER_TYPE = "grok-cli";
+    function resolveOwnerRegisteredRepoRoots(meshId, readConfig = readMeshConfigFromDisk) {
+      if (!meshId) return [];
+      let config = null;
+      try {
+        config = readConfig();
+      } catch {
+        return [];
+      }
+      const mesh = config?.meshes?.find((entry) => entry?.id === meshId);
+      if (!mesh || !Array.isArray(mesh.nodes)) return [];
+      const roots = mesh.nodes.filter((node) => !!node && node.isLocalWorktree !== true && !node.clonedFromNodeId).map((node) => typeof node.workspace === "string" ? node.workspace.trim() : "").filter((workspace) => workspace && path90.isAbsolute(workspace));
+      return [...new Set(roots)];
+    }
+    function applyGrokPrivateHomeEnv(env2, envUnsets, privateHome, realHome, notes) {
+      if (!envUnsets.has("GROK_HOME")) env2.GROK_HOME = path90.join(privateHome, ".grok");
+      if (!envUnsets.has("GROK_AUTH_PATH") && !env2.GROK_AUTH_PATH) {
+        env2.GROK_AUTH_PATH = path90.join(realHome || os39.homedir(), ".grok", "auth.json");
+      }
+      notes.push(`grok config root pinned to private ${path90.join(privateHome, ".grok")}; auth via real auth.json`);
+    }
     function buildCoordinatorDelegatedCliLaunchOptions(input) {
       const cliArgs = Array.isArray(input.cliArgs) ? [...input.cliArgs] : [];
       const env2 = { ...input.env || {} };
@@ -157677,6 +158302,8 @@ ${buttons.join("\n")}`;
             ...input.trustContext?.taskId ? { taskId: input.trustContext.taskId } : {},
             expiresAt: null
           };
+          const grokTrust = "scheme" in preLaunchTrust && preLaunchTrust.scheme === "grok_toml_file";
+          const registeredRepoRoots = grokTrust ? input.registeredRepoRoots ?? resolveOwnerRegisteredRepoRoots(input.trustContext?.meshId) : [];
           const candidate = resolveLaunchTrustPlan({
             provider: input.cliType,
             workspace: input.workspace,
@@ -157685,8 +158312,12 @@ ${buttons.join("\n")}`;
             scope: "worker",
             origin: "worker_auto",
             sessionKey: input.sessionKey || input.workspace,
-            lifecycle
+            lifecycle,
+            registeredRepoRoots
           });
+          if (grokTrust && candidate) {
+            notes.push(candidate.authorizedRepoRoot ? `grok repository-root trust authorized by owner-registered mesh root ${candidate.authorizedRepoRoot.realpath}` : "grok repository-root trust withheld \u2014 no owner-registered mesh root matches this checkout");
+          }
           if (candidate) {
             try {
               const recorded = recordWorkerAutoTrustGrant(candidate, {
@@ -157704,10 +158335,21 @@ ${buttons.join("\n")}`;
           }
         }
         const trustHomeIsConfigRoot = Boolean(workerIsolation?.workerHomeEnvVar);
-        if (resolvedTrustPlan && storeHome && !trustHomeIsConfigRoot && !envUnsets.has("HOME") && !env2.HOME) {
+        const exportHome = Boolean(resolvedTrustPlan) || input.cliType === GROK_PROVIDER_TYPE;
+        if (exportHome && storeHome && !trustHomeIsConfigRoot && !envUnsets.has("HOME") && !env2.HOME) {
           env2.HOME = storeHome;
           if (process.platform === "win32" && !env2.USERPROFILE) env2.USERPROFILE = storeHome;
         }
+        if (input.cliType === GROK_PROVIDER_TYPE) {
+          if (!storeHome) {
+            throw new Error(
+              `worker_private_home_failed: ${input.cliType}: no worker-private HOME for the grok trust/config store \u2014 refusing to launch the worker against the owner's ~/.grok.`
+            );
+          }
+          applyGrokPrivateHomeEnv(env2, envUnsets, storeHome, input.realHome, notes);
+        }
+      } else if (input.cliType === GROK_PROVIDER_TYPE && workerIsolation?.workerHome) {
+        applyGrokPrivateHomeEnv(env2, envUnsets, workerIsolation.workerHome, input.realHome, workerIsolation.notes);
       }
       const envSet = input.isolation?.env?.set;
       if (workerIsolation && envSet && typeof envSet === "object") {
@@ -170672,7 +171314,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto28 = require("crypto");
+    var import_node_crypto29 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -170681,7 +171323,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto28.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto29.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -170691,7 +171333,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto28.randomUUID)();
+          const id4 = (0, import_node_crypto29.randomUUID)();
           active.add(id4);
           try {
             return await run3();
