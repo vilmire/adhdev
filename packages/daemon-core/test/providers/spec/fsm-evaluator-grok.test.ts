@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { resolveSections, sectionText, extractButtonsFromRule } from '../../../src/providers/spec/evaluator.js';
-import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
+import { modalKindForState, statusForState, type CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 import {
     pickApprovalButton,
     hasNegativeApprovalOption,
@@ -205,6 +205,41 @@ describe('grok-cli FSM — transitions on real captured screens', () => {
     it('does not fire trust on an ordinary screen', () => {
         const spec = loadSpec();
         expect(fire(spec, 'starting', generating)).not.toBe('→trust');
+    });
+});
+
+// ── Synthetic: "Help improve Grok" data-retention consent banner ─────────────
+// Mirrors adhdev-providers/cli/grok-cli/fixtures/replay/consent-banner.pty.
+const consentBanner = [
+    'Help improve Grok',
+    'Off by default. Opt-in to allow SpaceXAI to retain coding data, e.g., prompts, traces, & metrics, for training.',
+    'Read Terms and Privacy Policy',
+    '[Opt out]    [Opt in]',
+];
+
+describe('grok-cli FSM — consent banner is an owner-attention park, never answered', () => {
+    it('enters consent_banner from boot, idle and busy — beating startup-grace and approval', () => {
+        const spec = loadSpec();
+        for (const from of ['starting', 'idle', 'busy']) {
+            expect(fire(spec, from, consentBanner)).toBe('→consent_banner');
+        }
+        // Even with an approval footer still in the buffer, consent outranks it.
+        expect(fire(spec, 'idle', [...consentBanner, ...approvalModal])).toBe('→consent_banner');
+    });
+
+    it('holds while the banner is visible and clears only once it is gone', () => {
+        const spec = loadSpec();
+        expect(fire(spec, 'consent_banner', consentBanner, 600_000)).toBeNull();
+        expect(fire(spec, 'consent_banner', idleAfterTurn)).toBe('consent_banner→idle');
+    });
+
+    it('declares an owner-attention status with nothing to press', () => {
+        const spec = loadSpec();
+        const state = spec.states.find((s) => s.id === 'consent_banner')!;
+        expect(statusForState(state)).toBe('owner_attention');
+        expect(state.modal).toBeUndefined();
+        expect(state.extract?.buttons).toBeUndefined();
+        expect(modalKindForState(state)).toBeNull();
     });
 });
 
