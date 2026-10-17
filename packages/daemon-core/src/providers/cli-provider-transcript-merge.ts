@@ -22,6 +22,27 @@ export function mergeConversationMessages(
         ? message.role.trim().toLowerCase()
         : '';
     const metadata = (message: ChatMessage): Record<string, unknown> => message.meta && typeof message.meta === 'object' && !Array.isArray(message.meta) ? message.meta as Record<string, unknown> : {};
+    // Index once, then look up. The ack-dedup below used to rescan every parsed
+    // turn and every runtime message (re-flattening and regex-normalizing each)
+    // for every runtime ack — O(n²) per getState(), which pinned the preview
+    // daemon at 100% CPU on long sessions (2026-10-17). Only `content` and
+    // `role` are indexed; both are never rewritten below (only `meta` is), so
+    // the index stays valid while candidates are updated in place.
+    const normalizeText = (message: ChatMessage): string => flattenContent(message.content).replace(/\s+/g, ' ').trim();
+    const parsedUserTurnsByText = new Map<string, MergeEntry[]>();
+    for (const parsedEntry of parsedEntries) {
+        const parsedRole = getRole(parsedEntry.message);
+        if (parsedRole !== 'user' && parsedRole !== 'human') continue;
+        const text = normalizeText(parsedEntry.message);
+        const bucket = parsedUserTurnsByText.get(text);
+        if (bucket) bucket.push(parsedEntry); else parsedUserTurnsByText.set(text, [parsedEntry]);
+    }
+    const runtimeAckCountByText = new Map<string, number>();
+    for (const r of runtimeMessages) {
+        if (metadata(r.message).runtimeInputAck !== true) continue;
+        const text = normalizeText(r.message);
+        runtimeAckCountByText.set(text, (runtimeAckCountByText.get(text) ?? 0) + 1);
+    }
     const runtimeEntries: MergeEntry[] = runtimeMessages.map((entry, index) => ({
         message: entry.message,
         index: parsedMessages.length + index,
@@ -32,22 +53,17 @@ export function mergeConversationMessages(
             ? entry.message.meta as Record<string, unknown>
             : {};
         if (meta.runtimeInputAck !== true) return true;
-        const runtimeText = flattenContent(entry.message.content).replace(/\s+/g, ' ').trim();
+        const runtimeText = normalizeText(entry.message);
         if (!runtimeText) return !!(meta.sourceMessageId || meta.outgoingReceipt);
-        const matches = parsedEntries.filter((parsedEntry) => {
-            const parsedRole = getRole(parsedEntry.message);
-            return (parsedRole === 'user' || parsedRole === 'human')
-                && flattenContent(parsedEntry.message.content).replace(/\s+/g, ' ').trim() === runtimeText;
-        });
+        const matches = parsedUserTurnsByText.get(runtimeText) ?? [];
         const sourceId = typeof meta.sourceMessageId === 'string' ? meta.sourceMessageId : null;
         const receipt = readOutgoingReceipt(meta.outgoingReceipt);
         // Text alone cannot distinguish repeated sends. An explicit native identity
         // can; otherwise both sides of the content match must be unique.
         const identified = sourceId ? matches.filter(p => metadata(p.message).sourceMessageId === sourceId) : [];
-        const sameTextAcks = runtimeMessages.filter(r => metadata(r.message).runtimeInputAck === true
-            && flattenContent(r.message.content).replace(/\s+/g, ' ').trim() === runtimeText);
+        const sameTextAckCount = runtimeAckCountByText.get(runtimeText) ?? 0;
         const candidate = identified.length === 1 ? identified[0]
-            : matches.length === 1 && sameTextAcks.length === 1 ? matches[0] : null;
+            : matches.length === 1 && sameTextAckCount === 1 ? matches[0] : null;
         if (!candidate) return true;
         // A historical native turn cannot receive a later send's identity. A small
         // allowance covers native timestamps sampled just before the runtime ack.

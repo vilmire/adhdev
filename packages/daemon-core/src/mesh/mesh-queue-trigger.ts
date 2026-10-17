@@ -143,6 +143,12 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
 
     const cliInstances = components.instanceManager.getByCategory('cli');
     for (const inst of cliInstances) {
+        // Skip other meshes' sessions before getState(): getState() rebuilds the
+        // full merged transcript and returns this same `settings` object, so a
+        // session whose live settings name another mesh can never be a candidate.
+        const liveSettings = (inst as { settings?: unknown }).settings;
+        if (liveSettings && typeof liveSettings === 'object'
+            && readText((liveSettings as Record<string, unknown>).meshNodeFor) !== meshId) continue;
         const state = inst.getState();
         const settings = state.settings as Record<string, unknown> || {};
 

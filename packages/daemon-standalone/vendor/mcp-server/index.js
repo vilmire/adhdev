@@ -74516,6 +74516,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const localCandidates = [];
       const cliInstances2 = components.instanceManager.getByCategory("cli");
       for (const inst of cliInstances2) {
+        const liveSettings = inst.settings;
+        if (liveSettings && typeof liveSettings === "object" && readText(liveSettings.meshNodeFor) !== meshId) continue;
         const state2 = inst.getState();
         const settings2 = state2.settings || {};
         const instMeshId = readText(settings2.meshNodeFor);
@@ -74681,11 +74683,18 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         inFlightAutoLaunches = /* @__PURE__ */ new Map();
       }
     });
+    function readInstanceIdentity(inst) {
+      const field3 = inst?.instanceId;
+      if (typeof field3 === "string" && field3) return field3;
+      const sid = inst?.getState?.().instanceId;
+      return typeof sid === "string" ? sid : void 0;
+    }
     function resolveClaimingSessionTranscriptProfile(components, sessionId) {
       try {
-        const instances = components.instanceManager?.getByCategory?.("cli") || [];
-        const inst = instances.find((i) => {
-          const sid = i?.getState?.().instanceId;
+        const direct = components.instanceManager?.getInstance?.(sessionId);
+        const instances = direct?.category === "cli" ? [] : components.instanceManager?.getByCategory?.("cli") || [];
+        const inst = direct?.category === "cli" ? direct : instances.find((i) => {
+          const sid = readInstanceIdentity(i);
           return typeof sid === "string" && sid && sessionIdsEquivalent(sid, sessionId);
         });
         const provider = inst?.provider;
@@ -108540,6 +108549,22 @@ ${marker2}`,
       }));
       const getRole = (message) => typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
       const metadata = (message) => message.meta && typeof message.meta === "object" && !Array.isArray(message.meta) ? message.meta : {};
+      const normalizeText = (message) => flattenContent(message.content).replace(/\s+/g, " ").trim();
+      const parsedUserTurnsByText = /* @__PURE__ */ new Map();
+      for (const parsedEntry of parsedEntries) {
+        const parsedRole = getRole(parsedEntry.message);
+        if (parsedRole !== "user" && parsedRole !== "human") continue;
+        const text3 = normalizeText(parsedEntry.message);
+        const bucket2 = parsedUserTurnsByText.get(text3);
+        if (bucket2) bucket2.push(parsedEntry);
+        else parsedUserTurnsByText.set(text3, [parsedEntry]);
+      }
+      const runtimeAckCountByText = /* @__PURE__ */ new Map();
+      for (const r of runtimeMessages) {
+        if (metadata(r.message).runtimeInputAck !== true) continue;
+        const text3 = normalizeText(r.message);
+        runtimeAckCountByText.set(text3, (runtimeAckCountByText.get(text3) ?? 0) + 1);
+      }
       const runtimeEntries = runtimeMessages.map((entry, index) => ({
         message: entry.message,
         index: parsedMessages.length + index,
@@ -108548,17 +108573,14 @@ ${marker2}`,
       })).filter((entry) => {
         const meta = entry.message.meta && typeof entry.message.meta === "object" && !Array.isArray(entry.message.meta) ? entry.message.meta : {};
         if (meta.runtimeInputAck !== true) return true;
-        const runtimeText = flattenContent(entry.message.content).replace(/\s+/g, " ").trim();
+        const runtimeText = normalizeText(entry.message);
         if (!runtimeText) return !!(meta.sourceMessageId || meta.outgoingReceipt);
-        const matches = parsedEntries.filter((parsedEntry) => {
-          const parsedRole = getRole(parsedEntry.message);
-          return (parsedRole === "user" || parsedRole === "human") && flattenContent(parsedEntry.message.content).replace(/\s+/g, " ").trim() === runtimeText;
-        });
+        const matches = parsedUserTurnsByText.get(runtimeText) ?? [];
         const sourceId = typeof meta.sourceMessageId === "string" ? meta.sourceMessageId : null;
         const receipt = readOutgoingReceipt(meta.outgoingReceipt);
         const identified = sourceId ? matches.filter((p) => metadata(p.message).sourceMessageId === sourceId) : [];
-        const sameTextAcks = runtimeMessages.filter((r) => metadata(r.message).runtimeInputAck === true && flattenContent(r.message.content).replace(/\s+/g, " ").trim() === runtimeText);
-        const candidate = identified.length === 1 ? identified[0] : matches.length === 1 && sameTextAcks.length === 1 ? matches[0] : null;
+        const sameTextAckCount = runtimeAckCountByText.get(runtimeText) ?? 0;
+        const candidate = identified.length === 1 ? identified[0] : matches.length === 1 && sameTextAckCount === 1 ? matches[0] : null;
         if (!candidate) return true;
         const nativeAt = candidate.message.receivedAt || candidate.message.timestamp || 0;
         const runtimeAt = entry.message.receivedAt || entry.message.timestamp || 0;

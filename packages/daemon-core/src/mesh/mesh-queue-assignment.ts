@@ -96,6 +96,17 @@ export type { SessionBusyVerdict };
 // share one comparison rule instead of drifting module-private copies.
 
 /**
+ * A provider instance's id without building its state. CLI instances carry a
+ * plain `instanceId` field; anything else falls back to getState().
+ */
+export function readInstanceIdentity(inst: unknown): string | undefined {
+    const field = (inst as { instanceId?: unknown } | null | undefined)?.instanceId;
+    if (typeof field === 'string' && field) return field;
+    const sid = (inst as { getState?: () => { instanceId?: unknown } } | null | undefined)?.getState?.().instanceId;
+    return typeof sid === 'string' ? sid : undefined;
+}
+
+/**
  * Resolve the transcript-authority profile of the LIVE claiming session's
  * provider module (runtime capability, not manifest — a manifest may declare
  * nativeHistory the live-loaded session doesn't have). Row-lean subset: the
@@ -108,11 +119,18 @@ function resolveClaimingSessionTranscriptProfile(
     sessionId: string,
 ): MeshWorkQueueEntry['assignedTranscriptProfile'] {
     try {
-        const instances = components.instanceManager?.getByCategory?.('cli') || [];
-        const inst = instances.find((i: any) => {
-            const sid = i?.getState?.().instanceId;
+        // Identity only — never getState() here. getState() rebuilds the whole
+        // merged transcript, and this runs for every claim attempt on every
+        // queue-drain tick; scanning all CLI instances through it pinned the
+        // preview daemon's event loop at 100% CPU (2026-10-17). The instance
+        // map is keyed by instance id, so try the direct lookup first, then the
+        // equivalence scan over the plain `instanceId` field.
+        const direct = components.instanceManager?.getInstance?.(sessionId) as { category?: string; provider?: unknown } | undefined;
+        const instances = direct?.category === 'cli' ? [] : (components.instanceManager?.getByCategory?.('cli') || []);
+        const inst = (direct?.category === 'cli' ? direct : instances.find((i: any) => {
+            const sid = readInstanceIdentity(i);
             return typeof sid === 'string' && sid && sessionIdsEquivalent(sid, sessionId);
-        }) as { provider?: unknown } | undefined;
+        })) as { provider?: unknown } | undefined;
         const provider = inst?.provider;
         if (!provider || typeof provider !== 'object') return undefined;
         const profile = resolveTranscriptAuthorityProfile(provider as Parameters<typeof resolveTranscriptAuthorityProfile>[0]);
