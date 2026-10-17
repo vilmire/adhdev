@@ -96,7 +96,9 @@ describe('buildAssistantSystemPrompt', () => {
     it('keeps the fixed rules around 5–6 KB', () => {
         expect(ASSISTANT_FIXED_RULES.length).toBeGreaterThan(4_000);
         // 6,600: +project_attach_remote's routing clause (the cap was within ~10 chars).
-        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(6_600);
+        // 6_600 → 6_700 (rc.18): the launch-defaults tools are named in the tool list
+        // (every assistant tool must be); the whole prompt stays under its own cap below.
+        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(6_700);
     });
 
     it('stays well under the limit with full memory/skill budgets and 20 projects', () => {
