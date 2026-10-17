@@ -100,7 +100,7 @@ function checkPathExists(paths: string[]): string | null {
             : p;
         if (normalized.includes('*')) {
             // Wildcard expansion: replace `*` with the current user's home folder name
-            // e.g. "C:\Users\*\AppData\..." → "C:\Users\vilmi\AppData\..."
+            // e.g. "C:\Users\*\AppData\..." becomes "C:\Users\example\AppData\...".
             const username = home.split(/[\\/]/).pop() || '';
             const resolved = normalized.replace('*', username);
             if (existsSync(resolved)) return resolved;

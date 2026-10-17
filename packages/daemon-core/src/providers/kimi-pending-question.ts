@@ -27,8 +27,8 @@
  * so a pre-restart answer still binds — the rc.20 rebind-fidelity rule the
  * claude TUI path solves with a content fingerprint).
  *
- * Shape verified against live kimi 0.34.0 wire.jsonl captures
- * (~/.kimi-code/sessions/wd_adhdev_78117b8afba9/session_cc5d676d-…): the
+ * Illustrative kimi 0.34.0 wire.jsonl shape
+ * (`~/.kimi-code/sessions/<wdKey>/session_<uuid>/agents/main/wire.jsonl`): the
  * tool.call event carries `toolCallId` / `name` / `args.questions[]` with
  * { header, question, options: [{ label, description }] }; the tool.result
  * event carries the same top-level `toolCallId`. Multi-select questions carry
