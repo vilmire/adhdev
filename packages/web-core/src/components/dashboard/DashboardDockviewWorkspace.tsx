@@ -6,8 +6,6 @@ import {
     useMemo,
     useRef,
     useState,
-    type Dispatch,
-    type SetStateAction,
 } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -18,8 +16,6 @@ import {
     type DockviewReadyEvent,
     type IDockviewPanelProps,
 } from 'dockview'
-import type { ActiveConversation } from './types'
-import type { DaemonData } from '../../types'
 import type { CliTerminalHandle } from '../CliTerminal'
 import PaneGroupContent from './PaneGroupContent'
 import PaneGroupEmptyState from './PaneGroupEmptyState'
@@ -30,12 +26,10 @@ import {
     readDashboardDockviewStoredLayout,
     writeDashboardDockviewHiddenRestoreState,
     writeDashboardDockviewStoredLayout,
-    type DashboardLayoutProfile,
     type DashboardStoredHiddenTabLocation,
 } from '../../utils/dashboardLayoutStorage'
-import type { LiveSessionInboxState } from './DashboardMobileChatShared'
 import { getPreferredConversationForIde } from './conversation-sort'
-import { getCliConversationViewMode, isCliConv, type CliConversationViewMode } from './types'
+import { getCliConversationViewMode, isCliConv } from './types'
 import { switchCliConversationViewModeOptimistically } from './cliViewModeOverrides'
 import { useTransport } from '../../context/TransportContext'
 import { useTheme } from '../../hooks/useTheme'
@@ -73,6 +67,7 @@ import {
     type DashboardDockviewContextValue,
 } from './dockviewWorkspaceContext'
 import { attachPopoutShortcutKeys } from './dockviewPopoutShortcuts'
+import type { DashboardDockviewWorkspaceProps } from './DashboardDockviewWorkspace.types'
 import DockviewTabContextMenu from './DockviewTabContextMenu'
 import { injectDockviewThemeIntoPopout, renderDockviewPopoutChrome, syncDockviewThemeToPopouts } from './dockviewPopoutWindows'
 
@@ -82,53 +77,6 @@ import { injectDockviewThemeIntoPopout, renderDockviewPopoutChrome, syncDockview
  * `activeActionLogs` useMemo below exists to preserve.
  */
 const EMPTY_ACTION_LOGS: { routeId: string; text: string; timestamp: number }[] = []
-
-interface DashboardDockviewWorkspaceProps {
-    visibleConversations: ActiveConversation[]
-    clearedTabs: Record<string, number>
-    ides: DaemonData[]
-    actionLogs: { routeId: string; text: string; timestamp: number }[]
-    sendDaemonCommand: (id: string, type: string, data: Record<string, unknown>) => Promise<any>
-    setActionLogs: Dispatch<SetStateAction<{ routeId: string; text: string; timestamp: number }[]>>
-    isStandalone: boolean
-    hasRegisteredMachines: boolean
-    initialDataLoaded: boolean
-    userName?: string
-    toggleHiddenTab: (tabKey: string) => void
-    actionShortcuts: Partial<Record<DashboardActionShortcutId, string>>
-    registerActionHandlers?: (handlers: {
-        setShortcutForActiveTab: () => void
-        restoreHiddenTabToSavedLocation: (tabKey: string) => void
-        activateConversationTab: (tabKey: string) => boolean
-        resetAllPanelsToMain: () => void
-        activatePreviousTabInGroup: () => void
-        activateNextTabInGroup: () => void
-        floatActiveTab: () => void
-        popoutActiveTab: () => void
-        dockActiveTab: () => void
-        splitActiveTabRight: () => void
-        splitActiveTabDown: () => void
-        focusLeftPane: () => void
-        focusRightPane: () => void
-        focusUpPane: () => void
-        focusDownPane: () => void
-        moveActiveTabToLeftPane: () => void
-        moveActiveTabToRightPane: () => void
-        moveActiveTabToUpPane: () => void
-        moveActiveTabToDownPane: () => void
-    } | null) => void
-    onActiveTabChange: (tabKey: string | null) => void
-    onOpenNewSession?: () => void
-    onRequestScrollToBottom?: (tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => void
-    requestedActiveTabKey?: string | null
-    requestedRemoteIdeId?: string | null
-    onRequestedActiveTabConsumed?: () => void
-    scrollToBottomRequest?: { tabKey: string; nonce: number } | null
-    liveSessionInboxState: Map<string, LiveSessionInboxState>
-    layoutProfile: DashboardLayoutProfile
-    /** Lets a panel switch its CLI conversation to the terminal view (owner-attention notice). */
-    setCliViewModeOverrides?: Dispatch<SetStateAction<Record<string, CliConversationViewMode>>>
-}
 
 type DashboardDockviewPanelActivityApi = Pick<IDockviewPanelProps<DashboardDockviewPanelParams>['api'], 'isActive' | 'isVisible'>
 
