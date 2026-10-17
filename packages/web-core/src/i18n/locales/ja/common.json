@@ -1626,7 +1626,8 @@
             "memory": "メモリ",
             "user": "ユーザー",
             "skill": "スキル",
-            "note": "ノート"
+            "note": "ノート",
+            "launchDefault": "起動デフォルト"
         },
         "action": {
             "add": "追加",
@@ -1636,7 +1637,9 @@
             "patch": "編集",
             "archive": "アーカイブ",
             "record": "記録",
-            "forget": "削除"
+            "forget": "削除",
+            "set": "設定",
+            "clear": "解除"
         },
         "origin": {
             "relay": "リレー後",
@@ -1644,6 +1647,10 @@
             "review_tainted": "信頼できない入力後のレビュー",
             "human": "あなた",
             "owner": "あなた"
+        },
+        "role": {
+            "assistant": "アシスタント",
+            "coordinator": "コーディネーター"
         }
     },
     "chatPane": {
@@ -3198,6 +3205,27 @@
             "installFailedDigestMismatch": "インストール失敗 — 後でもう一度お試しください",
             "loadFailed": "プロバイダー設定の読み込みに失敗しました: {{error}}",
             "quotaToggleFailed": "{{provider}} のクォータ取得設定の変更に失敗しました: {{error}}"
+        },
+        "launchDefaults": {
+            "title": "起動デフォルト",
+            "description": "このマシンで新しいアシスタント／コーディネーターセッションを起動するときの CLI です。次回の起動から適用され、実行中のセッションは変わりません。",
+            "role": {
+                "assistant": "アシスタント",
+                "coordinator": "コーディネーター"
+            },
+            "notSet": "未設定",
+            "nextLaunch": "次回の起動: {{selection}}",
+            "unusable": "このデフォルトでは起動できません（{{code}}: {{reason}}）。別の CLI を選ぶか解除してください。",
+            "provider": "CLI",
+            "chooseProvider": "CLI を選択",
+            "model": "モデル",
+            "thinking": "思考レベル",
+            "providerDefault": "プロバイダーの既定",
+            "save": "保存",
+            "clear": "解除",
+            "saved": "保存しました。次回の起動から適用されます。",
+            "saveFailed": "保存できませんでした: {{code}}",
+            "loadFailed": "起動デフォルトを読み込めませんでした: {{error}}"
         },
         "sourcesPanel": {
             "title": "外部ソース",

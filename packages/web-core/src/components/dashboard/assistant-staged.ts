@@ -17,8 +17,10 @@ import { ASSISTANT_VERB } from '@adhdev/mesh-shared'
 
 export const ASSISTANT_STAGED_COMMAND = ASSISTANT_VERB.stagedResolve
 
-/** What the write changes: the assistant's own memory, the person's profile, a skill, a project note. */
-export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note'
+/** What the write changes: the assistant's own memory, the person's profile, a skill, a project note,
+ * or this machine's launch default for a role (assistant / coordinator). */
+export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault'
+export type AssistantStagedLaunchRole = 'assistant' | 'coordinator'
 export type AssistantStagedDecision = 'apply' | 'discard'
 
 export interface AssistantStagedItem {
@@ -40,6 +42,8 @@ export interface AssistantStagedItem {
     reason?: string
     /** Note category / skill file path, when the write names one. */
     detail?: string
+    /** Launch default only — the role whose next-launch default the proposal sets or clears. */
+    role?: AssistantStagedLaunchRole
 }
 
 export interface AssistantStagedGroup {
@@ -128,6 +132,30 @@ function noteItem(r: Record<string, any>): AssistantStagedItem | null {
     return item
 }
 
+/** `provider · model · thinking`, omitting axes left to the provider default. */
+export function launchSelectionText(v: unknown): string {
+    const sel = rec(v)
+    if (!sel || !s(sel.provider)) return ''
+    return [s(sel.provider), s(sel.model), s(sel.thinkingLevel)].filter(Boolean).join(' · ')
+}
+
+/**
+ * A launch-default proposal (`launchDefaults[]`, daemon kind `launch_defaults`):
+ * `set` replaces the role's whole triple, `selection: null` clears it. The diff
+ * shows the default it was proposed against and what approving would save.
+ */
+function launchDefaultItem(r: Record<string, any>): AssistantStagedItem | null {
+    const role = s(r.role)
+    if (role !== 'assistant' && role !== 'coordinator') return null
+    const selection = rec(r.selection)
+    if (r.selection !== null && !launchSelectionText(selection)) return null
+    const item = base(r, 'launchDefault', selection ? 'set' : 'clear', s(r.project))
+    if (!item) return null
+    item.role = role
+    item.diff = { before: launchSelectionText(r.previous), after: launchSelectionText(selection) }
+    return item
+}
+
 /**
  * The list answer → items, oldest first. Returns null when the answer is not
  * a list at all (older daemon without the verb, refusal, transport error) so
@@ -136,7 +164,7 @@ function noteItem(r: Record<string, any>): AssistantStagedItem | null {
 export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     const r = unwrapStagedAnswer(raw)
     if (!r || r.success === false) return null
-    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes)) return null
+    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults)) return null
     const out: AssistantStagedItem[] = []
     const take = (list: unknown, fn: (x: Record<string, any>) => AssistantStagedItem | null) => {
         if (!Array.isArray(list)) return
@@ -149,6 +177,7 @@ export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     take(r.memory, memoryItem)
     take(r.skills, skillItem)
     take(r.notes, noteItem)
+    take(r.launchDefaults, launchDefaultItem)
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 

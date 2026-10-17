@@ -35,6 +35,23 @@ function listAnswer() {
     }
 }
 
+
+const LDF = 'ldf-0123456789abcdef0123456789abcdef-' + 'a'.repeat(64)
+function launchDefaultsAnswer() {
+    return {
+        success: true, memory: [], skills: [], notes: [],
+        launchDefaults: [
+            { version: 1, kind: 'launch_defaults', id: LDF, createdAt: '2026-10-08T03:00:00.000Z', generation: '0123456789abcdef0123456789abcdef',
+                documentRevision: 1, role: 'assistant', selection: { provider: 'codex-cli', model: 'gpt' },
+                previous: { provider: 'claude-cli', revision: 1, setBy: 'owner', setAt: 1 }, expectedRevision: 1, origin: 'relay', callerSessionId: 'a-1' },
+            { version: 1, kind: 'launch_defaults', id: 'ldf-clear', createdAt: '2026-10-08T03:00:01.000Z', generation: 'x',
+                documentRevision: 1, role: 'coordinator', project: 'host-project', selection: null,
+                previous: { provider: 'claude-cli', thinkingLevel: 'high', revision: 1, setBy: 'owner', setAt: 1 }, expectedRevision: 3, origin: 'review_tainted' },
+            { kind: 'launch_defaults', id: 'ldf-bad', createdAt: 'x', role: 'worker', selection: null, previous: null, origin: 'relay' },
+        ],
+    }
+}
+
 describe('assistant-staged model', () => {
     it('parses all three stores (and the cloud wrapper) into display items, oldest first', () => {
         const items = parseStagedList({ success: true, result: listAnswer() })!
@@ -44,6 +61,16 @@ describe('assistant-staged model', () => {
         expect(items[2]).toMatchObject({ kind: 'skill', target: 'deploy-preview', diff: { before: 'step a', after: 'step b' } })
         expect(items[3]).toMatchObject({ kind: 'note', target: 'adhdev', detail: 'gotcha', text: 'Run check:file-sizes before merge' })
         expect(parseStagedList({ success: true, memory: [{ id: 'mem-u', createdAt: 'x', origin: 'relay', op: { action: 'add', target: 'user', content: 'x' } }] })![0].kind).toBe('user')
+    })
+
+    it('parses launch-default proposals (set and clear) and drops unknown roles', () => {
+        const items = parseStagedList({ success: true, result: launchDefaultsAnswer() })!
+        expect(items.map(i => i.id)).toEqual([LDF, 'ldf-clear'])
+        expect(items[0]).toMatchObject({ kind: 'launchDefault', action: 'set', role: 'assistant', target: '', origin: 'relay',
+            diff: { before: 'claude-cli', after: 'codex-cli · gpt' } })
+        expect(items[1]).toMatchObject({ kind: 'launchDefault', action: 'clear', role: 'coordinator', target: 'host-project',
+            diff: { before: 'claude-cli · high', after: '' } })
+        expect(parseStagedList({ success: true, launchDefaults: [] })).toEqual([])
     })
 
     it('returns null for a refusal / unknown verb so the surface hides', () => {
@@ -180,6 +207,26 @@ describe('AssistantStagedWrites', () => {
         expect(failed?.textContent).toContain('memory_budget_exceeded')
         expect(container.querySelector('[data-staged-item="skl-1"]')).toBeNull()
         expect(container.querySelector('.assistant-staged-badge')?.textContent).toContain('2 pending')
+    })
+
+    it('shows a launch-default proposal and approves it by its Inbox id only', async () => {
+        let answer: unknown = launchDefaultsAnswer()
+        const send = vi.fn(async (_d: string, _t: string, payload?: Payload) => {
+            if (payload?.action === 'list') return answer
+            answer = { ...launchDefaultsAnswer(), launchDefaults: launchDefaultsAnswer().launchDefaults.slice(1) }
+            return { success: true, result: 'applied', role: 'assistant', scope: 'global', revision: 2, durable: true }
+        })
+        await mount(send)
+        await click(container.querySelector('.assistant-staged-badge'))
+        const row = container.querySelector(`[data-staged-item="${LDF}"]`)!
+        expect(row.textContent).toContain('Launch default')
+        expect(row.querySelector('[data-staged-role="assistant"]')?.textContent).toBe('Assistant')
+        expect(row.textContent).toContain('- claude-cli')
+        expect(row.textContent).toContain('+ codex-cli · gpt')
+        expect(container.querySelector('[data-staged-item="ldf-clear"]')!.textContent).toContain('Clear')
+        await click(row.querySelector('[data-staged-action="apply"]'))
+        expect(send).toHaveBeenCalledWith('daemon-1', 'assistant_staged_resolve', { id: LDF, decision: 'apply' })
+        expect(container.querySelector(`[data-staged-item="${LDF}"]`)).toBeNull()
     })
 
     it('refreshes when the assistant turn commits (busy → idle), not on every render', async () => {

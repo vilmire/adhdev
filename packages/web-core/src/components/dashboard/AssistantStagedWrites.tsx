@@ -1,6 +1,6 @@
 /**
  * "Held for your approval" — the assistant pane's compact surface for staged
- * memory / user / skill / project-note writes (design
+ * memory / user / skill / project-note writes and launch-default proposals (design
  * 2026-10-07-assistant-layer.md §4.10.2, research 2026-10-08 Q8).
  *
  * A small "N pending" pill in the pane's top-right control bar, hidden while
@@ -22,7 +22,7 @@ import { useAssistantStagedWrites, type AssistantStagedWritesState } from '../..
 type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<any>
 
 const KNOWN_ORIGINS = new Set(['relay', 'review', 'review_tainted', 'human', 'owner'])
-const KNOWN_ACTIONS = new Set(['add', 'replace', 'remove', 'create', 'patch', 'archive', 'record', 'forget'])
+const KNOWN_ACTIONS = new Set(['add', 'replace', 'remove', 'create', 'patch', 'archive', 'record', 'forget', 'set', 'clear'])
 
 export interface AssistantStagedWritesProps {
     daemonId: string | null | undefined
@@ -175,6 +175,7 @@ function StagedItemRow({ item, state }: { item: AssistantStagedItem; state: Assi
                     {t(`assistantStaged.kind.${item.kind}`)}
                 </span>
                 <span className="font-medium text-text-primary">{action}</span>
+                {item.role && <span className="font-medium text-text-primary" data-staged-role={item.role}>{t(`assistantStaged.role.${item.role}`)}</span>}
                 {item.target && <span className="truncate font-mono text-text-primary" title={item.target}>{item.target}</span>}
                 {item.detail && <span className="text-text-muted">· {item.detail}</span>}
             </div>

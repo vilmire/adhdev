@@ -1626,7 +1626,8 @@
             "memory": "记忆",
             "user": "用户",
             "skill": "技能",
-            "note": "笔记"
+            "note": "笔记",
+            "launchDefault": "启动默认值"
         },
         "action": {
             "add": "添加",
@@ -1636,7 +1637,9 @@
             "patch": "编辑",
             "archive": "归档",
             "record": "记录",
-            "forget": "移除"
+            "forget": "移除",
+            "set": "设置",
+            "clear": "清除"
         },
         "origin": {
             "relay": "来自中继",
@@ -1644,6 +1647,10 @@
             "review_tainted": "来自不可信输入后的回顾",
             "human": "来自你",
             "owner": "来自你"
+        },
+        "role": {
+            "assistant": "助手",
+            "coordinator": "协调者"
         }
     },
     "chatPane": {
@@ -3198,6 +3205,27 @@
             "installFailedDigestMismatch": "安装失败——请稍后重试",
             "loadFailed": "加载提供方设置失败：{{error}}",
             "quotaToggleFailed": "更新 {{provider}} 的配额探测设置失败：{{error}}"
+        },
+        "launchDefaults": {
+            "title": "启动默认值",
+            "description": "此机器启动新的助手和协调者会话时使用的 CLI。从下次启动开始生效，正在运行的会话不受影响。",
+            "role": {
+                "assistant": "助手",
+                "coordinator": "协调者"
+            },
+            "notSet": "未设置",
+            "nextLaunch": "下次启动：{{selection}}",
+            "unusable": "无法使用此默认值启动（{{code}}: {{reason}}）——请选择其他 CLI 或清除。",
+            "provider": "CLI",
+            "chooseProvider": "选择 CLI",
+            "model": "模型",
+            "thinking": "思考级别",
+            "providerDefault": "提供方默认",
+            "save": "保存",
+            "clear": "清除",
+            "saved": "已保存——从下次启动开始生效。",
+            "saveFailed": "未保存：{{code}}",
+            "loadFailed": "无法读取启动默认值：{{error}}"
         },
         "sourcesPanel": {
             "title": "外部来源",

@@ -1629,7 +1629,8 @@
             "memory": "Memoria",
             "user": "Usuario",
             "skill": "Habilidad",
-            "note": "Nota"
+            "note": "Nota",
+            "launchDefault": "Inicio predeterminado"
         },
         "action": {
             "add": "Añadir",
@@ -1639,7 +1640,9 @@
             "patch": "Editar",
             "archive": "Archivar",
             "record": "Registrar",
-            "forget": "Olvidar"
+            "forget": "Olvidar",
+            "set": "Establecer",
+            "clear": "Borrar"
         },
         "origin": {
             "relay": "De un relevo",
@@ -1647,6 +1650,10 @@
             "review_tainted": "De una revisión tras entrada no fiable",
             "human": "Tuyo",
             "owner": "Tuyo"
+        },
+        "role": {
+            "assistant": "Asistente",
+            "coordinator": "Coordinador"
         }
     },
     "chatPane": {
@@ -3201,6 +3208,27 @@
             "installFailedDigestMismatch": "Error de instalación: inténtalo más tarde",
             "loadFailed": "No se pudo cargar la configuración de proveedores: {{error}}",
             "quotaToggleFailed": "No se pudo actualizar el sondeo de cuota para {{provider}}: {{error}}"
+        },
+        "launchDefaults": {
+            "title": "Valores de inicio",
+            "description": "La CLI con la que esta máquina inicia nuevas sesiones de asistente y coordinador. Se aplica al próximo inicio; las sesiones en curso no cambian.",
+            "role": {
+                "assistant": "Asistente",
+                "coordinator": "Coordinador"
+            },
+            "notSet": "Sin configurar",
+            "nextLaunch": "Próximo inicio: {{selection}}",
+            "unusable": "No se puede iniciar con este valor ({{code}}: {{reason}}) — elige otra CLI o bórralo.",
+            "provider": "CLI",
+            "chooseProvider": "Elige una CLI",
+            "model": "Modelo",
+            "thinking": "Razonamiento",
+            "providerDefault": "Predeterminado del proveedor",
+            "save": "Guardar",
+            "clear": "Borrar",
+            "saved": "Guardado — se aplica al próximo inicio.",
+            "saveFailed": "No se guardó: {{code}}",
+            "loadFailed": "No se pudieron leer los valores de inicio: {{error}}"
         },
         "sourcesPanel": {
             "title": "Fuentes externas",

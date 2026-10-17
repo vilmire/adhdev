@@ -29,6 +29,7 @@ import InstalledProviderRow, { type ProviderPinInfo } from './InstalledProviderR
 import { extractChannelSyncErrors, hasDigestMismatch, type ChannelSyncErrorInfo } from './providerChannelErrors'
 import Card from '../../components/Card'
 import SourcesPanel from './SourcesPanel'
+import LaunchDefaultsCard from './LaunchDefaultsCard'
 import { IconSpinner } from '../../components/Icons'
 import { AlertBanner } from '../../components/ui/AlertBanner'
 import { RefreshButton } from '../../components/ui/RefreshButton'
@@ -513,6 +514,8 @@ export default function ProvidersTab({ machineId, providers, sendDaemonCommand, 
 
     return (
         <div className="flex flex-col gap-3">
+            {/* Which CLI new assistant / coordinator sessions start with (one read on mount). */}
+            <LaunchDefaultsCard machineId={machineId} providers={providers} sendDaemonCommand={sendDaemonCommand} />
             {/* Toolbar: filter + create + refresh + advanced toggle */}
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex gap-1 items-center">

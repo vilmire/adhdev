@@ -1626,7 +1626,8 @@
             "memory": "Memory",
             "user": "User",
             "skill": "Skill",
-            "note": "Note"
+            "note": "Note",
+            "launchDefault": "Launch default"
         },
         "action": {
             "add": "Add",
@@ -1636,7 +1637,9 @@
             "patch": "Edit",
             "archive": "Archive",
             "record": "Record",
-            "forget": "Forget"
+            "forget": "Forget",
+            "set": "Set",
+            "clear": "Clear"
         },
         "origin": {
             "relay": "From a relay",
@@ -1644,6 +1647,10 @@
             "review_tainted": "From a review after untrusted input",
             "human": "From you",
             "owner": "From you"
+        },
+        "role": {
+            "assistant": "Assistant",
+            "coordinator": "Coordinator"
         }
     },
     "chatPane": {
@@ -3198,6 +3205,27 @@
             "installFailedDigestMismatch": "Install failed — try later",
             "loadFailed": "Failed to load provider settings: {{error}}",
             "quotaToggleFailed": "Failed to update quota probe for {{provider}}: {{error}}"
+        },
+        "launchDefaults": {
+            "title": "Launch defaults",
+            "description": "The CLI this machine starts new assistant and coordinator sessions with. Applies to the next launch; running sessions are unchanged.",
+            "role": {
+                "assistant": "Assistant",
+                "coordinator": "Coordinator"
+            },
+            "notSet": "Not set",
+            "nextLaunch": "Next launch: {{selection}}",
+            "unusable": "Can't launch with this default ({{code}}: {{reason}}) — choose another CLI or clear it.",
+            "provider": "CLI",
+            "chooseProvider": "Choose a CLI",
+            "model": "Model",
+            "thinking": "Thinking",
+            "providerDefault": "Provider default",
+            "save": "Save",
+            "clear": "Clear",
+            "saved": "Saved — applies to the next launch.",
+            "saveFailed": "Not saved: {{code}}",
+            "loadFailed": "Couldn't read launch defaults: {{error}}"
         },
         "sourcesPanel": {
             "title": "External sources",

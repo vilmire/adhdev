@@ -1626,7 +1626,8 @@
             "memory": "기억",
             "user": "사용자",
             "skill": "스킬",
-            "note": "노트"
+            "note": "노트",
+            "launchDefault": "실행 기본값"
         },
         "action": {
             "add": "추가",
@@ -1636,7 +1637,9 @@
             "patch": "수정",
             "archive": "보관",
             "record": "기록",
-            "forget": "지움"
+            "forget": "지움",
+            "set": "설정",
+            "clear": "해제"
         },
         "origin": {
             "relay": "릴레이 뒤",
@@ -1644,6 +1647,10 @@
             "review_tainted": "신뢰할 수 없는 입력 뒤 리뷰",
             "human": "직접 입력",
             "owner": "직접 입력"
+        },
+        "role": {
+            "assistant": "어시스턴트",
+            "coordinator": "코디네이터"
         }
     },
     "chatPane": {
@@ -3198,6 +3205,27 @@
             "installFailedDigestMismatch": "설치 실패 — 나중에 다시 시도하세요",
             "loadFailed": "프로바이더 설정 로드 실패: {{error}}",
             "quotaToggleFailed": "{{provider}}의 쿼터 조회 설정 변경 실패: {{error}}"
+        },
+        "launchDefaults": {
+            "title": "실행 기본값",
+            "description": "이 머신에서 새 어시스턴트·코디네이터 세션을 시작할 때 쓰는 CLI입니다. 다음 실행부터 적용되며, 실행 중인 세션은 바뀌지 않습니다.",
+            "role": {
+                "assistant": "어시스턴트",
+                "coordinator": "코디네이터"
+            },
+            "notSet": "설정 안 됨",
+            "nextLaunch": "다음 실행: {{selection}}",
+            "unusable": "이 기본값으로는 실행할 수 없습니다({{code}}: {{reason}}). 다른 CLI를 고르거나 해제하세요.",
+            "provider": "CLI",
+            "chooseProvider": "CLI 선택",
+            "model": "모델",
+            "thinking": "생각 수준",
+            "providerDefault": "프로바이더 기본값",
+            "save": "저장",
+            "clear": "해제",
+            "saved": "저장됨 — 다음 실행부터 적용됩니다.",
+            "saveFailed": "저장 안 됨: {{code}}",
+            "loadFailed": "실행 기본값을 읽지 못했습니다: {{error}}"
         },
         "sourcesPanel": {
             "title": "외부 소스",
