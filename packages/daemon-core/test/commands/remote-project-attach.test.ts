@@ -6,8 +6,9 @@
  * path-validated, idempotent on retry and truthful about failures — with no child
  * stderr (which may carry helper credentials) ever leaving the process.
  */
+import { EventEmitter } from 'node:events';
 import { createHash, createHmac } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, existsSync, writeFileSync, readFileSync, lstatSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,11 +17,16 @@ const state = vi.hoisted(() => ({
     configDir: '',
     meshes: [] as any[],
     hostRecords: {} as Record<string, { hostDaemonId: string }>,
-    git: (_args: string[], _cwd: string): { stdout?: string; error?: any; defer?: Promise<void> } => ({ stdout: '' }),
+    git: (_args: string[], _cwd: string): { stdout?: string; error?: any; defer?: Promise<void>; manual?: boolean } => ({ stdout: '' }),
     python: true,
-    gitCalls: [] as { args: string[]; cwd: string; targetDir?: string; timeout?: number; windowsHide?: boolean; fullArgs?: string[] }[],
+    gitCalls: [] as { args: string[]; cwd: string; targetDir?: string; detached?: boolean; windowsHide?: boolean; fullArgs?: string[] }[],
     pythonCalls: [] as { cmd: string; args: string[]; opts: any }[],
     taskkillCalls: [] as { args: string[]; opts: any }[],
+    children: [] as any[],
+    taskkillGate: null as Promise<void> | null,
+    taskkillError: null as Error | null,
+    beforeLockWrite: null as (() => Promise<void>) | null,
+    renameError: null as string | null,
     pins: [] as any[],
     allowedHosts: [] as string[],
     machineSecret: null as string | null,
@@ -33,7 +39,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     const real = await importOriginal<typeof import('node:fs/promises')>();
     return {
         ...real,
+        writeFile: async (path: any, data: any, opts: any) => {
+            if (String(path).endsWith('.lock') && state.beforeLockWrite) {
+                const gate = state.beforeLockWrite;
+                state.beforeLockWrite = null;
+                await real.writeFile(path, '', opts);
+                await gate();
+                return real.writeFile(path, data);
+            }
+            return real.writeFile(path, data, opts);
+        },
         rename: async (oldPath: any, newPath: any) => {
+            if (state.renameError) throw Object.assign(new Error(state.renameError), { code: state.renameError });
             if (state.renameFailures > 0) {
                 state.renameFailures--;
                 throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
@@ -47,22 +64,36 @@ vi.mock('node:child_process', async (importOriginal) => {
     const real = await importOriginal<typeof import('node:child_process')>();
     return {
         ...real,
+        spawn: (cmd: string, args: string[], opts: any) => {
+            const cIdx = args.indexOf('-C');
+            const targetDir = args[cIdx + 1];
+            const gitArgs = args.slice(cIdx + 2);
+            state.gitCalls.push({ args: gitArgs, cwd: opts.cwd, targetDir, detached: opts.detached, windowsHide: opts.windowsHide, fullArgs: args });
+            const child: any = new EventEmitter();
+            child.pid = 4242;
+            child.stdout = new EventEmitter();
+            child.stderr = new EventEmitter();
+            child.args = gitArgs;
+            state.children.push(child);
+            const r = state.git(gitArgs, targetDir);
+            child.finish = () => {
+                if (r.stdout) child.stdout.emit('data', r.stdout);
+                if (r.error?.stderr) child.stderr.emit('data', r.error.stderr);
+                if (r.error?.code === 'ENOENT') child.emit('error', r.error);
+                child.emit('close', r.error ? (r.error.code ?? 1) : 0);
+            };
+            if (!r.manual) {
+                if (r.defer) void r.defer.then(child.finish);
+                else queueMicrotask(child.finish);
+            }
+            return child;
+        },
         execFile: (cmd: string, args: string[], opts: any, cb: (e: any, out?: any) => void) => {
             if (cmd === 'taskkill') {
                 state.taskkillCalls.push({ args, opts });
-                cb?.(null, { stdout: '', stderr: '' });
+                if (state.taskkillGate) void state.taskkillGate.then(() => cb(state.taskkillError));
+                else queueMicrotask(() => cb(state.taskkillError));
                 return { pid: 9999 } as any;
-            }
-            if (cmd === 'git') {
-                const cIdx = args.indexOf('-C');
-                const targetDir = cIdx !== -1 ? args[cIdx + 1] : opts?.cwd;
-                const gitArgs = cIdx !== -1 ? args.slice(cIdx + 2) : args.slice(6);
-                state.gitCalls.push({ args: gitArgs, cwd: opts?.cwd, targetDir, timeout: opts?.timeout, windowsHide: opts?.windowsHide, fullArgs: args });
-                const r = state.git(gitArgs, targetDir);
-                const reply = () => (r.error ? cb(r.error) : cb(null, { stdout: r.stdout ?? '', stderr: '' }));
-                if (r.defer) void r.defer.then(reply);
-                else queueMicrotask(reply);
-                return { pid: 4242, kill: () => {}, stdout: { on: () => {} }, stderr: { on: () => {} } } as any;
             }
             state.pythonCalls.push({ cmd, args, opts });
             if (state.python) cb(null, { stdout: 'gitpython-ready\n', stderr: '' });
@@ -111,12 +142,13 @@ vi.mock('../../src/mesh/mesh-host-memory.js', async (importOriginal) => ({
 import { DaemonCommandRouter, getDaemonCommandRegistry } from '../../src/commands/router.js';
 import { bootCommandPlane } from '../../src/boot/stages/command-plane.js';
 import { remoteProjectHandlers } from '../../src/commands/high-family/remote-project-attach.js';
-import { checkoutRemote, githubRemote, managedCheckoutPath } from '../../src/assistant/remote-project-checkout.js';
+import { checkoutRemote, githubRemote, managedCheckoutPath, git, REMOTE_GIT_CLONE_TIMEOUT_MS, REMOTE_GIT_CLONE_WATCHDOG_MS } from '../../src/assistant/remote-project-checkout.js';
 
 const SOURCE = 'daemon_mach_source1';
 const TARGET = 'daemon_mach_target1';
 const REPO = 'github.com/vilmire/batrp';
 const URL = `https://${REPO}.git`;
+const LOCK_NONCE = '12345678-1234-1234-1234-123456789abc';
 const SECRET_STDERR = 'fatal: Authentication failed for https://ghp_SECRETTOKEN@github.com/vilmire/batrp.git';
 
 function hostMesh(overrides: Record<string, unknown> = {}) {
@@ -155,6 +187,13 @@ beforeEach(() => {
     state.hostRecords = {};
     state.python = true;
     state.gitCalls = [];
+    state.children = [];
+    state.taskkillCalls = [];
+    state.taskkillGate = null;
+    state.taskkillError = null;
+    state.beforeLockWrite = null;
+    state.renameError = null;
+    state.renameFailures = 0;
     state.pins = [];
     state.allowedHosts = [SOURCE];
     state.machineSecret = null;
@@ -163,6 +202,8 @@ beforeEach(() => {
     workingGit();
 });
 afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     rmSync(state.configDir, { recursive: true, force: true });
 });
 
@@ -296,45 +337,120 @@ describe('remote_project_checkout (target)', () => {
         expect(JSON.stringify(r)).not.toMatch(/ghp_|SECRETTOKEN|Authentication failed/);
     });
 
-    it('a git timeout is reported as GIT_TIMEOUT and a failed clone is removed so a retry is idempotent', async () => {
+    it('idle watchdog waits for Windows tree termination AND child close before staging cleanup and lock release', async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        let killed!: () => void;
+        state.taskkillGate = new Promise<void>(r => { killed = r; });
+        const working = state.git;
+        state.git = (args, cwd) => args[0] === 'clone' ? { manual: true } : working(args, cwd);
         const workspace = await managedCheckoutPath('mesh_batrp', REPO);
-        state.git = (args) => {
-            if (args[0] === 'ls-remote') return { stdout: 'abc\tHEAD' };
-            if (args[0] === 'clone') { mkdirSync(args[args.length - 1], { recursive: true }); return { error: Object.assign(new Error('killed'), { killed: true, signal: 'SIGTERM' }) }; }
-            return { stdout: '' };
-        };
-        expect(await checkout({})).toMatchObject({ success: false, code: 'GIT_TIMEOUT', stage: 'repository_access' });
-        expect(existsSync(`${workspace}.pending`)).toBe(false);
-        expect(existsSync(workspace)).toBe(false);
-        workingGit();
-        expect(await checkout({})).toMatchObject({ success: true, reused: false, workspace });
+        vi.useFakeTimers();
+        try {
+            let settled = false;
+            const attempt = checkout({}).then(r => { settled = true; return r; });
+            await vi.waitFor(() => expect(state.children.find(c => c.args[0] === 'clone')).toBeDefined());
+            const child = state.children.find(c => c.args[0] === 'clone');
+            await vi.advanceTimersByTimeAsync(REMOTE_GIT_CLONE_WATCHDOG_MS);
+            expect(state.taskkillCalls).toHaveLength(1);
+            expect(settled).toBe(false);
+            expect(existsSync(`${workspace}.pending`)).toBe(true);
+            expect(existsSync(`${workspace}.lock`)).toBe(true);
+            killed();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(settled).toBe(false); // taskkill alone does not prove root close
+            child.emit('close', null);
+            await expect(attempt).resolves.toMatchObject({ success: false, code: 'GIT_TIMEOUT' });
+            expect(existsSync(`${workspace}.pending`)).toBe(false);
+            expect(existsSync(`${workspace}.lock`)).toBe(false);
+        } finally { Object.defineProperty(process, 'platform', platform); }
     });
 
-    it('gives clone a 15-20 min timeout with watchdog while keeping 120s for other git calls, kills the process tree on win32, and reports ENOBUFS truthfully', async () => {
-        expect(await checkout({})).toMatchObject({ success: true, reused: false });
-        const lsRemoteCall = state.gitCalls.find(c => c.args[0] === 'ls-remote')!;
-        const cloneCall = state.gitCalls.find(c => c.args[0] === 'clone')!;
-        expect(lsRemoteCall.timeout).toBe(120_000);
-        expect(cloneCall.timeout).toBeGreaterThanOrEqual(15 * 60_000);
-        expect(cloneCall.timeout).toBeLessThanOrEqual(20 * 60_000);
-
-        // ENOBUFS sets killed: true when maxBuffer overflows; must be reported as ENOBUFS, not GIT_TIMEOUT
-        state.git = () => ({ error: Object.assign(new Error('maxBuffer exceeded'), { code: 'ENOBUFS', killed: true, signal: 'SIGTERM' }) });
-        expect(await checkout({})).toMatchObject({ success: false, code: 'ENOBUFS', stage: 'repository_access' });
-
-        // On win32, a timed-out git process kills the process tree via taskkill /PID <pid> /T /F with windowsHide: true
-        state.taskkillCalls = [];
-        const origPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    it('clone progress rearms idle timeout, but wall deadline still stops the tree; output overflow also kills helpers', async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
         Object.defineProperty(process, 'platform', { value: 'win32' });
+        state.git = () => ({ manual: true });
+        vi.useFakeTimers();
         try {
-            state.git = () => ({ error: Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM' }) });
-            expect(await checkout({})).toMatchObject({ success: false, code: 'GIT_TIMEOUT' });
-            expect(state.taskkillCalls).toEqual([
-                { args: ['/PID', '4242', '/T', '/F'], opts: expect.objectContaining({ shell: false, windowsHide: true }) },
-            ]);
-        } finally {
-            Object.defineProperty(process, 'platform', origPlatform);
-        }
+            const pending = git(state.configDir, ['clone', '--', URL, 'unused']).catch(e => e);
+            const child = state.children.at(-1);
+            for (let elapsed = 0; elapsed < REMOTE_GIT_CLONE_TIMEOUT_MS; elapsed += 60_000) {
+                child.stderr.emit('data', 'progress');
+                await vi.advanceTimersByTimeAsync(60_000);
+            }
+            expect(state.taskkillCalls).toHaveLength(1);
+            child.emit('close', null);
+            expect(await pending).toMatchObject({ code: 'GIT_TIMEOUT' });
+            expect(state.gitCalls[0].detached).toBe(false);
+
+            const overflow = git(state.configDir, ['ls-remote', URL]).catch(e => e);
+            const next = state.children.at(-1);
+            next.stdout.emit('data', Buffer.alloc(1024 * 1024 + 1));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(state.taskkillCalls).toHaveLength(2);
+            expect(state.taskkillCalls[1]).toMatchObject({ args: ['/PID', '4242', '/T', '/F'], opts: { windowsHide: true } });
+            next.emit('close', null);
+            expect(await overflow).toMatchObject({ code: 'ENOBUFS' });
+        } finally { Object.defineProperty(process, 'platform', platform); }
+    });
+
+    it('uncertain tree termination preserves staging and the owner lock for recovery', async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        const working = state.git;
+        state.git = (args, cwd) => args[0] === 'clone' ? { manual: true } : working(args, cwd);
+        state.taskkillGate = new Promise<void>(() => {});
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        vi.useFakeTimers();
+        try {
+            const attempt = checkout({});
+            await vi.waitFor(() => expect(state.children.find(c => c.args[0] === 'clone')).toBeDefined());
+            await vi.advanceTimersByTimeAsync(REMOTE_GIT_CLONE_WATCHDOG_MS + 5001);
+            await expect(attempt).resolves.toMatchObject({ success: false, code: 'CHECKOUT_RECOVERY_REQUIRED' });
+            expect(existsSync(`${workspace}.pending`)).toBe(true);
+            expect(existsSync(`${workspace}.lock`)).toBe(true);
+        } finally { Object.defineProperty(process, 'platform', platform); }
+    });
+
+    it('uncertain termination while verifying crash-left completion evidence also keeps the lock', async () => {
+        const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        mkdirSync(`${workspace}.pending`);
+        const dir = lstatSync(`${workspace}.pending`);
+        writeFileSync(`${workspace}.pending.complete`, JSON.stringify({ meshId: 'mesh_batrp', identity: REPO, nonce: LOCK_NONCE, dev: dir.dev, ino: dir.ino }));
+        const working = state.git;
+        state.git = (args, cwd) => args[0] === 'rev-parse' ? { manual: true } : working(args, cwd);
+        state.taskkillError = new Error('denied');
+        vi.useFakeTimers();
+        try {
+            const attempt = checkout({});
+            await vi.waitFor(() => expect(state.children.find(c => c.args[0] === 'rev-parse')).toBeDefined());
+            await vi.advanceTimersByTimeAsync(120_000);
+            await expect(attempt).resolves.toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+            expect(existsSync(`${workspace}.pending`)).toBe(true);
+            expect(existsSync(`${workspace}.lock`)).toBe(true);
+        } finally { Object.defineProperty(process, 'platform', platform); }
+    });
+
+    it('POSIX termination signals the detached process group and escalates before releasing', async () => {
+        const actualKill = process.kill.bind(process);
+        const signals: any[] = [];
+        vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal: any) => {
+            if (pid < 0) { signals.push([pid, signal]); return true; }
+            return actualKill(pid, signal);
+        }) as any);
+        state.git = () => ({ manual: true });
+        vi.useFakeTimers();
+        const pending = git(state.configDir, ['clone', '--', URL, 'unused']).catch(e => e);
+        const child = state.children.at(-1);
+        await vi.advanceTimersByTimeAsync(REMOTE_GIT_CLONE_WATCHDOG_MS);
+        expect(signals).toEqual([[-4242, 'SIGTERM']]);
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(signals).toEqual([[-4242, 'SIGTERM'], [-4242, 'SIGKILL']]);
+        child.emit('close', null);
+        expect(await pending).toMatchObject({ code: 'GIT_TIMEOUT' });
+        expect(state.gitCalls[0].detached).toBe(true);
     });
 
     it('an incomplete crash-left .pending directory is preserved and reported, while a verified crash-left .pending is adopted', async () => {
@@ -351,6 +467,10 @@ describe('remote_project_checkout (target)', () => {
 
         // Verified crash-left .pending (passes verifyCheckout): adopted without re-cloning
         workingGit();
+        // Even a plausible origin/root is insufficient without producer evidence.
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        const dir = lstatSync(`${workspace}.pending`);
+        writeFileSync(`${workspace}.pending.complete`, JSON.stringify({ meshId: 'mesh_batrp', identity: REPO, nonce: LOCK_NONCE, dev: dir.dev, ino: dir.ino }));
         state.gitCalls = [];
         const adopted: any = await checkout({});
         expect(adopted).toMatchObject({ success: true, reused: true, workspace });
@@ -362,16 +482,96 @@ describe('remote_project_checkout (target)', () => {
     it('uses a cross-process pid lockfile and retries rename on transient win32 EBUSY/EPERM', async () => {
         const workspace = await managedCheckoutPath('mesh_batrp', REPO);
         // Live PID lockfile from another process blocks checkout with ATTACH_IN_PROGRESS
-        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: process.pid }));
+        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: process.pid, nonce: LOCK_NONCE }));
         expect(await checkout({})).toMatchObject({ success: false, code: 'ATTACH_IN_PROGRESS', stage: 'checkout' });
         expect(state.gitCalls).toHaveLength(0);
 
         // Stale dead-PID lockfile is reclaimed, and transient EBUSY on rename retries 5x200ms and succeeds
-        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: 99999999 }));
+        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: 99999999, nonce: LOCK_NONCE }));
         state.renameFailures = 2;
         expect(await checkout({})).toMatchObject({ success: true, reused: false, workspace });
         expect(state.renameFailures).toBe(0);
         expect(existsSync(`${workspace}.lock`)).toBe(false);
+    });
+
+    it('does not steal a fresh partial lock, even from an independent module instance', async () => {
+        vi.resetModules();
+        const independent = await import('../../src/assistant/remote-project-checkout.js');
+        let entered!: () => void, release!: () => void;
+        const writing = new Promise<void>(r => { entered = r; });
+        const gate = new Promise<void>(r => { release = r; });
+        state.beforeLockWrite = async () => { entered(); await gate; };
+        const first = checkoutRemote('mesh_batrp', githubRemote(URL)!);
+        await writing;
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        expect(readFileSync(`${workspace}.lock`, 'utf8')).toBe('');
+        await expect(independent.checkoutRemote('mesh_batrp', githubRemote(URL)!)).rejects.toMatchObject({ code: 'ATTACH_IN_PROGRESS' });
+        release();
+        await expect(first).resolves.toMatchObject({ reused: false });
+        expect(state.gitCalls.filter(c => c.args[0] === 'clone')).toHaveLength(1);
+    });
+
+    it('serializes competing stale reclaimers and never releases a replacement nonce', async () => {
+        vi.resetModules();
+        const independent = await import('../../src/assistant/remote-project-checkout.js');
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        writeFileSync(`${workspace}.lock`, JSON.stringify({ pid: 99999999, nonce: LOCK_NONCE }));
+        const results = await Promise.allSettled([
+            checkoutRemote('mesh_batrp', githubRemote(URL)!), independent.checkoutRemote('mesh_batrp', githubRemote(URL)!),
+        ]);
+        expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+        expect(results.filter(r => r.status === 'rejected')).toHaveLength(1);
+        expect(state.gitCalls.filter(c => c.args[0] === 'clone')).toHaveLength(1);
+
+        const replacement = { pid: process.pid, nonce: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' };
+        const working = state.git;
+        state.git = (args, cwd) => {
+            if (args[0] === 'ls-remote') writeFileSync(`${workspace}.lock`, JSON.stringify(replacement));
+            return working(args, cwd);
+        };
+        await expect(checkoutRemote('mesh_batrp', githubRemote(URL)!)).rejects.toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        expect(JSON.parse(readFileSync(`${workspace}.lock`, 'utf8'))).toEqual(replacement);
+    });
+
+    it('preserves malformed locks and orphan mutation guards instead of guessing they are stale', async () => {
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        writeFileSync(`${workspace}.lock`, '');
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        expect(readFileSync(`${workspace}.lock`, 'utf8')).toBe('');
+        rmSync(`${workspace}.lock`);
+        mkdirSync(`${workspace}.lock.guard`);
+        expect(await checkout({})).toMatchObject({ code: 'ATTACH_IN_PROGRESS' });
+        expect(state.gitCalls).toHaveLength(0);
+    });
+
+    it('publishes completion evidence only after clone close and recovers it after a failed rename', async () => {
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        state.renameError = 'EIO';
+        expect(await checkout({})).toMatchObject({ success: false });
+        const evidence = JSON.parse(readFileSync(`${workspace}.pending.complete`, 'utf8'));
+        expect(evidence).toMatchObject({ meshId: 'mesh_batrp', identity: REPO, nonce: expect.any(String) });
+        state.renameError = null;
+        state.gitCalls = [];
+        expect(await checkout({})).toMatchObject({ success: true, reused: true });
+        expect(state.gitCalls.some(c => c.args[0] === 'clone')).toBe(false);
+        expect(existsSync(`${workspace}.pending.complete`)).toBe(false);
+    });
+
+    it('refuses symlink staging, symlink locks, and completion evidence for a different directory', async () => {
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        const outside = join(state.configDir, 'preserved');
+        mkdirSync(outside);
+        symlinkSync(outside, `${workspace}.pending`, 'dir');
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        expect(lstatSync(`${workspace}.pending`).isSymbolicLink()).toBe(true);
+        rmSync(`${workspace}.pending`);
+        mkdirSync(`${workspace}.pending`);
+        writeFileSync(`${workspace}.pending.complete`, JSON.stringify({ meshId: 'mesh_batrp', identity: REPO, nonce: LOCK_NONCE, dev: -1, ino: -1 }));
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        symlinkSync(outside, `${workspace}.lock`, 'dir');
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        expect(lstatSync(`${workspace}.lock`).isSymbolicLink()).toBe(true);
+        expect(existsSync(outside)).toBe(true);
     });
 
     it('an existing checkout with a different origin is preserved and refused', async () => {
