@@ -20,6 +20,62 @@ import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } fro
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
 export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction'>;
 
+/** Read all currently-assigned non-readonly queue entries with ownedPaths across the entire mesh. */
+export function readInFlightOwnershipMeshWide(
+    host: Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'>,
+    meshId: string,
+): InFlightOwnership[] {
+    return host.assignedRowsMeshWide(meshId)
+        .map((row): InFlightOwnership | null => {
+            try {
+                const parsed = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                if (parsed.id === undefined) return null;
+                if (!parsed.ownedPaths || isTaskReadonly(parsed)) return null;
+                return { taskId: parsed.id, paths: parsed.ownedPaths };
+            } catch { return null; }
+        })
+        .filter((v): v is InFlightOwnership => v !== null);
+}
+
+/** Find owned_paths conflicts for a candidate against the mesh-wide in-flight ownership set. */
+export function findTaskOwnedPathsConflicts(
+    candidate: Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode'>,
+    inFlightOwnership: readonly InFlightOwnership[],
+) {
+    return candidate.ownedPaths && !isTaskReadonly(candidate)
+        ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership)
+        : [];
+}
+
+/** Format the diagnostic detail string for an owned_paths_conflict refusal. */
+export function formatOwnedPathsConflictDetail(
+    conflicts: ReadonlyArray<{ taskId: string; overlappingPaths: readonly string[] }>,
+): string | undefined {
+    return conflicts.length
+        ? `owned_paths overlap with task(s): ${conflicts.map(c => `${c.taskId} [${c.overlappingPaths.join(', ')}]`).join('; ')}`
+        : undefined;
+}
+
+/** Shared authoritative owned_paths admission evaluator used before spawn, on claim, and on await-claim expiry. */
+export function evaluateTaskOwnedPathsAdmission(
+    host: Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'>,
+    meshId: string,
+    candidate: Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode'> | undefined,
+    inFlightOwnership?: readonly InFlightOwnership[],
+): { allowed: boolean; conflicts: Array<{ taskId: string; overlappingPaths: readonly string[] }>; detail?: string } {
+    if (!candidate || !candidate.ownedPaths || isTaskReadonly(candidate)) {
+        return { allowed: true, conflicts: [] };
+    }
+    const inFlight = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
+    const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight);
+    if (conflicts.length === 0) return { allowed: true, conflicts: [] };
+    return {
+        allowed: false,
+        conflicts,
+        detail: formatOwnedPathsConflictDetail(conflicts),
+    };
+}
+
 // O(1) claim: transaction ensures only one session claims a pending task
 export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = [], opts?: {
             providerType?: string;
@@ -210,34 +266,10 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // owned_paths is refused. Scope is MESH-WIDE (assignedRowsMeshWide — every
         // node/daemon in the mesh), deliberately DIFFERENT from the provider/slot/
         // node-busy capacity gates above, which stay scoped to assignedRowsForDaemon
-        // (one machine's resources). Path ownership exists to keep parallel branches
-        // from touching the same files before they converge on main — two worktrees
-        // on two DIFFERENT machines are exactly as parallel as two worktrees on one
-        // machine, so a daemon-scoped query would miss the cross-daemon collision
-        // entirely (live finding, preview rc.41 runs 3–7: a direct-dispatch row
-        // `assigned` on one daemon did not stop an overlapping enqueued task from
-        // being claimed on a completely different daemon).
-        // Opt-in only: a candidate OR an in-flight task with no declaration never
-        // conflicts (findOwnershipConflicts' own backward-compat contract). This is a
-        // PATH-level refinement of the existing NODE-level nodeConflictAllows gate
-        // above — it catches the case that gate cannot: two DIFFERENT nodes (same
-        // daemon OR different daemons) racing on the same file, which
-        // nodeConflictAllows never sees because it only compares a candidate against
-        // ITS OWN node's busy bit.
-        const inFlightOwnership: InFlightOwnership[] = host.assignedRowsMeshWide(meshId)
-            .map((row): InFlightOwnership | null => {
-                try {
-                    const parsed = JSON.parse(row.payload) as MeshWorkQueueEntry;
-                    if (parsed.id === undefined) return null;
-                    if (!parsed.ownedPaths || isTaskReadonly(parsed)) return null;
-                    return { taskId: parsed.id, paths: parsed.ownedPaths };
-                } catch { return null; }
-            })
-            .filter((v): v is InFlightOwnership => v !== null);
+        // (one machine's resources).
+        const inFlightOwnership = readInFlightOwnershipMeshWide(host, meshId);
         const ownedPathsConflictFor = (candidate: MeshWorkQueueEntry) =>
-            candidate.ownedPaths && !isTaskReadonly(candidate)
-                ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership)
-                : [];
+            findTaskOwnedPathsConflicts(candidate, inFlightOwnership);
         const ownedPathsAllows = (candidate: MeshWorkQueueEntry): boolean =>
             ownedPathsConflictFor(candidate).length === 0;
 
@@ -353,7 +385,11 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             { reason: 'task_parked', test: notParked },
             { reason: 'convergence_target_is_worktree', test: convergenceAllows },
             { reason: 'target_pin_unmatched', test: targetMatches },
-            { reason: 'difficulty_floor_unmet', test: difficultyAllows },
+            // When the claiming session's live model is unknown (!assignedModel) and the
+            // candidate is already blocked mesh-wide by owned_paths_conflict (with node
+            // and parallel caps clear), advance to owned_paths_conflict rather than
+            // attributing the refusal to the unknown-model slot intersection.
+            { reason: 'difficulty_floor_unmet', test: c => difficultyAllows(c) || (!assignedModel && parallelCapsAllow(c) && nodeConflictAllows(c) && !ownedPathsAllows(c)) },
             { reason: 'parallel_cap_reached', test: parallelCapsAllow },
             { reason: 'node_busy_with_active_assignment', test: nodeConflictAllows },
             { reason: 'owned_paths_conflict', test: ownedPathsAllows },
@@ -368,10 +404,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             // ("refused ... instead of silently racing it").
             if (selected.reason === 'owned_paths_conflict' && selected.deepest) {
                 const conflicts = ownedPathsConflictFor(selected.deepest);
-                const detail = conflicts.length
-                    ? `owned_paths overlap with task(s): ${conflicts.map(c => `${c.taskId} [${c.overlappingPaths.join(', ')}]`).join('; ')}`
-                    : undefined;
-                return refuse('owned_paths_conflict', detail, selected.deepest);
+                return refuse('owned_paths_conflict', formatOwnedPathsConflictDetail(conflicts), selected.deepest);
             }
             // GIT-GATE: name the concrete git evidence (behind count / maxBehind) rather
             // than the generic "closest candidate" prose, mirroring the H1 detail above.

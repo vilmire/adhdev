@@ -234,10 +234,14 @@ export function logAutoLaunchQuotaFallbackSuccess(
     taskId: string,
     nodeId: string,
     sessionId?: string,
+    effectiveProviderType?: string,
 ): void {
-    if (!resolved.providerType || !resolved.quotaGated?.length) return;
+    const spawnedProviderType = (typeof effectiveProviderType === 'string' && effectiveProviderType.trim())
+        ? effectiveProviderType.trim()
+        : (typeof resolved.providerType === 'string' ? resolved.providerType.trim() : '');
+    if (!spawnedProviderType || !resolved.quotaGated?.length) return;
     const detail = resolved.quotaGated.map(item => quotaClaimBlockDescription(item.providerType, item.block)).join('; ');
-    LOG.info('MeshQueue', `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} → spawned provider '${resolved.providerType}'${sessionId ? ` (${sessionId})` : ''}`);
+    LOG.info('MeshQueue', `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} → spawned provider '${spawnedProviderType}'${sessionId ? ` (${sessionId})` : ''}`);
 }
 
 // De-dup for repeated `skipped` ledger noise: the reconcile loop re-runs the queue

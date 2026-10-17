@@ -36,12 +36,15 @@ import type { DaemonComponents } from '../boot/daemon-components.js';
 import { getMachineId } from '../config/config.js';
 import { LOG } from '../logging/logger.js';
 import { canonicalDaemonId, daemonIdsEquivalent, isIdleSessionState, sessionIdsEquivalent, readText } from '@adhdev/mesh-shared';
-import { getQueue, getQueueEntryById } from './mesh-work-queue.js';
+import { getQueue, getQueueEntryById, meshTaskNotBeforeReady } from './mesh-work-queue.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, recordAutoLaunchEvent } from './mesh-queue-observability.js';
+import { readRecentSessionClaimRefusal } from './mesh-claim-refusal.js';
 import { sessionHasActiveAssignment } from './mesh-scheduling-fitness.js';
+import { taskIsParked } from './mesh-task-parking.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { evaluateTaskOwnedPathsAdmission } from './mesh-runtime-store-claim.js';
 import { DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES } from '../repo-mesh-types.js';
 
 // See the AUTOLAUNCH-CLAIM-CHURN block in mesh-queue-assignment for why the await-claim window
@@ -121,6 +124,27 @@ export const AUTO_LAUNCH_REMOTE_IDLE_TTL_MS = 5 * 60 * 1000;
 
 function localCoordinatorDaemonId(): string | undefined {
     return canonicalDaemonId(readText(getMachineId()));
+}
+
+/**
+ * True when a session is a coordinator/assistant session or explicitly marked
+ * `spawnedForTaskId: null` (non-task-bound persistent session) and must never be
+ * treated as an auto-launched task worker by orphan/recovery sweeps.
+ */
+export function isProtectedNonAutoLaunchSession(
+    state: any,
+    settings: Record<string, unknown> = (state?.settings as Record<string, unknown>) || {},
+): boolean {
+    if (settings.spawnedForTaskId === null || state?.spawnedForTaskId === null || state?.launchRecord?.spawnedForTaskId === null) {
+        return true;
+    }
+    const role = readText(settings.meshRole || settings.role || state?.role).toLowerCase();
+    if (role === 'coordinator' || role === 'assistant') return true;
+    if (settings.assistant === true || settings.isAssistant === true) return true;
+    if (readText(settings.meshCoordinatorFor)) return true;
+    const launchedBy = readText(state?.launchRecord?.launchedBy || settings.launchedBy).toLowerCase();
+    if (launchedBy === 'assistant') return true;
+    return false;
 }
 
 // AUTOLAUNCH-ORPHAN-SWEEP. Per-(mesh,session) de-dup so a still-unclaimed orphan is reported
@@ -217,6 +241,7 @@ export function sweepAutoLaunchOrphanSessions(
         let state: any;
         try { state = inst.getState(); } catch { continue; }
         const settings = (state?.settings as Record<string, unknown>) || {};
+        if (isProtectedNonAutoLaunchSession(state, settings)) continue;
         if (readText(settings.meshNodeFor) !== meshId) continue;
         const originTaskId = readText(settings.autoLaunchedForQueueTaskId);
         if (!originTaskId) continue;
@@ -331,13 +356,16 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
     }
     const heldSessionId = existing ? readText(existing.sessionId) : '';
     if (!existing || existing.status !== 'completed' || !heldSessionId) return false;
-    // Only protect the record while its await-claim window is open. Past that the launch is no
-    // longer authoritative (driveExpiredAwaitClaim owns it) and normal recording must resume,
-    // otherwise a stale winner would freeze the field forever.
+    // Only protect the record while its await-claim window (or an active await-claim backoff
+    // extension) is open. Past that the launch is no longer authoritative (driveExpiredAwaitClaim
+    // owns it) and normal recording must resume, otherwise a stale winner would freeze the field
+    // forever.
     // CLOCK-LOWER-BOUND: a future-dated `updatedAt` must not freeze the winner field
     // forever — see isWithinForeignFreshnessWindow.
     const heldAtMs = Date.parse(existing.updatedAt);
-    if (!isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs)) return false;
+    const inBaseWindow = isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs);
+    const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId}::${taskId}`);
+    if (!inBaseWindow && !inBackoff) return false;
     // A started/completed for the SAME session is that session's own progression — allow it.
     if (sessionIdsEquivalent(readText(args.sessionId), heldSessionId)) return false;
     LOG.info('MeshQueue', `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
@@ -359,7 +387,11 @@ export function autoLaunchWriteWouldClobberWinner(meshId: string, taskId: string
 // cadence so the 4s reconcile tick does not hammer it. Cleared once the task claims, the direct
 // dispatch fires, or a respawn is authorized. In-memory (per process); a stale entry is harmless
 // (it only defers a respawn) and self-clears on the next resolution.
-interface AwaitClaimBackoffState { cycles: number; nextAttemptAtMs: number; }
+interface AwaitClaimBackoffState {
+    cycles: number;
+    nextAttemptAtMs: number;
+    admissionBlocked?: boolean;
+}
 // Exported as the map itself rather than behind get/set/delete accessors: its sole mutator is
 // driveExpiredAwaitClaim, which must stay in mesh-queue-assignment (it calls tryAssignQueueTask
 // from there), and six one-line accessors would be more surface than the map.
@@ -386,6 +418,73 @@ export function remoteSessionAppearsLive(meshId: string, sessionId: string): boo
     } catch {
         return false;
     }
+}
+
+export function localSessionAppearsLive(components: DaemonComponents, meshId: string, sessionId: string): boolean {
+    if (!sessionId) return false;
+    try {
+        const sessions = components.instanceManager?.getByCategory?.('cli') || [];
+        return sessions.some((inst: any) => {
+            try {
+                const state = inst.getState?.();
+                const sid = readText(state?.instanceId);
+                if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
+                const settings = (state?.settings as Record<string, unknown>) || {};
+                if (isProtectedNonAutoLaunchSession(state, settings)) return false;
+                const sessionMeshId = readText(settings.meshNodeFor);
+                if (sessionMeshId && sessionMeshId !== meshId) return false;
+                return isIdleSessionState(state) && !sessionHasActiveAssignment(meshId, sid);
+            } catch {
+                return false;
+            }
+        });
+    } catch {
+        return false;
+    }
+}
+
+const ADMISSION_BLOCKED_CLAIM_REASONS = new Set([
+    'owned_paths_conflict',
+    'not_before_delayed',
+    'task_parked',
+    'node_busy_with_active_assignment',
+    'node_active_task_conflict',
+    'parallel_cap_reached',
+    'code_change_cap_reached',
+]);
+
+export function isTaskKnownAdmissionBlocked(
+    meshId: string,
+    task: MeshWorkQueueEntry,
+    sessionId?: string,
+    nowMs: number = Date.now(),
+): { blocked: boolean; reason?: string; detail?: string } {
+    if (taskIsParked(task)) {
+        return { blocked: true, reason: 'task_parked' };
+    }
+    if (!meshTaskNotBeforeReady(task, nowMs)) {
+        return { blocked: true, reason: 'not_before_delayed' };
+    }
+    try {
+        const ownedAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+        if (!ownedAdmission.allowed) {
+            return {
+                blocked: true,
+                reason: 'owned_paths_conflict',
+                ...(ownedAdmission.detail ? { detail: ownedAdmission.detail } : {}),
+            };
+        }
+    } catch { /* best-effort check */ }
+    if (sessionId) {
+        const recent = readRecentSessionClaimRefusal(meshId, sessionId, nowMs);
+        if (recent && ADMISSION_BLOCKED_CLAIM_REASONS.has(recent.reason)) {
+            return {
+                blocked: true,
+                reason: recent.reason,
+            };
+        }
+    }
+    return { blocked: false };
 }
 
 // (A) Respawn-guard remote-awareness. The session ids of pending tasks whose auto-launch record
@@ -420,7 +519,7 @@ export function __clearAwaitClaimBackoffForTests(): void {
 // Returns a directive for the caller:
 //   - 'claimed'  — the re-drive claimed/dispatched the task into the existing session (progress).
 //   - 'fallback' — the post-cap direct dispatch delivered the task into the existing session.
-//   - 'backoff'  — liveness unknown; the window was extended (or is still cooling down). No launch.
+//   - 'backoff'  — liveness unknown or task admission-blocked; the window was extended (or is still cooling down). No launch.
 //   - 'respawn'  — the session is provably gone/unclaimable; the caller may launch a fresh one.
 // Moved here from mesh-queue-assignment (a frozen file-size baseline entry). It mutates the
 // await-claim backoff state that already lives in THIS module, so this is its natural home; the
@@ -438,22 +537,49 @@ export function driveExpiredAwaitClaim(
     const backoffKey = `${meshId}::${task.id}`;
     const nowMs = Date.now();
     const state = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
+    const admissionBlock = isTaskKnownAdmissionBlocked(meshId, task, sessionId, nowMs);
+    if (admissionBlock.blocked) {
+        if (!state.nextAttemptAtMs || nowMs >= state.nextAttemptAtMs || !state.admissionBlocked) {
+            const cycles = Math.max(1, state.cycles || 1);
+            autoLaunchAwaitClaimBackoff.set(backoffKey, {
+                cycles,
+                nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles),
+                admissionBlocked: true,
+            });
+            recordAutoLaunchEvent(meshId, {
+                phase: 'skipped',
+                taskId: task.id,
+                reason: admissionBlock.reason || 'awaiting_launched_session_claim_backoff',
+                nodeId,
+                sessionId,
+            });
+        }
+        return 'backoff';
+    }
+    const blockerJustReleased = state.admissionBlocked === true;
     // Rate-limit re-drive attempts to the backoff cadence so the 4s reconcile tick does not hammer
-    // a still-cooling-down window. The initial (no-state) expiry proceeds immediately.
-    if (state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return 'backoff';
+    // a still-cooling-down window. The initial (no-state) expiry or a newly released admission
+    // blocker proceeds immediately so the existing idle session can claim without waiting out
+    // the old backoff window.
+    if (!blockerJustReleased && state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return 'backoff';
 
-    const atCap = state.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
-    const live = remoteSessionAppearsLive(meshId, sessionId);
+    const effectiveCycles = blockerJustReleased ? 0 : state.cycles;
+    const atCap = effectiveCycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
+    const remoteLive = remoteSessionAppearsLive(meshId, sessionId);
+    const localLive = localSessionAppearsLive(components, meshId, sessionId);
+    const live = remoteLive || localLive;
 
-    // (B) Re-drive when the remote view shows the session live; (C) after the backoff cap, force the
+    // (B) Re-drive when the remote/local view shows the session live; (C) after the backoff cap, force the
     // same direct dispatch unconditionally. Both funnel through tryAssignQueueTask, which
     // idempotently (re)registers the session, delivers the task message (send_chat), and marks the
     // row assigned — the exact operation a coordinator performs manually via mesh_send_task. (D)
-    // The setRemoteIdleSession re-register makes this robust to a dropped agent:ready.
-    if ((live || atCap) && nodeId && providerType) {
-        try {
-            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
-        } catch { /* best-effort re-register */ }
+    // The setRemoteIdleSession re-register makes this robust to a dropped agent:ready for remote sessions.
+    if ((live || atCap || blockerJustReleased) && nodeId && providerType) {
+        if (!localLive) {
+            try {
+                MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
+            } catch { /* best-effort re-register */ }
+        }
         const assigned = assignQueueTask(components, meshId, nodeId, sessionId, providerType);
         if (assigned) {
             autoLaunchAwaitClaimBackoff.delete(backoffKey);
@@ -469,6 +595,23 @@ export function driveExpiredAwaitClaim(
             LOG.info('MeshQueue', `Auto-launch await-claim ${isFallback ? 'direct-dispatch fallback' : 're-drive'} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId} (mesh ${meshId})`);
             return isFallback ? 'fallback' : 'claimed';
         }
+        const postAttemptBlock = isTaskKnownAdmissionBlocked(meshId, task, sessionId, Date.now());
+        if (postAttemptBlock.blocked || localLive) {
+            const cycles = Math.max(1, effectiveCycles || 1);
+            autoLaunchAwaitClaimBackoff.set(backoffKey, {
+                cycles,
+                nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles),
+                ...(postAttemptBlock.blocked ? { admissionBlocked: true } : {}),
+            });
+            recordAutoLaunchEvent(meshId, {
+                phase: 'skipped',
+                taskId: task.id,
+                reason: postAttemptBlock.reason || 'awaiting_launched_session_claim_backoff',
+                nodeId,
+                sessionId,
+            });
+            return 'backoff';
+        }
         if (atCap) {
             // The forced dispatch could not claim — the session is genuinely gone/unclaimable.
             // Authorize a fresh respawn (ghosts were already prevented through the backoff window).
@@ -477,7 +620,7 @@ export function driveExpiredAwaitClaim(
         }
     }
     // Liveness unknown (or live-but-not-claimable) and not at cap → extend the window with backoff.
-    const cycles = Math.min(state.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
+    const cycles = Math.min(effectiveCycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
     autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs + awaitClaimWindowMs(cycles) });
     recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim_backoff', nodeId, sessionId });
     return 'backoff';

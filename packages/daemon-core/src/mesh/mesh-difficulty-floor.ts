@@ -4,8 +4,11 @@ import { getQueueEntryById, recordTaskAutoLaunch, type MeshWorkQueueEntry } from
 // (its old isDifficultyFloorWaitReason dependency moved here with the wait-clock guard),
 // so this edge cannot cycle.
 import { AUTO_LAUNCH_AWAIT_CLAIM_MS, autoLaunchWriteWouldClobberWinner } from './mesh-autolaunch-integrity.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { evaluateTaskOwnedPathsAdmission } from './mesh-runtime-store-claim.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
 import { isModelAllowedBySlot, SLOT_MODEL_BUSY_SKIP_REASON } from './slot-model-enforcement.js';
+import { slotCoversTaskDifficulty, taskRequiresDifficultyFloor } from './mesh-scheduling-fitness.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON } from './mesh-quota-routing.js';
 import { isMeshTaskDifficulty, normalizeNodeCapabilitySlots, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared';
 
@@ -78,7 +81,12 @@ export function launchSideDifficultyFloorMismatch(
     model: string | undefined,
     task: Pick<MeshWorkQueueEntry, 'id' | 'difficulty'>,
     nodeId: string,
+    decidedSlot?: NodeCapabilitySlot,
 ): string | undefined {
+    if (decidedSlot && taskRequiresDifficultyFloor(node, task) && !slotCoversTaskDifficulty(decidedSlot, task.difficulty)) {
+        LOG.info('MeshQueue', `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ''} on node ${nodeId} for task ${task.id} — the decided slot only covers [${(decidedSlot.difficulty || []).join(', ')}], below the task's '${task.difficulty}' floor`);
+        return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || 'classified'}`;
+    }
     const allowed = allowedClassifiedDifficultiesForSession(node, slots, providerType, model);
     if (taskMeetsSessionDifficultyFloor(task, allowed)) return undefined;
     LOG.info('MeshQueue', `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ''} on node ${nodeId} for task ${task.id} — the resolved launch model only covers [${(allowed || []).join(', ')}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
@@ -94,7 +102,18 @@ export function readSessionModel(state: any): string | undefined {
     const summaryModel = typeof modelItem?.shortValue === 'string' && modelItem.shortValue.trim()
         ? modelItem.shortValue.trim()
         : typeof modelItem?.value === 'string' ? modelItem.value.trim() : '';
-    return summaryModel || undefined;
+    if (summaryModel) return summaryModel;
+    const launchModel = state?.launchRecord?.model;
+    for (const candidate of [
+        launchModel?.launchValue,
+        launchModel?.requested,
+        launchModel?.resolvedDefault,
+        state?.settings?.initialModel,
+        state?.settings?.model,
+    ]) {
+        if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+    }
+    return undefined;
 }
 
 export function isDifficultyFloorWaitReason(reason?: string): boolean {
@@ -139,11 +158,24 @@ export function resetDifficultyFloorReportsForTests(): void {
 // (Moved here from mesh-autolaunch-integrity.ts: it is floor-domain logic, and the move
 // frees that module of its only import from this one so handleDifficultyFloorSkip can
 // import the winner guard back without a cycle.)
-export function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId: string, taskId: string, status: string): boolean {
+export function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId: string, taskId: string, status: string, reason?: string): boolean {
     if (status !== 'skipped') return false;
+    // An authoritative owned_paths_conflict admission skip must never be suppressed by an
+    // earlier floor-wait stamp (e.g. from an unknown-model idle session).
+    if (reason === 'owned_paths_conflict') return false;
     let existing: MeshWorkQueueEntry['autoLaunch'] | undefined;
     try { existing = getQueueEntryById(meshId, taskId)?.autoLaunch; } catch { return false; }
     return existing?.status === 'skipped' && isDifficultyFloorWaitReason(existing.reason);
+}
+
+function taskHasActiveOwnedPathsConflict(meshId: string, task: MeshWorkQueueEntry | undefined): boolean {
+    if (!task) return false;
+    try {
+        if (!evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task).allowed) {
+            return true;
+        }
+    } catch { /* best-effort */ }
+    return task.autoLaunch?.status === 'skipped' && task.autoLaunch.reason === 'owned_paths_conflict';
 }
 
 // LEDGER-AUTOLAUNCH-RETRY-SPAM ⑤: the claim path (tryAssignQueueTask) refuses an
@@ -156,6 +188,9 @@ export function handleClaimPathDifficultyFloorRefusal(args: {
     claimRefusal: { taskId?: string; difficulty?: string }; coordinatorDaemonId?: string;
 }): void {
     if (args.refusalReason !== 'difficulty_floor_unmet' || !args.claimRefusal.taskId) return;
+    let existingTask: MeshWorkQueueEntry | undefined;
+    try { existingTask = getQueueEntryById(args.meshId, args.claimRefusal.taskId) ?? undefined; } catch { /* best-effort */ }
+    if (taskHasActiveOwnedPathsConflict(args.meshId, existingTask)) return;
     handleDifficultyFloorSkip({
         meshId: args.meshId, taskId: args.claimRefusal.taskId, nodeId: args.nodeId,
         coordinatorDaemonId: args.coordinatorDaemonId,
@@ -174,6 +209,9 @@ export function handleDifficultyFloorSkip(args: {
     let previousTask: MeshWorkQueueEntry | undefined;
     try { previousTask = getQueueEntryById(args.meshId, args.taskId) ?? undefined; } catch { /* best-effort */ }
     if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
+    if (args.reason.startsWith('task_difficulty_floor_unavailable:') && taskHasActiveOwnedPathsConflict(args.meshId, previousTask)) {
+        return;
+    }
     const continuing = previousTask?.autoLaunch?.status === 'skipped'
         && isDifficultyFloorWaitReason(previousTask.autoLaunch.reason);
     // AUTOLAUNCH-WINNER-CLOBBER (floor branch): the `continuing` check above only prevents

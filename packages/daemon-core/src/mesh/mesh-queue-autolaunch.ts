@@ -33,12 +33,14 @@ import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy } from
 import { dirtyWriteVerdict, readDirtyWriteGate } from './mesh-dirty-write-verdict.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
 import { PARKED_SKIP_REASON, noteTargetPinCleared, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
-import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveWriteAssignment, resolveSchedulingStrategy, orderEligibleNodes, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, resolveLaunchAxis, type RankableNode } from './mesh-scheduling-fitness.js';
-import { logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
+import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveWriteAssignment, resolveSchedulingStrategy, orderEligibleNodes, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, resolveLaunchAxis, taskRequiresDifficultyFloor, type RankableNode } from './mesh-scheduling-fitness.js';
+import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
 import { selectQuotaBusyFallback } from './mesh-quota-fallback.js';
 import { autoLaunchWriteWouldClobberWinner, driveExpiredAwaitClaim, autoLaunchAwaitClaimBackoff, claimAfterRemoteAutoLaunch, AUTO_LAUNCH_AWAIT_CLAIM_MS, isAutoLaunchWithinAwaitClaimWindow, __clearAwaitClaimBackoffForTests, __resetAutoLaunchOrphanNotifiedForTests } from './mesh-autolaunch-integrity.js';
 import { autoLaunchWriteWouldClobberDifficultyFloorWaitClock, handleDifficultyFloorSkip, isDifficultyFloorWaitReason, launchSideDifficultyFloorMismatch } from './mesh-difficulty-floor.js';
+import { MeshRuntimeStore } from './mesh-runtime-store.js';
+import { evaluateTaskOwnedPathsAdmission } from './mesh-runtime-store-claim.js';
 import { maybeParkSpawnCappedTask } from './mesh-autolaunch-spawn-cap.js';
 import { maybeParkDispatchFailureCappedTask, resolveCooldownUntilAfterDispatchFailure } from './mesh-autolaunch-dispatch-cap.js';
 import { normalizeProviderPriority, isLaunchableNode, isLocalAutoLaunchNode, liveSessionCountForNode, nodeHasLiveSessionPendingClaim } from './mesh-candidacy-predicates.js';
@@ -64,7 +66,31 @@ const autoLaunchInProgress = new Set<string>();
 // see the AUTOLAUNCH-TASK-RACE section at the top of mesh-autolaunch-integrity.ts.
 const autoLaunchTaskInProgress = new Set<string>();
 const autoLaunchCooldownUntil = new Map<string, number>();
+const lastAutoLaunchRoutingDecisionBySession = new Map<string, ReturnType<typeof buildAutoLaunchRoutingDecision>>();
 const AUTO_LAUNCH_COOLDOWN_MS = 5_000;
+
+function rememberAutoLaunchRoutingDecision(
+    meshId: string,
+    sessionId: string,
+    decision: ReturnType<typeof buildAutoLaunchRoutingDecision>,
+): void {
+    if (!meshId || !sessionId) return;
+    const key = `${meshId}::${sessionId}`;
+    lastAutoLaunchRoutingDecisionBySession.delete(key);
+    lastAutoLaunchRoutingDecisionBySession.set(key, decision);
+    if (lastAutoLaunchRoutingDecisionBySession.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
+        const oldest = lastAutoLaunchRoutingDecisionBySession.keys().next().value;
+        if (oldest !== undefined) lastAutoLaunchRoutingDecisionBySession.delete(oldest);
+    }
+}
+
+function readAutoLaunchRoutingDecision(
+    meshId: string,
+    sessionId: string,
+): ReturnType<typeof buildAutoLaunchRoutingDecision> | undefined {
+    if (!meshId || !sessionId) return undefined;
+    return lastAutoLaunchRoutingDecisionBySession.get(`${meshId}::${sessionId}`);
+}
 
 /** Metadata-only actual node/task launch owners; no mutation or timeout pruning. */
 export function maintenanceAutoLaunches() { return {nodes:[...autoLaunchInProgress].sort(),tasks:[...autoLaunchTaskInProgress].sort()}; }
@@ -74,6 +100,7 @@ export function __resetAutoLaunchAwaitClaimBackoffForTests(): void {
     __clearAwaitClaimBackoffForTests();
     autoLaunchTaskInProgress.clear();
     autoLaunchInProgress.clear();
+    lastAutoLaunchRoutingDecisionBySession.clear();
     __resetAutoLaunchOrphanNotifiedForTests();
     // AUTOLAUNCH-DISPATCH-CAP: the per-(mesh,node) launch cooldown (including its
     // new dispatch-failure backoff) is another in-memory brake with the same
@@ -164,7 +191,7 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     const difficultyFloorSkip = args.status === 'skipped' && isDifficultyFloorWaitReason(reason);
     if (difficultyFloorSkip) {
         handleDifficultyFloorSkip({ meshId, taskId, reason: reason!, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId() });
-    } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
+    } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status, reason)) {
         recordTaskAutoLaunch(meshId, taskId, {
             status: args.status,
             reason,
@@ -248,6 +275,7 @@ function driveAwaitClaimGuard(components: DaemonComponents, meshId: string, mesh
         const alSessionId = readText(task.autoLaunch.sessionId);
         const alNodeId = readText(task.autoLaunch.nodeId);
         const alProvider = readText(task.autoLaunch.providerType);
+        const storedRoutingDecision = readAutoLaunchRoutingDecision(meshId, alSessionId);
         // CLOCK-LOWER-BOUND: `autoLaunch.updatedAt` is foreign; a future stamp must not
         // suppress the re-launch forever — see isWithinForeignFreshnessWindow.
         if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
@@ -258,7 +286,7 @@ function driveAwaitClaimGuard(components: DaemonComponents, meshId: string, mesh
             if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readText(
                 (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n: any) => meshNodeIdMatches(n, alNodeId)) : undefined)?.workspace,
             )))) {
-                if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, undefined, undefined, 'auto_launch')) {
+                if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, storedRoutingDecision, undefined, 'auto_launch')) {
                     clearClaimDeferralForNode(meshId, alNodeId);
                     recordAutoLaunchEvent(meshId, { phase: 'completed', taskId: task.id, reason: 'fast_forward_deferred_claim_redriven', nodeId: alNodeId, sessionId: alSessionId });
                     LOG.info('MeshQueue', `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
@@ -282,7 +310,13 @@ function driveAwaitClaimGuard(components: DaemonComponents, meshId: string, mesh
         // backing off on unknown liveness and direct-dispatching after the cap. Only a
         // 'respawn' directive falls through to a fresh launch below.
         if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
-            const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
+            const outcome = driveExpiredAwaitClaim(
+                components,
+                meshId,
+                task,
+                { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider },
+                (c, m, n, s, p) => tryAssignQueueTask(c, m, n, s, p, storedRoutingDecision, undefined, 'auto_launch'),
+            );
             if (outcome === 'claimed' || outcome === 'fallback') return 'progress'; // progress; suppress a duplicate launch
             if (outcome === 'backoff') return 'skip';                              // window extended; no respawn
             // outcome === 'respawn' → session provably gone; proceed to a fresh launch below.
@@ -531,55 +565,100 @@ function decideAutoLaunchSlot(
     // the pair. See slot-model-enforcement.ts "PROVIDER PAIRING" for the full
     // mechanism and the downstream damage (ledger resolvedModel → claim
     // assignedModel → empty difficulty allowance → dropped per-slot cap).
-    const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map(slot => ({
-        slot,
-        available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
-    }));
+    const allNodeSlots = resolveNodeCapabilitySlots(node, meshId);
+    const requiresFloor = taskRequiresDifficultyFloor(node, task);
+    const nodeSlotAvailability = (forProviderType: string) => {
+        const providerSlots = allNodeSlots.filter(slot => (slot.provider?.trim() ?? '') === forProviderType);
+        const hasCoveringSlot = requiresFloor && providerSlots.some(slot => slotCoversTaskDifficulty(slot, (task as any).difficulty));
+        const hasOnlyModelLessOrSameModel = hasCoveringSlot && (
+            providerSlots.every(slot => !readText(slot.model))
+            || new Set(providerSlots.map(slot => readText(slot.model).toLowerCase())).size === 1
+        );
+        const targetSlots = hasOnlyModelLessOrSameModel
+            ? allNodeSlots.filter(slot =>
+                (slot.provider?.trim() ?? '') !== forProviderType
+                || slotCoversTaskDifficulty(slot, (task as any).difficulty),
+            )
+            : allNodeSlots;
+        return targetSlots.map(slot => ({
+            slot,
+            available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly),
+        }));
+    };
     let effectiveProviderType = resolved.providerType;
     let effectiveRequestedModel = requestedModel;
     let effectiveWinningSlot = resolved.slot;
     let slotDecision = decideSlotForModel({
         requestedModel,
         providerType: effectiveProviderType,
-        slots: nodeSlotAvailability(),
+        slots: nodeSlotAvailability(effectiveProviderType),
     });
-    if (slotDecision.outcome === 'wait') {
-        // QUOTA-BUSY FALLBACK: the winner is quota-CLEAR but saturated.
-        // Ranking is recomputed from scratch every tick with no memory of
-        // "this was busy last tick", so without this the same saturated
-        // provider is re-elected indefinitely while an idle sibling slot on
-        // this very node is never tried. Walk the already-computed clear
-        // ranking instead of re-ranking (re-ranking reproduces the defect).
-        //
-        // Confined to 'wait' by construction: gated providers are absent from
-        // quotaClearOrder, and 'notify' is handled below, untouched. When the
-        // toggle is off — or no later candidate can run — this falls through
-        // to the original markSkip, byte-identical to the previous behaviour.
-        const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback
+    const primaryPostCompatModel = slotDecision.outcome === 'run'
+        ? (isModelCompatibleWithProvider(slotDecision.model, effectiveProviderType) ? slotDecision.model : undefined)
+        : undefined;
+    const primaryFailsFloor = slotDecision.outcome === 'run'
+        && (task as any).modelSource !== 'explicit'
+        && !!launchSideDifficultyFloorMismatch(node, allNodeSlots, effectiveProviderType, primaryPostCompatModel, task, nodeId, slotDecision.slot);
+    if (slotDecision.outcome === 'wait' || primaryFailsFloor) {
+        // QUOTA-BUSY / POST-FALLBACK FLOOR: when the winner is quota-CLEAR but
+        // saturated ('wait') or its post-compat model fails the difficulty floor,
+        // walk the already-computed quota-clear ranking for a candidate whose
+        // decided slot and post-compat model satisfyboth capacity and the floor.
+        const canTryFallback = slotDecision.outcome === 'wait'
+            ? resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback
+            : true;
+        const fallback = canTryFallback
             ? selectQuotaBusyFallback({
                 clearOrder: resolved.quotaClearOrder ?? [],
                 candidates: resolved.quotaCandidates ?? [],
                 busyProviderType: resolved.providerType,
-                probe: candidate => decideSlotForModel({
-                    // Re-resolve the model against the CANDIDATE's own slot: the
-                    // requested model was derived from the busy winner's slot, and
-                    // carrying it over would ask the fallback provider to honour a
-                    // model it may never declare — the exact (provider, model)
-                    // pair-splitting slot-model-enforcement.ts forbids.
-                    requestedModel: resolveLaunchAxis(
+                probe: candidate => {
+                    const candidateRequestedModel = resolveLaunchAxis(
                         task.model,
                         (task as any).modelSource,
                         candidate.slot.model,
                         slotCoversTaskDifficulty(candidate.slot, (task as any).difficulty),
-                    ),
-                    providerType: candidate.providerType,
-                    slots: nodeSlotAvailability(),
-                }).outcome === 'run',
+                    );
+                    const candidateDecision = decideSlotForModel({
+                        requestedModel: candidateRequestedModel,
+                        providerType: candidate.providerType,
+                        slots: nodeSlotAvailability(candidate.providerType),
+                    });
+                    if (candidateDecision.outcome !== 'run') return false;
+                    const candidateFinal = finalizeSlotSelection({
+                        winningSlot: candidate.slot,
+                        decidedSlot: candidateDecision.slot,
+                        decidedModel: candidateDecision.model,
+                        winningSlotHasCapacity: slotHasCapacity(meshId, nodeId, node, candidate.slot, mesh?.nodes, isReadonly),
+                    });
+                    const compatModel = isModelCompatibleWithProvider(candidateFinal.model, candidate.providerType)
+                        ? candidateFinal.model
+                        : undefined;
+                    if (launchSideDifficultyFloorMismatch(node, allNodeSlots, candidate.providerType, compatModel, task, nodeId, candidateDecision.slot)) {
+                        return false;
+                    }
+                    const candidateCap = effectiveSlotCap(
+                        resolveProviderMaxParallel(allNodeSlots, candidate.providerType),
+                        isReadonly,
+                    );
+                    if (
+                        candidateCap !== undefined
+                        && activeProviderAssignedCount(
+                            meshId,
+                            nodeId,
+                            candidate.providerType,
+                            resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes),
+                        ) >= candidateCap
+                    ) {
+                        return false;
+                    }
+                    return true;
+                },
             })
             : { outcome: 'exhausted' as const, skipped: [] };
         if (fallback.outcome === 'fallback') {
             const { candidate } = fallback;
-            LOG.info('MeshQueue', `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(', ')})` : ''}`);
+            LOG.info('MeshQueue', `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but ${primaryFailsFloor ? 'fails difficulty floor' : `saturated for model '${requestedModel}'`} (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also skipped: ${fallback.skipped.join(', ')})` : ''}`);
             effectiveProviderType = candidate.providerType;
             effectiveWinningSlot = candidate.slot;
             effectiveRequestedModel = resolveLaunchAxis(
@@ -591,7 +670,7 @@ function decideAutoLaunchSlot(
             slotDecision = decideSlotForModel({
                 requestedModel: effectiveRequestedModel,
                 providerType: effectiveProviderType,
-                slots: nodeSlotAvailability(),
+                slots: nodeSlotAvailability(effectiveProviderType),
             });
         }
     }
@@ -643,6 +722,11 @@ async function resolveAutoLaunchPlan(
     skippedCandidates: Array<{ nodeId: string; reason: string }>,
     markSkip: AutoLaunchSkipMarker,
 ): Promise<AutoLaunchPlan | null> {
+    const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+    if (!preAdmission.allowed) {
+        markSkip(nodeId, 'owned_paths_conflict');
+        return null;
+    }
     const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
     if (!resolved.providerType) {
         // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
@@ -654,6 +738,11 @@ async function resolveAutoLaunchPlan(
         // coordinator is not paged), never the actionable
         // 'provider_priority_unusable' (slot configuration error).
         markSkip(nodeId, resolved.reason || 'provider_unusable');
+        return null;
+    }
+    const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+    if (!postProviderAdmission.allowed) {
+        markSkip(nodeId, 'owned_paths_conflict', { providerType: resolved.providerType });
         return null;
     }
     // Slot-derived model/thinking precedence (see resolveLaunchAxis):
@@ -718,7 +807,7 @@ async function resolveAutoLaunchPlan(
     // mesh-difficulty-floor.ts): the FINAL (provider, model) must clear the
     // claim side's own difficulty predicate before spawning, or the spawn is
     // refused 'difficulty_floor_unmet' forever — the 2026-09-08 respawn runaway.
-    const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
+    const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId, slotChoice.slot);
     if (floorMiss) { markSkip(nodeId, floorMiss, { providerType: effectiveProviderType }); return null; }
 
     // Don't spawn a session for a (daemon, provider) already at its declared
@@ -753,6 +842,7 @@ async function resolveAutoLaunchPlan(
         meshNodeFor: meshId,
         meshNodeId: nodeId,
         spawnedSessionVisibility: resolveMeshPolicy(mesh?.policy).spawnedSessionVisibility || 'hidden',
+        ...(effectiveModel ? { initialModel: effectiveModel } : {}),
         // Coordinator-dispatched worker: auto-approve unless mesh/node policy
         // opts out (default true). Lands in settingsOverride and beats the
         // global per-provider-type boolean/mode through explicit opposite-key clearing.
@@ -867,7 +957,7 @@ async function launchQueueTaskOnRemoteNode(
     // session now exists (or is booting). THIS is the event the spawn budget
     // exists to count — a real session that must go on to claim the task.
     markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || undefined, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
-    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined);
+    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || undefined, effectiveProviderType);
     autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS); sweepExpiredCooldowns();
     // REMOTE-READY-WAIT: readiness barrier, symmetric with the local path's
     // waitForLocalSessionReady below and on the same 15s budget. The remote
@@ -888,13 +978,14 @@ async function launchQueueTaskOnRemoteNode(
     // whose catch marks the auto-launch FAILED. A readiness barrier must never
     // be able to turn a launch that genuinely succeeded into a recorded failure.
     if (remoteSessionId) {
+        const routingDecision = buildRoutingDecision();
+        rememberAutoLaunchRoutingDecision(meshId, remoteSessionId, routingDecision);
         await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
             isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId),
         }).catch(() => false);
         // Without the selected model, a remote session was judged against the
         // provider-slot intersection and could refuse `difficulty_floor_unmet`
         // despite the preview-selected slot having headroom.
-        const routingDecision = buildRoutingDecision();
         claimAfterRemoteAutoLaunch(components, meshId, nodeId, remoteSessionId, effectiveProviderType,
             (c, m, n, s, p) => tryAssignQueueTask(c, m, n, s, p, routingDecision, undefined, 'auto_launch'));
     }
@@ -948,7 +1039,9 @@ async function launchQueueTaskOnLocalNode(
     // SPAWN-CAP-TRANSPORT-AWARE: a local session demonstrably exists — spend one
     // unit of the spawn budget (the mismatch detector's counted unit).
     markAutoLaunch(meshId, task.id, { status: 'completed', nodeId, providerType: effectiveProviderType, sessionId, ...(effectiveModel ? { model: effectiveModel } : {}), ...(effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}), spendSpawnBudget: true });
-    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
+    logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId, effectiveProviderType);
+    const routingDecision = buildRoutingDecision();
+    rememberAutoLaunchRoutingDecision(meshId, sessionId, routingDecision);
     // Readiness barrier: a freshly-spawned local CLI session is NOT yet
     // interactive — its PTY prints the input prompt (and the adapter flips
     // isReady()) only ~2-6s after launch. Dispatching the task immediately
@@ -959,7 +1052,6 @@ async function launchQueueTaskOnLocalNode(
     // first message lands cleanly. The adapter's queue-until-ready path is the
     // backstop if readiness is reported late; this just avoids the churn.
     await waitForLocalSessionReady(components, sessionId);
-    const routingDecision = buildRoutingDecision();
     tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, undefined, 'auto_launch');
     return true;
 }
@@ -1099,6 +1191,17 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
             const awaitClaim = driveAwaitClaimGuard(components, meshId, mesh, task);
             if (awaitClaim === 'progress') return true;
             if (awaitClaim === 'skip') continue;
+
+            // OWNED-PATHS ADMISSION BEFORE SPAWN: evaluate the shared claim-side
+            // owned_paths_conflict predicate BEFORE spending spawn budget or calling
+            // launch_cli. A task whose ownedPaths overlap an in-flight task's ownedPaths
+            // cannot claim until the holder finishes, so spawning now would only create
+            // an idle unassigned worker.
+            const ownedPathsAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+            if (!ownedPathsAdmission.allowed) {
+                markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'owned_paths_conflict' });
+                continue;
+            }
 
             // AUTOLAUNCH-SPAWN-CAP (P3): durable per-task launch budget. Deliberately AFTER the
             // await-claim guard (an in-flight claim is never parked mid-wait) and BEFORE node
