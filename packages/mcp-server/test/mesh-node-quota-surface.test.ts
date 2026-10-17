@@ -73,11 +73,12 @@ test('summarizeNodeQuota renders an unmeasured axis as —', () => {
   assert.equal(summary['grok-cli'], '7d 16% · 5h — · 1m');
 });
 
-test('summarizeNodeQuota keeps last-good numbers visible while refreshing', () => {
+test('summarizeNodeQuota keeps expired-token numbers visible as stale while awaiting CLI use', () => {
   // carryForwardLastGoodWindows retains the previous good reading across a
   // transient failure (metadata.lastGoodWindows). The old fold dropped those
   // numbers to a bare "error:expired-token"; the numbers are the whole point
-  // of carry-forward, so they stay, labeled "refreshing".
+  // of carry-forward, so they stay. A quota retry cannot renew the idle
+  // CLI access token: the retained reading is stale, without a renewal promise.
   const quota = {
     'grok-cli': {
       provider: 'grok-cli',
@@ -90,7 +91,7 @@ test('summarizeNodeQuota keeps last-good numbers visible while refreshing', () =
     },
   };
   const summary = summarizeNodeQuota(quota, 1_000_000 + 60_000)!;
-  assert.equal(summary['grok-cli'], '7d 16% · 5h — · 1m · refreshing');
+  assert.equal(summary['grok-cli'], '7d 16% · 5h — · 1m · stale');
 });
 
 test('summarizeNodeQuota labels retained no-data windows stale, not refreshing', () => {
@@ -249,14 +250,14 @@ const retainedKimi = (metadata: Record<string, unknown>, provider = 'kimi') => (
   },
 });
 
-test('retry pending keeps "refreshing"', () => {
+test('a pending quota retry cannot promise renewal of an idle Kimi access token', () => {
   const line = summarizeNodeQuota(retainedKimi({ retryAtMs: FRESH_NOW + 240_000 }), FRESH_NOW)?.kimi ?? '';
-  assert.match(line, /· refreshing$/);
+  assert.equal(line, '7d 12% · 5h 31% · 10m · stale');
 });
 
-test('a spent retry budget reads stale with the next check, never refreshing', () => {
+test('a spent expired-token retry budget stays stale without a background renewal promise', () => {
   const line = summarizeNodeQuota(retainedKimi({ retryAtMs: FRESH_NOW - 20 * 60_000, retryExhausted: true }), FRESH_NOW)?.kimi ?? '';
-  assert.match(line, /· stale · next check ≤58m$/, line);
+  assert.equal(line, '7d 12% · 5h 31% · 10m · stale');
   assert.ok(!line.includes('refreshing'), line);
 });
 
@@ -266,3 +267,23 @@ test('codex no-data is stale with a daemon next check; claude no-data is plain s
   const claude = summarizeNodeQuota(retainedKimi({ failureKind: 'no-data' }, 'claude-cli'), FRESH_NOW)?.['claude-cli'] ?? '';
   assert.match(claude, /· stale$/, claude);
 });
+
+test('a pending network retry keeps retained readings refreshing; exhausted retries name the next check', () => {
+  const pending = summarizeNodeQuota(retainedKimi({
+    failureKind: 'network', retryAtMs: FRESH_NOW + 240_000,
+  }), FRESH_NOW)?.kimi ?? '';
+  assert.equal(pending, '7d 12% · 5h 31% · 10m · refreshing');
+  const exhausted = summarizeNodeQuota(retainedKimi({
+    failureKind: 'network', retryAtMs: FRESH_NOW - 20 * 60_000, retryExhausted: true,
+  }), FRESH_NOW)?.kimi ?? '';
+  assert.equal(exhausted, '7d 12% · 5h 31% · 10m · stale · next check ≤58m');
+});
+
+for (const provider of ['grok-cli', 'kimi', 'antigravity-cli']) {
+  test(`${provider} expiry keeps the reading and its age without promising background token renewal`, () => {
+    for (const metadata of [{}, { retryAtMs: FRESH_NOW + 240_000 }, { retryExhausted: true }]) {
+      const line = summarizeNodeQuota(retainedKimi(metadata, provider), FRESH_NOW)?.[provider] ?? '';
+      assert.equal(line, '7d 12% · 5h 31% · 10m · stale');
+    }
+  });
+}
