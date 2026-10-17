@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { defineCommandSpecs } from '../command-registry.js';
 import { assistantToolGate, ASSISTANT_TOOL_SOURCES, readAssistantSessionId } from './assistant-store.js';
@@ -8,9 +9,10 @@ import type { HighFamilyHandler } from './types.js';
 
 const state: HighFamilyHandler = async (ctx, args) => {
     const s = assistantExecutionState(ctx.components());
-    return { success: true, executionEnabled: s.enabled, restriction: assistantExecution.available({ ...s, enabled: true }) ? 'enforced' : 'prompt_only',
+    const daemonId = typeof ctx.deps?.statusInstanceId === 'string' ? ctx.deps.statusInstanceId : null;
+    return { success: true, machine: { daemonId, hostname: hostname() }, executionEnabled: s.enabled, restriction: assistantExecution.available({ ...s, enabled: true }) ? 'enforced' : 'prompt_only',
         supportedActions: ['local_pty_approve', 'local_pty_reject'], limitations: 'Local PTY provider permissions only. Remote, extension, webview and arbitrary execution are unavailable. Staged writes require owner Inbox ratification.',
-        choices: ownerActionChoices(ctx.components()),
+        choices: ownerActionChoices(ctx.components()).map(choice => ({ ...choice, daemonId })),
         executionAvailable: readAssistantSessionId(args) === s.sessionId && assistantExecution.available(s) };
 };
 const settings: HighFamilyHandler = async (_ctx, args) => {
@@ -30,7 +32,10 @@ const action: HighFamilyHandler = async (ctx, args) => {
     if (!consent.success) return consent;
     // Existing approval machinery, with an exact-modal guard at its last synchronous dispatch point.
     return ctx.execute('resolve_action', { targetSessionId: parsed.targetSessionId, action: parsed.action,
-        button: parsed.button, buttonIndex: target.buttonIndex, expectedModalIdentity: consent.expectedModalIdentity, assistantExecutionGuard: createAssistantExecutionGuard(() => Date.now() < consent.expiresAt && !!actionTarget(ctx.components(), parsed) && assistantExecutionState(ctx.components()).policyRevision === s.policyRevision && assistantExecution.available(assistantExecutionState(ctx.components()))) }, 'internal', { inProcess: true });
+        button: parsed.button, buttonIndex: target.buttonIndex, expectedModalIdentity: consent.expectedModalIdentity,
+        // Consent bound to an exact provider episode → the guarded exact-button
+        // path re-checks modalKey/attemptId/generation before the key write.
+        ...(consent.approvalTarget ? { approvalTarget: consent.approvalTarget } : {}), assistantExecutionGuard: createAssistantExecutionGuard(() => Date.now() < consent.expiresAt && !!actionTarget(ctx.components(), parsed) && assistantExecutionState(ctx.components()).policyRevision === s.policyRevision && assistantExecution.available(assistantExecutionState(ctx.components()))) }, 'internal', { inProcess: true });
 };
 export const assistantActionSpecs = defineCommandSpecs('high', {
     [ASSISTANT_VERB.action]: action, [ASSISTANT_VERB.executionState]: state, [ASSISTANT_VERB.executionSettings]: settings,

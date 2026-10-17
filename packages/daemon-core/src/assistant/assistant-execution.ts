@@ -7,7 +7,9 @@ export interface ExecutionState {
     provider: string; assistant: boolean; policyRevision?: number;
 }
 interface Attestation { sessionId: string; runtime: object; adapter: object; provider: string }
-interface Consent { origin: 'OWNER'; sessionId: string; action: AssistantAction; modal: string; expiresAt: number; policyRevision: number }
+/** Exact provider-approval episode a consent is bound to (null for a legacy adapter without lifecycle identity). */
+export interface AssistantApprovalTarget { modalKey: string; attemptId: string | null; generation: number | null }
+interface Consent { origin: 'OWNER'; sessionId: string; action: AssistantAction; modal: string; expiresAt: number; policyRevision: number; approvalTarget: AssistantApprovalTarget | null }
 
 export function modalIdentity(modal: unknown): string {
     return createHash('sha256').update(JSON.stringify(modal)).digest('hex');
@@ -39,14 +41,15 @@ export class AssistantExecution {
         return state.enabled && state.assistant && !!a && a.sessionId === state.sessionId
             && a.runtime === state.runtime && a.adapter === state.adapter && a.provider === state.provider;
     }
-    issue(source: unknown, state: ExecutionState, action: AssistantAction, modal: unknown, now = Date.now()) {
+    issue(source: unknown, state: ExecutionState, action: AssistantAction, modal: unknown, now = Date.now(), approvalTarget: AssistantApprovalTarget | null = null) {
         if (!['p2p', 'ws', 'standalone'].includes(String(source))) return { success: false as const, code: 'owner_origin_required' };
         if (!this.available(state)) return { success: false as const, code: state.enabled ? 'assistant_execution_not_enforced' : 'assistant_execution_off' };
         for (const [token, c] of this.consents) if (c.expiresAt <= now) this.consents.delete(token);
         if (this.consents.size >= 32) return { success: false as const, code: 'assistant_consent_capacity' };
         const authorization = randomBytes(32).toString('hex');
         const expiresAt = now + 2 * 60_000;
-        this.consents.set(authorization, { origin: 'OWNER', sessionId: state.sessionId!, action: { ...action }, modal: modalIdentity(modal), expiresAt, policyRevision: state.policyRevision ?? 0 });
+        this.consents.set(authorization, { origin: 'OWNER', sessionId: state.sessionId!, action: { ...action }, modal: modalIdentity(modal), expiresAt, policyRevision: state.policyRevision ?? 0,
+            approvalTarget: approvalTarget ? { modalKey: approvalTarget.modalKey, attemptId: approvalTarget.attemptId, generation: approvalTarget.generation } : null });
         return { success: true as const, authorization, expiresAt };
     }
     consume(token: unknown, state: ExecutionState, action: AssistantAction, modal: unknown, now = Date.now()) {
@@ -60,7 +63,7 @@ export class AssistantExecution {
         }
         // Burn before dispatch, even if the provider fails. A retry needs fresh owner consent.
         this.consents.delete(token as string);
-        return { success: true as const, expectedModalIdentity: c.modal, expiresAt: c.expiresAt };
+        return { success: true as const, expectedModalIdentity: c.modal, expiresAt: c.expiresAt, approvalTarget: c.approvalTarget };
     }
 }
 export const assistantExecution = new AssistantExecution();

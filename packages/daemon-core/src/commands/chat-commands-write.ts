@@ -12,7 +12,7 @@ import { modalIdentity, checkAssistantExecutionGuard } from '../assistant/assist
 import type { CommandResult, CommandHelpers, CommandContext } from './handler.js';
 import { normalizeInputEnvelope, type InputEnvelope, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
 import { assertTextOnlyInput } from '../providers/provider-input-support.js';
-import { pickApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
+import { pickApprovalButton, pickLeastPrivilegeApprovalButton, isNegativeApprovalLabel } from '../providers/approval-utils.js';
 import { LOG } from '../logging/logger.js';
 import { mintLegacyMessageId, readCommandSource, readMessageId, readOutboundOrigin, readSendPolicy } from './command-args.js';
 import { reportSessionChatInput } from '../assistant/assistant-human-input.js';
@@ -265,7 +265,7 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
         policy,
         createdAt: Date.now(),
     }, () => {
-        prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity);
+        prepared = prepareOwnerActionChat({ sessionRegistry: h.ctx.sessionRegistry, instanceManager: h.ctx.instanceManager, cliManager: h.ctx.adapters ? { adapters: h.ctx.adapters } : undefined }, readCommandSource(args), sessionKey, input.textFallback ?? '', args?.assistantOwnerAction, args?.expectedOwnerModalIdentity, args?.expectedOwnerApprovalTarget);
         if (!prepared.success) return { refusal: prepared.code };
         if (prepared.text === input.textFallback) return input;
         // Keep every original image/part. Only the native delivery body receives
@@ -812,6 +812,37 @@ export async function handleChangeModel(h: CommandHelpers, args: any): Promise<C
     return { success: false, error: 'changeModel not supported by this IDE provider' };
 }
 
+/**
+ * Validate an explicit button on an exact-target (`approvalTarget`) resolve.
+ * No button argument → ordinary approve/reject (`button: null`). Otherwise the
+ * label must be a non-empty string, `button`/`buttonText` must agree, it must be
+ * literally one of the target episode's offered buttons, a `buttonIndex` must
+ * point at that same button, and the label's polarity must match the action
+ * (a decline label is only pressed by `reject`, an affirmative only by `approve`).
+ */
+export function readExactTargetButton(args: any, offered: string[]):
+    | { ok: true; button: string | null }
+    | { ok: false; code: string; error: string } {
+    const hasButton = args?.button !== undefined || args?.buttonText !== undefined;
+    if (!hasButton && args?.buttonIndex === undefined) return { ok: true, button: null };
+    const refuse = (code: string, error: string) => ({ ok: false as const, code, error });
+    if (!hasButton) return refuse('approval_button_required', 'An exact provider button label is required with buttonIndex');
+    if (args?.button !== undefined && args?.buttonText !== undefined && args.button !== args.buttonText) {
+        return refuse('approval_button_mismatch', 'button and buttonText disagree');
+    }
+    const label = args?.button !== undefined ? args.button : args.buttonText;
+    if (typeof label !== 'string' || !label.trim()) return refuse('approval_button_required', 'An exact provider button label is required');
+    const index = offered.indexOf(label.slice(0, 120));
+    if (index < 0) return refuse('approval_button_not_offered', 'The button is not one of this permission request\'s provider buttons');
+    if (args?.buttonIndex !== undefined && (!Number.isInteger(args.buttonIndex) || offered[args.buttonIndex] !== label.slice(0, 120))) {
+        return refuse('approval_button_mismatch', 'buttonIndex does not name the requested button');
+    }
+    if (isNegativeApprovalLabel(label) !== (args?.action === 'reject')) {
+        return refuse('approval_button_action_mismatch', 'The button does not match the requested approve/reject action');
+    }
+    return { ok: true, button: label };
+}
+
 export async function handleResolveAction(h: CommandHelpers, args: any): Promise<CommandResult> {
     const provider = h.getProvider(args?.agentType);
     const transport = getTargetTransport(h, provider);
@@ -831,10 +862,17 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         const adapter = getTargetedCliAdapter(h, args, provider?.type);
         if (!adapter) return { success: false, error: 'CLI adapter not running' };
 
+        // Exact provider button for an exact target (owner one-tap). Accepted only
+        // when the button is literally one of the target episode's offered
+        // buttons; every identity check below still runs before the key write.
+        let exactTargetButton: string | null = null;
         if (args?.approvalTarget) {
             const approval = projectProviderApproval(adapter.getStatus()?.providerApproval, args.targetSessionId || h.currentSession?.sessionId || '', provider?.type || '');
             if (!matchesProviderApprovalTarget(approval, args.approvalTarget)) return { success: false, stalePrompt: true, error: 'Approval target is no longer live or does not match the current modal/attempt' };
-            if (args.data || args.buttonIndex !== undefined || args.button || args.buttonText || !['approve', 'reject'].includes(action)) return { success: false, error: 'Inbox permission actions require ordinary approve/reject' };
+            if (args.data || !['approve', 'reject'].includes(action)) return { success: false, error: 'Inbox permission actions require ordinary approve/reject' };
+            const exact = readExactTargetButton(args, approval!.buttons);
+            if (!exact.ok) return { success: false, code: exact.code, error: exact.error };
+            exactTargetButton = exact.button;
         }
 
         // Handle data-driven resolve actions (like from the dashboard 'Fix' button)
@@ -984,6 +1022,15 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
         const buttons: string[] = Array.isArray(effectiveModal.buttons) ? effectiveModal.buttons : [];
         // Resolve button index: explicit buttonIndex arg → exact text match → explicit action mapping
         let buttonIndex = typeof args?.buttonIndex === 'number' ? args.buttonIndex : -1;
+        if (exactTargetButton !== null) {
+            // Exact-target button: literal equality against the LIVE modal, never a
+            // substring or action heuristic. A caller index must name that same button.
+            const liveIndex = buttons.findIndex((candidate) => candidate === exactTargetButton);
+            if (liveIndex < 0 || (args?.buttonIndex !== undefined && args.buttonIndex !== liveIndex)) {
+                return { success: false, stalePrompt: true, code: 'approval_button_changed', error: 'The requested provider button is not on the live approval modal' };
+            }
+            buttonIndex = liveIndex;
+        }
         if (buttonIndex < 0 && button) {
             const btnLower = button.toLowerCase();
             buttonIndex = buttons.findIndex(b => b.toLowerCase().includes(btnLower));
@@ -1000,7 +1047,15 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
             buttonIndex = buttons.findIndex(b => /always/i.test(b));
         }
         if (buttonIndex < 0 && (action === 'approve' || action === 'accept')) {
-            buttonIndex = pickApprovalButton(buttons, provider).index;
+            // A plain "approve" on an exact Inbox target means THIS request only:
+            // the least-privilege one-time option, never a persistent grant. A
+            // standing grant needs the exact provider button.
+            if (args?.approvalTarget) {
+                buttonIndex = pickLeastPrivilegeApprovalButton(buttons, provider).index;
+                if (buttonIndex < 0) return { success: false, code: 'approval_one_time_unavailable', error: 'No one-time approve option; choose the exact provider button' };
+            } else {
+                buttonIndex = pickApprovalButton(buttons, provider).index;
+            }
         }
         if (buttonIndex < 0) {
             return { success: false, error: 'Approval action did not match any visible button' };
