@@ -11,6 +11,9 @@ import {
     rmSync,
     readFileSync,
     writeFileSync,
+    lstatSync,
+    realpathSync,
+    unlinkSync,
 } from 'fs';
 import * as path from 'path';
 import { type WorkerPrivateHomeSpec, deriveCursorWorkspaceSlug, findWorkerPrivateHomeSpec } from './worker-home-specs.js';
@@ -33,6 +36,66 @@ export interface PreparedWorkerHome {
      * whole isolation down with it. Each entry is `<relativePath> (<reason>)`.
      */
     failed: string[];
+}
+
+/** Never traverse an old private-home link while preparing or cleaning it. */
+function privateDirectory(home: string, relative = ''): void {
+    const target = path.resolve(home, relative);
+    const within = path.relative(path.resolve(home), target);
+    if (within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) {
+        throw new Error('worker_private_home_path_escape');
+    }
+    for (const dir of [home, ...within.split(path.sep).filter(Boolean).map((_, i, parts) => path.join(home, ...parts.slice(0, i + 1)))]) {
+        let stat;
+        try { stat = lstatSync(dir); } catch (err: any) {
+            if (err?.code !== 'ENOENT') throw err;
+        }
+        if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
+            throw new Error('worker_private_home_unsafe_directory');
+        }
+        if (!stat) mkdirSync(dir, { recursive: true });
+    }
+}
+
+/** Remove the link itself, including dangling links, without touching its referent. */
+function removePrivateEntry(target: string): void {
+    try {
+        if (lstatSync(target).isSymbolicLink()) unlinkSync(target);
+        else rmSync(target, { force: true, recursive: true });
+    } catch (err: any) {
+        if (err?.code !== 'ENOENT') throw err;
+    }
+}
+
+/** The installed Grok README documents [cli] auto_update (1.0.50). */
+function disableGrokAutoUpdate(contents: string): string {
+    // Refuse ambiguous syntax rather than silently leaving updating enabled.
+    // Multiline strings can contain text indistinguishable from a table header.
+    if (contents.includes('"""') || contents.includes("'''")) {
+        throw new Error('worker_private_home_unsupported_grok_config');
+    }
+    const lines = contents.split(/\r?\n/);
+    let inCli = false;
+    let sawCli = false;
+    const result: string[] = [];
+    for (const line of lines) {
+        if (/^\s*\[/.test(line)) {
+            inCli = /^\s*\[\s*(?:cli|"cli"|'cli')\s*\]\s*(?:#.*)?$/.test(line);
+            if (inCli) {
+                if (sawCli) throw new Error('worker_private_home_duplicate_grok_cli_table');
+                sawCli = true;
+                result.push(line, 'auto_update = false');
+                continue;
+            }
+        }
+        if (inCli && /^\s*(?:auto_update|"auto_update"|'auto_update')\s*=/.test(line)) continue;
+        if (/^\s*(?:cli|"cli"|'cli')\s*(?:\.|=)/.test(line)) {
+            throw new Error('worker_private_home_unsupported_grok_cli_table');
+        }
+        result.push(line);
+    }
+    if (!sawCli) result.push('', '[cli]', 'auto_update = false');
+    return `${result.join('\n').trimEnd()}\n`;
 }
 
 /**
@@ -149,11 +212,27 @@ export function materializePrivateHome(
     opts: { home: string; workspace: string; realHome?: string },
 ): PreparedWorkerHome {
     const realHome = opts.realHome || os.homedir();
-    const home = opts.home;
+    const home = path.resolve(opts.home);
 
-    mkdirSync(home, { recursive: true });
+    privateDirectory(home);
+    const canonicalHome = realpathSync(home);
+    const canonicalReal = realpathSync(realHome);
+    const relativeReal = path.relative(canonicalHome, canonicalReal);
+    const grokRelative = path.relative(path.join(canonicalReal, '.grok'), canonicalHome);
+    if (relativeReal === '' || (!relativeReal.startsWith(`..${path.sep}`) && relativeReal !== '..' && !path.isAbsolute(relativeReal))
+        || (spec.providerType === 'grok-cli' && grokRelative !== '..' && !grokRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(grokRelative))) {
+        throw new Error('worker_private_home_overlaps_real_home');
+    }
     for (const dir of spec.ensureDirs || []) {
-        mkdirSync(path.join(home, dir), { recursive: true });
+        privateDirectory(home, dir);
+    }
+
+    if (spec.providerType === 'grok-cli') {
+        privateDirectory(home, '.grok');
+        // Retire updater links left by older workers, even when dangling.
+        for (const name of ['bin', 'version.json']) {
+            removePrivateEntry(path.join(home, '.grok', name));
+        }
     }
 
     const imported: string[] = [];
@@ -215,9 +294,9 @@ export function materializePrivateHome(
             }
         }
 
-        mkdirSync(path.dirname(target), { recursive: true });
+        privateDirectory(home, path.dirname(entry.relativePath));
         // Replace any stale entry from a previous launch that reused this key.
-        try { rmSync(target, { force: true }); } catch { /* best effort */ }
+        removePrivateEntry(target);
 
         // ★Per-import failure policy (release blocker, 2026-09-27).
         //
@@ -266,6 +345,15 @@ export function materializePrivateHome(
         imported.push(entry.relativePath);
     }
 
+    if (spec.providerType === 'grok-cli') {
+        const configPath = path.join(home, '.grok', 'config.toml');
+        // A missing optional source must still produce an updater-disabled
+        // private config. Never write through a stale config symlink.
+        const config = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+        removePrivateEntry(configPath);
+        writeFileSync(configPath, disableGrokAutoUpdate(config), { mode: 0o600 });
+    }
+
     // ─── Workspace-derived links ────────────────────────────────────────
     //
     // Resolved HERE rather than declared statically because the directory name
@@ -286,8 +374,8 @@ export function materializePrivateHome(
         const target = path.join(home, rel);
         try {
             mkdirSync(source, { recursive: true });
-            mkdirSync(path.dirname(target), { recursive: true });
-            try { rmSync(target, { force: true, recursive: true }); } catch { /* best effort */ }
+            privateDirectory(home, path.dirname(rel));
+            removePrivateEntry(target);
             // Same win32 junction rule as the static imports — the source is
             // always a directory, so an unprivileged win32 host gets a junction
             // instead of the EPERM a bare symlink would raise.

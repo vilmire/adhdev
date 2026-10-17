@@ -619,10 +619,10 @@ export const WORKER_PRIVATE_HOME_SPECS: readonly WorkerPrivateHomeSpec[] = [
             // grok rewrites this file, and it is 0644 so it must not assert
             // owner-only.
             { relativePath: path.join('.grok', 'config.toml'), mode: 'copy' },
-            // Installed-build identity, so the worker resolves the same version
-            // and channel rather than reporting `[unknown]`.
-            { relativePath: path.join('.grok', 'version.json'), mode: 'symlink' },
-            { relativePath: path.join('.grok', 'bin'), mode: 'symlink' },
+            // Never expose the real install to a worker's updater. The launch
+            // resolves the executable before redirecting HOME; no bin link is
+            // needed. Build metadata is a private snapshot, never write-through.
+            { relativePath: path.join('.grok', 'version.json'), mode: 'copy' },
         ],
         // The ISOLATED surfaces: empty means grok's harness-compatibility layer
         // has no owner cursor/claude config to import — neither MCP servers nor
