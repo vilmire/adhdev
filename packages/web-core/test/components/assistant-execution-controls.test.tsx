@@ -199,3 +199,18 @@ it('renders plain Korean copy and keeps all five locale permission labels comple
     expect([...container.querySelectorAll('dt')].map(el => el.textContent)).toEqual(['세션', '머신', '요청 내용'])
     expect(container.textContent).not.toMatch(/PTY|enforced|ratification|Restriction:/)
 })
+
+it('binds consent to the daemon-stated provider episode and drops choices from another episode', async () => {
+    const episodeChoices = choices.map(c => ({ ...c, modalKey: 'modal-one', attemptId: 'attempt-one', generation: 7 }))
+    const send = vi.fn(async (_daemon: string, command: string) => command === 'send_chat' ? success() : state({ choices: episodeChoices }))
+    await open(send); await choose('Yes'); await click('Send response to assistant')
+    expect(send).toHaveBeenCalledWith('daemon', 'send_chat', expect.objectContaining({
+        assistantOwnerAction: { meshId: 'mesh', targetSessionId: 'worker', action: 'approve', button: 'Yes' },
+        expectedOwnerApprovalTarget: { modalKey: 'modal-one', attemptId: 'attempt-one', generation: 7 } }))
+})
+it('hides choices whose daemon-stated generation differs from the live roster episode', async () => {
+    const staleChoices = choices.map(c => ({ ...c, modalKey: 'modal-one', attemptId: 'attempt-one', generation: 6 }))
+    const send = vi.fn(async () => state({ choices: staleChoices }))
+    await open(send)
+    expect(labels()).toEqual([])
+})

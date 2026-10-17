@@ -6,7 +6,9 @@ import { useDaemons } from '../../compat'
 import { approvalButtonTone } from './ApprovalBanner'
 
 type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<any>
-type Choice = { meshId: string; targetSessionId: string; action: 'approve' | 'reject'; button: string; modalIdentity: string; label: string; message: string }
+type Choice = { meshId: string; targetSessionId: string; action: 'approve' | 'reject'; button: string; modalIdentity: string; label: string; message: string
+    /** Authoritative provider episode from the daemon (absent from older daemons / legacy adapters). */
+    modalKey?: string; attemptId?: string | null; generation?: number | null }
 type ExecutionView = { executionEnabled: boolean; executionAvailable: boolean; choices: Choice[] }
 const choiceKey = (choice: Choice) => JSON.stringify([choice.meshId, choice.targetSessionId, choice.modalIdentity, choice.action, choice.button])
 
@@ -47,8 +49,9 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
     }, [daemonId, sessionId, status])
     useEffect(() => { setDismissed([]) }, [daemonId, sessionId])
 
-    // The old execution-state answer has no provider lifecycle or generation. Only
-    // corroborated live local tool permissions may appear here. Never infer trust
+    // Older daemons' execution-state answers carry no provider lifecycle or
+    // generation; newer ones state the exact episode per choice, which must match
+    // the live roster. Only corroborated live local tool permissions appear here. Never infer trust
     // or permission from status, English prose, or an opaque modal hash alone.
     const requests = new Map<string, { key: string; title: string; machine: string; session: string; message: string; choices: Choice[] }>()
     for (const ide of ides) {
@@ -69,7 +72,10 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
             && ['approve', 'reject'].includes(c.action) && typeof c.meshId === 'string' && !!c.meshId
             && (!approval.meshId || approval.meshId === c.meshId)
             && approval.buttons.includes(c.button) && modal.buttons?.includes(c.button)
-            && c.message === String(modal.message ?? '').slice(0, 500))
+            && c.message === String(modal.message ?? '').slice(0, 500)
+            // When the daemon states the episode identity it must be THIS episode.
+            && (c.modalKey === undefined || (c.modalKey === approval.modalKey
+                && (c.attemptId ?? null) === (approval.attemptId ?? null) && (c.generation ?? null) === (approval.generation ?? null))))
         if (!choices.length) continue
         const unique = [...new Map(choices.map(c => [choiceKey(c), c])).values()]
         const rank = (c: Choice) => ({ primary: 0, danger: 1, neutral: 2, always: 3 })[approvalButtonTone(c.button.toLowerCase())]
@@ -105,7 +111,8 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
             const { meshId, targetSessionId, action, button } = choice
             const out = unwrapStagedAnswer(await sendCommand(daemonId, 'send_chat', { targetSessionId: sessionId,
                 message: `${action === 'approve' ? 'Approve' : 'Reject'} the selected permission for ${choice.label}.`,
-                assistantOwnerAction: { meshId, targetSessionId, action, button }, expectedOwnerModalIdentity: choice.modalIdentity }))
+                assistantOwnerAction: { meshId, targetSessionId, action, button }, expectedOwnerModalIdentity: choice.modalIdentity,
+                ...(choice.modalKey ? { expectedOwnerApprovalTarget: { modalKey: choice.modalKey, attemptId: choice.attemptId ?? null, generation: choice.generation ?? null } } : {}) }))
             if (currentScope.current !== requestScope || actionSequence.current !== seq) return
             const stale = out?.stalePrompt === true || out?.alreadyResolved === true
                 || ['owner_modal_selection_changed', 'assistant_action_target_unavailable', 'consent_modal_changed'].includes(out?.code)
