@@ -133,6 +133,9 @@ const LEGACY_DAEMON_METADATA_COMMANDS: ReadonlySet<string> = new Set([
     'invoke_provider_script',
     'set_user_name',
     'set_machine_nickname',
+    // Explicit launch-default writes change the daemon metadata capability.
+    'launch_defaults_set',
+    'assistant_launch_defaults_set',
 ]);
 
 // Formerly invalidated the retired `session.modal` topic; since its removal
@@ -293,6 +296,8 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // assistant-store-sources.test.ts.
     'assistant_memory', 'assistant_skill_view', 'assistant_skill_manage', 'assistant_project_note',
     'assistant_staged_resolve', 'assistant_store_admin', 'assistant_import_skills',
+    // Explicit daemon-owned launch defaults; fresh additions, not legacy migration.
+    'launch_defaults_get', 'launch_defaults_set', 'assistant_launch_defaults', 'assistant_launch_defaults_set',
     // Assistant project verbs (high-family/assistant.ts, same design §4.2–§4.4).
     'assistant_projects', 'assistant_project_status', 'assistant_project_send',
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',

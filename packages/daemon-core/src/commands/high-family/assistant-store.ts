@@ -41,6 +41,8 @@ import { detectCredential, isReviewOrigin, mustStage, scanWriteContent, type Sto
 import { scanHermesHome, importFromHermes, type HermesImportRequest } from '../../assistant/skills/hermes-import.js';
 import type { MemoryOperation, MemoryTarget } from '../../assistant/memory/memory-store.js';
 import type { SkillManageOp } from '../../assistant/skills/skill-store.js';
+import { createLaunchDefaultsHandlers } from './launch-defaults.js';
+import { getLaunchDefaultsCommandPorts } from '../../launch-defaults/ports.js';
 
 /** The command sources an assistant tool reaches the daemon over (MCP IPC / standalone HTTP). */
 export const ASSISTANT_TOOL_SOURCES = ['ipc', 'standalone'] as const;
@@ -306,7 +308,8 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const svc = getAssistantServices();
         const action = str(args?.action) || 'resolve';
         if (action === 'list') {
-            return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list() };
+            return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
+                launchDefaults: svc.launchDefaults?.list() ?? [] };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);
@@ -314,6 +317,16 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const decision = str(args?.decision);
         if (!id && !reviewTurnId) return invalidArgs('id or reviewTurnId required');
         if (id && reviewTurnId) return invalidArgs('pass id or reviewTurnId, not both');
+        if (id.startsWith('ldf-')) {
+            // Defaults consent is only the owner resolving this exact Inbox id.
+            // Reject supplied scope/modal/generation/authorization instead of
+            // silently treating consent for another operation as this decision.
+            if (Object.keys(args ?? {}).some(key => !['action', 'id', 'decision', '_interactionId', '_meshSenderDaemonId'].includes(key))) {
+                return invalidArgs('Launch-default resolution accepts only id and decision.');
+            }
+            if (decision !== 'apply' && decision !== 'discard' && decision !== 'reject') return invalidArgs('decision must be apply, discard or reject');
+            return resolveStagedOne(ctx, svc, id, decision === 'reject' ? 'discard' : decision);
+        }
         if (decision !== 'apply' && decision !== 'discard') return invalidArgs('decision must be apply or discard');
         if (reviewTurnId) return resolveReviewBatch(ctx, svc, reviewTurnId, decision);
         return resolveStagedOne(ctx, svc, id, decision);
@@ -379,6 +392,27 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
 
 /** One staged write by id (prefix picks the store). Credits M7 when an approved write came from a review turn. */
 async function resolveStagedOne(ctx: HighFamilyContext, svc: AssistantServices, id: string, decision: 'apply' | 'discard'): Promise<CommandRouterResult> {
+    if (id.startsWith('ldf-')) {
+        if (!svc.launchDefaults) return { success: false, code: 'staging_unavailable' };
+        return svc.launchDefaults.resolve(id, decision, async (proposal, documentRevision) => {
+            const ports = getLaunchDefaultsCommandPorts(ctx);
+            if (proposal.project) {
+                const stored = ports.store.read();
+                if (stored.status !== 'ok') return { success: false, code: 'launch_default_unavailable',
+                    error: 'Global launch-default setup cannot be read.' };
+                if (stored.document.revision !== documentRevision) return { success: false, code: 'revision_conflict',
+                    error: 'Global launch-default generation changed.', actualRevision: stored.document.revision, committed: false };
+            }
+            // This branch is reached only by the existing owner-source command.
+            // Do not reclassify owner approval using the assistant input log, and
+            // never forward request args or replay an execution/modal consent.
+            return createLaunchDefaultsHandlers(ports).launch_defaults_set(ctx, {
+                action: proposal.selection === null ? 'clear' : 'set', role: proposal.role,
+                expectedRevision: proposal.expectedRevision,
+                ...(proposal.project ? { project: proposal.project } : {}), ...proposal.selection,
+            });
+        });
+    }
     if (id.startsWith('mem-')) {
         const reviewTurnId = decision === 'apply' ? svc.memory.listStaged().find((r) => r.id === id)?.reviewTurnId : undefined;
         const out = svc.memory.resolveStaged(id, decision);

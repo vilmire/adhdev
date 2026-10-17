@@ -13,7 +13,7 @@
  */
 
 import type { GitCompactSummary } from './git/git-types.js';
-import type { DifficultyBrainMap } from '@adhdev/mesh-shared';
+import type { DifficultyBrainMap, LaunchDefaultEntry } from '@adhdev/mesh-shared';
 import type { RepoMeshRelatedRepo, MeshReportedMemberState, RepoMeshNodePolicy } from './repo-mesh-policy.js';
 import type { RepoMeshPolicyOverrides } from './repo-mesh-policy-resolve.js';
 
@@ -240,6 +240,13 @@ export interface LocalMeshConfig {
     meshes: LocalMeshEntry[];
 }
 
+/** Host-only launch override. A clear retains its CAS token. Never repo/inline authority. */
+export interface HostCoordinatorLaunchDefault {
+    version: 1;
+    revision: number;
+    entry: LaunchDefaultEntry | null;
+}
+
 export interface LocalMeshEntry {
     id: string;
     name: string;
@@ -255,6 +262,8 @@ export interface LocalMeshEntry {
     /** Policy storage format marker; 2 = sparse overrides (set by the load-time migration). */
     policyStorage?: number;
     coordinator: RepoMeshCoordinatorConfig;
+    /** Sibling of coordinator; only the hosting daemon's meshes.json is authoritative. */
+    coordinatorLaunch?: HostCoordinatorLaunchDefault;
     meshHost?: RepoMeshHostMetadata;
     nodes: LocalMeshNodeEntry[];
     /**

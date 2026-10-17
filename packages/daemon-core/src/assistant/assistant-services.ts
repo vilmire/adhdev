@@ -12,6 +12,7 @@ import { AssistantMemoryStore } from './memory/memory-store.js';
 import { AssistantSkillStore } from './skills/skill-store.js';
 import { defaultHermesHome } from './skills/hermes-import.js';
 import { AssistantNoteStaging } from './note-staging.js';
+import { AssistantLaunchDefaultStaging } from './launch-default-staging.js';
 import { AssistantInputLog } from './assistant-input-log.js';
 import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { withMemberMeshes } from './member-meshes.js';
@@ -39,6 +40,8 @@ export interface AssistantServices {
     memory: AssistantMemoryStore;
     skills: AssistantSkillStore;
     notes: AssistantNoteStaging;
+    /** Same staged Inbox directory; optional only for older injected services. */
+    launchDefaults?: AssistantLaunchDefaultStaging;
     inputLog: AssistantInputLog;
     operatingNotes: AssistantOperatingNotesPort;
     hermesHome: string;
@@ -84,6 +87,7 @@ export function createAssistantServices(opts: CreateAssistantServicesOptions = {
         memory: new AssistantMemoryStore({ configDir, now: opts.now }),
         skills: new AssistantSkillStore({ configDir, now: opts.now }),
         notes: new AssistantNoteStaging({ configDir, now: opts.now }),
+        launchDefaults: new AssistantLaunchDefaultStaging({ configDir, now: opts.now }),
         inputLog: new AssistantInputLog(),
         operatingNotes: opts.operatingNotes ?? defaultOperatingNotes,
         hermesHome: opts.hermesHome ?? defaultHermesHome(),
