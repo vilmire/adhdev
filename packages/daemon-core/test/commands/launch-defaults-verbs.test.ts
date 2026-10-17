@@ -104,6 +104,16 @@ describe('global explicit setup, check and read', () => {
             roles: { assistant: unset, coordinator: unset } });
         expect(fs.readdirSync(dir)).toEqual([]);
     });
+    it('refuses a project-scoped get on an absent document before resolving the project', async () => {
+        const read = vi.spyOn(dependencies.projects!, 'read');
+        for (const ref of ['host-project', 'no-such-project']) {
+            const result = await run('launch_defaults_get', { role: 'coordinator', project: ref });
+            expect(result).toEqual({ success: false, code: 'launch_default_required',
+                error: 'Explicitly save launch defaults on this daemon.', documentRevision: 0 });
+        }
+        expect(read).not.toHaveBeenCalled();
+        expect(fs.readdirSync(dir)).toEqual([]);
+    });
     it('checks a candidate before setup without persisting it', async () => {
         expect(await run('launch_defaults_get', { action: 'check', role: 'assistant', provider: 'claude', model: 'opus' }))
             .toMatchObject({ success: true, result: 'check', selection: { provider: 'claude-cli', model: 'opus' }, warnings: ['catalog_unverified'] });

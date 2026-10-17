@@ -141,10 +141,12 @@ export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) 
         const stored = ports.store.read();
         const unavailable = diskError(stored);
         // Explicit global set/clear is the only absent-document bootstrap path.
-        // A get on an absent document still answers per role (stored: null with a
+        // A global get on an absent document still answers per role (stored: null with a
         // loud launch_default_required in `effective`), so a UI can offer first setup.
-        if (unavailable && !(stored.status === 'missing'
-            && (input.action === 'get' || !input.project && (write || input.action === 'check')))) return unavailable;
+        // Project-scoped requests never pass this gate on an absent document, so
+        // project-resolution codes are not reachable as an existence oracle.
+        if (unavailable && !(stored.status === 'missing' && !input.project
+            && (input.action === 'get' || write || input.action === 'check'))) return unavailable;
         let project: HostProjectLaunchState | undefined;
         if (input.project) {
             const read = projectState(ports, input.project);
