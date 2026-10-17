@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { getConfigDir } from '../config/config.js';
 const exec = promisify(execFile);
 /**
@@ -152,13 +152,45 @@ async function readOwner(lockPath: string): Promise<CheckoutOwner> {
     if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.nonce !== 'string' || !/^[0-9a-f-]{36}$/.test(owner.nonce)) throw recovery();
     return owner;
 }
+/** A guard held longer than this cannot be a live mutation (each one is a few file operations). */
+export const LOCK_GUARD_STALE_MS = 60_000;
+const guardRecovery = (guard: string) => new AttachFailure('CHECKOUT_RECOVERY_REQUIRED', 'checkout',
+    `A previous attempt was interrupted while holding the lock guard remote-projects/${basename(guard)} in the ADHDev config directory. Confirm no attach is running on the selected daemon, remove that directory, then retry.`);
+/**
+ * True only when an existing guard cannot belong to a live mutation: its recorded owner
+ * pid is dead, or it has existed far longer than any mutation takes. Never reclaims —
+ * the caller refuses with recovery, so two live attempts can never both hold the guard.
+ */
+async function guardIsStale(guard: string): Promise<boolean> {
+    let info;
+    try { info = await lstat(guard); } catch (e: any) { if (e?.code === 'ENOENT') return false; throw e; }
+    if (info.isSymbolicLink() || !info.isDirectory()) return true;
+    let owner: CheckoutOwner | undefined;
+    // Missing/partial owner = a live holder between mkdir and its owner write, or a crash there.
+    try { owner = await readOwner(join(guard, 'owner')); } catch { owner = undefined; }
+    if (owner && !pidAlive(owner.pid)) return true;
+    return Date.now() - info.mtimeMs > LOCK_GUARD_STALE_MS;
+}
 async function lockMutation<T>(lockPath: string, action: () => Promise<T>): Promise<T> {
-    // All cooperating initializers/reclaimers/releasers use this atomic guard.
-    // A crash during mutation leaves the guard behind: fail closed for local
-    // recovery, never guess that an empty/partially initialized lock is stale.
+    // All cooperating initializers/reclaimers/releasers use this atomic guard. It records
+    // its owner so a crash-left guard is reported as recovery instead of "wait" forever;
+    // it is never removed by anyone but its owner (a crash needs local inspection).
     const guard = `${lockPath}.guard`;
-    try { await mkdir(guard); } catch (e: any) { if (e.code === 'EEXIST') throw busy(); throw e; }
-    try { return await action(); } finally { await rmdir(guard); }
+    try { await mkdir(guard); } catch (e: any) {
+        if (e.code !== 'EEXIST') throw e;
+        if (await guardIsStale(guard)) throw guardRecovery(guard);
+        throw busy();
+    }
+    const ownerPath = join(guard, 'owner');
+    const self: CheckoutOwner = { pid: process.pid, nonce: randomUUID() };
+    try { await writeFile(ownerPath, JSON.stringify(self), { flag: 'wx' }); }
+    catch (e) { await rm(ownerPath, { force: true }).then(() => rmdir(guard)).catch(() => {}); throw e; }
+    try { return await action(); } finally {
+        const current = await readOwner(ownerPath);
+        if (current.nonce !== self.nonce || current.pid !== self.pid) throw guardRecovery(guard);
+        await rm(ownerPath);
+        await rmdir(guard);
+    }
 }
 async function acquireLock(lockPath: string): Promise<CheckoutOwner> {
     return lockMutation(lockPath, async () => {
@@ -191,6 +223,12 @@ async function completedStaging(staging: string, meshId: string, identity: strin
     if (evidence.meshId !== meshId || evidence.identity !== identity || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
     await verifyCheckout(staging, identity);
 }
+async function discardStaleMarker(marker: string): Promise<void> {
+    let info;
+    try { info = await lstat(marker); } catch (e: any) { if (e?.code === 'ENOENT') return; throw e; }
+    if (!info.isFile() && !info.isSymbolicLink()) throw recovery();
+    await rm(marker);
+}
 async function renameWithRetry(from: string, to: string): Promise<void> {
     for (let i = 0; ; i++) {
         try { await rename(from, to); return; }
@@ -216,6 +254,10 @@ export async function checkoutRemote(meshId: string, remote: { identity: string;
         if (!reused) {
             const staging = `${workspace}.pending`;
             let claimed = false;
+            // Under the held lock, an absent staging dir proves any marker is crash-left from an
+            // earlier adoption (renamed, then crashed before removing it): it describes nothing,
+            // and keeping it would make this attempt's 'wx' evidence write fail forever.
+            if (!await present(staging)) await discardStaleMarker(`${staging}.complete`);
             try { await mkdir(staging); claimed = true; } catch (e: any) { if (e?.code !== 'EEXIST') throw e; }
             if (!claimed) {
                 // Fixed staging name permits adopting a finished crash-left checkout or preserving an incomplete one.

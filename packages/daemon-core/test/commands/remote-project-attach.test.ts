@@ -8,7 +8,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { createHash, createHmac } from 'node:crypto';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, existsSync, writeFileSync, readFileSync, lstatSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, existsSync, writeFileSync, readFileSync, lstatSync, symlinkSync, utimesSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -545,6 +545,58 @@ describe('remote_project_checkout (target)', () => {
         mkdirSync(`${workspace}.lock.guard`);
         expect(await checkout({})).toMatchObject({ code: 'ATTACH_IN_PROGRESS' });
         expect(state.gitCalls).toHaveLength(0);
+    });
+
+    it('a crash-left mutation guard answers CHECKOUT_RECOVERY_REQUIRED naming the guard, never ATTACH_IN_PROGRESS forever', async () => {
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        const guard = `${workspace}.lock.guard`;
+        const guardName = `remote-projects/${workspace.split(/[\\/]/).pop()}.lock.guard`;
+        const old = new Date(Date.now() - 10 * 60_000);
+        // Owner recorded in the guard has died (daemon crashed mid-mutation): recovery at once.
+        mkdirSync(guard);
+        writeFileSync(join(guard, 'owner'), JSON.stringify({ pid: 99999999, nonce: LOCK_NONCE }));
+        const dead: any = await checkout({});
+        expect(dead).toMatchObject({ success: false, code: 'CHECKOUT_RECOVERY_REQUIRED', stage: 'checkout' });
+        expect(dead.action).toContain(guardName);
+        expect(existsSync(join(guard, 'owner'))).toBe(true);
+        // Owner-less guard (crash between mkdir and the owner write, or an older daemon) once it is old.
+        rmSync(guard, { recursive: true });
+        mkdirSync(guard);
+        utimesSync(guard, old, old);
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        // A live recorded owner is waited on while fresh; held far past any mutation it is recovery.
+        rmSync(guard, { recursive: true });
+        mkdirSync(guard);
+        writeFileSync(join(guard, 'owner'), JSON.stringify({ pid: process.pid, nonce: LOCK_NONCE }));
+        expect(await checkout({})).toMatchObject({ code: 'ATTACH_IN_PROGRESS' });
+        utimesSync(guard, old, old);
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        // Nothing was reclaimed or cloned; the guard survives every refusal.
+        expect(existsSync(guard)).toBe(true);
+        expect(state.gitCalls).toHaveLength(0);
+        // Following the recovery action (removing the guard) lets the attach proceed, and the
+        // guard is released with its owner record.
+        rmSync(guard, { recursive: true });
+        expect(await checkout({})).toMatchObject({ success: true, reused: false });
+        expect(existsSync(guard)).toBe(false);
+    });
+
+    it('a crash-left completion marker without its staging dir is discarded so a later clone can complete', async () => {
+        const workspace = await managedCheckoutPath('mesh_batrp', REPO);
+        // Crash after adopting (rename) but before removing the marker; the workspace was later deleted.
+        writeFileSync(`${workspace}.pending.complete`, JSON.stringify({ meshId: 'mesh_batrp', identity: REPO, nonce: LOCK_NONCE, dev: 1, ino: 1 }));
+        expect(await checkout({})).toMatchObject({ success: true, reused: false, workspace });
+        expect(state.gitCalls.filter(c => c.args[0] === 'clone')).toHaveLength(1);
+        expect(existsSync(`${workspace}.pending`)).toBe(false);
+        expect(existsSync(`${workspace}.pending.complete`)).toBe(false);
+        // A non-file at the marker path is not guessed at: refused and preserved, nothing cloned.
+        rmSync(workspace, { recursive: true });
+        mkdirSync(`${workspace}.pending.complete`);
+        state.gitCalls = [];
+        expect(await checkout({})).toMatchObject({ code: 'CHECKOUT_RECOVERY_REQUIRED' });
+        expect(lstatSync(`${workspace}.pending.complete`).isDirectory()).toBe(true);
+        expect(state.gitCalls.some(c => c.args[0] === 'clone')).toBe(false);
+        expect(readdirSync(join(realpathSync(state.configDir), 'remote-projects')).some(n => n.endsWith('.pending'))).toBe(false);
     });
 
     it('publishes completion evidence only after clone close and recovers it after a failed rename', async () => {
