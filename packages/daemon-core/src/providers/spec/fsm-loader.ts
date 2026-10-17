@@ -124,6 +124,20 @@ export function validateFsmSpec(raw: unknown): string[] {
         if (s.status === 'waiting_external' && s.modal) {
             errs.push(`states[${i}] ("${s.id}") declares status:"waiting_external" with modal:true — an external-auth wait has no on-screen buttons to press; drop modal (and modal_kind/extract.buttons) or use a different status`);
         }
+        // OWNER-ATTENTION PARK: a prompt only the owner may answer. It must
+        // never present an answer surface (modal / buttons) the coordinator or
+        // auto-approve could press, and the compatible declaration form is
+        // status:"waiting_external" + owner_attention:true (see FsmState).
+        const ownerAttention = s.owner_attention === true || s.status === 'owner_attention';
+        if (s.owner_attention !== undefined && typeof s.owner_attention !== 'boolean') {
+            errs.push(`states[${i}] ("${s.id}") owner_attention must be a boolean`);
+        }
+        if (s.owner_attention === true && s.status !== 'waiting_external' && s.status !== 'owner_attention') {
+            errs.push(`states[${i}] ("${s.id}") declares owner_attention:true without status:"waiting_external" — declare both so daemons without owner-attention support keep a buttonless park`);
+        }
+        if (ownerAttention && (s.modal || s.modal_kind || s.extract?.buttons)) {
+            errs.push(`states[${i}] ("${s.id}") is an owner-attention park — it must not declare modal, modal_kind or extract.buttons (nothing may answer it automatically)`);
+        }
     }
     if (initialCount === 0) errs.push('exactly one state must have initial:true (none found)');
     if (initialCount > 1) errs.push(`exactly one state must have initial:true (${initialCount} found)`);

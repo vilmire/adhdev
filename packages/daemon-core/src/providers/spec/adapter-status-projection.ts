@@ -13,7 +13,8 @@
  * branch. The short version, highest precedence first:
  *
  *   error → stopped → starting(not spawned) → starting(no state)
- *     → approval → waiting_external → starting(not ready) → generating → idle
+ *     → approval → waiting_external → owner_attention → starting(not ready)
+ *     → generating → idle
  */
 'use strict';
 
@@ -160,6 +161,32 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
     // keeps the auto-approve gate inert here (it requires buttons to press).
     if (state.status === 'waiting_external') {
         return { ...base, status: 'waiting_approval' };
+    }
+
+    // OWNER-ATTENTION PARK (see FsmState.owner_attention): a prompt only the
+    // owner may answer — grok's data-retention consent banner, or a trust
+    // prompt past its grace window. Distinct from approval on purpose:
+    //   - `waiting_choice` is the blocked class that is NOT an approval, so the
+    //     session never enters mesh_list_pending_approvals, mesh_approve and
+    //     auto-approve have no `waiting_approval` to act on, and the stall
+    //     watchdog parks instead of reaping;
+    //   - activeModal AND activeInteractivePrompt are forced null, so there is
+    //     no button, no option and no promptId for any automatic path (or a
+    //     stale latched picker) to answer with;
+    //   - no idle / fsmReadySeen (never a false "ready" queue claim) and no
+    //     generating (never false busy work);
+    //   - above the readySeen gate, like the other blocked classes, because the
+    //     consent banner is drawn during boot.
+    // `ownerAttention` names the reason for the owner; it carries the spec's
+    // own label, never terminal content.
+    if (state.status === 'owner_attention') {
+        return {
+            ...base,
+            status: 'waiting_choice',
+            activeModal: null,
+            activeInteractivePrompt: null,
+            ownerAttention: { stateId: state.id, message: state.label },
+        };
     }
 
     // Until the FSM has drawn a genuine non-initial idle prompt, do NOT

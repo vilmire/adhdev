@@ -135,14 +135,14 @@ export type FsmCondition =
  * again surfaces as type errors at every site instead of silently diverging —
  * the `waiting_external` addition found three copies of the literal union.
  */
-export type FsmStatus = 'idle' | 'generating' | 'approval' | 'waiting_external';
+export type FsmStatus = 'idle' | 'generating' | 'approval' | 'waiting_external' | 'owner_attention';
 
 /** Runtime mirror of `FsmStatus`, used by the loader to validate a spec's
  *  declared `status`. Kept next to the type (and `satisfies`-checked against it)
  *  so a future value cannot be added to one without the other — the loader
  *  silently rejecting a status the engine understands would present as "my spec
  *  does not load" with no hint why. */
-export const FSM_STATUS_VALUES = ['idle', 'generating', 'approval', 'waiting_external'] as const;
+export const FSM_STATUS_VALUES = ['idle', 'generating', 'approval', 'waiting_external', 'owner_attention'] as const;
 
 // Two-way lock between the list and the union. `Extract` proves every LISTED
 // value is a real FsmStatus; `Exclude` proves every FsmStatus member is LISTED.
@@ -216,6 +216,31 @@ export interface FsmState {
      *  requires a parsed `activeModal` with buttons, and a non-modal state
      *  produces none. */
     status?: FsmStatus;
+    /**
+     * OWNER-ATTENTION PARK — the session is stopped on an in-terminal prompt
+     * that ONLY the owner may answer and that nothing in the daemon must ever
+     * answer: grok's "Help improve Grok" data-retention consent banner, or a
+     * workspace-trust prompt that persisted past its grace window. Unlike
+     * `waiting_external` the decision is on screen; unlike a modal it is not a
+     * request the coordinator, mesh_approve or auto-approve may resolve.
+     *
+     * Semantics (status `owner_attention`, see adapter-status-projection):
+     *   - not approval: projects to the blocked `waiting_choice` class with an
+     *     `ownerAttention` marker, never `waiting_approval`, so it is absent
+     *     from mesh_list_pending_approvals and mesh_approve has nothing to do;
+     *   - non-actionable: no activeModal, no buttons, no interactive prompt —
+     *     auto-approve, auto-pick and mesh_answer_question have no handle;
+     *   - parked: neither ready (no idle / fsmReadySeen, so no queue claim)
+     *     nor busy work (not generating), and visible during boot.
+     *
+     * ★Declare it as `status: "waiting_external"` + `owner_attention: true`
+     * rather than `status: "owner_attention"`. Daemons that predate this field
+     * ignore the unknown key and keep the buttonless waiting_external park
+     * (still never auto-answered), whereas an unknown `status` value would make
+     * the whole spec fail to load there. `statusForState` folds the pair into
+     * `owner_attention`. Must not be combined with `modal`/`extract.buttons`.
+     */
+    owner_attention?: boolean;
     /** Optional extraction run whenever this state is the committed state —
      *  used by modal states to surface a title + buttons. */
     extract?: {
@@ -596,6 +621,9 @@ export function outgoingTransitions(spec: CliSpecV4, stateId: string): FsmTransi
 /** Map a state to the dashboard status string, applying the documented
  *  defaults when `status` is not explicit. */
 export function statusForState(state: FsmState): FsmStatus {
+    if (state.owner_attention === true && (state.status === 'waiting_external' || state.status === 'owner_attention')) {
+        return 'owner_attention';
+    }
     if (state.status) return state.status;
     if (state.modal) return 'approval';
     if (state.id === 'busy' || state.id === 'generating') return 'generating';

@@ -28,6 +28,8 @@ import type {
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
 import { projectAdapterStatus, type AdapterStatusInputs } from '../../../src/providers/spec/adapter-status-projection.js';
 import { minimalSpecPath } from '../../helpers/minimal-spec.js';
+import { statusForState } from '../../../src/providers/spec/fsm-types.js';
+import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 
 // A fake PTY whose onData callback the test drives to simulate CLI output.
 class DrivablePty implements PtyRuntimeTransport {
@@ -258,5 +260,76 @@ describe('SpecCliAdapter.getStatus({ allowParse: false }) — cheap read path to
         expect(status.status).toBe('idle');
         expect('lastOutputAt' in status).toBe(false);
         expect('lastScreenChangeAt' in status).toBe(false);
+    });
+});
+
+describe('projectAdapterStatus — owner-attention park (consent / persistent trust)', () => {
+    const baseInputs = (over: Partial<AdapterStatusInputs>): AdapterStatusInputs => ({
+        providerSessionId: undefined,
+        providerFailure: null,
+        exited: false,
+        spawned: true,
+        activeInteractivePrompt: null,
+        state: { id: 'consent_banner', label: 'Owner attention: Grok data-retention consent', title: null, status: 'owner_attention' },
+        modal: null,
+        readySeen: () => true,
+        lastOutputAt: 1_700_000_000_100,
+        lastScreenChangeAt: 1_700_000_000_050,
+        ...over,
+    });
+
+    it('parks as the non-approval blocked class with an owner-attention marker and the clocks intact', () => {
+        const status = projectAdapterStatus(baseInputs({}));
+        expect(status.status).toBe('waiting_choice');
+        expect(status.status).not.toBe('waiting_approval');
+        expect(status.activeModal).toBeNull();
+        expect(status.activeInteractivePrompt).toBeNull();
+        expect(status.ownerAttention).toEqual({ stateId: 'consent_banner', message: 'Owner attention: Grok data-retention consent' });
+        expect(status.fsmReadySeen).toBeUndefined();
+        expect(status.lastOutputAt).toBe(1_700_000_000_100);
+        expect(status.lastScreenChangeAt).toBe(1_700_000_000_050);
+    });
+
+    it('exposes no buttons or prompt even when a stale modal/prompt is latched', () => {
+        const status = projectAdapterStatus(baseInputs({
+            modal: { title: 'Opt in?', buttons: [{ index: 1, label: 'Opt in' }], kind: 'approval' },
+            activeInteractivePrompt: { promptId: 'stale', questions: [] } as unknown as AdapterStatusInputs['activeInteractivePrompt'],
+        }));
+        expect(status.status).toBe('waiting_choice');
+        expect(status.activeModal).toBeNull();
+        expect(status.activeInteractivePrompt).toBeNull();
+    });
+
+    it('stays visible during boot instead of a false starting/ready', () => {
+        const status = projectAdapterStatus(baseInputs({ readySeen: () => false }));
+        expect(status.status).toBe('waiting_choice');
+        expect(status.fsmReadySeen).toBeUndefined();
+    });
+
+    it('leaves the waiting_external projection unchanged', () => {
+        const status = projectAdapterStatus(baseInputs({
+            state: { id: 'signing_in', label: 'Sign in', title: null, status: 'waiting_external' },
+        }));
+        expect(status.status).toBe('waiting_approval');
+        expect(status.ownerAttention).toBeUndefined();
+    });
+
+    it('folds the backward-compatible waiting_external + owner_attention declaration', () => {
+        expect(statusForState({ id: 'p', label: 'P', status: 'waiting_external', owner_attention: true })).toBe('owner_attention');
+        expect(statusForState({ id: 'p', label: 'P', status: 'waiting_external' })).toBe('waiting_external');
+        expect(statusForState({ id: 'p', label: 'P', status: 'owner_attention' })).toBe('owner_attention');
+    });
+
+    it('rejects an owner-attention state that could be answered automatically', () => {
+        const spec = (state: Record<string, unknown>) => ({
+            $schema: 'adhdev:cli/spec@4', id: 't', name: 't', binary: '/bin/true',
+            send_message: { submit_key: '\r' }, sections: {}, transitions: [],
+            states: [{ id: 'idle', label: 'Idle', initial: true, status: 'idle' }, { id: 'park', label: 'Park', ...state }],
+        });
+        expect(validateFsmSpec(spec({ status: 'waiting_external', owner_attention: true }) as never)).toEqual([]);
+        expect(validateFsmSpec(spec({ status: 'waiting_external', owner_attention: true, modal: true }) as never).join(' '))
+            .toMatch(/owner-attention park/);
+        expect(validateFsmSpec(spec({ status: 'idle', owner_attention: true }) as never).join(' '))
+            .toMatch(/without status:"waiting_external"/);
     });
 });

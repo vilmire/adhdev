@@ -74,6 +74,15 @@ export interface CliAdapterStatus {
      */
     fsmReadySeen?: boolean;
     /**
+     * FSM-spec adapters only: the session is parked on a prompt only the OWNER
+     * may answer (FsmState.owner_attention — e.g. grok's data-retention consent
+     * banner). Present only alongside status `waiting_choice` with no
+     * activeModal and no activeInteractivePrompt, so nothing can answer it
+     * automatically. `message` is the spec-authored state label (never
+     * terminal content).
+     */
+    ownerAttention?: { stateId: string; message: string };
+    /**
      * Wall-clock (ms) of the most recent raw PTY output chunk. Advances on every
      * byte the process emits, including tool/build output that produces no
      * parsed assistant text. Absent until the first chunk. Liveness watchdogs
