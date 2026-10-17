@@ -36,6 +36,8 @@ function digest(value: object): string {
     return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 function syncDir(dir: string): void {
+    // Windows cannot open a directory for fsync (EPERM/EISDIR); see sessions/outgoing-receipt-store.ts.
+    if (process.platform === 'win32') return;
     const fd = openSync(dir, 'r');
     try { fsyncSync(fd); } finally { closeSync(fd); }
 }

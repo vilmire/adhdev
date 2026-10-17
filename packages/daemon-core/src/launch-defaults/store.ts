@@ -154,8 +154,11 @@ export class LaunchDefaultsStore {
             finally { closeSync(fd); }
             renameSync(temp, this.path);
             committed = true;
-            const parent = openSync(resolve(this.path, '..'), 'r');
-            try { fsyncSync(parent); } finally { closeSync(parent); }
+            // Windows cannot open a directory for fsync (EPERM/EISDIR); see sessions/outgoing-receipt-store.ts.
+            if (process.platform !== 'win32') {
+                const parent = openSync(resolve(this.path, '..'), 'r');
+                try { fsyncSync(parent); } finally { closeSync(parent); }
+            }
             return { ok: true, document, previous, warnings, lowersToolLock, durable: true };
         } catch {
             return { ok: false, code: 'persistence_failed', reason: committed ? 'durability_unconfirmed' : 'atomic_replace_failed',

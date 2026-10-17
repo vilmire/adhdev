@@ -145,8 +145,11 @@ export function saveMeshConfigDurable(config: LocalMeshConfig):
         finally { closeSync(fd); }
         renameSync(temp, path);
         committed = true;
-        const parent = openSync(dirname(path), 'r');
-        try { fsyncSync(parent); } finally { closeSync(parent); }
+        // Windows cannot open a directory for fsync (EPERM/EISDIR); see sessions/outgoing-receipt-store.ts.
+        if (process.platform !== 'win32') {
+            const parent = openSync(dirname(path), 'r');
+            try { fsyncSync(parent); } finally { closeSync(parent); }
+        }
         return { ok: true, durable: true };
     } catch {
         return { ok: false, reason: committed ? 'durability_unconfirmed' : 'atomic_replace_failed', committed };
