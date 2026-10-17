@@ -26,6 +26,8 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_skill_view: ['ipc', 'standalone'],
     assistant_skill_manage: ['ipc', 'standalone'],
     assistant_project_note: ['ipc', 'standalone'],
+    assistant_launch_defaults: ['ipc', 'standalone'],
+    assistant_launch_defaults_set: ['ipc', 'standalone'],
     assistant_staged_resolve: ['p2p', 'standalone', 'ws'],
     assistant_store_admin: ['p2p', 'standalone', 'ws'],
     assistant_import_skills: ['p2p', 'standalone', 'ws'],

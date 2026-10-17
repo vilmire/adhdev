@@ -49,6 +49,8 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   skill_view: { name: 'list' },
   skill_manage: { action: 'archive', name: 'old-skill' },
   project_note: { project: 'adhdev', action: 'record', text: 'oss commits in English' },
+  launch_defaults: {},
+  launch_defaults_set: { action: 'set', role: 'assistant', expectedRevision: 1, provider: 'claude-cli' },
 };
 
 function fakeTransport(reply: (type: string, args: Record<string, unknown>) => any = () => ({ success: true })) {

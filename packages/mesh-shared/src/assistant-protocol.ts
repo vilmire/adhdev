@@ -31,6 +31,8 @@ export const ASSISTANT_TOOLS = [
     'skill_view',
     'skill_manage',
     'project_note',
+    'launch_defaults',
+    'launch_defaults_set',
 ] as const
 
 export type AssistantTool = typeof ASSISTANT_TOOLS[number]
@@ -60,6 +62,8 @@ export const ASSISTANT_VERB = {
     skillView: 'assistant_skill_view',
     skillManage: 'assistant_skill_manage',
     projectNote: 'assistant_project_note',
+    launchDefaults: 'assistant_launch_defaults',
+    launchDefaultsSet: 'assistant_launch_defaults_set',
     // assistant-side daemon verbs without a tool of the same name
     launch: 'launch_assistant',
     pendingRelays: 'assistant_pending_relays',
@@ -87,6 +91,8 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     skill_view: ASSISTANT_VERB.skillView,
     skill_manage: ASSISTANT_VERB.skillManage,
     project_note: ASSISTANT_VERB.projectNote,
+    launch_defaults: ASSISTANT_VERB.launchDefaults,
+    launch_defaults_set: ASSISTANT_VERB.launchDefaultsSet,
 }
 
 /**
@@ -95,7 +101,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
  * because they cause effects (a coordinator message or launch, a new
  * project), and MCP clients use readOnlyHint to skip confirmation.
  */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote']
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote', 'launch_defaults_set']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [

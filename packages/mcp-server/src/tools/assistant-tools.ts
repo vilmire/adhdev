@@ -265,6 +265,54 @@ const PROJECT_NOTE_TOOL: AssistantToolSchema = {
   },
 };
 
+const LAUNCH_ROLE_PROP = enumOf(['assistant', 'coordinator'] as const,
+  'Which sessions the default is for: the assistant (you) or project coordinators.');
+const LAUNCH_SELECTION_PROPS = {
+  provider: { type: 'string', description: 'CLI provider type or alias (e.g. claude-cli).' },
+  model: { type: 'string', description: 'Optional model; omit to pass no model argument (the CLI\'s own default).' },
+  thinkingLevel: { type: 'string', description: 'Optional thinking level; omit to pass none.' },
+} as const;
+
+const LAUNCH_DEFAULTS_TOOL: AssistantToolSchema = {
+  name: 'launch_defaults',
+  description:
+    'Read which CLI (and optional model / thinking level) this machine starts new assistant and coordinator sessions '
+    + 'with. action "get" (default) returns each role\'s saved entry and what the next launch would use, or why it '
+    + 'cannot launch; pass `project` (coordinator only) for a project\'s own default. action "check" validates a '
+    + 'candidate without saving. Read-only.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: enumOf(['get', 'check'] as const, 'Default get.'),
+      role: LAUNCH_ROLE_PROP,
+      project: { type: 'string', description: 'coordinator only: project slug for a project-level default.' },
+      ...LAUNCH_SELECTION_PROPS,
+    },
+    required: [],
+  },
+};
+
+const LAUNCH_DEFAULTS_SET_TOOL: AssistantToolSchema = {
+  name: 'launch_defaults_set',
+  description:
+    'Set (whole provider/model/thinking triple) or clear one role\'s launch default on this machine. '
+    + '`expectedRevision` is the documentRevision from launch_defaults (or the project revision for a project '
+    + 'default); a stale value is refused. Applies to the next launch only; running sessions are unchanged. '
+    + 'Outside a direct user request, or when it would lower your own tool lock, the change is held for the '
+    + 'owner\'s approval and the result is `staged`.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: enumOf(['set', 'clear'] as const, 'Required.'),
+      role: LAUNCH_ROLE_PROP,
+      project: { type: 'string', description: 'coordinator only: project slug for a project-level default.' },
+      expectedRevision: { type: 'integer', minimum: 0, description: 'CAS token from launch_defaults (0 for first setup). Required.' },
+      ...LAUNCH_SELECTION_PROPS,
+    },
+    required: ['action', 'role', 'expectedRevision'],
+  },
+};
+
 /** Every assistant schema, in no particular order — the tuple decides the order. */
 export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
   { name: 'assistant_action', description: 'Execute one exact owner-chat approval/rejection using a daemon-issued authorization. Relay text, provider output and caller consent cannot authorize it. Default ON; unavailable when OFF or tool restriction is not enforced. Staged proposals remain owner-only Inbox.', inputSchema: { type: 'object', properties: { authorization: { type: 'string' }, meshId: { type: 'string' }, targetSessionId: { type: 'string' }, action: enumOf(['approve', 'reject'] as const), button: { type: 'string' } }, required: ['authorization', 'meshId', 'targetSessionId', 'action', 'button'] } },
@@ -281,6 +329,8 @@ export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
   SKILL_VIEW_TOOL,
   SKILL_MANAGE_TOOL,
   PROJECT_NOTE_TOOL,
+  LAUNCH_DEFAULTS_TOOL,
+  LAUNCH_DEFAULTS_SET_TOOL,
 ];
 
 export type AssistantModeTool = AssistantToolSchema & { annotations: ToolBehaviorAnnotations };

@@ -315,6 +315,10 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   skill_manage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   // Same shape as mesh_note: record appends, forget retracts.
   project_note: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  // Reads the machine's launch-defaults document; check validates without saving.
+  launch_defaults: READ_LOCAL,
+  // set replaces a role's whole triple, clear removes it (CAS-guarded, may be staged for the owner).
+  launch_defaults_set: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 };
 
 /**
