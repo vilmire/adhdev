@@ -165,6 +165,15 @@ describe('actual persisted launch-default Inbox', () => {
             .toMatchObject({ code: 'COMMAND_SOURCE_REJECTED' });
         expect(bytes()).toEqual(before); expect(fs.readFileSync(stagedPath(id))).toEqual(pending);
     });
+    // The dashboard hook (web-core useAssistantStagedWrites) sends exactly {id, decision}; the
+    // router stamps only _interactionId on this verb (no _commandSource, and _meshSenderDaemonId
+    // only on the mesh source, which this owner verb rejects), so the strict key list holds.
+    it.each(['p2p', 'ws', 'standalone'] as const)('accepts the dashboard resolve shape from %s through the router', async source => {
+        const id = inbox().write(proposal());
+        expect(await router.execute('assistant_staged_resolve', { id, decision: 'apply' }, source))
+            .toMatchObject({ result: 'applied', durable: true });
+        expect(inbox().read(id)).toBeNull();
+    });
     it.each(['authorization', 'consent', 'modal', 'expectedModalIdentity', 'generation', 'role', 'project', 'selection', 'origin'])
         ('refuses foreign approval/scope field %s instead of reusing it as Inbox consent', async key => {
             const id = (await toolSet({ model: 'opus' })).stagedId as string; const before = bytes();
