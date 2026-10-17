@@ -67,35 +67,74 @@ function removePrivateEntry(target: string): void {
     }
 }
 
-/** The installed Grok README documents [cli] auto_update (1.0.50). */
-function disableGrokAutoUpdate(contents: string): string {
+/** Resolve existing ancestors before creating anything in a proposed home. */
+function physicalPath(target: string): string {
+    try { return realpathSync(target); } catch (err: any) {
+        if (err?.code !== 'ENOENT') throw err;
+        const parent = path.dirname(target);
+        if (parent === target) throw err;
+        return path.join(physicalPath(parent), path.basename(target));
+    }
+}
+
+/** Edit the documented scalar keys in Grok's private config, failing closed. */
+function setGrokConfigValue(contents: string, table: 'cli' | 'privacy', key: string, value: string | null): string {
     // Refuse ambiguous syntax rather than silently leaving updating enabled.
     // Multiline strings can contain text indistinguishable from a table header.
     if (contents.includes('"""') || contents.includes("'''")) {
         throw new Error('worker_private_home_unsupported_grok_config');
     }
     const lines = contents.split(/\r?\n/);
-    let inCli = false;
-    let sawCli = false;
+    const tablePattern = new RegExp(`^\\s*\\[\\s*(?:${table}|"${table}"|'${table}')\\s*\\]\\s*(?:#.*)?$`);
+    const keyPattern = new RegExp(`^\\s*(?:${key}|"${key}"|'${key}')\\s*=`);
+    const unsupportedTablePattern = new RegExp(`^\\s*(?:${table}|"${table}"|'${table}')\\s*(?:\\.|=)`);
+    let inTable = false;
+    let sawTable = false;
     const result: string[] = [];
     for (const line of lines) {
         if (/^\s*\[/.test(line)) {
-            inCli = /^\s*\[\s*(?:cli|"cli"|'cli')\s*\]\s*(?:#.*)?$/.test(line);
-            if (inCli) {
-                if (sawCli) throw new Error('worker_private_home_duplicate_grok_cli_table');
-                sawCli = true;
-                result.push(line, 'auto_update = false');
+            inTable = tablePattern.test(line);
+            if (inTable) {
+                if (sawTable) throw new Error('worker_private_home_duplicate_grok_table');
+                sawTable = true;
+                result.push(line);
+                if (value !== null) result.push(`${key} = ${value}`);
                 continue;
             }
         }
-        if (inCli && /^\s*(?:auto_update|"auto_update"|'auto_update')\s*=/.test(line)) continue;
-        if (/^\s*(?:cli|"cli"|'cli')\s*(?:\.|=)/.test(line)) {
-            throw new Error('worker_private_home_unsupported_grok_cli_table');
+        if (inTable && keyPattern.test(line)) continue;
+        if (unsupportedTablePattern.test(line)) {
+            throw new Error('worker_private_home_unsupported_grok_table');
         }
         result.push(line);
     }
-    if (!sawCli) result.push('', '[cli]', 'auto_update = false');
+    if (!sawTable && value !== null) result.push('', `[${table}]`, `${key} = ${value}`);
     return `${result.join('\n').trimEnd()}\n`;
+}
+
+/** Account consent and the local dismissed-banner marker are separate state. */
+function grokAccountOptedOut(authPath: string): boolean {
+    try {
+        const auth: unknown = JSON.parse(readFileSync(authPath, 'utf8'));
+        if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return false;
+        const accounts = Object.values(auth);
+        // Never suppress the banner on the strength of an unrelated account.
+        return accounts.length > 0 && accounts.every(account => account && typeof account === 'object'
+            && account.coding_data_retention_opt_out === true);
+    } catch {
+        return false;
+    }
+}
+
+function grokPrivacyAcknowledgment(contents: string): string {
+    let inPrivacy = false;
+    for (const line of contents.split(/\r?\n/)) {
+        if (/^\s*\[/.test(line)) inPrivacy = /^\s*\[\s*(?:privacy|"privacy"|'privacy')\s*\]\s*(?:#.*)?$/.test(line);
+        if (!inPrivacy) continue;
+        const existing = /^\s*(?:privacy_banner_acked|"privacy_banner_acked"|'privacy_banner_acked')\s*=\s*["'](\d{4}-\d{2}-\d{2}T[\d:.]+Z)["']\s*(?:#.*)?$/.exec(line);
+        if (existing && Number.isFinite(Date.parse(existing[1]))) return existing[1];
+    }
+    return new Date().toISOString();
 }
 
 /**
@@ -214,15 +253,15 @@ export function materializePrivateHome(
     const realHome = opts.realHome || os.homedir();
     const home = path.resolve(opts.home);
 
-    privateDirectory(home);
-    const canonicalHome = realpathSync(home);
-    const canonicalReal = realpathSync(realHome);
+    const canonicalHome = physicalPath(home);
+    const canonicalReal = physicalPath(path.resolve(realHome));
     const relativeReal = path.relative(canonicalHome, canonicalReal);
     const grokRelative = path.relative(path.join(canonicalReal, '.grok'), canonicalHome);
     if (relativeReal === '' || (!relativeReal.startsWith(`..${path.sep}`) && relativeReal !== '..' && !path.isAbsolute(relativeReal))
         || (spec.providerType === 'grok-cli' && grokRelative !== '..' && !grokRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(grokRelative))) {
         throw new Error('worker_private_home_overlaps_real_home');
     }
+    privateDirectory(home);
     for (const dir of spec.ensureDirs || []) {
         privateDirectory(home, dir);
     }
@@ -351,7 +390,18 @@ export function materializePrivateHome(
         // private config. Never write through a stale config symlink.
         const config = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
         removePrivateEntry(configPath);
-        writeFileSync(configPath, disableGrokAutoUpdate(config), { mode: 0o600 });
+        // README: [cli] auto_update; config reference: the pager reads
+        // [privacy] privacy_banner_acked (RFC3339 UTC) from user config only.
+        // Seed acknowledgment only after confirming account opt-out. This never
+        // changes account consent, writes the real config, or answers the TUI.
+        const optedOut = grokAccountOptedOut(path.join(realHome, '.grok', 'auth.json'));
+        const privateConfig = setGrokConfigValue(config, 'cli', 'auto_update', 'false');
+        writeFileSync(configPath, setGrokConfigValue(privateConfig, 'privacy', 'privacy_banner_acked',
+            optedOut ? JSON.stringify(grokPrivacyAcknowledgment(config)) : null), { mode: 0o600 });
+        if (!optedOut) {
+            failed.push('.grok/config.toml (privacy banner acknowledgment pending: account opt-out unconfirmed)');
+            LOG.warn('WorkerMcp', '[grok-cli] account opt-out unconfirmed; privacy banner requires owner attention');
+        }
     }
 
     // ─── Workspace-derived links ────────────────────────────────────────
