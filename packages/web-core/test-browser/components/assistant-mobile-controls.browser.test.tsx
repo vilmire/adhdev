@@ -81,7 +81,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             await page.viewport(width, 844)
             await render(width < 768)
             const buttons = [...host.querySelectorAll('button')]
-            const execution = buttons.filter(b => b.textContent === 'Execution ON')
+            const execution = buttons.filter(b => b.textContent === 'Assistant actions: on')
             const fold = buttons.find(b => b.textContent?.includes('Tool steps'))!
             const pending = host.querySelector('[data-assistant-staged-count] button')!
             expect(execution).toHaveLength(1)
@@ -157,12 +157,29 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             await act(async () => { await page.screenshot({ path: `/tmp/assistant-mobile-controls-expanded-${width}.png` }) })
             await act(async () => fold.click())
             expect(host.textContent).not.toContain('Synthetic tool step')
-            expect(execution[0].textContent).toBe('Execution ON')
+            expect(execution[0].textContent).toBe('Assistant actions: on')
             expect(pending.textContent).toContain('1 pending')
 
             await act(async () => execution[0].click())
             const executionPanel = host.querySelector('.assistant-execution-panel')!
-            for (const el of executionPanel.querySelectorAll('button, select')) assertTarget(el)
+            expect(executionPanel.getAttribute('aria-label')).toBe('Assistant permissions')
+            // This fixture has no live provider permission. Opening the controls
+            // must not invent a selectable response or authorize an empty choice.
+            expect(executionPanel.textContent).toContain('No live permission requests are available to choose here.')
+            expect(executionPanel.querySelectorAll('input[type="radio"]')).toHaveLength(0)
+            expect(executionPanel.querySelector('select')).toBeNull()
+            const sendResponse = [...executionPanel.querySelectorAll('button')].find(b => b.textContent === 'Send response to assistant')!
+            expect(sendResponse).toBeDefined()
+            expect(sendResponse.disabled).toBe(true)
+            expect(executionPanel.textContent).not.toMatch(/PTY|enforced|prompt_only|ratification/)
+            // The current panel scrolls on small screens. Every control must be
+            // reachable inside it and retain the same size and hit-test checks.
+            for (const el of executionPanel.querySelectorAll('button, label:has(input[type="radio"])')) {
+                await act(async () => el.scrollIntoView({ block: 'nearest' }))
+                assertTarget(el)
+                expect(rect(el).y).toBeGreaterThanOrEqual(rect(executionPanel).y)
+                expect(rect(el).bottom).toBeLessThanOrEqual(rect(executionPanel).bottom)
+            }
             if (mobile) expect(rect(executionPanel).bottom).toBeLessThanOrEqual(rect(host.querySelector('.chat-scroll-frame')!).y)
             await act(async () => { await page.screenshot({ path: `/tmp/assistant-mobile-controls-policy-${width}.png` }) })
             await act(async () => execution[0].click())
@@ -203,10 +220,16 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             await render(mobile)
             const dialog = document.querySelector('[role="dialog"]')!
             expect(dialog.textContent).toContain('Choose a public example format')
-            const option = dialog.querySelector('[role="radio"]')!
+            const options = [...dialog.querySelectorAll<HTMLButtonElement>('button[role="radio"]')]
+            expect(options).toHaveLength(2)
+            expect(options[0].textContent).toContain('Short')
+            expect(options[1].textContent).toContain('Detailed')
+            expect(options.every(option => option.getAttribute('aria-checked') === 'false')).toBe(true)
+            const option = options[0]
             assertTarget(option, false)
             await act(async () => (option as HTMLButtonElement).click())
             expect(option.getAttribute('aria-checked')).toBe('true')
+            expect(options[1].getAttribute('aria-checked')).toBe('false')
             await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
             const submit = [...dialog.querySelectorAll('button')].find(b => b.textContent === 'Submit')!
             expect(submit.disabled).toBe(false)
@@ -219,7 +242,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             conversation.modalMessage = undefined
             if (mobile) {
                 await render(true, true)
-                expect([...host.querySelectorAll('button')].filter(b => b.textContent === 'Execution ON')).toHaveLength(1)
+                expect([...host.querySelectorAll('button')].filter(b => b.textContent === 'Assistant actions: on')).toHaveLength(1)
                 expect(host.querySelector('[data-assistant-staged-count]')).not.toBeNull()
                 await act(async () => { await page.screenshot({ path: `/tmp/assistant-mobile-controls-terminal-${width}.png` }) })
             }
