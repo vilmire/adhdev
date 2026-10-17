@@ -156,7 +156,7 @@ export function dockLayoutContainsUnresolvedStoredPanel(
  * Sync dock panels for the current conversation list. On the first authoritative
  * session list for a daemon, stored :cli: panels that are not live are removed
  * immediately and the pruned layout is persisted in this same call.
- * Returns whether a stored ghost was removed.
+ * Reconnect deferral retains unrelated panels. Returns whether a ghost was removed.
  */
 export function applyAuthoritativeStoredDockPrune(
   api: DockviewApi,
@@ -166,6 +166,7 @@ export function applyAuthoritativeStoredDockPrune(
   assistantPins?: AssistantTabPinState | null,
   now = Date.now(),
   persist?: (layout: unknown) => void,
+  deferNonAuthoritativePrune = false,
 ): boolean {
   const visibleTabKeys = visibleConversations.map(conversation => conversation.tabKey)
   const drop = storedCliPanelsToDrop(api.panels.map(panel => panel.id), visibleTabKeys, ides)
@@ -176,6 +177,12 @@ export function applyAuthoritativeStoredDockPrune(
   if (retain) {
     for (const id of drop) retain.delete(id)
     if (retain.size === 0) retain = null
+  }
+  // A transient empty conversation view can defer ordinary pruning, but an
+  // explicit authoritative list still removes this daemon's absent panels.
+  // Retain other daemons' panels even when they are no longer in the grace ref.
+  if (deferNonAuthoritativePrune) {
+    retain = new Set(api.panels.map(panel => panel.id).filter(id => !drop.has(id)))
   }
   const before = new Set(api.panels.map(panel => panel.id))
   syncDockviewPanels(api, visibleConversations, retain, assistantPins)

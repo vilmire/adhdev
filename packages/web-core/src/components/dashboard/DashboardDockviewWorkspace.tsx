@@ -43,6 +43,7 @@ import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActi
 import { getConversationTitle } from './conversation-presenters';
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
 import { applyAuthoritativeStoredDockPrune, dockLayoutContainsUnresolvedStoredPanel, pendingStoredPanelsAfterRestore, releaseStoredDockGrace, shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune, STORED_PANEL_ARRIVAL_GRACE_MS, type PendingStoredPanels } from './dashboardDockviewHydration'
+import { buildPersistableDashboardDockviewLayout } from './dashboardDockviewPersistence'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import { attachDockviewIdleDragFloat, isDockviewIdleDragFloatEnabled } from './dockviewIdleDragFloat'
@@ -745,17 +746,16 @@ export default function DashboardDockviewWorkspace({
         return activated
     }, [activateRequestedTab])
 
-    const persistDockviewLayout = useCallback((force = false) => {
+    const persistDockviewLayout = useCallback((filterUnresolved = false) => {
         const api = apiRef.current
         if (!api) return
         const visibleKeys = latestVisibleConversationsRef.current.map(conversation => conversation.tabKey)
-        // Placeholders have no live conversation and are not written. A prune
-        // passes force so the layout without those panels is saved immediately.
-        if (!force && dockLayoutContainsUnresolvedStoredPanel(api.panels.map(panel => panel.id), visibleKeys, isRemotePanelId)) return
-        writeDashboardDockviewStoredLayout(layoutProfile, {
-            activeTabId: api.activePanel?.id ?? null,
-            layout: api.toJSON(),
-        })
+        // Normal layout events wait for hydration. A prune saves a filtered
+        // copy immediately, leaving other daemons' arrival grace intact.
+        if (!filterUnresolved && dockLayoutContainsUnresolvedStoredPanel(api.panels.map(panel => panel.id), visibleKeys, isRemotePanelId)) return
+        writeDashboardDockviewStoredLayout(layoutProfile, filterUnresolved
+            ? buildPersistableDashboardDockviewLayout(api.toJSON(), api.activePanel?.id ?? null, visibleKeys)
+            : { activeTabId: api.activePanel?.id ?? null, layout: api.toJSON() })
     }, [layoutProfile])
 
     const persistHiddenRestoreState = useCallback(() => {
@@ -1025,8 +1025,8 @@ export default function DashboardDockviewWorkspace({
             persistHiddenRestoreState()
         }
 
+        applyAuthoritativeStoredDockPrune(api, visibleConversations, pendingStoredPanelsRef, ides, assistantPinsRef.current, undefined, () => persistDockviewLayout(true), shouldSkipPanelPrune)
         if (!shouldSkipPanelPrune) {
-            applyAuthoritativeStoredDockPrune(api, visibleConversations, pendingStoredPanelsRef, ides, assistantPinsRef.current, undefined, () => persistDockviewLayout(true))
             syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
         }
 
