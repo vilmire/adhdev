@@ -1,3 +1,4 @@
+import { remoteProjectHandlers, remoteProjectSpecs, attachRemoteProject } from './remote-project-attach.js';
 import { readTaskReportPage } from '../../assistant/task-report-continuation.js';
 import { recoverAttemptReport } from '../../assistant/attempt-report-recovery.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
@@ -494,6 +495,13 @@ const discover = assistantVerb(ASSISTANT_VERB.discoverRepos, async (ports, args)
 });
 
 export const assistantProjectHandlers: Record<string, HighFamilyHandler> = {
+    ...remoteProjectHandlers,
+    [ASSISTANT_VERB.projectAttachRemote]: assistantVerb(ASSISTANT_VERB.projectAttachRemote, async (ports, args, ctx) => {
+        const p = await resolveProject(ports, args.project);
+        if (!p.ok) return p.result;
+        if (p.remote) return fail('project_host_required', 'Run attachment on this project host.');
+        return attachRemoteProject(ctx, { meshId: p.mesh.id, targetDaemonId: args.targetDaemonId });
+    }),
     [ASSISTANT_VERB.projects]: projects,
     [ASSISTANT_VERB.environment]: environment,
     [ASSISTANT_VERB.projectStatus]: projectStatus,
@@ -504,6 +512,8 @@ export const assistantProjectHandlers: Record<string, HighFamilyHandler> = {
 };
 
 export const assistantProjectSpecs = defineCommandSpecs('high', assistantProjectHandlers, {
+    ...remoteProjectSpecs,
+    [ASSISTANT_VERB.projectAttachRemote]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.environment]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.projects]: { sources: [...ASSISTANT_PROJECTS_SOURCES] },
     [ASSISTANT_VERB.projectStatus]: { sources: [...ASSISTANT_TOOL_SOURCES] },

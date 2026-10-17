@@ -235,6 +235,11 @@ export interface CommandRouterDeps {
     statusVersion?: string;
     /** Session host control plane */
     sessionHostControl?: SessionHostControlPlane | null;
+    /**
+     * Cloud-only authenticated remote project attachment bridge
+     * (DaemonBootConfig.mesh.attachRemoteProject). Credentials stay in the host.
+     */
+    attachRemoteProject?: (meshId: string, targetDaemonId: string) => Promise<CommandRouterResult>;
     /** Selected-coordinator mesh peer telemetry surface for target daemons, when supported by the runtime. */
     getMeshPeerConnectionStatus?: (daemonId: string) => Record<string, unknown> | null;
     /** Standalone: the HTTP server's listen address, for host pairing address candidates. */

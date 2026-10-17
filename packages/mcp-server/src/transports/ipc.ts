@@ -118,6 +118,11 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   // cleanup_mesh_sessions: Mutating command for cleaning up stale sessions,
   // needs sufficient time to terminate processes and clear state.
   cleanup_mesh_sessions: 60_000,
+  // Authenticated remote project attach: the daemon-cloud bridge waits up to 300s
+  // (REMOTE_ATTACH_FETCH_TIMEOUT_MS) for four sequential server relay steps. Mutating
+  // and deliberately NOT in the probe-retry allowlist below.
+  attach_remote_project: 320_000,
+  assistant_project_attach_remote: 320_000,
 };
 
 // IPC-PROBE-TIMEOUT-RETRY (2026-08-18 RCA, verdict D — whole-process freeze):

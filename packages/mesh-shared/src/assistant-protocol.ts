@@ -25,6 +25,7 @@ export const ASSISTANT_TOOLS = [
     'project_send',
     'project_read',
     'project_add',
+    'project_attach_remote',
     'discover_repos',
     'memory',
     'skill_view',
@@ -53,6 +54,7 @@ export const ASSISTANT_VERB = {
     projectSend: 'assistant_project_send',
     projectRead: 'assistant_project_read',
     projectAdd: 'assistant_project_add',
+    projectAttachRemote: 'assistant_project_attach_remote',
     discoverRepos: 'assistant_discover_repos',
     memory: 'assistant_memory',
     skillView: 'assistant_skill_view',
@@ -79,6 +81,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     project_send: ASSISTANT_VERB.projectSend,
     project_read: ASSISTANT_VERB.projectRead,
     project_add: ASSISTANT_VERB.projectAdd,
+    project_attach_remote: ASSISTANT_VERB.projectAttachRemote,
     discover_repos: ASSISTANT_VERB.discoverRepos,
     memory: ASSISTANT_VERB.memory,
     skill_view: ASSISTANT_VERB.skillView,
@@ -92,7 +95,7 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
  * because they cause effects (a coordinator message or launch, a new
  * project), and MCP clients use readOnlyHint to skip confirmation.
  */
-export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add']
+export const ASSISTANT_WRITE_TOOLS: readonly AssistantTool[] = ['project_watch', 'assistant_action', 'memory', 'skill_manage', 'project_note', 'project_send', 'project_add', 'project_attach_remote']
 
 /** Owner-only verbs: never reachable from the assistant's MCP server (no `ipc`). */
 export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [

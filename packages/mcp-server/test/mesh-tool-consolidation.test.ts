@@ -38,10 +38,11 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // MAGI tools left with MAGI (2026-09-30).
 // 41 after mesh_refine_plan was removed (2026-10-08); 40 after
 // mesh_coordinator_prompt_append was removed (2026-10-08, assistant-layer §11 Q2);
-// 39 once the deprecated mesh_ledger_query alias is dropped next release.
-test('the published surface is 40 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 40);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 40);
+// 41 with mesh_attach_remote (authenticated remote project attach, 2026-10-17);
+// 40 once the deprecated mesh_ledger_query alias is dropped next release.
+test('the published surface is 41 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 41);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 41);
     for (const name of Object.keys(RETIRED_MESH_TOOLS)) {
         assert.equal(published.has(name), false, `${name} is retired but still published`);
         assert.equal(resolveMeshToolHandler(name), undefined, `${name} is retired but still silently dispatchable`);

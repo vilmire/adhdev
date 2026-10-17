@@ -20,6 +20,7 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_project_send: ['ipc', 'standalone'],
     assistant_project_read: ['ipc', 'standalone'],
     assistant_project_add: ['ipc', 'standalone'],
+    assistant_project_attach_remote: ['ipc', 'standalone'],
     assistant_discover_repos: ['ipc', 'standalone'],
     assistant_memory: ['ipc', 'standalone'],
     assistant_skill_view: ['ipc', 'standalone'],

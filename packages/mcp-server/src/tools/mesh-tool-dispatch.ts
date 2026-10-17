@@ -85,6 +85,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_answer_question: (ctx, a) => meshAnswerQuestion(ctx, a as any),
     mesh_list_pending_approvals: (ctx, a) => meshListPendingApprovals(ctx, a as any),
     mesh_create: (ctx, a) => meshCreateOrPlan(ctx.transport, a, ctx.mesh.id),
+    mesh_attach_remote: async (ctx, a) => JSON.stringify(await ctx.transport.command('attach_remote_project', { meshId: ctx.mesh.id, targetDaemonId: a.targetDaemonId })),
     mesh_add_node: (ctx, a) => meshAddNode(ctx.transport, { ...a, inline_mesh: ctx.mesh } as any, ctx.mesh.id),
     mesh_clone_node: (ctx, a) => meshCloneNode(ctx, a as any),
     mesh_remove_node: (ctx, a) => meshRemoveNode(ctx, a as any),

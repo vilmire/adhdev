@@ -7,7 +7,7 @@
 import type { DaemonCdpManager } from '../cdp/manager.js';
 import type { DaemonCdpInitializer } from '../cdp/initializer.js';
 import type { DaemonCommandHandler } from '../commands/handler.js';
-import type { DaemonCommandRouter, SessionHostControlPlane } from '../commands/router.js';
+import type { CommandRouterResult, DaemonCommandRouter, SessionHostControlPlane } from '../commands/router.js';
 import type {
     DaemonCliManager,
     CliTransportFactoryParams,
@@ -68,6 +68,13 @@ export interface DaemonBootConfig {
          * (`get_mesh_host_pairing`). Null until the server is listening.
          */
         getMeshListenAddress?: () => MeshListenAddress | null;
+        /**
+         * Cloud-only: the authenticated remote project attachment bridge
+         * (`attach_remote_project` / `assistant_project_attach_remote`). The host
+         * owns the machine credential; core only sees the public result. Absent
+         * on standalone, where the commands answer CAPABILITY_NOT_AVAILABLE.
+         */
+        attachRemoteProject?: (meshId: string, targetDaemonId: string) => Promise<CommandRouterResult>;
         /**
          * Cloud-only: refresh the host's dashboard mirror of a mesh worker session
          * (`meshOwnedSessions`) from a forwarded worker event and flush daemon.metadata.

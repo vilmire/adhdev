@@ -367,3 +367,15 @@ export const MESH_RECONCILE_LEDGER_TOOL = {
         },
     },
 };
+
+export const MESH_ATTACH_REMOTE_TOOL = {
+    name: 'mesh_attach_remote',
+    description: 'Attach this verified GitHub-backed project to the exact owner-selected canonical daemon using authenticated setup and target-local Git credentials (never pass credentials). Local-only projects are refused. Preserves existing and dirty checkouts. Returns checkout, attachment and resource readiness stages; ATTACH_PENDING / ATTACH_IN_PROGRESS mean retry later — every step is idempotent.',
+    inputSchema: {
+        type: 'object' as const,
+        properties: {
+            targetDaemonId: { type: 'string', description: 'Exact canonical daemon_mach_* selected by the owner.' },
+        },
+        required: ['targetDaemonId'],
+    },
+};

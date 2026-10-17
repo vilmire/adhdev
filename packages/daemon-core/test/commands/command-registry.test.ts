@@ -301,6 +301,10 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // Assistant project verbs (high-family/assistant.ts, same design §4.2–§4.4).
     'assistant_projects', 'assistant_project_status', 'assistant_project_send',
     'assistant_project_read', 'assistant_project_add', 'assistant_discover_repos',
+    // Authenticated remote project attach (high-family/remote-project-attach.ts): the
+    // owner entry (assistant verb + mesh tool command) and the four server-api steps.
+    'assistant_project_attach_remote', 'attach_remote_project',
+    'remote_project_prepare', 'remote_project_checkout', 'remote_project_register', 'remote_project_accept',
     // Assistant session verbs (high-family/assistant-launch.ts, same design §4.4–§4.5).
     'launch_assistant', 'assistant_pending_relays',
     // Host side of a remote-hosted assistant project (high-family/assistant-remote.ts,

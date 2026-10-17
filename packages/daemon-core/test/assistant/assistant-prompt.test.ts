@@ -95,7 +95,8 @@ describe('buildAssistantSystemPrompt', () => {
 
     it('keeps the fixed rules around 5–6 KB', () => {
         expect(ASSISTANT_FIXED_RULES.length).toBeGreaterThan(4_000);
-        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(6_500);
+        // 6,600: +project_attach_remote's routing clause (the cap was within ~10 chars).
+        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(6_600);
     });
 
     it('stays well under the limit with full memory/skill budgets and 20 projects', () => {

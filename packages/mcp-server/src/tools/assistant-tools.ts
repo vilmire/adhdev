@@ -87,6 +87,23 @@ const PROJECT_STATUS_TOOL: AssistantToolSchema = {
   inputSchema: { type: 'object', properties: { ...PROJECT_PROP }, required: ['project'] },
 };
 
+const PROJECT_ATTACH_REMOTE_TOOL: AssistantToolSchema = {
+  name: 'project_attach_remote',
+  description:
+    'Attach an existing verified GitHub-backed project to the exact owner-selected daemon. Uses authenticated setup and the '
+    + 'target\'s own Git credential helper; never accepts credentials. Local-only projects are refused. Preserves existing '
+    + 'checkouts. Returns separate checkout, attachment and resource readiness stages; ATTACH_PENDING / ATTACH_IN_PROGRESS '
+    + 'mean retry later — every step is idempotent.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      ...PROJECT_PROP,
+      targetDaemonId: { type: 'string', description: 'Exact canonical daemon_mach_* selected by the owner.' },
+    },
+    required: ['project', 'targetDaemonId'],
+  },
+};
+
 const PROJECT_SEND_TOOL: AssistantToolSchema = {
   name: 'project_send',
   description:
@@ -258,6 +275,7 @@ export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
   PROJECT_SEND_TOOL,
   PROJECT_READ_TOOL,
   PROJECT_ADD_TOOL,
+  PROJECT_ATTACH_REMOTE_TOOL,
   DISCOVER_REPOS_TOOL,
   MEMORY_TOOL,
   SKILL_VIEW_TOOL,

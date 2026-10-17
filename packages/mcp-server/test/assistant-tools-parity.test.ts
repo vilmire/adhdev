@@ -43,6 +43,7 @@ const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
   project_send: { project: 'adhdev', message: 'run the tests' },
   project_read: { project: 'adhdev' },
   project_add: { path: '/tmp/repo' },
+  project_attach_remote: { project: 'adhdev', targetDaemonId: 'daemon_mach_target1' },
   discover_repos: {},
   memory: { action: 'add', target: 'user', text: 'reports in one line' },
   skill_view: { name: 'list' },

@@ -20,7 +20,7 @@ describe('ASSISTANT_TOOLS', () => {
     it('includes the additive assistant surface in contract order without duplicates', () => {
         expect([...ASSISTANT_TOOLS]).toEqual([
             'projects', 'environment', 'assistant_action', 'project_watch', 'project_status', 'project_send', 'project_read', 'project_add',
-            'discover_repos', 'memory', 'skill_view', 'skill_manage', 'project_note',
+            'project_attach_remote', 'discover_repos', 'memory', 'skill_view', 'skill_manage', 'project_note',
         ])
         expect(new Set(ASSISTANT_TOOLS).size).toBe(ASSISTANT_TOOLS.length)
     })
@@ -41,16 +41,16 @@ describe('ASSISTANT_TOOLS', () => {
     })
 
     it('write tools are memory, skill_manage and project_note', () => {
-        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'memory', 'project_add', 'project_note', 'project_send', 'project_watch', 'skill_manage'])
+        expect([...ASSISTANT_WRITE_TOOLS].sort()).toEqual(['assistant_action', 'memory', 'project_add', 'project_attach_remote', 'project_note', 'project_send', 'project_watch', 'skill_manage'])
     })
 })
 
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are twenty distinct names: thirteen tool verbs + launch/pull/state + four owner verbs', () => {
-        expect(all.length).toBe(20)
-        expect(new Set(all).size).toBe(20)
+    it('are twenty-one distinct names: fourteen tool verbs + launch/pull/state + four owner verbs', () => {
+        expect(all.length).toBe(21)
+        expect(new Set(all).size).toBe(21)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
             'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',
