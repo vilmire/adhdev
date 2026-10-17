@@ -321,6 +321,9 @@ describe('remote_project_checkout (target)', () => {
         expect(first).toMatchObject({ success: true, reused: false, stage: 'checkout', attached: false, targetDaemonId: TARGET });
         expect(first.workspace).toBe(await managedCheckoutPath('mesh_batrp', REPO));
         expect(first.workspace.startsWith(join(realpathSync(state.configDir), 'remote-projects'))).toBe(true);
+        // Without a TTY git prints no progress unless asked, and the idle watchdog is reset
+        // only by output — so a clone running past the idle window would always be killed.
+        expect(state.gitCalls.find(c => c.args[0] === 'clone')?.args).toContain('--progress');
         state.gitCalls = [];
         const again: any = await checkout({});
         expect(again).toMatchObject({ success: true, reused: true, workspace: first.workspace });

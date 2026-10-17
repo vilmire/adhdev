@@ -230,7 +230,9 @@ export async function checkoutRemote(meshId: string, remote: { identity: string;
                 reused = true;
             } else {
                 try {
-                    await git(getConfigDir(), ['clone', '--origin', 'origin', '--', remote.url, staging]);
+                    // --progress: without a TTY git is silent until the clone ends, so the output-reset idle
+                    // watchdog would kill every clone that runs longer than its idle window.
+                    await git(getConfigDir(), ['clone', '--progress', '--origin', 'origin', '--', remote.url, staging]);
                 } catch (e) {
                     // Only remove staging when this attempt claimed it.
                     if (!(e instanceof AttachFailure && e.preserveCheckout)) await rm(staging, { recursive: true, force: true }).catch(() => {});
@@ -253,8 +255,15 @@ export async function checkoutRemote(meshId: string, remote: { identity: string;
         if (e instanceof AttachFailure && e.preserveCheckout) cleanupSafe = false;
         throw e;
     } finally {
-        inFlight.delete(workspace);
-        if (owner && cleanupSafe) await releaseLock(lockPath, owner);
+        // Release BEFORE dropping the in-flight entry. Dropping it first let a same-process
+        // attempt slip in and take the mutation guard, so this release failed as busy and
+        // stranded the lock on our own live pid (every later attach: ATTACH_IN_PROGRESS).
+        // A release refusal (lock replaced by another owner) still propagates on purpose.
+        try {
+            if (owner && cleanupSafe) await releaseLock(lockPath, owner);
+        } finally {
+            inFlight.delete(workspace);
+        }
     }
 }
 export async function pythonResourcePreflight(): Promise<{ ready: boolean; code: string; action?: string }> {
