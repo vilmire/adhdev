@@ -1,0 +1,106 @@
+/**
+ * Worker permission policy — auto-approve OFF: a coordinator-delegated worker's
+ * permission request reaches the coordinator first; the owner's server push is
+ * an escalation sent once, only if the SAME episode is still unresolved after
+ * the coordinator-first window. Resolved/replaced episodes are retired.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
+import { createStatusEventEmitter } from '../../src/status/status-event.js';
+import { currentApprovalEpisodeKey, isCoordinatorFirstSession, OWNER_APPROVAL_ESCALATION_MS } from '../../src/status/approval-escalation.js';
+
+const workerSettings = { launchedByCoordinator: true, meshNodeFor: 'mesh-1', spawnedSessionVisibility: 'visible' };
+const approval = (modalKey: string, extra: Record<string, unknown> = {}) => ({ type: 'tool_permission', lifecycle: 'pending', evidence: 'live', actionable: true, modalKey, resolvedAt: null, ...extra });
+
+let state: any;
+function world(opts: { settings?: Record<string, unknown> } = {}) {
+    state = { status: 'waiting_approval', settings: opts.settings ?? workerSettings,
+        activeChat: { status: 'waiting_approval', activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] }, providerApproval: approval('modal:1') } };
+    const bus = createSessionLifecycleBus();
+    const dashboard: any[] = [];
+    const server: any[] = [];
+    const stop = createStatusEventEmitter(bus, {
+        instanceManager: { getInstance: (id: string) => id === 'w1' ? { getState: () => state } : undefined },
+        sendDashboard: (p) => dashboard.push(p), sendServer: (p) => server.push(p),
+    });
+    const ask = () => bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'codex-cli', modalMessage: 'Run npm test?', modalButtons: ['Yes', 'No'], timestamp: 1 } } as any);
+    return { bus, dashboard, server, stop, ask };
+}
+
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { vi.useRealTimers(); });
+
+describe('coordinator-first owner escalation', () => {
+    it('holds the owner push but keeps the dashboard leg real time', () => {
+        const w = world(); w.ask();
+        expect(w.dashboard).toHaveLength(1);
+        expect(w.server).toHaveLength(0);
+        w.stop();
+    });
+
+    it('escalates exactly once when the same episode is still unresolved after the window', () => {
+        const w = world(); w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS - 1);
+        expect(w.server).toHaveLength(0);
+        w.ask(); // repaint/stall nudge of the same episode must not restart or duplicate
+        vi.advanceTimersByTime(1);
+        expect(w.server).toHaveLength(1);
+        expect(w.server[0]).toMatchObject({ event: 'agent:waiting_approval', targetSessionId: 'w1', modalMessage: 'Run npm test?' });
+        w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('retires the held push when the coordinator resolved the episode', () => {
+        const w = world(); w.ask();
+        state = { ...state, status: 'generating', activeChat: { ...state.activeChat, status: 'generating', providerApproval: approval('modal:1', { lifecycle: 'resolved', resolvedAt: 5 }) } };
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(0);
+        w.stop();
+    });
+
+    it('retires a replaced episode and gives the new one its own window', () => {
+        const w = world(); w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:2') } };
+        w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        expect(w.server).toHaveLength(0);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('drops the held push when the session terminates', () => {
+        const w = world(); w.ask();
+        w.bus.emit({ kind: 'terminated', sessionId: 'w1' } as any);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(0);
+        w.stop();
+    });
+
+    it('keeps the hide/mute stamp on the escalated push (muted workers stay silent at the server gate)', () => {
+        const w = world({ settings: { launchedByCoordinator: true, meshNodeFor: 'mesh-1', spawnedSessionVisibility: 'hidden' } });
+        w.ask(); vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+        expect(w.server[0]).toMatchObject({ surfaceHidden: true, muted: true });
+        w.stop();
+    });
+
+    it('sends a non-delegated session immediately, as before', () => {
+        const w = world({ settings: {} }); w.ask();
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+});
+
+describe('episode identity helpers', () => {
+    it('identifies only live, pending, unresolved episodes', () => {
+        expect(currentApprovalEpisodeKey({ status: 'waiting_approval', activeChat: { providerApproval: approval('modal:x') } })).toBe('modal:modal:x');
+        expect(currentApprovalEpisodeKey({ status: 'waiting_approval', activeChat: { providerApproval: approval('modal:x', { evidence: 'cached' }) } })).toBeNull();
+        expect(currentApprovalEpisodeKey({ status: 'generating', activeChat: { providerApproval: approval('modal:x') } })).toBeNull();
+        expect(isCoordinatorFirstSession({ launchedByCoordinator: true, meshNodeFor: 'm' })).toBe(true);
+        expect(isCoordinatorFirstSession({ meshNodeFor: 'm' })).toBe(false);
+    });
+});

@@ -28,6 +28,7 @@ import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus
 import { resolveMuted, resolveSurfaceHidden } from './builders.js';
 import { TURN_WIRE_EVENT_NAMES, projectTurnWireEvent, type TurnWireEvent } from '../mesh/turn-ledger/bus-projection.js';
 import type { TurnBusEvent } from '../mesh/turn-ledger/types.js';
+import { createApprovalEscalationGate } from './approval-escalation.js';
 
 /** The two wire names `turn-ledger/bus-projection.ts` now solely produces from a
  *  committed turn (wiring-unification C1/C5). A `provider_event` still carrying
@@ -454,6 +455,12 @@ export interface StatusEventEmitterDeps {
      * `false` only for a test that wants the pre-C-W5 behaviour.
      */
     turnCommits?: boolean;
+    /**
+     * Coordinator-first window (ms) for a delegated worker's
+     * `agent:waiting_approval` on the SERVER leg (see status/approval-escalation.ts).
+     * `false` disables the hold (every event sent immediately, pre-policy behaviour).
+     */
+    approvalEscalationMs?: number | false;
 }
 
 /**
@@ -465,6 +472,26 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     const resolveHideMute = createInstanceHideMuteResolver(deps.instanceManager, deps.sessionRegistry);
     const resolveSessionMeta = createInstanceSessionMetaResolver(deps.instanceManager, deps.sessionRegistry);
     const durations = createTurnDurationTracker();
+    const sendServer = (serverEvent: DaemonStatusEventPayload) => {
+        if (!deps.sendServer) return;
+        try {
+            deps.sendServer(serverEvent);
+        } catch (error) {
+            LOG.warn('StatusEvent', `server delivery failed: ${(error as Error)?.message ?? error}`);
+        }
+    };
+    const escalation = deps.sendServer && deps.approvalEscalationMs !== false ? createApprovalEscalationGate({
+        delayMs: typeof deps.approvalEscalationMs === 'number' ? deps.approvalEscalationMs : undefined,
+        readState: (sessionId) => {
+            const getInstance = deps.instanceManager?.getInstance;
+            return typeof getInstance === 'function' ? getInstance.call(deps.instanceManager, sessionId)?.getState?.() as any : undefined;
+        },
+        // Re-project at send time so current hide/mute is honoured.
+        escalate: (_sessionId, raw) => {
+            const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
+            if (serverEvent) sendServer({ ...serverEvent, timestamp: Date.now() });
+        },
+    }) : null;
     const unsubProviderEvent = bus.on('provider_event', (e) => {
         const raw = e.event as unknown as Record<string, unknown>;
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
@@ -475,13 +502,10 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
         } catch (error) {
             LOG.warn('StatusEvent', `dashboard delivery failed: ${(error as Error)?.message ?? error}`);
         }
-        if (deps.sendServer) {
-            try {
-                deps.sendServer(serverEvent);
-            } catch (error) {
-                LOG.warn('StatusEvent', `server delivery failed: ${(error as Error)?.message ?? error}`);
-            }
-        }
+        // Coordinator first: a delegated worker's approval reaches the owner's
+        // push only as an escalation (held, then sent once if still unresolved).
+        if (escalation?.hold(raw)) return;
+        sendServer(serverEvent);
     }, { name: 'host.status-event' });
     // Turn-ledger commits (wiring-unification C1/C5): the SOLE source of
     // `agent:generating_completed` / `agent:stopped` on this wire (ON by
@@ -508,9 +532,14 @@ export function createStatusEventEmitter(bus: Pick<SessionLifecycleBus, 'on'>, d
     const unsubTerminated = deps.turnCommits === false ? () => {} : bus.on('terminated', (e) => {
         durations.forgetSession(e.sessionId);
     }, { name: 'host.status-event.turn-duration-evict' });
+    const unsubEscalationRetire = escalation ? bus.on('terminated', (e) => {
+        escalation.retire(e.sessionId);
+    }, { name: 'host.status-event.approval-escalation-retire' }) : () => {};
     return () => {
         unsubProviderEvent();
         unsubTurn();
         unsubTerminated();
+        unsubEscalationRetire();
+        escalation?.dispose();
     };
 }
