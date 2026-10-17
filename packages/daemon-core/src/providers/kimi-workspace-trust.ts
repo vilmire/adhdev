@@ -28,11 +28,9 @@
  *   hash       = sha256(normalized).hex.slice(0, 12)
  *   key        = `wd_${slug}_${hash}`
  *
- * e.g. `/Users/example/Work/adhdev` -> `wd_adhdev_78117b8afba9` (confirmed
- * against the file already on disk from a manually-trusted session).
+ * Illustrative example: `/home/example/project` -> `wd_project_867467bcb778`.
  *
- * OSS code (AGPL-3.0). Must not import from packages/ (proprietary).
- */
+ * OSS code (AGPL-3.0). Must not import from packages/ (proprietary). */
 'use strict';
 
 import * as fs from 'node:fs';

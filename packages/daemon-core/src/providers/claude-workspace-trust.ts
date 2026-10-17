@@ -10,13 +10,11 @@
  * a fresh worktree clone for claude-cli means adding that one path to the
  * SAME file the interactively-run CLI reads.
  *
- * ★Storage format — read live from this machine's own `~/.claude.json`
- * (`kjs0116@dstrict.com`'s Claude Code account, read-only, no values printed):
- * top-level key `projects`, a JSON OBJECT keyed by the ABSOLUTE real project
- * path (verified: `/Users/example` and `/Users/example/Work/adhdev` are both
- * present as keys), each value an object carrying (among many session-stat
- * fields) a boolean `hasTrustDialogAccepted`. The live adhdev entry reads
- * `hasTrustDialogAccepted: true`. This is NOT an array-of-strings store (the
+ * ★Storage format — `~/.claude.json` is a JSON object with a top-level
+ * `projects` object keyed by absolute workspace paths. For example,
+ * `/home/example/project` can map to `{ hasTrustDialogAccepted: true }`.
+ * Each project entry can also carry session-stat fields, which must be
+ * preserved. This is NOT an array-of-strings store (the
  * generic `PreLaunchTrustSettingsArray` scheme does not fit) and NOT a
  * one-file-per-workspace or shared-TOML store (kimi/grok/codex schemes do not
  * fit either) — it is its own named scheme, `claude_json_projects`.
