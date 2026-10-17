@@ -388,7 +388,11 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
         // the stall nudge; the prompt is not answered here.
         host.pendingAutoApprovalSignature = '';
         host.pendingAutoApprovalSince = 0;
-        return autoApproveActive;
+        // Only a mesh worker has someone the stall nudge pages; for the owner's
+        // own sessions keeping the mask would hide the prompt behind
+        // "generating" with no event or push. Unmask so it surfaces as a normal
+        // waiting_approval right away.
+        return host.isMeshWorkerSession() ? autoApproveActive : false;
     }
     const { index: buttonIndex, label: buttonLabel } = choice;
     // Structural decline anchor (#137): a tall diff can scroll "3. No" off-frame;

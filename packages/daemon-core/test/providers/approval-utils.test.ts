@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   pickApprovalButton,
-  pickAutoApprovalButton,
+  pickAutoApprovalButton, isPersistentApprovalGrantLabel,
   hasNegativeApprovalOption,
   hasReliableApprovalAffirmative,
   isNegativeApprovalLabel,
@@ -78,20 +78,36 @@ describe('approval-utils', () => {
     })).toEqual({ index: 0, label: '1 Yes' })
   })
 
-  it('auto-approval picks the first visible button, not the strongest positive label', () => {
+  it('auto-approval leaves a modal alone when the one-time label is contained in a persistent grant (IDE scripts match by substring)', () => {
     expect(pickAutoApprovalButton([
       'Yes',
       'Yes, allow all edits in tmp/ during this session (shift+tab)',
       'No',
-    ])).toEqual({ index: 0, label: 'Yes' })
+    ])).toEqual({ index: -1, label: '' })
   })
 
-  it('auto-approval keeps button index stable even when labels are malformed', () => {
+  it('auto-approval refuses a malformed label it cannot tell apart from a persistent grant', () => {
     expect(pickAutoApprovalButton([
       '❯',
       'Yes, allow reading from etc/ from this project',
       'No',
-    ])).toEqual({ index: 0, label: '❯' })
+    ])).toEqual({ index: -1, label: '' })
+  })
+
+  it('auto-approval never presses a decline as an approval', () => {
+    expect(pickAutoApprovalButton(['Always Allow', 'Deny', 'Allow Once'])).toEqual({ index: 2, label: 'Allow Once' })
+    expect(pickAutoApprovalButton(['Always allow', 'Reject'])).toEqual({ index: -1, label: '' })
+  })
+
+  it('classes broad and non-English standing grants as persistent', () => {
+    for (const label of [
+      'Yes, and bypass permissions', 'Yes, and use auto mode', 'Yes, allow all', 'Allow all', 'Accept all', 'Approve all',
+      'Yes to all', 'Yes, and allow this host in the future', 'Yes, and allow similar commands', 'Grant full access',
+      'Yes, enable YOLO mode', '항상 허용', 'Immer erlauben', '始终允许', 'Toujours autoriser',
+    ]) expect(isPersistentApprovalGrantLabel(label), label).toBe(true)
+    for (const label of ['Yes', 'Allow once', 'Run', 'Approve', '허용', 'Erlauben']) {
+      expect(isPersistentApprovalGrantLabel(label), label).toBe(false)
+    }
   })
 })
 

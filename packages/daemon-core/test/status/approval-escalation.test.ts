@@ -60,14 +60,40 @@ describe('coordinator-first owner escalation', () => {
         w.stop();
     });
 
-    it('retires a replaced episode and gives the new one its own window', () => {
+    it('a replaced episode keeps the original deadline instead of restarting the window', () => {
         const w = world(); w.ask();
         vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
         state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:2') } };
         w.ask();
-        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2 - 1);
         expect(w.server).toHaveLength(0);
-        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        vi.advanceTimersByTime(1);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('a modal that keeps minting new episode keys still reaches the owner once, on time', () => {
+        const w = world(); w.ask();
+        for (let i = 2; i <= 12; i++) {
+            vi.advanceTimersByTime(5_000);
+            state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval(`modal:${i}`) } };
+            w.ask();
+        }
+        vi.advanceTimersByTime(5_000);
+        expect(w.server).toHaveLength(1);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('re-checks a momentarily unreadable episode instead of dropping the escalation', () => {
+        const w = world(); w.ask();
+        const live = state;
+        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:1', { evidence: 'unavailable' }) } };
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(0);
+        state = live;
+        vi.advanceTimersByTime(5_000);
         expect(w.server).toHaveLength(1);
         w.stop();
     });

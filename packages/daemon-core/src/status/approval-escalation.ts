@@ -68,6 +68,7 @@ export interface ApprovalEscalationGateDeps {
     /** Re-project and send the held raw event on escalation. */
     escalate(sessionId: string, rawEvent: Record<string, unknown>): void;
     delayMs?: number;
+    now?: () => number;
     setTimer?: (fn: () => void, ms: number) => unknown;
     clearTimer?: (handle: unknown) => void;
 }
@@ -82,25 +83,50 @@ export interface ApprovalEscalationGate {
 }
 
 const MAX_ESCALATED_REMEMBERED = 512;
+/** Re-check cadence while a still-waiting session's episode key is momentarily unreadable. */
+const ESCALATION_RECHECK_MS = 5_000;
+const ESCALATION_MAX_RECHECKS = 6;
+
+function stillWaiting(state: SessionStateLike): boolean {
+    return !!state && (state.status === 'waiting_approval' || state.activeChat?.status === 'waiting_approval');
+}
 
 export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): ApprovalEscalationGate {
     const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
     const setTimer = deps.setTimer ?? ((fn, ms) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); return t; });
     const clearTimer = deps.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
-    const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown }>();
+    const now = deps.now ?? Date.now;
+    // firstHeldAt caps the total hold per session: a modal that keeps minting new
+    // episode keys (a tall diff scrolling its buttons in and out) must not keep
+    // restarting the window and starve the owner push.
+    const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
     const escalated = new Set<string>();
 
     const fire = (sessionId: string) => {
         const entry = held.get(sessionId);
         if (!entry) return;
-        held.delete(sessionId);
+        let state: SessionStateLike = null;
         let currentKey: string | null = null;
-        try { currentKey = currentApprovalEpisodeKey(deps.readState(sessionId)); } catch { currentKey = null; }
-        if (currentKey !== entry.key) {
-            LOG.info('StatusEvent', `approval escalation retired session=${sessionId} (resolved or replaced before escalation)`);
+        try { state = deps.readState(sessionId); currentKey = currentApprovalEpisodeKey(state); } catch { currentKey = null; }
+        if (!currentKey) {
+            // Still parked but the episode is momentarily unreadable (an
+            // evidence:'unavailable' repaint): look again shortly instead of
+            // dropping the escalation for good.
+            if (stillWaiting(state) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+                entry.rechecks += 1;
+                entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+                return;
+            }
+            held.delete(sessionId);
+            LOG.info('StatusEvent', `approval escalation retired session=${sessionId} (resolved before escalation)`);
             return;
         }
+        held.delete(sessionId);
+        if (escalated.has(`${sessionId}\u0000${currentKey}`)) return;
+        // A replaced but still-pending episode is still an unanswered request
+        // from the same worker: escalate it rather than retiring silently.
         escalated.add(`${sessionId}\u0000${entry.key}`);
+        escalated.add(`${sessionId}\u0000${currentKey}`);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
             const oldest = escalated.values().next().value;
             if (oldest === undefined) break;
@@ -124,8 +150,10 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             if (escalated.has(`${sessionId}\u0000${key}`)) return true;
             const existing = held.get(sessionId);
             if (existing?.key === key) { existing.raw = rawEvent; return true; }
+            const firstHeldAt = existing?.firstHeldAt ?? now();
             if (existing) clearTimer(existing.timer);
-            held.set(sessionId, { key, raw: rawEvent, timer: setTimer(() => fire(sessionId), delayMs) });
+            const remaining = Math.max(0, firstHeldAt + delayMs - now());
+            held.set(sessionId, { key, raw: rawEvent, firstHeldAt, rechecks: 0, timer: setTimer(() => fire(sessionId), remaining) });
             return true;
         },
         retire(sessionId) {

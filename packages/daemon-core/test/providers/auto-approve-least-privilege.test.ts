@@ -160,6 +160,18 @@ describe('maybeAutoApproveStatus — least privilege end to end', () => {
     expect(h.logs).toEqual([])
   })
 
+  it('unmasks a persistent-only prompt for the owner\'s own session; a mesh worker stays masked for its coordinator nudge', () => {
+    const persistentOnly = approval(['Always allow', 'Approve for this session', 'Deny'], { type: 'tool_permission', modalKey: 'modal:c' })
+    const own = harness()
+    own.instance.isMeshWorkerSession = () => false
+    expect(own.instance.maybeAutoApproveStatus(persistentOnly, 1_000)).toBe(false)
+    const worker = harness()
+    worker.instance.isMeshWorkerSession = () => true
+    expect(worker.instance.maybeAutoApproveStatus(persistentOnly, 1_000)).toBe(true)
+    expect(own.resolves).toEqual([])
+    expect(worker.resolves).toEqual([])
+  })
+
   it('does not answer a directory-trust prompt for a different directory', async () => {
     const h = harness()
     await h.run(approval(['Yes, proceed', 'No, quit'], {

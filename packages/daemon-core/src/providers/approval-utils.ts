@@ -169,7 +169,15 @@ export function isPersistentApprovalGrantLabel(value: string): boolean {
         || /\beverything\b|\bremember\b|\bpermanent(?:ly)?\b|\bforever\b/.test(label)
         || /\ball (?:edits|commands|tools|actions|files|changes|requests|permissions)\b/.test(label)
         || /\bauto (?:accept|approve|allow|run)\b/.test(label)
-        || /\btrust\b/.test(label);
+        || /\btrust\b/.test(label)
+        // Broad escapes: bypass/auto/yolo modes, "allow all", "yes to all",
+        // standing future/similar-command rules, full access.
+        || /\bbypass\b|\bauto mode\b|\byolo\b|\bfull access\b|\bunrestricted\b/.test(label)
+        || /\b(?:allow|accept|approve|yes|grant|run) (?:to )?all\b|\byes to all\b/.test(label)
+        || /\bin the future\b|\bfrom now on\b|\bsimilar (?:commands|requests|actions)\b|\bfuture (?:commands|requests)\b/.test(label)
+        // "Always" in other UI languages (CJK has no word boundaries).
+        || /\b(?:immer|toujours|siempre|sempre|sempres|zawsze|altijd|alltid|всегда)\b/u.test(label)
+        || /항상|始终|总是|永远|一律|常に|いつも|今後|以後/u.test(label);
 }
 
 /**
@@ -207,8 +215,18 @@ export function pickAutoApprovalButton(
     buttons: string[] | null | undefined,
 ): { index: number; label: string } {
     const labels = (buttons || []).map((button) => String(button || '').trim());
-    const index = labels.findIndex((label) => !!label && !isPersistentApprovalGrantLabel(label));
-    return index >= 0 ? { index, label: labels[index] } : { index: -1, label: '' };
+    // Same least-privilege rule as the CLI path: never a persistent grant and
+    // never a decline ("Deny"/"Reject" pressed as an approval).
+    const picked = pickLeastPrivilegeApprovalButton(labels);
+    if (picked.index < 0) return { index: -1, label: '' };
+    // The IDE click scripts match labels by substring, so a chosen label that is
+    // contained in a persistent grant on the same modal ("Allow" vs "Always
+    // Allow") could land on the grant. Leave such a modal for the person.
+    const chosen = normalizeApprovalLabel(picked.label);
+    const ambiguous = labels.some((label, i) => i !== picked.index
+        && isPersistentApprovalGrantLabel(label)
+        && normalizeApprovalLabel(label).includes(chosen));
+    return ambiguous ? { index: -1, label: '' } : picked;
 }
 
 /**
