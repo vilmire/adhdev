@@ -14,10 +14,11 @@
 // "strip a real shortcut suffix" behavior it must not break.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ApprovalBanner, { cleanBtnText } from '../../src/components/dashboard/ApprovalBanner'
 import type { ActiveConversation } from '../../src/components/dashboard/types'
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
 function conv(overrides: Partial<ActiveConversation> = {}): ActiveConversation {
     return {
@@ -69,6 +70,28 @@ describe('ApprovalBanner', () => {
     afterEach(() => {
         act(() => root.unmount())
         container.remove()
+    })
+
+    it('re-enables real responses for a changed session or button list with identical request text', () => {
+        const onModalButton = vi.fn()
+        const render = (overrides: Partial<ActiveConversation>) => act(() => root.render(
+            <ApprovalBanner activeConv={conv({ sessionId: 'one', modalMessage: 'Run?', ...overrides })} onModalButton={onModalButton} />,
+        ))
+        render({})
+        act(() => (container.querySelector('button') as HTMLButtonElement).click())
+        expect([...container.querySelectorAll('button')].every(button => button.disabled)).toBe(true)
+        render({ sessionId: 'two' })
+        expect([...container.querySelectorAll('button')].every(button => !button.disabled)).toBe(true)
+        act(() => (container.querySelector('button') as HTMLButtonElement).click())
+        render({ sessionId: 'two', modalButtons: ['Run once', 'No'] })
+        const buttons = [...container.querySelectorAll('button')]
+        expect(buttons.map(button => button.textContent)).toEqual(['Run once', 'No'])
+        expect(buttons.every(button => !button.disabled)).toBe(true)
+        expect(buttons[0].parentElement?.className).toContain('gap-2')
+        act(() => buttons[0].click())
+        expect(onModalButton).toHaveBeenLastCalledWith('Run once')
+        render({ status: 'idle' })
+        expect(container.querySelector('button')).toBeNull()
     })
 
     it('renders the full approval message text, not truncated to 120 chars', () => {

@@ -54,8 +54,9 @@ const PENDING_BUTTON_RESET_MS = 12_000;
  * exit like "Deny".
  */
 export function approvalButtonTone(clean: string): 'primary' | 'danger' | 'always' | 'neutral' {
-    if (/^always\b|\balways allow\b|\bdon'?t ask again\b|\ballow all\b|^yes,? and allow\b/.test(clean)) return 'always';
-    if (/^(run|approve|accept|yes|allow)/.test(clean)) return 'primary';
+    clean = clean.trim().toLowerCase().replace(/^\d+[.)]\s*/, '');
+    if (/\balways\b|\bdon['’]?t ask again\b|\ballow all\b|\brun everything\b|^yes,? (?:and )?allow\b(?!\s+(?:once|this time)\b)|\ballowlist\b|\b(?:during|for) this session\b|\bfrom this project\b/.test(clean)) return 'always';
+    if (/^(run|approve|accept|yes|allow)\b/.test(clean)) return 'primary';
     if (/^(reject|deny|delete|remove|abort|no)\b/.test(clean)) return 'danger';
     return 'neutral';
 }
@@ -86,7 +87,7 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
     // Reset pending on modal status change (approval complete or new approval)
     useEffect(() => {
         setPendingButton(null);
-    }, [activeConv.modalMessage, activeConv.status, activeConv.connectionState]);
+    }, [activeConv.sessionId, activeConv.modalMessage, activeConv.modalButtons?.join('\u0000'), activeConv.status, activeConv.connectionState]);
 
     // MULTISELECT-REMOTE-DEADLOCK: failsafe un-stick. See PENDING_BUTTON_RESET_MS —
     // an injection that resolves nothing changes none of the deps above, so without
