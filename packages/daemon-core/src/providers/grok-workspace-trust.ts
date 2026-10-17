@@ -55,7 +55,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { LOG } from '../logging/logger.js';
-import { escapeTomlKey, hasTomlTrustTable, isOverBroadTrustRoot, realWorkspacePath } from './workspace-trust-shared.js';
+import { escapeTomlKey, hasTomlTrustTable, isOverBroadTrustRoot, realWorkspacePath, registeredGrokRepoRoot } from './workspace-trust-shared.js';
 
 /**
  * grok's config home. Honors the `GROK_HOME` override the binary itself reads.
@@ -96,6 +96,16 @@ function hasTrustEntry(contents: string, real: string): boolean {
     return hasTomlTrustTable(contents, 'folders', real);
 }
 
+function hasDistrustEntry(contents: string, real: string): boolean {
+    const header = `[folders."${escapeTomlKey(real)}"]`;
+    let matching = false;
+    for (const line of contents.split(/\r?\n/)) {
+        if (line.trim().startsWith('[')) matching = line.trim() === header;
+        if (matching && /^\s*trusted\s*=\s*false\s*(?:#.*)?$/.test(line)) return true;
+    }
+    return false;
+}
+
 /** Native grok TOML projection bytes, separated from HOME/store resolution. */
 export function serializeGrokWorkspaceTrust(real: string, decidedAt = Math.floor(Date.now() / 1000)): string {
     return `[folders."${escapeTomlKey(real)}"]\ntrusted = true\ndecided_at = ${decidedAt}\n`;
@@ -105,10 +115,9 @@ export function serializeGrokWorkspaceTrust(real: string, decidedAt = Math.floor
  * Idempotently pre-trust `workingDir` for grok so the first-run folder-trust
  * TUI prompt never appears.
  *
- * - Registers EXACTLY `workingDir`'s realpath — never a parent, never a
- *   wildcard, never `--trust`'s cascading grant. A workspace's repo content
- *   (including any `.mcp.json`) is not authored by us, so trust stays scoped
- *   to the single directory being launched into.
+ * - Registers `workingDir`'s realpath. Also registers Grok's canonical repo
+ *   root ONLY when independently supplied in `registeredRepoRoots` by the
+ *   owner's mesh registry. Git metadata alone never widens the grant.
  * - Appends to the shared store, preserving every existing entry. Never
  *   rewrites or reorders what is already there.
  * - No-ops if an entry for that path already exists (does not refresh
@@ -122,7 +131,11 @@ export function serializeGrokWorkspaceTrust(real: string, decidedAt = Math.floor
  * present, over-broad, or an error occurred) — purely so callers/tests can
  * assert the effect.
  */
-export function applyGrokWorkspaceTrust(workingDir: string, env: NodeJS.ProcessEnv = process.env): string | null {
+export function applyGrokWorkspaceTrust(
+    workingDir: string,
+    env: NodeJS.ProcessEnv = process.env,
+    registeredRepoRoots: readonly string[] = [],
+): string | null {
     const real = realWorkspacePath(workingDir);
     if (isOverBroadRoot(real, env)) {
         LOG.warn('grok-workspace-trust', `refusing to pre-trust over-broad root ${real}`);
@@ -136,11 +149,14 @@ export function applyGrokWorkspaceTrust(workingDir: string, env: NodeJS.ProcessE
         } catch (err: any) {
             if (err?.code !== 'ENOENT') throw err;
         }
-        if (hasTrustEntry(existing, real)) {
-            LOG.debug('grok-workspace-trust', `${real} already has a trust entry — no change`);
-            return null;
-        }
-        const entry = serializeGrokWorkspaceTrust(real);
+        const repoRoot = registeredGrokRepoRoot(workingDir, registeredRepoRoots);
+        const roots = [...new Set([real, ...(repoRoot && !isOverBroadRoot(repoRoot, env) ? [repoRoot] : [])])];
+        // A root grant must not bypass an explicit worktree refusal, nor may
+        // a worktree grant bypass an explicit repo-root refusal.
+        if (roots.some(root => hasDistrustEntry(existing, root))) return null;
+        const missing = roots.filter(root => !hasTrustEntry(existing, root));
+        if (!missing.length) return null;
+        const entry = missing.map(root => serializeGrokWorkspaceTrust(root)).join('');
         const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
         fs.mkdirSync(path.dirname(storePath), { recursive: true });
         fs.appendFileSync(storePath, `${separator}${entry}`, { encoding: 'utf8', mode: 0o600 });

@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { applyGrokWorkspaceTrust, __test__ } from '../../src/providers/grok-workspace-trust.js';
 
 const { hasTrustEntry, escapeTomlKey, isOverBroadRoot } = __test__;
@@ -114,6 +115,58 @@ describe('applyGrokWorkspaceTrust', () => {
         const contents = fs.readFileSync(storePath(), 'utf8');
         expect(contents).toContain(`[folders."${escapeTomlKey(fs.realpathSync(child))}"]`);
         expect(hasTrustEntry(contents, real())).toBe(false);
+    });
+
+    function linkedWorktree(): string {
+        const git = (args: string[]) => execFileSync('git', ['-C', workspace, ...args], {
+            encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        git(['init']);
+        git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']);
+        const linked = path.join(workspace, 'linked');
+        git(['worktree', 'add', '-b', 'fixture-linked', linked]);
+        return linked;
+    }
+
+    it('registers the common repo root for an owner-registered linked worktree', () => {
+        const linked = linkedWorktree();
+        applyGrokWorkspaceTrust(linked, env(), [workspace]);
+        const contents = fs.readFileSync(storePath(), 'utf8');
+        expect(hasTrustEntry(contents, fs.realpathSync(linked))).toBe(true);
+        expect(hasTrustEntry(contents, real())).toBe(true);
+        expect(applyGrokWorkspaceTrust(linked, env(), [workspace])).toBeNull();
+    });
+
+    it('does not infer authorization from git metadata or a registered ancestor', () => {
+        const linked = linkedWorktree();
+        applyGrokWorkspaceTrust(linked, env(), [path.dirname(workspace)]);
+        expect(hasTrustEntry(fs.readFileSync(storePath(), 'utf8'), real())).toBe(false);
+    });
+
+    it('adds a missing registered repo root even when the worktree entry exists', () => {
+        const linked = linkedWorktree();
+        applyGrokWorkspaceTrust(linked, env());
+        applyGrokWorkspaceTrust(linked, env(), [workspace]);
+        const contents = fs.readFileSync(storePath(), 'utf8');
+        expect(hasTrustEntry(contents, real())).toBe(true);
+        expect(contents.split(`[folders."${escapeTomlKey(fs.realpathSync(linked))}"]`).length).toBe(2);
+    });
+
+    it('does not bypass a worktree refusal by granting its registered repo root', () => {
+        const linked = linkedWorktree();
+        const denied = `[folders."${escapeTomlKey(fs.realpathSync(linked))}"]\ntrusted = false\n`;
+        fs.writeFileSync(storePath(), denied);
+        expect(applyGrokWorkspaceTrust(linked, env(), [workspace])).toBeNull();
+        expect(fs.readFileSync(storePath(), 'utf8')).toBe(denied);
+    });
+
+    it('preserves explicit distrust of the registered root', () => {
+        const linked = linkedWorktree();
+        const denied = `[folders."${escapeTomlKey(real())}"]\ntrusted = false\n`;
+        fs.writeFileSync(storePath(), denied);
+        expect(applyGrokWorkspaceTrust(linked, env(), [workspace])).toBeNull();
+        expect(fs.readFileSync(storePath(), 'utf8')).toBe(denied);
+        expect(fs.readFileSync(storePath(), 'utf8').split(`[folders."${escapeTomlKey(real())}"]`).length).toBe(2);
     });
 
     it('refuses over-broad roots grok would itself reject', () => {

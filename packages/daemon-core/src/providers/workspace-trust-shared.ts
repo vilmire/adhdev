@@ -8,6 +8,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 /**
  * Resolve the canonical, real (symlink-followed) absolute form of the workspace
@@ -21,6 +22,31 @@ export function realWorkspacePath(workingDir: string): string {
         return fs.realpathSync(workingDir);
     } catch {
         return path.resolve(workingDir);
+    }
+}
+
+/**
+ * Grok keys linked-worktree trust by the main repository, not the worktree.
+ * Git discovery is only a candidate: an exact owner-registered root must
+ * independently authorize it. A worktree/.git file is never authorization.
+ */
+export function registeredGrokRepoRoot(workingDir: string, registeredRoots: readonly string[]): string | null {
+    if (!registeredRoots.length) return null;
+    try {
+        const gitPath = (flag: string) => execFileSync('git', ['-C', workingDir, 'rev-parse', flag], {
+            encoding: 'utf8', timeout: 2000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        const top = realWorkspacePath(gitPath('--show-toplevel'));
+        const common = realWorkspacePath(path.resolve(workingDir, gitPath('--git-common-dir')));
+        const candidates = [top];
+        // Standard main/linked worktrees share <main>/.git. Other layouts
+        // (bare repos, submodules, --separate-git-dir) need explicit evidence;
+        // never assume the metadata directory's parent is a repository root.
+        if (path.basename(common) === '.git') candidates.push(realWorkspacePath(path.dirname(common)));
+        const registered = new Set(registeredRoots.filter(path.isAbsolute).map(realWorkspacePath));
+        return candidates.reverse().find(candidate => registered.has(candidate) && !isOverBroadTrustRoot(candidate)) || null;
+    } catch {
+        return null;
     }
 }
 
