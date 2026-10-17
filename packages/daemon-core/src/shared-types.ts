@@ -50,10 +50,10 @@ export type {
 } from './providers/provider-instance.js';
 
 // Re-export ProviderErrorReason (defined in this file, imported by provider-instance)
-export type { ProviderErrorReason } from './providers/provider-instance.js';
+export type { ProviderErrorReason, OwnerAttentionMarker } from './providers/provider-instance.js';
 
 // Local import for use in Managed*Entry types below
-import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason } from './providers/provider-instance.js';
+import type { ActiveChatData as _ActiveChatData, ProviderErrorReason as _ProviderErrorReason, OwnerAttentionMarker as _OwnerAttentionMarker } from './providers/provider-instance.js';
 import type { WorkspaceEntry } from './config/workspaces.js';
 import type { AutoApproveModesConfig, LaunchableProviderCategory, ProviderCategory, ProviderResumeCapability } from './providers/contracts.js';
 import type { ProviderMeshCoordinatorConfig } from './providers/mesh-coordinator-contracts.js';
@@ -438,6 +438,14 @@ export interface SessionEntry {
     resume?: ProviderResumeCapability;
     activeChat: SessionActiveChatData | null;
     activeInteractivePrompt?: InteractivePrompt | null;
+    /**
+     * CLI only: the session is parked on a prompt only the owner may answer in
+     * the terminal (OwnerAttentionMarker). Emitted explicitly as `null` when
+     * absent so a merging consumer clears it. `message` is provider-authored
+     * text: P2P / standalone only — RoutingSessionEntry and the cloud status
+     * allow-lists deliberately do not declare it.
+     */
+    ownerAttention?: _OwnerAttentionMarker | null;
     capabilities?: SessionCapability[];
     /** Effective message input/media support for this session. Defaults fail-closed to text-only. */
     messageInput?: MessageInputSupport;

@@ -40,6 +40,8 @@ function sessionWithContent(overrides: Record<string, unknown> = {}) {
         settings: { executablePath: '/opt/homebrew/bin/claude' },
         git: { branch: 'fix/auth-token-ttl', dirty: true },
         controlValues: { model: 'opus' },
+        // owner-attention park: the message is provider-authored text (P2P only)
+        ownerAttention: { stateId: 'consent_banner', message: 'Owner attention: Grok data-retention consent' },
         providerControls: [{ id: 'model', label: 'Model' }],
         meshQueueStats: {
             pending: 1,
@@ -67,6 +69,7 @@ const CONTENT_FIELDS = [
     'controlValues',
     'providerControls',
     'meshQueueStats',
+    'ownerAttention',
 ];
 
 describe('buildCloudStatusReportPayload — server WS content boundary', () => {

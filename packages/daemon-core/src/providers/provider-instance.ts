@@ -55,6 +55,22 @@ export interface ActiveChatData {
     inputContent?: string;
 }
 
+/**
+ * A CLI session parked on a prompt only the OWNER may answer
+ * (FsmState.owner_attention — e.g. grok's data-retention consent banner or a
+ * persistent workspace-trust prompt). Non-actionable by design: nothing in the
+ * daemon or dashboard may answer it automatically; the owner answers it in the
+ * terminal.
+ *
+ * `stateId` is the spec state id (identifier). `message` is the spec-authored
+ * state label — provider text, so it rides P2P / standalone only and must never
+ * enter RoutingSessionEntry / the cloud status allow-lists.
+ */
+export interface OwnerAttentionMarker {
+    stateId: string;
+    message: string;
+}
+
 /** Standardized error reasons across all provider categories */
 export type ProviderErrorReason =
     | 'not_installed'   // CLI binary not found
@@ -80,6 +96,12 @@ interface ProviderStateBase {
  /** chat data */
     activeChat: ActiveChatData | null;
     activeInteractivePrompt?: InteractivePrompt | null;
+    /**
+     * CLI only: owner-attention park (see OwnerAttentionMarker). Present (non-null)
+     * only while status is `waiting_choice` because of it; null otherwise so a
+     * consumer merging snapshots sees the park clear.
+     */
+    ownerAttention?: OwnerAttentionMarker | null;
  /** Workspace — project path or name (all categories) */
     workspace?: string | null;
     /** Runtime info (real-time detection) */

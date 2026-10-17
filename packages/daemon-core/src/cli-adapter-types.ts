@@ -6,6 +6,7 @@
 
 import type { ChatMessage } from './types.js';
 import type { InteractivePrompt, InteractivePromptResponse } from './providers/types/interactive-prompt.js';
+import type { OwnerAttentionMarker } from './providers/provider-instance.js';
 import type { MeshSendKeyItem, MeshSendKeyName } from './cli-adapters/provider-cli-shared.js';
 
 /**
@@ -81,7 +82,7 @@ export interface CliAdapterStatus {
      * automatically. `message` is the spec-authored state label (never
      * terminal content).
      */
-    ownerAttention?: { stateId: string; message: string };
+    ownerAttention?: OwnerAttentionMarker;
     /**
      * Wall-clock (ms) of the most recent raw PTY output chunk. Advances on every
      * byte the process emits, including tool/build output that produces no

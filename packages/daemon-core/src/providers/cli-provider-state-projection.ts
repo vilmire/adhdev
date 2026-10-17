@@ -25,7 +25,7 @@
 import type { ProviderModule } from './contracts.js';
 import { flattenContent } from './contracts.js';
 import { getEffectiveMessageInputSupport } from './provider-input-support.js';
-import type { ProviderState, ProviderErrorReason } from './provider-instance.js';
+import type { ProviderState, ProviderErrorReason, OwnerAttentionMarker } from './provider-instance.js';
 import type { InteractivePrompt } from './types/interactive-prompt.js';
 import type { ChatMessage } from '../types.js';
 import { ChatHistoryWriter } from '../config/chat-history.js';
@@ -120,6 +120,22 @@ function toPersistedTailMessage(
 export function resolveCliActiveModal<M>(parsed: M | null | undefined, adapter: M | null | undefined): M | null {
     if (hasNonEmptyCliModalButtons(parsed)) return parsed as M;
     return adapter ?? parsed ?? null;
+}
+
+/**
+ * The owner-attention park the adapter projected (adapter-status-projection),
+ * carried onto the instance state only while the surfaced status is still the
+ * `waiting_choice` it implies. Any other surfaced status (error overlay, an
+ * auto-approve mask, a generating reconcile) means the park is not what the
+ * owner sees, so it is `null` — explicit, so a merging consumer clears it.
+ * `message` is the spec-authored state label (never terminal content).
+ */
+export function resolveCliOwnerAttention(adapterOwnerAttention: unknown, finalStatus: string): OwnerAttentionMarker | null {
+    if (finalStatus !== 'waiting_choice') return null;
+    if (!adapterOwnerAttention || typeof adapterOwnerAttention !== 'object') return null;
+    const { stateId, message } = adapterOwnerAttention as { stateId?: unknown; message?: unknown };
+    if (typeof stateId !== 'string' || !stateId.trim()) return null;
+    return { stateId, message: typeof message === 'string' ? message : '' };
 }
 
 export function buildProviderState(host: ProviderStateHost): ProviderState {
@@ -351,6 +367,7 @@ export function buildProviderState(host: ProviderStateHost): ProviderState {
             inputContent: '',
         },
         activeInteractivePrompt: host.activeInteractivePrompt,
+        ownerAttention: resolveCliOwnerAttention(adapterStatus.ownerAttention, finalStatus),
         workspace: host.workingDir,
         instanceId: host.instanceId,
         providerSessionId: host.providerSessionId,

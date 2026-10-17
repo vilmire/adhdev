@@ -77,6 +77,7 @@ export type {
   ProviderState,
   ProviderStatus,
   ProviderErrorReason,
+  OwnerAttentionMarker,
   SessionActiveChatData,
   ActiveChatData,
   IdeProviderState,

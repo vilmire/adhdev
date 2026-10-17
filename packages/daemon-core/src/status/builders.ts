@@ -487,6 +487,7 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         resume: state.resume,
         activeChat,
         activeInteractivePrompt: state.activeInteractivePrompt ?? null,
+        ...buildOwnerAttentionField(state.ownerAttention, resolvedStatus),
         ...(summaryMetadata && { summaryMetadata }),
         ...buildSessionLaunchFields(readStateLaunch(state)),
         ...(includeSessionMetadata && {
@@ -512,6 +513,29 @@ function buildCliSession(state: CliProviderState, options: SessionEntryBuildOpti
         // status-gated so a one-shot silent-idle arm mutes ONLY the idle/completion
         // snapshot, never an approval/generating frame in the same turn.
         muted: resolveMuted(state.settings, resolvedStatus),
+    };
+}
+
+/**
+ * Owner-attention park for the dashboard lane (daemon.metadata, P2P / local).
+ * Present only while the resolved status is the `waiting_choice` the park
+ * implies, so a non-parked entry is byte-identical to before and the keyed
+ * delta's unsetFields clears it downstream when the park ends. `message` is
+ * provider-authored text: the cloud status path never forwards it
+ * (buildCloudStatusReportPayload is an allow-list over RoutingSessionEntry,
+ * which does not declare this field).
+ */
+export function buildOwnerAttentionField(
+    ownerAttention: CliProviderState['ownerAttention'],
+    resolvedStatus: string,
+): Pick<SessionEntry, 'ownerAttention'> {
+    if (resolvedStatus !== 'waiting_choice') return {};
+    if (!ownerAttention || typeof ownerAttention.stateId !== 'string' || !ownerAttention.stateId) return {};
+    return {
+        ownerAttention: {
+            stateId: ownerAttention.stateId,
+            message: typeof ownerAttention.message === 'string' ? ownerAttention.message : '',
+        },
     };
 }
 
