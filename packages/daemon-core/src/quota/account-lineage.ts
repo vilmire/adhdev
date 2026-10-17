@@ -13,23 +13,44 @@ export type QuotaAccountLineage =
 
 export const UNKNOWN_ACCOUNT_LINEAGE: QuotaAccountLineage = Object.freeze({ version: 1, kind: 'unknown' });
 
-/** Local CLI credential claims only; no network, verification, or token exchange. */
-export function accountLineageFromCliJwt(provider: string, token: string, authority: string): QuotaAccountLineage {
+/**
+ * Issuer + subject claims of a JWT the owning CLI stored, decoded locally.
+ * No signature check, network call, or token exchange; null when either claim
+ * is absent or blank. The token itself never leaves this function.
+ */
+export function cliJwtIdentity(token: unknown): { iss: string; sub: string } | null {
+    if (typeof token !== 'string') return null;
     try {
         const parts = token.split('.');
-        if (parts.length !== 3) return UNKNOWN_ACCOUNT_LINEAGE;
+        if (parts.length !== 3) return null;
         const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
         if (typeof claims?.iss !== 'string' || !claims.iss.trim()
-            || typeof claims?.sub !== 'string' || !claims.sub.trim()) return UNKNOWN_ACCOUNT_LINEAGE;
-        // Domain separation includes the provider and quota authority; neither
-        // an opaque account id nor a credential value leaves this function.
-        const key = createHash('sha256').update(JSON.stringify([
-            'adhdev-quota-account-v1', provider, authority, claims.iss, claims.sub,
-        ])).digest('hex');
-        return { version: 1, kind: 'account', key };
+            || typeof claims?.sub !== 'string' || !claims.sub.trim()) return null;
+        return { iss: claims.iss, sub: claims.sub };
     } catch {
-        return UNKNOWN_ACCOUNT_LINEAGE;
+        return null;
     }
+}
+
+/**
+ * Digest of a STABLE account identity the owning CLI itself recorded: an
+ * issuer naming who assigned the subject, and that subject. Callers pass ids,
+ * never token values, emails or mtimes; blank/non-string input is unknown.
+ */
+export function accountLineageFromStableIdentity(provider: string, authority: string, issuer: unknown, subject: unknown): QuotaAccountLineage {
+    if (typeof issuer !== 'string' || !issuer.trim() || typeof subject !== 'string' || !subject.trim()) return UNKNOWN_ACCOUNT_LINEAGE;
+    // Domain separation includes the provider and quota authority; neither
+    // an opaque account id nor a credential value leaves this function.
+    const key = createHash('sha256').update(JSON.stringify([
+        'adhdev-quota-account-v1', provider, authority, issuer, subject,
+    ])).digest('hex');
+    return { version: 1, kind: 'account', key };
+}
+
+/** Local CLI credential claims only; no network, verification, or token exchange. */
+export function accountLineageFromCliJwt(provider: string, token: string, authority: string): QuotaAccountLineage {
+    const identity = cliJwtIdentity(token);
+    return identity ? accountLineageFromStableIdentity(provider, authority, identity.iss, identity.sub) : UNKNOWN_ACCOUNT_LINEAGE;
 }
 
 export function quotaAccountLineage(value: unknown): QuotaAccountLineage {
@@ -81,4 +102,17 @@ export function settleCredentialQuota(quota: ProviderQuota, before: {
             || (before.lineage.kind === 'unknown' && after.lineage.kind === 'unknown' && before.token === after.token));
     return continuous ? withQuotaAccountLineage(quota, before.lineage)
         : unconfirmedQuotaReading(quota, after?.lineage ?? UNKNOWN_ACCOUNT_LINEAGE);
+}
+
+/**
+ * For collections that spend no identity-bearing credential of their own
+ * (statusline snapshot, rollout log, CLI subprocess, keychain token read
+ * before/after): the owning CLI's account read before and after collection
+ * must agree. Both unknown leaves the reading unstamped (= unknown lineage,
+ * so it never transfers); any disagreement isolates it.
+ */
+export function settleAccountQuota(quota: ProviderQuota, before: QuotaAccountLineage, after: QuotaAccountLineage): ProviderQuota {
+    if (sameQuotaAccount(before, after)) return withQuotaAccountLineage(quota, quotaAccountLineage(before));
+    if (before.kind === 'unknown' && after.kind === 'unknown') return quota;
+    return unconfirmedQuotaReading(quota, after);
 }

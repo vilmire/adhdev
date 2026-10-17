@@ -48,6 +48,7 @@ import { fetchKimiQuota, readKimiCredentialMtimeMs, readKimiQuotaAccountLineage 
 import { fetchOpencodeUsage } from './fetchers/opencode.js';
 import { lastGoodProvenanceOf, loadQuotaCache, mergeLastGoodForPersist, quotaEntryHoldsReading, saveQuotaCache } from './persist.js';
 import { revalidateInFlight } from './refresh-triggers.js';
+import { readCurrentQuotaAccountLineage } from './account-lineage-readers.js';
 
 /**
  * How often a node re-reads its own quota. Deliberately coarse: quota moves on
@@ -513,6 +514,7 @@ export function clearQuotaCache(): void {
     latestQuotaAttempts.clear(); // late responses cannot repopulate a reset cache
     hydratedOnly.clear();
     hydrated = false;
+    pendingHydrationConfirmations = [];
     for (const state of failureRetries.values()) {
         if (state.timer) clearTimeout(state.timer);
     }
@@ -539,13 +541,14 @@ export function clearQuotaCache(): void {
  * cache", which is the state a daemon is in before its first refresh anyway.
  */
 let hydrated = false;
+/** Hydration confirmations still waiting on an async credential-store read. */
+let pendingHydrationConfirmations: Promise<void>[] = [];
 
 export function hydrateQuotaCacheFromDisk(
     env: NodeJS.ProcessEnv = process.env,
     isEnabled?: QuotaProviderEnabled,
-    readLineage: (provider: string) => QuotaAccountLineage = (provider) =>
-        provider === 'grok-cli' ? readGrokQuotaAccountLineage({ env })
-            : provider === 'kimi' ? readKimiQuotaAccountLineage({ env }) : UNKNOWN_ACCOUNT_LINEAGE,
+    readLineage: (provider: string) => QuotaAccountLineage | Promise<QuotaAccountLineage> = (provider) =>
+        readCurrentQuotaAccountLineage(provider, env),
 ): number {
     if (hydrated) return 0;
     hydrated = true;
@@ -570,16 +573,37 @@ export function hydrateQuotaCacheFromDisk(
         // Disk belongs to an earlier process/account epoch. Unknown/legacy
         // lineage and a changed account can restore diagnostic state, never
         // account-scoped numbers, usage, or labels. No token/mtime equality.
-        let current = UNKNOWN_ACCOUNT_LINEAGE;
+        const settle = (current: QuotaAccountLineage): MeshNodeFactsProviderQuota =>
+            quota.provider === provider && quota.metadata?.lineageUncertain !== true
+                && sameQuotaAccount(quota.metadata?.accountLineage, current)
+                ? quota : unconfirmedQuotaReading(quota, current);
+        let current: QuotaAccountLineage | Promise<QuotaAccountLineage> = UNKNOWN_ACCOUNT_LINEAGE;
         try { current = readLineage(provider); } catch { /* uncertainty stays explicit */ }
-        const confirmed = quota.provider === provider && quota.metadata?.lineageUncertain !== true
-            && sameQuotaAccount(quota.metadata?.accountLineage, current);
-        cache.set(provider, confirmed ? quota : unconfirmedQuotaReading(quota, current));
+        if (current instanceof Promise) {
+            // Until the credential store answers, only diagnostic state is
+            // shown. The confirmation upgrades this exact placeholder only —
+            // a live measurement, a disable prune or a cache clear wins.
+            const placeholder = unconfirmedQuotaReading(quota, UNKNOWN_ACCOUNT_LINEAGE);
+            cache.set(provider, placeholder);
+            pendingHydrationConfirmations.push(current.catch(() => UNKNOWN_ACCOUNT_LINEAGE).then((lineage) => {
+                if (cache.get(provider) !== placeholder || !hydratedOnly.has(provider)) return;
+                const confirmed = settle(lineage);
+                cache.set(provider, confirmed);
+                if (confirmed === quota) notifyQuotaCacheChanged();
+            }));
+        } else {
+            cache.set(provider, settle(current));
+        }
         hydratedOnly.add(provider);
         count += 1;
     }
     if (count > 0) LOG.info('Quota', `Restored ${count} provider quota snapshot(s) from the on-disk cache`);
     return count;
+}
+
+/** Resolves once every async hydration lineage check has settled. */
+export async function quotaHydrationConfirmed(): Promise<void> {
+    await Promise.all(pendingHydrationConfirmations);
 }
 
 /**
@@ -606,6 +630,7 @@ export function isRateLimitedCooldownActive(
 /** Test seam: allow a fresh hydration in the same process. */
 export function __resetQuotaHydrationForTests(): void {
     hydrated = false;
+    pendingHydrationConfirmations = [];
 }
 
 // Each provider has one current publication right. A newer attempt, disable,
@@ -685,10 +710,11 @@ export async function refreshQuotaCacheOnce(
             try {
                 let fresh = toWireQuota(await fetch());
                 if (!canPublish()) return;
-                // Grok/Kimi CLI stable subjects are locally available. Other
-                // fetchers must explicitly establish their own identity; an
-                // unknown identity never becomes a signed-out/account-switch
-                // claim. Fetchers also recheck their credential after HTTP.
+                // Grok/Kimi CLI stable subjects are re-read here as well. Every
+                // lineage-stamping fetcher (incl. claude/codex/cursor/antigravity)
+                // reads the owning CLI's account before AND after collection and
+                // isolates on disagreement; an unknown identity never becomes a
+                // signed-out/account-switch claim.
                 if (options.readAccountLineage || ((provider === 'grok-cli' || provider === 'kimi')
                     && quotaAccountLineage(fresh.metadata?.accountLineage).kind === 'account')) {
                     let current = UNKNOWN_ACCOUNT_LINEAGE;

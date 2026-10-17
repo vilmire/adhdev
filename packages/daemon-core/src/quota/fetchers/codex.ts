@@ -10,7 +10,11 @@
  * This fetcher is the strictest possible expression of that rule — it never
  * reads, writes or even opens `$CODEX_HOME/auth.json`. We spawn the user's own
  * `codex` binary, which authenticates itself from its own on-disk session, and
- * ask it a question. When that session is missing or expired the CLI answers
+ * ask it a question. (The one exception is account LINEAGE, not auth:
+ * `readCodexQuotaAccountLineage` decodes only the issuer/subject claims of the
+ * stored `id_token` plus `account_id`, locally, to key cached readings to the
+ * signed-in account. No credential is used, sent, refreshed or written.)
+ * When that session is missing or expired the CLI answers
  * with a JSON-RPC error and we report "cannot query"; refreshing it is the
  * CLI's job, done the next time the user runs `codex`.
  *
@@ -48,6 +52,17 @@ import { codexRolloutMissingFailure, fetchCodexQuotaFromRollout } from './codex-
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 import { toEpochResetMs as toResetMs, toNumber } from './coerce.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { isTestRuntimeEnv } from '../../config/config-dir.js';
+import {
+    accountLineageFromStableIdentity,
+    cliJwtIdentity,
+    settleAccountQuota,
+    UNKNOWN_ACCOUNT_LINEAGE,
+    type QuotaAccountLineage,
+} from '../account-lineage.js';
+import { codexHome } from './codex-rollout.js';
 
 /** Whole-operation budget: spawn, handshake and reply. */
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -551,6 +566,42 @@ export async function fetchCodexQuotaFromAppServer(overrides: QuotaFetchDeps = {
  * Never throws.
  */
 export async function fetchCodexQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    // Neither source carries identity; the signed-in account must read the
+    // same before and after collection to stamp lineage.
+    const before = readCodexQuotaAccountLineage(overrides);
+    const quota = await fetchCodexQuotaLocalFirst(overrides);
+    return settleAccountQuota(quota, before, readCodexQuotaAccountLineage(overrides));
+}
+
+/** Both sources report the ChatGPT-plan Codex rate limits; no URL is involved. */
+const CODEX_QUOTA_AUTHORITY = 'codex:chatgpt-rate-limits';
+
+/**
+ * Stable owning-CLI account from `$CODEX_HOME/auth.json`: the stored
+ * `id_token`'s issuer + subject, plus `account_id` (the ChatGPT workspace the
+ * plan limits belong to). Claims are decoded locally — no verification,
+ * refresh, or request — and rotating token values never enter the digest.
+ * API-key mode, a keyring-backed store (no file) or a malformed file stay
+ * unknown.
+ */
+export function readCodexQuotaAccountLineage(overrides: QuotaFetchDeps = {}): QuotaAccountLineage {
+    // Tests must opt into a synthetic CODEX_HOME, never the owner's.
+    if (isTestRuntimeEnv() && !overrides.env?.CODEX_HOME) return UNKNOWN_ACCOUNT_LINEAGE;
+    try {
+        const root = JSON.parse(fs.readFileSync(path.join(codexHome(overrides.env ?? process.env), 'auth.json'), 'utf8'));
+        if (typeof root?.auth_mode === 'string' && root.auth_mode.toLowerCase() !== 'chatgpt') return UNKNOWN_ACCOUNT_LINEAGE;
+        const identity = cliJwtIdentity(root?.tokens?.id_token);
+        if (!identity) return UNKNOWN_ACCOUNT_LINEAGE;
+        const accountId = typeof root.tokens.account_id === 'string' && root.tokens.account_id.trim()
+            ? root.tokens.account_id.trim() : null;
+        return accountLineageFromStableIdentity('codex-cli', CODEX_QUOTA_AUTHORITY, identity.iss,
+            JSON.stringify([identity.sub, accountId]));
+    } catch {
+        return UNKNOWN_ACCOUNT_LINEAGE;
+    }
+}
+
+async function fetchCodexQuotaLocalFirst(overrides: QuotaFetchDeps): Promise<ProviderQuota> {
     const local = fetchCodexQuotaFromRollout(overrides);
     if (local?.status === 'ok') {
         return local;

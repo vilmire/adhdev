@@ -298,7 +298,7 @@
  */
 'use strict';
 
-import { settleCredentialQuota, UNKNOWN_ACCOUNT_LINEAGE, withQuotaAccountLineage } from '../account-lineage.js';
+import { accountLineageFromStableIdentity, cliJwtIdentity, settleCredentialQuota, UNKNOWN_ACCOUNT_LINEAGE, withQuotaAccountLineage, type QuotaAccountLineage } from '../account-lineage.js';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -453,6 +453,12 @@ interface AntigravityCredentials {
     expiresAtMs: number | null;
     /** `consumer` for a personal plan; business accounts use another API. */
     authMethod: string | null;
+    /**
+     * Issuer + subject of the stored Google `id_token`, decoded locally (no
+     * verification or request). Only these two claims are kept — never the
+     * id_token itself. Null when the blob carries no usable id_token.
+     */
+    identity: { iss: string; sub: string } | null;
 }
 
 type CredentialsResult =
@@ -788,10 +794,13 @@ function parseCredentials(
         ? root.auth_method.trim()
         : null;
 
+    // The CLI stores Google's `id_token` beside `token` (and tolerate it nested).
+    const identity = cliJwtIdentity(root.id_token ?? token.id_token);
+
     // `token.refresh_token` is deliberately NOT read — see AntigravityCredentials.
     return {
         kind: 'ok',
-        credentials: { accessToken, expiresAtMs, authMethod },
+        credentials: { accessToken, expiresAtMs, authMethod, identity },
         platform,
     };
 }
@@ -1153,6 +1162,33 @@ async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentialsRe
     }
 }
 
+function credentialLineage(credentials: AntigravityCredentials, authority: string): QuotaAccountLineage {
+    // The store label and consumer auth_method are not account identity; the
+    // Google id_token's issuer + subject is, and survives access-token rotation.
+    return credentials.identity
+        ? accountLineageFromStableIdentity('antigravity-cli', authority, credentials.identity.iss, credentials.identity.sub)
+        : UNKNOWN_ACCOUNT_LINEAGE;
+}
+
+/**
+ * Read-only identity check for hydration: the same credential-store read the
+ * fetcher does (keychain / wincred / linux file), no request, no exchange.
+ * Async because darwin/win32 stores are read through a child process.
+ */
+export async function readAntigravityQuotaAccountLineage(overrides: QuotaFetchDeps = {}): Promise<QuotaAccountLineage> {
+    // Tests must inject the store (spawn/readFile) or a synthetic linux HOME;
+    // never the owner's keychain or token file.
+    if (isTestRuntimeEnv() && !overrides.spawn && !overrides.readFile
+        && !(overrides.env?.ADHDEV_ANTIGRAVITY_PLATFORM === 'linux' && overrides.env?.HOME)) return UNKNOWN_ACCOUNT_LINEAGE;
+    try {
+        const deps = resolveDeps(overrides);
+        const result = await readCredentials(deps);
+        return result.kind === 'ok' ? credentialLineage(result.credentials, baseUrl(deps.env)) : UNKNOWN_ACCOUNT_LINEAGE;
+    } catch {
+        return UNKNOWN_ACCOUNT_LINEAGE;
+    }
+}
+
 export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
     assertInjectedNetworkFetchInTest(overrides, 'fetchAntigravityQuota');
     const deps = resolveDeps(overrides);
@@ -1161,7 +1197,7 @@ export async function fetchAntigravityQuota(overrides: QuotaFetchDeps = {}): Pro
     const quota = await fetchForCredentials(deps, before);
     if (before.kind !== 'ok') return withQuotaAccountLineage(quota, UNKNOWN_ACCOUNT_LINEAGE);
     const after = await readCredentials(deps);
-    // The store label and consumer auth_method are not account identity.
-    return settleCredentialQuota(quota, { token: before.credentials.accessToken, authority, lineage: UNKNOWN_ACCOUNT_LINEAGE },
-        after.kind === 'ok' ? { token: after.credentials.accessToken, authority: baseUrl(deps.env), lineage: UNKNOWN_ACCOUNT_LINEAGE } : null);
+    const afterAuthority = baseUrl(deps.env);
+    return settleCredentialQuota(quota, { token: before.credentials.accessToken, authority, lineage: credentialLineage(before.credentials, authority) },
+        after.kind === 'ok' ? { token: after.credentials.accessToken, authority: afterAuthority, lineage: credentialLineage(after.credentials, afterAuthority) } : null);
 }

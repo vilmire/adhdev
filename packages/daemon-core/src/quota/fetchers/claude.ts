@@ -30,6 +30,8 @@
 'use strict';
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import {
     SESSION_WINDOW_MINUTES,
@@ -45,6 +47,13 @@ import type { QuotaFetchDeps } from './deps.js';
 import { resolveDeps } from './deps.js';
 import { FILE_AXIS_REREAD_NOTE, quotaReadNowClause } from '../refresh-command-hint.js';
 import { IDENTITY } from '../../track-identity.js';
+import { isTestRuntimeEnv } from '../../config/config-dir.js';
+import {
+    accountLineageFromStableIdentity,
+    settleAccountQuota,
+    UNKNOWN_ACCOUNT_LINEAGE,
+    type QuotaAccountLineage,
+} from '../account-lineage.js';
 
 /**
  * How old a reading may be and still count as current.
@@ -76,6 +85,56 @@ function toWindow(
  * 'unavailable' (nothing to read yet, an ordinary state) or 'error'.
  */
 export async function fetchClaudeQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
+    // The snapshot carries no identity; the account Claude Code is signed in
+    // to must read the same before and after collection to stamp lineage.
+    const before = readClaudeQuotaAccountLineage(overrides);
+    const quota = await readClaudeSnapshotQuota(overrides);
+    return settleAccountQuota(quota, before, readClaudeQuotaAccountLineage(overrides));
+}
+
+/**
+ * Claude Code's global state file, which records the signed-in OAuth account
+ * (`oauthAccount`). `$CLAUDE_CONFIG_DIR/.claude.json` when relocated (see
+ * statusline/paths.ts), else `~/.claude.json` — a sibling of `~/.claude/`.
+ */
+function claudeAccountStatePath(env: NodeJS.ProcessEnv): string {
+    const override = env.CLAUDE_CONFIG_DIR?.trim();
+    if (override) return path.join(override, '.claude.json');
+    const home = process.platform === 'win32'
+        ? (env.USERPROFILE?.trim() || env.HOME?.trim())
+        : env.HOME?.trim();
+    return path.join(home || os.homedir(), '.claude.json');
+}
+
+/** The statusline `rate_limits` handout; there is no network authority. */
+const CLAUDE_QUOTA_AUTHORITY = 'claude-code:statusline-rate-limits';
+/** Claude Code's own OAuth account record assigns the subject below. */
+const CLAUDE_ACCOUNT_ISSUER = 'claude-code:oauthAccount';
+
+/**
+ * Stable owning-CLI account: `oauthAccount.accountUuid` (+ `organizationUuid`,
+ * since plan limits follow the organization). Local file only — no token,
+ * email or display name is read into the digest. API-key sign-in has no
+ * `oauthAccount` and stays unknown.
+ */
+export function readClaudeQuotaAccountLineage(overrides: QuotaFetchDeps = {}): QuotaAccountLineage {
+    // Tests must opt into a synthetic config dir, never the owner's home.
+    if (isTestRuntimeEnv() && !overrides.env?.CLAUDE_CONFIG_DIR) return UNKNOWN_ACCOUNT_LINEAGE;
+    try {
+        const root = JSON.parse(fs.readFileSync(claudeAccountStatePath(overrides.env ?? process.env), 'utf8'));
+        const account = root?.oauthAccount;
+        const accountUuid = typeof account?.accountUuid === 'string' ? account.accountUuid.trim() : '';
+        if (!accountUuid) return UNKNOWN_ACCOUNT_LINEAGE;
+        const organizationUuid = typeof account.organizationUuid === 'string' && account.organizationUuid.trim()
+            ? account.organizationUuid.trim() : null;
+        return accountLineageFromStableIdentity('claude-cli', CLAUDE_QUOTA_AUTHORITY, CLAUDE_ACCOUNT_ISSUER,
+            JSON.stringify([accountUuid, organizationUuid]));
+    } catch {
+        return UNKNOWN_ACCOUNT_LINEAGE;
+    }
+}
+
+async function readClaudeSnapshotQuota(overrides: QuotaFetchDeps): Promise<ProviderQuota> {
     const deps = resolveDeps(overrides);
     const paths = resolveInstallPaths(deps.env);
 

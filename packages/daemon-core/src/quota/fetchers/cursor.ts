@@ -28,6 +28,14 @@ import {
 import { retryAfterMs, toNumber } from './coerce.js';
 import type { QuotaChildProcess, QuotaFetchDeps, QuotaFetchResponse } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { isTestRuntimeEnv } from '../../config/config-dir.js';
+import {
+    accountLineageFromStableIdentity,
+    cliJwtIdentity,
+    settleAccountQuota,
+    UNKNOWN_ACCOUNT_LINEAGE,
+    type QuotaAccountLineage,
+} from '../account-lineage.js';
 
 const DEFAULT_BASE_URL = 'https://api2.cursor.sh';
 const DASHBOARD_SERVICE = 'aiserver.v1.DashboardService';
@@ -406,16 +414,90 @@ async function postRpc(
     });
 }
 
+/**
+ * cursor-agent's own record of the signed-in user: `authInfo.authId` in
+ * `~/.cursor/cli-config.json` (identity metadata only — no token; cursor
+ * rewrites it on every invocation, see mesh/worker-home-specs.ts). The id is
+ * the auth provider's subject (`<connection>|user_…`), stable across token
+ * rotation. Email, display name and the numeric userId are not used.
+ */
+function cursorCliConfigPath(env: NodeJS.ProcessEnv): string {
+    return path.join(homeDir(env), '.cursor', 'cli-config.json');
+}
+
+function readCursorAuthId(env: NodeJS.ProcessEnv): string | null {
+    try {
+        const authId = JSON.parse(fs.readFileSync(cursorCliConfigPath(env), 'utf8'))?.authInfo?.authId;
+        return typeof authId === 'string' && authId.trim() ? authId.trim() : null;
+    } catch {
+        return null;
+    }
+}
+
+/** cursor-agent's own account record assigns the subject. */
+const CURSOR_ACCOUNT_ISSUER = 'cursor-agent:authInfo.authId';
+
+/** Authority = the usage API base; an overridden base is a different quota source. */
+function cursorAuthIdLineage(env: NodeJS.ProcessEnv, authId: string): QuotaAccountLineage {
+    return accountLineageFromStableIdentity('cursor-cli', baseUrl(env), CURSOR_ACCOUNT_ISSUER, authId);
+}
+
+/**
+ * Does a credential agree with the recorded account? A decodable JWT must name
+ * the same subject; an opaque stored token defers to cursor-agent's own record,
+ * but an exchanged API-key token must prove it (`strict`), since the record may
+ * describe a different, interactive sign-in.
+ */
+function credentialAgrees(accessToken: string, authId: string, strict: boolean): boolean {
+    const identity = cliJwtIdentity(accessToken);
+    return identity ? identity.sub === authId : !strict;
+}
+
+/**
+ * authId lineage, refused when a file-backed credential (or the credential this
+ * collection spends, when given) names someone else.
+ */
+function readCursorRecordedLineage(env: NodeJS.ProcessEnv, spent?: { accessToken: string; strict: boolean }): QuotaAccountLineage {
+    const authId = readCursorAuthId(env);
+    if (!authId) return UNKNOWN_ACCOUNT_LINEAGE;
+    const stored = readCredentialFile(env);
+    if (stored.kind === 'invalid') return UNKNOWN_ACCOUNT_LINEAGE;
+    if (stored.kind === 'ok' && !credentialAgrees(stored.accessToken, authId, false)) return UNKNOWN_ACCOUNT_LINEAGE;
+    if (spent && !credentialAgrees(spent.accessToken, authId, spent.strict)) return UNKNOWN_ACCOUNT_LINEAGE;
+    return cursorAuthIdLineage(env, authId);
+}
+
+/** Read-only identity check for hydration; no keychain spawn, no request. */
+export function readCursorQuotaAccountLineage(overrides: QuotaFetchDeps = {}): QuotaAccountLineage {
+    // Tests must opt into a synthetic HOME, never the owner's.
+    if (isTestRuntimeEnv() && !overrides.env?.HOME) return UNKNOWN_ACCOUNT_LINEAGE;
+    return readCursorRecordedLineage(overrides.env ?? process.env);
+}
+
 /** Fetch Cursor's current billing-period usage. Never throws. */
 export async function fetchCursorQuota(overrides: QuotaFetchDeps = {}): Promise<ProviderQuota> {
     assertInjectedNetworkFetchInTest(overrides, 'fetchCursorQuota');
     const deps = resolveDeps(overrides);
 
     let credentials = await readCredentials(deps);
+    let exchanged = false;
     if (credentials.kind === 'missing') {
         const apiKey = deps.env.CURSOR_API_KEY?.trim();
-        if (apiKey) credentials = await exchangeApiKey(deps, apiKey);
+        if (apiKey) {
+            credentials = await exchangeApiKey(deps, apiKey);
+            exchanged = true;
+        }
     }
+    if (credentials.kind !== 'ok' || (isTestRuntimeEnv() && !overrides.env?.HOME)) return fetchForCredentials(deps, credentials);
+    // cursor-agent's record must name the spent credential's account both
+    // before and after the request; any disagreement isolates the reading.
+    const spent = { accessToken: credentials.accessToken, strict: exchanged };
+    const before = readCursorRecordedLineage(deps.env, spent);
+    const quota = await fetchForCredentials(deps, credentials);
+    return settleAccountQuota(quota, before, readCursorRecordedLineage(deps.env, spent));
+}
+
+async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentials: CredentialsResult): Promise<ProviderQuota> {
     if (credentials.kind === 'missing') {
         return quotaFailure('cursor-cli', 'unavailable', 'Not signed in to Cursor CLI', {
             source: 'oauth', failureKind: 'missing-credentials',
