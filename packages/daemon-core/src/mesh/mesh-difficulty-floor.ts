@@ -170,11 +170,12 @@ export function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId: stri
 
 function taskHasActiveOwnedPathsConflict(meshId: string, task: MeshWorkQueueEntry | undefined): boolean {
     if (!task) return false;
+    // The live admission verdict is authoritative. A historical owned_paths_conflict
+    // stamp only stands in when that verdict cannot be computed — otherwise a released
+    // blocker would leave the stamp suppressing the bounded floor pager forever.
     try {
-        if (!evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task).allowed) {
-            return true;
-        }
-    } catch { /* best-effort */ }
+        return !evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task).allowed;
+    } catch { /* fall back to the recorded stamp */ }
     return task.autoLaunch?.status === 'skipped' && task.autoLaunch.reason === 'owned_paths_conflict';
 }
 

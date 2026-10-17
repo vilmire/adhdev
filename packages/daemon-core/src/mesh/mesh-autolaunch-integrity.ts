@@ -443,6 +443,30 @@ export function localSessionAppearsLive(components: DaemonComponents, meshId: st
     }
 }
 
+/** True when a LOCAL CLI session with this id exists and is an assistant / coordinator / null-spawn session. */
+export function localSessionIsProtected(components: DaemonComponents, sessionId: string): boolean {
+    if (!sessionId) return false;
+    try {
+        const sessions = components.instanceManager?.getByCategory?.('cli') || [];
+        return sessions.some((inst: any) => {
+            try {
+                // Match on the plain id field before building state (getState() rebuilds
+                // the whole transcript); only the matching instance pays for it.
+                const fieldId = readText(inst?.instanceId);
+                if (fieldId && !sessionIdsEquivalent(fieldId, sessionId)) return false;
+                const state = inst.getState?.();
+                const sid = readText(state?.instanceId);
+                if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
+                return isProtectedNonAutoLaunchSession(state, (state?.settings as Record<string, unknown>) || {});
+            } catch {
+                return false;
+            }
+        });
+    } catch {
+        return false;
+    }
+}
+
 const ADMISSION_BLOCKED_CLAIM_REASONS = new Set([
     'owned_paths_conflict',
     'not_before_delayed',
@@ -465,6 +489,7 @@ export function isTaskKnownAdmissionBlocked(
     if (!meshTaskNotBeforeReady(task, nowMs)) {
         return { blocked: true, reason: 'not_before_delayed' };
     }
+    let ownedPathsVerifiedClear = false;
     try {
         const ownedAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
         if (!ownedAdmission.allowed) {
@@ -474,10 +499,15 @@ export function isTaskKnownAdmissionBlocked(
                 ...(ownedAdmission.detail ? { detail: ownedAdmission.detail } : {}),
             };
         }
+        ownedPathsVerifiedClear = true;
     } catch { /* best-effort check */ }
     if (sessionId) {
         const recent = readRecentSessionClaimRefusal(meshId, sessionId, nowMs);
-        if (recent && ADMISSION_BLOCKED_CLAIM_REASONS.has(recent.reason)) {
+        // A cached owned_paths_conflict refusal is stale once the live check above has
+        // cleared THIS task: honouring it would hold the released task in backoff until
+        // the refusal TTL lapses instead of re-driving it immediately.
+        const staleOwnedPathsRefusal = recent?.reason === 'owned_paths_conflict' && ownedPathsVerifiedClear;
+        if (recent && !staleOwnedPathsRefusal && ADMISSION_BLOCKED_CLAIM_REASONS.has(recent.reason)) {
             return {
                 blocked: true,
                 reason: recent.reason,
@@ -563,6 +593,14 @@ export function driveExpiredAwaitClaim(
     // the old backoff window.
     if (!blockerJustReleased && state.nextAttemptAtMs && nowMs < state.nextAttemptAtMs) return 'backoff';
 
+    // An assistant / coordinator / null-spawn session is never a worker. If a stale
+    // auto-launch record points at one, the cap fallback and the released-blocker
+    // re-drive below would force a task into it; refuse and let a real worker launch.
+    if (localSessionIsProtected(components, sessionId)) {
+        autoLaunchAwaitClaimBackoff.delete(backoffKey);
+        recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'await_claim_session_protected', nodeId, sessionId });
+        return 'respawn';
+    }
     const effectiveCycles = blockerJustReleased ? 0 : state.cycles;
     const atCap = effectiveCycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
     const remoteLive = remoteSessionAppearsLive(meshId, sessionId);

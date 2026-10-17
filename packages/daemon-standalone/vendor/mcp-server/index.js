@@ -39685,6 +39685,16 @@ ${error.message || ""}`;
     }
     function ensureAssistantRelaySchema(db) {
       db.exec(`
+        -- Delivery manifests are content-free and never backfilled from captured
+        -- reports: old captures do not prove what survived the rendered cap.
+        CREATE TABLE IF NOT EXISTS assistant_relay_coverage (
+            attempt_id TEXT PRIMARY KEY,
+            coordinator_session_id TEXT NOT NULL,
+            rendered_at INTEGER NOT NULL,
+            replies_json TEXT NOT NULL,
+            reply_count INTEGER NOT NULL CHECK (reply_count BETWEEN 0 AND 600)
+        );
+        CREATE INDEX IF NOT EXISTS idx_assistant_relay_coverage_age ON assistant_relay_coverage(rendered_at);
         -- Local report captures survive delivery/restart; never projected to cloud status.
         CREATE TABLE IF NOT EXISTS assistant_attempt_bodies (
             attempt_id TEXT PRIMARY KEY,
@@ -61704,6 +61714,37 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_task_predicates();
       }
     });
+    function readInFlightOwnershipMeshWide(host, meshId) {
+      return host.assignedRowsMeshWide(meshId).map((row2) => {
+        try {
+          const parsed = JSON.parse(row2.payload);
+          if (parsed.id === void 0) return null;
+          if (!parsed.ownedPaths || isTaskReadonly3(parsed)) return null;
+          return { taskId: parsed.id, paths: parsed.ownedPaths };
+        } catch {
+          return null;
+        }
+      }).filter((v) => v !== null);
+    }
+    function findTaskOwnedPathsConflicts(candidate, inFlightOwnership) {
+      return candidate.ownedPaths && !isTaskReadonly3(candidate) ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership) : [];
+    }
+    function formatOwnedPathsConflictDetail(conflicts) {
+      return conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
+    }
+    function evaluateTaskOwnedPathsAdmission(host, meshId, candidate, inFlightOwnership) {
+      if (!candidate || !candidate.ownedPaths || isTaskReadonly3(candidate)) {
+        return { allowed: true, conflicts: [] };
+      }
+      const inFlight3 = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
+      const conflicts = findTaskOwnedPathsConflicts(candidate, inFlight3);
+      if (conflicts.length === 0) return { allowed: true, conflicts: [] };
+      return {
+        allowed: false,
+        conflicts,
+        detail: formatOwnedPathsConflictDetail(conflicts)
+      };
+    }
     function claimNextQueueTask(host, meshId, nodeId, sessionId, capabilityTags = [], opts) {
       return host.transaction(() => {
         if (bridgeDispatchFrozen(host.db, meshId)) return null;
@@ -61778,17 +61819,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (isTaskReadonly3(candidate)) return true;
           return !nodeWriteBusy;
         };
-        const inFlightOwnership = host.assignedRowsMeshWide(meshId).map((row2) => {
-          try {
-            const parsed = JSON.parse(row2.payload);
-            if (parsed.id === void 0) return null;
-            if (!parsed.ownedPaths || isTaskReadonly3(parsed)) return null;
-            return { taskId: parsed.id, paths: parsed.ownedPaths };
-          } catch {
-            return null;
-          }
-        }).filter((v) => v !== null);
-        const ownedPathsConflictFor = (candidate) => candidate.ownedPaths && !isTaskReadonly3(candidate) ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership) : [];
+        const inFlightOwnership = readInFlightOwnershipMeshWide(host, meshId);
+        const ownedPathsConflictFor = (candidate) => findTaskOwnedPathsConflicts(candidate, inFlightOwnership);
         const ownedPathsAllows = (candidate) => ownedPathsConflictFor(candidate).length === 0;
         const nodeGitGate = opts?.nodeGitGate;
         const nodeDirtyGate = nodeGitGate ? { dirty: nodeGitGate.dirty, worktreeBranch: nodeGitGate.worktreeBranch, nodeId: nodeGitGate.nodeId ?? nodeId } : void 0;
@@ -61821,7 +61853,11 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           { reason: "task_parked", test: notParked },
           { reason: "convergence_target_is_worktree", test: convergenceAllows },
           { reason: "target_pin_unmatched", test: targetMatches },
-          { reason: "difficulty_floor_unmet", test: difficultyAllows },
+          // When the claiming session's live model is unknown (!assignedModel) and the
+          // candidate is already blocked mesh-wide by owned_paths_conflict (with node
+          // and parallel caps clear), advance to owned_paths_conflict rather than
+          // attributing the refusal to the unknown-model slot intersection.
+          { reason: "difficulty_floor_unmet", test: (c) => difficultyAllows(c) || !assignedModel && parallelCapsAllow(c) && nodeConflictAllows(c) && !ownedPathsAllows(c) },
           { reason: "parallel_cap_reached", test: parallelCapsAllow },
           { reason: "node_busy_with_active_assignment", test: nodeConflictAllows },
           { reason: "owned_paths_conflict", test: ownedPathsAllows },
@@ -61832,8 +61868,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (!candidates.length) return refuse3("no_pending_candidates");
           if (selected.reason === "owned_paths_conflict" && selected.deepest) {
             const conflicts = ownedPathsConflictFor(selected.deepest);
-            const detail = conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
-            return refuse3("owned_paths_conflict", detail, selected.deepest);
+            return refuse3("owned_paths_conflict", formatOwnedPathsConflictDetail(conflicts), selected.deepest);
           }
           if (selected.reason === "dirty_workspace") {
             return refuse3("dirty_workspace", describeDirtyWriteRefusal2(nodeDirtyGate ?? { dirty: true }, nodeId), selected.deepest);
@@ -70224,10 +70259,11 @@ ${upstream}`;
     function clearWorktreeBootstrapStaleBypassState(meshId, nodeId, sessionId) {
       lastWorktreeBootstrapBypassLog.delete(`${meshId}:${nodeId}:${sessionId}`);
     }
-    function logAutoLaunchQuotaFallbackSuccess(resolved, taskId, nodeId, sessionId) {
-      if (!resolved.providerType || !resolved.quotaGated?.length) return;
+    function logAutoLaunchQuotaFallbackSuccess(resolved, taskId, nodeId, sessionId, effectiveProviderType) {
+      const spawnedProviderType = typeof effectiveProviderType === "string" && effectiveProviderType.trim() ? effectiveProviderType.trim() : typeof resolved.providerType === "string" ? resolved.providerType.trim() : "";
+      if (!spawnedProviderType || !resolved.quotaGated?.length) return;
       const detail = resolved.quotaGated.map((item) => quotaClaimBlockDescription(item.providerType, item.block)).join("; ");
-      LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${resolved.providerType}'${sessionId ? ` (${sessionId})` : ""}`);
+      LOG.info("MeshQueue", `QUOTA GATE: auto-launch fallback succeeded for task ${taskId} on node ${nodeId}: ${detail} \u2192 spawned provider '${spawnedProviderType}'${sessionId ? ` (${sessionId})` : ""}`);
     }
     function recordAutoLaunchEvent(meshId, args) {
       const dedupKey = `${meshId}:${args.taskId}:${args.nodeId || ""}`;
@@ -71374,6 +71410,18 @@ ${upstream}`;
     function localCoordinatorDaemonId() {
       return canonicalDaemonId2(readText(getMachineId()));
     }
+    function isProtectedNonAutoLaunchSession(state2, settings2 = state2?.settings || {}) {
+      if (settings2.spawnedForTaskId === null || state2?.spawnedForTaskId === null || state2?.launchRecord?.spawnedForTaskId === null) {
+        return true;
+      }
+      const role = readText(settings2.meshRole || settings2.role || state2?.role).toLowerCase();
+      if (role === "coordinator" || role === "assistant") return true;
+      if (settings2.assistant === true || settings2.isAssistant === true) return true;
+      if (readText(settings2.meshCoordinatorFor)) return true;
+      const launchedBy = readText(state2?.launchRecord?.launchedBy || settings2.launchedBy).toLowerCase();
+      if (launchedBy === "assistant") return true;
+      return false;
+    }
     function describeOrphanReclaim(idleTtlMinutes) {
       const ttl = idleTtlMinutes ?? DEFAULT_DELEGATED_SESSION_IDLE_TTL_MINUTES;
       if (!(ttl > 0)) {
@@ -71405,6 +71453,7 @@ ${upstream}`;
           continue;
         }
         const settings2 = state2?.settings || {};
+        if (isProtectedNonAutoLaunchSession(state2, settings2)) continue;
         if (readText(settings2.meshNodeFor) !== meshId) continue;
         const originTaskId = readText(settings2.autoLaunchedForQueueTaskId);
         if (!originTaskId) continue;
@@ -71481,7 +71530,9 @@ ${upstream}`;
       const heldSessionId = existing ? readText(existing.sessionId) : "";
       if (!existing || existing.status !== "completed" || !heldSessionId) return false;
       const heldAtMs = Date.parse(existing.updatedAt);
-      if (!isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs2)) return false;
+      const inBaseWindow = isAutoLaunchWithinAwaitClaimWindow(heldAtMs, Date.now(), awaitClaimWindowMs2);
+      const inBackoff = autoLaunchAwaitClaimBackoff.has(`${meshId}::${taskId}`);
+      if (!inBaseWindow && !inBackoff) return false;
       if (sessionIdsEquivalent(readText(args.sessionId), heldSessionId)) return false;
       LOG.info("MeshQueue", `AUTOLAUNCH-WINNER-CLOBBER: suppressed a '${args.status}' autoLaunch write for task ${taskId} (mesh ${meshId}) that would have overwritten the in-window launch record for session ${heldSessionId}; the field keeps pointing at the actually-launched session.`);
       return true;
@@ -71496,6 +71547,80 @@ ${upstream}`;
       } catch {
         return false;
       }
+    }
+    function localSessionAppearsLive(components, meshId, sessionId) {
+      if (!sessionId) return false;
+      try {
+        const sessions = components.instanceManager?.getByCategory?.("cli") || [];
+        return sessions.some((inst) => {
+          try {
+            const state2 = inst.getState?.();
+            const sid = readText(state2?.instanceId);
+            if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
+            const settings2 = state2?.settings || {};
+            if (isProtectedNonAutoLaunchSession(state2, settings2)) return false;
+            const sessionMeshId = readText(settings2.meshNodeFor);
+            if (sessionMeshId && sessionMeshId !== meshId) return false;
+            return isIdleSessionState(state2) && !sessionHasActiveAssignment(meshId, sid);
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        return false;
+      }
+    }
+    function localSessionIsProtected(components, sessionId) {
+      if (!sessionId) return false;
+      try {
+        const sessions = components.instanceManager?.getByCategory?.("cli") || [];
+        return sessions.some((inst) => {
+          try {
+            const fieldId = readText(inst?.instanceId);
+            if (fieldId && !sessionIdsEquivalent(fieldId, sessionId)) return false;
+            const state2 = inst.getState?.();
+            const sid = readText(state2?.instanceId);
+            if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
+            return isProtectedNonAutoLaunchSession(state2, state2?.settings || {});
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        return false;
+      }
+    }
+    function isTaskKnownAdmissionBlocked(meshId, task, sessionId, nowMs2 = Date.now()) {
+      if (taskIsParked(task)) {
+        return { blocked: true, reason: "task_parked" };
+      }
+      if (!meshTaskNotBeforeReady(task, nowMs2)) {
+        return { blocked: true, reason: "not_before_delayed" };
+      }
+      let ownedPathsVerifiedClear = false;
+      try {
+        const ownedAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+        if (!ownedAdmission.allowed) {
+          return {
+            blocked: true,
+            reason: "owned_paths_conflict",
+            ...ownedAdmission.detail ? { detail: ownedAdmission.detail } : {}
+          };
+        }
+        ownedPathsVerifiedClear = true;
+      } catch {
+      }
+      if (sessionId) {
+        const recent = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
+        const staleOwnedPathsRefusal = recent?.reason === "owned_paths_conflict" && ownedPathsVerifiedClear;
+        if (recent && !staleOwnedPathsRefusal && ADMISSION_BLOCKED_CLAIM_REASONS.has(recent.reason)) {
+          return {
+            blocked: true,
+            reason: recent.reason
+          };
+        }
+      }
+      return { blocked: false };
     }
     function inWindowAutoLaunchSessionIdsForNode(meshId, nodeId) {
       const nowMs2 = Date.now();
@@ -71517,13 +71642,43 @@ ${upstream}`;
       const backoffKey = `${meshId}::${task.id}`;
       const nowMs2 = Date.now();
       const state2 = autoLaunchAwaitClaimBackoff.get(backoffKey) || { cycles: 0, nextAttemptAtMs: 0 };
-      if (state2.nextAttemptAtMs && nowMs2 < state2.nextAttemptAtMs) return "backoff";
-      const atCap = state2.cycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
-      const live = remoteSessionAppearsLive(meshId, sessionId);
-      if ((live || atCap) && nodeId && providerType) {
-        try {
-          MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs2 + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
-        } catch {
+      const admissionBlock = isTaskKnownAdmissionBlocked(meshId, task, sessionId, nowMs2);
+      if (admissionBlock.blocked) {
+        if (!state2.nextAttemptAtMs || nowMs2 >= state2.nextAttemptAtMs || !state2.admissionBlocked) {
+          const cycles2 = Math.max(1, state2.cycles || 1);
+          autoLaunchAwaitClaimBackoff.set(backoffKey, {
+            cycles: cycles2,
+            nextAttemptAtMs: nowMs2 + awaitClaimWindowMs(cycles2),
+            admissionBlocked: true
+          });
+          recordAutoLaunchEvent(meshId, {
+            phase: "skipped",
+            taskId: task.id,
+            reason: admissionBlock.reason || "awaiting_launched_session_claim_backoff",
+            nodeId,
+            sessionId
+          });
+        }
+        return "backoff";
+      }
+      const blockerJustReleased = state2.admissionBlocked === true;
+      if (!blockerJustReleased && state2.nextAttemptAtMs && nowMs2 < state2.nextAttemptAtMs) return "backoff";
+      if (localSessionIsProtected(components, sessionId)) {
+        autoLaunchAwaitClaimBackoff.delete(backoffKey);
+        recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "await_claim_session_protected", nodeId, sessionId });
+        return "respawn";
+      }
+      const effectiveCycles = blockerJustReleased ? 0 : state2.cycles;
+      const atCap = effectiveCycles >= AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES;
+      const remoteLive = remoteSessionAppearsLive(meshId, sessionId);
+      const localLive = localSessionAppearsLive(components, meshId, sessionId);
+      const live = remoteLive || localLive;
+      if ((live || atCap || blockerJustReleased) && nodeId && providerType) {
+        if (!localLive) {
+          try {
+            MeshRuntimeStore.getInstance().setRemoteIdleSession(meshId, nodeId, sessionId, providerType, nowMs2 + AUTO_LAUNCH_REMOTE_IDLE_TTL_MS);
+          } catch {
+          }
         }
         const assigned = assignQueueTask(components, meshId, nodeId, sessionId, providerType);
         if (assigned) {
@@ -71539,12 +71694,29 @@ ${upstream}`;
           LOG.info("MeshQueue", `Auto-launch await-claim ${isFallback ? "direct-dispatch fallback" : "re-drive"} claimed task ${task.id} into existing session ${sessionId} on node ${nodeId} (mesh ${meshId})`);
           return isFallback ? "fallback" : "claimed";
         }
+        const postAttemptBlock = isTaskKnownAdmissionBlocked(meshId, task, sessionId, Date.now());
+        if (postAttemptBlock.blocked || localLive) {
+          const cycles2 = Math.max(1, effectiveCycles || 1);
+          autoLaunchAwaitClaimBackoff.set(backoffKey, {
+            cycles: cycles2,
+            nextAttemptAtMs: nowMs2 + awaitClaimWindowMs(cycles2),
+            ...postAttemptBlock.blocked ? { admissionBlocked: true } : {}
+          });
+          recordAutoLaunchEvent(meshId, {
+            phase: "skipped",
+            taskId: task.id,
+            reason: postAttemptBlock.reason || "awaiting_launched_session_claim_backoff",
+            nodeId,
+            sessionId
+          });
+          return "backoff";
+        }
         if (atCap) {
           autoLaunchAwaitClaimBackoff.delete(backoffKey);
           return "respawn";
         }
       }
-      const cycles = Math.min(state2.cycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
+      const cycles = Math.min(effectiveCycles + 1, AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES);
       autoLaunchAwaitClaimBackoff.set(backoffKey, { cycles, nextAttemptAtMs: nowMs2 + awaitClaimWindowMs(cycles) });
       recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim_backoff", nodeId, sessionId });
       return "backoff";
@@ -71599,6 +71771,7 @@ ${upstream}`;
     var AUTO_LAUNCH_ORPHAN_GRACE_MS;
     var ORPHAN_NOTICE_REAP_CADENCE_MS;
     var autoLaunchAwaitClaimBackoff;
+    var ADMISSION_BLOCKED_CLAIM_REASONS;
     var remoteGeneratingSessions;
     var init_mesh_autolaunch_integrity = __esm2({
       "src/mesh/mesh-autolaunch-integrity.ts"() {
@@ -71609,8 +71782,11 @@ ${upstream}`;
         init_mesh_work_queue();
         init_deliver();
         init_mesh_queue_observability();
+        init_mesh_claim_refusal();
         init_mesh_scheduling_fitness();
+        init_mesh_task_parking();
         init_mesh_runtime_store();
+        init_mesh_runtime_store_claim();
         init_repo_mesh_types();
         AUTO_LAUNCH_AWAIT_CLAIM_MS = 9e4;
         AUTO_LAUNCH_AWAIT_CLAIM_BACKOFF_CAP_CYCLES = 2;
@@ -71621,6 +71797,15 @@ ${upstream}`;
         AUTO_LAUNCH_ORPHAN_GRACE_MS = 3e4;
         ORPHAN_NOTICE_REAP_CADENCE_MS = 5 * 60 * 1e3;
         autoLaunchAwaitClaimBackoff = /* @__PURE__ */ new Map();
+        ADMISSION_BLOCKED_CLAIM_REASONS = /* @__PURE__ */ new Set([
+          "owned_paths_conflict",
+          "not_before_delayed",
+          "task_parked",
+          "node_busy_with_active_assignment",
+          "node_active_task_conflict",
+          "parallel_cap_reached",
+          "code_change_cap_reached"
+        ]);
         remoteGeneratingSessions = /* @__PURE__ */ new Set();
       }
     });
@@ -71643,7 +71828,11 @@ ${upstream}`;
       if (!allowed || !isMeshTaskDifficulty2(task.difficulty) || task.difficulty === "freeform") return true;
       return allowed.includes(task.difficulty);
     }
-    function launchSideDifficultyFloorMismatch(node, slots2, providerType, model, task, nodeId) {
+    function launchSideDifficultyFloorMismatch(node, slots2, providerType, model, task, nodeId, decidedSlot) {
+      if (decidedSlot && taskRequiresDifficultyFloor(node, task) && !slotCoversTaskDifficulty(decidedSlot, task.difficulty)) {
+        LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the decided slot only covers [${(decidedSlot.difficulty || []).join(", ")}], below the task's '${task.difficulty}' floor`);
+        return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || "classified"}`;
+      }
       const allowed = allowedClassifiedDifficultiesForSession(node, slots2, providerType, model);
       if (taskMeetsSessionDifficultyFloor(task, allowed)) return void 0;
       LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the resolved launch model only covers [${(allowed || []).join(", ")}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
@@ -71654,13 +71843,25 @@ ${upstream}`;
       if (controlModel) return controlModel;
       const modelItem = Array.isArray(state2?.summaryMetadata?.items) ? state2.summaryMetadata.items.find((item) => item?.id === "model") : void 0;
       const summaryModel = typeof modelItem?.shortValue === "string" && modelItem.shortValue.trim() ? modelItem.shortValue.trim() : typeof modelItem?.value === "string" ? modelItem.value.trim() : "";
-      return summaryModel || void 0;
+      if (summaryModel) return summaryModel;
+      const launchModel = state2?.launchRecord?.model;
+      for (const candidate of [
+        launchModel?.launchValue,
+        launchModel?.requested,
+        launchModel?.resolvedDefault,
+        state2?.settings?.initialModel,
+        state2?.settings?.model
+      ]) {
+        if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+      }
+      return void 0;
     }
     function isDifficultyFloorWaitReason(reason) {
       return typeof reason === "string" && (reason.startsWith(TASK_DIFFICULTY_FLOOR_REASON_PREFIX) || reason.startsWith(ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON) || BOUNDED_WAIT_SKIP_REASONS.some((prefix) => reason.startsWith(prefix)));
     }
-    function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, status) {
+    function autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, status, reason) {
       if (status !== "skipped") return false;
+      if (reason === "owned_paths_conflict") return false;
       let existing;
       try {
         existing = getQueueEntryById(meshId, taskId)?.autoLaunch;
@@ -71669,8 +71870,22 @@ ${upstream}`;
       }
       return existing?.status === "skipped" && isDifficultyFloorWaitReason(existing.reason);
     }
+    function taskHasActiveOwnedPathsConflict(meshId, task) {
+      if (!task) return false;
+      try {
+        return !evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task).allowed;
+      } catch {
+      }
+      return task.autoLaunch?.status === "skipped" && task.autoLaunch.reason === "owned_paths_conflict";
+    }
     function handleClaimPathDifficultyFloorRefusal(args) {
       if (args.refusalReason !== "difficulty_floor_unmet" || !args.claimRefusal.taskId) return;
+      let existingTask;
+      try {
+        existingTask = getQueueEntryById(args.meshId, args.claimRefusal.taskId) ?? void 0;
+      } catch {
+      }
+      if (taskHasActiveOwnedPathsConflict(args.meshId, existingTask)) return;
       handleDifficultyFloorSkip({
         meshId: args.meshId,
         taskId: args.claimRefusal.taskId,
@@ -71686,6 +71901,9 @@ ${upstream}`;
       } catch {
       }
       if (previousTask?.autoLaunch?.reason?.startsWith(TASK_DIFFICULTY_FLOOR_REPORTED_PREFIX)) return;
+      if (args.reason.startsWith("task_difficulty_floor_unavailable:") && taskHasActiveOwnedPathsConflict(args.meshId, previousTask)) {
+        return;
+      }
       const continuing = previousTask?.autoLaunch?.status === "skipped" && isDifficultyFloorWaitReason(previousTask.autoLaunch.reason);
       if (!continuing && !autoLaunchWriteWouldClobberWinner(args.meshId, args.taskId, {
         status: "skipped",
@@ -71751,8 +71969,11 @@ ${upstream}`;
         init_logger();
         init_mesh_work_queue();
         init_mesh_autolaunch_integrity();
+        init_mesh_runtime_store();
+        init_mesh_runtime_store_claim();
         init_deliver();
         init_slot_model_enforcement();
+        init_mesh_scheduling_fitness();
         init_mesh_quota_routing();
         init_dist();
         DIFFICULTY_FLOOR_REPORT_AFTER_MS = 10 * 6e4;
@@ -73813,6 +74034,20 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_scheduling_fitness();
       }
     });
+    function rememberAutoLaunchRoutingDecision(meshId, sessionId, decision) {
+      if (!meshId || !sessionId) return;
+      const key4 = `${meshId}::${sessionId}`;
+      lastAutoLaunchRoutingDecisionBySession.delete(key4);
+      lastAutoLaunchRoutingDecisionBySession.set(key4, decision);
+      if (lastAutoLaunchRoutingDecisionBySession.size > AUTO_LAUNCH_LEDGER_DEDUP_MAX) {
+        const oldest = lastAutoLaunchRoutingDecisionBySession.keys().next().value;
+        if (oldest !== void 0) lastAutoLaunchRoutingDecisionBySession.delete(oldest);
+      }
+    }
+    function readAutoLaunchRoutingDecision(meshId, sessionId) {
+      if (!meshId || !sessionId) return void 0;
+      return lastAutoLaunchRoutingDecisionBySession.get(`${meshId}::${sessionId}`);
+    }
     function maintenanceAutoLaunches() {
       return { nodes: [...autoLaunchInProgress].sort(), tasks: [...autoLaunchTaskInProgress].sort() };
     }
@@ -73836,7 +74071,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const difficultyFloorSkip = args.status === "skipped" && isDifficultyFloorWaitReason(reason);
       if (difficultyFloorSkip) {
         handleDifficultyFloorSkip({ meshId, taskId, reason, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId2() });
-      } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status)) {
+      } else if (!autoLaunchWriteWouldClobberWinner(meshId, taskId, args, AUTO_LAUNCH_AWAIT_CLAIM_MS) && !autoLaunchWriteWouldClobberDifficultyFloorWaitClock(meshId, taskId, args.status, reason)) {
         recordTaskAutoLaunch(meshId, taskId, {
           status: args.status,
           reason,
@@ -73882,11 +74117,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const alSessionId = readText(task.autoLaunch.sessionId);
         const alNodeId = readText(task.autoLaunch.nodeId);
         const alProvider = readText(task.autoLaunch.providerType);
+        const storedRoutingDecision = readAutoLaunchRoutingDecision(meshId, alSessionId);
         if (isAutoLaunchWithinAwaitClaimWindow(launchedAtMs)) {
           if (shouldRedriveDeferredClaim(meshId, alNodeId, alSessionId, () => isWorkspaceAutoFastForwardInFlight(readText(
             (Array.isArray(mesh?.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, alNodeId)) : void 0)?.workspace
           )))) {
-            if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, void 0, void 0, "auto_launch")) {
+            if (tryAssignQueueTask(components, meshId, alNodeId, alSessionId, alProvider, storedRoutingDecision, void 0, "auto_launch")) {
               clearClaimDeferralForNode(meshId, alNodeId);
               recordAutoLaunchEvent(meshId, { phase: "completed", taskId: task.id, reason: "fast_forward_deferred_claim_redriven", nodeId: alNodeId, sessionId: alSessionId });
               LOG.info("MeshQueue", `Auto-launch re-drove the auto-fast-forward-deferred claim for task ${task.id} into session ${alSessionId} on node ${alNodeId} (mesh ${meshId})`);
@@ -73898,7 +74134,13 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           return "skip";
         }
         if (Number.isFinite(launchedAtMs) && alSessionId && alNodeId) {
-          const outcome = driveExpiredAwaitClaim(components, meshId, task, { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider }, tryAssignQueueTask);
+          const outcome = driveExpiredAwaitClaim(
+            components,
+            meshId,
+            task,
+            { sessionId: alSessionId, nodeId: alNodeId, providerType: alProvider },
+            (c, m, n, s2, p) => tryAssignQueueTask(c, m, n, s2, p, storedRoutingDecision, void 0, "auto_launch")
+          );
           if (outcome === "claimed" || outcome === "fallback") return "progress";
           if (outcome === "backoff") return "skip";
         }
@@ -73994,42 +74236,77 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       return launchTarget;
     }
     function decideAutoLaunchSlot(meshId, mesh, task, node, nodeId, isReadonly, resolved, requestedModel, markSkip) {
-      const nodeSlotAvailability = () => resolveNodeCapabilitySlots(node, meshId).map((slot) => ({
-        slot,
-        available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly)
-      }));
+      const allNodeSlots = resolveNodeCapabilitySlots(node, meshId);
+      const requiresFloor = taskRequiresDifficultyFloor(node, task);
+      const nodeSlotAvailability = (forProviderType) => {
+        const providerSlots = allNodeSlots.filter((slot) => (slot.provider?.trim() ?? "") === forProviderType);
+        const hasCoveringSlot = requiresFloor && providerSlots.some((slot) => slotCoversTaskDifficulty(slot, task.difficulty));
+        const hasOnlyModelLessOrSameModel = hasCoveringSlot && (providerSlots.every((slot) => !readText(slot.model)) || new Set(providerSlots.map((slot) => readText(slot.model).toLowerCase())).size === 1);
+        const targetSlots = hasOnlyModelLessOrSameModel ? allNodeSlots.filter(
+          (slot) => (slot.provider?.trim() ?? "") !== forProviderType || slotCoversTaskDifficulty(slot, task.difficulty)
+        ) : allNodeSlots;
+        return targetSlots.map((slot) => ({
+          slot,
+          available: slotHasCapacity(meshId, nodeId, node, slot, mesh?.nodes, isReadonly)
+        }));
+      };
       let effectiveProviderType = resolved.providerType;
       let effectiveRequestedModel = requestedModel;
       let effectiveWinningSlot = resolved.slot;
       let slotDecision = decideSlotForModel({
         requestedModel,
         providerType: effectiveProviderType,
-        slots: nodeSlotAvailability()
+        slots: nodeSlotAvailability(effectiveProviderType)
       });
-      if (slotDecision.outcome === "wait") {
-        const fallback = resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback ? selectQuotaBusyFallback({
+      const primaryPostCompatModel = slotDecision.outcome === "run" ? isModelCompatibleWithProvider(slotDecision.model, effectiveProviderType) ? slotDecision.model : void 0 : void 0;
+      const primaryFailsFloor = slotDecision.outcome === "run" && task.modelSource !== "explicit" && !!launchSideDifficultyFloorMismatch(node, allNodeSlots, effectiveProviderType, primaryPostCompatModel, task, nodeId, slotDecision.slot);
+      if (slotDecision.outcome === "wait" || primaryFailsFloor) {
+        const canTryFallback = slotDecision.outcome === "wait" ? resolveQuotaRoutingPolicy(mesh?.policy?.quotaRouting ?? null).quotaBusyFallback : true;
+        const fallback = canTryFallback ? selectQuotaBusyFallback({
           clearOrder: resolved.quotaClearOrder ?? [],
           candidates: resolved.quotaCandidates ?? [],
           busyProviderType: resolved.providerType,
-          probe: (candidate) => decideSlotForModel({
-            // Re-resolve the model against the CANDIDATE's own slot: the
-            // requested model was derived from the busy winner's slot, and
-            // carrying it over would ask the fallback provider to honour a
-            // model it may never declare — the exact (provider, model)
-            // pair-splitting slot-model-enforcement.ts forbids.
-            requestedModel: resolveLaunchAxis(
+          probe: (candidate) => {
+            const candidateRequestedModel = resolveLaunchAxis(
               task.model,
               task.modelSource,
               candidate.slot.model,
               slotCoversTaskDifficulty(candidate.slot, task.difficulty)
-            ),
-            providerType: candidate.providerType,
-            slots: nodeSlotAvailability()
-          }).outcome === "run"
+            );
+            const candidateDecision = decideSlotForModel({
+              requestedModel: candidateRequestedModel,
+              providerType: candidate.providerType,
+              slots: nodeSlotAvailability(candidate.providerType)
+            });
+            if (candidateDecision.outcome !== "run") return false;
+            const candidateFinal = finalizeSlotSelection({
+              winningSlot: candidate.slot,
+              decidedSlot: candidateDecision.slot,
+              decidedModel: candidateDecision.model,
+              winningSlotHasCapacity: slotHasCapacity(meshId, nodeId, node, candidate.slot, mesh?.nodes, isReadonly)
+            });
+            const compatModel = isModelCompatibleWithProvider(candidateFinal.model, candidate.providerType) ? candidateFinal.model : void 0;
+            if (launchSideDifficultyFloorMismatch(node, allNodeSlots, candidate.providerType, compatModel, task, nodeId, candidateDecision.slot)) {
+              return false;
+            }
+            const candidateCap = effectiveSlotCap(
+              resolveProviderMaxParallel(allNodeSlots, candidate.providerType),
+              isReadonly
+            );
+            if (candidateCap !== void 0 && activeProviderAssignedCount(
+              meshId,
+              nodeId,
+              candidate.providerType,
+              resolveDaemonSiblingNodeIds(nodeId, mesh?.nodes)
+            ) >= candidateCap) {
+              return false;
+            }
+            return true;
+          }
         }) : { outcome: "exhausted", skipped: [] };
         if (fallback.outcome === "fallback") {
           const { candidate } = fallback;
-          LOG.info("MeshQueue", `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but saturated for model '${requestedModel}' (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also busy: ${fallback.skipped.join(", ")})` : ""}`);
+          LOG.info("MeshQueue", `QUOTA-BUSY FALLBACK: provider '${resolved.providerType}' on node ${nodeId} is quota-clear but ${primaryFailsFloor ? "fails difficulty floor" : `saturated for model '${requestedModel}'`} (task ${task.id}); falling through to next quota-clear candidate '${candidate.providerType}'${fallback.skipped.length ? ` (also skipped: ${fallback.skipped.join(", ")})` : ""}`);
           effectiveProviderType = candidate.providerType;
           effectiveWinningSlot = candidate.slot;
           effectiveRequestedModel = resolveLaunchAxis(
@@ -74041,7 +74318,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           slotDecision = decideSlotForModel({
             requestedModel: effectiveRequestedModel,
             providerType: effectiveProviderType,
-            slots: nodeSlotAvailability()
+            slots: nodeSlotAvailability(effectiveProviderType)
           });
         }
       }
@@ -74067,9 +74344,19 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       return { effectiveProviderType, slot: slotDecision.slot, model: finalization.model, demotionReason: finalization.demotionReason };
     }
     async function resolveAutoLaunchPlan(components, meshId, mesh, task, node, nodeId, isReadonly, skippedCandidates, markSkip) {
+      const preAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+      if (!preAdmission.allowed) {
+        markSkip(nodeId, "owned_paths_conflict");
+        return null;
+      }
       const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: task.difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
       if (!resolved.providerType) {
         markSkip(nodeId, resolved.reason || "provider_unusable");
+        return null;
+      }
+      const postProviderAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+      if (!postProviderAdmission.allowed) {
+        markSkip(nodeId, "owned_paths_conflict", { providerType: resolved.providerType });
         return null;
       }
       const slotCoversDifficulty = slotCoversTaskDifficulty(resolved.slot, task.difficulty);
@@ -74104,7 +74391,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       if (rawEffectiveModel && effectiveModel === void 0) {
         LOG.info("MeshQueue", `CODEX-400 GUARD: dropped incompatible launch model '${rawEffectiveModel}' for non-Anthropic provider '${effectiveProviderType}' on node ${nodeId} (task ${task.id}); provider will use its own default model`);
       }
-      const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId);
+      const floorMiss = launchSideDifficultyFloorMismatch(node, resolveNodeCapabilitySlots(node, meshId), effectiveProviderType, effectiveModel, task, nodeId, slotChoice.slot);
       if (floorMiss) {
         markSkip(nodeId, floorMiss, { providerType: effectiveProviderType });
         return null;
@@ -74128,6 +74415,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         meshNodeFor: meshId,
         meshNodeId: nodeId,
         spawnedSessionVisibility: resolveMeshPolicy2(mesh?.policy).spawnedSessionVisibility || "hidden",
+        ...effectiveModel ? { initialModel: effectiveModel } : {},
         // Coordinator-dispatched worker: auto-approve unless mesh/node policy
         // opts out (default true). Lands in settingsOverride and beats the
         // global per-provider-type boolean/mode through explicit opposite-key clearing.
@@ -74202,14 +74490,15 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       }
       const remoteSessionId = readText(payload.sessionId) || readText(payload.id) || readText(payload.runtimeSessionId);
       markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId: remoteSessionId || void 0, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
-      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || void 0);
+      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, remoteSessionId || void 0, effectiveProviderType);
       autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
       sweepExpiredCooldowns();
       if (remoteSessionId) {
+        const routingDecision = buildRoutingDecision();
+        rememberAutoLaunchRoutingDecision(meshId, remoteSessionId, routingDecision);
         await waitForRemoteSessionReady(meshId, nodeId, remoteSessionId, {
           isReady: remoteSessionReadyProbe(meshId, nodeId, remoteSessionId)
         }).catch(() => false);
-        const routingDecision = buildRoutingDecision();
         claimAfterRemoteAutoLaunch(
           components,
           meshId,
@@ -74253,9 +74542,10 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         return false;
       }
       markAutoLaunch(meshId, task.id, { status: "completed", nodeId, providerType: effectiveProviderType, sessionId, ...effectiveModel ? { model: effectiveModel } : {}, ...effectiveThinkingLevel ? { thinkingLevel: effectiveThinkingLevel } : {}, spendSpawnBudget: true });
-      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId);
-      await waitForLocalSessionReady(components, sessionId);
+      logAutoLaunchQuotaFallbackSuccess(resolved, task.id, nodeId, sessionId, effectiveProviderType);
       const routingDecision = buildRoutingDecision();
+      rememberAutoLaunchRoutingDecision(meshId, sessionId, routingDecision);
+      await waitForLocalSessionReady(components, sessionId);
       tryAssignQueueTask(components, meshId, nodeId, sessionId, effectiveProviderType, routingDecision, void 0, "auto_launch");
       return true;
     }
@@ -74342,6 +74632,11 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           const awaitClaim = driveAwaitClaimGuard(components, meshId, mesh, task);
           if (awaitClaim === "progress") return true;
           if (awaitClaim === "skip") continue;
+          const ownedPathsAdmission = evaluateTaskOwnedPathsAdmission(MeshRuntimeStore.getInstance(), meshId, task);
+          if (!ownedPathsAdmission.allowed) {
+            markAutoLaunch(meshId, task.id, { status: "skipped", reason: "owned_paths_conflict" });
+            continue;
+          }
           if (maybeParkSpawnCappedTask(meshId, task, parkTaskTargetPin, (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }))) continue;
           if (maybeParkDispatchFailureCappedTask(meshId, task, parkTaskTargetPin, (reason) => markAutoLaunch(meshId, task.id, { status: "skipped", reason }))) continue;
           const orderedCandidateNodes = selectAutoLaunchCandidateNodes(components, meshId, mesh, task);
@@ -74382,6 +74677,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     var autoLaunchInProgress;
     var autoLaunchTaskInProgress;
     var autoLaunchCooldownUntil;
+    var lastAutoLaunchRoutingDecisionBySession;
     var AUTO_LAUNCH_COOLDOWN_MS;
     var init_mesh_queue_autolaunch = __esm2({
       "src/mesh/mesh-queue-autolaunch.ts"() {
@@ -74411,6 +74707,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         init_mesh_quota_fallback();
         init_mesh_autolaunch_integrity();
         init_mesh_difficulty_floor();
+        init_mesh_runtime_store();
+        init_mesh_runtime_store_claim();
         init_mesh_autolaunch_spawn_cap();
         init_mesh_autolaunch_dispatch_cap();
         init_mesh_candidacy_predicates();
@@ -74420,6 +74718,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         autoLaunchInProgress = /* @__PURE__ */ new Set();
         autoLaunchTaskInProgress = /* @__PURE__ */ new Set();
         autoLaunchCooldownUntil = /* @__PURE__ */ new Map();
+        lastAutoLaunchRoutingDecisionBySession = /* @__PURE__ */ new Map();
         AUTO_LAUNCH_COOLDOWN_MS = 5e3;
       }
     });
@@ -91645,6 +91944,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         init_report_continuation();
       }
     });
+    function copyRenderedCoverage(value) {
+      const id4 = (v) => typeof v === "string" && v.length > 0 && v.length <= 512;
+      if (!value || !id4(value.attemptId) || !id4(value.coordinatorSessionId) || !Array.isArray(value.replies) || value.replies.length > 600) return null;
+      if (!value.replies.every((r) => r && Number.isSafeInteger(r.messageAt) && Number.isFinite(new Date(r.messageAt).getTime()) && typeof r.contentHash === "string" && /^[a-f0-9]{64}$/.test(r.contentHash))) return null;
+      return {
+        attemptId: value.attemptId,
+        coordinatorSessionId: value.coordinatorSessionId,
+        replies: value.replies.map((r) => ({ messageAt: r.messageAt, contentHash: r.contentHash }))
+      };
+    }
     function evidencePrefixMatches(evidenceRef, stablePrefix) {
       try {
         const arr = JSON.parse(evidenceRef);
@@ -91658,6 +91967,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const rows = [...byMesh.entries()].map(([meshId, count]) => ({ meshId, count })).sort((a, b) => b.count - a.count || a.meshId.localeCompare(b.meshId));
       return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
     }
+    var coverageOrder;
+    var RELAY_COVERAGE_TTL_MS;
+    var RELAY_COVERAGE_MAX_ROWS;
+    var RELAY_COVERAGE_MAX_REPLIES;
+    var RELAY_COVERAGE_MAX_BYTES;
     var ATTEMPT_BODY_TTL_MS;
     var ATTEMPT_BODY_MAX_CHARS;
     var ATTEMPT_BODY_MAX_ROWS;
@@ -91668,6 +91982,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var init_assistant_relay_store = __esm2({
       "src/assistant/assistant-relay-store.ts"() {
         "use strict";
+        coverageOrder = (a, b) => a.renderedAt - b.renderedAt || Buffer.compare(Buffer.from(a.attemptId), Buffer.from(b.attemptId));
+        RELAY_COVERAGE_TTL_MS = 24 * 60 * 6e4;
+        RELAY_COVERAGE_MAX_ROWS = 4096;
+        RELAY_COVERAGE_MAX_REPLIES = 4096;
+        RELAY_COVERAGE_MAX_BYTES = 2 * 1048576;
         ATTEMPT_BODY_TTL_MS = 24 * 60 * 6e4;
         ATTEMPT_BODY_MAX_CHARS = 1048576;
         ATTEMPT_BODY_MAX_ROWS = 128;
@@ -91675,6 +91994,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 6e4;
         THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 6e4;
         InMemoryAssistantRelayStore = class {
+          coverage = /* @__PURE__ */ new Map();
           bodies = /* @__PURE__ */ new Map();
           threads = /* @__PURE__ */ new Map();
           relays = /* @__PURE__ */ new Map();
@@ -91698,13 +92018,41 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             this.relays.set(row2.attemptId, { ...row2, deliveredAt: null, relayedAt: null });
             return true;
           }
-          markDelivered(attemptIds, at, rendered) {
+          markDelivered(attemptIds, at, rendered, coverage = []) {
             const sent = new Set(rendered ?? attemptIds);
+            const fresh = /* @__PURE__ */ new Set();
             for (const id4 of attemptIds) {
               const r = this.relays.get(id4);
               if (!r || r.deliveredAt !== null) continue;
               r.deliveredAt = at;
-              if (sent.has(id4)) r.relayedAt = at;
+              if (sent.has(id4)) {
+                r.relayedAt = at;
+                fresh.add(id4);
+              }
+            }
+            for (const value of coverage) {
+              const c = copyRenderedCoverage(value);
+              if (!c || !fresh.has(c.attemptId) || this.relays.get(c.attemptId)?.coordinatorSessionId !== c.coordinatorSessionId) continue;
+              fresh.delete(c.attemptId);
+              this.coverage.set(c.attemptId, { ...c, renderedAt: at });
+            }
+            this.pruneCoverage(at);
+          }
+          listDeliveredCoverage(now) {
+            this.pruneCoverage(now);
+            return [...this.coverage.values()].sort(coverageOrder).map((c) => ({ ...copyRenderedCoverage(c), renderedAt: c.renderedAt }));
+          }
+          pruneCoverage(now) {
+            let count = 0, replies = 0, bytes = 0;
+            const ordered = [...this.coverage.values()].sort(coverageOrder).reverse();
+            for (const c of ordered) {
+              const cost = Buffer.byteLength(JSON.stringify(c.replies), "utf8") + Buffer.byteLength(c.attemptId, "utf8") + Buffer.byteLength(c.coordinatorSessionId, "utf8") + 32;
+              if (now - c.renderedAt >= RELAY_COVERAGE_TTL_MS || ++count > RELAY_COVERAGE_MAX_ROWS || replies + c.replies.length > RELAY_COVERAGE_MAX_REPLIES || bytes + cost > RELAY_COVERAGE_MAX_BYTES) {
+                this.coverage.delete(c.attemptId);
+              } else {
+                replies += c.replies.length;
+                bytes += cost;
+              }
             }
           }
           listUndelivered() {
@@ -91748,6 +92096,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             }
           }
           prune(now) {
+            this.pruneCoverage(now);
             this.pruneBodies(now);
             for (const [id4, r] of this.relays) {
               if (r.deliveredAt !== null && now - r.deliveredAt > RELAY_DELIVERED_RETENTION_MS) this.relays.delete(id4);
@@ -91816,13 +92165,61 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         `).run(row2.attemptId, row2.meshId, row2.coordinatorSessionId, row2.committedAt, row2.kind, row2.outcome);
             return r.changes > 0;
           }
-          markDelivered(attemptIds, at, rendered) {
+          markDelivered(attemptIds, at, rendered, coverage = []) {
             if (!attemptIds.length) return;
             const sent = new Set(rendered ?? attemptIds);
             const stmt = this.db.prepare("UPDATE assistant_relays SET delivered_at = ?, relayed_at = ? WHERE attempt_id = ? AND delivered_at IS NULL");
+            const insert = this.db.prepare(`INSERT OR IGNORE INTO assistant_relay_coverage
+            (attempt_id, coordinator_session_id, rendered_at, replies_json, reply_count)
+            SELECT attempt_id, coordinator_session_id, ?, ?, ? FROM assistant_relays
+            WHERE attempt_id=? AND coordinator_session_id=? AND delivered_at=? AND relayed_at=?`);
             this.db.transaction((ids) => {
-              for (const id4 of ids) stmt.run(at, sent.has(id4) ? at : null, id4);
+              const fresh = /* @__PURE__ */ new Set();
+              for (const id4 of ids) {
+                if (stmt.run(at, sent.has(id4) ? at : null, id4).changes && sent.has(id4)) fresh.add(id4);
+              }
+              for (const value of coverage) {
+                const c = copyRenderedCoverage(value);
+                if (!c || !fresh.has(c.attemptId)) continue;
+                if (insert.run(at, JSON.stringify(c.replies), c.replies.length, c.attemptId, c.coordinatorSessionId, at, at).changes) fresh.delete(c.attemptId);
+              }
+              this.pruneCoverage(at);
             })(attemptIds);
+          }
+          listDeliveredCoverage(now) {
+            this.pruneCoverage(now);
+            const rows = this.db.prepare(`SELECT attempt_id, coordinator_session_id, rendered_at, replies_json, reply_count
+            FROM assistant_relay_coverage ORDER BY rendered_at, attempt_id`).all();
+            const out = [];
+            const drop = this.db.prepare("DELETE FROM assistant_relay_coverage WHERE attempt_id=?");
+            for (const row2 of rows) {
+              let manifest = null;
+              try {
+                manifest = copyRenderedCoverage({ attemptId: row2.attempt_id, coordinatorSessionId: row2.coordinator_session_id, replies: JSON.parse(row2.replies_json) });
+              } catch {
+              }
+              if (!manifest || manifest.replies.length !== row2.reply_count || !Number.isSafeInteger(row2.rendered_at) || !Number.isFinite(new Date(row2.rendered_at).getTime())) {
+                drop.run(row2.attempt_id);
+                continue;
+              }
+              out.push({ ...manifest, renderedAt: row2.rendered_at });
+            }
+            return out;
+          }
+          pruneCoverage(now) {
+            this.db.prepare("DELETE FROM assistant_relay_coverage WHERE rendered_at <= ?").run(now - RELAY_COVERAGE_TTL_MS);
+            const rows = this.db.prepare(`SELECT attempt_id, reply_count,
+            length(CAST(replies_json AS BLOB))+length(CAST(attempt_id AS BLOB))+length(CAST(coordinator_session_id AS BLOB))+32 AS bytes
+            FROM assistant_relay_coverage ORDER BY rendered_at DESC, attempt_id DESC`).all();
+            let count = 0, replies = 0, bytes = 0;
+            const drop = this.db.prepare("DELETE FROM assistant_relay_coverage WHERE attempt_id=?");
+            for (const row2 of rows) {
+              if (++count > RELAY_COVERAGE_MAX_ROWS || replies + row2.reply_count > RELAY_COVERAGE_MAX_REPLIES || bytes + row2.bytes > RELAY_COVERAGE_MAX_BYTES) drop.run(row2.attempt_id);
+              else {
+                replies += row2.reply_count;
+                bytes += row2.bytes;
+              }
+            }
           }
           listUndelivered() {
             return this.db.prepare("SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id").all().map(toRelay);
@@ -91881,6 +92278,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             }
           }
           prune(now) {
+            this.pruneCoverage(now);
             this.pruneBodies(now);
             this.db.prepare("DELETE FROM assistant_relays WHERE delivered_at IS NOT NULL AND ? - delivered_at > ?").run(now, RELAY_DELIVERED_RETENTION_MS);
             this.db.prepare("DELETE FROM assistant_threads WHERE closed_at IS NOT NULL AND ? - closed_at > ?").run(now, THREAD_CLOSED_RETENTION_MS);
@@ -91994,12 +92392,6 @@ ${b.text}`;
       return bubbles.map((b, i) => `[reply ${i + 1}/${bubbles.length} \xB7 ${formatReplyClock(b.at)}]
 ${b.text}`).join("\n\n");
     }
-    function envelopeIsNativePrefix(envelope, bubbles) {
-      const needle = envelope.trim();
-      if (!needle) return true;
-      if (bubbles.some((b) => b.text.trim().startsWith(needle))) return true;
-      return bubbles.map((b) => b.text.trim()).join("\n").startsWith(needle);
-    }
     function partsOf(bubbles) {
       return bubbles.map((b) => ({ at: b.at, chars: b.chars }));
     }
@@ -92011,6 +92403,97 @@ ${b.text}`).join("\n\n");
         rec3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
       }
     });
+    function isVerifiedNativeEvidenceRef(reference, generation) {
+      if (typeof reference !== "string") return false;
+      try {
+        const parts = JSON.parse(reference);
+        return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && typeof parts[7] === "string" && /^verified-native-window:[a-f0-9]{64}$/.test(parts[7]);
+      } catch {
+        return false;
+      }
+    }
+    function verifiedNativeReportParts(body, parts, reference, generation) {
+      if (body.length > ATTEMPT_BODY_MAX_CHARS || !isVerifiedNativeEvidenceRef(reference, generation) || !Array.isArray(parts) || !parts.length || parts.length > 600) return null;
+      const ref = JSON.parse(reference);
+      const points = Array.from(body);
+      const bubbles = [];
+      let offset = 0;
+      for (let i = 0; i < parts.length; i++) {
+        const part = rec4(parts[i]);
+        const at = part?.at, chars = part?.chars;
+        if (typeof at !== "number" || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || at > Number(ref[2]) || i > 0 && at <= bubbles[i - 1].at || typeof chars !== "number" || !Number.isSafeInteger(chars) || chars <= 0) return null;
+        if (parts.length > 1) {
+          const label2 = Array.from(`${i ? "\n\n" : ""}[reply ${i + 1}/${parts.length} \xB7 ${formatReplyClock(at)}]
+`);
+          if (points.slice(offset, offset + label2.length).join("") !== label2.join("")) return null;
+          offset += label2.length;
+        }
+        const text3 = points.slice(offset, offset + chars).join("");
+        offset += chars;
+        if (Array.from(text3).length !== chars || text3.trim() !== text3) return null;
+        bubbles.push({ at, chars, text: text3 });
+      }
+      if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
+      const digest3 = (0, import_node_crypto17.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      return ref[7] === VERIFIED_WINDOW_REF + digest3 ? bubbles : null;
+    }
+    function verifiedNativeRead(read2, sessionId) {
+      const source2 = rec4(read2.messageSource) ?? rec4(read2.transcriptProvenance);
+      const providers = [read2.agent, rec4(read2.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.length > 0).map((p) => p.toLowerCase());
+      if (!providers.length || providers.some((p) => !TIMESTAMPED_PROVIDERS.has(p)) || new Set(providers).size !== 1) return false;
+      if (read2.success !== true || read2.source === "pty-parser") return false;
+      if (source2?.selected === "pty-parser" && source2.nativeOnlyContentPreserved !== true) return false;
+      return read2.source === "provider-native" || source2?.selected === "native-history" || source2?.nativeOnlyContentPreserved === true;
+    }
+    function finalized(message) {
+      const r = rec4(message);
+      return !!r && r.bubbleState === "final" && r.isStreaming !== true && r.truncated !== true;
+    }
+    async function readNativeWindow(execute, sessionId, start, end) {
+      const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
+      const messages = [];
+      let providerIdle = false;
+      let invalid = false;
+      const request = async (command, args) => {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return null;
+        let timer;
+        try {
+          return await Promise.race([
+            Promise.resolve().then(() => execute(command, args)),
+            new Promise((resolve41) => {
+              timer = setTimeout(() => resolve41(null), remaining);
+            })
+          ]);
+        } catch {
+          return null;
+        } finally {
+          if (timer !== void 0) clearTimeout(timer);
+        }
+      };
+      const take = (read2) => {
+        if (!read2 || !verifiedNativeRead(read2, sessionId) || !Array.isArray(read2.messages)) return false;
+        providerIdle ||= read2.providerObservedStatus === "idle";
+        for (const message of read2.messages) {
+          const b = standardAssistantBubble(message);
+          if (b && b.at >= start && b.at <= end && !finalized(message)) invalid = true;
+        }
+        messages.push(...read2.messages);
+        return true;
+      };
+      const result = (complete) => ({ ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle });
+      const chat = await request("read_chat", { targetSessionId: sessionId, tailLimit: 200 });
+      if (take(chat)) {
+        if (chat.coverage === "full" && chat.hasMore !== true) return result(true);
+      } else if (!chat) return result(false);
+      for (let offset = 0; offset < 400; offset += 100) {
+        const history = await request("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
+        if (!take(history)) return result(false);
+        const oldest = history.messages.map(standardAssistantBubble).filter((b) => b !== null).reduce((at, b) => Math.min(at, b.at), Infinity);
+        if (history.hasMore === false || oldest < start) return result(true);
+      }
+      return result(false);
+    }
     async function recoverAttemptReport(db, attempt, meshId, sessionId, execute) {
       if (!attempt || attempt.scope !== "plain" || attempt.sessionId !== sessionId || !attempt.terminal) return { body: null, source: "unavailable", reason: "exact_committed_attempt_not_found" };
       if (attempt.meshId && attempt.meshId !== meshId) return { body: null, source: "unavailable", reason: "attempt_mesh_mismatch" };
@@ -92081,80 +92564,63 @@ ${b.text}`).join("\n\n");
         const envelope = rec4(rec4(payload?.local)?.envelope);
         return typeof envelope?.finalSummary === "string" && envelope.finalSummary.trim() ? envelope.finalSummary : null;
       })();
-      const windowStart = attempt.acceptedAt - 1e3;
+      const windowStart = attempt.acceptedAt;
       const windowEnd = attempt.terminal.at;
-      const pooled = [];
-      const take = (messages) => {
-        if (Array.isArray(messages)) pooled.push(...messages);
-        return selectNativeWindow(pooled, windowStart, windowEnd);
-      };
-      let selected = { ambiguous: false, bubbles: [] };
-      let sawChat = false;
-      const chat = await execute("read_chat", { targetSessionId: sessionId, limit: 200 });
-      if (chat.success) {
-        sawChat = true;
-        selected = take(chat.messages);
-        if (selected.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
-      }
-      if (!selected.bubbles.length && (!sawChat || chat.hasMore === true)) {
-        for (let offset = 0; offset < 400; offset += 100) {
-          const history = await execute("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
-          if (!history.success) break;
-          sawChat = true;
-          selected = take(history.messages);
-          if (selected.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
-          if (history.hasMore !== true) break;
-        }
-      }
-      let anchorOutside = false;
-      let viaAnchor = false;
-      if (!selected.bubbles.length && isNativeReference(evidence) && typeof evidence?.messageAt === "number") {
-        const at = evidence.messageAt;
-        if (at < attempt.acceptedAt || at > attempt.terminal.at) anchorOutside = true;
-        else {
-          const anchored = selectNativeWindow(pooled, at, at);
-          if (anchored.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
-          if (anchored.bubbles.length === 1) {
-            selected = anchored;
-            viaAnchor = true;
-          }
-        }
-      }
+      const selected = await readNativeWindow(execute, sessionId, windowStart, windowEnd);
+      if (selected.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+      const anchor = typeof evidence?.messageAt === "number" ? evidence.messageAt : null;
+      const anchorOutside = anchor !== null && (anchor < windowStart || anchor > windowEnd);
+      const last = selected.bubbles.at(-1);
+      const terminalPresent = !anchorOutside && !!last && (anchor !== null ? last.at === anchor : selected.providerIdle && !!envelopeText && last.text.startsWith(envelopeText.trim()));
       const finishNative = (bubbles, source2) => {
-        if (envelopeText && !envelopeIsNativePrefix(envelopeText, bubbles)) {
+        if (envelopeText && !bubbles.at(-1)?.text.startsWith(envelopeText.trim())) {
           LOG.warn("Assistant", `envelope_native_mismatch attempt=${attempt.attemptId} envelopeChars=${envelopeText.length} nativeChars=${bubbles.reduce((n, b) => n + b.chars, 0)}`);
         }
         const parts = partsOf(bubbles);
-        const evidenceRef = JSON.stringify([...stable, hash3(parts.map((p) => `${p.at}:${p.chars}`).join("|"))]);
+        const evidenceRef = JSON.stringify([...stable, VERIFIED_WINDOW_REF + hash3(JSON.stringify(bubbles))]);
         const body = renderNativeReplies(bubbles);
         store2.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: "final_native", parts });
         return { body, source: source2, completeness: "final_native", parts, provenance: provenanceFor(evidenceRef) };
       };
-      if (selected.bubbles.length) return finishNative(selected.bubbles, viaAnchor ? "exact_native_bubble" : "native_window");
+      if (selected.complete && terminalPresent) return finishNative(selected.bubbles, "native_window");
       const durable2 = store2.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
-      if (durable2) return {
+      if (durable2 && verifiedNativeReportParts(durable2.body, durable2.parts, durable2.evidenceRef, attempt.generation)) return {
         body: durable2.body,
         source: "durable_attempt_capture",
         completeness: "final_native",
         parts: durable2.parts,
         provenance: provenanceFor(durable2.evidenceRef)
       };
-      if (envelopeText) return { body: envelopeText, source: "existing_attempt_envelope", completeness: "envelope_unverified", provenance: provenanceFor(JSON.stringify(stable)) };
+      if (envelopeText) return {
+        body: envelopeText,
+        source: "existing_attempt_envelope",
+        completeness: "envelope_unverified",
+        reason: anchorOutside ? "native_reference_outside_attempt" : !selected.complete ? "native_window_unverified" : "terminal_native_reply_unavailable",
+        provenance: provenanceFor(JSON.stringify(stable))
+      };
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
     var import_node_crypto17;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
+    var VERIFIED_WINDOW_REF;
+    var NATIVE_READ_BUDGET_MS;
+    var TIMESTAMPED_PROVIDERS;
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
         import_node_crypto17 = require("crypto");
         init_assistant_relay_sqlite_store();
+        init_assistant_relay_store();
         init_logger();
+        init_coordinator_registry();
         init_assistant_native_window();
         rec4 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
         ATTEMPT_EVIDENCE_VERSION = 2;
+        VERIFIED_WINDOW_REF = "verified-native-window:";
+        NATIVE_READ_BUDGET_MS = 2e3;
+        TIMESTAMPED_PROVIDERS = /* @__PURE__ */ new Set(["claude-cli", "codex-cli", "antigravity-cli", "hermes-cli"]);
       }
     });
     function environmentInventory(meshes, now = Date.now(), local) {
@@ -93174,44 +93640,49 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return row2.terminal_reason === "session_error" && row2.terminal_source === "session_registry";
     }
     async function collectCoordinatorReplies(opts) {
-      const since = opts.sinceMs - LOOKBACK_MS;
-      let sessions;
-      try {
-        sessions = opts.db.prepare(`
-        SELECT session_id FROM (
-            SELECT session_id, MAX(COALESCE(terminal_at, last_activity_at, accepted_at)) AS seen
-            FROM turn_attempts
-            WHERE scope='plain' AND COALESCE(terminal_at, last_activity_at, accepted_at) >= ?
-            GROUP BY session_id
-            UNION
-            SELECT coordinator_session_id AS session_id, MAX(committed_at) AS seen
-            FROM assistant_relays WHERE committed_at >= ? GROUP BY coordinator_session_id
-        ) ORDER BY seen DESC LIMIT ?
-    `).all(since, since, SESSION_CAP);
-      } catch {
-        return [];
-      }
+      const since = opts.now - RELAY_AUDIT_RETENTION_MS;
+      const inventory = [...new Map((opts.coordinatorSessions ?? listMeshesReadOnly().flatMap((mesh) => listCoordinatorsForMesh(mesh.id))).map((entry) => [entry.sessionId, entry])).values()].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+      const first = inventory.length ? Math.floor(opts.now / 6e4) * SESSION_CAP % inventory.length : 0;
+      const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
       const out = [];
-      for (const { session_id: sessionId } of sessions) {
-        if (!sessionId) continue;
+      const scans = await Promise.all(sessions.map(async ({ sessionId, cliType }) => {
+        if (!sessionId) return { sessionId, skipped: true };
+        if (cliType === "grok-cli") return { sessionId, skipped: true };
         const attempts = opts.db.prepare(`
-            SELECT attempt_id, accepted_at, terminal_at, terminal_reason, terminal_source, state
-            FROM turn_attempts WHERE session_id=? AND scope='plain'
+            SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state,
+                r.relayed_at, c.rendered_at AS coverage_at
+            FROM turn_attempts a
+            LEFT JOIN assistant_relays r ON r.attempt_id=a.attempt_id AND r.coordinator_session_id=a.session_id
+            LEFT JOIN assistant_relay_coverage c ON c.attempt_id=a.attempt_id AND c.coordinator_session_id=a.session_id
+            WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
-        let chat;
-        try {
-          chat = await opts.execute("read_chat", { targetSessionId: sessionId, limit: 200 });
-        } catch {
+        const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
+        return { sessionId, attempts, window };
+      }));
+      let complete = true;
+      let successful = 0;
+      let failed = false;
+      for (const scan of scans) {
+        if ("skipped" in scan) {
+          complete = false;
           continue;
         }
-        if (!chat?.success || !Array.isArray(chat.messages)) continue;
-        for (const m of chat.messages) {
-          const bubble = standardAssistantBubble(m);
-          if (!bubble || bubble.at < opts.sinceMs) continue;
-          const containing = attempts.filter((a) => bubble.at >= a.accepted_at - 1e3 && bubble.at <= (a.terminal_at ?? opts.now));
+        const { sessionId, attempts, window } = scan;
+        if (!window.complete || window.ambiguous) {
+          complete = false;
+          failed = true;
+          continue;
+        }
+        successful += 1;
+        for (const bubble of window.bubbles) {
+          const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
           containing.sort((a, b) => b.accepted_at - a.accepted_at);
           const attempt = containing[0];
-          const open = !!attempt && !TERMINAL2.has(attempt.state);
+          if (attempt?.relayed_at != null && (attempt.coverage_at === null || attempt.coverage_at <= since)) {
+            complete = false;
+            continue;
+          }
+          const open = !!attempt && (!TERMINAL2.has(attempt.state) || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
           out.push({
             sessionId,
             messageAt: bubble.at,
@@ -93223,35 +93694,51 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           });
         }
       }
-      return out;
+      if (failed && !successful) throw new Error("coordinator native audit unavailable");
+      return complete ? out : Object.assign(out, { complete: false });
     }
     var TERMINAL2;
     var SESSION_CAP;
-    var LOOKBACK_MS;
+    var RELAY_AUDIT_RETENTION_MS;
     var init_assistant_relay_audit = __esm2({
       "src/assistant/assistant-relay-audit.ts"() {
         "use strict";
-        init_assistant_native_window();
+        init_attempt_report_recovery();
+        init_mesh_config();
+        init_coordinator_registry();
+        init_assistant_relay_format();
         TERMINAL2 = /* @__PURE__ */ new Set(["completed", "failed", "cancelled"]);
         SESSION_CAP = 20;
-        LOOKBACK_MS = 12e4;
+        RELAY_AUDIT_RETENTION_MS = 24 * 60 * 6e4;
       }
     });
+    var import_node_crypto18;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
+    var COVERAGE_TTL_MS;
+    var COVERAGE_MAX_ENTRIES;
+    var replyHash;
+    var coverageKey;
     var realClock;
     var AssistantRelay;
     var init_assistant_relay = __esm2({
       "src/assistant/assistant-relay.ts"() {
         "use strict";
         init_report_continuation();
+        import_node_crypto18 = require("crypto");
         init_logger();
+        init_assistant_native_window();
         init_dist();
+        init_assistant_relay_store();
         init_assistant_registry();
         init_assistant_human_input();
         init_assistant_relay_format();
         ASSISTANT_RELAY_BUS_KINDS = ["turn", "modal", "prompt", "terminated", "registered", "status"];
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
+        COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
+        COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
+        replyHash = (text3) => (0, import_node_crypto18.createHash)("sha256").update(text3.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        coverageKey = (sessionId, attemptId, at, text3) => JSON.stringify([sessionId, attemptId, at, replyHash(text3)]);
         realClock = {
           now: () => Date.now(),
           setTimeout: (fn, ms3) => {
@@ -93286,9 +93773,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
            * memory cache clears on delivery; the reader retains bounded durable captures. */
           attemptBodies = /* @__PURE__ */ new Map();
           attemptMeta = /* @__PURE__ */ new Map();
-          /** Exact bodies whose own relay was sent. The detector treats these as coverage. */
-          renderedCoverage = [];
-          flaggedReplies = /* @__PURE__ */ new Set();
+          attemptBodyAt = /* @__PURE__ */ new Map();
+          /** Only complete native parts inside the rendered cap; never retain bodies. */
+          renderedCoverage = /* @__PURE__ */ new Map();
+          flaggedReplies = /* @__PURE__ */ new Map();
+          pendingTimers = /* @__PURE__ */ new Map();
+          lifecycle = 0;
           lastAuditAt = 0;
           auditing = false;
           /** In-flight local captures (attemptId → settle promise); `renderRelay` awaits these instead of racing them. */
@@ -93322,10 +93812,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               }
             }
             this.queue.push(...byMesh.values());
-            this.lastAuditAt = this.clock.now();
+            this.loadDeliveredCoverage(this.clock.now());
+            this.lifecycle += 1;
+            this.lastAuditAt = this.clock.now() - COVERAGE_TTL_MS;
             this.unsubscribe = this.ports.subscribe((e) => this.onEvent(e));
           }
           stop() {
+            this.lifecycle += 1;
             this.unsubscribe?.();
             this.unsubscribe = null;
             for (const b of this.batches.values()) this.clearBatchTimers(b);
@@ -93333,6 +93826,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.attemptBodyCapture.clear();
             this.attemptBodies.clear();
             this.attemptMeta.clear();
+            this.attemptBodyAt.clear();
+            for (const [timer, resolve41] of this.pendingTimers) {
+              this.clock.clearTimeout(timer);
+              resolve41();
+            }
+            this.pendingTimers.clear();
+            this.renderedCoverage.clear();
+            this.flaggedReplies.clear();
+            this.auditing = false;
           }
           /** `project_send` accepted: open/refresh the project's thread. */
           openThread(meshId) {
@@ -93477,6 +93979,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               }
             }
             this.ports.store.prune(now);
+            this.pruneCoverage(now);
+            this.pruneBodyCache(now);
             this.auditReplies(now);
             this.kick();
           }
@@ -93669,7 +94173,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               await Promise.resolve();
               if (!live()) return;
               try {
-                last = this.normalizeReport(await read2);
+                const raw = await this.bounded(read2, Math.max(0, RELAY_NATIVE_WAIT_MS - (this.clock.now() - started)), null);
+                const next = this.normalizeReport(raw);
+                if (next.body || !last.body) last = next;
               } catch {
                 last = this.normalizeReport(null);
               }
@@ -93684,56 +94190,131 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 return;
               }
               const wait = Math.min(RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS - elapsed);
-              await new Promise((resolve41) => {
-                this.clock.setTimeout(resolve41, wait);
-              });
+              await this.bounded(new Promise(() => {
+              }), wait, void 0);
+              if (!live()) return;
+              if (this.clock.now() - started >= RELAY_NATIVE_WAIT_MS) {
+                this.rememberReport(attemptId, last);
+                return;
+              }
+            }
+          }
+          /** A stopped relay resolves its waits too; late I/O cannot repopulate caches. */
+          async bounded(read2, ms3, fallback) {
+            let timer;
+            const timeout = new Promise((resolve41) => {
+              const finish = () => resolve41(fallback);
+              timer = this.clock.setTimeout(finish, ms3);
+              this.pendingTimers.set(timer, finish);
+            });
+            try {
+              return await Promise.race([read2, timeout]);
+            } finally {
+              this.clock.clearTimeout(timer);
+              this.pendingTimers.delete(timer);
             }
           }
           normalizeReport(raw) {
-            if (typeof raw === "string") return { body: raw, completeness: "final_native" };
+            if (typeof raw === "string") return raw.length <= ATTEMPT_BODY_MAX_CHARS ? { body: raw, completeness: "final_native" } : { body: null, completeness: "envelope_unverified" };
             if (!raw || typeof raw !== "object") return { body: null, completeness: "envelope_unverified" };
-            const completeness = raw.completeness === "final_native" ? "final_native" : "envelope_unverified";
+            if (typeof raw.body === "string" && raw.body.length > ATTEMPT_BODY_MAX_CHARS) return { body: null, completeness: "envelope_unverified" };
+            const validParts = raw.parts === void 0 || Array.isArray(raw.parts) && raw.parts.length <= 600 && raw.parts.every((p) => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime()) && Number.isSafeInteger(p.chars) && p.chars > 0);
+            const completeness = raw.completeness === "final_native" && validParts ? "final_native" : "envelope_unverified";
             return {
               body: typeof raw.body === "string" ? raw.body : null,
               completeness,
-              ...raw.source ? { source: raw.source } : {},
-              ...raw.parts ? { parts: raw.parts } : {}
+              ...typeof raw.source === "string" && raw.source.length <= 128 ? { source: raw.source } : {},
+              ...raw.parts && validParts ? { parts: raw.parts.map((p) => ({ at: p.at, chars: p.chars })) } : {}
             };
           }
           rememberReport(attemptId, report) {
             this.attemptBodies.set(attemptId, report.body);
             this.attemptMeta.set(attemptId, report);
+            this.attemptBodyAt.delete(attemptId);
+            this.attemptBodyAt.set(attemptId, this.clock.now());
+            this.pruneBodyCache(this.clock.now());
+          }
+          pruneBodyCache(now) {
+            let bytes = 0;
+            let count = 0;
+            for (const [id4, at] of [...this.attemptBodyAt].reverse()) {
+              bytes += Buffer.byteLength(this.attemptBodies.get(id4) ?? "", "utf8");
+              count += 1;
+              if (now - at < COVERAGE_TTL_MS && count <= ATTEMPT_BODY_MAX_ROWS && bytes <= ATTEMPT_BODY_TOTAL_BYTES) continue;
+              this.attemptBodies.delete(id4);
+              this.attemptMeta.delete(id4);
+              this.attemptBodyAt.delete(id4);
+            }
           }
           /** Native finals not covered by a delivered exact relay. One warn and one pointer per bubble. */
           auditReplies(now) {
             const port = this.ports.auditCoordinatorReplies;
             if (!port || this.auditing) return;
             const since = this.lastAuditAt;
-            this.lastAuditAt = now;
+            const lifecycle = this.lifecycle;
             this.auditing = true;
-            void Promise.resolve().then(() => port(since)).then((replies) => {
+            void Promise.resolve().then(() => this.bounded(port(since), 3e3, null)).then((replies) => {
+              if (this.lifecycle !== lifecycle || !replies) return;
               for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
+              if (replies.complete !== false) this.lastAuditAt = now;
             }).catch((e) => LOG.warn("Assistant", `relay gap audit failed: ${e?.message ?? e}`)).finally(() => {
-              this.auditing = false;
+              if (this.lifecycle === lifecycle) this.auditing = false;
             });
           }
           noteUncoveredReply(reply, now) {
             const text3 = reply.text?.trim() ?? "";
             if (!text3 || !reply.chars || reply.attemptOpen) return;
-            const key4 = `${reply.sessionId}:${reply.messageAt}`;
+            if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId) || [...this.batches.values()].some((b) => b.attemptIds.includes(reply.attemptId)) || this.queue.some((i) => i.kind === "relay" && i.attemptIds.includes(reply.attemptId)))) return;
+            const key4 = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text3);
             if (this.flaggedReplies.has(key4) || this.replyCovered(reply, text3)) return;
             const klass = !reply.attemptId ? "no_attempt" : reply.restartClosed ? "restart_closed" : "inside_attempt";
-            this.flaggedReplies.add(key4);
+            this.flaggedReplies.set(key4, now);
+            this.pruneCoverage(now);
             LOG.warn("Assistant", `relay gap class=${klass} session=${reply.sessionId} at=${reply.messageAt} chars=${reply.chars}`);
             this.ports.onRelayGap?.(klass, now);
             this.pushLine("relay", buildUncoveredReplyGap(klass, reply.messageAt));
           }
           replyCovered(reply, text3) {
-            return this.renderedCoverage.some((c) => {
-              if (c.sessionId !== reply.sessionId) return false;
-              if (c.parts.some((p) => p.at === reply.messageAt)) return true;
-              return c.body.includes(text3);
-            });
+            return this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text3));
+          }
+          pruneCoverage(now) {
+            for (const map2 of [this.renderedCoverage, this.flaggedReplies]) {
+              for (const [key4, at] of map2) if (now - at >= COVERAGE_TTL_MS) map2.delete(key4);
+              while (map2.size > COVERAGE_MAX_ENTRIES) map2.delete(map2.keys().next().value);
+            }
+          }
+          loadDeliveredCoverage(now) {
+            this.renderedCoverage.clear();
+            for (const c of this.ports.store.listDeliveredCoverage(now)) for (const r of c.replies) {
+              this.renderedCoverage.set(JSON.stringify([c.coordinatorSessionId, c.attemptId, r.messageAt, r.contentHash]), c.renderedAt);
+            }
+            this.pruneCoverage(now);
+          }
+          renderedParts(attemptId, sessionId, body, meta) {
+            const parts = meta.parts;
+            if (!parts?.length) return null;
+            const points = Array.from(body);
+            let offset = 0;
+            let renderedOffset = 0;
+            const replies = [];
+            for (let i = 0; i < parts.length; i++) {
+              const part = parts[i];
+              if (!Number.isFinite(part.at) || !Number.isSafeInteger(part.chars) || part.chars <= 0) return null;
+              if (parts.length > 1) {
+                const label2 = Array.from(`${i ? "\n\n" : ""}[reply ${i + 1}/${parts.length} \xB7 ${formatReplyClock(part.at)}]
+`);
+                if (points.slice(offset, offset + label2.length).join("") !== label2.join("")) return null;
+                offset += label2.length;
+                renderedOffset += label2.length;
+              }
+              const text3 = points.slice(offset, offset + part.chars).join("");
+              offset += part.chars;
+              renderedOffset += Array.from(text3.replace(/\r\n?/g, "\n")).length;
+              if (Array.from(text3).length !== part.chars) return null;
+              if (renderedOffset <= RELAY_BODY_MAX_CHARS) replies.push({ messageAt: part.at, contentHash: replyHash(text3) });
+            }
+            if (offset !== points.length) return null;
+            return { attemptId, coordinatorSessionId: sessionId, replies };
           }
           onCoordinatorAttention(meshId, sessionId, value) {
             if (value === null || value === void 0) {
@@ -93887,21 +94468,25 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               const last = i.attemptIds[i.attemptIds.length - 1];
               return sentIds.has(relayMessageId(i.meshId, last)) ? i.attemptIds.filter((id4) => this.hasCapturedBody(id4)) : [];
             });
-            this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
+            const coverage = [];
             for (const item of relayItems) {
               for (const id4 of item.attemptIds) {
                 if (!rendered.includes(id4)) continue;
                 const meta = this.attemptMeta.get(id4);
                 const body = this.attemptBodies.get(id4);
                 if (meta?.completeness === "final_native" && body?.trim()) {
-                  this.renderedCoverage.push({ sessionId: item.coordinatorSessionId, body, parts: meta.parts ?? [] });
+                  const manifest = this.renderedParts(id4, this.restoredAttempts.get(id4)?.sessionId ?? item.coordinatorSessionId, body, meta);
+                  if (manifest) coverage.push(manifest);
                 }
               }
             }
+            this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered, coverage);
+            if (relayItems.length) this.loadDeliveredCoverage(at);
             for (const id4 of relayItems.flatMap((i) => i.attemptIds)) {
               this.attemptBodyCapture.delete(id4);
               this.attemptBodies.delete(id4);
               this.attemptMeta.delete(id4);
+              this.attemptBodyAt.delete(id4);
               this.restoredAttempts.delete(id4);
             }
             const meshes = [...new Set(relayItems.map((i) => i.meshId))];
@@ -93986,11 +94571,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               const ref = this.restoredAttempts.get(id4);
               if (!ref || this.attemptBodies.has(id4)) continue;
               let report = null;
+              const lifecycle = this.lifecycle;
               try {
-                report = this.normalizeReport(await this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id4) ?? null);
+                report = this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id4) ?? Promise.resolve(null), RELAY_NATIVE_WAIT_MS, null));
               } catch {
               }
-              if (report?.body) this.rememberReport(id4, report);
+              if (report?.body && this.lifecycle === lifecycle) this.rememberReport(id4, report);
             }
             return item.attemptIds.map((id4) => this.attemptBodies.get(id4) ?? null);
           }
@@ -94371,17 +94957,18 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function buildAssistantRelayPorts(components, deps) {
       const { registry, store: store2, metrics: metrics2 } = deps;
       const svc = getAssistantServices();
+      const projectPorts = () => getAssistantProjectPorts({
+        components: () => components,
+        selfDaemonId: str12(components.statusInstanceId),
+        execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true }),
+        transport: { dispatch: components.dispatchMeshCommand, peerStatus: components.getMeshPeerConnectionStatus }
+      });
       return {
         subscribe: (handler) => components.bus.on(ASSISTANT_RELAY_BUS_KINDS, handler, { name: "assistant.relay" }),
         coordinatorMeshOf: (sessionId) => str12(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? null,
         rehydrateAttemptReport: async (meshId, sessionId, attemptId) => {
-          const ports = await getAssistantProjectPorts({
-            components: () => components,
-            selfDaemonId: str12(components.statusInstanceId),
-            execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true }),
-            transport: { dispatch: components.dispatchMeshCommand, peerStatus: components.getMeshPeerConnectionStatus }
-          });
+          const ports = await projectPorts();
           const mesh = ports.listMeshes().find((m) => m.id === meshId);
           if (!mesh) return null;
           if (ports.isHostedHere(mesh)) {
@@ -94402,23 +94989,21 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const proof = result?.provenance;
           const versionOk = proof?.version === 2 || proof?.version === 1;
           if (typeof result?.body !== "string" || !versionOk || proof?.attemptId !== attemptId || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0 || typeof proof?.evidenceRef !== "string" || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
-          const completeness = proof?.version === 2 && result.completeness === "final_native" ? "final_native" : "envelope_unverified";
-          const parts = Array.isArray(result.parts) ? result.parts : void 0;
+          const nativeParts = proof?.version === 2 && result.completeness === "final_native" ? verifiedNativeReportParts(result.body, result.parts, proof.evidenceRef, Number(proof.generation)) : null;
+          const completeness = nativeParts ? "final_native" : "envelope_unverified";
+          const parts = nativeParts?.map(({ at, chars }) => ({ at, chars }));
           return { body: result.body, completeness, ...typeof result.source === "string" ? { source: result.source } : {}, ...parts ? { parts } : {} };
         },
         auditCoordinatorReplies: async (sinceMs) => {
-          try {
-            const db = MeshRuntimeStore.getInstance().db;
-            return await collectCoordinatorReplies({
-              db,
-              sinceMs,
-              now: Date.now(),
-              execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true })
-            });
-          } catch (e) {
-            LOG.warn("Assistant", `relay gap audit failed: ${e?.message ?? e}`);
-            return [];
-          }
+          const ports = await projectPorts();
+          const coordinatorSessions = ports.listMeshes().filter((mesh) => ports.isHostedHere(mesh)).flatMap((mesh) => listCoordinatorsForMesh(mesh.id).filter((c) => ports.coordinatorSessionAuthorized?.(mesh.id, c.sessionId) !== false));
+          return collectCoordinatorReplies({
+            db: MeshRuntimeStore.getInstance().db,
+            sinceMs,
+            now: Date.now(),
+            coordinatorSessions,
+            execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true })
+          });
         },
         onRelayGap: (_klass, at) => metrics2?.bump("relay_gaps", "", at),
         readCoordinatorTail: async (sessionId) => {
@@ -94681,6 +95266,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_dist();
         init_logger();
         init_assistant_relay_audit();
+        init_attempt_report_recovery();
+        init_coordinator_registry();
         init_mesh_runtime_store();
         init_mesh_work_queue();
         init_mesh_missions();
@@ -122294,7 +122881,7 @@ ${result.stderr}`, result.code);
         let supersededRows = 0;
         let supersededBytes = 0;
         let rewritten = 0;
-        let finalized = false;
+        let finalized2 = false;
         const nextRev = (id4, prior) => Math.max(prior?.rev ?? 0, this.tornIds.get(id4) ?? 0, this.deletedRevs.get(id4) ?? 0) + 1;
         for (const bubble of observed2) {
           if (capped.has(bubble.id)) continue;
@@ -122363,7 +122950,7 @@ ${result.stderr}`, result.code);
             supersededBytes += pieces ? 512 : prior.bytes;
           }
           const final = head.bubbleState === "final";
-          if (final && !prior?.final) finalized = true;
+          if (final && !prior?.final) finalized2 = true;
           staged.set(bubble.id, {
             rev,
             hash: hash3,
@@ -122480,7 +123067,7 @@ ${result.stderr}`, result.code);
           bytes,
           supersededRows,
           supersededBytes,
-          finalized,
+          finalized: finalized2,
           capped: capped.size > 0,
           tripwire,
           baseRateExceeded,
@@ -143749,7 +144336,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs98 = __toESM2(require("fs"));
     var path87 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -143790,7 +144377,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto18.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto19.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -147947,7 +148534,7 @@ ${text3}` : text3;
       return messages;
     }
     var fs97 = __toESM2(require("fs"));
-    var import_node_crypto19 = require("crypto");
+    var import_node_crypto20 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -147974,7 +148561,7 @@ ${text3}` : text3;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto19.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto20.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -150102,7 +150689,7 @@ ${text3}` : text3;
     init_logger();
     init_track_identity();
     var import_node_child_process15 = require("child_process");
-    var import_node_crypto20 = require("crypto");
+    var import_node_crypto21 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -150112,7 +150699,7 @@ ${text3}` : text3;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto20.randomUUID)();
+      generation = (0, import_node_crypto21.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -150173,7 +150760,7 @@ ${text3}` : text3;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto20.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto21.randomUUID)()}`;
         return new Promise((resolve41, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -150209,7 +150796,7 @@ ${text3}` : text3;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto21 = require("crypto");
+    var import_node_crypto222 = require("crypto");
     init_dist();
     function record2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -150340,7 +150927,7 @@ ${text3}` : text3;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto21.randomUUID)(),
+          promptId: (0, import_node_crypto222.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -151956,7 +152543,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -152154,7 +152741,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto222.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto23.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -168463,7 +169050,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto23 = require("crypto");
+    var import_node_crypto24 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -168472,7 +169059,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto23.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto24.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -168482,7 +169069,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto23.randomUUID)();
+          const id4 = (0, import_node_crypto24.randomUUID)();
           active.add(id4);
           try {
             return await run3();
