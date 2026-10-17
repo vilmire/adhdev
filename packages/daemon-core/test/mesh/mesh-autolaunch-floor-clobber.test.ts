@@ -50,8 +50,8 @@ vi.mock('../../src/detection/cli-detector.js', () => ({ detectCLI: detectCliMock
 
 import { __resolveUsableProviderForTests, triggerMeshQueue } from '../../src/mesh/mesh-queue-assignment.js'
 import { __replaceMeshQueueForTests, __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, getQueue, recordTaskAutoLaunch } from '../../src/mesh/mesh-work-queue.js'
-import { handleClaimPathDifficultyFloorRefusal, resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
-import { AUTO_LAUNCH_AWAIT_CLAIM_MS } from '../../src/mesh/mesh-autolaunch-integrity.js'
+import { handleClaimPathDifficultyFloorRefusal, handleDifficultyFloorSkip, readSessionModel, resetDifficultyFloorReportsForTests } from '../../src/mesh/mesh-difficulty-floor.js'
+import { AUTO_LAUNCH_AWAIT_CLAIM_MS, __seedAutoLaunchAwaitClaimBackoffForTests, __clearAwaitClaimBackoffForTests } from '../../src/mesh/mesh-autolaunch-integrity.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 
 const NODE_ID = 'node_floor_clobber'
@@ -119,6 +119,7 @@ function autoLaunchOf(meshId: string, taskId: string) {
 function cleanup(meshId: string) {
   __clearMeshQueueForTests(meshId)
   __resetMeshRuntimeStoreForTests()
+  __clearAwaitClaimBackoffForTests()
   resetDifficultyFloorReportsForTests()
   meshConfigMocks.getMesh.mockReset()
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
@@ -154,6 +155,101 @@ describe('P1 — handleDifficultyFloorSkip must not clobber an in-window complet
     } finally {
       cleanup(meshId)
     }
+  })
+
+  it('keeps status=completed past the initial 90s window while autoLaunchAwaitClaimBackoff is active', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-08T00:00:00.000Z'))
+    const meshId = `mesh_floor_clobber_p1_backoff_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      const task = enqueueTask(meshId, 'backoff-protected winner', { taskMode: 'code_change', difficulty: 'difficult' })
+      recordTaskAutoLaunch(meshId, task.id, { status: 'completed', sessionId: 'winner-backoff-sess', nodeId: NODE_ID })
+      vi.advanceTimersByTime(AUTO_LAUNCH_AWAIT_CLAIM_MS + 5_000)
+      __seedAutoLaunchAwaitClaimBackoffForTests(meshId, task.id, {
+        cycles: 1,
+        nextAttemptAtMs: Date.now() + 90_000,
+      })
+
+      handleClaimPathDifficultyFloorRefusal({
+        meshId,
+        nodeId: NODE_ID,
+        refusalReason: 'difficulty_floor_unmet',
+        claimRefusal: { taskId: task.id, difficulty: 'difficult' },
+      })
+
+      const record = autoLaunchOf(meshId, task.id)
+      expect(record?.status).toBe('completed')
+      expect(record?.sessionId).toBe('winner-backoff-sess')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('never clobbers an active owned_paths_conflict reason with task_difficulty_floor_unavailable:*', () => {
+    const meshId = `mesh_floor_clobber_p1_owned_paths_${randomUUID().slice(0, 8)}`
+    try {
+      setMesh(meshId)
+      const now = new Date().toISOString()
+      const holderId = `holder_${randomUUID().slice(0, 8)}`
+      const task = enqueueTask(meshId, 'blocked by path conflict', {
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+        ownedPaths: ['src/commands/launch.ts'],
+      })
+      __replaceMeshQueueForTests(meshId, [
+        {
+          id: holderId,
+          meshId,
+          message: 'active holder',
+          status: 'assigned',
+          taskMode: 'code_change',
+          difficulty: 'difficult',
+          ownedPaths: ['src/commands/**'],
+          assignedNodeId: 'node_other',
+          assignedSessionId: 'sess_holder',
+          createdAt: now,
+          updatedAt: now,
+        } as any,
+        {
+          ...task,
+          autoLaunch: {
+            status: 'skipped',
+            reason: 'owned_paths_conflict',
+            nodeId: NODE_ID,
+            updatedAt: now,
+          },
+        },
+      ])
+
+      handleClaimPathDifficultyFloorRefusal({
+        meshId,
+        nodeId: NODE_ID,
+        refusalReason: 'difficulty_floor_unmet',
+        claimRefusal: { taskId: task.id, difficulty: 'difficult' },
+      })
+      expect(autoLaunchOf(meshId, task.id)?.reason).toBe('owned_paths_conflict')
+
+      handleDifficultyFloorSkip({
+        meshId,
+        taskId: task.id,
+        reason: 'task_difficulty_floor_unavailable:difficult',
+        nodeId: NODE_ID,
+      })
+      expect(autoLaunchOf(meshId, task.id)?.reason).toBe('owned_paths_conflict')
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('readSessionModel falls back to launchRecord.model and settings.initialModel when controlValues.model is absent', () => {
+    expect(readSessionModel({ controlValues: { model: 'claude-opus-4-6' }, settings: { initialModel: 'sonnet' } })).toBe('claude-opus-4-6')
+    expect(readSessionModel({ launchRecord: { model: { launchValue: 'gemini-3.1-pro' } } })).toBe('gemini-3.1-pro')
+    expect(readSessionModel({ launchRecord: { model: { requested: 'gpt-5-codex' } } })).toBe('gpt-5-codex')
+    expect(readSessionModel({ launchRecord: { model: { resolvedDefault: 'claude-sonnet-4-6' } } })).toBe('claude-sonnet-4-6')
+    expect(readSessionModel({ settings: { initialModel: 'gpt-5.3-codex' } })).toBe('gpt-5.3-codex')
+    expect(readSessionModel({ settings: { model: 'kimi-k2' } })).toBe('kimi-k2')
+    expect(readSessionModel({})).toBeUndefined()
   })
 
   it('control: past the await-claim window the floor-wait skip lands again (no over-suppression)', () => {

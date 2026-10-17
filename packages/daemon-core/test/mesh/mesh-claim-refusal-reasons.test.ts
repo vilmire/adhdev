@@ -45,6 +45,7 @@ vi.mock('../../src/config/mesh-config.js', () => ({
 import { __clearMeshQueueForTests, __resetMeshRuntimeStoreForTests, enqueueTask, recordDirectDispatchTask } from '../../src/mesh/mesh-work-queue.js'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js'
 import type { MeshClaimRefusal } from '../../src/mesh/mesh-runtime-store.js'
+import { evaluateTaskOwnedPathsAdmission } from '../../src/mesh/mesh-runtime-store-claim.js'
 
 const NODE_A = 'node_alpha'
 const SESSION_A = 'session_alpha'
@@ -502,6 +503,106 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
       // the diagnostic is no better than the bare `return null` it replaced.
       expect(seen.size).toBe(4)
       expect(seen.has('no_pending_candidates')).toBe(false)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('evaluateTaskOwnedPathsAdmission shares the exact claim-time owned_paths evaluator', () => {
+    const meshId = `mesh_refuse_eval_parity_${randomUUID().slice(0, 8)}`
+    const NODE_B = 'node_beta'
+    const daemonNodeIds = [NODE_A, NODE_B]
+    try {
+      const store = MeshRuntimeStore.getInstance()
+      const holder = enqueueTask(meshId, 'holder work', {
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+        ownedPaths: ['oss/packages/daemon-core/src/commands/**'],
+      })
+      expect(claim(meshId, { daemonNodeIds }).task?.id).toBe(holder.id)
+
+      const overlapping = enqueueTask(meshId, 'overlapping write', {
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+        ownedPaths: ['oss/packages/daemon-core/src/commands/launch.ts'],
+      })
+      const admission = evaluateTaskOwnedPathsAdmission(store, meshId, overlapping)
+      expect(admission.allowed).toBe(false)
+      expect(admission.conflicts).toHaveLength(1)
+      expect(admission.detail).toContain(holder.id)
+
+      const claimResult = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
+      expect(claimResult.task).toBeNull()
+      expect(claimResult.refusal.reason).toBe('owned_paths_conflict')
+      expect(claimResult.refusal.detail).toBe(admission.detail)
+
+      const disjoint = enqueueTask(meshId, 'disjoint write', {
+        taskMode: 'code_change',
+        difficulty: 'medium',
+        ownedPaths: ['oss/packages/daemon-core/src/mesh/mesh-work-queue.ts'],
+      })
+      const disjointAdmission = evaluateTaskOwnedPathsAdmission(store, meshId, disjoint)
+      expect(disjointAdmission.allowed).toBe(true)
+    } finally {
+      cleanup(meshId)
+    }
+  })
+
+  it('unknown session model (assignedModel omitted) does not mask an active owned_paths_conflict with difficulty_floor_unmet', () => {
+    const meshId = `mesh_refuse_unknown_model_conflict_${randomUUID().slice(0, 8)}`
+    const NODE_B = 'node_beta'
+    const daemonNodeIds = [NODE_A, NODE_B]
+    try {
+      const holder = enqueueTask(meshId, 'holder work', {
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+        ownedPaths: ['oss/packages/daemon-core/src/commands/**'],
+      })
+      expect(claim(meshId, {
+        daemonNodeIds,
+        providerType: 'claude-cli',
+        assignedModel: 'claude-opus-4-6',
+        allowedTaskDifficulties: ['easy', 'medium', 'difficult'],
+      }).task?.id).toBe(holder.id)
+
+      const blocked = enqueueTask(meshId, 'difficult overlapping work', {
+        taskMode: 'code_change',
+        difficulty: 'difficult',
+        ownedPaths: ['oss/packages/daemon-core/src/commands/launch.ts'],
+      })
+
+      // Idle session whose model is not yet known (assignedModel omitted) and whose unknown-model
+      // intersection only allows ['easy'] must report the underlying owned_paths_conflict rather
+      // than masking it with difficulty_floor_unmet.
+      const unknownModelAttempt = claim(
+        meshId,
+        {
+          daemonNodeIds,
+          providerType: 'antigravity-cli',
+          allowedTaskDifficulties: ['easy'],
+        },
+        { nodeId: NODE_B, sessionId: 'session_unknown_model' },
+      )
+      expect(unknownModelAttempt.task).toBeNull()
+      expect(unknownModelAttempt.refusal.reason).toBe('owned_paths_conflict')
+      expect(unknownModelAttempt.refusal.taskId).toBe(blocked.id)
+      expect(unknownModelAttempt.refusal.detail).toContain(holder.id)
+
+      // Control: when assignedModel IS explicitly known to be an easy-only model, difficulty_floor_unmet
+      // remains attributable for that session's known model.
+      const knownEasyModelAttempt = claim(
+        meshId,
+        {
+          daemonNodeIds,
+          providerType: 'antigravity-cli',
+          assignedModel: 'gemini-3-flash',
+          allowedTaskDifficulties: ['easy'],
+        },
+        { nodeId: NODE_B, sessionId: 'session_known_easy_model' },
+      )
+      expect(knownEasyModelAttempt.task).toBeNull()
+      expect(knownEasyModelAttempt.refusal.reason).toBe('difficulty_floor_unmet')
+      expect(knownEasyModelAttempt.refusal.taskId).toBe(blocked.id)
     } finally {
       cleanup(meshId)
     }
