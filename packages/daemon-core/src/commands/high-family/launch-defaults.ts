@@ -141,7 +141,10 @@ export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) 
         const stored = ports.store.read();
         const unavailable = diskError(stored);
         // Explicit global set/clear is the only absent-document bootstrap path.
-        if (unavailable && !(stored.status === 'missing' && !input.project && (write || input.action === 'check'))) return unavailable;
+        // A get on an absent document still answers per role (stored: null with a
+        // loud launch_default_required in `effective`), so a UI can offer first setup.
+        if (unavailable && !(stored.status === 'missing'
+            && (input.action === 'get' || !input.project && (write || input.action === 'check')))) return unavailable;
         let project: HostProjectLaunchState | undefined;
         if (input.project) {
             const read = projectState(ports, input.project);
@@ -149,15 +152,15 @@ export function createLaunchDefaultsHandlers(ports: LaunchDefaultsCommandPorts) 
             project = read.state;
         }
         if (input.action === 'get') {
+            // Every requested role answers on its own: an unset or no-longer-valid
+            // default is a loud failure inside that role's `effective` (shared
+            // LaunchDefaultsRoleView contract), never a failure of the whole read,
+            // and the stored entry is returned as-is so the owner can see and fix it.
             const roles: Partial<Record<LaunchRole, { stored: LaunchDefaultEntry | null; effective: ResolveLaunchResult }>> = {};
             for (const role of input.role ? [input.role] : ['assistant', 'coordinator'] as const) {
                 const effective = resolveLaunchSelection({ role, stored,
                     ...(project?.entry ? { hostCoordinatorLaunch: { projectId: project.projectId, revision: project.revision,
                         selection: pickSelection(project.entry) } } : {}) }, ports.validation);
-                if (!effective.ok) {
-                    const { ok: _ok, code, hint, ...detail } = effective;
-                    return fail(code, hint, { ...detail, ...(stored.status === 'ok' ? { documentRevision: stored.document.revision } : {}) });
-                }
                 roles[role] = { stored: stored.status === 'ok' ? stored.document[role] ?? null : null, effective };
             }
             return { success: true as const, result: 'get' as const,

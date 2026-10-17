@@ -98,8 +98,10 @@ describe('unregistered command contract', () => {
 });
 
 describe('global explicit setup, check and read', () => {
-    it('reports absent setup and creates no document during get', async () => {
-        expect(await run('launch_defaults_get')).toMatchObject({ success: false, code: 'launch_default_required', documentRevision: 0 });
+    it('reports absent setup per role and creates no document during get', async () => {
+        const unset = { stored: null, effective: { ok: false, code: 'launch_default_required', reason: 'launch_defaults_read_failed' } };
+        expect(await run('launch_defaults_get')).toMatchObject({ success: true, result: 'get', documentRevision: 0,
+            roles: { assistant: unset, coordinator: unset } });
         expect(fs.readdirSync(dir)).toEqual([]);
     });
     it('checks a candidate before setup without persisting it', async () => {
@@ -118,7 +120,11 @@ describe('global explicit setup, check and read', () => {
     });
     it('reads both roles without using the other role as a default', async () => {
         await set();
-        expect(await run('launch_defaults_get')).toMatchObject({ code: 'launch_default_required', role: 'coordinator', documentRevision: 1 });
+        // One unset role never hides another role's stored value (shared LaunchDefaultsRoleView contract).
+        expect(await run('launch_defaults_get')).toMatchObject({ success: true, result: 'get', documentRevision: 1, roles: {
+            assistant: { stored: { provider: 'claude-cli', revision: 1 }, effective: { ok: true, selection: { provider: 'claude-cli' } } },
+            coordinator: { stored: null, effective: { ok: false, code: 'launch_default_required', role: 'coordinator', reason: 'role_default_unset' } },
+        } });
         await set('coordinator', 1, { provider: 'codex-cli', model: 'gpt' });
         expect(await run('launch_defaults_get')).toMatchObject({ success: true,
             roles: { assistant: { effective: { selection: { provider: 'claude-cli' } } }, coordinator: { effective: { selection: { provider: 'codex-cli' } } } } });
@@ -127,8 +133,14 @@ describe('global explicit setup, check and read', () => {
         await set();
         const before = bytes();
         providerPatch = { enabled: false };
-        expect(await run('launch_defaults_get', { role: 'assistant' })).toMatchObject({ success: false,
-            code: 'launch_default_unavailable', reason: 'provider_disabled', source: 'stored_default', value: 'claude-cli' });
+        // The stored-but-now-invalid entry is still returned so the owner can see and fix it.
+        expect(await run('launch_defaults_get', { role: 'assistant' })).toMatchObject({ success: true, roles: { assistant: {
+            stored: { provider: 'claude-cli', revision: 1 },
+            effective: { ok: false, code: 'launch_default_unavailable', reason: 'provider_disabled', source: 'stored_default', value: 'claude-cli' },
+        } } });
+        expect(await run('launch_defaults_get')).toMatchObject({ success: true, roles: {
+            assistant: { effective: { ok: false, code: 'launch_default_unavailable' } },
+            coordinator: { stored: null, effective: { ok: false, code: 'launch_default_required' } } } });
         expect(bytes()).toEqual(before);
     });
     it('lets an owner replace an unreadable old provider catalog with an explicit usable choice', async () => {
@@ -163,7 +175,8 @@ describe('global explicit setup, check and read', () => {
         const before = bytes();
         expect(await run('launch_defaults_set', { action: 'set', role: 'assistant', provider: 'claude-cli', expectedRevision: 1 }))
             .toMatchObject({ code: 'revision_conflict', actualRevision: 3, committed: false });
-        expect(await run('launch_defaults_get', { role: 'assistant' })).toMatchObject({ code: 'launch_default_required' });
+        expect(await run('launch_defaults_get', { role: 'assistant' })).toMatchObject({ success: true, documentRevision: 3,
+            roles: { assistant: { stored: null, effective: { ok: false, code: 'launch_default_required' } } } });
         expect(bytes()).toEqual(before);
     });
     it('revalidates through the store instead of treating preflight as authority', async () => {

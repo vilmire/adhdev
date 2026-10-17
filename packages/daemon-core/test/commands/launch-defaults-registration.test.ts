@@ -120,7 +120,9 @@ describe('actual command registration and source authorization', () => {
         expect(getDaemonCommandRegistry().get('launch_defaults_get')?.meshSender).toBe('authenticated_peer');
     });
     it('routes explicit owner setup into the real store and reads applied provenance', async () => {
-        expect(await router.execute('launch_defaults_get', {}, 'p2p')).toMatchObject({ code: 'launch_default_required', documentRevision: 0 });
+        expect(await router.execute('launch_defaults_get', {}, 'p2p')).toMatchObject({ success: true, documentRevision: 0, roles: {
+            assistant: { stored: null, effective: { ok: false, code: 'launch_default_required' } },
+            coordinator: { stored: null, effective: { ok: false, code: 'launch_default_required' } } } });
         expect(fs.existsSync(globalPath())).toBe(false);
         expect(await ownerSet({ model: 'opus', thinkingLevel: 'high' })).toMatchObject({ success: true, result: 'applied', revision: 1, durable: true });
         const before = globalBytes();
@@ -145,7 +147,7 @@ describe('actual command registration and source authorization', () => {
     it('authorizes mesh readers before stripping transport metadata', async () => {
         expect(await router.execute('launch_defaults_get', {}, 'mesh')).toMatchObject({ code: 'mesh_sender_unknown' });
         expect(await router.execute('launch_defaults_get', { _meshSenderDaemonId: 'daemon_mach_authenticated_peer' }, 'mesh'))
-            .toMatchObject({ code: 'launch_default_required' });
+            .toMatchObject({ success: true, documentRevision: 0 });
     });
     it('strips reserved router metadata, never domain authority or inline configuration', async () => {
         expect(await ownerSet({ _interactionId: 'trace-1' })).toMatchObject({ result: 'applied' });
@@ -163,15 +165,16 @@ describe('actual command registration and source authorization', () => {
             .toMatchObject({ result: 'applied', entry: null, revision: 2 });
         const before = globalBytes();
         expect(await ownerSet({ expectedRevision: 1 })).toMatchObject({ code: 'revision_conflict', actualRevision: 2 });
-        expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'standalone')).toMatchObject({ code: 'launch_default_required' });
+        expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'standalone'))
+            .toMatchObject({ success: true, roles: { assistant: { stored: null, effective: { ok: false, code: 'launch_default_required' } } } });
         expect(globalBytes()).toEqual(before);
     });
     it('scopes provider aliases to CLI and computes machine availability without probing/writing config', async () => {
         expect(await ownerSet({ provider: 'codex' })).toMatchObject({ result: 'applied', entry: { provider: 'codex-cli' } });
         providers.enabled = false;
         const before = globalBytes();
-        expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'ipc'))
-            .toMatchObject({ code: 'launch_default_unavailable', reason: 'provider_disabled' });
+        expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'ipc')).toMatchObject({ success: true, roles: { assistant: {
+            stored: { provider: 'codex-cli' }, effective: { ok: false, code: 'launch_default_unavailable', reason: 'provider_disabled' } } } });
         providers.enabled = true; providers.detected = false;
         expect(await ownerSet({ expectedRevision: 1 })).toMatchObject({ code: 'launch_default_invalid', reason: 'provider_not_detected' });
         expect(globalBytes()).toEqual(before);

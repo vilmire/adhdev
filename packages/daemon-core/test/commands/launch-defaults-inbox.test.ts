@@ -135,7 +135,7 @@ describe('actual persisted launch-default Inbox', () => {
         const id = inbox().write(proposal({ selection: null }));
         expect(await resolve(id)).toMatchObject({ result: 'applied', revision: 2, entry: null, durable: true });
         expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'p2p'))
-            .toMatchObject({ code: 'launch_default_required' });
+            .toMatchObject({ success: true, roles: { assistant: { stored: null, effective: { ok: false, code: 'launch_default_required' } } } });
     });
     it('retains the exact proposal on stale document revision including clear ABA', async () => {
         const id = (await toolSet({ model: 'opus' })).stagedId as string;
@@ -188,7 +188,7 @@ describe('assistant staging authority through registered dispatch', () => {
         expect(inbox().read(staged.stagedId as string)).toMatchObject({ documentRevision: 0, expectedRevision: 0 });
         expect(fs.existsSync(join(dir, 'launch-defaults.json'))).toBe(false);
         expect(await router.execute('launch_defaults_get', { role: 'assistant' }, 'p2p'))
-            .toMatchObject({ code: 'launch_default_required' });
+            .toMatchObject({ success: true, roles: { assistant: { stored: null, effective: { ok: false, code: 'launch_default_required' } } } });
         expect(await resolve(staged.stagedId as string)).toMatchObject({ result: 'applied', revision: 1, durable: true });
     });
     it.each(['invalid', 'unreadable', 'missing'] as const)('refuses %s authority at the production staging snapshot', async status => {
