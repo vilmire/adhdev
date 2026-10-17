@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import { buildCoordinatorDelegatedCliLaunchOptions } from '../../src/commands/cli-delegated-launch'
+import { buildCoordinatorDelegatedCliLaunchOptions, resolveOwnerRegisteredRepoRoots } from '../../src/commands/cli-delegated-launch'
 import { applyPreLaunchTrust } from '../../src/providers/spec/pre-launch-trust'
 
 // Every it() below creates its own mkdtempSync workspace inline (no shared
@@ -1126,5 +1126,111 @@ describe('config_override isolation rules vs. a worker-private config root', () 
     )
     expect(disableRule).toBeTruthy()
     expect(disableRule.withholdWithPrivateHome).toBe(true)
+  })
+})
+
+// ★Grok worker private HOME: auth export, config-root pinning and the
+// independent owner-registered repository-root authority, in BOTH launch
+// shapes (worker-MCP isolation ON, and the trust-only path with it OFF).
+describe('grok delegated launch: private HOME env + registered-root authority', () => {
+  const GROK_TRUST = { scheme: 'grok_toml_file' } as const
+
+  function tmp(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix))
+    __tmpDirsToClean.push(dir)
+    return dir
+  }
+
+  function fakeGrokRealHome(): string {
+    const home = tmp('grok-launch-realhome-')
+    mkdirSync(join(home, '.grok', 'sessions'), { recursive: true })
+    writeFileSync(join(home, '.grok', 'auth.json'), '{}', { mode: 0o600 })
+    writeFileSync(join(home, '.grok', 'config.toml'), '', { mode: 0o600 })
+    return home
+  }
+
+  function launch(mcp: 'on' | 'off', extra: Record<string, unknown> = {}) {
+    const realHome = fakeGrokRealHome()
+    const workspace = tmp('grok-launch-ws-')
+    const result = buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'grok-cli',
+      workspace,
+      sessionKey: `sess_grok_${mcp}`,
+      preLaunchTrust: GROK_TRUST,
+      mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '.mcp.json', serverName: 'adhdev-mesh' },
+      realHome,
+      workerHomeBaseDir: tmp('grok-launch-base-'),
+      trustLedgerPath: join(tmp('grok-launch-ledger-'), 'grants.json'),
+      runtimeEnv: { ADHDEV_WORKER_MCP: mcp === 'on' ? '1' : 'off' } as NodeJS.ProcessEnv,
+      registeredRepoRoots: [],
+      ...extra,
+    })
+    return { result, realHome, workspace }
+  }
+
+  for (const mcp of ['on', 'off'] as const) {
+    it(`exports the REAL auth path and pins GROK_HOME to the private home (worker MCP ${mcp})`, () => {
+      const { result, realHome } = launch(mcp)
+      const privateHome = result.env.HOME
+      expect(privateHome).toBeTruthy()
+      expect(privateHome.startsWith(realHome)).toBe(false)
+      if (mcp === 'on') expect(result.workerIsolation?.workerHome).toBe(privateHome)
+      else expect(result.workerIsolation).toBeUndefined()
+      expect(result.env.GROK_AUTH_PATH).toBe(join(realHome, '.grok', 'auth.json'))
+      expect(result.env.GROK_HOME).toBe(join(privateHome, '.grok'))
+      expect(result.resolvedTrustPlan?.storePath).toBe(join(privateHome, '.grok', 'trusted_folders.toml'))
+      expect(result.resolvedTrustPlan?.authorizedRepoRoot).toBeUndefined()
+    })
+  }
+
+  it('overrides an inherited owner GROK_HOME but keeps a caller-provided auth path', () => {
+    const { result } = launch('on', { env: { GROK_HOME: '/owner/.grok', GROK_AUTH_PATH: '/custom/auth.json' } })
+    expect(result.env.GROK_HOME).toBe(join(result.env.HOME, '.grok'))
+    expect(result.env.GROK_AUTH_PATH).toBe('/custom/auth.json')
+  })
+
+  it('withholds repo-root trust when the registered roots do not authorize this checkout', () => {
+    const { result } = launch('off', { registeredRepoRoots: ['/not/this/repository'] })
+    expect(result.resolvedTrustPlan?.authorizedRepoRoot).toBeUndefined()
+    expect((result.trustNotes || []).join('; ')).toMatch(/repository-root trust withheld/)
+  })
+
+  it('refuses the launch when no private grok HOME can be built (no owner ~/.grok fallback)', () => {
+    // Missing required auth.json makes private-HOME preparation fail.
+    const realHome = tmp('grok-launch-noauth-')
+    expect(() => buildCoordinatorDelegatedCliLaunchOptions({
+      cliType: 'grok-cli',
+      workspace: tmp('grok-launch-ws-'),
+      sessionKey: 'sess_grok_noauth',
+      preLaunchTrust: GROK_TRUST,
+      realHome,
+      workerHomeBaseDir: tmp('grok-launch-base-'),
+      trustLedgerPath: join(tmp('grok-launch-ledger-'), 'grants.json'),
+      runtimeEnv: { ADHDEV_WORKER_MCP: 'off' } as NodeJS.ProcessEnv,
+      registeredRepoRoots: [],
+    })).toThrow(/worker_private_home_failed: grok-cli/)
+  })
+
+  it('resolves owner-registered roots from the mesh config, excluding ADHDev-created worktrees', () => {
+    const config = {
+      meshes: [
+        {
+          id: 'mesh-a',
+          nodes: [
+            { id: 'base', workspace: '/repos/main' },
+            { id: 'wt', workspace: '/repos/main-wt', isLocalWorktree: true },
+            { id: 'clone', workspace: '/repos/main-clone', clonedFromNodeId: 'base' },
+            { id: 'rel', workspace: 'relative/path' },
+            { id: 'dup', workspace: '/repos/main' },
+          ],
+        },
+        { id: 'mesh-b', nodes: [{ id: 'other', workspace: '/repos/other' }] },
+      ],
+    } as any
+    expect(resolveOwnerRegisteredRepoRoots('mesh-a', () => config)).toEqual(['/repos/main'])
+    expect(resolveOwnerRegisteredRepoRoots('mesh-missing', () => config)).toEqual([])
+    expect(resolveOwnerRegisteredRepoRoots(undefined, () => config)).toEqual([])
+    expect(resolveOwnerRegisteredRepoRoots('mesh-a', () => null)).toEqual([])
+    expect(resolveOwnerRegisteredRepoRoots('mesh-a', () => { throw new Error('torn write') })).toEqual([])
   })
 })

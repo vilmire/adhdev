@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveConfigDir } from '../config/config-dir.js';
 import type { PreLaunchTrust } from './spec/fsm-types.js';
+import { isOverBroadTrustRoot, registeredGrokRepoRoot } from './workspace-trust-shared.js';
 
 export type TrustScope = 'user' | 'worker';
 export type TrustOrigin = 'user_confirmed' | 'worker_auto';
@@ -26,9 +27,28 @@ export interface TrustLifecycle {
     expiresAt: string | null;
 }
 
+/**
+ * A repository-root grant that is authorized INDEPENDENTLY of the worker.
+ *
+ * Grok keys linked-worktree trust by the main repository (git common-dir
+ * parent), not by the worktree path. Git metadata alone only nominates a
+ * candidate; the grant exists only when that candidate is exactly one of the
+ * owner's registered mesh roots (see cli-delegated-launch
+ * `resolveOwnerRegisteredRepoRoots`). It is projected solely into the
+ * worker-private store, so its lifetime is bounded by that private HOME, the
+ * same as the worktree grant it accompanies.
+ */
+export interface AuthorizedRepoRootGrant {
+    realpath: string;
+    authority: 'owner_registered_mesh_node';
+    meshId?: string;
+}
+
 export interface ResolvedTrustPlan {
     provider: string;
     workspaceRealpath: string;
+    /** Grok worker plans only; absent means no repository-root grant. */
+    authorizedRepoRoot?: AuthorizedRepoRootGrant;
     /** Absolute native trust-store path. Never contains `~`. */
     storePath: string;
     scope: TrustScope;
@@ -47,6 +67,12 @@ export interface ResolveTrustPlanInput {
     origin: TrustOrigin;
     sessionKey: string;
     lifecycle: TrustLifecycle;
+    /**
+     * Owner-registered repository roots (absolute). Consulted only for a grok
+     * worker plan, and only as an exact-match authority for the git-derived
+     * repository root — never as a grant in its own right.
+     */
+    registeredRepoRoots?: readonly string[];
 }
 
 export function resolveWorkspaceRealpath(workspace: string): string {
@@ -66,20 +92,57 @@ function resolveSettingsStorePath(declaredPath: string, storeHome: string, works
 }
 
 /**
- * Resolve array-based trust stores. Named schemes retain their provider-owned
- * behavior until that provider receives a private HOME; this intentionally
- * leaves kimi's KIMI_CODE_HOME/os.homedir() and grok's GROK_HOME/os.homedir()
- * behavior unchanged. Both therefore return null here and are materialized by
- * the driver's named-scheme branch instead.
+ * Resolve array-based trust stores, plus grok's TOML store for WORKER plans.
+ *
+ * Other named schemes retain their provider-owned behavior; kimi's
+ * KIMI_CODE_HOME/os.homedir() resolution is unchanged and returns null here,
+ * so it is materialized by the driver's named-scheme branch instead. A grok
+ * USER plan also stays null: an interactive launch keeps honoring the owner's
+ * own GROK_HOME exactly as before.
+ *
+ * A grok WORKER plan pins the store to `<storeHome>/.grok/trusted_folders.toml`
+ * (the delegated launch exports GROK_HOME to that same directory), so the
+ * projection can never land in the owner's store. It may carry an
+ * `authorizedRepoRoot` — see `AuthorizedRepoRootGrant`.
  */
 export function resolveLaunchTrustPlan(input: ResolveTrustPlanInput): ResolvedTrustPlan | null {
-    if ('scheme' in input.trust) return null;
+    if ('scheme' in input.trust) {
+        if (input.trust.scheme !== 'grok_toml_file' || input.scope !== 'worker') return null;
+        return resolveGrokWorkerTrustPlan(input);
+    }
     const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
     const storePath = resolveSettingsStorePath(input.trust.settings_path, input.storeHome, workspaceRealpath);
     if (!path.isAbsolute(storePath)) throw new Error('resolved trust store path must be absolute');
     return {
         provider: input.provider,
         workspaceRealpath,
+        storePath,
+        scope: input.scope,
+        origin: input.origin,
+        sessionKey: input.sessionKey,
+        lifecycle: { ...input.lifecycle },
+    };
+}
+
+function resolveGrokWorkerTrustPlan(input: ResolveTrustPlanInput): ResolvedTrustPlan {
+    const workspaceRealpath = resolveWorkspaceRealpath(input.workspace);
+    const configRoot = path.resolve(input.storeHome, '.grok');
+    const storePath = path.join(configRoot, 'trusted_folders.toml');
+    if (!path.isAbsolute(storePath)) throw new Error('resolved trust store path must be absolute');
+    const repoRoot = registeredGrokRepoRoot(input.workspace, input.registeredRepoRoots || []);
+    const authorizedRepoRoot = repoRoot
+        && repoRoot !== workspaceRealpath
+        && !isOverBroadTrustRoot(repoRoot, configRoot)
+        ? {
+            realpath: repoRoot,
+            authority: 'owner_registered_mesh_node' as const,
+            ...(input.lifecycle.meshId ? { meshId: input.lifecycle.meshId } : {}),
+        }
+        : undefined;
+    return {
+        provider: input.provider,
+        workspaceRealpath,
+        ...(authorizedRepoRoot ? { authorizedRepoRoot } : {}),
         storePath,
         scope: input.scope,
         origin: input.origin,
@@ -127,6 +190,8 @@ export interface WorkerTrustGrant {
     firstUsedAt: string;
     lastUsedAt: string;
     lifecycle: TrustLifecycle;
+    /** Latest independently authorized repository-root grant, if any. */
+    authorizedRepoRoot?: AuthorizedRepoRootGrant;
     usages: WorkerTrustUsage[];
 }
 
@@ -229,6 +294,10 @@ export function recordWorkerAutoTrustGrant(
         grant.lastUsedAt = now;
         grant.lifecycle = { ...plan.lifecycle };
     }
+    // Provenance follows the CURRENT authority: a root that is no longer
+    // owner-registered must not linger as if it were still authorized.
+    if (plan.authorizedRepoRoot) grant.authorizedRepoRoot = { ...plan.authorizedRepoRoot };
+    else delete grant.authorizedRepoRoot;
 
     if (usage) {
         usage.lastUsedAt = now;

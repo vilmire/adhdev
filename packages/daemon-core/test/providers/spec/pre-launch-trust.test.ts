@@ -186,6 +186,72 @@ describe('applyPreLaunchTrust — grok_toml_file', () => {
         expect(toml).not.toMatch(/trusted = true\[folders/);
         expect(toml).toContain(`\n[folders."${fs.realpathSync(workspace)}"]`);
     });
+
+    describe('owner-registered repository root (authorizedRepoRoot)', () => {
+        let repoRoot: string;
+        beforeEach(() => {
+            repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'repo-grok-')));
+        });
+        afterEach(() => {
+            fs.rmSync(repoRoot, { recursive: true, force: true });
+        });
+
+        function rootPlan(root = repoRoot): ResolvedTrustPlan {
+            return {
+                ...grokPlan(),
+                scope: 'worker',
+                origin: 'worker_auto',
+                authorizedRepoRoot: { realpath: root, authority: 'owner_registered_mesh_node', meshId: 'mesh-a' },
+            };
+        }
+        const header = (real: string) => `[folders."${real}"]`;
+        const count = (toml: string, real: string) => toml.split(/\r?\n/).filter((l) => l.trim() === header(real)).length;
+
+        it('materializes the worktree and the authorized root in the planned private store', () => {
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan())).toBe(fs.realpathSync(workspace));
+            const toml = fs.readFileSync(storePath, 'utf8');
+            expect(count(toml, fs.realpathSync(workspace))).toBe(1);
+            expect(count(toml, repoRoot)).toBe(1);
+        });
+
+        it('is idempotent and adds only the missing root when the worktree entry exists', () => {
+            applyPreLaunchTrust({ scheme: 'grok_toml_file' }, grokPlan());
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan())).toBe(fs.realpathSync(workspace));
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan())).toBeNull();
+            const toml = fs.readFileSync(storePath, 'utf8');
+            expect(count(toml, fs.realpathSync(workspace))).toBe(1);
+            expect(count(toml, repoRoot)).toBe(1);
+        });
+
+        it('refuses the whole projection on explicit distrust of the root or the worktree', () => {
+            fs.mkdirSync(path.dirname(storePath), { recursive: true });
+            const deniedRoot = `${header(repoRoot)}\ntrusted = false\n`;
+            fs.writeFileSync(storePath, deniedRoot, 'utf8');
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan())).toBeNull();
+            expect(fs.readFileSync(storePath, 'utf8')).toBe(deniedRoot);
+
+            const deniedWorktree = `${header(fs.realpathSync(workspace))}\ntrusted = false\n`;
+            fs.writeFileSync(storePath, deniedWorktree, 'utf8');
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan())).toBeNull();
+            expect(fs.readFileSync(storePath, 'utf8')).toBe(deniedWorktree);
+        });
+
+        it('never widens to an over-broad root', () => {
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan('/'))).toBeNull();
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan(os.homedir()))).toBeNull();
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan(path.dirname(storePath)))).toBeNull();
+            expect(fs.existsSync(storePath)).toBe(false);
+        });
+
+        it('refuses to write through a symlinked store (private containment)', () => {
+            const outside = path.join(repoRoot, 'owner-store.toml');
+            fs.writeFileSync(outside, '# owner\n', 'utf8');
+            fs.mkdirSync(path.dirname(storePath), { recursive: true });
+            fs.symlinkSync(outside, storePath);
+            expect(applyPreLaunchTrust({ scheme: 'grok_toml_file' }, rootPlan())).toBeNull();
+            expect(fs.readFileSync(outside, 'utf8')).toBe('# owner\n');
+        });
+    });
 });
 
 /**

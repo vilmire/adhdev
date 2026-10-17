@@ -14,6 +14,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
 import { resolveLaunchTrustPlan } from '../../../src/providers/trust-provenance-ledger.js';
+import type { ResolvedTrustPlan } from '../../../src/providers/trust-provenance-ledger.js';
+import { buildSpecAdapterOpts } from '../../../src/providers/spec/fsm-driver-launch.js';
+import type { CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 import type {
     PtyTransportFactory, PtyRuntimeTransport, PtySpawnOptions,
 } from '../../../src/cli-adapters/pty-transport.js';
@@ -446,4 +449,96 @@ describe('FsmDriver -- pre_launch_trust', () => {
         const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
         expect(spec.pre_launch_trust).toEqual({ scheme: 'claude_json_projects' });
     });
+});
+
+/**
+ * Delegated grok workers: the driver consumes the launch plan (including an
+ * owner-registered repository root) and never falls back into the owner's
+ * ~/.grok trust/config store. `process.env.GROK_HOME` stands in for the
+ * owner's store throughout; it must stay untouched.
+ */
+describe('FsmDriver -- delegated grok trust/auth', () => {
+    const GROK_SPEC = () => writeSpec(baseSpec({ pre_launch_trust: { scheme: 'grok_toml_file' } }));
+    let prevGrokHome: string | undefined;
+    let ownerGrok: string;
+
+    function tmp(prefix: string): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+        __tmpDirsToClean.push(dir);
+        return dir;
+    }
+
+    function withOwnerGrokHome<T>(fn: () => T): T {
+        prevGrokHome = process.env.GROK_HOME;
+        ownerGrok = tmp('driver-grok-owner-');
+        process.env.GROK_HOME = ownerGrok;
+        try {
+            return fn();
+        } finally {
+            if (prevGrokHome === undefined) delete process.env.GROK_HOME;
+            else process.env.GROK_HOME = prevGrokHome;
+        }
+    }
+
+    function start(opts: { workspace: string; extraEnv?: Record<string, string>; plan?: ResolvedTrustPlan | null }) {
+        const driver = new FsmDriver({
+            specPath: GROK_SPEC(),
+            workingDir: opts.workspace,
+            hotReload: false,
+            transportFactory: new StubFactory(),
+            ...(opts.extraEnv ? { extraEnv: opts.extraEnv } : {}),
+            ...(opts.plan !== undefined ? { resolvedTrustPlan: opts.plan } : {}),
+        });
+        try { driver.start(); } finally { driver.shutdown(); }
+    }
+
+    it('materializes the plan worktree + authorized repository root in the private store', () => withOwnerGrokHome(() => {
+        const workspace = fs.realpathSync(tmp('driver-grok-ws-'));
+        const repoRoot = fs.realpathSync(tmp('driver-grok-repo-'));
+        const privateHome = tmp('driver-grok-private-');
+        const plan: ResolvedTrustPlan = {
+            provider: 'grok-cli',
+            workspaceRealpath: workspace,
+            authorizedRepoRoot: { realpath: repoRoot, authority: 'owner_registered_mesh_node' },
+            storePath: path.join(privateHome, '.grok', 'trusted_folders.toml'),
+            scope: 'worker',
+            origin: 'worker_auto',
+            sessionKey: 'session-driver-grok',
+            lifecycle: { kind: 'worktree', worktreePath: workspace, expiresAt: null },
+        };
+        start({ workspace, plan, extraEnv: { HOME: privateHome, GROK_HOME: path.join(privateHome, '.grok') } });
+        const toml = fs.readFileSync(plan.storePath, 'utf8');
+        expect(toml).toContain(`[folders."${workspace}"]`);
+        expect(toml).toContain(`[folders."${repoRoot}"]`);
+        expect(fs.existsSync(path.join(ownerGrok, 'trusted_folders.toml'))).toBe(false);
+    }));
+
+    it('a planless delegated fallback writes the private GROK_HOME, never the owner store, and grants no root', () => withOwnerGrokHome(() => {
+        const workspace = tmp('driver-grok-ws-');
+        const privateGrok = tmp('driver-grok-private-');
+        start({ workspace, plan: null, extraEnv: { GROK_HOME: privateGrok, GROK_AUTH_PATH: '/owner/.grok/auth.json' } });
+        const toml = fs.readFileSync(path.join(privateGrok, 'trusted_folders.toml'), 'utf8');
+        expect(toml.match(/^\[folders\./gm)).toHaveLength(1);
+        expect(toml).toContain(`[folders."${fs.realpathSync(workspace)}"]`);
+        expect(fs.existsSync(path.join(ownerGrok, 'trusted_folders.toml'))).toBe(false);
+    }));
+
+    it('a delegated launch missing its private GROK_HOME/HOME writes nothing (no owner fallback)', () => withOwnerGrokHome(() => {
+        const workspace = tmp('driver-grok-ws-');
+        start({ workspace, plan: null, extraEnv: { GROK_AUTH_PATH: '/owner/.grok/auth.json' } });
+        expect(fs.existsSync(path.join(ownerGrok, 'trusted_folders.toml'))).toBe(false);
+    }));
+
+    it('the spawn env keeps the private GROK_HOME and the real GROK_AUTH_PATH over the daemon env', () => withOwnerGrokHome(() => {
+        const workspace = tmp('driver-grok-ws-');
+        const privateGrok = path.join(tmp('driver-grok-private-'), '.grok');
+        const spec = JSON.parse(fs.readFileSync(GROK_SPEC(), 'utf8')) as CliSpecV4;
+        const adapterOpts = buildSpecAdapterOpts(spec, {
+            specPath: '', workingDir: workspace,
+            extraEnv: { GROK_HOME: privateGrok, GROK_AUTH_PATH: '/real/home/.grok/auth.json' },
+        });
+        expect(adapterOpts.env?.GROK_HOME).toBe(privateGrok);
+        expect(adapterOpts.env?.GROK_AUTH_PATH).toBe('/real/home/.grok/auth.json');
+        expect(adapterOpts.envIsComplete).toBe(true);
+    }));
 });

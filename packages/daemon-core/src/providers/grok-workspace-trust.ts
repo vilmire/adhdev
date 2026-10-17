@@ -106,6 +106,33 @@ function hasDistrustEntry(contents: string, real: string): boolean {
     return false;
 }
 
+/**
+ * Decide what (if anything) to append to grok's shared trust store for
+ * `roots`. Shared by the HOME-resolving writer below and the plan-driven
+ * projection in spec/pre-launch-trust.ts so both enforce the same rules:
+ *
+ * - `refused` when ANY root carries an explicit `trusted = false` table. A
+ *   repo-root grant must not bypass a worktree refusal, nor a worktree grant
+ *   a repo-root refusal.
+ * - otherwise the serialized tables for the roots that have no table yet
+ *   (header match — an existing table is never rewritten), or null when
+ *   every root is already present.
+ */
+export function planGrokTrustAppend(
+    existing: string,
+    roots: readonly string[],
+    decidedAt = Math.floor(Date.now() / 1000),
+): { refused: true } | { refused: false; append: string | null } {
+    if (roots.some(root => hasDistrustEntry(existing, root))) return { refused: true };
+    const missing = [...new Set(roots)].filter(root => !hasTrustEntry(existing, root));
+    if (!missing.length) return { refused: false, append: null };
+    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+    return {
+        refused: false,
+        append: `${separator}${missing.map(root => serializeGrokWorkspaceTrust(root, decidedAt)).join('')}`,
+    };
+}
+
 /** Native grok TOML projection bytes, separated from HOME/store resolution. */
 export function serializeGrokWorkspaceTrust(real: string, decidedAt = Math.floor(Date.now() / 1000)): string {
     return `[folders."${escapeTomlKey(real)}"]\ntrusted = true\ndecided_at = ${decidedAt}\n`;
@@ -153,13 +180,10 @@ export function applyGrokWorkspaceTrust(
         const roots = [...new Set([real, ...(repoRoot && !isOverBroadRoot(repoRoot, env) ? [repoRoot] : [])])];
         // A root grant must not bypass an explicit worktree refusal, nor may
         // a worktree grant bypass an explicit repo-root refusal.
-        if (roots.some(root => hasDistrustEntry(existing, root))) return null;
-        const missing = roots.filter(root => !hasTrustEntry(existing, root));
-        if (!missing.length) return null;
-        const entry = missing.map(root => serializeGrokWorkspaceTrust(root)).join('');
-        const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+        const decision = planGrokTrustAppend(existing, roots);
+        if (decision.refused || !decision.append) return null;
         fs.mkdirSync(path.dirname(storePath), { recursive: true });
-        fs.appendFileSync(storePath, `${separator}${entry}`, { encoding: 'utf8', mode: 0o600 });
+        fs.appendFileSync(storePath, decision.append, { encoding: 'utf8', mode: 0o600 });
         LOG.info('grok-workspace-trust', `pre-trusted workspace ${real}`);
         return real;
     } catch (err) {

@@ -27,7 +27,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { PreLaunchTrust } from './fsm-types.js';
 import { serializeKimiWorkspaceTrust } from '../kimi-workspace-trust.js';
-import { serializeGrokWorkspaceTrust } from '../grok-workspace-trust.js';
+import { planGrokTrustAppend } from '../grok-workspace-trust.js';
+import { isOverBroadTrustRoot } from '../workspace-trust-shared.js';
 import { serializeCodexWorkspaceTrust } from '../codex-workspace-trust.js';
 import { claudeProjectKey } from '../claude-workspace-trust.js';
 import type { ResolvedTrustPlan } from '../trust-provenance-ledger.js';
@@ -75,26 +76,52 @@ export function applyPreLaunchTrust(trust: PreLaunchTrust, plan: ResolvedTrustPl
                 // false negative merely rewrites an equivalent entry.
                 //
                 // An existing entry is never rewritten, which is what preserves a
-                // user's explicit `trusted = false` decision.
+                // user's explicit `trusted = false` decision — and an explicit
+                // refusal of EITHER the worktree or the authorized repository
+                // root refuses the whole projection (planGrokTrustAppend).
+                //
+                // The repository root is written only when launch planning
+                // attached `authorizedRepoRoot` (exact owner-registered mesh
+                // root, see trust-provenance-ledger). Nothing here derives or
+                // widens a root on its own.
+                const configRoot = path.dirname(settingsPath);
+                const root = plan.authorizedRepoRoot?.realpath;
+                const roots = [real, ...(root && root !== real ? [root] : [])];
+                if (roots.some((candidate) => !path.isAbsolute(candidate)
+                    || isOverBroadTrustRoot(candidate, configRoot))) {
+                    LOG.warn('pre-launch-trust', `refusing grok trust plan with an over-broad root in ${settingsPath}`);
+                    return null;
+                }
+                // Private containment: the worker store is a plain file inside
+                // the private config root. A symlink there could only write
+                // through to someone else's store (e.g. the owner's), so refuse.
+                try {
+                    if (fs.lstatSync(settingsPath).isSymbolicLink()) {
+                        LOG.warn('pre-launch-trust', `refusing to write grok trust through symlinked store ${settingsPath}`);
+                        return null;
+                    }
+                } catch (err: any) {
+                    if (err?.code !== 'ENOENT') throw err;
+                }
                 let existing = '';
                 try {
                     existing = fs.readFileSync(settingsPath, 'utf8');
                 } catch (err: any) {
                     if (err?.code !== 'ENOENT') throw err;
                 }
-                const header = `[folders."${real.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
-                if (existing.split(/\r?\n/).some((line) => line.trim() === header)) {
+                const decision = planGrokTrustAppend(existing, roots);
+                if (decision.refused) {
+                    LOG.info('pre-launch-trust', `[${settingsPath}] explicit grok distrust present — no trust written`);
+                    return null;
+                }
+                if (!decision.append) {
                     LOG.debug('pre-launch-trust', `[${settingsPath}] ${real} already trusted — no change`);
                     return null;
                 }
-                const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
-                fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-                fs.appendFileSync(
-                    settingsPath,
-                    `${separator}${serializeGrokWorkspaceTrust(real)}`,
-                    { encoding: 'utf8', mode: 0o600 },
-                );
-                LOG.info('pre-launch-trust', `materialized ${plan.origin} grok folder trust in ${settingsPath}`);
+                fs.mkdirSync(configRoot, { recursive: true });
+                fs.appendFileSync(settingsPath, decision.append, { encoding: 'utf8', mode: 0o600 });
+                LOG.info('pre-launch-trust', `materialized ${plan.origin} grok folder trust in ${settingsPath}`
+                    + (root && root !== real ? ' (with owner-registered repository root)' : ''));
                 return real;
             }
             if (trust.scheme === 'codex_toml_file') {

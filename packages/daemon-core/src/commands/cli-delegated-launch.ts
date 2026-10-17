@@ -7,6 +7,8 @@ import { resolveWorkerMcpServerLaunch } from './mesh-coordinator.js';
 import type { MeshCoordinatorDelegatedWorkerIsolation } from '../providers/mesh-coordinator-contracts.js';
 import type { PreLaunchTrust } from '../providers/spec/fsm-types.js';
 import { LOG } from '../logging/logger.js';
+import { readMeshConfigFromDisk } from '../config/mesh-config-store.js';
+import type { LocalMeshConfig } from '../repo-mesh-types.js';
 import {
     loadPreLaunchTrustFromSpecPath,
     recordWorkerAutoTrustGrant,
@@ -64,6 +66,14 @@ export interface CoordinatorDelegatedCliLaunchOptionsInput {
     preLaunchTrust?: PreLaunchTrust;
     /** Optional lifecycle override retained for embeddings/tests. */
     trustLifecycle?: TrustLifecycle;
+    /**
+     * Owner-registered repository roots that may authorize grok's repo-root
+     * trust key. Test/embedding seam: when absent, production resolves them
+     * from this daemon's meshes.json for `trustContext.meshId` via
+     * `resolveOwnerRegisteredRepoRoots`. An empty list withholds repo-root
+     * trust (fail closed); the worktree grant is unaffected.
+     */
+    registeredRepoRoots?: readonly string[];
     trustContext?: {
         meshId?: string;
         nodeId?: string;
@@ -228,6 +238,69 @@ function renderWorkerMcpDeliveryArgs(
     return renderedArgs;
 }
 
+/** Provider type whose worker-private HOME carries grok's config/trust store. */
+const GROK_PROVIDER_TYPE = 'grok-cli';
+
+/**
+ * Owner-registered repository roots for `meshId`, read from THIS daemon's
+ * meshes.json without migrating or persisting anything.
+ *
+ * ★Authority source (no dedicated registry API exists): the narrowest record
+ * of what the OWNER registered is the mesh's node list in the local
+ * meshes.json — nodes are added only by the owner (mesh create / add node /
+ * pairing). Nodes ADHDev created itself (`isLocalWorktree` or
+ * `clonedFromNodeId` — clone_mesh_node worktrees) are excluded: they are task
+ * scratch checkouts, not roots the owner chose to trust. Paths registered for
+ * other machines simply never equal the local git root, so they cannot match.
+ * A missing/unreadable file or unknown mesh yields [] — repo-root trust is
+ * then withheld (fail closed) and only the worktree itself is trusted.
+ */
+export function resolveOwnerRegisteredRepoRoots(
+    meshId: string | undefined,
+    readConfig: () => LocalMeshConfig | null = readMeshConfigFromDisk,
+): string[] {
+    if (!meshId) return [];
+    let config: LocalMeshConfig | null = null;
+    try {
+        config = readConfig();
+    } catch {
+        return [];
+    }
+    const mesh = config?.meshes?.find((entry) => entry?.id === meshId);
+    if (!mesh || !Array.isArray(mesh.nodes)) return [];
+    const roots = mesh.nodes
+        .filter((node) => !!node && node.isLocalWorktree !== true && !node.clonedFromNodeId)
+        .map((node) => (typeof node.workspace === 'string' ? node.workspace.trim() : ''))
+        .filter((workspace) => workspace && path.isAbsolute(workspace));
+    return [...new Set(roots)];
+}
+
+/**
+ * grok's private-HOME env: pin the config root to the worker's private `.grok`
+ * and point auth at the REAL auth file.
+ *
+ *  - `GROK_HOME` is forced (not merely defaulted): an inherited daemon/caller
+ *    `GROK_HOME` would otherwise redirect the worker straight back into the
+ *    owner's config and trust store.
+ *  - `GROK_AUTH_PATH` names the owner's real `~/.grok/auth.json` (the same
+ *    file the private HOME already links), so grok's token refresh rewrites
+ *    the one real credential instead of replacing a private symlink with a
+ *    detached copy. A caller-provided value is kept.
+ */
+function applyGrokPrivateHomeEnv(
+    env: Record<string, string>,
+    envUnsets: Set<string>,
+    privateHome: string,
+    realHome: string | undefined,
+    notes: string[],
+): void {
+    if (!envUnsets.has('GROK_HOME')) env.GROK_HOME = path.join(privateHome, '.grok');
+    if (!envUnsets.has('GROK_AUTH_PATH') && !env.GROK_AUTH_PATH) {
+        env.GROK_AUTH_PATH = path.join(realHome || os.homedir(), '.grok', 'auth.json');
+    }
+    notes.push(`grok config root pinned to private ${path.join(privateHome, '.grok')}; auth via real auth.json`);
+}
+
 export function buildCoordinatorDelegatedCliLaunchOptions(
     input: CoordinatorDelegatedCliLaunchOptionsInput,
 ): CoordinatorDelegatedCliLaunchOptions {
@@ -345,6 +418,10 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
                 ...(input.trustContext?.taskId ? { taskId: input.trustContext.taskId } : {}),
                 expiresAt: null,
             };
+            const grokTrust = 'scheme' in preLaunchTrust && preLaunchTrust.scheme === 'grok_toml_file';
+            const registeredRepoRoots = grokTrust
+                ? (input.registeredRepoRoots ?? resolveOwnerRegisteredRepoRoots(input.trustContext?.meshId))
+                : [];
             const candidate = resolveLaunchTrustPlan({
                 provider: input.cliType,
                 workspace: input.workspace,
@@ -354,7 +431,13 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
                 origin: 'worker_auto',
                 sessionKey: input.sessionKey || input.workspace,
                 lifecycle,
+                registeredRepoRoots,
             });
+            if (grokTrust && candidate) {
+                notes.push(candidate.authorizedRepoRoot
+                    ? `grok repository-root trust authorized by owner-registered mesh root ${candidate.authorizedRepoRoot.realpath}`
+                    : 'grok repository-root trust withheld — no owner-registered mesh root matches this checkout');
+            }
             if (candidate) {
                 try {
                     const recorded = recordWorkerAutoTrustGrant(candidate, {
@@ -386,10 +469,27 @@ export function buildCoordinatorDelegatedCliLaunchOptions(
         // process tree. The trust projection still lands correctly, because it is
         // written to `storeHome` directly rather than resolved through `$HOME`.
         const trustHomeIsConfigRoot = Boolean(workerIsolation?.workerHomeEnvVar);
-        if (resolvedTrustPlan && storeHome && !trustHomeIsConfigRoot && !envUnsets.has('HOME') && !env.HOME) {
+        // grok: the private HOME is exported even when the ledger write failed
+        // (plan null) — without it the worker would read the owner's ~/.grok.
+        const exportHome = Boolean(resolvedTrustPlan) || input.cliType === GROK_PROVIDER_TYPE;
+        if (exportHome && storeHome && !trustHomeIsConfigRoot && !envUnsets.has('HOME') && !env.HOME) {
             env.HOME = storeHome;
             if (process.platform === 'win32' && !env.USERPROFILE) env.USERPROFILE = storeHome;
         }
+        if (input.cliType === GROK_PROVIDER_TYPE) {
+            if (!storeHome) {
+                // Fail closed: a grok worker without its private HOME would
+                // read — and its trust grant would land in — the owner's real
+                // ~/.grok config/trust store.
+                throw new Error(
+                    `worker_private_home_failed: ${input.cliType}: no worker-private HOME for the grok trust/config store`
+                    + " — refusing to launch the worker against the owner's ~/.grok.",
+                );
+            }
+            applyGrokPrivateHomeEnv(env, envUnsets, storeHome, input.realHome, notes);
+        }
+    } else if (input.cliType === GROK_PROVIDER_TYPE && workerIsolation?.workerHome) {
+        applyGrokPrivateHomeEnv(env, envUnsets, workerIsolation.workerHome, input.realHome, workerIsolation.notes);
     }
 
     // Provider-declared env VALUES (env.set), applied before the unset sweep so

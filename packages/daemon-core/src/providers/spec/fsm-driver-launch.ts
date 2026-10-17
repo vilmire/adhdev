@@ -60,9 +60,28 @@ export function applySpecPreLaunchTrust(spec: CliSpecV4, opts: SpecDriverOpts, s
         // in both a git and a non-git workspace. Folder trust in grok
         // gates HOOK/PLUGIN execution, not the session — so this is a
         // correctness/containment fix, not a stall fix.
+        //
+        // ★Delegated workers normally arrive with a resolved plan (handled
+        // above, including any owner-registered repository root). This
+        // fallback passes NO registered roots, so it can only ever trust the
+        // launch directory itself. A delegated grok launch is recognizable by
+        // the GROK_AUTH_PATH cli-delegated-launch exports; if such a launch
+        // somehow lacks its private GROK_HOME/HOME, resolving the store from
+        // the daemon's env would write into the OWNER's ~/.grok — refuse.
+        const extraEnv = opts.extraEnv || {};
+        const delegatedGrok = typeof extraEnv.GROK_AUTH_PATH === 'string' && extraEnv.GROK_AUTH_PATH.trim() !== '';
+        const privateStore = Boolean(extraEnv.GROK_HOME?.trim() || extraEnv.HOME?.trim());
+        if (delegatedGrok && !privateStore) {
+            LOG.warn(
+                'pre-launch-trust',
+                `[${specTag}] skipping grok trust for a delegated launch without a private GROK_HOME/HOME`
+                + ` (workspace=${opts.workingDir}) — refusing to write the owner's trust store.`,
+            );
+            return;
+        }
         applyGrokWorkspaceTrust(opts.workingDir, {
             ...process.env,
-            ...(opts.extraEnv || {}),
+            ...extraEnv,
         });
     } else if ('scheme' in trust
         && trust.scheme === 'codex_toml_file') {

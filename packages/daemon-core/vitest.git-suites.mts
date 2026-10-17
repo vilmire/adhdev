@@ -76,4 +76,8 @@ export const GIT_HEAVY_SUITES: string[] = [
   'test/mesh/submodule-default-branch.test.ts',
   'test/mesh/worktree-bootstrap-stale-running.test.ts',
   'test/mesh/workspace-git-watcher.test.ts',
+  // Grok repo-root trust: real repo + linked worktree to resolve the git
+  // common-dir parent that grok keys trust by.
+  'test/providers/grok-workspace-trust.test.ts',
+  'test/providers/trust-provenance-ledger.test.ts',
 ];
