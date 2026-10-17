@@ -80,3 +80,6 @@ ide_dom.json
 
 # Local agent tool state (machine-specific, must not be tracked)
 .antigravitycli/
+# A symlinked node_modules (worktrees sharing installs) is a file, which
+# the directory pattern above does not match.
+node_modules
