@@ -42,7 +42,7 @@ import { useTabShortcuts } from '../../hooks/useTabShortcuts';
 import { isEditableTarget, normalizeKey, readActionShortcuts, type DashboardActionShortcutId } from '../../hooks/useActionShortcuts'
 import { getConversationTitle } from './conversation-presenters';
 import { buildDashboardDockviewContextMenuItems } from './dockviewContextMenuItems'
-import { pendingStoredPanelsAfterRestore, shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune, STORED_PANEL_ARRIVAL_GRACE_MS, takeRetainedStoredPanelIds, type PendingStoredPanels } from './dashboardDockviewHydration'
+import { applyAuthoritativeStoredDockPrune, dockLayoutContainsUnresolvedStoredPanel, pendingStoredPanelsAfterRestore, releaseStoredDockGrace, shouldAwaitStoredDockviewHydration, shouldDeferDockviewPanelPrune, STORED_PANEL_ARRIVAL_GRACE_MS, type PendingStoredPanels } from './dashboardDockviewHydration'
 import { getPassiveSessionSelectionCommand } from './dashboardSessionCommands'
 import type { DashboardScrollToBottomIntent } from './dashboard-scroll-to-bottom'
 import { attachDockviewIdleDragFloat, isDockviewIdleDragFloatEnabled } from './dockviewIdleDragFloat'
@@ -56,7 +56,6 @@ import {
 } from './dockviewWorkspaceHelpers';
 import {
     buildInitialDockviewLayout,
-    syncDockviewPanels,
     readHiddenTabLocationFromLayout,
     syncRemotePanels,
     type DashboardDockviewPanelParams,
@@ -746,9 +745,13 @@ export default function DashboardDockviewWorkspace({
         return activated
     }, [activateRequestedTab])
 
-    const persistDockviewLayout = useCallback(() => {
+    const persistDockviewLayout = useCallback((force = false) => {
         const api = apiRef.current
         if (!api) return
+        const visibleKeys = latestVisibleConversationsRef.current.map(conversation => conversation.tabKey)
+        // Placeholders have no live conversation and are not written. A prune
+        // passes force so the layout without those panels is saved immediately.
+        if (!force && dockLayoutContainsUnresolvedStoredPanel(api.panels.map(panel => panel.id), visibleKeys, isRemotePanelId)) return
         writeDashboardDockviewStoredLayout(layoutProfile, {
             activeTabId: api.activePanel?.id ?? null,
             layout: api.toJSON(),
@@ -858,9 +861,6 @@ export default function DashboardDockviewWorkspace({
         }
     }, [])
 
-    const retainedStoredPanelIds = useCallback((conversations: ActiveConversation[]) =>
-        takeRetainedStoredPanelIds(pendingStoredPanelsRef, conversations.map(conversation => conversation.tabKey)), [])
-
     const handleReady = useCallback((event: DockviewReadyEvent) => {
         apiRef.current = event.api
         idleDragFloatCleanupRef.current?.()
@@ -873,12 +873,13 @@ export default function DashboardDockviewWorkspace({
             pendingStoredPanelsRef.current = pendingStoredPanelsAfterRestore(
                 event.api.panels.map(panel => panel.id), visibleConversations.map(conversation => conversation.tabKey), isRemotePanelId)
             if (pendingStoredPanelsRef.current) {
-                // Sessions that never come back are pruned once the grace ends.
+                // Sessions for a daemon that has not reported a session list yet
+                // can still arrive during the grace. When the timer fires, prune
+                // even if the retain ref was already cleared.
                 window.setTimeout(() => {
-                    const api = apiRef.current
-                    if (!api || !pendingStoredPanelsRef.current) return
-                    pendingStoredPanelsRef.current = null
-                    syncDockviewPanels(api, latestVisibleConversationsRef.current, null, assistantPinsRef.current)
+                    if (releaseStoredDockGrace(apiRef.current, pendingStoredPanelsRef, latestVisibleConversationsRef.current, assistantPinsRef.current)) {
+                        persistDockviewLayout(true)
+                    }
                 }, STORED_PANEL_ARRIVAL_GRACE_MS + 50)
             }
         }
@@ -891,7 +892,7 @@ export default function DashboardDockviewWorkspace({
         })
 
         if (!awaitingInitialLayoutHydrationRef.current) {
-            syncDockviewPanels(event.api, visibleConversations, retainedStoredPanelIds(visibleConversations), assistantPinsRef.current)
+            applyAuthoritativeStoredDockPrune(event.api, visibleConversations, pendingStoredPanelsRef, ides, assistantPinsRef.current, undefined, () => persistDockviewLayout(true))
             syncRemotePanels(event.api, visibleConversations, requestedRemoteIdeId)
         }
 
@@ -984,7 +985,6 @@ export default function DashboardDockviewWorkspace({
         persistDockviewLayout,
         requestedActiveTabKey,
         requestedRemoteIdeId,
-        retainedStoredPanelIds,
         sendCommand,
         syncPopoutChrome,
         visibleConversations,
@@ -1026,7 +1026,7 @@ export default function DashboardDockviewWorkspace({
         }
 
         if (!shouldSkipPanelPrune) {
-            syncDockviewPanels(api, visibleConversations, retainedStoredPanelIds(visibleConversations), assistantPinsRef.current)
+            applyAuthoritativeStoredDockPrune(api, visibleConversations, pendingStoredPanelsRef, ides, assistantPinsRef.current, undefined, () => persistDockviewLayout(true))
             syncRemotePanels(api, visibleConversations, requestedRemoteIdeId)
         }
 
@@ -1075,7 +1075,7 @@ export default function DashboardDockviewWorkspace({
         if (!activePanelStillExists) {
             activateStoredActiveTab()
         }
-    }, [activatePanel, activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, retainedStoredPanelIds, visibleConversations])
+    }, [activatePanel, activateRequestedTab, activateStoredActiveTab, ides, initialDataLoaded, persistDockviewLayout, persistHiddenRestoreState, readHiddenRestoreStateFromLayout, requestedActiveTabKey, requestedRemoteIdeId, visibleConversations])
 
     useEffect(() => {
         if (!hasInitializedRef.current) return

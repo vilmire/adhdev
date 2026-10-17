@@ -409,7 +409,9 @@
 
     .adhdev-dockview .dv-tabs-and-actions-container {
         align-items: flex-end;
-        background: transparent !important;
+        /* Opaque in every theme. A transparent bar let the first user bubble
+           slide underneath the 50px strip. Light theme repeats this below. */
+        background: var(--surface-primary) !important;
         padding-inline: 8px;
         padding-top: 6px;
         padding-bottom: 0;
@@ -421,6 +423,12 @@
         gap: 6px;
         min-width: 0;
         overscroll-behavior-x: contain;
+    }
+
+    /* Stored panels with no live conversation are not tabs. Hide the dockview
+       shell as well as the placeholder, so a restored title cannot show. */
+    .adhdev-dockview .dv-tab:has(.adhdev-dockview-tab-pending) {
+        display: none;
     }
 
     .adhdev-dockview .dv-left-actions-container,
@@ -1869,6 +1877,12 @@
         display: flex;
         justify-content: flex-end;
         pointer-events: none;
+    }
+
+    /* The pill is taken out of flow. Clear it so the first user bubble is not
+       covered (top offset 6px + pill height + a small gap). */
+    .chat-activity-toggle-bar + * .chat-container {
+        padding-top: 40px;
     }
 
     .chat-activity-toggle {

@@ -207,15 +207,18 @@ export function DashboardDockviewTab(props: IDockviewPanelHeaderProps<DashboardD
     const conversation = ctx.conversationsByTabKey.get(props.params.tabKey)
 
     if (!conversation) {
+        // A stored panel can exist for a moment before the first session list.
+        // It must not render the restored title (Assistant / folder basename)
+        // as a live tab, and the layout writer refuses to persist it.
         return (
             <div
-                className="adhdev-dockview-tab adhdev-dockview-tab-empty"
+                className="adhdev-dockview-tab adhdev-dockview-tab-pending"
                 data-tab-key={props.params.tabKey || ''}
-            >
-                <div className="adhdev-dockview-tab-copy">
-                    <div className="adhdev-dockview-tab-primary">{props.api.title || props.params.tabKey}</div>
-                </div>
-            </div>
+                data-pending-hydration="true"
+                aria-busy="true"
+                aria-label="Loading"
+                hidden
+            />
         )
     }
 
