@@ -95,7 +95,10 @@ describe('approval-utils', () => {
   })
 
   it('auto-approval never presses a decline as an approval', () => {
-    expect(pickAutoApprovalButton(['Always Allow', 'Deny', 'Allow Once'])).toEqual({ index: 2, label: 'Allow Once' })
+    // A modal that offers any standing grant is left for the person (fuzzy IDE clicks).
+    expect(pickAutoApprovalButton(['Always Allow', 'Deny', 'Allow Once'])).toEqual({ index: -1, label: '' })
+    expect(pickAutoApprovalButton(['Allow', 'Always run'])).toEqual({ index: -1, label: '' })
+    expect(pickAutoApprovalButton(['Run', 'Deny'])).toEqual({ index: 0, label: 'Run' })
     expect(pickAutoApprovalButton(['Always allow', 'Reject'])).toEqual({ index: -1, label: '' })
   })
 

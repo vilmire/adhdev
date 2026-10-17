@@ -107,8 +107,9 @@ describe('pickLeastPrivilegeApprovalButton', () => {
 })
 
 describe('IDE/extension auto-approval pick', () => {
-  it('skips a leading persistent option', () => {
-    expect(pickAutoApprovalButton(['Always allow', 'Allow once', 'Deny'])).toEqual({ index: 1, label: 'Allow once' })
+  it('leaves any modal that offers a standing grant for the person (IDE clicks match fuzzily)', () => {
+    expect(pickAutoApprovalButton(['Always allow', 'Allow once', 'Deny'])).toEqual({ index: -1, label: '' })
+    expect(pickAutoApprovalButton(['Allow once', 'Deny'])).toEqual({ index: 0, label: 'Allow once' })
   })
   it('refuses persistent-only modals but keeps the script default for button-less ones', () => {
     expect(modalAllowsAutoApproval({ buttons: ['Always allow', 'Allow for this session'] })).toBe(false)

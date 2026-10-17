@@ -219,14 +219,15 @@ export function pickAutoApprovalButton(
     // never a decline ("Deny"/"Reject" pressed as an approval).
     const picked = pickLeastPrivilegeApprovalButton(labels);
     if (picked.index < 0) return { index: -1, label: '' };
-    // The IDE click scripts match labels by substring, so a chosen label that is
-    // contained in a persistent grant on the same modal ("Allow" vs "Always
-    // Allow") could land on the grant. Leave such a modal for the person.
-    const chosen = normalizeApprovalLabel(picked.label);
-    const ambiguous = labels.some((label, i) => i !== picked.index
-        && isPersistentApprovalGrantLabel(label)
-        && normalizeApprovalLabel(label).includes(chosen));
-    return ambiguous ? { index: -1, label: '' } : picked;
+    // The IDE/extension click scripts match labels fuzzily (substring, and some
+    // prefer any "always…" button when the wanted label starts with run/allow/
+    // accept/yes), so on a modal that offers ANY persistent grant the click can
+    // land on the grant whatever label we ask for. Leave such a modal for the
+    // person; auto-click only modals with no standing option at all.
+    if (labels.some((label, i) => i !== picked.index && isPersistentApprovalGrantLabel(label))) {
+        return { index: -1, label: '' };
+    }
+    return picked;
 }
 
 /**
