@@ -181,16 +181,27 @@ describe('antigravity coordinator + co-located worker birth-floor isolation (D3)
     tmpDir = '';
   });
 
-  it('coordinator (real floor before all births) resolves the OLDEST-born (its own mesh-heavy) conv with ownerConfirmed:true', async () => {
+  // Since rc.17 (native-history ownership proof) a spawn floor only EXCLUDES stores born
+  // before the session; it never attributes one. A session owns a discovered
+  // conversation only when that store holds input this session alone sent, recorded
+  // through the same registry the live send path writes. The D3 isolation invariants
+  // below are unchanged; only the evidence that establishes ownership is.
+  async function recordSends() {
+    const { recordSentPrompt, __resetSentPromptRegistry } = await import(
+      '../../../src/providers/native-history/sent-prompt-registry.js'
+    );
+    __resetSentPromptRegistry();
+    recordSentPrompt('coord-session-iid', 'mesh_dispatch task to replica');
+    recordSentPrompt('replica-a-iid', 'do the replica-A work');
+  }
+
+  it('coordinator resolves its OWN conversation by its sent input, owner-confirmed', async () => {
+    await recordSends();
     const { createNativeHistoryDispatcher } = await import(
       '../../../src/providers/native-history/dispatcher.js'
     );
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
 
-    // Floor sits before every store's birth → all three qualify; the floor branch
-    // returns the OLDEST-born store, which is the coordinator's own conv. This is
-    // exactly the pick the coordinator makes when it carries a valid (past) floor
-    // instead of the pre-fix spawnedAtMs=0.
     const coord = dispatch({
       agentType: 'antigravity-cli',
       sessionId: '',
@@ -205,19 +216,13 @@ describe('antigravity coordinator + co-located worker birth-floor isolation (D3)
     expect(coord!.messages.some(m => m.role === 'assistant' && m.content === 'coordinator answer')).toBe(true);
   });
 
-  it('replica (floor AFTER the coordinator birth) resolves its OWN conv and CANNOT claim the coordinator conv', async () => {
-    // Backdate the coordinator store far enough into the past that a replica floor
-    // can sit strictly AFTER the coordinator birth but before the replicas — the
-    // birth-window guard then excludes the coordinator conv from the replica.
-    // (birthtime is not forgeable, so we express the SEPARATION via the floor and
-    //  verify claim-exclusion, the other half of the isolation, independently.)
+  it('replica resolves its OWN conv and never surfaces the coordinator conv', async () => {
+    await recordSends();
     const { createNativeHistoryDispatcher } = await import(
       '../../../src/providers/native-history/dispatcher.js'
     );
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
 
-    // Coordinator reads first with a valid floor and CLAIMS its own (oldest) conv,
-    // exactly as it does live.
     const coord = dispatch({
       agentType: 'antigravity-cli',
       sessionId: '',
@@ -227,10 +232,6 @@ describe('antigravity coordinator + co-located worker birth-floor isolation (D3)
     });
     expect(coord!.sourcePath.endsWith(`${COORD}.db`)).toBe(true);
 
-    // The replica reads with its OWN valid floor and a distinct instanceId. The
-    // coordinator's conv is now claimedByOther (the coordinator's owner token), so
-    // the claim registry excludes it from the replica's candidate set entirely —
-    // the replica resolves a NON-coordinator conv, owner-confirmed as its own.
     const replica = dispatch({
       agentType: 'antigravity-cli',
       sessionId: '',
@@ -239,31 +240,31 @@ describe('antigravity coordinator + co-located worker birth-floor isolation (D3)
       sessionStartedAtMs: Date.now() - 60_000,
     });
     expect(replica).not.toBeNull();
+    expect(replica!.sourcePath.endsWith(`${REPLICA_A}.db`)).toBe(true);
     // The hard invariant: the replica NEVER surfaced the coordinator's conv.
-    expect(replica!.sourcePath.endsWith(`${COORD}.db`)).toBe(false);
     expect(replica!.messages.some(m => m.content === 'coordinator answer')).toBe(false);
     expect((replica as any).ownerConfirmed).toBe(true);
   });
 
-  it('with NO floor (spawnedAtMs=0, the pre-fix attach) a replica read is NOT owner-confirmed — the regression', async () => {
-    // Documents the exact pre-fix failure so the fix is meaningful: floor-less, the
-    // read takes the newest-by-mtime branch (ownerConfirmed:false). A bare recency
-    // pick can alias a co-located session's conv, which is what let a replica claim
-    // the coordinator's conv and left the coordinator ownerConfirmed:false → D1 gate
-    // never fired → pty-parser / user-only.
+  it('a session with no sent-input evidence resolves nothing instead of guessing a sibling conv', async () => {
+    // The pre-fix failure mode was a bare recency pick aliasing a co-located
+    // session's conversation. Without evidence the read now refuses outright —
+    // floorless or not — so it can never claim, pin or display a sibling's store.
+    await recordSends();
     const { createNativeHistoryDispatcher } = await import(
       '../../../src/providers/native-history/dispatcher.js'
     );
     const dispatch = createNativeHistoryDispatcher('antigravity-cli');
 
-    const floorless = dispatch({
-      agentType: 'antigravity-cli',
-      sessionId: '',
-      instanceId: 'replica-floorless-iid',
-      workspace: WORKSPACE,
-      sessionStartedAtMs: 0,
-    });
-    expect(floorless).not.toBeNull();
-    expect((floorless as any).ownerConfirmed).not.toBe(true);
+    for (const sessionStartedAtMs of [0, Date.now() - 60_000]) {
+      const unproven = dispatch({
+        agentType: 'antigravity-cli',
+        sessionId: '',
+        instanceId: 'replica-without-sends-iid',
+        workspace: WORKSPACE,
+        sessionStartedAtMs,
+      });
+      expect(unproven).toBeNull();
+    }
   });
 });

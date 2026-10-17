@@ -144,7 +144,9 @@ const CASES: Array<{
   },
   {
     providerType: 'grok-cli',
-    dirs: [join('.grok', 'sessions'), join('.grok', 'bin')],
+    // .grok/bin is deliberately NOT linked any more: a worker's grok auto-updater must
+    // not reach the real install through it (worker-home-specs.ts, rc.17).
+    dirs: [join('.grok', 'sessions')],
     files: [join('.grok', 'auth.json')],
   },
   { providerType: 'kimi', dirs: ['credentials', 'oauth', 'sessions'], files: ['config.toml'] },
@@ -174,7 +176,11 @@ describe('★unprivileged win32: directory imports become junctions, the private
       })
 
       expect(existsSync(prepared.home)).toBe(true)
-      expect(prepared.failed).toEqual([])
+      if (c.providerType === 'grok-cli') expect(prepared.imported).not.toContain(join('.grok', 'bin'))
+      // Import failures only. grok-cli also lists an unconfirmed account opt-out here on
+      // purpose (worker-private-home.test.ts pins it) so the launch notes surface the
+      // pending privacy banner; this fixture's fake home has no opted-out auth.json.
+      expect(prepared.failed.filter((f) => !f.includes('privacy banner acknowledgment pending'))).toEqual([])
       for (const d of c.dirs) {
         const source = join(sourceBase, d)
         const target = join(prepared.home, d)

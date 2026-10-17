@@ -176,14 +176,21 @@ describe('antigravity dispatcher read-path — .db surfacing (live win32 regress
     expect(result!.sourcePath.endsWith('.db')).toBe(true);
   });
 
-  it('falls back to the newest recent .db when no sessionId is bound (empty brain)', async () => {
-    // No exact sessionId hint + empty brain → resolveAntigravityPath must reach
-    // the newest-recent conversations/*.db fallback and still decode it.
+  it('with no sessionId bound (empty brain), surfaces the .db that holds this session\'s own sent input', async () => {
+    // No exact sessionId hint + empty brain → discovery must still reach and decode the
+    // conversations/*.db. Since rc.17 discovery attributes a store only by this session's
+    // own sent input (recency alone can alias a co-located session), so the send path's
+    // record is part of the fixture.
     makeEmptyBrainTranscript(SESSION);
     await makeConversationDb(SESSION, [
       { step_type: 14, payload: encodeUserStep('unbound prompt') },
       { step_type: 15, payload: encodeModelStep('unbound answer from newest db') },
     ]);
+    const { recordSentPrompt, __resetSentPromptRegistry } = await import(
+      '../../../src/providers/native-history/sent-prompt-registry.js'
+    );
+    __resetSentPromptRegistry();
+    recordSentPrompt('agy-unbound-iid', 'unbound prompt');
 
     const { createNativeHistoryDispatcher } = await import(
       '../../../src/providers/native-history/dispatcher.js'
@@ -192,11 +199,15 @@ describe('antigravity dispatcher read-path — .db surfacing (live win32 regress
     const result = dispatch({
       agentType: 'antigravity-cli',
       sessionId: '', // unbound
+      instanceId: 'agy-unbound-iid',
       workspace: '/workspaces/agy',
     });
 
     expect(result).not.toBeNull();
     expect(result!.providerSessionId).toBe(SESSION);
     expect(result!.messages.some((m) => m.role === 'assistant' && m.content === 'unbound answer from newest db')).toBe(true);
+
+    // A different session with no evidence for that store must not receive it.
+    expect(dispatch({ agentType: 'antigravity-cli', sessionId: '', instanceId: 'agy-other-iid', workspace: '/workspaces/agy' })).toBeNull();
   });
 });
