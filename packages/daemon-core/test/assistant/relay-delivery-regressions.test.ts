@@ -86,6 +86,16 @@ describe('relay delivery review regressions', () => {
         h.relay.stop();
     });
 
+    it('allows bounded native scan timeouts to return healthy partial results', async () => {
+        const h = harness({ body: 'body', completeness: 'final_native' });
+        h.audit.mockImplementationOnce(() => new Promise(resolve => setTimeout(() => resolve(Object.assign([
+            { sessionId: 'coord', attemptId: null, messageAt: NOW, text: 'healthy', chars: 7 },
+        ], { complete: false })), 2_100)));
+        h.relay.tick(); await vi.advanceTimersByTimeAsync(2_101);
+        expect((await h.relay.pullPending(null)).map(x => x.text).join('\n')).toContain('[ADHDev relay gap]');
+        h.relay.stop();
+    });
+
     it('defers gaps while the attempt is queued for normal delivery', async () => {
         const h = harness({ body: 'final', completeness: 'final_native', parts: [{ at: NOW - 1_000, chars: 5 }] });
         h.audit.mockResolvedValue([{ sessionId: 'coord', attemptId: 'plain:a', messageAt: NOW - 1_000, text: 'final', chars: 5 }]);

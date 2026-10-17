@@ -681,7 +681,10 @@ export class AssistantRelay {
         const lifecycle = this.lifecycle;
         this.auditing = true;
         void Promise.resolve()
-            .then(() => this.bounded(port(since), 2_000, null))
+            // Native scans have their own two-second I/O budget; leave room for
+            // their timeout results to settle so one offline session cannot hide
+            // healthy partial results at the outer deadline.
+            .then(() => this.bounded(port(since), 3_000, null))
             .then((replies) => {
                 if (this.lifecycle !== lifecycle || !replies) return;
                 for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
