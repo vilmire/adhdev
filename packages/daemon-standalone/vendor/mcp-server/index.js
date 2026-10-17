@@ -62071,8 +62071,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename28 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename28 || (nodeId ? nodeId.slice(0, 8) : "node");
+      const basename29 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename29 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
     function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
       return buildMeshNodeMachineLabel(node, nodeId);
@@ -67678,6 +67678,28 @@ ${upstream}`;
         id3 = (s2) => typeof s2 === "string" && !!s2 && s2.trim() === s2;
       }
     });
+    function readInstanceIdentity(inst) {
+      const field3 = inst?.instanceId;
+      if (typeof field3 === "string" && field3) return field3;
+      const sid = inst?.getState?.().instanceId;
+      return typeof sid === "string" ? sid : void 0;
+    }
+    function findLocalCliInstance(components, sessionId) {
+      if (!sessionId) return void 0;
+      const direct = components.instanceManager?.getInstance?.(sessionId);
+      if (direct && direct.category === "cli") return direct;
+      const instances2 = components.instanceManager?.getByCategory?.("cli") || [];
+      return instances2.find((inst) => {
+        const sid = readText(readInstanceIdentity(inst));
+        return !!sid && sessionIdsEquivalent(sid, sessionId);
+      });
+    }
+    var init_cli_instance_lookup = __esm2({
+      "src/mesh/cli-instance-lookup.ts"() {
+        "use strict";
+        init_dist();
+      }
+    });
     function normalizeInputEnvelope(input) {
       const normalized = normalizeInputEnvelopePayload(input);
       const textFallback = normalized.textFallback ?? flattenInputParts(normalized.parts);
@@ -72274,10 +72296,11 @@ ${upstream}`;
     function localSessionAppearsLive(components, meshId, sessionId) {
       if (!sessionId) return false;
       try {
-        const sessions = components.instanceManager?.getByCategory?.("cli") || [];
-        return sessions.some((inst) => {
+        const inst = findLocalCliInstance(components, sessionId);
+        if (!inst) return false;
+        return [inst].some((inst2) => {
           try {
-            const state2 = inst.getState?.();
+            const state2 = inst2.getState?.();
             const sid = readText(state2?.instanceId);
             if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
             const settings2 = state2?.settings || {};
@@ -72296,19 +72319,10 @@ ${upstream}`;
     function localSessionIsProtected(components, sessionId) {
       if (!sessionId) return false;
       try {
-        const sessions = components.instanceManager?.getByCategory?.("cli") || [];
-        return sessions.some((inst) => {
-          try {
-            const fieldId = readText(inst?.instanceId);
-            if (fieldId && !sessionIdsEquivalent(fieldId, sessionId)) return false;
-            const state2 = inst.getState?.();
-            const sid = readText(state2?.instanceId);
-            if (!sid || !sessionIdsEquivalent(sid, sessionId)) return false;
-            return isProtectedNonAutoLaunchSession(state2, state2?.settings || {});
-          } catch {
-            return false;
-          }
-        });
+        const inst = findLocalCliInstance(components, sessionId);
+        const state2 = inst?.getState?.();
+        if (!state2) return false;
+        return isProtectedNonAutoLaunchSession(state2, state2.settings || {});
       } catch {
         return false;
       }
@@ -72499,6 +72513,7 @@ ${upstream}`;
     var init_mesh_autolaunch_integrity = __esm2({
       "src/mesh/mesh-autolaunch-integrity.ts"() {
         "use strict";
+        init_cli_instance_lookup();
         init_config();
         init_logger();
         init_dist();
@@ -72796,11 +72811,7 @@ ${upstream}`;
     function resolveSessionBusyVerdict(components, sessionId) {
       if (!sessionId) return "UNKNOWN";
       try {
-        const instances2 = components.instanceManager?.getByCategory?.("cli") || [];
-        const inst = instances2.find((i) => {
-          const sid = readText(i?.getState?.().instanceId);
-          return sid && sessionIdsEquivalent(sid, sessionId);
-        });
+        const inst = findLocalCliInstance(components, sessionId);
         if (!inst) return "UNKNOWN";
         const state2 = inst.getState?.();
         if (!state2) return "UNKNOWN";
@@ -72864,6 +72875,7 @@ ${upstream}`;
         init_mesh_node_identity();
         init_worktree_bootstrap_config();
         init_mesh_autolaunch_integrity();
+        init_cli_instance_lookup();
         init_mesh_claim_refusal();
         init_mesh_scheduling_fitness();
         init_mesh_node_slots();
@@ -75710,20 +75722,9 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         inFlightAutoLaunches = /* @__PURE__ */ new Map();
       }
     });
-    function readInstanceIdentity(inst) {
-      const field3 = inst?.instanceId;
-      if (typeof field3 === "string" && field3) return field3;
-      const sid = inst?.getState?.().instanceId;
-      return typeof sid === "string" ? sid : void 0;
-    }
     function resolveClaimingSessionTranscriptProfile(components, sessionId) {
       try {
-        const direct = components.instanceManager?.getInstance?.(sessionId);
-        const instances2 = direct?.category === "cli" ? [] : components.instanceManager?.getByCategory?.("cli") || [];
-        const inst = direct?.category === "cli" ? direct : instances2.find((i) => {
-          const sid = readInstanceIdentity(i);
-          return typeof sid === "string" && sid && sessionIdsEquivalent(sid, sessionId);
-        });
+        const inst = findLocalCliInstance(components, sessionId);
         const provider = inst?.provider;
         if (!provider || typeof provider !== "object") return void 0;
         const profile = resolveTranscriptAuthorityProfile(provider);
@@ -76091,6 +76092,8 @@ ${continuationNotice}` } : task,
       "src/mesh/mesh-queue-assignment.ts"() {
         "use strict";
         init_cooperative_gate();
+        init_cli_instance_lookup();
+        init_cli_instance_lookup();
         init_logger();
         init_mesh_record();
         init_mesh_work_queue();
@@ -79374,6 +79377,7 @@ ${cleanBody}`;
         resume: state2.resume,
         activeChat,
         activeInteractivePrompt: state2.activeInteractivePrompt ?? null,
+        ...buildOwnerAttentionField(state2.ownerAttention, resolvedStatus),
         ...summaryMetadata && { summaryMetadata },
         ...buildSessionLaunchFields(readStateLaunch(state2)),
         ...includeSessionMetadata && {
@@ -79399,6 +79403,16 @@ ${cleanBody}`;
         // status-gated so a one-shot silent-idle arm mutes ONLY the idle/completion
         // snapshot, never an approval/generating frame in the same turn.
         muted: resolveMuted(state2.settings, resolvedStatus)
+      };
+    }
+    function buildOwnerAttentionField(ownerAttention, resolvedStatus) {
+      if (resolvedStatus !== "waiting_choice") return {};
+      if (!ownerAttention || typeof ownerAttention.stateId !== "string" || !ownerAttention.stateId) return {};
+      return {
+        ownerAttention: {
+          stateId: ownerAttention.stateId,
+          message: typeof ownerAttention.message === "string" ? ownerAttention.message : ""
+        }
       };
     }
     function buildAssistantRoleFields(settings2) {
@@ -94269,17 +94283,48 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.nonce !== "string" || !/^[0-9a-f-]{36}$/.test(owner.nonce)) throw recovery();
       return owner;
     }
+    async function guardIsStale(guard2) {
+      let info;
+      try {
+        info = await (0, import_promises8.lstat)(guard2);
+      } catch (e) {
+        if (e?.code === "ENOENT") return false;
+        throw e;
+      }
+      if (info.isSymbolicLink() || !info.isDirectory()) return true;
+      let owner;
+      try {
+        owner = await readOwner2((0, import_node_path9.join)(guard2, "owner"));
+      } catch {
+        owner = void 0;
+      }
+      if (owner && !pidAlive2(owner.pid)) return true;
+      return Date.now() - info.mtimeMs > LOCK_GUARD_STALE_MS;
+    }
     async function lockMutation(lockPath, action2) {
       const guard2 = `${lockPath}.guard`;
       try {
         await (0, import_promises8.mkdir)(guard2);
       } catch (e) {
-        if (e.code === "EEXIST") throw busy();
+        if (e.code !== "EEXIST") throw e;
+        if (await guardIsStale(guard2)) throw guardRecovery(guard2);
+        throw busy();
+      }
+      const ownerPath = (0, import_node_path9.join)(guard2, "owner");
+      const self = { pid: process.pid, nonce: (0, import_node_crypto21.randomUUID)() };
+      try {
+        await (0, import_promises8.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
+      } catch (e) {
+        await (0, import_promises8.rm)(ownerPath, { force: true }).then(() => (0, import_promises8.rmdir)(guard2)).catch(() => {
+        });
         throw e;
       }
       try {
         return await action2();
       } finally {
+        const current4 = await readOwner2(ownerPath);
+        if (current4.nonce !== self.nonce || current4.pid !== self.pid) throw guardRecovery(guard2);
+        await (0, import_promises8.rm)(ownerPath);
         await (0, import_promises8.rmdir)(guard2);
       }
     }
@@ -94313,6 +94358,17 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (evidence.meshId !== meshId || evidence.identity !== identity2 || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
       await verifyCheckout(staging, identity2);
     }
+    async function discardStaleMarker(marker2) {
+      let info;
+      try {
+        info = await (0, import_promises8.lstat)(marker2);
+      } catch (e) {
+        if (e?.code === "ENOENT") return;
+        throw e;
+      }
+      if (!info.isFile() && !info.isSymbolicLink()) throw recovery();
+      await (0, import_promises8.rm)(marker2);
+    }
     async function renameWithRetry(from, to) {
       for (let i = 0; ; i++) {
         try {
@@ -94338,6 +94394,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (!reused) {
           const staging = `${workspace}.pending`;
           let claimed = false;
+          if (!await present(staging)) await discardStaleMarker(`${staging}.complete`);
           try {
             await (0, import_promises8.mkdir)(staging);
             claimed = true;
@@ -94413,6 +94470,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var refusal;
     var busy;
     var recovery;
+    var LOCK_GUARD_STALE_MS;
+    var guardRecovery;
     var inFlight3;
     var init_remote_project_checkout = __esm2({
       "src/assistant/remote-project-checkout.ts"() {
@@ -94439,6 +94498,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         refusal = (e) => e instanceof AttachFailure ? { success: false, code: e.code, stage: e.stage, action: e.action, attached: false } : { success: false, code: "ATTACH_FAILED", stage: "checkout", action: "Inspect the selected daemon locally before retrying. Existing files were preserved.", attached: false };
         busy = () => new AttachFailure("ATTACH_IN_PROGRESS", "checkout", "Wait for the current attachment result; do not retry repeatedly.");
         recovery = () => new AttachFailure("CHECKOUT_RECOVERY_REQUIRED", "checkout", "Preserve the checkout and lock. Inspect the previous attempt locally before retrying.");
+        LOCK_GUARD_STALE_MS = 6e4;
+        guardRecovery = (guard2) => new AttachFailure(
+          "CHECKOUT_RECOVERY_REQUIRED",
+          "checkout",
+          `A previous attempt was interrupted while holding the lock guard remote-projects/${(0, import_node_path9.basename)(guard2)} in the ADHDev config directory. Confirm no attach is running on the selected daemon, remove that directory, then retry.`
+        );
         inFlight3 = /* @__PURE__ */ new Set();
       }
     });
@@ -117412,17 +117477,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function readSession(sessionPath) {
       if (!sessionPath || !path57.isAbsolute(sessionPath)) return null;
-      const basename28 = path57.basename(sessionPath, ".jsonl");
-      if (!isSafeFilename(basename28)) return null;
+      const basename29 = path57.basename(sessionPath, ".jsonl");
+      if (!isSafeFilename(basename29)) return null;
       if (!fs52.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename28, void 0, sourceMtimeMs);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename29, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
         messages,
-        providerSessionId: basename28,
+        providerSessionId: basename29,
         source: "provider-native",
         sourcePath: sessionPath,
         sourceMtimeMs,
@@ -117431,7 +117496,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
       if (usageRecords.length > 0) {
         session.usage = foldUsageRecords(usageRecords, {
-          providerSessionId: basename28,
+          providerSessionId: basename29,
           agent: "claude-cli"
         });
       }
@@ -117817,8 +117882,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!fs53.existsSync(sessionPath)) return null;
       const meta = readSessionMeta(sessionPath);
       const metaId = String(meta?.id ?? "").trim();
-      const basename28 = path58.basename(sessionPath, ".jsonl");
-      const uuidMatch = basename28.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const basename29 = path58.basename(sessionPath, ".jsonl");
+      const uuidMatch = basename29.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       const filenameUuid2 = uuidMatch ? uuidMatch[1] : "";
       if (metaId && filenameUuid2 && metaId !== filenameUuid2) return null;
       const sessionId = metaId || filenameUuid2;
@@ -156302,6 +156367,13 @@ ${buttons.join("\n")}`;
       if (hasNonEmptyCliModalButtons(parsed)) return parsed;
       return adapter ?? parsed ?? null;
     }
+    function resolveCliOwnerAttention(adapterOwnerAttention, finalStatus) {
+      if (finalStatus !== "waiting_choice") return null;
+      if (!adapterOwnerAttention || typeof adapterOwnerAttention !== "object") return null;
+      const { stateId, message } = adapterOwnerAttention;
+      if (typeof stateId !== "string" || !stateId.trim()) return null;
+      return { stateId, message: typeof message === "string" ? message : "" };
+    }
     function buildProviderState(host) {
       const adapterStatus = host.stabilizeFlappingApprovalStatus(host.adapter.getStatus());
       if (Object.prototype.hasOwnProperty.call(adapterStatus, "activeInteractivePrompt")) {
@@ -156447,6 +156519,7 @@ ${buttons.join("\n")}`;
           inputContent: ""
         },
         activeInteractivePrompt: host.activeInteractivePrompt,
+        ownerAttention: resolveCliOwnerAttention(adapterStatus.ownerAttention, finalStatus),
         workspace: host.workingDir,
         instanceId: host.instanceId,
         providerSessionId: host.providerSessionId,
