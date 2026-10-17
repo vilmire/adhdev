@@ -68,4 +68,14 @@ describe('relay audit review regressions', () => {
         expect(replies.complete).toBe(false);
         expect(replies.map(r => r.sessionId)).toEqual(['coord']);
     });
+
+    it('keeps Grok clock uncertainty partial without reading or claiming an empty native history', async () => {
+        const execute = vi.fn(async () => { throw new Error('Grok clocks are not attempt evidence'); });
+        const replies = await collectCoordinatorReplies({ db, execute, sinceMs: NOW, now: NOW,
+            coordinatorSessions: [{ sessionId: 'grok', cliType: 'grok-cli' }],
+        });
+        expect(replies).toHaveLength(0);
+        expect(replies.complete).toBe(false);
+        expect(execute).not.toHaveBeenCalled();
+    });
 });

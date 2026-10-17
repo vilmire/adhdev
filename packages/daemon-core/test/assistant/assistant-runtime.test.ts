@@ -295,7 +295,8 @@ it('actual runtime exact-reader port validates terminal/generation before durabl
     const store = new SqliteAssistantRelayStore(db);
     store.recordCommitted({ attemptId: attempt.attemptId, meshId: 'mesh_a', coordinatorSessionId: 'coord', committedAt: Date.now(), kind: 'relay', outcome: 'completed' });
     const spy = vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue({ db, turnStore: () => ({ getAttempt: (id: string) => id === attempt.attemptId ? attempt : null }) } as any);
-    routerExecute.mockResolvedValue({ success: true, messages: [{ role: 'assistant', timestamp: 190, content: 'exact report' }, { role: 'assistant', timestamp: 10_000, content: 'newer tail' }] });
+    routerExecute.mockResolvedValue({ success: true, coverage: 'full', messageSource: { selected: 'native-history' }, debugReadChat: { provider: 'codex-cli' },
+        messages: [{ role: 'assistant', bubbleState: 'final', timestamp: 190, content: 'exact report' }, { role: 'assistant', bubbleState: 'final', timestamp: 10_000, content: 'newer tail' }] });
     let hostedHere = true; let remoteReply: any = { body: 'unproven old-host tail', source: 'durable_attempt_capture' };
     setAssistantProjectPortsForTests(() => ({ listMeshes: () => [{ id: 'mesh_a' }], isHostedHere: () => hostedHere,
         remoteHost: () => ({ reachable: true }), callHost: async () => ({ ok: true, result: { result: remoteReply } }),

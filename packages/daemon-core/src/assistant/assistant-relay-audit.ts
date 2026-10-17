@@ -19,6 +19,8 @@ interface AttemptSpan {
     terminal_reason: string | null;
     terminal_source: string | null;
     state: string;
+    relayed_at: number | null;
+    coverage_at: number | null;
 }
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
@@ -54,23 +56,35 @@ export async function collectCoordinatorReplies(opts: {
         // native record boundary contract, no exact missing-attempt claim is made.
         if (cliType === 'grok-cli') return { sessionId, skipped: true } as const;
         const attempts = opts.db.prepare(`
-            SELECT attempt_id, accepted_at, terminal_at, terminal_reason, terminal_source, state
-            FROM turn_attempts WHERE session_id=? AND scope='plain'
+            SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state,
+                r.relayed_at, c.rendered_at AS coverage_at
+            FROM turn_attempts a
+            LEFT JOIN assistant_relays r ON r.attempt_id=a.attempt_id AND r.coordinator_session_id=a.session_id
+            LEFT JOIN assistant_relay_coverage c ON c.attempt_id=a.attempt_id AND c.coordinator_session_id=a.session_id
+            WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId) as AttemptSpan[];
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
         return { sessionId, attempts, window };
     }));
     let complete = true;
     let successful = 0;
+    let failed = false;
     for (const scan of scans) {
-        if ('skipped' in scan) continue;
+        if ('skipped' in scan) { complete = false; continue; }
         const { sessionId, attempts, window } = scan;
-        if (!window.complete || window.ambiguous) { complete = false; continue; }
+        if (!window.complete || window.ambiguous) { complete = false; failed = true; continue; }
         successful += 1;
         for (const bubble of window.bubbles) {
             const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
             containing.sort((a, b) => b.accepted_at - a.accepted_at);
             const attempt = containing[0];
+            // A pre-upgrade (or capacity-pruned) delivered row has no complete
+            // delivery manifest. Its captured body cannot prove which parts were
+            // shown. Keep this uncertainty rather than emit a false missing claim.
+            if (attempt?.relayed_at != null && (attempt.coverage_at === null || attempt.coverage_at <= since)) {
+                complete = false;
+                continue;
+            }
             const open = !!attempt && (!TERMINAL.has(attempt.state)
                 || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
             out.push({
@@ -84,6 +98,6 @@ export async function collectCoordinatorReplies(opts: {
             });
         }
     }
-    if (!complete && !successful) throw new Error('coordinator native audit unavailable');
+    if (failed && !successful) throw new Error('coordinator native audit unavailable');
     return complete ? out : Object.assign(out, { complete: false });
 }

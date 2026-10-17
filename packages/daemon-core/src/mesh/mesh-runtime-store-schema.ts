@@ -199,6 +199,16 @@ export function migrate(self: MeshRuntimeStore): void {
  */
 export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     db.exec(`
+        -- Delivery manifests are content-free and never backfilled from captured
+        -- reports: old captures do not prove what survived the rendered cap.
+        CREATE TABLE IF NOT EXISTS assistant_relay_coverage (
+            attempt_id TEXT PRIMARY KEY,
+            coordinator_session_id TEXT NOT NULL,
+            rendered_at INTEGER NOT NULL,
+            replies_json TEXT NOT NULL,
+            reply_count INTEGER NOT NULL CHECK (reply_count BETWEEN 0 AND 600)
+        );
+        CREATE INDEX IF NOT EXISTS idx_assistant_relay_coverage_age ON assistant_relay_coverage(rendered_at);
         -- Local report captures survive delivery/restart; never projected to cloud status.
         CREATE TABLE IF NOT EXISTS assistant_attempt_bodies (
             attempt_id TEXT PRIMARY KEY,

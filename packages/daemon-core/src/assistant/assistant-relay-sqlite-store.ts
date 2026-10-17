@@ -15,6 +15,8 @@ import type { Database as DatabaseHandle } from 'better-sqlite3';
 import {
     ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
     RELAY_DELIVERED_RETENTION_MS,
+    RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_ROWS, RELAY_COVERAGE_MAX_REPLIES, RELAY_COVERAGE_MAX_BYTES,
+    copyRenderedCoverage,
     THREAD_CLOSED_RETENTION_MS,
     evidencePrefixMatches,
     toUnrenderedCounts,
@@ -24,6 +26,7 @@ import {
     type AssistantThreadRow,
     type UnrenderedRelayCounts,
     type VerifiedAttemptBody,
+    type RenderedAttemptCoverage, type StoredAttemptCoverage,
 } from './assistant-relay-store.js';
 
 interface ThreadDbRow { mesh_id: string; opened_at: number; last_send_at: number; closed_at: number | null }
@@ -84,13 +87,57 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return r.changes > 0;
     }
 
-    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[]): void {
+    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[], coverage: readonly RenderedAttemptCoverage[] = []): void {
         if (!attemptIds.length) return;
         const sent = new Set(rendered ?? attemptIds);
         const stmt = this.db.prepare('UPDATE assistant_relays SET delivered_at = ?, relayed_at = ? WHERE attempt_id = ? AND delivered_at IS NULL');
+        const insert = this.db.prepare(`INSERT OR IGNORE INTO assistant_relay_coverage
+            (attempt_id, coordinator_session_id, rendered_at, replies_json, reply_count)
+            SELECT attempt_id, coordinator_session_id, ?, ?, ? FROM assistant_relays
+            WHERE attempt_id=? AND coordinator_session_id=? AND delivered_at=? AND relayed_at=?`);
         this.db.transaction((ids: readonly string[]) => {
-            for (const id of ids) stmt.run(at, sent.has(id) ? at : null, id);
+            const fresh = new Set<string>();
+            for (const id of ids) {
+                if (stmt.run(at, sent.has(id) ? at : null, id).changes && sent.has(id)) fresh.add(id);
+            }
+            for (const value of coverage) {
+                const c = copyRenderedCoverage(value);
+                if (!c || !fresh.has(c.attemptId)) continue;
+                if (insert.run(at, JSON.stringify(c.replies), c.replies.length, c.attemptId, c.coordinatorSessionId, at, at).changes) fresh.delete(c.attemptId);
+            }
+            this.pruneCoverage(at);
         })(attemptIds);
+    }
+
+    listDeliveredCoverage(now: number): StoredAttemptCoverage[] {
+        this.pruneCoverage(now);
+        const rows = this.db.prepare(`SELECT attempt_id, coordinator_session_id, rendered_at, replies_json, reply_count
+            FROM assistant_relay_coverage ORDER BY rendered_at, attempt_id`).all() as Array<{
+                attempt_id: string; coordinator_session_id: string; rendered_at: number; replies_json: string; reply_count: number;
+            }>;
+        const out: StoredAttemptCoverage[] = [];
+        const drop = this.db.prepare('DELETE FROM assistant_relay_coverage WHERE attempt_id=?');
+        for (const row of rows) {
+            let manifest: RenderedAttemptCoverage | null = null;
+            try { manifest = copyRenderedCoverage({ attemptId: row.attempt_id, coordinatorSessionId: row.coordinator_session_id, replies: JSON.parse(row.replies_json) }); } catch { /* corrupt manifests prove no coverage */ }
+            if (!manifest || manifest.replies.length !== row.reply_count || !Number.isSafeInteger(row.rendered_at)
+                || !Number.isFinite(new Date(row.rendered_at).getTime())) { drop.run(row.attempt_id); continue; }
+            out.push({ ...manifest, renderedAt: row.rendered_at });
+        }
+        return out;
+    }
+
+    private pruneCoverage(now: number): void {
+        this.db.prepare('DELETE FROM assistant_relay_coverage WHERE rendered_at <= ?').run(now - RELAY_COVERAGE_TTL_MS);
+        const rows = this.db.prepare(`SELECT attempt_id, reply_count,
+            length(CAST(replies_json AS BLOB))+length(CAST(attempt_id AS BLOB))+length(CAST(coordinator_session_id AS BLOB))+32 AS bytes
+            FROM assistant_relay_coverage ORDER BY rendered_at DESC, attempt_id DESC`).all() as Array<{ attempt_id: string; reply_count: number; bytes: number }>;
+        let count = 0, replies = 0, bytes = 0;
+        const drop = this.db.prepare('DELETE FROM assistant_relay_coverage WHERE attempt_id=?');
+        for (const row of rows) {
+            if (++count > RELAY_COVERAGE_MAX_ROWS || replies + row.reply_count > RELAY_COVERAGE_MAX_REPLIES || bytes + row.bytes > RELAY_COVERAGE_MAX_BYTES) drop.run(row.attempt_id);
+            else { replies += row.reply_count; bytes += row.bytes; }
+        }
     }
 
     listUndelivered(): AssistantRelayRow[] {
@@ -160,6 +207,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
     }
 
     prune(now: number): void {
+        this.pruneCoverage(now);
         this.pruneBodies(now);
         this.db.prepare('DELETE FROM assistant_relays WHERE delivered_at IS NOT NULL AND ? - delivered_at > ?').run(now, RELAY_DELIVERED_RETENTION_MS);
         this.db.prepare('DELETE FROM assistant_threads WHERE closed_at IS NOT NULL AND ? - closed_at > ?').run(now, THREAD_CLOSED_RETENTION_MS);

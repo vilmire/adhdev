@@ -31,7 +31,8 @@ import type { EventOf } from '../sessions/lifecycle-events.js';
 import type { Unsubscribe } from '../sessions/lifecycle-bus.js';
 import type { AssistantInputLog } from './assistant-input-log.js';
 import type { AssistantInputSource } from './store-guards.js';
-import { ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES, type AssistantRelayStore } from './assistant-relay-store.js';
+import { ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
+    RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_REPLIES, type RenderedAttemptCoverage, type AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
@@ -47,10 +48,11 @@ export type AssistantRelayBusEvent = EventOf<typeof ASSISTANT_RELAY_BUS_KINDS[nu
 
 /** A human input parked in the driver FIFO is attributed when the next turn starts; give up after this. */
 export const PENDING_HUMAN_MAX_AGE_MS = 5 * 60_000;
-const COVERAGE_TTL_MS = 24 * 60 * 60_000;
-const COVERAGE_MAX_ENTRIES = 4_096;
+const COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
+const COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
+const replyHash = (text: string) => createHash('sha256').update(text.replace(/\r\n?/g, '\n').trim()).digest('hex');
 const coverageKey = (sessionId: string, attemptId: string | null, at: number, text: string) =>
-    JSON.stringify([sessionId, attemptId, at, createHash('sha256').update(text.replace(/\r\n?/g, '\n').trim()).digest('hex')]);
+    JSON.stringify([sessionId, attemptId, at, replyHash(text)]);
 
 export interface MeshWorkCounts { activeMissions: number; pending: number; assigned: number }
 
@@ -221,6 +223,7 @@ export class AssistantRelay {
             }
         }
         this.queue.push(...byMesh.values());
+        this.loadDeliveredCoverage(this.clock.now());
         this.lifecycle += 1;
         this.lastAuditAt = this.clock.now() - COVERAGE_TTL_MS;
         this.unsubscribe = this.ports.subscribe((e) => this.onEvent(e));
@@ -722,31 +725,38 @@ export class AssistantRelay {
         }
     }
 
-    private rememberRenderedParts(attemptId: string, sessionId: string, body: string, meta: AttemptReportSnapshot, at: number): void {
+    private loadDeliveredCoverage(now: number): void {
+        this.renderedCoverage.clear();
+        for (const c of this.ports.store.listDeliveredCoverage(now)) for (const r of c.replies) {
+            this.renderedCoverage.set(JSON.stringify([c.coordinatorSessionId, c.attemptId, r.messageAt, r.contentHash]), c.renderedAt);
+        }
+        this.pruneCoverage(now);
+    }
+
+    private renderedParts(attemptId: string, sessionId: string, body: string, meta: AttemptReportSnapshot): RenderedAttemptCoverage | null {
         const parts = meta.parts;
-        if (!parts?.length) return; // no native identity: do not infer it from substring containment
+        if (!parts?.length) return null; // no native identity: do not infer it from substring containment
         const points = Array.from(body);
         let offset = 0;
         let renderedOffset = 0;
-        const keys: string[] = [];
+        const replies: RenderedAttemptCoverage['replies'] = [];
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i]!;
-            if (!Number.isFinite(part.at) || !Number.isSafeInteger(part.chars) || part.chars <= 0) return;
+            if (!Number.isFinite(part.at) || !Number.isSafeInteger(part.chars) || part.chars <= 0) return null;
             if (parts.length > 1) {
                 const label = Array.from(`${i ? '\n\n' : ''}[reply ${i + 1}/${parts.length} · ${formatReplyClock(part.at)}]\n`);
-                if (points.slice(offset, offset + label.length).join('') !== label.join('')) return;
+                if (points.slice(offset, offset + label.length).join('') !== label.join('')) return null;
                 offset += label.length;
                 renderedOffset += label.length;
             }
             const text = points.slice(offset, offset + part.chars).join('');
             offset += part.chars;
             renderedOffset += Array.from(text.replace(/\r\n?/g, '\n')).length;
-            if (Array.from(text).length !== part.chars) return;
-            if (renderedOffset <= RELAY_BODY_MAX_CHARS) keys.push(coverageKey(sessionId, attemptId, part.at, text));
+            if (Array.from(text).length !== part.chars) return null;
+            if (renderedOffset <= RELAY_BODY_MAX_CHARS) replies.push({ messageAt: part.at, contentHash: replyHash(text) });
         }
-        if (offset !== points.length) return; // reject malformed/legacy part metadata
-        for (const key of keys) this.renderedCoverage.set(key, at);
-        this.pruneCoverage(at);
+        if (offset !== points.length) return null; // reject malformed/legacy part metadata
+        return { attemptId, coordinatorSessionId: sessionId, replies };
     }
 
     private onCoordinatorAttention(meshId: string, sessionId: string, value: unknown): void {
@@ -918,17 +928,22 @@ export class AssistantRelay {
             return sentIds.has(relayMessageId(i.meshId, last))
                 ? i.attemptIds.filter((id) => this.hasCapturedBody(id)) : [];
         });
-        this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered);
+        const coverage: RenderedAttemptCoverage[] = [];
         for (const item of relayItems) {
             for (const id of item.attemptIds) {
                 if (!rendered.includes(id)) continue;
                 const meta = this.attemptMeta.get(id);
                 const body = this.attemptBodies.get(id);
                 if (meta?.completeness === 'final_native' && body?.trim()) {
-                    this.rememberRenderedParts(id, this.restoredAttempts.get(id)?.sessionId ?? item.coordinatorSessionId, body, meta, at);
+                    const manifest = this.renderedParts(id, this.restoredAttempts.get(id)?.sessionId ?? item.coordinatorSessionId, body, meta);
+                    if (manifest) coverage.push(manifest);
                 }
             }
         }
+        // Persist settlement and complete coverage manifests in one transaction.
+        // Updating a capture later must never change this delivery snapshot.
+        this.ports.store.markDelivered(relayItems.flatMap(i => i.attemptIds), at, rendered, coverage);
+        if (relayItems.length) this.loadDeliveredCoverage(at);
         for (const id of relayItems.flatMap((i) => i.attemptIds)) {
             this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.attemptBodyAt.delete(id); this.restoredAttempts.delete(id);
         }

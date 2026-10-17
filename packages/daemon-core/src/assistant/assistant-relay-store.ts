@@ -56,7 +56,9 @@ export interface AssistantRelayStore {
      * went out in the envelope; the rest settle unrendered and are counted by
      * `countUnrendered`. Pass the same list twice when every row was rendered.
      */
-    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[]): void;
+    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[], coverage?: readonly RenderedAttemptCoverage[]): void;
+    /** Complete manifests of actual rendered parts, not the captured report. */
+    listDeliveredCoverage(now: number): StoredAttemptCoverage[];
     /** Undelivered rows, oldest commit first. */
     listUndelivered(): AssistantRelayRow[];
     /** Rows that settled without their own body being sent (silent loss). */
@@ -83,6 +85,31 @@ export interface VerifiedAttemptBody {
     body: string;
     evidenceRef: string;
     parts: Array<{ at: number; chars: number }>;
+}
+
+export interface RenderedAttemptCoverage {
+    attemptId: string;
+    coordinatorSessionId: string;
+    /** Empty is valid: every native reply was outside the rendered cap. */
+    replies: Array<{ messageAt: number; contentHash: string }>;
+}
+export interface StoredAttemptCoverage extends RenderedAttemptCoverage { renderedAt: number }
+const coverageOrder = (a: StoredAttemptCoverage, b: StoredAttemptCoverage) => a.renderedAt - b.renderedAt
+    || Buffer.compare(Buffer.from(a.attemptId), Buffer.from(b.attemptId));
+
+export const RELAY_COVERAGE_TTL_MS = 24 * 60 * 60_000;
+export const RELAY_COVERAGE_MAX_ROWS = 4_096;
+export const RELAY_COVERAGE_MAX_REPLIES = 4_096;
+export const RELAY_COVERAGE_MAX_BYTES = 2 * 1_048_576;
+
+/** Allow-list metadata so neither implementation can persist reply bodies. */
+export function copyRenderedCoverage(value: RenderedAttemptCoverage): RenderedAttemptCoverage | null {
+    const id = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 512;
+    if (!value || !id(value.attemptId) || !id(value.coordinatorSessionId) || !Array.isArray(value.replies) || value.replies.length > 600) return null;
+    if (!value.replies.every(r => r && Number.isSafeInteger(r.messageAt) && Number.isFinite(new Date(r.messageAt).getTime())
+        && typeof r.contentHash === 'string' && /^[a-f0-9]{64}$/.test(r.contentHash))) return null;
+    return { attemptId: value.attemptId, coordinatorSessionId: value.coordinatorSessionId,
+        replies: value.replies.map(r => ({ messageAt: r.messageAt, contentHash: r.contentHash })) };
 }
 
 export const ATTEMPT_BODY_TTL_MS = 24 * 60 * 60_000;
@@ -113,6 +140,7 @@ export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): Unrende
 }
 
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
+    private readonly coverage = new Map<string, StoredAttemptCoverage>();
     private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string; parts: Array<{ at: number; chars: number }> }>();
     private readonly threads = new Map<string, AssistantThreadRow>();
     private readonly relays = new Map<string, AssistantRelayRow>();
@@ -142,13 +170,39 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         return true;
     }
 
-    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[]): void {
+    markDelivered(attemptIds: readonly string[], at: number, rendered?: readonly string[], coverage: readonly RenderedAttemptCoverage[] = []): void {
         const sent = new Set(rendered ?? attemptIds);
+        const fresh = new Set<string>();
         for (const id of attemptIds) {
             const r = this.relays.get(id);
             if (!r || r.deliveredAt !== null) continue;
             r.deliveredAt = at;
-            if (sent.has(id)) r.relayedAt = at;
+            if (sent.has(id)) { r.relayedAt = at; fresh.add(id); }
+        }
+        for (const value of coverage) {
+            const c = copyRenderedCoverage(value);
+            if (!c || !fresh.has(c.attemptId) || this.relays.get(c.attemptId)?.coordinatorSessionId !== c.coordinatorSessionId) continue;
+            fresh.delete(c.attemptId);
+            this.coverage.set(c.attemptId, { ...c, renderedAt: at });
+        }
+        this.pruneCoverage(at);
+    }
+
+    listDeliveredCoverage(now: number): StoredAttemptCoverage[] {
+        this.pruneCoverage(now);
+        return [...this.coverage.values()].sort(coverageOrder).map(c => ({ ...copyRenderedCoverage(c)!, renderedAt: c.renderedAt }));
+    }
+
+    private pruneCoverage(now: number): void {
+        let count = 0, replies = 0, bytes = 0;
+        const ordered = [...this.coverage.values()].sort(coverageOrder).reverse();
+        for (const c of ordered) {
+            const cost = Buffer.byteLength(JSON.stringify(c.replies), 'utf8') + Buffer.byteLength(c.attemptId, 'utf8')
+                + Buffer.byteLength(c.coordinatorSessionId, 'utf8') + 32;
+            if (now - c.renderedAt >= RELAY_COVERAGE_TTL_MS || ++count > RELAY_COVERAGE_MAX_ROWS
+                || replies + c.replies.length > RELAY_COVERAGE_MAX_REPLIES || bytes + cost > RELAY_COVERAGE_MAX_BYTES) {
+                this.coverage.delete(c.attemptId);
+            } else { replies += c.replies.length; bytes += cost; }
         }
     }
 
@@ -197,6 +251,7 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
     }
 
     prune(now: number): void {
+        this.pruneCoverage(now);
         this.pruneBodies(now);
         for (const [id, r] of this.relays) {
             if (r.deliveredAt !== null && now - r.deliveredAt > RELAY_DELIVERED_RETENTION_MS) this.relays.delete(id);

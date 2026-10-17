@@ -1,13 +1,14 @@
 /** Recover an exact native window or, failing that, an unverified envelope. Never select the latest tail. */
 import { createHash } from 'node:crypto';
 import { SqliteAssistantRelayStore } from './assistant-relay-sqlite-store.js';
+import { ATTEMPT_BODY_MAX_CHARS } from './assistant-relay-store.js';
 import type { Database } from 'better-sqlite3';
 import type { TurnAttempt } from '../mesh/turn-ledger/types.js';
 import type { Execute } from './assistant-project-ports.js';
 import { LOG } from '../logging/logger.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import {
-    partsOf, renderNativeReplies, selectNativeWindow, standardAssistantBubble,
+    formatReplyClock, partsOf, renderNativeReplies, selectNativeWindow, standardAssistantBubble,
     type NativeReplyPart, type ReportCompleteness,
 } from './assistant-native-window.js';
 const rec = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
@@ -31,13 +32,45 @@ const TIMESTAMPED_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'antigravity-c
 type NativeExecute = (command: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
 /** Old v2 readers also pinned unproven windows. Version alone is insufficient. */
-export function isVerifiedNativeEvidenceRef(reference: unknown): boolean {
+export function isVerifiedNativeEvidenceRef(reference: unknown, generation?: number): boolean {
     if (typeof reference !== 'string') return false;
     try {
         const parts: unknown = JSON.parse(reference);
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION
+            && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === undefined || parts[1] === generation)
+            && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime())
+            && [parts[3], parts[5]].every(v => typeof v === 'string' && v.length > 0 && v.length <= 512)
+            && [parts[4], parts[6]].every(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v))
             && typeof parts[7] === 'string' && /^verified-native-window:[a-f0-9]{64}$/.test(parts[7]);
     } catch { return false; }
+}
+
+/** Verify that a host's exact-body claim actually binds this body and its parts. */
+export function verifiedNativeReportParts(body: string, parts: unknown, reference: unknown, generation: number): NativeReplyPart[] | null {
+    if (body.length > ATTEMPT_BODY_MAX_CHARS || !isVerifiedNativeEvidenceRef(reference, generation)
+        || !Array.isArray(parts) || !parts.length || parts.length > 600) return null;
+    const ref = JSON.parse(reference as string) as unknown[];
+    const points = Array.from(body);
+    const bubbles: NativeReplyPart[] = [];
+    let offset = 0;
+    for (let i = 0; i < parts.length; i++) {
+        const part = rec(parts[i]);
+        const at = part?.at, chars = part?.chars;
+        if (typeof at !== 'number' || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime())
+            || at > Number(ref[2]) || (i > 0 && at <= bubbles[i - 1]!.at)
+            || typeof chars !== 'number' || !Number.isSafeInteger(chars) || chars <= 0) return null;
+        if (parts.length > 1) {
+            const label = Array.from(`${i ? '\n\n' : ''}[reply ${i + 1}/${parts.length} · ${formatReplyClock(at)}]\n`);
+            if (points.slice(offset, offset + label.length).join('') !== label.join('')) return null;
+            offset += label.length;
+        }
+        const text = points.slice(offset, offset + chars).join(''); offset += chars;
+        if (Array.from(text).length !== chars || text.trim() !== text) return null;
+        bubbles.push({ at, chars, text });
+    }
+    if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
+    const digest = createHash('sha256').update(JSON.stringify(bubbles)).digest('hex');
+    return ref[7] === VERIFIED_WINDOW_REF + digest ? bubbles : null;
 }
 
 /** A successful chat read may still contain the PTY parser's screen scrape. */
@@ -211,7 +244,7 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
     const durable = store.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
     // Earlier v2 captures did not check native provenance, paging or finality.
     // They may be replaced, but cannot be read back as independently verified.
-    if (durable && isVerifiedNativeEvidenceRef(durable.evidenceRef)) return {
+    if (durable && verifiedNativeReportParts(durable.body, durable.parts, durable.evidenceRef, attempt.generation)) return {
         body: durable.body, source: 'durable_attempt_capture', completeness: 'final_native',
         parts: durable.parts, provenance: provenanceFor(durable.evidenceRef),
     };

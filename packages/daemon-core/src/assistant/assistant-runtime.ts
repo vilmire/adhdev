@@ -30,6 +30,8 @@ import { SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { collectCoordinatorReplies } from './assistant-relay-audit.js';
+import { verifiedNativeReportParts } from './attempt-report-recovery.js';
+import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
 import { getMeshMissions } from '../mesh/mesh-missions.js';
@@ -149,14 +151,15 @@ export function buildAssistantRelayPorts(
 ): AssistantRelayPorts {
     const { registry, store, metrics } = deps;
     const svc = getAssistantServices();
+    const projectPorts = () => getAssistantProjectPorts({ components: () => components as DaemonComponents, selfDaemonId: str((components as any).statusInstanceId),
+        execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
+        transport: { dispatch: (components as any).dispatchMeshCommand, peerStatus: (components as any).getMeshPeerConnectionStatus } });
     return {
         subscribe: (handler) => components.bus.on(ASSISTANT_RELAY_BUS_KINDS, handler, { name: 'assistant.relay' }),
         coordinatorMeshOf: (sessionId) => str(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
         projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? null,
         rehydrateAttemptReport: async (meshId, sessionId, attemptId) => {
-            const ports = await getAssistantProjectPorts({ components: () => components as DaemonComponents, selfDaemonId: str((components as any).statusInstanceId),
-                execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
-                transport: { dispatch: (components as any).dispatchMeshCommand, peerStatus: (components as any).getMeshPeerConnectionStatus } });
+            const ports = await projectPorts();
             const mesh = ports.listMeshes().find(m => m.id === meshId);
             if (!mesh) return null;
             if (ports.isHostedHere(mesh)) {
@@ -183,21 +186,22 @@ export function buildAssistantRelayPorts(
             if (typeof result?.body !== 'string' || !versionOk || proof?.attemptId !== attemptId
                 || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0
                 || typeof proof?.evidenceRef !== 'string' || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
-            const completeness = proof?.version === 2 && result.completeness === 'final_native' ? 'final_native' as const : 'envelope_unverified' as const;
-            const parts = Array.isArray(result.parts) ? result.parts as Array<{ at: number; chars: number }> : undefined;
+            const nativeParts = proof?.version === 2 && result.completeness === 'final_native'
+                ? verifiedNativeReportParts(result.body, result.parts, proof.evidenceRef, Number(proof.generation)) : null;
+            const completeness = nativeParts ? 'final_native' as const : 'envelope_unverified' as const;
+            const parts = nativeParts?.map(({ at, chars }) => ({ at, chars }));
             return { body: result.body, completeness, ...(typeof result.source === 'string' ? { source: result.source } : {}), ...(parts ? { parts } : {}) };
         },
         auditCoordinatorReplies: async (sinceMs) => {
-            try {
-                const db = MeshRuntimeStore.getInstance().db;
-                return await collectCoordinatorReplies({
-                    db, sinceMs, now: Date.now(),
-                    execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
-                });
-            } catch (e) {
-                LOG.warn('Assistant', `relay gap audit failed: ${(e as Error)?.message ?? e}`);
-                return [];
-            }
+            const ports = await projectPorts();
+            const coordinatorSessions = ports.listMeshes().filter(mesh => ports.isHostedHere(mesh)).flatMap(mesh =>
+                listCoordinatorsForMesh(mesh.id).filter(c => ports.coordinatorSessionAuthorized?.(mesh.id, c.sessionId) !== false));
+            // The relay owns the failure fence. Converting rejection to [] here
+            // would incorrectly advance its successful-audit watermark.
+            return collectCoordinatorReplies({
+                db: MeshRuntimeStore.getInstance().db, sinceMs, now: Date.now(), coordinatorSessions,
+                execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
+            });
         },
         onRelayGap: (_klass, at) => metrics?.bump('relay_gaps', '', at),
         readCoordinatorTail: async (sessionId) => {
