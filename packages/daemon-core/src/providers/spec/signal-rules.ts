@@ -122,10 +122,10 @@ export interface SignalRule {
     cooldown_ms?: number;
 }
 
-export type SignalRuleKind = 'usage_limit' | 'auth_error' | 'rate_limit' | 'service_error' | 'info';
+export type SignalRuleKind = 'usage_limit' | 'auth_error' | 'rate_limit' | 'service_error' | 'info' | 'background_hold';
 
 const SIGNAL_RULE_KINDS: ReadonlySet<string> = new Set<SignalRuleKind>([
-    'usage_limit', 'auth_error', 'rate_limit', 'service_error', 'info',
+    'usage_limit', 'auth_error', 'rate_limit', 'service_error', 'info', 'background_hold',
 ]);
 
 /** Default re-emit cooldown. Generous: these signals are advisory, not real-time. */

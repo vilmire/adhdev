@@ -25,6 +25,7 @@ import { TerminalAdapter, type SpecPtyEvent } from './adapter.js';
 import type { PtyRuntimeExitInfo } from '../../cli-adapters/pty-transport.js';
 import { resolveSections, sectionText, type ResolvedSection } from './evaluator.js';
 import { evaluateFsm, type FsmClock, type TransitionEval, type FsmEvaluation } from './fsm-evaluator.js';
+import { BackgroundMarkerBound, compileBackgroundMarkers, maskGuard, type MarkerScan } from './background-marker-bound.js';
 import type { SignalSnapshot } from './signal-envelope.js';
 import {
     compileSignalRules, evaluateSignalRules, SignalEmissionGate,
@@ -89,6 +90,10 @@ export class FsmDriver implements ISpecDriver {
     //    which is the no-op default.
     private signalRules: CompiledSignalRule[] = [];
     private readonly signalGate = new SignalEmissionGate();
+    // ── Bound on a marker-only generating hold (background-marker-bound.ts).
+    //    Rebuilt per spec load; a no-op bound for specs that declare no marker.
+    private bgMarker = new BackgroundMarkerBound([]);
+    private bgMarkerTimer: ReturnType<typeof setTimeout> | null = null;
 
     // ── The entire FSM state: which node we're in, and when we entered it.
     private currentStateId = '';
@@ -389,6 +394,7 @@ export class FsmDriver implements ISpecDriver {
         for (const t of this.delegateTimers.values()) clearTimeout(t);
         this.delegateTimers.clear();
         if (this.wakeTimer) { clearTimeout(this.wakeTimer); this.wakeTimer = null; }
+        if (this.bgMarkerTimer) { clearTimeout(this.bgMarkerTimer); this.bgMarkerTimer = null; }
         this.redrawNudge.dispose();
         this.focusPrimer.dispose();
         // ENTER-LOSS layer ① scope note: clearing these timers DROPS any submit
@@ -451,7 +457,7 @@ export class FsmDriver implements ISpecDriver {
         // with the (wrong) viewport-only reading and nothing contradicted it.
         const viewportScreen = this.adapter.snapshot();
         const guard = this.guardFrame(viewportScreen, viewportCursor);
-        const ev = this.evalFsmNow(guard, viewportScreen, guard.cursor, now);
+        const ev = this.evalFsmNow(this.bgMarker.peekFrame(guard, resolveSections(this.spec.sections ?? {}, guard.lines)), viewportScreen, guard.cursor, now);
         const state = stateById(this.spec, this.currentStateId);
         return {
             currentState: this.currentStateId,
@@ -554,6 +560,7 @@ export class FsmDriver implements ISpecDriver {
         if (!res.ok) throw new Error(`fsm spec invalid: ${res.errors.join('; ')}`);
         this.spec = res.spec;
         this.compileSignalRules();
+        this.bgMarker = new BackgroundMarkerBound(compileBackgroundMarkers(this.spec.background_marker, this.specTag()));
         reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
     }
 
@@ -582,6 +589,7 @@ export class FsmDriver implements ISpecDriver {
                 }
                 this.spec = res.spec;
                 this.compileSignalRules();
+                this.bgMarker = new BackgroundMarkerBound(compileBackgroundMarkers(this.spec.background_marker, this.specTag()));
                 reportFsmSpecWarnings(res.warnings, this.specTag(), LOG.warn.bind(LOG));
                 LOG.info('FsmDriver', `[${this.specTag()}] spec hot-reloaded`);
                 // Re-evaluate immediately with the new transitions.
@@ -612,8 +620,8 @@ export class FsmDriver implements ISpecDriver {
         return buildGuardFrame(viewportScreen, cursor, () => this.scrollbackLines());
     }
 
-    private evalFsmNow(guard: { screen: string; lines: string[] }, viewportScreen: string, cursor: { row: number; col: number }, now: number) {
-        const prev = this.prevScreenLines.length > 0 ? this.prevScreenLines : undefined;
+    private evalFsmNow(guard: { screen: string; lines: string[] }, viewportScreen: string, cursor: { row: number; col: number }, now: number, prevLines = this.prevScreenLines) {
+        const prev = prevLines.length > 0 ? prevLines : undefined;
         const viewportStartRow = guard.lines.length - viewportScreen.split('\n').length;
         return evaluateFsm(this.spec, this.currentStateId, guard.screen, cursor, prev, this.buildClock(now), this.signalObservation, viewportStartRow);
     }
@@ -680,7 +688,12 @@ export class FsmDriver implements ISpecDriver {
             stableVerdictCache: this.stableVerdictCache,
         }, currentLines, cursor, now);
 
-        const ev = this.evalFsmNow(guard, screen, cursor, now);
+        // Marker-only bound: once released, evaluate with the marker blanked.
+        const markerScan = this.bgMarker.enabled
+            ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines))
+            : null;
+        const prevForEval = this.prevScreenLines;
+        const ev = this.evalFsmNow(this.bgMarker.frame(guard, markerScan), screen, cursor, now);
         this.lastFsmEval = ev;
         this.prevScreenLines = currentLines;
         this.logShadowDivergence(ev);
@@ -715,6 +728,7 @@ export class FsmDriver implements ISpecDriver {
             // branches is safe. Drain stays after emit so detectStatusTransition
             // observes idle+fsmReadySeen before the first queued body is written.
             this.sends.drainPendingSends();
+            this.trackBackgroundMarker(guard, markerScan, screen, now, prevForEval);
             return;
         }
 
@@ -729,6 +743,32 @@ export class FsmDriver implements ISpecDriver {
         this.redrawNudge.schedule();
         // Drain queued sends once we first reach a "ready" state.
         this.sends.drainPendingSends();
+        this.trackBackgroundMarker(guard, markerScan, screen, now, prevForEval);
+    }
+
+    /** Marker-only bound (background-marker-bound.ts): probe whether the FSM would go idle with the marker blanked. */
+    private trackBackgroundMarker(
+        guard: { screen: string; lines: string[]; cursor: { row: number; col: number } },
+        scan: MarkerScan | null, viewportScreen: string, now: number, prevLines: string[],
+    ): void {
+        if (this.bgMarkerTimer) { clearTimeout(this.bgMarkerTimer); this.bgMarkerTimer = null; }
+        if (!scan || scan.signature === '' || this.bgMarker.released || this.tornDown) return;
+        const st = stateById(this.spec, this.currentStateId);
+        let markerOnly = false;
+        if (st && statusForState(st) === 'generating') {
+            const probe = this.evalFsmNow(maskGuard(guard, scan), viewportScreen, guard.cursor, now, prevLines);
+            const to = probe.fired ? stateById(this.spec, probe.fired.to) : undefined;
+            markerOnly = !!to && statusForState(to) === 'idle';
+        }
+        const r = this.bgMarker.update(now, markerOnly, scan.sample);
+        if (r.notice) this.emit({ kind: 'signal_detected', signal: r.notice });
+        if (r.released) {
+            LOG.info('FsmDriver', `[${this.specTag()}] background marker was the only thing holding ${st?.id} — evaluating as idle`);
+            this.reevaluate(true);
+            return;
+        }
+        const wake = this.bgMarker.nextWakeMs(now);
+        if (wake !== null) this.bgMarkerTimer = setTimeout(() => { this.bgMarkerTimer = null; this.reevaluate(); }, wake);
     }
 
     private commitTransition(fired: TransitionEval, now: number, ev: FsmEvaluation): void {

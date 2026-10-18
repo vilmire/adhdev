@@ -580,6 +580,17 @@ export interface CliSpecV4 {
      * Omitted by every spec that needs none — the engine then does nothing.
      */
     signal_rules?: SignalRule[];
+    /**
+     * Background-job marker patterns (per line, optionally section-scoped) that
+     * the spec's own busy guards already treat as "generating" — `1 shell still
+     * running`, `N background terminal(s) running`, a drawer row `● [hh:mm:ss]
+     * … running`. Declaring them lets the engine BOUND that hold: marker-only
+     * (no spinner / output / modal) for 120 s ⇒ one coordinator notice, for 10
+     * min ⇒ the screen is evaluated as if the marker were absent, so the normal
+     * turn-end path decides instead of a left-running dev server pinning the
+     * session. See background-marker-bound.ts. Omitted ⇒ no bound (old behaviour).
+     */
+    background_marker?: { patterns: Array<{ regex: string; flags?: string; section?: string }> };
     notifications?: NotificationRule[];
     delegate?: DelegateTrigger[];
     native_history?: NativeHistoryConfig;
