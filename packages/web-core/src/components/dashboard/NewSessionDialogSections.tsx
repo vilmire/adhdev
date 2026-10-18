@@ -2,6 +2,7 @@
 // shows plus change callbacks; state and remembered-choice bookkeeping stay in
 // DashboardNewSessionDialog.
 import { useTranslation } from 'react-i18next'
+import LaunchOptionField from './LaunchOptionField'
 import type { DaemonData } from '../../types'
 import { getMachineDisplayName } from '../../utils/daemon-utils'
 import { InfoTip } from '../ui/InfoTip'
@@ -212,16 +213,14 @@ export function NewSessionStartupArgs({ value, recentOptions, busy, onChange }: 
 }
 
 export function NewSessionModelThinkingFields({
-    modelOptions, thinkingOptions, model, thinkingLevel, modelIsCustom, busy,
-    onModelIsCustomChange, onModelChange, onThinkingChange,
+    modelOptions, thinkingOptions, model, thinkingLevel, busy,
+    onModelChange, onThinkingChange,
 }: {
     modelOptions: string[]
     thinkingOptions: string[]
     model: string
     thinkingLevel: string
-    modelIsCustom: boolean
     busy: boolean
-    onModelIsCustomChange: (custom: boolean) => void
     /** User edits only — the dialog records them with source 'user'. */
     onModelChange: (value: string) => void
     onThinkingChange: (value: string) => void
@@ -232,69 +231,21 @@ export function NewSessionModelThinkingFields({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <label className="flex flex-col gap-1">
                     <span className="text-2xs text-text-muted">{t('newSession.model')}</span>
-                    {modelOptions.length > 0 && !modelIsCustom ? (
-                        <>
-                            <select
-                                value={modelOptions.includes(model) ? model : ''}
-                                onChange={(event) => {
-                                    if (event.target.value === '__custom__') {
-                                        onModelIsCustomChange(true)
-                                        onModelChange('')
-                                    } else {
-                                        onModelChange(event.target.value)
-                                    }
-                                }}
-                                className={FIELD_CLASS}
-                                disabled={busy}
-                            >
-                                <option value="">{t('newSession.providerDefault')}</option>
-                                {modelOptions.map((m: string) => <option key={m} value={m}>{m}</option>)}
-                                <option value="__custom__">{t('newSession.custom')}</option>
-                            </select>
-                            {/* Phase E: what "provider default" resolves to — the daemon records
-                                the same value (discovery models[0], else the manifest's first
-                                option), which is exactly this list's head. */}
-                            {!model.trim() && (
-                                <span className="text-2xs text-text-muted" data-testid="new-session-default-model">
-                                    {t('newSession.defaultResolvesTo', { model: modelOptions[0], defaultValue: 'Default resolves to {{model}}' })}
-                                </span>
-                            )}
-                        </>
-                    ) : (
-                        <>
-                            <input
-                                type="text"
-                                value={model}
-                                onChange={(event) => onModelChange(event.target.value)}
-                                placeholder={t('newSession.typeModelName')}
-                                className={FIELD_CLASS}
-                                disabled={busy}
-                                autoFocus={modelIsCustom}
-                            />
-                            {modelOptions.length > 0 && (
-                                <button
-                                    type="button"
-                                    className="self-start text-2xs text-accent-primary bg-transparent border-none cursor-pointer p-0"
-                                    onClick={() => { onModelIsCustomChange(false); onModelChange('') }}
-                                    disabled={busy}
-                                >
-                                    {t('newSession.backToModelList')}
-                                </button>
-                            )}
-                        </>
+                    <LaunchOptionField value={model} options={modelOptions} onChange={onModelChange}
+                        allowCustom className={FIELD_CLASS} disabled={busy} />
+                    {/* Phase E: what "provider default" resolves to — the daemon records
+                        the same value (discovery models[0], else the manifest's first
+                        option), which is exactly this list's head. */}
+                    {modelOptions.length > 0 && !model.trim() && (
+                        <span className="text-2xs text-text-muted" data-testid="new-session-default-model">
+                            {t('newSession.defaultResolvesTo', { model: modelOptions[0], defaultValue: 'Default resolves to {{model}}' })}
+                        </span>
                     )}
                 </label>
                 <label className="flex flex-col gap-1">
                     <span className="text-2xs text-text-muted">{t('newSession.thinkingLevel')}</span>
-                    <select
-                        value={thinkingLevel}
-                        onChange={(event) => onThinkingChange(event.target.value)}
-                        className={FIELD_CLASS}
-                        disabled={busy}
-                    >
-                        <option value="">{t('newSession.providerDefault')}</option>
-                        {thinkingOptions.map((l: string) => <option key={l} value={l}>{l}</option>)}
-                    </select>
+                    <LaunchOptionField value={thinkingLevel} options={thinkingOptions} onChange={onThinkingChange}
+                        className={FIELD_CLASS} disabled={busy} />
                 </label>
             </div>
         </LaunchSectionCard>

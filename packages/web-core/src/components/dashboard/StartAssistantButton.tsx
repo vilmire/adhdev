@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
+import LaunchOptionField from './LaunchOptionField'
 import { cn } from '../../lib/utils'
 import { IconAssistant, IconCheck, IconChevronLeft } from '../Icons'
 import { assistantLaunchTargetFor, type AssistantLaunchTarget, type AssistantMachineOption } from './assistant-session'
@@ -268,29 +269,27 @@ export default function StartAssistantButton({
                                     {selectedCli.modelOptions.length > 0 && (
                                         <label className="flex min-w-0 flex-1 flex-col gap-0.5 text-2xs text-text-muted">
                                             {t('dashboard.assistantLaunch.model')}
-                                            <select
+                                            <LaunchOptionField
                                                 value={selected.model ?? ''}
-                                                onChange={event => pickOption('model', event.target.value)}
+                                                options={selectedCli.modelOptions}
+                                                onChange={value => pickOption('model', value)}
                                                 className="min-w-0 rounded-md border border-border-default bg-bg-secondary px-1.5 py-1 text-xs text-text-primary"
-                                                data-testid="assistant-launch-model"
-                                            >
-                                                <option value="">{t('dashboard.assistantLaunch.defaultOption')}</option>
-                                                {selectedCli.modelOptions.map(model => <option key={model} value={model}>{model}</option>)}
-                                            </select>
+                                                fieldAttrs={{ 'data-testid': 'assistant-launch-model' }}
+                                                defaultLabel={t('dashboard.assistantLaunch.defaultOption')}
+                                            />
                                         </label>
                                     )}
                                     {selectedCli.thinkingLevelOptions.length > 0 && (
                                         <label className="flex w-[88px] shrink-0 flex-col gap-0.5 text-2xs text-text-muted">
                                             {t('dashboard.assistantLaunch.thinking')}
-                                            <select
+                                            <LaunchOptionField
                                                 value={selected.thinkingLevel ?? ''}
-                                                onChange={event => pickOption('thinkingLevel', event.target.value)}
+                                                options={selectedCli.thinkingLevelOptions}
+                                                onChange={value => pickOption('thinkingLevel', value)}
                                                 className="min-w-0 rounded-md border border-border-default bg-bg-secondary px-1.5 py-1 text-xs text-text-primary"
-                                                data-testid="assistant-launch-thinking"
-                                            >
-                                                <option value="">{t('dashboard.assistantLaunch.defaultOption')}</option>
-                                                {selectedCli.thinkingLevelOptions.map(level => <option key={level} value={level}>{level}</option>)}
-                                            </select>
+                                                fieldAttrs={{ 'data-testid': 'assistant-launch-thinking' }}
+                                                defaultLabel={t('dashboard.assistantLaunch.defaultOption')}
+                                            />
                                         </label>
                                     )}
                                 </div>

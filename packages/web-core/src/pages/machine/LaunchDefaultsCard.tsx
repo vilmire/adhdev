@@ -15,6 +15,7 @@ import Card from '../../components/Card'
 import { InfoTip } from '../../components/ui/InfoTip'
 import type { ProviderInfo } from './types'
 import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils/provider-priority'
+import LaunchOptionField from '../../components/dashboard/LaunchOptionField'
 import {
     LAUNCH_DEFAULT_ROLE_ORDER,
     buildLaunchDefaultsSetArgs,
@@ -104,11 +105,7 @@ export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCom
     )
 }
 
-/**
- * Model / thinking level: the selected CLI's advertised options as a dropdown,
- * first entry "provider default". A saved value the list does not contain stays
- * selectable (so it is visible); a CLI that advertises nothing keeps a text box.
- */
+/** Model / thinking level — the shared launch picker (same as the new-session dialog). */
 function OptionField({ field, label, value, options, onChange }: {
     field: 'model' | 'thinkingLevel'
     label: string
@@ -116,20 +113,12 @@ function OptionField({ field, label, value, options, onChange }: {
     options: string[]
     onChange: (value: string) => void
 }) {
-    const { t } = useTranslation('common')
-    const list = value && !options.includes(value) ? [...options, value] : options
     return (
         <label className="flex flex-col gap-1 text-2xs text-text-secondary">
             <span className="font-medium text-text-primary">{label}</span>
-            {options.length > 0 ? (
-                <select value={value} onChange={e => onChange(e.target.value)} className="machine-input text-2xs" data-launch-default-field={field}>
-                    <option value="">{t('machine.launchDefaults.providerDefault')}</option>
-                    {list.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
-            ) : (
-                <input type="text" value={value} onChange={e => onChange(e.target.value)}
-                    placeholder={t('machine.launchDefaults.providerDefault')} className="machine-input text-2xs" data-launch-default-field={field} />
-            )}
+            <LaunchOptionField value={value} options={options} onChange={onChange}
+                allowCustom={field === 'model'} className="machine-input text-2xs"
+                fieldAttrs={{ 'data-launch-default-field': field }} />
         </label>
     )
 }

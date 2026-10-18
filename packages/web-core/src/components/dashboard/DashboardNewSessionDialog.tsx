@@ -135,7 +135,6 @@ export default function DashboardNewSessionDialog({
     }, [])
     // When true, the model field is a free-text input (user picked "Custom…" in the
     // model dropdown) instead of a select of the provider's suggested models.
-    const [modelIsCustom, setModelIsCustom] = useState(false)
     const [recentArgsOptions, setRecentArgsOptions] = useState<string[]>([])
     const [selectedResumeSessionId, setSelectedResumeSessionId] = useState('')
     const [savedSessions, setSavedSessions] = useState<SavedSessionOption[]>([])
@@ -278,11 +277,11 @@ export default function DashboardNewSessionDialog({
         () => modelOptionsForProvider(activeLaunchProvider ? [activeLaunchProvider] : [], activeLaunchProvider?.type),
         [activeLaunchProvider],
     )
-    const thinkingLevelOptionsForTarget = useMemo(() => {
-        const list = thinkingOptionsForProvider(activeLaunchProvider ? [activeLaunchProvider] : [], activeLaunchProvider?.type)
-        // Fall back to the standard levels when the provider declares none.
-        return list.length ? list : ['low', 'medium', 'high']
-    }, [activeLaunchProvider])
+    // No invented fallback list: a CLI that advertises no levels gets a text box.
+    const thinkingLevelOptionsForTarget = useMemo(
+        () => thinkingOptionsForProvider(activeLaunchProvider ? [activeLaunchProvider] : [], activeLaunchProvider?.type),
+        [activeLaunchProvider],
+    )
     const providerMeshManualSetup = useMemo(
         () => buildManualCoordinatorSetup(selectedCliProvider?.meshCoordinator, {
             meshId: selectedMesh?.id || '',
@@ -384,7 +383,6 @@ export default function DashboardNewSessionDialog({
             setPendingDangerousMode(null)
             setModelWithSource('', 'user')
             setThinkingWithSource('', 'user')
-            setModelIsCustom(false)
             setSelectedResumeSessionId('')
             setSavedSessions([])
             setSavedSessionsLoaded(false)
@@ -498,7 +496,6 @@ export default function DashboardNewSessionDialog({
     useEffect(() => {
         setModelWithSource('', 'user')
         setThinkingWithSource('', 'user')
-        setModelIsCustom(false)
     }, [selectedTarget, setModelWithSource, setThinkingWithSource])
 
     // A dangerous registry default must never become active merely because its
@@ -528,16 +525,11 @@ export default function DashboardNewSessionDialog({
         if (!values || valuesTarget !== selectedTarget) return
         pendingTuningRef.current = false
         const rememberedModel = values.model || ''
-        if (rememberedModel) {
-            // A model outside the advisory list is shown in the free-text input
-            // (never hidden behind an empty select while still being sent).
-            if (modelOptionsForTarget.length > 0 && !modelOptionsForTarget.includes(rememberedModel)) {
-                setModelIsCustom(true)
-            }
-            setModelWithSource(rememberedModel, 'remembered')
-        }
+        // Off-list remembered values stay visible: the shared picker keeps them
+        // as an extra entry, so what is shown is what is sent.
+        if (rememberedModel) setModelWithSource(rememberedModel, 'remembered')
         const rememberedThinking = values.thinkingLevel || ''
-        if (rememberedThinking && thinkingLevelOptionsForTarget.includes(rememberedThinking)) {
+        if (rememberedThinking) {
             setThinkingWithSource(rememberedThinking, 'remembered')
         }
         const rememberedAutoApproveModeId = values.autoApproveModeId || ''
@@ -1171,9 +1163,7 @@ export default function DashboardNewSessionDialog({
                                 thinkingOptions={thinkingLevelOptionsForTarget}
                                 model={initialModel}
                                 thinkingLevel={initialThinkingLevel}
-                                modelIsCustom={modelIsCustom}
                                 busy={busy}
-                                onModelIsCustomChange={setModelIsCustom}
                                 onModelChange={(value) => setModelWithSource(value, 'user')}
                                 onThinkingChange={(value) => setThinkingWithSource(value, 'user')}
                             />

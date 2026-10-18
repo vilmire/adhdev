@@ -19,8 +19,8 @@ import { InfoTip } from '../../components/ui/InfoTip'
 import { MESH_TASK_DIFFICULTIES, type MeshTaskDifficulty, type NodeCapabilitySlot } from '@adhdev/mesh-shared'
 import { buildProviderOptionMap, type AvailableCliProviderOption } from '../../utils/provider-priority'
 import { IconX, IconPlus } from '../../components/Icons'
+import LaunchOptionField from '../../components/dashboard/LaunchOptionField'
 
-const THINKING_LEVELS = ['', 'low', 'medium', 'high'] as const
 const DIFFICULTY_LABEL: Record<MeshTaskDifficulty, string> = {
     easy: 'Easy', medium: 'Medium', difficult: 'Difficult', freeform: 'Freeform',
 }
@@ -163,42 +163,17 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                         </label>
                         {(() => {
                             const opts = optionsByProvider.get(d.provider)
-                            const models = opts?.models ?? []
-                            // Provider-declared thinking list wins; else the standard axis.
-                            const thinking = (opts?.thinking?.length ? ['', ...opts.thinking] : THINKING_LEVELS) as readonly string[]
-                            const modelIsCustom = !!d.model && models.length > 0 && !models.includes(d.model)
                             return (
                                 <>
                                     <label className="flex flex-col gap-1">
                                         <span className="text-2xs text-text-muted">{t('mesh.slotEditor.model')}</span>
-                                        {models.length > 0 && !modelIsCustom ? (
-                                            <select className={selectCls} value={models.includes(d.model) ? d.model : ''}
-                                                onChange={e => update(i, { model: e.target.value === '__custom__' ? ' ' : e.target.value })}>
-                                                <option value="">{t('mesh.slotEditor.providerDefault')}</option>
-                                                {models.map(m => <option key={m} value={m}>{m}</option>)}
-                                                <option value="__custom__">{t('mesh.slotEditor.custom')}</option>
-                                            </select>
-                                        ) : (
-                                            <>
-                                                <input className={selectCls} value={d.model.trim()}
-                                                    placeholder={d.provider ? `${d.provider} model` : t('mesh.slotEditor.modelPlaceholder')}
-                                                    onChange={e => update(i, { model: e.target.value })} />
-                                                {/* Back to the dropdown — only when the provider has a list to go back to. */}
-                                                {models.length > 0 && (
-                                                    <button type="button"
-                                                        className="self-start bg-transparent border-none cursor-pointer p-0 text-3xs text-text-muted hover:underline"
-                                                        onClick={() => update(i, { model: '' })}>
-                                                        {t('mesh.slotEditor.backToModelList')}
-                                                    </button>
-                                                )}
-                                            </>
-                                        )}
+                                        <LaunchOptionField className={selectCls} value={d.model} options={opts?.models ?? []}
+                                            allowCustom onChange={model => update(i, { model })} />
                                     </label>
                                     <label className="flex flex-col gap-1">
                                         <span className="text-2xs text-text-muted">{t('mesh.slotEditor.thinking')}</span>
-                                        <select className={selectCls} value={d.thinkingLevel} onChange={e => update(i, { thinkingLevel: e.target.value })}>
-                                            {thinking.map(l => <option key={l || '_default'} value={l}>{l || t('mesh.slotEditor.thinkingDefault')}</option>)}
-                                        </select>
+                                        <LaunchOptionField className={selectCls} value={d.thinkingLevel} options={opts?.thinking ?? []}
+                                            onChange={thinkingLevel => update(i, { thinkingLevel })} />
                                     </label>
                                 </>
                             )

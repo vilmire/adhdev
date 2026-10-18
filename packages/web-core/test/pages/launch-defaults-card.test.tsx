@@ -118,12 +118,12 @@ describe('LaunchDefaultsCard', () => {
         const values = (el: Element) => [...el.querySelectorAll('option')].map(o => (o as HTMLOptionElement).value)
         // The saved assistant model is shown inside the dropdown with the advertised ones.
         expect(field('assistant', 'model').tagName).toBe('SELECT')
-        expect(values(field('assistant', 'model'))).toEqual(['', 'sonnet', 'opus'])
+        expect(values(field('assistant', 'model'))).toEqual(['', 'sonnet', 'opus', '__custom__'])
         expect((field('assistant', 'model') as HTMLSelectElement).value).toBe('opus')
         expect(values(field('assistant', 'thinkingLevel'))).toEqual(['', 'low', 'high'])
         // Switching CLI drops a model the new CLI does not offer.
         await choose(role('assistant').querySelector('[data-launch-default-field="provider"]'), 'codex-cli')
-        expect(values(field('assistant', 'model'))).toEqual(['', 'gpt-5'])
+        expect(values(field('assistant', 'model'))).toEqual(['', 'gpt-5', '__custom__'])
         expect((field('assistant', 'model') as HTMLSelectElement).value).toBe('')
         // A CLI that advertises nothing keeps a text box.
         await choose(role('assistant').querySelector('[data-launch-default-field="provider"]'), 'grok-cli')
