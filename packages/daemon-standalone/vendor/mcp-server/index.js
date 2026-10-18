@@ -40407,6 +40407,9 @@ ${error.message || ""}`;
     }
     function ensureAssistantRelaySchema(db) {
       db.exec(`
+        CREATE TABLE IF NOT EXISTS assistant_relay_receipts (
+            receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL
+        );
         -- Delivery manifests are content-free and never backfilled from captured
         -- reports: old captures do not prove what survived the rendered cap.
         CREATE TABLE IF NOT EXISTS assistant_relay_coverage (
@@ -94210,11 +94213,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const picked = visible.slice(-tail).map((m) => {
         const text4 = messageText(m);
         const truncated = text4.length > maxChars;
-        const at = typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : readText3(m.timestamp) || readText3(m.createdAt) || void 0;
+        const time = m.timestamp ?? m.receivedAt ?? m.createdAt;
+        const at = typeof time === "number" ? new Date(time).toISOString() : readText3(time) || void 0;
         return {
           messageId: reportMessageId(m),
           totalChars: text4.length,
-          complete: !truncated,
+          complete: !truncated && m.bubbleState !== "streaming" && m.isStreaming !== true && m.meta?.streaming !== true,
           nextOffset: truncated ? maxChars : null,
           role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
           text: truncated ? `${text4.slice(0, maxChars)}\u2026` : text4,
@@ -94232,9 +94236,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     function reportMessageId(message) {
       const m = message;
       return (0, import_crypto31.createHash)("sha256").update(JSON.stringify([
-        m?.messageId ?? m?.bubbleId ?? m?.id ?? null,
+        // read_chat stamps presentation ids; chat_history returns native rows.
+        // A timestamped native reply must keep one cursor across both lanes.
+        m?.timestamp == null && m?.receivedAt == null && m?.createdAt == null ? m?.messageId ?? m?.bubbleId ?? m?.id ?? null : null,
         m?.role,
-        m?.timestamp ?? m?.createdAt ?? null,
+        m?.timestamp ?? m?.receivedAt ?? m?.createdAt ?? null,
+        m?.kind ?? m?.messageKind ?? "standard",
         messageText(m)
       ])).digest("hex");
     }
@@ -94356,6 +94363,92 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             }
           }
         };
+      }
+    });
+    function pageAttemptReport(body, cursor, source2, completeness = "final_native") {
+      const reportId = reportBodyId(body);
+      if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: "original_report_unavailable", reason: "original_report_identity_mismatch" };
+      if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
+      const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
+      const pageComplete = end === body.length;
+      const sourceComplete = completeness === "final_native";
+      const page = {
+        success: true,
+        attemptId: cursor.attemptId,
+        coordinatorSessionId: cursor.coordinatorSessionId,
+        reportId,
+        source: source2,
+        text: body.slice(cursor.offset, end),
+        offset: cursor.offset,
+        totalChars: body.length,
+        sourceComplete,
+        complete: pageComplete && sourceComplete,
+        truncated: end < body.length,
+        nextOffset: end < body.length ? end : null
+      };
+      if (sourceComplete) return page;
+      return { ...page, originalCompleteness: completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
+    }
+    function parseReportContinuation(args) {
+      if (args.taskId !== void 0) {
+        if (typeof args.taskId !== "string" || !args.taskId || args.taskId.length > 200 || args.attemptId !== void 0 || args.messageId !== void 0 || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0 || args.outputVersion !== void 0 && (!Number.isSafeInteger(args.outputVersion) || Number(args.outputVersion) < 1) || Number(args.offset ?? 0) > 0 && args.outputVersion === void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId))) return "taskId, non-negative offset and stable outputVersion for continuation required";
+        return { taskId: args.taskId, offset: Number(args.offset ?? 0), ...typeof args.outputVersion === "number" ? { outputVersion: args.outputVersion } : {}, ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
+      }
+      if (args.attemptId !== void 0) {
+        if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.messageId !== void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId)) || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0) return "attemptId, coordinatorSessionId and non-negative offset required; reportId must be a SHA256 identity";
+        return { attemptId: args.attemptId, coordinatorSessionId: args.coordinatorSessionId, offset: Number(args.offset ?? 0), ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
+      }
+      if (args.messageId === void 0 && args.offset === void 0 && args.coordinatorSessionId === void 0) return null;
+      if (typeof args.messageId !== "string" || !/^[a-f0-9]{64}$/.test(args.messageId) || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || !Number.isSafeInteger(args.offset) || args.offset < 0) return "messageId, coordinatorSessionId and non-negative integer offset required";
+      return { messageId: args.messageId, offset: args.offset, coordinatorSessionId: args.coordinatorSessionId };
+    }
+    async function continueReport(execute, cursor) {
+      const slice = (chat) => {
+        const messages = Array.isArray(chat.messages) ? chat.messages : [];
+        const found = messages.find((m) => isVisible(m) && reportMessageId(m) === cursor.messageId);
+        if (!found) return null;
+        const body = messageText(found);
+        if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
+        const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
+        return {
+          success: true,
+          coordinatorSessionId: cursor.coordinatorSessionId,
+          messageId: cursor.messageId,
+          text: body.slice(cursor.offset, end),
+          offset: cursor.offset,
+          totalChars: body.length,
+          truncated: end < body.length,
+          complete: end === body.length,
+          nextOffset: end < body.length ? end : null
+        };
+      };
+      const tail = await execute("read_chat", { targetSessionId: cursor.coordinatorSessionId, limit: 200 });
+      if (tail.success) {
+        const page = slice(tail);
+        if (page) return page;
+      }
+      for (let offset = 0; offset < 800; offset += 100) {
+        const history = await execute("chat_history", {
+          targetSessionId: cursor.coordinatorSessionId,
+          offset,
+          limit: 100,
+          excludeRecentCount: 0
+        });
+        if (!history.success) return { success: false, code: "original_report_unavailable", reason: "history_read_failed" };
+        const page = slice(history);
+        if (page) return page;
+        if (history.hasMore !== true) break;
+      }
+      return { success: false, code: "original_report_unavailable", reason: "exact_message_not_found_in_bounded_history" };
+    }
+    var import_crypto32;
+    var reportBodyId;
+    var init_report_continuation = __esm2({
+      "src/assistant/report-continuation.ts"() {
+        "use strict";
+        import_crypto32 = require("crypto");
+        init_project_views();
+        reportBodyId = (body) => (0, import_crypto32.createHash)("sha256").update(body).digest("hex");
       }
     });
     function githubRemote(value) {
@@ -94884,92 +94977,6 @@ ${grant.exp}`).digest("hex");
         };
       }
     });
-    function pageAttemptReport(body, cursor, source2, completeness = "final_native") {
-      const reportId = reportBodyId(body);
-      if (cursor.reportId && cursor.reportId !== reportId) return { success: false, code: "original_report_unavailable", reason: "original_report_identity_mismatch" };
-      if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
-      const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
-      const pageComplete = end === body.length;
-      const sourceComplete = completeness === "final_native";
-      const page = {
-        success: true,
-        attemptId: cursor.attemptId,
-        coordinatorSessionId: cursor.coordinatorSessionId,
-        reportId,
-        source: source2,
-        text: body.slice(cursor.offset, end),
-        offset: cursor.offset,
-        totalChars: body.length,
-        sourceComplete,
-        complete: pageComplete && sourceComplete,
-        truncated: end < body.length,
-        nextOffset: end < body.length ? end : null
-      };
-      if (sourceComplete) return page;
-      return { ...page, originalCompleteness: completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
-    }
-    function parseReportContinuation(args) {
-      if (args.taskId !== void 0) {
-        if (typeof args.taskId !== "string" || !args.taskId || args.taskId.length > 200 || args.attemptId !== void 0 || args.messageId !== void 0 || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0 || args.outputVersion !== void 0 && (!Number.isSafeInteger(args.outputVersion) || Number(args.outputVersion) < 1) || Number(args.offset ?? 0) > 0 && args.outputVersion === void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId))) return "taskId, non-negative offset and stable outputVersion for continuation required";
-        return { taskId: args.taskId, offset: Number(args.offset ?? 0), ...typeof args.outputVersion === "number" ? { outputVersion: args.outputVersion } : {}, ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
-      }
-      if (args.attemptId !== void 0) {
-        if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.messageId !== void 0 || args.reportId !== void 0 && (typeof args.reportId !== "string" || !/^[a-f0-9]{64}$/.test(args.reportId)) || !Number.isSafeInteger(args.offset ?? 0) || Number(args.offset ?? 0) < 0) return "attemptId, coordinatorSessionId and non-negative offset required; reportId must be a SHA256 identity";
-        return { attemptId: args.attemptId, coordinatorSessionId: args.coordinatorSessionId, offset: Number(args.offset ?? 0), ...typeof args.reportId === "string" ? { reportId: args.reportId } : {} };
-      }
-      if (args.messageId === void 0 && args.offset === void 0 && args.coordinatorSessionId === void 0) return null;
-      if (typeof args.messageId !== "string" || !/^[a-f0-9]{64}$/.test(args.messageId) || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || !Number.isSafeInteger(args.offset) || args.offset < 0) return "messageId, coordinatorSessionId and non-negative integer offset required";
-      return { messageId: args.messageId, offset: args.offset, coordinatorSessionId: args.coordinatorSessionId };
-    }
-    async function continueReport(execute, cursor) {
-      const slice = (chat) => {
-        const messages = Array.isArray(chat.messages) ? chat.messages : [];
-        const found = messages.find((m) => isVisible(m) && reportMessageId(m) === cursor.messageId);
-        if (!found) return null;
-        const body = messageText(found);
-        if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
-        const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
-        return {
-          success: true,
-          coordinatorSessionId: cursor.coordinatorSessionId,
-          messageId: cursor.messageId,
-          text: body.slice(cursor.offset, end),
-          offset: cursor.offset,
-          totalChars: body.length,
-          truncated: end < body.length,
-          complete: end === body.length,
-          nextOffset: end < body.length ? end : null
-        };
-      };
-      const tail = await execute("read_chat", { targetSessionId: cursor.coordinatorSessionId, limit: 200 });
-      if (tail.success) {
-        const page = slice(tail);
-        if (page) return page;
-      }
-      for (let offset = 0; offset < 800; offset += 100) {
-        const history = await execute("chat_history", {
-          targetSessionId: cursor.coordinatorSessionId,
-          offset,
-          limit: 100,
-          excludeRecentCount: 0
-        });
-        if (!history.success) return { success: false, code: "original_report_unavailable", reason: "history_read_failed" };
-        const page = slice(history);
-        if (page) return page;
-        if (history.hasMore !== true) break;
-      }
-      return { success: false, code: "original_report_unavailable", reason: "exact_message_not_found_in_bounded_history" };
-    }
-    var import_crypto32;
-    var reportBodyId;
-    var init_report_continuation = __esm2({
-      "src/assistant/report-continuation.ts"() {
-        "use strict";
-        import_crypto32 = require("crypto");
-        init_project_views();
-        reportBodyId = (body) => (0, import_crypto32.createHash)("sha256").update(body).digest("hex");
-      }
-    });
     function readTaskReportPage(db, meshId, cursor) {
       const row2 = db.prepare(`SELECT version,attempt,status,created_at,
         CASE WHEN length(envelope_json)<=1048576 THEN envelope_json ELSE NULL END envelope_json
@@ -95060,6 +95067,16 @@ ${grant.exp}`).digest("hex");
         MISSED_REPORT_WINDOW_MS = ATTEMPT_BODY_TTL_MS;
         THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 6e4;
         InMemoryAssistantRelayStore = class {
+          receipts = /* @__PURE__ */ new Map();
+          readReceipt(key4, now) {
+            const row2 = this.receipts.get(key4);
+            return row2 && now - row2.at < RELAY_DELIVERED_RETENTION_MS ? row2.value : null;
+          }
+          writeReceipt(key4, value, at) {
+            this.receipts.delete(key4);
+            this.receipts.set(key4, { value, at });
+            while (this.receipts.size > 4096) this.receipts.delete(this.receipts.keys().next().value);
+          }
           coverage = /* @__PURE__ */ new Map();
           bodies = /* @__PURE__ */ new Map();
           threads = /* @__PURE__ */ new Map();
@@ -95216,6 +95233,14 @@ ${grant.exp}`).digest("hex");
         SqliteAssistantRelayStore = class {
           constructor(db) {
             this.db = db;
+          }
+          readReceipt(key4, now) {
+            const row2 = this.db.prepare("SELECT value FROM assistant_relay_receipts WHERE receipt_key=? AND at_ms>?").get(key4, now - RELAY_DELIVERED_RETENTION_MS);
+            return row2?.value ?? null;
+          }
+          writeReceipt(key4, value, at) {
+            this.db.prepare("INSERT INTO assistant_relay_receipts(receipt_key,value,at_ms) VALUES(?,?,?) ON CONFLICT(receipt_key) DO UPDATE SET value=excluded.value,at_ms=excluded.at_ms").run(key4, value, at);
+            this.db.prepare("DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET 4096)").run(at - RELAY_DELIVERED_RETENTION_MS);
           }
           openThread(meshId, at) {
             this.db.prepare(`
@@ -95491,7 +95516,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && typeof parts[7] === "string" && /^verified-native-window:[a-f0-9]{64}$/.test(parts[7]);
+        return Array.isArray(parts) && (parts.length === 8 || parts.length === 9) && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && typeof parts[7] === "string" && /^verified-native-window:[a-f0-9]{64}$/.test(parts[7]) && (parts.length === 8 || Number.isSafeInteger(parts[8]) && Number(parts[8]) >= Number(parts[2]) && Number.isFinite(new Date(Number(parts[8])).getTime()));
       } catch {
         return false;
       }
@@ -95505,7 +95530,7 @@ ${b.text}`).join("\n\n");
       for (let i = 0; i < parts.length; i++) {
         const part = rec4(parts[i]);
         const at = part?.at, chars = part?.chars;
-        if (typeof at !== "number" || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || at > Number(ref[2]) || i > 0 && at <= bubbles[i - 1].at || typeof chars !== "number" || !Number.isSafeInteger(chars) || chars <= 0) return null;
+        if (typeof at !== "number" || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || at > Number(ref[8] ?? ref[2]) || i > 0 && at <= bubbles[i - 1].at || typeof chars !== "number" || !Number.isSafeInteger(chars) || chars <= 0) return null;
         if (parts.length > 1) {
           const label2 = Array.from(`${i ? "\n\n" : ""}[reply ${i + 1}/${parts.length} \xB7 ${formatReplyClock(at)}]
 `);
@@ -95536,9 +95561,10 @@ ${b.text}`).join("\n\n");
     }
     async function readNativeWindow(execute, sessionId, start, end) {
       const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
-      const messages = [];
+      let messages = [];
       let providerIdle = false;
       let invalid = false;
+      const targets = /* @__PURE__ */ new Map();
       const request = async (command, args) => {
         const remaining = deadline - Date.now();
         if (remaining <= 0) return null;
@@ -95566,11 +95592,19 @@ ${b.text}`).join("\n\n");
         messages.push(...read2.messages);
         return true;
       };
-      const result = (complete) => ({ ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle });
+      const result = (complete) => {
+        for (const message of messages) {
+          const bubble = standardAssistantBubble(message);
+          if (bubble) targets.set(bubble.at, reportMessageId(message));
+        }
+        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets };
+      };
       const chat = await request("read_chat", { targetSessionId: sessionId, tailLimit: 200 });
       if (take(chat)) {
-        if (chat.coverage === "full" && chat.hasMore !== true) return result(true);
+        if (!invalid && chat.coverage === "full" && chat.hasMore !== true) return result(true);
       } else if (!chat) return result(false);
+      messages = [];
+      invalid = false;
       for (let offset = 0; offset < 400; offset += 100) {
         const history = await request("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
         if (!take(history, true)) return result(false);
@@ -95618,12 +95652,12 @@ ${b.text}`).join("\n\n");
           textEventId = hold ? rec4(JSON.parse(hold.data_json))?.textEventId : void 0;
         } catch {
         }
-        const original = typeof textEventId === "string" ? db.prepare("SELECT * FROM turn_events WHERE event_id=? AND attempt_id=?").get(textEventId, attempt.attemptId) : void 0;
-        const originalPayload = payloadOf(original), originalEvidence = rec4(originalPayload?.evidence);
-        if (!original || !matchesEvidence(original, originalEvidence) || original.verdict !== "applied" || !isNativeReference(originalEvidence) || original.at_ms > terminal.at_ms) {
+        const original2 = typeof textEventId === "string" ? db.prepare("SELECT * FROM turn_events WHERE event_id=? AND attempt_id=?").get(textEventId, attempt.attemptId) : void 0;
+        const originalPayload = payloadOf(original2), originalEvidence = rec4(originalPayload?.evidence);
+        if (!original2 || !matchesEvidence(original2, originalEvidence) || original2.verdict !== "applied" || !isNativeReference(originalEvidence) || original2.at_ms > terminal.at_ms) {
           return { body: null, source: "unavailable", reason: "no_unique_original_native_bubble_reference" };
         }
-        sourceEvent = original;
+        sourceEvent = original2;
         payload = originalPayload;
         evidence = originalEvidence;
       }
@@ -95650,11 +95684,17 @@ ${b.text}`).join("\n\n");
         return typeof envelope?.finalSummary === "string" && envelope.finalSummary.trim() ? envelope.finalSummary : null;
       })();
       const windowStart = attempt.acceptedAt;
-      const windowEnd = attempt.terminal.at;
-      const selected2 = await readNativeWindow(execute, sessionId, windowStart, windowEnd);
-      if (selected2.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+      const next = db.prepare("SELECT MIN(accepted_at) AS at FROM turn_attempts WHERE session_id=? AND scope='plain' AND accepted_at>?").get(sessionId, attempt.acceptedAt);
       const anchor = typeof evidence?.messageAt === "number" ? evidence.messageAt : null;
-      const anchorOutside = anchor !== null && (anchor < windowStart || anchor > windowEnd);
+      let windowEnd = anchor === null ? Math.max(attempt.terminal.at, Math.min(Date.now(), (next.at ?? Infinity) - 1)) : attempt.terminal.at;
+      let selected2 = await readNativeWindow(execute, sessionId, windowStart, windowEnd);
+      const original = selected2.bubbles.filter((b) => b.at <= attempt.terminal.at);
+      if (anchor === null && selected2.complete && selected2.providerIdle && envelopeText && original.at(-1)?.text.startsWith(envelopeText.trim())) {
+        selected2 = { ...selected2, bubbles: original };
+        windowEnd = attempt.terminal.at;
+      }
+      if (selected2.ambiguous) return { body: null, source: "unavailable", reason: "ambiguous_original_native_bubble" };
+      const anchorOutside = anchor !== null && (anchor < windowStart || anchor > attempt.terminal.at);
       const last = selected2.bubbles.at(-1);
       const terminalPresent = !anchorOutside && !!last && (anchor !== null ? last.at === anchor : selected2.providerIdle && !!envelopeText && last.text.startsWith(envelopeText.trim()));
       const finishNative = (bubbles, source2) => {
@@ -95662,7 +95702,11 @@ ${b.text}`).join("\n\n");
           LOG.warn("Assistant", `envelope_native_mismatch attempt=${attempt.attemptId} envelopeChars=${envelopeText.length} nativeChars=${bubbles.reduce((n, b) => n + b.chars, 0)}`);
         }
         const parts = partsOf(bubbles);
-        const evidenceRef = JSON.stringify([...stable, VERIFIED_WINDOW_REF + hash3(JSON.stringify(bubbles))]);
+        const evidenceRef = JSON.stringify([
+          ...stable,
+          VERIFIED_WINDOW_REF + hash3(JSON.stringify(bubbles)),
+          ...windowEnd > attempt.terminal.at ? [windowEnd] : []
+        ]);
         const body = renderNativeReplies(bubbles);
         store2.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: "final_native", parts });
         return { body, source: source2, completeness: "final_native", parts, provenance: provenanceFor(evidenceRef) };
@@ -95700,6 +95744,7 @@ ${b.text}`).join("\n\n");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
+        init_project_views();
         init_coordinator_registry();
         init_assistant_native_window();
         rec4 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
@@ -95935,8 +95980,9 @@ ${b.text}`).join("\n\n");
     function defangRelayBody(text4) {
       return text4.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[(\s*)(ADHDev)\b/gi, "[$1quoted $2").replace(/^\[(\s*)project\b/gim, "[$1quoted project");
     }
-    function compactRelayBody(text4, max = RELAY_BODY_MAX_CHARS) {
-      const body = String(text4 ?? "").replace(/\r\n?/g, "\n").trim();
+    function compactRelayBody(text4, max = RELAY_BODY_MAX_CHARS, preserveWhitespace = false) {
+      const normalized = String(text4 ?? "").replace(/\r\n?/g, "\n");
+      const body = preserveWhitespace ? normalized : normalized.trim();
       if (!body) return "(no coordinator message found \u2014 use project_read)";
       const points = Array.from(body);
       if (points.length <= max) return body;
@@ -95956,7 +96002,7 @@ ${b.text}`).join("\n\n");
       input.bodies.forEach((body, i) => {
         lines.push("");
         if (n > 1) lines.push(`[turn ${i + 1}/${n}]`);
-        lines.push(defangRelayBody(compactRelayBody(body)));
+        lines.push(defangRelayBody(compactRelayBody(body, RELAY_BODY_MAX_CHARS, input.preservePageWhitespace)));
       });
       lines.push("");
       const status = typeof input.statusLine === "string" ? input.statusLine.replace(/[\r\n]+/g, " ").trim() : "";
@@ -96503,7 +96549,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (!sessionId) return { ok: true, result: { coordinator: "none", messages: [] } };
       const chat = await ports.execute("read_chat", { targetSessionId: sessionId, limit: Math.max(tail * 4, 40) });
       if (!chat.success) return { ok: false, error: str10(chat.error) || "read_chat failed", coordinatorSessionId: sessionId };
-      return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, ...compactTranscriptTail(chat, tail) } };
+      return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, sourceComplete: verifiedNativeRead(chat, sessionId), ...compactTranscriptTail(chat, tail) } };
     }
     function expandPath3(raw) {
       if (raw === "~") return (0, import_os7.homedir)();
@@ -96684,10 +96730,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (p.remote) {
             const out = await callRemote(ports, { ...p, remote: p.remote }, "read", { tail, ...continuation ?? {} });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
+            ports.relay.recordProjectRead?.(remoteBody(out));
             return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: "relay" });
           }
           const r = await localProjectRead(ports, meshId, tail, continuation);
           if (!r.ok) return fail4("project_read_failed", r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
+          ports.relay.recordProjectRead?.(r.result);
           return wrap(p.slug, meshId, r.result);
         });
         PLAN_EXISTS_CODES = /* @__PURE__ */ new Set(["ambiguous_mesh", "duplicate_workspace", "duplicate_node"]);
@@ -96790,7 +96838,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const first = inventory.length ? Math.floor(opts.now / 6e4) * SESSION_CAP % inventory.length : 0;
       const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
       const out = [];
-      const scans = await Promise.all(sessions.map(async ({ sessionId, cliType }) => {
+      const scans = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
         if (!sessionId) return { sessionId, skipped: true };
         if (cliType === "grok-cli") return { sessionId, skipped: true };
         const attempts = opts.db.prepare(`
@@ -96802,7 +96850,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
-        return { sessionId, attempts, window };
+        return { sessionId, meshId, attempts, window };
       }));
       let complete = true;
       let successful = 0;
@@ -96812,17 +96860,22 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           complete = false;
           continue;
         }
-        const { sessionId, attempts, window } = scan;
+        const { sessionId, meshId, attempts, window } = scan;
         if (!window.complete || window.ambiguous) {
           complete = false;
           failed = true;
           continue;
         }
         successful += 1;
+        const reportIds = /* @__PURE__ */ new Map();
         for (const bubble of window.bubbles) {
           const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
           containing.sort((a, b) => b.accepted_at - a.accepted_at);
           const attempt = containing[0];
+          if (attempt && !reportIds.has(attempt.attempt_id)) reportIds.set(
+            attempt.attempt_id,
+            reportBodyId(renderNativeReplies(window.bubbles.filter((b) => b.at >= attempt.accepted_at && b.at <= (attempt.terminal_at ?? opts.now))))
+          );
           if (attempt?.relayed_at != null && (attempt.coverage_at === null || attempt.coverage_at <= since)) {
             complete = false;
             continue;
@@ -96830,6 +96883,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const open = !!attempt && (!TERMINAL2.has(attempt.state) || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
           out.push({
             sessionId,
+            meshId,
+            messageId: window.targets.get(bubble.at),
+            ...attempt ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {},
             messageAt: bubble.at,
             chars: Array.from(bubble.text).length,
             text: bubble.text,
@@ -96848,6 +96904,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var init_assistant_relay_audit = __esm2({
       "src/assistant/assistant-relay-audit.ts"() {
         "use strict";
+        init_assistant_native_window();
+        init_report_continuation();
         init_attempt_report_recovery();
         init_mesh_config();
         init_coordinator_registry();
@@ -96857,7 +96915,77 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         RELAY_AUDIT_RETENTION_MS = 24 * 60 * 6e4;
       }
     });
+    function buildReadableReplyGap(replies, project) {
+      const last = replies.at(-1);
+      const klass = !last.attemptId ? "no_attempt" : last.restartClosed ? "restart_closed" : "inside_attempt";
+      const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
+      return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
+    }
     var import_node_crypto24;
+    var receiptKey;
+    var gapGroup;
+    var RelayGapTracker;
+    var init_relay_gap_tracker = __esm2({
+      "src/assistant/relay-gap-tracker.ts"() {
+        "use strict";
+        import_node_crypto24 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto24.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        gapGroup = (reply) => receiptKey(
+          "gap",
+          reply.sessionId,
+          reply.attemptId ?? Math.floor(reply.messageAt / 6e4)
+        );
+        RelayGapTracker = class {
+          constructor(store2, now) {
+            this.store = store2;
+            this.now = now;
+          }
+          notified(reply, recipient) {
+            return this.store.readReceipt(receiptKey(recipient, gapGroup(reply)), this.now()) !== null;
+          }
+          markNotified(reply, recipient) {
+            this.store.writeReceipt(receiptKey(recipient, gapGroup(reply)), "1", this.now());
+          }
+          wasRead(reply, recipient) {
+            const through = Number(this.store.readReceipt(receiptKey("read-through", recipient, reply.sessionId), this.now()) ?? 0);
+            if (reply.messageAt < through) return true;
+            return !!reply.messageId && this.store.readReceipt(receiptKey("read", recipient, reply.sessionId, reply.messageId), this.now()) === "full" || !!reply.attemptId && !!reply.attemptReportId && this.store.readReceipt(receiptKey("read", recipient, reply.sessionId, reply.attemptId, reply.attemptReportId), this.now()) === "full";
+          }
+          /** Called only for successful project_read results returned to the assistant. */
+          recordRead(result, recipient) {
+            const session = result.coordinatorSessionId;
+            if (typeof session !== "string" || result.success === false || result.sourceComplete === false) return;
+            const pages = Array.isArray(result.messages) ? result.messages : [result];
+            for (const page of pages) {
+              const id4 = page.attemptId ?? page.messageId;
+              if (typeof id4 !== "string" || typeof page.text !== "string" || !Number.isSafeInteger(page.totalChars) || page.totalChars < 0 || page.sourceComplete === false) continue;
+              const key4 = page.attemptId ? receiptKey("read", recipient, session, id4, page.reportId) : receiptKey("read", recipient, session, id4);
+              const previous = this.store.readReceipt(key4, this.now());
+              const at = typeof page.at === "number" ? page.at : Date.parse(String(page.at ?? ""));
+              if (page.complete === true && (page.offset ?? 0) === 0 && page.text.length >= page.totalChars && result.sourceComplete === true && page.role === "assistant" && Number.isFinite(at)) {
+                const throughKey = receiptKey("read-through", recipient, session);
+                const oldThrough = Number(this.store.readReceipt(throughKey, this.now()) ?? 0);
+                this.store.writeReceipt(throughKey, String(Math.max(at, oldThrough)), this.now());
+              }
+              if (previous === "full") continue;
+              let old = { end: 0 };
+              try {
+                if (previous) old = JSON.parse(previous);
+              } catch {
+              }
+              const identity2 = page.reportId ?? id4;
+              if (old.reportId !== identity2) old = { end: 0, reportId: identity2 };
+              const offset = page.offset ?? 0;
+              if (!Number.isSafeInteger(offset) || offset < 0 || offset > old.end) continue;
+              const end = Math.max(old.end, Math.min(page.totalChars, Number.isSafeInteger(page.nextOffset) ? page.nextOffset : offset + page.text.length));
+              const full = end === page.totalChars && page.complete === true;
+              this.store.writeReceipt(key4, full ? "full" : JSON.stringify({ end, reportId: identity2 }), this.now());
+            }
+          }
+        };
+      }
+    });
+    var import_node_crypto25;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -96870,8 +96998,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var init_assistant_relay = __esm2({
       "src/assistant/assistant-relay.ts"() {
         "use strict";
+        init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto24 = require("crypto");
+        import_node_crypto25 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -96883,7 +97012,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto24.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto25.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -96899,6 +97028,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           constructor(ports) {
             this.ports = ports;
             this.clock = ports.clock ?? realClock;
+            this.gaps = new RelayGapTracker(ports.store, () => this.clock.now());
           }
           clock;
           batches = /* @__PURE__ */ new Map();
@@ -96911,8 +97041,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           progressSent = /* @__PURE__ */ new Set();
           stallSent = /* @__PURE__ */ new Set();
           lastRelayAt = /* @__PURE__ */ new Map();
-          /** Historical gaps already surfaced to each assistant session in this process. */
-          notifiedGaps = /* @__PURE__ */ new Map();
+          /** Durable read and notification acknowledgements, scoped to the recipient. */
+          gaps;
           modalOpen = /* @__PURE__ */ new Set();
           /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
           remote = /* @__PURE__ */ new Map();
@@ -97151,6 +97281,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.pruneCoverage(now);
             this.pruneBodyCache(now);
             this.auditReplies(now);
+            for (const item of this.queue) if (item.kind === "relay") for (const id4 of item.attemptIds) {
+              if (!this.hasCapturedBody(id4) && !this.attemptBodyCapture.has(id4)) {
+                const ref = this.restoredAttempts.get(id4);
+                this.captureAttemptBody(id4, ref?.meshId ?? item.meshId, ref?.sessionId ?? item.coordinatorSessionId);
+              }
+            }
             this.kick();
           }
           /**
@@ -97301,6 +97437,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               outcome
             });
             if (!fresh) return;
+            this.restoredAttempts.set(e.attemptId, { meshId, sessionId: e.sessionId });
             this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
             let b = this.batches.get(meshId);
             if (!b) {
@@ -97415,7 +97552,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               this.attemptBodyAt.delete(id4);
             }
           }
-          /** Native finals not covered by a delivered exact relay. One warn and one pointer per bubble. */
+          /** project_read acknowledges only the exact content actually returned. */
+          recordProjectRead(result, recipient = this.ports.assistantSessionId()) {
+            this.gaps.recordRead(result, recipient);
+          }
+          /** Native finals not covered by delivery/read receipts, grouped per attempt. */
           auditReplies(now) {
             const port = this.ports.auditCoordinatorReplies;
             if (!port || this.auditing) return;
@@ -97425,6 +97566,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             void Promise.resolve().then(() => this.bounded(port(since), 3e3, null)).then((replies) => {
               if (this.lifecycle !== lifecycle || !replies) return;
               for (const reply of replies ?? []) this.noteUncoveredReply(reply, now);
+              this.kick();
               if (replies.complete !== false) this.lastAuditAt = now;
             }).catch((e) => LOG.warn("Assistant", `relay gap audit failed: ${e?.message ?? e}`)).finally(() => {
               if (this.lifecycle === lifecycle) this.auditing = false;
@@ -97432,19 +97574,32 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
           noteUncoveredReply(reply, now) {
             const text4 = reply.text?.trim() ?? "";
-            if (!text4 || !reply.chars || reply.attemptOpen) return;
+            if (!text4 || !reply.chars || reply.attemptOpen || !reply.messageId || !this.ports.hasAssistant()) return;
             if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId) || [...this.batches.values()].some((b) => b.attemptIds.includes(reply.attemptId)) || this.queue.some((i) => i.kind === "relay" && i.attemptIds.includes(reply.attemptId)))) return;
+            if (!reply.attemptId && (this.queue.some((i) => i.kind === "relay" && i.coordinatorSessionId === reply.sessionId) || [...this.batches.values()].some((b) => b.coordinatorSessionId === reply.sessionId))) return;
             const key4 = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text4);
-            if (this.flaggedReplies.has(key4) || this.replyCovered(reply, text4)) return;
+            if (this.replyCovered(reply, text4) || this.gaps.wasRead(reply, this.ports.assistantSessionId()) || this.gaps.notified(reply, this.ports.assistantSessionId())) return;
             const klass = !reply.attemptId ? "no_attempt" : reply.restartClosed ? "restart_closed" : "inside_attempt";
-            this.flaggedReplies.set(key4, now);
-            this.pruneCoverage(now);
-            LOG.warn("Assistant", `relay gap class=${klass} session=${reply.sessionId} at=${reply.messageAt} chars=${reply.chars}`);
-            this.ports.onRelayGap?.(klass, now);
-            this.pushLine("relay", buildUncoveredReplyGap(klass, reply.messageAt));
+            if (!this.flaggedReplies.has(key4)) {
+              this.flaggedReplies.set(key4, now);
+              this.pruneCoverage(now);
+              LOG.warn("Assistant", `relay gap class=${klass} session=${reply.sessionId} at=${reply.messageAt} chars=${reply.chars}`);
+              this.ports.onRelayGap?.(klass, now);
+            }
+            const group = gapGroup(reply);
+            const queued = this.queue.find((i) => i.kind === "line" && i.messageId === `gap:${group}`);
+            if (queued?.kind === "line") {
+              if (!queued.gapReplies?.some((r) => r.messageId === reply.messageId)) queued.gapReplies?.push(reply);
+            } else this.queue.push({ kind: "line", source: "relay", text: "", messageId: `gap:${group}`, gapReplies: [reply] });
           }
           replyCovered(reply, text4) {
-            return this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text4));
+            if (this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text4))) return true;
+            if (reply.attemptId) return false;
+            const hash3 = replyHash(text4);
+            return [...this.renderedCoverage.keys()].some((key4) => {
+              const [session, , at, contentHash] = JSON.parse(key4);
+              return session === reply.sessionId && at === reply.messageAt && contentHash === hash3;
+            });
           }
           pruneCoverage(now) {
             for (const map2 of [this.renderedCoverage, this.flaggedReplies]) {
@@ -97459,7 +97614,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             this.pruneCoverage(now);
           }
-          renderedParts(attemptId, sessionId, body, meta) {
+          renderedParts(attemptId, sessionId, body, meta, renderedLimit = RELAY_BODY_MAX_CHARS) {
             const parts = meta.parts;
             if (!parts?.length) return null;
             const points = Array.from(body);
@@ -97480,7 +97635,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               offset += part.chars;
               renderedOffset += Array.from(text4.replace(/\r\n?/g, "\n")).length;
               if (Array.from(text4).length !== part.chars) return null;
-              if (renderedOffset <= RELAY_BODY_MAX_CHARS) replies.push({ messageAt: part.at, contentHash: replyHash(text4) });
+              if (renderedOffset <= renderedLimit) replies.push({ messageAt: part.at, contentHash: replyHash(text4) });
             }
             if (offset !== points.length) return null;
             return { attemptId, coordinatorSessionId: sessionId, replies };
@@ -97565,7 +97720,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
             const missed = this.missedReportsIncluding(taken, parts);
-            const gap = parts.some((p) => p.source === "review") ? "" : this.newGapLine(sid, missed, taken, parts);
+            const gap = !parts.some((p) => p.messageId.startsWith("gap:")) ? "" : this.newGapLine(sid, missed);
             const text4 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
             const outcome = await this.ports.submit(sid, { text: text4, messageId, policy: { mode: "queue" } });
             if (outcome.kind === "refused") return;
@@ -97581,7 +97736,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             await this.idle();
             const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
             const missed = this.missedReportsIncluding(taken, parts);
-            const gap = parts.some((p) => p.source === "review") ? "" : this.newGapLine(sessionId, missed, taken, parts);
+            const gap = !parts.some((p) => p.messageId.startsWith("gap:")) ? "" : this.newGapLine(sessionId, missed);
             if (gap && parts.length) parts.push({ text: gap, source: "relay", messageId: `gap:${this.clock.now()}:${++this.seq}` });
             this.commitTaken(taken, parts, sessionId);
             if (gap && parts.length) this.rememberGaps(sessionId, missed);
@@ -97610,6 +97765,30 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 taken.push(item);
                 continue;
               }
+              if (item.kind === "relay") {
+                await this.bodiesFor(item);
+                const pending = item.attemptIds.filter((id4) => !this.hasCapturedBody(id4));
+                if (pending.length === item.attemptIds.length) continue;
+                if (pending.length) {
+                  this.queue.push({ ...item, attemptIds: pending });
+                  item.attemptIds = item.attemptIds.filter((id4) => this.hasCapturedBody(id4));
+                }
+              }
+              if (item.kind === "line" && item.gapReplies) {
+                const readable = [];
+                for (const reply of item.gapReplies) {
+                  if (this.replyCovered(reply, reply.text) || this.gaps.wasRead(reply, sid) || this.gaps.notified(reply, sid)) continue;
+                  try {
+                    if (await this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2e3, false) && !this.gaps.wasRead(reply, sid) && !this.replyCovered(reply, reply.text)) readable.push(reply);
+                  } catch {
+                  }
+                }
+                if (!readable.length) {
+                  taken.push(item);
+                  continue;
+                }
+                item.text = buildReadableReplyGap(readable, this.ports.projectSlug(readable.at(-1).meshId ?? this.ports.coordinatorMeshOf(readable.at(-1).sessionId) ?? "") ?? "");
+              }
               const part = item.kind === "line" ? { text: item.text, source: item.source, messageId: item.messageId, ...item.meshId ? { meshId: item.meshId } : {} } : await this.renderRelay(item);
               const cost = codePoints(part.text) + 2;
               if (parts.length && size + cost > RELAY_DELIVERY_MAX_CHARS) break;
@@ -97627,31 +97806,36 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           commitTaken(taken, parts, sid, submitted = false) {
             this.queue = this.queue.filter((i) => !taken.includes(i));
             const at = this.clock.now();
+            const sent = new Set(parts.map((p) => p.messageId));
+            for (const item of taken) if (item.kind === "line" && item.gapReplies && sent.has(item.messageId)) {
+              this.gaps.markNotified(item.gapReplies[0], sid);
+            }
             if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
             if (sid) {
               for (const p of parts) if (p.source === "review") this.ports.onReviewDelivered?.(sid, p.messageId, at);
             }
             const relayItems = taken.filter((i) => i.kind === "relay");
-            const sentIds = new Set(parts.map((p) => p.messageId));
-            const rendered = relayItems.flatMap((i) => {
-              const last = i.attemptIds[i.attemptIds.length - 1];
-              return sentIds.has(relayMessageId(i.meshId, last)) ? i.attemptIds.filter((id4) => this.hasCapturedBody(id4)) : [];
-            });
-            const coverage = [];
+            const sentReports = new Map(parts.flatMap((p) => (p.reports ?? []).map((r) => [r.attemptId, r])));
+            const rendered = relayItems.flatMap((i) => i.attemptIds.filter((id4) => {
+              const report = sentReports.get(id4);
+              return report && report.offset + RELAY_BODY_MAX_CHARS >= report.totalPoints;
+            }));
+            const coverage = rendered.flatMap((id4) => sentReports.get(id4)?.coverage ?? []);
+            const settled = relayItems.flatMap((i) => i.attemptIds.filter((id4) => !sentReports.has(id4) || rendered.includes(id4)));
             for (const item of relayItems) {
-              for (const id4 of item.attemptIds) {
-                if (!rendered.includes(id4)) continue;
-                const meta = this.attemptMeta.get(id4);
-                const body = this.attemptBodies.get(id4);
-                if (meta?.completeness === "final_native" && body?.trim()) {
-                  const manifest = this.renderedParts(id4, this.restoredAttempts.get(id4)?.sessionId ?? item.coordinatorSessionId, body, meta);
-                  if (manifest) coverage.push(manifest);
-                }
+              const remaining = item.attemptIds.filter((id4) => sentReports.has(id4) && !rendered.includes(id4));
+              for (const id4 of remaining) {
+                const report = sentReports.get(id4);
+                this.ports.store.writeReceipt(receiptKey("relay-page", id4, report.reportId), String(report.offset + RELAY_BODY_MAX_CHARS), at);
+              }
+              if (remaining.length) {
+                this.queue.push({ ...item, attemptIds: remaining });
+                this.dirty = true;
               }
             }
-            this.ports.store.markDelivered(relayItems.flatMap((i) => i.attemptIds), at, rendered, coverage);
+            this.ports.store.markDelivered(settled, at, rendered, coverage);
             if (relayItems.length) this.loadDeliveredCoverage(at);
-            for (const id4 of relayItems.flatMap((i) => i.attemptIds)) {
+            for (const id4 of settled) {
               this.attemptBodyCapture.delete(id4);
               this.attemptBodies.delete(id4);
               this.attemptMeta.delete(id4);
@@ -97674,7 +97858,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /**
            * Coordinator turns that settled without their own body reaching the
            * assistant (batch-folded or aged out). Counts and project slugs only.
-           * Surfaced unprompted — on every relay envelope and in `project_status` —
+           * Surfaced with actionable gap pointers and in `project_status` —
            * because the 2026-10-10 losses were only ever found by the owner
            * suspecting them and asking.
            */
@@ -97685,23 +97869,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           missedReportsFor(meshId) {
             return this.unrenderedByMesh().get(meshId) ?? 0;
           }
-          newGapLine(sessionId, missed, taken, parts) {
-            const seen2 = this.notifiedGaps.get(sessionId ?? "");
-            const sentIds = new Set(parts.map((p) => p.messageId));
-            const newLosses = /* @__PURE__ */ new Set();
-            for (const item of taken) {
-              if (item.kind !== "relay") continue;
-              if (!sentIds.has(relayMessageId(item.meshId, item.attemptIds[item.attemptIds.length - 1])) || item.attemptIds.some((id4) => !this.hasCapturedBody(id4))) {
-                newLosses.add(this.ports.projectSlug(item.meshId) ?? item.meshId);
-              }
-            }
-            return buildMissedReportsLine(missed.filter((m) => newLosses.has(m.slug) || m.count > (seen2?.get(m.slug) ?? 0)));
+          newGapLine(sessionId, missed) {
+            return buildMissedReportsLine(missed.filter((m) => this.ports.store.readReceipt(receiptKey("counter", sessionId, m.slug), this.clock.now()) !== String(m.count)));
           }
           rememberGaps(sessionId, missed) {
-            const key4 = sessionId ?? "";
-            const seen2 = this.notifiedGaps.get(key4) ?? /* @__PURE__ */ new Map();
-            for (const m of missed) seen2.set(m.slug, m.count);
-            this.notifiedGaps.set(key4, seen2);
+            for (const m of missed) this.ports.store.writeReceipt(receiptKey("counter", sessionId, m.slug), String(m.count), this.clock.now());
           }
           /** Stored gaps (not yet counted again) per mesh. */
           unrenderedByMesh() {
@@ -97710,11 +97882,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /** Stored gaps plus the ones this pending delivery is about to create. */
           missedReportsIncluding(taken, parts) {
             const counts = this.unrenderedByMesh();
-            const sentIds = new Set(parts.map((p) => p.messageId));
+            const sentReports = new Set(parts.flatMap((p) => p.reports?.map((r) => r.attemptId) ?? []));
             for (const item of taken) {
               if (item.kind !== "relay") continue;
-              const last = item.attemptIds[item.attemptIds.length - 1];
-              const missed = sentIds.has(relayMessageId(item.meshId, last)) ? item.attemptIds.filter((id4) => !this.hasCapturedBody(id4)).length : item.attemptIds.length;
+              const missed = item.attemptIds.filter((id4) => !sentReports.has(id4)).length;
               if (missed > 0) counts.set(item.meshId, (counts.get(item.meshId) ?? 0) + missed);
             }
             return this.slugCounts(counts);
@@ -97745,12 +97916,20 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 report = this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id4) ?? Promise.resolve(null), RELAY_NATIVE_WAIT_MS, null));
               } catch {
               }
-              if (report?.body && this.lifecycle === lifecycle) this.rememberReport(id4, report);
+              if (report && this.lifecycle === lifecycle) this.rememberReport(id4, report);
             }
             return item.attemptIds.map((id4) => this.attemptBodies.get(id4) ?? null);
           }
+          pageOffset(id4, body) {
+            return Number(this.ports.store.readReceipt(receiptKey("relay-page", id4, reportBodyId(body)), this.clock.now()) ?? 0);
+          }
+          relayPartId(item, bodies) {
+            const base = relayMessageId(item.meshId, item.attemptIds.at(-1));
+            const offsets = item.attemptIds.map((id4, index) => this.pageOffset(id4, bodies[index] ?? ""));
+            const paged = offsets.some((n) => n > 0) || bodies.some((body) => codePoints(body ?? "") > RELAY_BODY_MAX_CHARS);
+            return paged ? `${base}:page:${receiptKey(bodies.map((body, index) => [reportBodyId(body ?? ""), offsets[index]]))}` : base;
+          }
           async renderRelay(item) {
-            const lastAttempt = item.attemptIds[item.attemptIds.length - 1];
             const remote = this.remote.get(item.meshId);
             const bodies = await this.bodiesFor(item);
             const unavailable2 = item.attemptIds.filter((id4, index) => this.restoredAttempts.has(id4) && !bodies[index]);
@@ -97765,7 +97944,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 reportId: body ? reportBodyId(body) : null,
                 totalChars: body?.length ?? null,
                 complete: source2 === "final_native",
-                source: source2
+                source: source2,
+                offset: body ? Array.from(body).slice(0, this.pageOffset(attemptId, body ?? "")).join("").length : 0,
+                nextOffset: body && this.pageOffset(attemptId, body ?? "") + RELAY_BODY_MAX_CHARS < codePoints(body) ? Array.from(body).slice(0, this.pageOffset(attemptId, body ?? "") + RELAY_BODY_MAX_CHARS).join("").length : null
               };
             });
             const references = `[ADHDev report references] ${JSON.stringify({ meshId: item.meshId, reports: refs, omittedReferences: Math.max(0, item.attemptIds.length - refs.length) })}
@@ -97773,7 +97954,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const envelope = buildRelayEnvelope({
               slug: this.ports.projectSlug(item.meshId) ?? item.meshId,
               outcome: item.outcome,
-              bodies,
+              preservePageWhitespace: true,
+              bodies: bodies.map((body, index) => body ? Array.from(body).slice(this.pageOffset(item.attemptIds[index], body), this.pageOffset(item.attemptIds[index], body) + RELAY_BODY_MAX_CHARS).join("") : body),
               statusLine: remote ? remote.statusLine : this.ports.meshStatusLine?.(item.meshId) ?? null,
               idle: item.idle
             });
@@ -97783,7 +97965,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const unverified = item.attemptIds.some((id4) => this.attemptMeta.get(id4)?.completeness === "envelope_unverified" && !!this.attemptBodies.get(id4)?.trim());
             const caution = unverified ? "[ADHDev relay] This report may be truncated \u2014 the native transcript was not captured. Use project_read with the report reference.\n" : "";
             const text4 = envelope.slice(0, headerEnd) + references + missing + caution + envelope.slice(headerEnd);
-            return { text: text4, source: "relay", messageId: relayMessageId(item.meshId, lastAttempt), meshId: item.meshId };
+            const reports = item.attemptIds.map((id4, index) => {
+              const body = bodies[index];
+              const offset = this.pageOffset(id4, body);
+              const totalPoints = codePoints(body);
+              const meta = this.attemptMeta.get(id4) ?? { body, completeness: "final_native" };
+              const coverage = offset + RELAY_BODY_MAX_CHARS >= totalPoints ? this.renderedParts(id4, this.restoredAttempts.get(id4)?.sessionId ?? item.coordinatorSessionId, body, meta, Infinity) : null;
+              return { attemptId: id4, reportId: reportBodyId(body), offset, totalPoints, ...coverage ? { coverage } : {} };
+            });
+            return { text: text4, source: "relay", messageId: this.relayPartId(item, bodies), meshId: item.meshId, reports };
           }
         };
       }
@@ -98211,6 +98401,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             execute: (cmd, args) => components.router.execute(cmd, args, "ipc", { inProcess: true })
           });
         },
+        canReadCoordinatorReply: async (reply) => {
+          if (!reply.messageId) return false;
+          const ports = await projectPorts();
+          if (!reply.meshId || ports.coordinatorSessionAuthorized?.(reply.meshId, reply.sessionId) === false || !ports.listMeshes().some((mesh) => mesh.id === reply.meshId && ports.isHostedHere(mesh))) return false;
+          const page = await continueReport(ports.execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
+          return page.success === true && page.totalChars === reply.text.length && typeof page.text === "string" && reply.text.startsWith(page.text);
+        },
         onRelayGap: (_klass, at) => metrics2?.bump("relay_gaps", "", at),
         readCoordinatorTail: async (sessionId) => {
           const chat = await components.router.execute("read_chat", { targetSessionId: sessionId, limit: 40 }, "ipc", { inProcess: true });
@@ -98449,6 +98646,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         },
         isThreadOpen: (meshId) => store2.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
+        recordProjectRead: (result) => relay.recordProjectRead(result),
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics2?.bump("skill_attaches", meshId, Date.now(), count),
         remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor)
@@ -98498,6 +98696,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var init_assistant_runtime = __esm2({
       "src/assistant/assistant-runtime.ts"() {
         "use strict";
+        init_report_continuation();
         init_assistant();
         init_terminal_watch();
         init_terminal_watch_runtime();
@@ -147500,7 +147699,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs99 = __toESM2(require("fs"));
     var path90 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto25 = require("crypto");
+    var import_node_crypto26 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -147541,7 +147740,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto25.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto26.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -151775,7 +151974,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs98 = __toESM2(require("fs"));
-    var import_node_crypto26 = require("crypto");
+    var import_node_crypto27 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -151802,7 +152001,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto26.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto27.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -153939,7 +154138,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process17 = require("child_process");
-    var import_node_crypto27 = require("crypto");
+    var import_node_crypto28 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -153949,7 +154148,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto27.randomUUID)();
+      generation = (0, import_node_crypto28.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -154010,7 +154209,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto27.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto28.randomUUID)()}`;
         return new Promise((resolve44, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -154046,7 +154245,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto28 = require("crypto");
+    var import_node_crypto29 = require("crypto");
     init_dist();
     function record2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -154177,7 +154376,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto28.randomUUID)(),
+          promptId: (0, import_node_crypto29.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -155816,7 +156015,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto29 = require("crypto");
+    var import_node_crypto30 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -156014,7 +156213,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto29.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto30.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -172432,7 +172631,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto30 = require("crypto");
+    var import_node_crypto31 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -172441,7 +172640,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto30.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto31.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -172451,7 +172650,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto30.randomUUID)();
+          const id4 = (0, import_node_crypto31.randomUUID)();
           active.add(id4);
           try {
             return await run3();

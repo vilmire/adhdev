@@ -1,6 +1,6 @@
 import { remoteProjectHandlers, remoteProjectSpecs, attachRemoteProject } from './remote-project-attach.js';
 import { readTaskReportPage } from '../../assistant/task-report-continuation.js';
-import { recoverAttemptReport } from '../../assistant/attempt-report-recovery.js';
+import { recoverAttemptReport, verifiedNativeRead } from '../../assistant/attempt-report-recovery.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { environmentInventory, observedInventoryMachine } from '../../assistant/environment-inventory.js';
 /**
@@ -390,7 +390,7 @@ export async function localProjectRead(ports: AssistantProjectPorts, meshId: str
     if (!sessionId) return { ok: true, result: { coordinator: 'none', messages: [] } };
     const chat = await ports.execute('read_chat', { targetSessionId: sessionId, limit: Math.max(tail * 4, 40) });
     if (!chat.success) return { ok: false, error: str(chat.error) || 'read_chat failed', coordinatorSessionId: sessionId };
-    return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, ...compactTranscriptTail(chat, tail) } };
+    return { ok: true, result: { coordinatorSessionId: sessionId, live: !!live, sourceComplete: verifiedNativeRead(chat, sessionId), ...compactTranscriptTail(chat, tail) } };
 }
 
 const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args) => {

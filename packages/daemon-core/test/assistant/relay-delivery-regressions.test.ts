@@ -254,3 +254,19 @@ it('suppresses fully paged attempt reads only for the same content-bound report'
     expect(await h.relay.pullPending(null)).toHaveLength(1);
     h.relay.stop();
 });
+
+it('suppresses replies older than a fully read native tail, while an unverified read cannot advance the fence', async () => {
+    const tail = { coordinatorSessionId: 'coord', sourceComplete: true, messages: [{ role: 'assistant',
+        messageId: 'c'.repeat(64), at: new Date(NOW).toISOString(), text: 'Later finalized native reply.',
+        totalChars: 'Later finalized native reply.'.length, complete: true }] };
+    const h = harness({ body: 'unused', completeness: 'final_native' });
+    h.relay.recordProjectRead(tail, null);
+    h.audit.mockResolvedValue([missing(1)]); h.relay.tick(); await micro();
+    expect(await h.relay.pullPending(null)).toEqual([]);
+    h.relay.stop();
+    const unverified = harness({ body: 'unused', completeness: 'final_native' });
+    unverified.relay.recordProjectRead({ ...tail, sourceComplete: false }, null);
+    unverified.audit.mockResolvedValue([missing(1)]); unverified.relay.tick(); await micro();
+    expect(await unverified.relay.pullPending(null)).toHaveLength(1);
+    unverified.relay.stop();
+});

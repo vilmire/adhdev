@@ -17,6 +17,8 @@ export class RelayGapTracker {
         this.store.writeReceipt(receiptKey(recipient, gapGroup(reply)), '1', this.now());
     }
     wasRead(reply: AuditedCoordinatorReply, recipient: string | null): boolean {
+        const through = Number(this.store.readReceipt(receiptKey('read-through', recipient, reply.sessionId), this.now()) ?? 0);
+        if (reply.messageAt < through) return true;
         return (!!reply.messageId && this.store.readReceipt(receiptKey('read', recipient, reply.sessionId, reply.messageId), this.now()) === 'full')
             || (!!reply.attemptId && !!reply.attemptReportId
                 && this.store.readReceipt(receiptKey('read', recipient, reply.sessionId, reply.attemptId, reply.attemptReportId), this.now()) === 'full');
@@ -35,7 +37,16 @@ export class RelayGapTracker {
                 ? receiptKey('read', recipient, session, id, page.reportId)
                 : receiptKey('read', recipient, session, id);
             const previous = this.store.readReceipt(key, this.now());
+            // Reading a finalized native tail past a reply acknowledges older
+            // notices too. PTY/unverified or partial pages cannot move this fence.
+            const at = typeof page.at === 'number' ? page.at : Date.parse(String(page.at ?? ''));
+            if (page.complete === true && (page.offset ?? 0) === 0 && page.text.length >= page.totalChars && result.sourceComplete === true && page.role === 'assistant' && Number.isFinite(at)) {
+                const throughKey = receiptKey('read-through', recipient, session);
+                const oldThrough = Number(this.store.readReceipt(throughKey, this.now()) ?? 0);
+                this.store.writeReceipt(throughKey, String(Math.max(at, oldThrough)), this.now());
+            }
             if (previous === 'full') continue;
+
             // Keep only the contiguous prefix: reading the last page alone does
             // not acknowledge an unread middle. A changed reportId resets it.
             let old: { end: number; reportId?: string } = { end: 0 };
@@ -47,6 +58,7 @@ export class RelayGapTracker {
             const end = Math.max(old.end, Math.min(page.totalChars, (Number.isSafeInteger(page.nextOffset) ? page.nextOffset : offset + page.text.length)));
             const full = end === page.totalChars && page.complete === true;
             this.store.writeReceipt(key, full ? 'full' : JSON.stringify({ end, reportId: identity }), this.now());
+
         }
     }
 }
