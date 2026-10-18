@@ -1,3 +1,4 @@
+import { recordQueueTaskHold } from './mesh-queue-hold-store.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
  * Queue auto-launch subsystem — extracted from mesh-queue-assignment.ts (pure move,
@@ -188,6 +189,7 @@ function markAutoLaunch(meshId: string, taskId: string, args: {
     dispatchFailedInTransport?: boolean;
 }) {
     const reason = args.reason || args.error;
+    if (args.status === 'skipped' && reason) recordQueueTaskHold(meshId, taskId, reason, args.nodeId);
     const difficultyFloorSkip = args.status === 'skipped' && isDifficultyFloorWaitReason(reason);
     if (difficultyFloorSkip) {
         handleDifficultyFloorSkip({ meshId, taskId, reason: reason!, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId() });
@@ -301,6 +303,7 @@ function driveAwaitClaimGuard(components: DaemonComponents, meshId: string, mesh
             // here: recordTaskAutoLaunch overwrites task.autoLaunch wholesale, which would
             // erase the very `completed` record (status + sessionId + updatedAt) this guard
             // reads on the next tick, reopening the duplicate-launch hole it closes.
+            recordQueueTaskHold(meshId, task.id, 'awaiting_launched_session_claim', alNodeId, true);
             recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'awaiting_launched_session_claim', nodeId: alNodeId, sessionId: alSessionId });
             return 'skip';
         }
@@ -1098,6 +1101,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
         // task.autoLaunch wholesale and clobber the in-flight racer's record.
         const taskLaunchKey = `${meshId}::${task.id}`;
         if (autoLaunchTaskInProgress.has(taskLaunchKey)) {
+            recordQueueTaskHold(meshId, task.id, 'auto_launch_task_in_progress', undefined, true);
             recordAutoLaunchEvent(meshId, { phase: 'skipped', taskId: task.id, reason: 'auto_launch_task_in_progress' });
             continue;
         }

@@ -1,3 +1,4 @@
+import { queueTaskHoldView } from '../../mesh/mesh-queue-hold.js';
 /**
  * RF-ROUTER HIGH family — mesh aggregate status + review inbox.
  *
@@ -336,7 +337,8 @@ export const meshStatusHandlers: Record<string, HighFamilyHandler> = {
                     // (base64 image parts) for their 30-day lifetime; the dashboard status
                     // surface must never echo that data (it pushed mesh_status past the P2P
                     // chunk ceiling). Summarize at the read, before anything downstream sees it.
-                    const queue = getQueue(meshId).map(summarizeQueueEntryInputForView);
+                    const rawQueue = getQueue(meshId);
+                    const queue = rawQueue.map(task => ({ ...summarizeQueueEntryInputForView(task), ...(task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {}) }));
                     const queueSummary = getMeshQueueStats(meshId);
 
                     // Scheduling-runtime projection — the load-balancer's live view (tie-break

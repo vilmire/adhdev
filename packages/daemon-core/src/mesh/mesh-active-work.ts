@@ -1,3 +1,4 @@
+import { queueTaskHoldView, type MeshQueueHoldView } from './mesh-queue-hold.js';
 import { readProviderDecision, isActionableProviderApproval } from '@adhdev/mesh-shared';
 import type { ProviderApproval } from '@adhdev/mesh-shared';
 import type { MeshLedgerEntry } from './mesh-ledger.js';
@@ -47,6 +48,7 @@ function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { statu
 }
 
 export interface MeshActiveWorkRecord {
+    hold?: MeshQueueHoldView;
     taskId: string;
     source: MeshActiveWorkSource;
     status: MeshActiveWorkStatus;
@@ -78,6 +80,8 @@ export interface MeshActiveWorkRecord {
 }
 
 export interface MeshActiveWorkSummary {
+    heldCount: number;
+    heldReasons: Record<string, number>;
     totalActiveCount: number;
     queueActiveCount: number;
     directActiveCount: number;
@@ -764,10 +768,15 @@ export function buildMeshActiveWorkSummary(activeWork: MeshActiveWorkRecord[]): 
         sourceCounts[item.source] += 1;
         statusCounts[item.status] += 1;
     }
+    const held = activeWork.filter(item => item.status === 'pending' && item.hold);
+    const heldReasons: Record<string, number> = {};
+    for (const item of held) heldReasons[item.hold!.reason] = (heldReasons[item.hold!.reason] || 0) + 1;
     const approvals = collectPendingApprovals(activeWork);
     const staleDirectCount = activeWork.filter(item => item.source === 'direct' && item.staleReason).length;
     const staleDirectUnacknowledgedCount = activeWork.filter(item => item.source === 'direct' && item.staleDispatchUnacknowledged).length;
     return {
+        heldCount: held.length,
+        heldReasons,
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
         directActiveCount: sourceCounts.direct,
@@ -843,6 +852,7 @@ export function buildMeshActiveWork(opts: BuildMeshActiveWorkOptions): { activeW
         if (turnOverlay) queueStatus = turnOverlay.status;
         records.push({
             taskId: task.id,
+            ...(task.hold ? { hold: queueTaskHoldView(task, opts.queue || [], now) } : {}),
             source: 'queue',
             status: queueStatus,
             providerApproval: queueLive.providerApproval,

@@ -100,6 +100,9 @@ function queueAssignmentStaleReason(task: any, liveness: QueueLivenessIndex): st
 }
 
 export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
+    const held = queue.filter(task => task.status === 'pending' && task.hold);
+    const heldReasons: Record<string, number> = {};
+    for (const task of held) heldReasons[task.hold.reason] = (heldReasons[task.hold.reason] || 0) + 1;
     const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
     let staleAssigned = 0;
     for (const task of queue) {
@@ -111,6 +114,8 @@ export function buildQueueStatusSummary(queue: any[]): Record<string, unknown> {
     }
     const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
     return {
+        heldCount: held.length,
+        heldReasons,
         totalCount: queue.length,
         activeCount: counts.pending + liveAssigned,
         historicalCount: counts.completed + counts.failed + counts.cancelled,
@@ -157,6 +162,8 @@ export function buildQueueStatusSummaryFromCounts(
     }
     const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
     return {
+        heldCount: (!allowed || allowed.has('pending')) ? activeRows.filter(task => task.status === 'pending' && task.hold).length : 0,
+        heldReasons: (!allowed || allowed.has('pending')) ? buildQueueStatusSummary(activeRows).heldReasons : {},
         totalCount,
         activeCount: counts.pending + liveAssigned,
         historicalCount: counts.completed + counts.failed + counts.cancelled,
@@ -336,6 +343,7 @@ export function compactQueueRow(task: any): any {
     if (!task || typeof task !== 'object') return task;
     const slim: any = {};
     for (const [k, v] of Object.entries(task)) {
+        if (k === 'holdNoticeId') continue;
         if (k === 'message') slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
         else slim[k] = elideLargeNestedValue(k, v);
     }

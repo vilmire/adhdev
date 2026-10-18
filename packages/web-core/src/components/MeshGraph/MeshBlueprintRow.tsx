@@ -17,6 +17,7 @@
  * The "plan" disclosure appears only when the row can actually draw a plan
  * (queue dependency edges) — see useBlueprintGroups.
  */
+import { QueueTaskHold } from './QueueTaskHold'
 import { useTranslation } from 'react-i18next'
 import type { MeshGraphTheme } from './meshGraphTheme'
 import { formatTaskCardTime, taskCardTimeSource } from './taskDagViewModel'
@@ -125,6 +126,7 @@ export function MeshBlueprintTaskRowView({ row, meshTheme, nowMs, nodeLabel, pin
                 )}
                 {onTogglePlan && <PlanToggle expanded={planExpanded} onToggle={onTogglePlan} meshTheme={meshTheme} />}
             </div>
+            <QueueTaskHold task={task} nowMs={nowMs} />
             {/* Badge row — only rendered when it has something to say. */}
             {(row.awaitingApproval || row.awaitingChoice || row.dependencyFailureCount > 0
                 || row.waitingOn.length > 0 || row.missingDeps.length > 0 || pinnedSlot || task.difficulty

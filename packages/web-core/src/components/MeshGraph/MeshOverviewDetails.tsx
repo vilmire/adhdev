@@ -3,6 +3,7 @@
  * mission, ledger entry, queue task (with its routing decision) and session —
  * opened from any card and navigable as a stack.
  */
+import { QueueTaskHold } from './QueueTaskHold'
 import type { DetailSelection, MeshCommandSeam } from './MeshOverviewCards';
 import { ledgerKindLabel, queueTaskSortRank, useRecentList, StatusBadge, missionStatusLabel, missionStatusTone, StatTile, formatDuration, ListRow, queueTaskStatusLabel, queueTaskTone, difficultyLabel, difficultyTone, relativeTime, MoreToggle, ModalRow, payloadSummary, ledgerKindTone, sessionStatusTone, type MeshMissionDisplay } from './meshOverviewPrimitives';
 import { ledgerEntryNodeLabel } from './meshLedgerEvents';
@@ -647,6 +648,7 @@ function QueueDetail({ meshTheme, task, resolveNodeLabel, missionTitles, onOpenM
                         }
                     />
                 )}
+                <QueueTaskHold task={task} />
                 {task.cancelReason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelCancelReason')} value={task.cancelReason} />}
                 {task.requeueReason && <ModalRow meshTheme={meshTheme} label={t('mesh.overview.detailLabelRequeueReason')} value={task.requeueReason} />}
             </div>

@@ -434,6 +434,7 @@ export interface RepoMeshQueueTask {
     requeueReason?: string;
     requeuedAt?: string;
     requeueCount?: number;
+    hold?: import('./mesh/mesh-queue-hold.js').MeshQueueHoldView;
     autoLaunch?: {
         status: 'skipped' | 'started' | 'failed' | 'completed';
         reason?: string;

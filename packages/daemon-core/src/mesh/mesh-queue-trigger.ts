@@ -1,3 +1,4 @@
+import { notifyHeldQueueTasks } from './mesh-queue-hold-store.js';
 // triggerMeshQueue — one drain pass over a mesh's queue: claim for every idle
 // session (local + remote), then the auto-launch scan, reporting before/after
 // counts. Split out of mesh-queue-assignment.ts (re-exported there).
@@ -336,6 +337,7 @@ export async function triggerMeshQueue(components: DaemonComponents, meshId: str
         return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs);
     });
 
+    notifyHeldQueueTasks(meshId);
     return {
         success: true,
         meshId,

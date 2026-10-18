@@ -1,3 +1,4 @@
+import { queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
 /**
  * The queue claim transaction of MeshRuntimeStore: one session atomically claims
  * the next pending task it may run — the dependency gate, notBefore, target pins,
@@ -378,7 +379,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // whose failure collapsed into a bare `return null` — nine predicates, one silent
         // exit. Order and short-circuit semantics are preserved exactly; this only records
         // WHICH gate said no.
-        const selected = selectClaimCandidate<MeshWorkQueueEntry>(candidates, [
+        const gates: Array<{ reason: MeshClaimRefusalReason; test: (candidate: MeshWorkQueueEntry) => boolean }> = [
             { reason: 'required_tags_unsatisfied', test: c => nodeSatisfiesRequiredTags(c.requiredTags, capabilityTags) },
             { reason: 'dependencies_unsatisfied', test: dependenciesSatisfied },
             { reason: 'not_before_delayed', test: notBeforeReady },
@@ -395,7 +396,20 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             { reason: 'owned_paths_conflict', test: ownedPathsAllows },
             { reason: 'dirty_workspace', test: nodeNotDirty },
             { reason: 'node_stale_behind_upstream', test: nodeNotStaleBehind },
-        ]);
+        ];
+        let holdBlockers: MeshWorkQueueEntry[] | undefined;
+        const selected = selectClaimCandidate<MeshWorkQueueEntry>(candidates, gates.map(gate => ({
+            reason: gate.reason,
+            test: candidate => {
+                if (gate.test(candidate)) return true;
+                holdBlockers ??= (host.assignedRowsMeshWide(meshId)).map(row => JSON.parse(row.payload) as MeshWorkQueueEntry);
+                const context = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
+                if (gate.reason === 'dependencies_unsatisfied') context.blockingTaskIds = (candidate.dependsOn || []).filter(id => depStatus.get(id) !== 'completed');
+                setQueueTaskHold(candidate, gate.reason, context);
+                host.db.prepare('UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = \'pending\'').run(JSON.stringify(candidate), candidate.id, meshId);
+                return false;
+            },
+        })));
         if (!selected.entry) {
             if (!candidates.length) return refuse('no_pending_candidates');
             // H1: for an owned_paths_conflict refusal, name the specific conflicting
@@ -436,6 +450,8 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
 
         const now = new Date().toISOString();
         entry.status = 'assigned';
+        delete entry.hold;
+        delete entry.holdNoticeId;
         entry.assignedNodeId = nodeId;
         entry.assignedSessionId = sessionId;
         if (providerType) entry.assignedProviderType = providerType;

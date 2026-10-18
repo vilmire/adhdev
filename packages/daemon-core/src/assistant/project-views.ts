@@ -275,10 +275,15 @@ export function compactProjectStatus(view: Record<string, unknown>, extras: Proj
         .filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS)
         .sort((a, b) => a.last - b.last)
         .map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 86_400_000) }));
+    const activeWork = rec(rec(view.activeWork)?.activeWork);
+    const heldTasks = (Array.isArray(activeWork?.activeWork) ? activeWork.activeWork : []).filter((task: any) => task.status === 'pending' && task.hold);
     return {
         machines,
         machinesOnline: machines.filter((m) => m.online).length,
         queue: extras.queue,
+        heldTasks: heldTasks.map((task: any) => ({ taskId: task.taskId, title: task.taskTitle, hold: task.hold })),
+        heldCount: rec(activeWork?.summary)?.heldCount ?? heldTasks.length,
+        heldReasons: rec(activeWork?.summary)?.heldReasons ?? {},
         activeMissions,
         failedTasks: extras.queue?.failed ?? null,
         pendingApprovals: extras.pendingApprovals,

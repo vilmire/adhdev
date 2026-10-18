@@ -248,6 +248,9 @@ export interface MeshWorkQueueEntry {
      * time to finish booting rather than racing it again on the very next tick.
      */
     dispatchFailureCount?: number;
+    hold?: import('./mesh-queue-hold.js').MeshQueueHold;
+    /** Durable once-per-hold notice marker, independent of updatedAt. */
+    holdNoticeId?: string;
     /** Last automatic queue session spin-up attempt, for mesh_view_queue/debug visibility. */
     autoLaunch?: {
         status: 'skipped' | 'started' | 'failed' | 'completed';

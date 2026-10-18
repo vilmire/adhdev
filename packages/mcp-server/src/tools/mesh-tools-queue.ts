@@ -1,3 +1,4 @@
+import { broadOwnedPathsWarning } from './mesh-owned-paths-warning.js';
 import { withProviderPinWarning, requestedProviderPins } from './mesh-provider-pin-advisory.js';
 // Mesh tool implementations — queue domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
@@ -441,6 +442,9 @@ export async function meshEnqueueTask(
         const worktreeAdvisory = buildUntargetedCodeChangeWorktreeAdvisory({
             taskMode, readonly, requiredTags, targetNodeId, preferWorktree,
         }) ?? {};
+        const ownershipWarning = broadOwnedPathsWarning(task, [])
+            ? broadOwnedPathsWarning(task, await readQueueFromDaemon(ctx, { statuses: ['pending', 'assigned'] }).catch(() => [])) ?? {}
+            : {};
         const enqueueEcho = {
             ...(task.priority ? { priority: task.priority } : {}),
             ...(task.notBefore ? { notBefore: task.notBefore } : {}),
@@ -469,6 +473,7 @@ export async function meshEnqueueTask(
             requiredTags: task.requiredTags,
             ...buildProviderPinAdvisory(requiredTags),
             ...enqueueEcho,
+            ...ownershipWarning,
             ...(targetNodeId ? { targetNodeId } : {}),
             ...(preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {}),
             ...duplicateWarning,
@@ -662,6 +667,9 @@ export async function meshEnqueueBatch(
         });
     }
     const tasks = committed.tasks as unknown as MeshWorkQueueEntry[];
+    const ownershipQueue = tasks.some(task => broadOwnedPathsWarning(task, []))
+        ? await readQueueFromDaemon(ctx, { statuses: ['pending', 'assigned'] }).catch(() => tasks)
+        : [];
 
     // ── Post-insert (best-effort, never undoes the committed batch): mission
     //    warnings, routing advisories, queue drain. ──
@@ -701,6 +709,7 @@ export async function meshEnqueueBatch(
             status: task.status,
             taskMode: task.taskMode,
             ...buildProviderPinAdvisory(normalizedEntries[i].requiredTags),
+            ...(broadOwnedPathsWarning(task, ownershipQueue) ?? {}),
             ...(Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {}),
             ...(task.targetNodeId ? { targetNodeId: task.targetNodeId } : {}),
             ...(task.priority ? { priority: task.priority } : {}),
