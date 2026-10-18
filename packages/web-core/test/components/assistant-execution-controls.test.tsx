@@ -36,7 +36,9 @@ async function choose(label = 'Yes') {
     const input = [...container.querySelectorAll('label')].find(el => el.textContent === label)!.querySelector('input')!
     await act(async () => input.click())
 }
-const sendButton = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Send response to assistant')!
+// The send button is hidden while there is no request to answer (2026-10-18
+// panel restyle); hidden counts as "cannot send", the property these tests check.
+const sendButton = () => [...container.querySelectorAll('button')].find(b => b.textContent === 'Send response to assistant') ?? ({ disabled: true } as HTMLButtonElement)
 const labels = () => [...container.querySelectorAll('label')].map(el => el.textContent)
 
 it('separates real session/machine/request and provider options, puts the narrow option first without selecting it', async () => {

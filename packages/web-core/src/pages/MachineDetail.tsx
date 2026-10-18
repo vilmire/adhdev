@@ -141,9 +141,13 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
         void loadMachineRuntime(machineId, { minFreshMs: 30_000 }).catch(() => {})
     }, [activeTab, loadMachineRuntime, machineEntry, machineId])
 
+    // The Providers tab shows the plan-quota chips too, so it stays subscribed:
+    // machine.runtime now carries the quota cache, and a one-off load only ran
+    // while quota was absent (2026-10-18: an expired-token reading stuck there).
+    const runtimeLive = activeTab === 'overview' || activeTab === 'providers'
     useDaemonMachineRuntimeSubscription(
-        machineId && activeTab === 'overview' ? [machineId] : [],
-        { enabled: activeTab === 'overview', intervalMs: DEFAULT_MACHINE_RUNTIME_REFRESH_MS },
+        machineId && runtimeLive ? [machineId] : [],
+        { enabled: runtimeLive, intervalMs: DEFAULT_MACHINE_RUNTIME_REFRESH_MS },
     )
 
     const handleBack = () => {

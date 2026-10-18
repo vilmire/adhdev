@@ -38,6 +38,26 @@ export interface StartAssistantButtonProps {
 }
 
 const MENU_WIDTH = 280
+/** Below this much room under the button, the menu opens upward when there is more room above. */
+const MENU_MIN_ROOM = 320
+const MENU_GAP = 6
+const MENU_EDGE = 8
+
+type MenuPosition = { left: number; maxHeight: number } & ({ top: number } | { bottom: number })
+
+/**
+ * Where the menu goes. It is sized to the room actually left on screen (the
+ * visual viewport on phones) and flips upward when there is more room above,
+ * so the footer — model / thinking and Start — is always reachable
+ * (2026-10-18: on a phone the menu ran past the bottom edge).
+ */
+export function placeAssistantMenu(rect: { top: number; bottom: number; left: number }, viewport: { width: number; height: number }): MenuPosition {
+    const left = Math.max(MENU_EDGE, Math.min(rect.left, viewport.width - MENU_WIDTH - MENU_EDGE))
+    const below = viewport.height - rect.bottom - MENU_GAP - MENU_EDGE
+    const above = rect.top - MENU_GAP - MENU_EDGE
+    if (below >= MENU_MIN_ROOM || below >= above) return { top: rect.bottom + MENU_GAP, left, maxHeight: Math.max(160, below) }
+    return { bottom: viewport.height - rect.top + MENU_GAP, left, maxHeight: Math.max(160, above) }
+}
 
 export default function StartAssistantButton({
     onStart,
@@ -51,7 +71,7 @@ export default function StartAssistantButton({
     const { t } = useTranslation('common')
     const [open, setOpen] = useState(false)
     const [selected, setSelected] = useState<AssistantLaunchTarget | null>(null)
-    const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
+    const [position, setPosition] = useState<MenuPosition | null>(null)
     const toggleRef = useRef<HTMLButtonElement | null>(null)
     const menuRef = useRef<HTMLDivElement | null>(null)
     const showMachines = machines.length > 1
@@ -83,8 +103,8 @@ export default function StartAssistantButton({
         if (!open || typeof window === 'undefined') { setPosition(null); return }
         const rect = toggleRef.current?.getBoundingClientRect()
         if (!rect) return
-        const left = Math.min(Math.max(8, rect.left), window.innerWidth - MENU_WIDTH - 8)
-        setPosition({ top: rect.bottom + 6, left: Math.max(8, left) })
+        const vv = window.visualViewport
+        setPosition(placeAssistantMenu(rect, { width: window.innerWidth, height: vv?.height ?? window.innerHeight }))
     }, [open])
 
     useEffect(() => {
@@ -173,8 +193,8 @@ export default function StartAssistantButton({
                     aria-label={t('dashboard.assistantLaunch.chooseCli')}
                     onKeyDown={onMenuKeyDown}
                     data-testid="dashboard-start-assistant-options"
-                    className="fixed z-[var(--z-popover)] flex max-h-[70vh] flex-col rounded-xl border border-border-default bg-bg-card p-1 shadow-xl backdrop-blur-xl"
-                    style={position ? { top: position.top, left: position.left, width: MENU_WIDTH } : { top: -9999, left: -9999, width: MENU_WIDTH, visibility: 'hidden' }}
+                    className="fixed z-[var(--z-popover)] flex flex-col rounded-xl border border-border-default bg-bg-card p-1 shadow-xl backdrop-blur-xl"
+                    style={position ? { ...position, width: MENU_WIDTH } : { top: -9999, left: -9999, width: MENU_WIDTH, visibility: 'hidden' }}
                 >
                     <div className="flex min-h-0 flex-col overflow-y-auto">
                     {machines.map(machine => (
@@ -242,7 +262,7 @@ export default function StartAssistantButton({
                     ))}
                     </div>
                     {selected && selectedCli && (
-                        <div className="mt-1 flex flex-col gap-1.5 border-t border-border-default px-1.5 pb-1 pt-2" data-testid="assistant-launch-options">
+                        <div className="mt-1 flex shrink-0 flex-col gap-1.5 border-t border-border-default px-1.5 pb-1 pt-2" data-testid="assistant-launch-options">
                             {(selectedCli.modelOptions.length > 0 || selectedCli.thinkingLevelOptions.length > 0) && (
                                 <div className="flex gap-1.5">
                                     {selectedCli.modelOptions.length > 0 && (

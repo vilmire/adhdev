@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { isActionableProviderApproval } from '@adhdev/mesh-shared'
 import { useDaemons } from '../../compat'
 import { approvalButtonTone } from './ApprovalBanner'
+import { IconX } from '../Icons'
 
 type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<any>
 type Choice = { meshId: string; targetSessionId: string; action: 'approve' | 'reject'; button: string; modalIdentity: string; label: string; message: string
@@ -124,7 +125,6 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
         } catch { if (currentScope.current === requestScope && actionSequence.current === seq) setNotice(t('assistantExecution.directionUnauthorized')) }
         finally { if (currentScope.current === requestScope && actionSequence.current === seq) setBusy(false) }
     }
-    const buttonClass = 'rounded border border-border-default px-3 py-2 text-left disabled:opacity-50'
     // The switch (executionEnabled) and whether this assistant can act at all
     // (executionAvailable: only a verified, tool-restricted Claude Code
     // assistant) are different facts. "On" is shown only when both hold, so the
@@ -144,34 +144,40 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
     if (view?.restriction === 'prompt_only') return null
     return <div className="assistant-execution-controls relative text-xs">
         <button type="button" className="chat-activity-toggle assistant-execution-toggle" aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(!open); if (!open) void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(stateKey) })}</button>
-        {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="assistant-execution-panel pointer-events-auto absolute right-0 z-20 w-96 max-w-[90vw] max-h-[70vh] overflow-y-auto rounded border border-border-default bg-bg-card p-3 shadow-xl space-y-3">
-            <p>{t(summaryKey)}</p>
-            <div className="flex flex-wrap gap-2">
-                <button type="button" className={buttonClass} disabled={!view || busy} onClick={() => void toggle()}>{t(view?.executionEnabled ? 'assistantExecution.turnOff' : 'assistantExecution.turnOn')}</button>
-                {!cannotAct && <button type="button" className={buttonClass} disabled={busy} onClick={() => void refresh()}>{t('assistantExecution.refreshPermissions')}</button>}
+        {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="assistant-staged-panel assistant-execution-panel pointer-events-auto absolute right-0 top-full z-20 mt-1.5 flex max-h-[min(60vh,520px)] w-[min(400px,calc(100vw-24px))] flex-col overflow-y-auto rounded-lg border border-border-default bg-bg-card text-xs text-text-secondary shadow-xl backdrop-blur-xl">
+            <div className="sticky top-0 z-[1] flex items-center gap-2 border-b border-border-subtle bg-bg-card px-3 py-2">
+                <span className="font-semibold text-text-primary">{t('assistantExecution.controlsLabel')}</span>
+                <button type="button" className="btn btn-icon ml-auto" onClick={() => setOpen(false)} aria-label={t('assistantStaged.close')}><IconX size={14} /></button>
             </div>
-            {!cannotAct && <>
-            <p className="font-semibold">{t('assistantExecution.currentPermission')}</p>
-            {requests.size === 0 && <p>{t('assistantExecution.noRequests')}</p>}
-            {[...requests.values()].map(request => <fieldset key={request.key} className="min-w-0 space-y-2 rounded border border-border-default p-3" disabled={!view?.executionAvailable || busy}>
-                <legend className="px-1 font-semibold break-words">{request.title}</legend>
-                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
-                    <dt>{t('assistantExecution.session')}</dt><dd className="break-all">{request.session}</dd>
-                    <dt>{t('assistantExecution.machine')}</dt><dd className="break-words">{request.machine}</dd>
-                    <dt>{t('assistantExecution.request')}</dt><dd className="whitespace-pre-wrap break-words">{request.message || t('assistantExecution.noDescription')}</dd>
-                </dl>
-                <div role="group" aria-label={t('assistantExecution.selectTargetAndButton')} className="flex flex-col gap-2">
-                    {options.filter(option => option.request.key === request.key).map(option => <label key={option.key} className={`${buttonClass} flex items-start gap-2 cursor-pointer`}>
-                        <input type="radio" name={`assistant-permission-${sessionId}`} value={option.key} checked={selected === option.key} onChange={() => setSelected(option.key)} />
-                        <span className="min-w-0 break-words">{option.choice.button}</span>
-                    </label>)}
+            <div className="flex flex-col gap-3 p-3">
+                <p className="m-0 leading-relaxed">{t(summaryKey)}</p>
+                <div className="flex flex-wrap gap-1.5">
+                    <button type="button" className="btn btn-quiet assistant-panel-action" disabled={!view || busy} onClick={() => void toggle()}>{t(view?.executionEnabled ? 'assistantExecution.turnOff' : 'assistantExecution.turnOn')}</button>
+                    {!cannotAct && <button type="button" className="btn btn-quiet assistant-panel-action" disabled={busy} onClick={() => void refresh()}>{t('assistantExecution.refreshPermissions')}</button>}
                 </div>
-            </fieldset>)}
-            {selection && approvalButtonTone(selection.choice.button.toLowerCase()) === 'always' && <p>{t('approval.alwaysAllowWarning')}</p>}
-            <button type="button" className={buttonClass} disabled={!view?.executionAvailable || !selection || busy} onClick={() => void direct()}>{t('assistantExecution.sendDirection')}</button>
-            {requests.size > 0 && <p>{t('assistantExecution.chatInstructions')}</p>}
-            </>}
-            {notice && <p role="status">{notice}</p>}
+                {!cannotAct && <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
+                    <p className="m-0 font-semibold text-text-primary">{t('assistantExecution.currentPermission')}</p>
+                    {requests.size === 0 && <p className="m-0 text-text-muted">{t('assistantExecution.noRequests')}</p>}
+                    {[...requests.values()].map(request => <fieldset key={request.key} className="m-0 min-w-0 space-y-2 rounded-lg border border-border-subtle p-2.5" disabled={!view?.executionAvailable || busy}>
+                        <legend className="px-1 font-semibold text-text-primary break-words">{request.title}</legend>
+                        <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-text-muted">
+                            <dt>{t('assistantExecution.session')}</dt><dd className="m-0 break-all text-text-secondary">{request.session}</dd>
+                            <dt>{t('assistantExecution.machine')}</dt><dd className="m-0 break-words text-text-secondary">{request.machine}</dd>
+                            <dt>{t('assistantExecution.request')}</dt><dd className="m-0 whitespace-pre-wrap break-words text-text-secondary">{request.message || t('assistantExecution.noDescription')}</dd>
+                        </dl>
+                        <div role="group" aria-label={t('assistantExecution.selectTargetAndButton')} className="flex flex-col gap-2">
+                            {options.filter(option => option.request.key === request.key).map(option => <label key={option.key} className="assistant-panel-choice">
+                                <input type="radio" className="mt-0.5" name={`assistant-permission-${sessionId}`} value={option.key} checked={selected === option.key} onChange={() => setSelected(option.key)} />
+                                <span className="min-w-0 break-words text-text-primary">{option.choice.button}</span>
+                            </label>)}
+                        </div>
+                    </fieldset>)}
+                    {selection && approvalButtonTone(selection.choice.button.toLowerCase()) === 'always' && <p className="m-0 text-status-warning">{t('approval.alwaysAllowWarning')}</p>}
+                    {requests.size > 0 && <button type="button" className="btn btn-primary btn-sm self-start" disabled={!view?.executionAvailable || !selection || busy} onClick={() => void direct()}>{t('assistantExecution.sendDirection')}</button>}
+                    {requests.size > 0 && <p className="m-0 text-2xs text-text-muted">{t('assistantExecution.chatInstructions')}</p>}
+                </div>}
+                {notice && <p role="status" className="m-0 text-text-muted">{notice}</p>}
+            </div>
         </div>}
     </div>
 }

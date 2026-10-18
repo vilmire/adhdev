@@ -1894,6 +1894,30 @@
         background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     }
 
+    /* Assistant panels (permissions, followed projects, held writes) share one
+       look: a quiet outlined action, a radio row that highlights on hover. */
+    .btn.assistant-panel-action {
+        height: 32px;
+        padding: 0 12px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .assistant-panel-choice {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+    .assistant-panel-choice:hover {
+        background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+    }
+
     .chat-notice-group-close {
         border: 0;
         background: transparent;
@@ -4822,17 +4846,9 @@
         margin-top: 6px;
     }
 
-    .assistant-session-controls .assistant-execution-panel > button {
-        margin-right: 8px;
-        padding: 8px 12px;
-        border: 1px solid var(--border-default);
-        border-radius: 6px;
-    }
-
-    .assistant-session-controls [role="dialog"] button,
-    .assistant-session-controls [role="dialog"] select {
-        min-height: 44px;
-        min-width: 44px;
+    /* Touch-friendly but not boxy: the panel's own buttons are 36px. */
+    .assistant-session-controls [role="dialog"] .btn {
+        min-height: 36px;
     }
 }
 
