@@ -1,5 +1,13 @@
 {
     "controls": {
+        "labels": {
+            "model": "モデル",
+            "mode": "モード",
+            "new": "新規",
+            "effort": "推論レベル",
+            "thinking": "思考レベル",
+            "usage": "使用量"
+        },
         "runFailed": "{{label}} を実行できませんでした",
         "updateFailed": "{{label}} を更新できませんでした",
         "loadOptionsFailed": "{{label}} のオプションを読み込めませんでした"

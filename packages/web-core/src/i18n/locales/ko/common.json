@@ -1,5 +1,13 @@
 {
     "controls": {
+        "labels": {
+            "model": "모델",
+            "mode": "모드",
+            "new": "새 대화",
+            "effort": "노력 수준",
+            "thinking": "생각 수준",
+            "usage": "사용량"
+        },
         "runFailed": "{{label}}을(를) 실행하지 못했습니다",
         "updateFailed": "{{label}}을(를) 변경하지 못했습니다",
         "loadOptionsFailed": "{{label}} 옵션을 불러오지 못했습니다"

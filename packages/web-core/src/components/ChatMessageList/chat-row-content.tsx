@@ -15,6 +15,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkAlert from 'remark-github-blockquote-alert';
 import remarkBreaks from 'remark-breaks';
+import remarkCjkStrong from './remark-cjk-strong';
 import type { Pluggable, PluggableList } from 'unified';
 import { IconClipboard, IconCheck } from '../Icons';
 import {
@@ -91,7 +92,7 @@ function ChatCodeBlock(props: ComponentPropsWithoutRef<'pre'>) {
 const chatMarkdownComponents = { pre: ChatCodeBlock };
 // `singleTilde:false` keeps numeric ranges (`4~11%`) literal instead of strikethrough.
 const gfmRemarkPlugin: Pluggable = [remarkGfm, { singleTilde: false }];
-const chatRemarkPlugins: PluggableList = [gfmRemarkPlugin, remarkAlert, remarkBreaks];
+const chatRemarkPlugins: PluggableList = [gfmRemarkPlugin, remarkAlert, remarkBreaks, remarkCjkStrong];
 
 /**
  * Content-keyed text body. ReactMarkdown re-parses on every render and the list

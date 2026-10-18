@@ -1,5 +1,13 @@
 {
     "controls": {
+        "labels": {
+            "model": "Model",
+            "mode": "Mode",
+            "new": "New",
+            "effort": "Effort",
+            "thinking": "Thinking",
+            "usage": "Usage"
+        },
         "runFailed": "Couldn't run {{label}}",
         "updateFailed": "Couldn't update {{label}}",
         "loadOptionsFailed": "Couldn't load {{label}} options"

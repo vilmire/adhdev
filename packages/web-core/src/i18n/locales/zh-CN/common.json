@@ -1,5 +1,13 @@
 {
     "controls": {
+        "labels": {
+            "model": "模型",
+            "mode": "模式",
+            "new": "新建",
+            "effort": "推理强度",
+            "thinking": "思考深度",
+            "usage": "用量"
+        },
         "runFailed": "无法运行 {{label}}",
         "updateFailed": "无法更新 {{label}}",
         "loadOptionsFailed": "无法加载 {{label}} 选项"

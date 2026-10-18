@@ -47,8 +47,11 @@ export function getConversationPreviewText(
     // transcript authority ChatPane renders, keeping inbox and chat in sync.
     const preview = getConversationLastMessagePreview(conversation, snapshot)
     if (preview) return preview
+    // The assistant's session title is its working folder ("assistant"), which
+    // reads as noise under the "비서" name; an empty assistant says it is empty.
+    if (isAssistantConversation(conversation)) return i18next.t('chatPane.noMessagesYet', { ns: 'common' })
     if (conversation.title) return conversation.title
-    return getConversationMetaText(conversation) || 'No messages yet'
+    return getConversationMetaText(conversation) || i18next.t('chatPane.noMessagesYet', { ns: 'common' })
 }
 
 export function getConversationStatusHint(
@@ -56,13 +59,13 @@ export function getConversationStatusHint(
     options?: { requiresAction?: boolean },
 ): string | null {
     const { isReconnecting, isConnecting, isErrored } = getConversationViewStates(conversation)
-    if (isReconnecting) return 'Reconnecting…'
-    if (isConnecting) return 'Connecting…'
-    if (options?.requiresAction) return 'Action needed'
+    if (isReconnecting) return i18next.t('mobileInbox.reconnectingItem', { ns: 'common' })
+    if (isConnecting) return i18next.t('mobileInbox.connectingItem', { ns: 'common' })
+    if (options?.requiresAction) return i18next.t('mobileInbox.actionNeeded', { ns: 'common' })
     // G8-10: surfaced only after the higher-priority connection/action hints
     // above — a session that's both reconnecting AND errored shows the more
     // actionable "Reconnecting…" first.
-    if (isErrored) return 'Needs attention'
+    if (isErrored) return i18next.t('mobileInbox.needsAttention', { ns: 'common' })
     return null
 }
 
@@ -70,7 +73,7 @@ export function getMachineConversationCardSubtitle(
     conversation: ActiveConversation,
     options?: { timestampLabel?: string | null },
 ): string {
-    const parts = ['Chat', ...getConversationMetaParts(conversation)]
+    const parts = [i18next.t('settings.appearance.chatLabel', { ns: 'common' }), ...getConversationMetaParts(conversation)]
     if (options?.timestampLabel) parts.push(options.timestampLabel)
     return parts.filter(Boolean).join(' · ')
 }

@@ -1,5 +1,13 @@
 {
     "controls": {
+        "labels": {
+            "model": "Modelo",
+            "mode": "Modo",
+            "new": "Nuevo",
+            "effort": "Esfuerzo",
+            "thinking": "Razonamiento",
+            "usage": "Uso"
+        },
         "runFailed": "No se pudo ejecutar {{label}}",
         "updateFailed": "No se pudo actualizar {{label}}",
         "loadOptionsFailed": "No se pudieron cargar las opciones de {{label}}"

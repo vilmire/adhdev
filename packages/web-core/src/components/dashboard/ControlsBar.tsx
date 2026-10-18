@@ -285,6 +285,15 @@ export interface ControlsBarProps {
     coordinatorHint?: { meshCoordinatorDaemonId?: string };
 }
 
+const CONTROL_LABEL_KEYS: Record<string, string> = {
+    Model: 'controls.labels.model',
+    Mode: 'controls.labels.mode',
+    New: 'controls.labels.new',
+    Effort: 'controls.labels.effort',
+    Thinking: 'controls.labels.thinking',
+    Usage: 'controls.labels.usage',
+};
+
 const AGENT_COLORS: Record<string, string> = {
     'cline': '#22d3ee', 'roo-code': '#a78bfa', 'cursor': '#60a5fa',
     'claude-code-vscode': '#ea580c', 'codex': '#10b981',
@@ -394,10 +403,15 @@ export default function ControlsBar({
         return null;
     }
 
+    // Provider specs label their controls in English ("Model", "Mode", …); the
+    // common ones are shown in the user's language, anything else as written.
     const barControls = getVisibleBarControls(controls, {
         hostIdeType,
         providerType,
         currentStatus,
+    }).map(ctrl => {
+        const key = CONTROL_LABEL_KEYS[ctrl.label];
+        return key ? { ...ctrl, label: t(key) } : ctrl;
     });
 
     if (barControls.length === 0) {

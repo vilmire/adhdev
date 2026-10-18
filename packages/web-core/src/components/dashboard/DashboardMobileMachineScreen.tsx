@@ -133,8 +133,8 @@ export default function DashboardMobileMachineScreen({
                     workspaceOptions: options,
                     selectedWorkspaceKey: selectedKey,
                     details: [
-                        { label: 'Mode', value: formatKindLabel(session.kind) },
-                        ...(session.providerType ? [{ label: 'Provider', value: session.providerType }] : []),
+                        { label: t('controls.labels.mode'), value: formatKindLabel(session.kind) },
+                        ...(session.providerType ? [{ label: t('sessionInfo.rowProvider'), value: session.providerType }] : []),
                     ],
                 }, async () => {
                     const selectedOption = options.find(option => option.key === launcher.launchConfirmWorkspaceKeyRef.current)

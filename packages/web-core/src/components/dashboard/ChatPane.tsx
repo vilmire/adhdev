@@ -791,7 +791,10 @@ export default function ChatPane({
                 sessionId={activeConv.sessionId}
                 hostIdeType={activeConv.hostIdeType}
                 providerType={controlsContext.providerType}
-                displayLabel={controlsContext.displayLabel}
+                // The chip names the CLI; the English role suffix the conversation
+                // data carries ("(Assistant)", "(Coordinator)", "(Mesh Node)") is
+                // shown elsewhere in the user's language.
+                displayLabel={controlsContext.displayLabel?.replace(/\s*\((?:Assistant|Coordinator|Mesh Node)\)$/, '')}
                 controls={controlsContext.targetEntry?.providerControls}
                 controlValues={controlsContext.targetEntry?.controlValues}
                 currentStatus={activeConv.status}
