@@ -1634,6 +1634,7 @@
         "summaryOn": "已开启。收到权限请求时，助手会用你在此选择的回复代为处理。",
         "summaryOff": "已关闭。开启后，助手可以代你回复权限请求。",
         "summaryUnsupported": "已开启，但当前助手无法使用。代为处理权限请求仅支持用 Claude Code 启动的助手。",
+        "promptOnlyNote": "此 CLI 仅由系统提示词限制（无工具锁）。每个回复仍只在你选择后发送。",
         "controlsLabel": "助手权限请求",
         "available": "助手可以代为处理您选择的回复。",
         "closed": "助手目前无法代为处理权限请求。",

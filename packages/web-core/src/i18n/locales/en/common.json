@@ -1634,6 +1634,7 @@
         "summaryOn": "On. When a permission request comes in, the assistant answers it with the response you pick here.",
         "summaryOff": "Off. Turn it on to let the assistant answer permission requests for you.",
         "summaryUnsupported": "On, but this assistant cannot use it. Answering permission requests works only for an assistant started with Claude Code.",
+        "promptOnlyNote": "This CLI is restricted by its system prompt only (no tool lock). Each response still goes out only when you pick it.",
         "controlsLabel": "Assistant permissions",
         "available": "The assistant can act on the response you choose.",
         "closed": "The assistant cannot act on permission requests right now.",

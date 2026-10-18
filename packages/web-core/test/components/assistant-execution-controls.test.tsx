@@ -227,3 +227,10 @@ it('says "not supported" when an enforced assistant cannot act right now', async
     expect(container.textContent).toContain('On, but this assistant cannot use it')
     expect(container.querySelector('fieldset')).toBeNull()
 })
+
+it('a prompt-only CLI that can act shows the panel with a prompt-only note (2026-10-18)', async () => {
+    const send = vi.fn(async () => state({ executionAvailable: true, restriction: 'prompt_only' }))
+    await open(send)
+    expect(container.textContent).toContain('restricted by its system prompt only')
+    expect(container.querySelector('fieldset')).toBeTruthy()
+})

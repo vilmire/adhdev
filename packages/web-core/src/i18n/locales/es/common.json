@@ -1637,6 +1637,7 @@
         "summaryOn": "Activado. Cuando llegue una solicitud de permiso, el asistente la responderá con la opción que elijas aquí.",
         "summaryOff": "Desactivado. Actívalo para que el asistente responda por ti las solicitudes de permiso.",
         "summaryUnsupported": "Activado, pero este asistente no puede usarlo. Responder solicitudes de permiso solo funciona con un asistente iniciado con Claude Code.",
+        "promptOnlyNote": "Esta CLI solo está limitada por su prompt de sistema (sin bloqueo de herramientas). Cada respuesta se envía solo cuando la eliges.",
         "controlsLabel": "Permisos del asistente",
         "available": "El asistente puede responder con la opción que elijas.",
         "closed": "El asistente no puede responder a solicitudes de permiso en este momento.",

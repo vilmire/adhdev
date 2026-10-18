@@ -138,10 +138,11 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
     // Hide the request form only once the daemon has said this assistant cannot
     // act; while an answer is loading it stays (disabled) so a refresh does not flicker.
     const cannotAct = !!view && !view.executionAvailable
-    // This assistant's CLI can never answer permission requests (only a
-    // tool-restricted Claude Code assistant can): the control would only ever
-    // say "not supported", so it is not shown at all.
-    if (view?.restriction === 'prompt_only') return null
+    // An older daemon allows only a tool-locked Claude Code assistant to act and
+    // reports every other CLI as prompt_only + unavailable: nothing to show there.
+    // A current daemon lets any CLI act once switched on (owner decision 2026-10-18).
+    if (view?.restriction === 'prompt_only' && !view.executionAvailable) return null
+    const promptOnly = view?.restriction === 'prompt_only'
     return <div className="assistant-execution-controls relative text-xs">
         <button type="button" className="chat-activity-toggle assistant-execution-toggle" aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(!open); if (!open) void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(stateKey) })}</button>
         {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="assistant-staged-panel assistant-execution-panel pointer-events-auto absolute right-0 top-full z-20 mt-1.5 flex max-h-[min(60vh,520px)] w-[min(400px,calc(100vw-24px))] flex-col overflow-y-auto rounded-lg border border-border-default bg-bg-card text-xs text-text-secondary shadow-xl backdrop-blur-xl">
@@ -151,6 +152,7 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
             </div>
             <div className="flex flex-col gap-3 p-3">
                 <p className="m-0 leading-relaxed">{t(summaryKey)}</p>
+                {promptOnly && <p className="m-0 text-2xs text-text-muted">{t('assistantExecution.promptOnlyNote')}</p>}
                 <div className="flex flex-wrap gap-1.5">
                     <button type="button" className="btn btn-quiet assistant-panel-action" disabled={!view || busy} onClick={() => void toggle()}>{t(view?.executionEnabled ? 'assistantExecution.turnOff' : 'assistantExecution.turnOn')}</button>
                     {!cannotAct && <button type="button" className="btn btn-quiet assistant-panel-action" disabled={busy} onClick={() => void refresh()}>{t('assistantExecution.refreshPermissions')}</button>}
