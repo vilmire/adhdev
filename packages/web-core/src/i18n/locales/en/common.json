@@ -1568,6 +1568,7 @@
         "waitingToSend": "Waiting to send — the agent is still working.",
         "deliveryFailed": "Not sent — rejected before writing.",
         "deliveryUncertain": "Delivery unconfirmed — do not resend.",
+        "retryMayDuplicate": "May already have been delivered — resending could duplicate it.",
         "waitingToSendAria": "Waiting to send",
         "notDelivered": "Not delivered — the agent never received this.",
         "notDeliveredAria": "Not delivered",

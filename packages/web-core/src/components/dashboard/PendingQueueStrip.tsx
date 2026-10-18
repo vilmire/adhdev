@@ -177,6 +177,14 @@ function PendingQueueStripImpl({
                                 ↻
                             </button>
                         )}
+                        {onRetry && entry.stale === true && entry.deliveryUncertain && !failed && (
+                            // Uncertain = the original write may have landed; Retry
+                            // re-sends under a new id. Inline text (not a tooltip) so
+                            // touch devices see it too.
+                            <span className="text-2xs opacity-70" data-testid="pending-queue-retry-hint">
+                                {t('chat.retryMayDuplicate')}
+                            </span>
+                        )}
                         {entry.deliveryUncertain && !failed && <button
                             type="button" className="chat-pending-queue-cancel"
                             aria-label={t('common.close')} title={t('chat.deliveryUncertain')}

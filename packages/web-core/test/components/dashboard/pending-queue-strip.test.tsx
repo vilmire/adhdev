@@ -480,3 +480,27 @@ it('durably persists uncertain dismissal across unmount/remount, hides non-queue
     act(() => { retryBtn!.click(); });
     expect(onRetry).toHaveBeenCalledWith('failed-1');
 });
+
+it('shows the may-duplicate hint next to Retry on uncertain rows only', () => {
+    const onRetry = vi.fn();
+    const hint = () => container.querySelectorAll('[data-testid="pending-queue-retry-hint"]');
+    const retry = () => container.querySelectorAll('[data-testid="pending-queue-retry"]');
+
+    // uncertain + stale: Retry AND the hint
+    render({ onRetry, entries: [{ ...parked('hint-uncertain', 'maybe delivered'), deliveryUncertain: true, stale: true }] });
+    expect(retry()).toHaveLength(1);
+    expect(hint()).toHaveLength(1);
+    expect(hint()[0].textContent).not.toBe('');
+    expect(hint()[0].textContent).not.toBe('chat.retryMayDuplicate');
+
+    // plain failed (write known not to have happened): Retry, no hint
+    render({ onRetry, entries: [{ ...parked('hint-failed', 'never written', false), sendFailed: true, deliveryUncertain: true }] });
+    expect(retry()).toHaveLength(1);
+    expect(hint()).toHaveLength(0);
+
+    // a normal queued row: neither Retry nor the hint
+    render({ onRetry, entries: [parked('hint-queued', 'still held')] });
+    expect(retry()).toHaveLength(0);
+    expect(hint()).toHaveLength(0);
+});
+

@@ -1571,6 +1571,7 @@
         "waitingToSend": "Esperando para enviar — el agente todavía está trabajando.",
         "deliveryFailed": "No enviado — rechazado antes de escribir.",
         "deliveryUncertain": "Entrega sin confirmar — no reenviar.",
+        "retryMayDuplicate": "Puede que ya se haya entregado — reenviar podría duplicarlo.",
         "waitingToSendAria": "Esperando para enviar",
         "notDelivered": "No entregado — el agente nunca recibió este mensaje.",
         "notDeliveredAria": "No entregado",

@@ -1568,6 +1568,7 @@
         "waitingToSend": "等待发送 —— 代理仍在处理中。",
         "deliveryFailed": "未发送 —— 写入前被拒绝。",
         "deliveryUncertain": "送达未确认 —— 请勿重发。",
+        "retryMayDuplicate": "可能已送达，重发可能造成重复。",
         "waitingToSendAria": "等待发送",
         "notDelivered": "未送达 —— 代理从未收到这条消息。",
         "notDeliveredAria": "未送达",

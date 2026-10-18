@@ -1568,6 +1568,7 @@
         "waitingToSend": "전송 대기 중 — 에이전트가 아직 작업 중입니다.",
         "deliveryFailed": "전송되지 않음 — 기록 전에 거부되었습니다.",
         "deliveryUncertain": "전달 미확인 — 다시 보내지 마세요.",
+        "retryMayDuplicate": "이미 전달됐을 수 있어 중복될 수 있음",
         "waitingToSendAria": "전송 대기 중",
         "notDelivered": "전달되지 않음 — 에이전트가 이 메시지를 받지 못했습니다.",
         "notDeliveredAria": "전달되지 않음",

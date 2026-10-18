@@ -1568,6 +1568,7 @@
         "waitingToSend": "送信待ち — エージェントはまだ作業中です。",
         "deliveryFailed": "未送信 — 書き込み前に拒否されました。",
         "deliveryUncertain": "配信未確認 — 再送しないでください。",
+        "retryMayDuplicate": "すでに配信されている可能性があり、重複するおそれがあります。",
         "waitingToSendAria": "送信待ち",
         "notDelivered": "未配信 — エージェントはこのメッセージを受け取っていません。",
         "notDeliveredAria": "未配信",
