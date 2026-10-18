@@ -1581,6 +1581,8 @@
         "agent": "エージェント",
         "tool": "ツール",
         "toolResult": "結果",
+        "relayReportMissing": "コーディネーターの報告本文を取得できませんでした。アシスタントがプロジェクトの記録で確認します。",
+        "relayReportTruncated": "この報告は一部のみの可能性があります。",
         "noticeGroup": "通知 {{count}} 件",
         "noticeGroupCollapse": "通知 {{count}} 件を閉じる",
         "notice": {

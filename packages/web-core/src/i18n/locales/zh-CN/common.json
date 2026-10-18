@@ -1581,6 +1581,8 @@
         "agent": "代理",
         "tool": "工具",
         "toolResult": "结果",
+        "relayReportMissing": "未能获取协调者的报告原文，助手会改为查看项目记录。",
+        "relayReportTruncated": "此报告可能不完整。",
         "noticeGroup": "{{count}} 条通知",
         "noticeGroupCollapse": "收起 {{count}} 条通知",
         "notice": {

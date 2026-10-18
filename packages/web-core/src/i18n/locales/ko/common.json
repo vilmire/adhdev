@@ -1581,6 +1581,8 @@
         "agent": "에이전트",
         "tool": "도구",
         "toolResult": "결과",
+        "relayReportMissing": "코디네이터 보고 원문을 가져오지 못했어요. 비서가 프로젝트 기록에서 확인합니다.",
+        "relayReportTruncated": "보고가 일부만 전달됐을 수 있어요.",
         "noticeGroup": "알림 {{count}}건",
         "noticeGroupCollapse": "알림 {{count}}건 접기",
         "notice": {

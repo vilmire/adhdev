@@ -1581,6 +1581,8 @@
         "agent": "Agent",
         "tool": "Tool",
         "toolResult": "Result",
+        "relayReportMissing": "The coordinator's report did not come through; the assistant checks the project record instead.",
+        "relayReportTruncated": "This report may be incomplete.",
         "noticeGroup": "{{count}} notices",
         "noticeGroupCollapse": "Hide {{count}} notices",
         "notice": {

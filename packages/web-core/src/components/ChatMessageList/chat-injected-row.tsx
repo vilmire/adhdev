@@ -35,6 +35,11 @@ function RelayCard({ segment, timestamp, open, onToggle }: { segment: InjectedSe
                 {segment.idle && <span className="chat-relay-badge">{t('chat.relayIdle')}</span>}
                 <RowMeta className="chat-bubble-header-end" copyText={segment.body || null} timestamp={timestamp} />
             </div>
+            {(segment.reportMissing || segment.reportTruncated) && (
+                <div className="chat-relay-note" data-relay-note={segment.reportMissing ? 'missing' : 'truncated'}>
+                    {t(segment.reportMissing ? 'chat.relayReportMissing' : 'chat.relayReportTruncated')}
+                </div>
+            )}
             {open ? (
                 <div className="chat-relay-body chat-markdown">
                     <ChatMarkdownBody content={segment.body} renderAsPreformatted={false} renderAsMarkdown={likelyNeedsMarkdownRender(segment.body)} />

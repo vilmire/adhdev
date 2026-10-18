@@ -191,6 +191,36 @@ function renderRow(message: Record<string, unknown>) {
     }))
 }
 
+describe('relay card hides the daemon bookkeeping lines (2026-10-18)', () => {
+    const withLines = (body: string | null, extra: string[]) => {
+        const env = buildRelayEnvelope({ slug: 'api', outcome: 'completed', bodies: [body], idle: false })
+        const headerEnd = env.indexOf('\n') + 1
+        return env.slice(0, headerEnd) + extra.map(l => l + '\n').join('') + env.slice(headerEnd)
+    }
+    const refs = '[ADHDev report references] {"meshId":"m","reports":[]}'
+
+    it('the preview is the report, not the references JSON', () => {
+        const seg = detectInjectedText(withLines('Shipped the fix.', [refs]))!.segments[0]!
+        expect(seg.preview).toBe('Shipped the fix.')
+        expect(seg.body).not.toContain('report references')
+        expect(seg.reportMissing).toBeUndefined()
+    })
+
+    it('a report that did not come through is flagged, and the card says so', () => {
+        const text = withLines(null, [refs, '[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: a1.'])
+        const seg = detectInjectedText(text)!.segments[0]!
+        expect(seg.reportMissing).toBe(true)
+        expect(seg.body).not.toContain('no coordinator message found')
+        expect(renderRow({ role: 'user', content: text })).toContain('data-relay-note="missing"')
+    })
+
+    it('a possibly cut report is flagged as truncated', () => {
+        const seg = detectInjectedText(withLines('Partial.', [refs, '[ADHDev relay] This report may be truncated — the native transcript was not captured. Use project_read with the report reference.']))!.segments[0]!
+        expect(seg.reportTruncated).toBe(true)
+        expect(seg.body).toBe('Partial.')
+    })
+})
+
 describe('daemon notices are summarised in the user language', () => {
     const summaryOf = (text: string) => summarizeNotice(detectInjectedText(text)!.segments[0]!)
     it('every daemon builder maps to its own key (a daemon wording change fails here)', () => {

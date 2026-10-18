@@ -1918,6 +1918,12 @@
         background: color-mix(in srgb, var(--text-primary) 5%, transparent);
     }
 
+    .chat-relay-note {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--status-warning, #d97706);
+    }
+
     .chat-notice-group-close {
         border: 0;
         background: transparent;

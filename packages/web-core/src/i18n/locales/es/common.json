@@ -1584,6 +1584,8 @@
         "agent": "Agente",
         "tool": "Herramienta",
         "toolResult": "Resultado",
+        "relayReportMissing": "No llegó el informe del coordinador; el asistente revisa el registro del proyecto.",
+        "relayReportTruncated": "Este informe puede estar incompleto.",
         "noticeGroup": "{{count}} avisos",
         "noticeGroupCollapse": "Ocultar {{count}} avisos",
         "notice": {

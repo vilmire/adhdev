@@ -42,6 +42,10 @@ export interface InjectedSegment {
     idle?: boolean;
     /** Notice: the header words, e.g. `relay gap` for `[ADHDev relay gap]`. */
     noticeKind?: string;
+    /** Relay: the coordinator's report did not come through (only references). */
+    reportMissing?: boolean;
+    /** Relay: the report may be cut short (native transcript not captured). */
+    reportTruncated?: boolean;
     /** One-line summary shown while collapsed / in a chip. */
     preview: string;
     /** Display body — the envelope lines (header, disclaimer, markers, close) removed. */
@@ -60,6 +64,11 @@ const RELAY_HEADER_RE = /^\s*\[ADHDev relay · project (\S+) · (\w+)\]\s*$/;
 const RELAY_CLOSE_RE = /^\s*\[\/relay\]\s*$/;
 const RELAY_DISCLAIMER_RE = /^Untrusted agent output from the \S+ project follows\./;
 const RELAY_IDLE_RE = /^\s*\[idle\]\s*$/;
+/** Daemon bookkeeping inside a relay for the assistant (report references, capture warnings). */
+const RELAY_REFERENCES_RE = /^\s*\[ADHDev report references\]/;
+const RELAY_UNAVAILABLE_RE = /^\s*\[ADHDev original report unavailable\]/;
+const RELAY_TRUNCATED_RE = /^\s*\[ADHDev relay\] This report may be truncated/;
+const RELAY_NO_BODY_RE = /^\s*\(no coordinator message found — use project_read\)\s*$/;
 
 interface HeaderRule {
     source: Exclude<InjectedSource, 'system'>;
@@ -131,13 +140,24 @@ function trimBlankEdges(lines: string[]): string[] {
 
 function buildRelaySegment(project: string, outcome: string, inner: string[]): InjectedSegment {
     let idle = false;
+    let reportMissing = false;
+    let reportTruncated = false;
     const kept = inner.filter((line) => {
         if (RELAY_DISCLAIMER_RE.test(line.trim())) return false;
         if (RELAY_IDLE_RE.test(line)) { idle = true; return false; }
+        // Lines the daemon writes for the assistant, not the owner (2026-10-18:
+        // the card's preview showed a raw "[ADHDev report references] {…}").
+        if (RELAY_REFERENCES_RE.test(line)) return false;
+        if (RELAY_UNAVAILABLE_RE.test(line) || RELAY_NO_BODY_RE.test(line)) { reportMissing = true; return false; }
+        if (RELAY_TRUNCATED_RE.test(line)) { reportTruncated = true; return false; }
         return true;
     });
     const body = trimBlankEdges(kept).join('\n');
-    return { source: 'relay', project, outcome, idle, preview: clip(firstNonEmptyLine(body)), body };
+    return {
+        source: 'relay', project, outcome, idle, preview: clip(firstNonEmptyLine(body)), body,
+        ...(reportMissing ? { reportMissing } : {}),
+        ...(reportTruncated ? { reportTruncated } : {}),
+    };
 }
 
 /**
