@@ -81,6 +81,8 @@ export interface BaseDaemonContextValue {
 
 /** Data injection interface (used by standalone/cloud) */
 export interface BaseDaemonActions {
+    /** A new transport must deliver its own authoritative session list. */
+    invalidateSessionList: (daemonId: string) => void
     /** Merge entries received from server/WS into status */
     injectEntries: (entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => void
     /** Mark initial load complete */
@@ -133,6 +135,7 @@ const BaseDaemonCtx = createContext<BaseDaemonContextValue>({
 })
 
 const ActionsCtx = createContext<BaseDaemonActions>({
+    invalidateSessionList: () => {},
     injectEntries: () => {},
     markLoaded: () => {},
     getIdes: () => [],
@@ -516,12 +519,18 @@ export function BaseDaemonProvider({ children, connectionOverrides }: {
         setIdes(prev => hydrateInteractivePromptIntoIdes(prev, sessionId, prompt))
     }, [])
 
+    const invalidateSessionList = useCallback((daemonId: string) => {
+        setIdes(prev => prev.map(entry => entry.id === daemonId && entry._sessionListAuthoritative
+            ? { ...entry, _sessionListAuthoritative: false } : entry))
+    }, [])
+
     const actions = useMemo<BaseDaemonActions>(() => ({
         injectEntries,
+        invalidateSessionList,
         markLoaded,
         getIdes: () => idesRef.current,
         hydrateInteractivePrompt,
-    }), [injectEntries, markLoaded, hydrateInteractivePrompt])
+    }), [injectEntries, markLoaded, hydrateInteractivePrompt, invalidateSessionList])
 
     const co = connectionOverrides
     const contextValue = useMemo<BaseDaemonContextValue>(() => ({

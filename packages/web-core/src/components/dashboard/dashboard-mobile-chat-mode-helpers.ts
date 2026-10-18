@@ -95,14 +95,8 @@ export function groupMobileInboxItems(
  * (`utils/status-transform.ts`) and means "this daemon entry was built from a status
  * payload that carried an explicit sessions array" — i.e. exactly "the session list
  * for this daemon has arrived", even when that list is legitimately empty. It is
- * sticky: a later daemon-only WS bootstrap merges through `mergeWeakEntry`, which
- * spreads the existing entry, so the flag never flips back and cannot cause a
- * loading↔empty flicker.
- *
- * A daemon is only awaited while it is actually reachable — an offline or
- * still-connecting machine would otherwise pin the list in a loading state forever.
- * Standalone injects sessions in the same payload that marks load complete, so every
- * entry is authoritative on arrival and this returns `initialDataLoaded` unchanged.
+ * scoped to the current transport; reconnecting clears it until a fresh list arrives.
+ * Pending machines keep the empty state hidden while ready sessions remain visible.
  */
 export interface MobileMachineConnectionOptions {
     isStandalone?: boolean
@@ -117,16 +111,14 @@ export function areConversationsLoaded(
 ): boolean {
     if (!initialDataLoaded) return false
 
-    const connectedDaemons = ides.filter(entry => (
-        entry.type === 'adhdev-daemon'
-        && getMobileMachineConnectionLabel(entry, options) === 'Connected'
-    ))
+    return ides.filter(entry => entry.type === 'adhdev-daemon')
+        .every(entry => !isMachineSessionListPending(entry, options))
+}
 
-    // No reachable daemon → nothing further to wait for; the empty state is honest
-    // ("no machines connected" is rendered ahead of "no conversations").
-    if (connectedDaemons.length === 0) return true
-
-    return connectedDaemons.some(entry => entry._sessionListAuthoritative === true)
+export function isMachineSessionListPending(entry: DaemonData, options?: MobileMachineConnectionOptions): boolean {
+    const label = getMobileMachineConnectionLabel(entry, options)
+    if (label === 'Offline') return false
+    return label !== 'Connected' || entry._sessionListAuthoritative !== true
 }
 
 export function getMobileMachineConnectionLabel(
@@ -137,10 +129,13 @@ export function getMobileMachineConnectionLabel(
     const isStandalone = options?.isStandalone ?? (options?.connectionStates === undefined)
     if (!isStandalone) {
         if (options?.connectionStates !== undefined) {
-            return options.connectionStates[machineEntry.id] === 'connected' ? 'Connected' : 'Connecting'
+            const state = options.connectionStates[machineEntry.id]
+            if (state && ['failed', 'closed', 'disconnected', 'evicted'].includes(state)) return 'Offline'
+            return state === 'connected' ? 'Connected' : 'Connecting'
         }
         const p2pState = machineEntry.p2p?.state || ''
         if (p2pState === 'connected') return 'Connected'
+        if (['failed', 'closed', 'disconnected', 'evicted'].includes(p2pState)) return 'Offline'
         return 'Connecting'
     }
     const p2pState = machineEntry.p2p?.state || ''
@@ -242,7 +237,8 @@ export function buildMobileMachineCards(
         const generatingCount =
             machineItems.filter(item => isConversationGenerating(item.conversation)).length
             + machineHidden.filter(isConversationGenerating).length
-        const statusLabel = getMobileMachineConnectionLabel(machineEntry, options)
+        const statusLabel = isMachineSessionListPending(machineEntry, options)
+            ? 'Connecting' : getMobileMachineConnectionLabel(machineEntry, options)
         const displayStatus = options?.statusLabels?.[statusLabel] ?? statusLabel
         const subtitleParts = [
             machineEntry.platform || 'machine',

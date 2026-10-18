@@ -153,6 +153,7 @@ export type DashboardP2POfferWirePayload = {
     daemonId: string
     peerId?: string
     attemptId?: number
+    attemptEpoch?: string
     sdp: string
     type: string
 }
@@ -161,6 +162,7 @@ export type DashboardP2PIceWirePayload = {
     daemonId: string
     peerId?: string
     attemptId?: number
+    attemptEpoch?: string
     candidate: string
     mid?: string
     sdpMid?: string | null
@@ -236,12 +238,13 @@ export const DASHBOARD_P2P_SIGNAL_TYPES = ['p2p_ready', 'p2p_answer', 'p2p_ice']
 export type DashboardP2PSignalType = typeof DASHBOARD_P2P_SIGNAL_TYPES[number]
 export const isDashboardP2PSignalType = makeTypeGuard(DASHBOARD_P2P_SIGNAL_TYPES)
 
-export type DashboardP2PReadyWirePayload = { daemonId: string; peerId: string; attemptId?: number }
-export type DashboardP2PAnswerWirePayload = { daemonId: string; peerId: string; sdp: string; type: string; attemptId?: number }
+export type DashboardP2PReadyWirePayload = { daemonId: string; peerId: string; attemptId?: number; attemptEpoch?: string }
+export type DashboardP2PAnswerWirePayload = { daemonId: string; peerId: string; sdp: string; type: string; attemptId?: number; attemptEpoch?: string }
 export type DashboardP2PLocalIceWirePayload = {
     daemonId: string
     peerId: string
     attemptId?: number
+    attemptEpoch?: string
     candidate: string
     sdpMid: string | null
     sdpMLineIndex: number | null

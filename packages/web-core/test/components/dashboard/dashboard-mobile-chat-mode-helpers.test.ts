@@ -129,7 +129,7 @@ describe('dashboard mobile chat mode helpers', () => {
                 isStandalone: false,
                 connectionStates: { 'cloud-1': 'failed' },
             }),
-        ).toBe('Connecting')
+        ).toBe('Offline')
 
         // Cloud mode with browser P2P connected -> Connected
         expect(
@@ -193,7 +193,7 @@ describe('dashboard mobile chat mode helpers', () => {
             inboxBucket: 'task_complete',
         }]
 
-        const cards = buildMobileMachineCards([createMachine()], items)
+        const cards = buildMobileMachineCards([createMachine({ _sessionListAuthoritative: true })], items)
 
         expect(cards).toHaveLength(1)
         expect(cards[0]).toMatchObject({
@@ -392,7 +392,7 @@ describe('dashboard mobile chat mode helpers', () => {
             expect(areConversationsLoaded([connectedWithSessions()], true)).toBe(true)
         })
 
-        it('unblocks as soon as any connected daemon is authoritative even if another connected daemon is still loading', () => {
+        it('waits for every connected daemon, including an empty daemon plus a loading daemon', () => {
             const ides = [
                 connectedWithSessions(),
                 createMachine({
@@ -400,7 +400,7 @@ describe('dashboard mobile chat mode helpers', () => {
                     p2p: { state: 'connected', available: true } as DaemonData['p2p'],
                 }),
             ]
-            expect(areConversationsLoaded(ides, true)).toBe(true)
+            expect(areConversationsLoaded(ides, true)).toBe(false)
         })
 
         it('stays unloaded when multiple daemons are connected in cloud mode but none is authoritative yet', () => {
@@ -415,14 +415,14 @@ describe('dashboard mobile chat mode helpers', () => {
                 }),
             ).toBe(false)
 
-            // As soon as machine-1 becomes authoritative, loading unblocks while machine-2 is still connecting
+            // One ready machine does not make the pending machine authoritative.
             ides[0]._sessionListAuthoritative = true
             expect(
                 areConversationsLoaded(ides, true, {
                     isStandalone: false,
                     connectionStates: { 'machine-1': 'connected', 'machine-2': 'connecting' },
                 }),
-            ).toBe(true)
+            ).toBe(false)
         })
 
         it('does not falsely treat a WS-bootstrapped cloud daemon with no P2P telemetry as Connected before browser P2P connects', () => {
@@ -440,12 +440,12 @@ describe('dashboard mobile chat mode helpers', () => {
                     isStandalone: false,
                     connectionStates: { 'machine-slow': 'connecting' },
                 }),
-            ).toBe(true)
+            ).toBe(false)
         })
 
         it('sorts Connected machine cards ahead of Connecting and Offline machines and exposes statusLabel', () => {
             const slowMachine = createMachine({ id: 'machine-slow', hostname: 'Slow Mac', status: 'online' })
-            const readyMachine = createMachine({ id: 'machine-ready', hostname: 'Ready Mac', status: 'online' })
+            const readyMachine = createMachine({ id: 'machine-ready', hostname: 'Ready Mac', status: 'online', _sessionListAuthoritative: true })
             const offlineMachine = createMachine({ id: 'machine-off', hostname: 'Offline Mac', status: 'offline' })
 
             const cards = buildMobileMachineCards(
@@ -471,7 +471,7 @@ describe('dashboard mobile chat mode helpers', () => {
             expect(cards[1]?.subtitle).toBe('darwin · 연결 중')
         })
 
-        it('does not wait on daemons that are offline or still connecting', () => {
+        it('waits on connecting daemons even while another daemon is ready', () => {
             // An unreachable machine would otherwise pin the list in a loading state forever.
             const ides = [
                 connectedWithSessions(),
@@ -485,7 +485,21 @@ describe('dashboard mobile chat mode helpers', () => {
                     p2p: { state: 'connecting', available: true } as DaemonData['p2p'],
                 }),
             ]
-            expect(areConversationsLoaded(ides, true)).toBe(true)
+            expect(areConversationsLoaded(ides, true)).toBe(false)
+        })
+
+        it('reports loaded only once all cloud machines have lists or terminal transport states', () => {
+            const machines = [connectedWithSessions(), createMachine({ id: 'machine-2' })]
+            const options = { isStandalone: false, connectionStates: { 'machine-1': 'connected', 'machine-2': 'connected' } }
+            expect(areConversationsLoaded(machines, true, options)).toBe(false)
+            expect(buildMobileMachineCards(machines, [], [], options)[1].statusLabel).toBe('Connecting')
+            machines[1]._sessionListAuthoritative = true
+            expect(areConversationsLoaded(machines, true, options)).toBe(true)
+            machines[1]._sessionListAuthoritative = false
+            options.connectionStates['machine-2'] = 'failed'
+            expect(areConversationsLoaded(machines, true, options)).toBe(true)
+            options.connectionStates['machine-2'] = 'new'
+            expect(areConversationsLoaded(machines, true, options)).toBe(false)
         })
 
         it('reports loaded when no machine is reachable at all', () => {

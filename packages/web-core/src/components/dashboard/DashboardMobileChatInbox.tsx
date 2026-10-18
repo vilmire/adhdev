@@ -869,7 +869,7 @@ export default function DashboardMobileChatInbox({
                                 {t('mobileInbox.allCaughtUp')}
                             </div>
                         )}
-                        {!isDisconnected && !isConversationBootstrapping && machineCards.some(m => m.statusLabel === 'Connecting') && (
+                        {!isDisconnected && machineCards.some(m => m.statusLabel === 'Connecting') && (
                             <div className="flex flex-col gap-1.5 px-2 pt-1" data-testid="mobile-inbox-connecting-machines">
                                 {machineCards.filter(m => m.statusLabel === 'Connecting').map(machine => (
                                     <div key={machine.id} className="flex items-center justify-between gap-2 rounded-xl border border-border-subtle/60 bg-bg-secondary/25 px-3 py-2 text-xs text-text-muted">
