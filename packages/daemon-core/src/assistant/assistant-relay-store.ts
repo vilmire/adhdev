@@ -15,6 +15,11 @@ export interface AssistantThreadRow {
     openedAt: number;
     lastSendAt: number;
     closedAt: number | null;
+    /**
+     * When the stall notice went out for the current quiet stretch. Persisted so
+     * a daemon restart does not re-send it; absent until the first notice.
+     */
+    stallNotifiedAt?: number;
 }
 
 export interface AssistantRelayRow {
@@ -49,6 +54,8 @@ export interface AssistantRelayStore {
     closeThread(meshId: string, at: number): void;
     isThreadOpen(meshId: string): boolean;
     openThreads(): AssistantThreadRow[];
+    /** Record that the stall notice for the thread's current quiet stretch went out. */
+    markStallNotified(meshId: string, at: number): void;
     /** Insert a committed coordinator attempt. False when the attempt is already recorded (dedupe). */
     recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt' | 'relayedAt'>): boolean;
     /**
@@ -61,8 +68,11 @@ export interface AssistantRelayStore {
     listDeliveredCoverage(now: number): StoredAttemptCoverage[];
     /** Undelivered rows, oldest commit first. */
     listUndelivered(): AssistantRelayRow[];
-    /** Rows that settled without their own body being sent (silent loss). */
-    countUnrendered(): UnrenderedRelayCounts;
+    /**
+     * Rows that settled without their own body being sent (silent loss).
+     * `since` limits it to rows settled at or after that time.
+     */
+    countUnrendered(since?: number): UnrenderedRelayCounts;
     /** Caller must validate terminal/generation/native provenance before storing or reading. */
     captureAttemptBody(attemptId: string, meshId: string, sessionId: string, body: string, at: number, evidenceRef: string, meta?: AttemptBodyMeta): void;
     readAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, evidenceRef: string): string | null;
@@ -118,6 +128,12 @@ export const ATTEMPT_BODY_MAX_ROWS = 128;
 export const ATTEMPT_BODY_TOTAL_BYTES = 8 * ATTEMPT_BODY_MAX_CHARS;
 
 export const RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/**
+ * How far back a missed report still counts. A folded report's body is gone
+ * after ATTEMPT_BODY_TTL_MS, so an older loss can no longer be acted on; a
+ * lifetime total only repeats the same number to every new assistant session.
+ */
+export const MISSED_REPORT_WINDOW_MS = ATTEMPT_BODY_TTL_MS;
 export const THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
 /** v2 evidence refs are a JSON array. `stablePrefix` is the array without the parts hash. */
@@ -149,6 +165,11 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         const t = this.threads.get(meshId);
         if (t && t.closedAt === null) t.lastSendAt = at;
         else this.threads.set(meshId, { meshId, openedAt: at, lastSendAt: at, closedAt: null });
+    }
+
+    markStallNotified(meshId: string, at: number): void {
+        const t = this.threads.get(meshId);
+        if (t && t.closedAt === null) t.stallNotifiedAt = at;
     }
 
     closeThread(meshId: string, at: number): void {
@@ -213,10 +234,11 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
             .map((r) => ({ ...r }));
     }
 
-    countUnrendered(): UnrenderedRelayCounts {
+    countUnrendered(since?: number): UnrenderedRelayCounts {
         const byMesh = new Map<string, number>();
         for (const r of this.relays.values()) {
             if (r.deliveredAt === null || r.relayedAt !== null) continue;
+            if (since !== undefined && r.deliveredAt < since) continue;
             byMesh.set(r.meshId, (byMesh.get(r.meshId) ?? 0) + 1);
         }
         return toUnrenderedCounts(byMesh);

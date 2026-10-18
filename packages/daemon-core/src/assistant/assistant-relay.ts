@@ -32,7 +32,7 @@ import type { Unsubscribe } from '../sessions/lifecycle-bus.js';
 import type { AssistantInputLog } from './assistant-input-log.js';
 import type { AssistantInputSource } from './store-guards.js';
 import { ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
-    RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_REPLIES, type RenderedAttemptCoverage, type AssistantRelayStore } from './assistant-relay-store.js';
+    RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_REPLIES, MISSED_REPORT_WINDOW_MS, type RenderedAttemptCoverage, type AssistantRelayStore } from './assistant-relay-store.js';
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
@@ -392,9 +392,14 @@ export class AssistantRelay {
             if (this.batches.has(t.meshId) || this.stallSent.has(t.meshId)) continue;
             const quietSince = Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
             if (now - quietSince < RELAY_STALL_AFTER_MS) continue;
+            // One notice per quiet stretch, across restarts too: `lastRelayAt` and
+            // `stallSent` are this process only, so without the stored mark every
+            // daemon restart re-sent the notice for every quiet thread.
+            if (t.stallNotifiedAt !== undefined && t.stallNotifiedAt >= quietSince) continue;
             const w = this.workOf(t.meshId);
             if (w && (w.activeMissions > 0 || w.pending > 0) && w.assigned === 0) {
                 this.stallSent.add(t.meshId);
+                this.ports.store.markStallNotified(t.meshId, now);
                 this.pushLine('stall', buildStallSignal(slug, w), t.meshId);
             }
         }
@@ -1003,7 +1008,7 @@ export class AssistantRelay {
 
     /** Stored gaps (not yet counted again) per mesh. */
     private unrenderedByMesh(): Map<string, number> {
-        return new Map(this.ports.store.countUnrendered().byMesh.map((r) => [r.meshId, r.count]));
+        return new Map(this.ports.store.countUnrendered(this.clock.now() - MISSED_REPORT_WINDOW_MS).byMesh.map((r) => [r.meshId, r.count]));
     }
 
     /** Stored gaps plus the ones this pending delivery is about to create. */

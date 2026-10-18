@@ -225,7 +225,8 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             mesh_id TEXT PRIMARY KEY,
             opened_at INTEGER NOT NULL,
             last_send_at INTEGER NOT NULL,
-            closed_at INTEGER
+            closed_at INTEGER,
+            stall_notified_at INTEGER
         );
 
         -- delivered_at = the row left the queue (settled). relayed_at = its OWN
@@ -292,6 +293,10 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     // Additive column for relay tables created before 2026-10-10. Existing rows
     // get relayed_at = delivered_at: pre-upgrade history cannot tell a rendered
     // row from a folded one, and reporting it as loss would be a false alarm.
+    // Additive column for thread tables created before 2026-10-18 (stall notice
+    // survives a restart).
+    const threadCols = new Set((db.prepare('PRAGMA table_info(assistant_threads)').all() as Array<{ name: string }>).map((r) => r.name));
+    if (!threadCols.has('stall_notified_at')) db.exec('ALTER TABLE assistant_threads ADD COLUMN stall_notified_at INTEGER');
     const relayCols = new Set((db.prepare('PRAGMA table_info(assistant_relays)').all() as Array<{ name: string }>).map((r) => r.name));
     if (!relayCols.has('relayed_at')) {
         db.exec('ALTER TABLE assistant_relays ADD COLUMN relayed_at INTEGER');

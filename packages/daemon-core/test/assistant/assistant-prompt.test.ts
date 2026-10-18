@@ -178,7 +178,7 @@ describe('renderProjectTable', () => {
 
 describe('language rule', () => {
     it('tells the assistant to answer in the user\'s language and never to translate the routed request', () => {
-        expect(ASSISTANT_FIXED_RULES).toMatch(/language of the user's latest message/);
+        expect(ASSISTANT_FIXED_RULES).toMatch(/language of the user's own latest message/);
         expect(ASSISTANT_FIXED_RULES).toMatch(/do not translate them/);
         expect(ASSISTANT_FIXED_RULES).not.toMatch(/Korean|한국어/);
     });

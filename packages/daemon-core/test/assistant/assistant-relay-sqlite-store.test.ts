@@ -35,6 +35,45 @@ function openDb(path = ':memory:') {
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
+/** Stall notice mark and the windowed loss count (2026-10-18), on both stores. */
+function exerciseStallAndWindow(store: AssistantRelayStore) {
+    store.openThread('s1', T0);
+    store.markStallNotified('s1', T0 + 30);
+    expect(store.openThreads().find((t) => t.meshId === 's1')?.stallNotifiedAt).toBe(T0 + 30);
+    store.openThread('s1', T0 + 40); // a send in the same thread keeps the mark (quietSince moves past it)
+    expect(store.openThreads().find((t) => t.meshId === 's1')?.stallNotifiedAt).toBe(T0 + 30);
+    store.closeThread('s1', T0 + 50);
+    store.openThread('s1', T0 + 60); // a reopened thread starts clean
+    expect(store.openThreads().find((t) => t.meshId === 's1')).not.toHaveProperty('stallNotifiedAt');
+
+    const lost = { attemptId: 'plain:w:1', meshId: 'w1', coordinatorSessionId: 'w', committedAt: T0, kind: 'relay' as const, outcome: 'completed' };
+    store.recordCommitted(lost);
+    store.markDelivered([lost.attemptId], T0 + 1, []);
+    expect(store.countUnrendered().total).toBe(1);
+    expect(store.countUnrendered(T0 + 1).total).toBe(1);
+    expect(store.countUnrendered(T0 + 2).total).toBe(0);
+}
+
+describe('stall mark and loss window', () => {
+    it('in-memory store', () => exerciseStallAndWindow(new InMemoryAssistantRelayStore()));
+    it('sqlite store', () => exerciseStallAndWindow(new SqliteAssistantRelayStore(openDb())));
+    it('sqlite store keeps the mark across a reopen and migrates an old thread table', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'relay-stall-')); dirs.push(dir);
+        const path = join(dir, 'r.db');
+        const old = new Database(path);
+        old.exec('CREATE TABLE assistant_threads (mesh_id TEXT PRIMARY KEY, opened_at INTEGER NOT NULL, last_send_at INTEGER NOT NULL, closed_at INTEGER)');
+        old.prepare('INSERT INTO assistant_threads VALUES (?, ?, ?, NULL)').run('old', T0, T0);
+        old.close();
+        const a = openDb(path);
+        const s1 = new SqliteAssistantRelayStore(a);
+        expect(s1.openThreads()).toEqual([{ meshId: 'old', openedAt: T0, lastSendAt: T0, closedAt: null }]);
+        s1.markStallNotified('old', T0 + 9);
+        a.close();
+        const s2 = new SqliteAssistantRelayStore(openDb(path));
+        expect(s2.openThreads()[0]?.stallNotifiedAt).toBe(T0 + 9);
+    });
+});
+
 function exercise(store: AssistantRelayStore) {
     store.openThread('m1', T0);
     store.openThread('m1', T0 + 5);

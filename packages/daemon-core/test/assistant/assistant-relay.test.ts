@@ -61,9 +61,9 @@ interface Harness {
     delivered: string[][];
 }
 
-function harness(): Harness {
+function harness(existingStore?: InMemoryAssistantRelayStore): Harness {
     const clock = new FakeClock();
-    const store = new InMemoryAssistantRelayStore();
+    const store = existingStore ?? new InMemoryAssistantRelayStore();
     const log = new AssistantInputLog();
     const submits: Harness['submits'] = [];
     const delivered: string[][] = [];
@@ -286,6 +286,21 @@ describe('relay trigger and batching', () => {
         h.clock.advance(RELAY_QUIET_MS);
         await settle(h);
         expect(h.submits[2]!.text).toContain('blog: 1');
+    });
+
+    it('a missed report stops counting once its 24 h window has passed', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.state.report = null;
+        h.emit(turn('committed', COORD, 1, h.clock.now()));
+        h.clock.advance(RELAY_QUIET_MS);
+        await settle(h);
+        expect(h.relay.missedReportsFor(MESH)).toBe(1);
+        h.clock.advance(23 * 60 * MIN);
+        expect(h.relay.missedReportsFor(MESH)).toBe(1);
+        h.clock.advance(2 * 60 * MIN);
+        expect(h.relay.missedReportsFor(MESH)).toBe(0);
+        expect(h.relay.missedReports()).toEqual([]);
     });
 
     it('counts a missing captured body as a gap and only announces increases', async () => {
@@ -576,6 +591,31 @@ describe('signals', () => {
         expect(s.submits).toHaveLength(1);
         expect(s.submits[0]!.text).toMatch(/^\[project blog\] no progress for 30 min: 3 pending, 0 assigned, 2 active missions/);
         expect(s.log.sources(ASSISTANT)).toEqual(['stall']);
+    });
+
+    it('a daemon restart does not re-send the stall notice for the same quiet stretch', async () => {
+        const first = harness();
+        first.relay.openThread(MESH);
+        first.state.work = { activeMissions: 16, pending: 1, assigned: 0 };
+        first.clock.advance(31 * MIN);
+        first.relay.tick();
+        await settle(first);
+        expect(first.submits).toHaveLength(1);
+
+        // Restart: a new relay process over the same durable store.
+        const second = harness(first.store);
+        second.state.work = { activeMissions: 16, pending: 1, assigned: 0 };
+        second.clock.t = first.clock.t + 60 * MIN;
+        second.relay.tick();
+        await settle(second);
+        expect(second.submits).toHaveLength(0);
+
+        // New activity starts a new quiet stretch, which may be noticed again.
+        second.relay.openThread(MESH);
+        second.clock.advance(31 * MIN);
+        second.relay.tick();
+        await settle(second);
+        expect(second.submits.map((x) => x.text)).toEqual([expect.stringMatching(/^\[project blog\] no progress for 30 min/)]);
     });
 
     it('closes the thread of a project that disappeared', () => {

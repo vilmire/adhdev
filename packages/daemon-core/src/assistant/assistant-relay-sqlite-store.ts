@@ -29,14 +29,17 @@ import {
     type RenderedAttemptCoverage, type StoredAttemptCoverage,
 } from './assistant-relay-store.js';
 
-interface ThreadDbRow { mesh_id: string; opened_at: number; last_send_at: number; closed_at: number | null }
+interface ThreadDbRow { mesh_id: string; opened_at: number; last_send_at: number; closed_at: number | null; stall_notified_at?: number | null }
 interface RelayDbRow {
     attempt_id: string; mesh_id: string; coordinator_session_id: string;
     committed_at: number; delivered_at: number | null; relayed_at: number | null; kind: string; outcome: string;
 }
 
 function toThread(r: ThreadDbRow): AssistantThreadRow {
-    return { meshId: r.mesh_id, openedAt: r.opened_at, lastSendAt: r.last_send_at, closedAt: r.closed_at ?? null };
+    return {
+        meshId: r.mesh_id, openedAt: r.opened_at, lastSendAt: r.last_send_at, closedAt: r.closed_at ?? null,
+        ...(typeof r.stall_notified_at === 'number' ? { stallNotifiedAt: r.stall_notified_at } : {}),
+    };
 }
 
 function toRelay(r: RelayDbRow): AssistantRelayRow {
@@ -63,8 +66,13 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
             ON CONFLICT(mesh_id) DO UPDATE SET
                 opened_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.opened_at ELSE excluded.opened_at END,
                 last_send_at = excluded.last_send_at,
-                closed_at = NULL
+                closed_at = NULL,
+                stall_notified_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.stall_notified_at ELSE NULL END
         `).run(meshId, at, at);
+    }
+
+    markStallNotified(meshId: string, at: number): void {
+        this.db.prepare('UPDATE assistant_threads SET stall_notified_at = ? WHERE mesh_id = ? AND closed_at IS NULL').run(at, meshId);
     }
 
     closeThread(meshId: string, at: number): void {
@@ -144,10 +152,10 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         return (this.db.prepare('SELECT * FROM assistant_relays WHERE delivered_at IS NULL ORDER BY committed_at, attempt_id').all() as RelayDbRow[]).map(toRelay);
     }
 
-    countUnrendered(): UnrenderedRelayCounts {
+    countUnrendered(since?: number): UnrenderedRelayCounts {
         const rows = this.db.prepare(
-            'SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL GROUP BY mesh_id',
-        ).all() as Array<{ mesh_id: string; n: number }>;
+            'SELECT mesh_id, COUNT(*) AS n FROM assistant_relays WHERE delivered_at IS NOT NULL AND relayed_at IS NULL AND delivered_at >= ? GROUP BY mesh_id',
+        ).all(since ?? 0) as Array<{ mesh_id: string; n: number }>;
         return toUnrenderedCounts(new Map(rows.map((r) => [r.mesh_id, Number(r.n)])));
     }
 
