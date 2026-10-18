@@ -121,7 +121,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         h.unmount()
     })
 
-    it('agent-queue acceptance remains uncertain without a post-write receipt', async () => {
+    it('agent-queue acceptance drops queued marking while remaining uncertain until a post-write receipt', async () => {
         const send = vi.fn()
             .mockResolvedValueOnce(DAEMON_QUEUED_RESULT)
             .mockResolvedValueOnce(DAEMON_AGENT_QUEUED)
@@ -131,9 +131,9 @@ describe('SEND-NOW — handleSendNowQueued', () => {
 
         expect(h.get().lastSendQueued).toBe(false)
         expect(h.get().sendFeedbackMessage).toBeNull()
-        // The bubble STAYS — it is retired by the daemon's echo, exactly like a
+        // The bubble STAYS — it is retired by the daemon's echo/receipt, exactly like a
         // normal send. Only the queued marking is dropped.
-        expect(h.get().pendingLocalMessage).toMatchObject({ content: 'urgent: stop', queued: true, deliveryUncertain: true })
+        expect(h.get().pendingLocalMessage).toMatchObject({ content: 'urgent: stop', queued: false, deliveryUncertain: true })
         h.unmount()
     })
 
@@ -228,7 +228,7 @@ describe('SEND-NOW — handleSendNowQueued', () => {
         const h = renderHarness(send)
         await act(async () => { await h.get().handleSendChat('already delivered') })
         expect(h.get().pendingLocalMessage).toMatchObject({ content: 'already delivered' })
-        expect(h.get().pendingLocalMessage.queued).toBe(true)
+        expect(h.get().pendingLocalMessage.queued).toBe(false)
 
         await act(async () => { await h.get().handleSendNowQueued() })
 
@@ -342,5 +342,237 @@ describe('SEND-NOW — same OutboundMessage identity and body (Phase D-web)', ()
         expect(resend).toEqual(original)
         expect((send.mock.calls[1][2] as any).message).toBeUndefined()
         h.unmount()
+    })
+})
+
+describe('IDLE OPTIMISTIC SEND + RECEIPT LIFECYCLE (M-ASSISTANT-QUEUED-BUBBLE-STUCK)', () => {
+    it('(1) idle send renders immediately in transcript as a normal sent user message and never in PendingQueueStrip (even when session transitions to generating)', async () => {
+        const { shouldRenderInPendingQueueStrip, withPendingLocalMessages } = await import('../../src/components/dashboard/conversation-message-snapshot')
+        let resolveSend: (value: any) => void = () => {}
+        const send = vi.fn(() => new Promise(resolve => { resolveSend = resolve }))
+
+        const container = document.createElement('div')
+        const root = createRoot(container)
+        let latest: any = null
+        function Harness({ status }: { status: string }) {
+            const activeConv = {
+                tabKey: 'tab-idle',
+                routeId: 'daemon-1:sess-idle',
+                daemonId: 'daemon-1',
+                sessionId: 'sess-idle',
+                transport: 'pty',
+                status,
+            }
+            latest = useDashboardConversationCommands({
+                sendDaemonCommand: receiptAwareTransport(send),
+                activeConv,
+                setActionLogs: () => {},
+                isStandalone: false,
+            } as any)
+            return null
+        }
+
+        act(() => { root.render(createElement(Harness, { status: 'idle' })) })
+        let sendPromise: Promise<boolean> | undefined
+        act(() => { sendPromise = latest.handleSendChat('hello idle assistant') })
+        await act(async () => { await Promise.resolve() })
+
+        // Immediately while in-flight: shown in transcript, NOT in PendingQueueStrip
+        expect(latest.pendingLocalMessages).toHaveLength(1)
+        expect(latest.pendingLocalMessages[0].queued).toBe(false)
+        expect(shouldRenderInPendingQueueStrip(latest.pendingLocalMessages[0])).toBe(false)
+        const inFlightTranscript = withPendingLocalMessages([], latest.pendingLocalMessages, Date.now(), { excludeQueued: true })
+        expect(inFlightTranscript).toHaveLength(1)
+        expect(inFlightTranscript[0]).toMatchObject({ content: 'hello idle assistant', meta: { pendingLocal: true, queued: false } })
+
+        // Daemon accepts and starts writing (uncertain rev 2), and session transitions to generating
+        await act(async () => {
+            resolveSend({ success: true, sent: true, queued: false, submitted: false })
+            await sendPromise
+        })
+        act(() => { root.render(createElement(Harness, { status: 'generating' })) })
+
+        expect(latest.pendingLocalMessages).toHaveLength(1)
+        expect(latest.pendingLocalMessages[0].queued).toBe(false)
+        expect(latest.pendingLocalMessages[0].deliveryUncertain).toBe(true)
+        // Still NOT in PendingQueueStrip while generating!
+        expect(shouldRenderInPendingQueueStrip(latest.pendingLocalMessages[0])).toBe(false)
+        const generatingTranscript = withPendingLocalMessages([], latest.pendingLocalMessages, Date.now(), { excludeQueued: true })
+        expect(generatingTranscript).toHaveLength(1)
+        expect(generatingTranscript[0].content).toBe('hello idle assistant')
+
+        // (5) Real transcript bubble arrives in liveMessages -> reconciles in place with zero duplicate
+        const entryId = latest.pendingLocalMessages[0].id
+        const liveWithEcho = [{
+            id: 'live-user-1',
+            role: 'user',
+            content: 'hello idle assistant',
+            timestamp: Date.now(),
+            meta: { sourceMessageId: entryId },
+        }] as any
+        const reconciledTranscript = withPendingLocalMessages(liveWithEcho, latest.pendingLocalMessages, Date.now(), { excludeQueued: true })
+        expect(reconciledTranscript).toHaveLength(1)
+        expect(reconciledTranscript[0].id).toBe('live-user-1')
+
+        act(() => { root.unmount() })
+    })
+
+    it('(2) & (3) busy send queues in strip, converts on Send Now, and retires from state + localStorage when outgoing_receipts serves submitted rev3 (stopping the poll)', async () => {
+        vi.useFakeTimers()
+        try {
+            const { shouldRenderInPendingQueueStrip } = await import('../../src/components/dashboard/conversation-message-snapshot')
+            const { readPendingQueuedMessages } = await import('../../src/utils/pendingQueuedMessages')
+            const { outgoingInputDigest } = await import('@adhdev/daemon-core/seqscribe/transcript-keyed-codec')
+
+            let serveSubmitted = false
+            let receiptPolls = 0
+            const rawSend = vi.fn(async (_target: string, type: string, payload: any) => {
+                if (type === 'send_chat') {
+                    if (payload.policy?.mode === 'send_now') {
+                        return DAEMON_AGENT_QUEUED
+                    }
+                    return DAEMON_QUEUED_RESULT
+                }
+                return { success: true }
+            })
+            const baseTransport = receiptAwareTransport(rawSend)
+            const customTransport = vi.fn(async (target: string, type: string, payload: any) => {
+                if (type === 'outgoing_receipts') {
+                    receiptPolls += 1
+                    if (serveSubmitted) {
+                        const id = payload.messageIds[0]
+                        return {
+                            success: true,
+                            receipts: [{
+                                version: 1,
+                                messageId: id,
+                                sessionId: 'sess-1',
+                                attemptId: `test-attempt-${id}`,
+                                generation: 'test-generation',
+                                inputDigest: outgoingInputDigest({ parts: [{ type: 'text', text: 'urgent: stop' }], textFallback: 'urgent: stop' }),
+                                state: 'submitted',
+                                revision: 3,
+                                proof: 'native_write_ack',
+                            }],
+                        }
+                    }
+                }
+                return baseTransport(target, type, payload)
+            })
+
+            const container = document.createElement('div')
+            const root = createRoot(container)
+            let latest: any = null
+            const activeConv = {
+                tabKey: 'tab-1',
+                routeId: 'daemon-1:sess-1',
+                daemonId: 'daemon-1',
+                sessionId: 'sess-1',
+                transport: 'pty',
+                status: 'generating',
+            }
+            function Harness() {
+                latest = useDashboardConversationCommands({
+                    sendDaemonCommand: customTransport,
+                    activeConv,
+                    setActionLogs: () => {},
+                    isStandalone: false,
+                } as any)
+                return null
+            }
+
+            act(() => { root.render(createElement(Harness)) })
+            await act(async () => { await latest.handleSendChat('urgent: stop') })
+            expect(latest.pendingLocalMessages[0].queued).toBe(true)
+            expect(shouldRenderInPendingQueueStrip(latest.pendingLocalMessages[0])).toBe(true)
+
+            // Convert via Send Now -> no longer marked queued
+            await act(async () => { await latest.handleSendNowQueued() })
+            expect(latest.pendingLocalMessages[0].queued).toBe(false)
+            expect(shouldRenderInPendingQueueStrip(latest.pendingLocalMessages[0])).toBe(false)
+
+            // Next outgoing_receipts poll serves submitted rev3 -> retires from state and localStorage
+            serveSubmitted = true
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1_000)
+            })
+            expect(latest.pendingLocalMessages).toHaveLength(0)
+            expect(readPendingQueuedMessages('tab-1')).toHaveLength(0)
+
+            const pollsAtRetirement = receiptPolls
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(10_000)
+            })
+            expect(receiptPolls).toBe(pollsAtRetirement)
+            act(() => { root.unmount() })
+        } finally {
+            vi.useRealTimers()
+        }
+    })
+
+    it('(4) exponential backoff and bounded max age mark unconfirmed messages stale/uncertain with Retry and stop polling', async () => {
+        vi.useFakeTimers()
+        try {
+            const { shouldRenderInPendingQueueStrip } = await import('../../src/components/dashboard/conversation-message-snapshot')
+            let receiptPolls = 0
+            const rawSend = vi.fn().mockResolvedValue({ success: true, sent: true, queued: false, submitted: false })
+            const baseTransport = receiptAwareTransport(rawSend)
+            const countingTransport = vi.fn(async (target: string, type: string, payload: any) => {
+                if (type === 'outgoing_receipts') receiptPolls += 1
+                return baseTransport(target, type, payload)
+            })
+
+            const container = document.createElement('div')
+            const root = createRoot(container)
+            let latest: any = null
+            const activeConv = {
+                tabKey: 'tab-backoff',
+                routeId: 'daemon-1:sess-1',
+                daemonId: 'daemon-1',
+                sessionId: 'sess-1',
+                transport: 'pty',
+                status: 'idle',
+            }
+            function Harness() {
+                latest = useDashboardConversationCommands({
+                    sendDaemonCommand: countingTransport,
+                    activeConv,
+                    setActionLogs: () => {},
+                    isStandalone: false,
+                } as any)
+                return null
+            }
+
+            act(() => { root.render(createElement(Harness)) })
+            await act(async () => { await latest.handleSendChat('unconfirmed turn') })
+            // Initial poll at t=0
+            expect(receiptPolls).toBe(1)
+            expect(latest.pendingLocalMessages[0].stale).toBeFalsy()
+
+            // Backoff schedule: 1s, 2s, 4s, 8s, 16s (total 31s >= 30s max age)
+            await act(async () => { await vi.advanceTimersByTimeAsync(32_000) })
+
+            // Bounded number of polls (initial + 4 backoff steps = 5 polls total, vs 32 under 1s fixed interval)
+            expect(receiptPolls).toBeLessThanOrEqual(6)
+            expect(latest.pendingLocalMessages[0].stale).toBe(true)
+            expect(latest.pendingLocalMessages[0].deliveryUncertain).toBe(true)
+            expect(shouldRenderInPendingQueueStrip(latest.pendingLocalMessages[0])).toBe(true)
+
+            const pollsAfterMaxAge = receiptPolls
+            await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+            expect(receiptPolls).toBe(pollsAfterMaxAge)
+
+            // Retry action resends the same text with a fresh messageId
+            const firstId = latest.pendingLocalMessages[0].id
+            await act(async () => { await latest.handleRetryPendingMessage(firstId) })
+            expect(latest.pendingLocalMessages).toHaveLength(1)
+            expect(latest.pendingLocalMessages[0].id).not.toBe(firstId)
+            expect(latest.pendingLocalMessages[0].content).toBe('unconfirmed turn')
+            expect(latest.pendingLocalMessages[0].stale).toBeFalsy()
+
+            act(() => { root.unmount() })
+        } finally {
+            vi.useRealTimers()
+        }
     })
 })

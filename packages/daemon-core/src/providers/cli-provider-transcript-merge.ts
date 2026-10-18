@@ -1,5 +1,6 @@
 // Transcript assembly helpers extracted from cli-provider-instance.ts.
 
+import { unwrapPastedContent } from '@adhdev/mesh-shared';
 import { readOutgoingReceipt, sameOutgoingAttempt } from '../seqscribe/outgoing-receipt.js';
 import { flattenContent } from './contracts.js';
 import { buildChatMessage, normalizeChatMessages, resolveChatMessageKind, isUserFacingChatMessage } from './chat-message-normalization.js';
@@ -28,7 +29,7 @@ export function mergeConversationMessages(
     // daemon at 100% CPU on long sessions (2026-10-17). Only `content` and
     // `role` are indexed; both are never rewritten below (only `meta` is), so
     // the index stays valid while candidates are updated in place.
-    const normalizeText = (message: ChatMessage): string => flattenContent(message.content).replace(/\s+/g, ' ').trim();
+    const normalizeText = (message: ChatMessage): string => unwrapPastedContent(flattenContent(message.content)).replace(/\s+/g, ' ').trim();
     const parsedUserTurnsByText = new Map<string, MergeEntry[]>();
     for (const parsedEntry of parsedEntries) {
         const parsedRole = getRole(parsedEntry.message);

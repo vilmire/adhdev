@@ -362,12 +362,12 @@ export class SpecCliAdapter implements CliAdapter {
      * the caller's whole contract here is that `accepted: false` means nothing
      * was written and its previous fallback is safe to take.
      */
-    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean): QueuedWriteOutcome {
+    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome {
         if (typeof this.driver.sendMessageDuringGeneration !== 'function') {
             return { accepted: false, reason: 'not_supported' };
         }
         LOG.info('SpecAdapter', `[${this.cliType}] sendMessageDuringGeneration(len=${text.length})`);
-        const outcome = this.driver.sendMessageDuringGeneration(text, bracketedPaste);
+        const outcome = this.driver.sendMessageDuringGeneration(text, bracketedPaste, messageId);
         if (!outcome.accepted) {
             LOG.info('SpecAdapter', `[${this.cliType}] mid-generation send refused — ${outcome.reason} (len=${text.length})`);
         }

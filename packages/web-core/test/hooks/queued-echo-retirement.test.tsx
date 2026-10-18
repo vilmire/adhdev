@@ -524,4 +524,86 @@ describe('the deployed fix cleans up what is already stuck', () => {
         // Still readable and still cancellable — the owner can resend it.
         expect(row.content).toBe('never delivered')
     })
+
+    it('retires non-PTY entries on <pasted_content id="240c"> wrapped echoes, while PTY entries retire only on submitted receipt regardless of echo shape', async () => {
+        const { withPendingLocalMessages } = await import('../../src/components/dashboard/conversation-message-snapshot')
+        const { outgoingInputDigest } = await import('@adhdev/daemon-core/seqscribe/transcript-keyed-codec')
+        const wrapped = (body: string) => `\n\n<pasted_content id="240c">\n${body}\n</pasted_content id="240c">\n`
+        const body = 'Multi-line relay prompt:\nLine 2 of the prompt'
+        const sentAt = Date.now()
+
+        // Non-PTY entry: text-only wrapped echo retires via shared unwrapPastedContent()
+        const nonPty = [{ id: 'non-pty-1', content: body, sentAt, queued: false }]
+        const retiredNonPty = retirePendingLocalMessages(nonPty, [userEcho(wrapped(body)) as any], sentAt + 100)
+        expect(retiredNonPty.retiredByEcho).toBe(1)
+        expect(retiredNonPty.entries).toHaveLength(0)
+
+        // PTY entry: never retired from state by an uncertain echo (wrapped or plain),
+        // reconciled in-place at render time by withPendingLocalMessages, and retired from state on submitted receipt
+        const digest = outgoingInputDigest({ parts: [{ type: 'text', text: body }], textFallback: body })
+        const ptyEntry = {
+            id: 'pty-1',
+            content: body,
+            sentAt,
+            queued: false,
+            requiresReceipt: true,
+            targetSessionId: 'sess-1',
+            inputDigest: digest,
+            deliveryUncertain: true,
+            outgoingReceipt: {
+                version: 1 as const,
+                messageId: 'pty-1',
+                sessionId: 'sess-1',
+                attemptId: 'att-1',
+                generation: 'gen-1',
+                inputDigest: digest,
+                state: 'uncertain' as const,
+                revision: 2,
+                proof: 'none' as const,
+            },
+        }
+        const liveUncertainWrapped = [{
+            ...userEcho(wrapped(body)),
+            meta: { outgoingReceipt: ptyEntry.outgoingReceipt },
+        }] as any
+        expect(retirePendingLocalMessages([ptyEntry], liveUncertainWrapped, sentAt + 100).entries).toHaveLength(1)
+        // Render-time reconciliation avoids duplicate bubble in transcript
+        expect(withPendingLocalMessages(liveUncertainWrapped, [ptyEntry], sentAt + 100, { excludeQueued: true })).toHaveLength(1)
+
+        // Submitted receipt retires the PTY entry from state regardless of echo shape
+        const liveSubmittedWrapped = [{
+            ...userEcho(wrapped(body)),
+            meta: {
+                outgoingReceipt: {
+                    ...ptyEntry.outgoingReceipt,
+                    state: 'submitted' as const,
+                    revision: 3,
+                    proof: 'native_write_ack' as const,
+                },
+            },
+        }] as any
+        expect(retirePendingLocalMessages([ptyEntry], liveSubmittedWrapped, sentAt + 100).entries).toHaveLength(0)
+    })
+
+    it('uses PENDING_QUEUED_MESSAGE_MAX_AGE_MS to expire stale dismissed-uncertain records', async () => {
+        const fs = await import('node:fs')
+        const path = await import('node:path')
+        const {
+            PENDING_QUEUED_MESSAGE_MAX_AGE_MS,
+            dismissUncertainMessageId,
+            readDismissedUncertainMessageIds,
+        } = await import('../../src/utils/pendingQueuedMessages')
+
+        const src = fs.readFileSync(
+            path.resolve(__dirname, '../../src/utils/pendingQueuedMessages.ts'),
+            'utf8',
+        )
+        const occurrences = src.match(/\bPENDING_QUEUED_MESSAGE_MAX_AGE_MS\b/g) || []
+        expect(occurrences.length).toBeGreaterThanOrEqual(2)
+
+        const t0 = 1_700_000_000_000
+        dismissUncertainMessageId('msg-dismissed', t0)
+        expect(readDismissedUncertainMessageIds(t0 + 1_000).has('msg-dismissed')).toBe(true)
+        expect(readDismissedUncertainMessageIds(t0 + PENDING_QUEUED_MESSAGE_MAX_AGE_MS + 1).has('msg-dismissed')).toBe(false)
+    })
 })

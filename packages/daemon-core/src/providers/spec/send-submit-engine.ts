@@ -210,7 +210,7 @@ export class SendSubmitEngine {
                 this.notifyWrite(attempt, writes.every(Boolean) ? 'submitted' : 'uncertain');
                 // An unconfirmed body cannot be proven by another CR. A failed
                 // CR with a confirmed body may still get a later submit ACK.
-                if (writes.slice(0, -1).some(written => !written) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
+                if ((writes.slice(0, -1).some(written => !written) || this.win32SubmitTimer === null) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
             });
         }
     }
@@ -243,6 +243,7 @@ export class SendSubmitEngine {
     private win32SubmitTimer: ReturnType<typeof setTimeout> | null = null;
     private win32WriteTimer: ReturnType<typeof setTimeout> | null = null;
     private plainSubmitTimer: ReturnType<typeof setTimeout> | null = null;
+    private plainSubmitAttempt: WriteAttempt | null | undefined = null;
 
     constructor(private readonly host: DriverHost) {}
 
@@ -261,6 +262,7 @@ export class SendSubmitEngine {
     cancelTimers(): void {
         this.writeObservers.clear();
         this.writeAttempt = undefined;
+        this.plainSubmitAttempt = null;
         if (this.win32SubmitTimer) { clearTimeout(this.win32SubmitTimer); this.win32SubmitTimer = null; }
         if (this.win32WriteTimer) { clearTimeout(this.win32WriteTimer); this.win32WriteTimer = null; }
         if (this.plainSubmitTimer) { clearTimeout(this.plainSubmitTimer); this.plainSubmitTimer = null; }
@@ -269,7 +271,7 @@ export class SendSubmitEngine {
     }
 
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean): QueuedWriteOutcome {
+    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome {
         // ★ win32 first, before any state is read, so the refused platform can
         // never reach a write regardless of what the FSM believes. The delayed
         // lone CR that makes this work on POSIX is the same shape ConPTY absorbs
@@ -303,7 +305,11 @@ export class SendSubmitEngine {
         // stall the ordinary FIFO drain for that whole window, blocking the very
         // queue the owner is trying to get ahead of. drainPendingSends' own
         // `status !== 'idle'` gate already prevents a concurrent write here.
-        this.actuallySendMessage(text, bracketedPaste, { midGeneration: true });
+        const attempt: WriteAttempt | undefined = messageId
+            ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) }
+            : undefined;
+        if (attempt) this.notifyWrite(attempt, 'started');
+        this.actuallySendMessage(text, bracketedPaste, { midGeneration: true, attempt });
         return { accepted: true };
     }
 
@@ -531,9 +537,20 @@ export class SendSubmitEngine {
      *  cancel it instead of letting it fire into a killed PTY. */
     private schedulePlainSubmit(submitKey: string, delayMs: number, receiptAttempt: WriteAttempt | null | undefined = this.writeAttempt): void {
         const attempt = receiptAttempt;
-        if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
+        if (this.plainSubmitTimer) {
+            clearTimeout(this.plainSubmitTimer);
+            this.plainSubmitTimer = null;
+            if (this.plainSubmitAttempt && this.plainSubmitAttempt !== attempt) {
+                this.notifyWrite(this.plainSubmitAttempt, 'uncertain');
+                if (this.writeObservers.get(this.plainSubmitAttempt.messageId) === this.plainSubmitAttempt.observer) {
+                    this.writeObservers.delete(this.plainSubmitAttempt.messageId);
+                }
+            }
+        }
+        this.plainSubmitAttempt = attempt;
         this.plainSubmitTimer = setTimeout(() => {
             this.plainSubmitTimer = null;
+            this.plainSubmitAttempt = null;
             this.writeKeys(submitKey, true, attempt);
         }, delayMs);
     }
@@ -581,8 +598,8 @@ export class SendSubmitEngine {
     }
 
 
-    private actuallySendMessage(text: string, bracketedPaste?: boolean, opts?: { midGeneration?: boolean }): void {
-        const attempt = opts?.midGeneration ? null : this.writeAttempt;
+    private actuallySendMessage(text: string, bracketedPaste?: boolean, opts?: { midGeneration?: boolean; attempt?: WriteAttempt }): void {
+        const attempt = opts?.midGeneration ? (opts.attempt ?? null) : this.writeAttempt;
         const sm = this.host.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
@@ -631,13 +648,14 @@ export class SendSubmitEngine {
             // write. The paste CLOSE marker is not a submit — the CR still is.
             const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text}${BRACKETED_PASTE_CLOSE}` : text;
             this.writeKeys(body, false, attempt);
+            if (attempt) attempt.bodyFinished = true;
             // ★ The CR MUST be a separate, later write. An atomic `text + '\r'`
             // is the retired force-inject shape and is NOT consumed mid-turn
             // (see ISpecDriver.sendMessageDuringGeneration for the A/B).
             // schedulePlainSubmit is used unconditionally — never the
             // `beforeSubmit === 0` immediate branch below — so the gap always
             // exists even if a spec declares no delay.
-            this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), null);
+            this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), attempt);
             return;
         }
 

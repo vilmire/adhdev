@@ -14,6 +14,8 @@ import { buildCliStructuredInputPrompt } from '../../src/providers/cli-provider-
 import { recordAcknowledgedUserInput } from '../../src/providers/cli-provider-runtime-messages.js';
 import { encodeChatMessageHead, chatMessageFromWire } from '../../src/seqscribe/transcript-keyed-codec.js';
 
+export const WRAPPED_TURN = (body: string) => `\n\n<pasted_content id="240c">\n${body}\n</pasted_content id="240c">\n`;
+
 /** No real process, network, config, owner data or private image is involved. */
 export function outgoingContractFixture(sessionId: string, confirmed = true) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-outgoing-contract-'));
@@ -34,11 +36,18 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
             const out = engine.handleSendMessage(text, opts.bracketedPaste, opts.messageId);
             return out.status === 'queued' ? { status: 'queued', position: out.queueDepth } : { status: 'delivered' };
         },
+        claimQueuedSend: (id: string) => engine.claimQueuedSend(id),
+        restoreQueuedSend: (claimed: any) => engine.restoreQueuedSend(claimed),
+        sendMessageDuringGeneration: (text: string, bp?: boolean, id?: string) => engine.sendMessageDuringGeneration(text, bp, id),
+        reserveDrain: (ttlMs: number) => engine.reserveDrain(ttlMs),
+        releaseDrain: () => engine.releaseDrain(),
+        interruptTurn: async () => { engine.drainPendingSends(); status = 'idle'; return { ok: true as const, keyName: 'esc', bytes: 1, confidence: 'declared' as const }; },
         observeSendWrite: (id: string, observer: any) => engine.observeSendWrite(id, observer),
         hasQueuedSend: (id: string) => engine.hasQueuedSend(id),
         recordAcknowledgedUserInput: (input: any, id: string, receipt: any) => recordAcknowledgedUserInput(host, input, id, receipt) };
     const store = new OutgoingReceiptStore(path.join(directory, 'receipts'));
-    let service = createSessionInputService({ resolveSession: id => id === sessionId ? target : null, receiptStore: store });
+    const interruptTuning = { minBusyDwellMs: 0, pollMs: 1, timeoutMs: 500 };
+    let service = createSessionInputService({ resolveSession: id => id === sessionId ? target : null, receiptStore: store, interrupt: interruptTuning });
     let frame = 0;
     // All action ingress dependencies are synthetic and stored under this temp dir.
     const registry = new AssistantRegistry({ configDir: directory });
@@ -56,8 +65,9 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
             instanceManager: { getInstance: (id: string) => id === sessionId ? runtime : actionAvailable && id === 'synthetic-worker' ? worker : null } } };
 
     return {
-        sessionId, directory, writes, engine, store,
+        sessionId, directory, writes, acknowledgments, engine, store, host,
         submit: (message: any) => service.submit(message),
+        sendNow: (message: any) => service.submit({ ...message, policy: { mode: 'send_now' } }),
         authorizeAction() {
             actionAvailable = true;
             assistantExecution.attest(sessionId, runtime, sessionAdapter, 'claude-cli',
@@ -76,10 +86,11 @@ export function outgoingContractFixture(sessionId: string, confirmed = true) {
         receipts: (ids: string[]) => service.getReceipts(sessionId, ids),
         drain() { status = 'idle'; engine.drainPendingSends(); },
         idle() { status = 'idle'; },
+        generating() { status = 'generating'; engine.drainPendingSends(); },
         acknowledgeOne() { acknowledgments.shift()?.(); },
         acknowledge() { for (const resolve of acknowledgments.splice(0)) resolve(); status = 'generating'; engine.drainPendingSends(); },
         restartService() { service = createSessionInputService({ resolveSession: () => target,
-            receiptStore: new OutgoingReceiptStore(path.join(directory, 'receipts')) }); },
+            receiptStore: new OutgoingReceiptStore(path.join(directory, 'receipts')), interrupt: interruptTuning }); },
         wire(native = false) {
             // Exercise native dedup before encoding and real browser consumption.
             const messages = native ? mergeConversationMessages(host.runtimeMessages,

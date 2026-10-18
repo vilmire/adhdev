@@ -261,6 +261,7 @@ export default function DashboardRemoteDialog({
                                 handleSendChat={cmds.handleSendChat}
                                 handleSendNowQueued={cmds.handleSendNowQueued}
                                 handleCancelQueued={cmds.handleCancelQueued}
+                                handleRetryPendingMessage={cmds.handleRetryPendingMessage}
                                 isSendingChat={cmds.isSendingChat}
                                 sendFeedbackMessage={cmds.sendFeedbackMessage}
                                 pendingLocalMessage={cmds.pendingLocalMessage}

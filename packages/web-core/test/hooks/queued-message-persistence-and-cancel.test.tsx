@@ -276,7 +276,7 @@ describe('CANCEL — per-item withdrawal', () => {
         await queueBodies(h, ['delivered immediately'])
 
         const entry = h.get().pendingLocalMessages[0]
-        expect(entry.queued).toBe(true)
+        expect(entry.queued).toBe(false)
         expect(entry.settled).toBe(true)
 
         send.mockClear()

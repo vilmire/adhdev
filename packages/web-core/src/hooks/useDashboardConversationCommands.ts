@@ -11,7 +11,12 @@ import { retirePendingLocalMessages } from '../components/dashboard/conversation
 import type { DashboardMessage } from '../components/dashboard/types'
 import { getExplicitSessionRevealCommand } from '../components/dashboard/dashboardSessionCommands'
 import {
+    clearDismissedUncertainMessageId,
     createPendingQueuedMessageId,
+    OUTGOING_RECEIPT_POLL_BASE_MS,
+    OUTGOING_RECEIPT_POLL_MAX_AGE_MS,
+    OUTGOING_RECEIPT_POLL_MAX_MS,
+    readDismissedUncertainMessageIds,
     readPendingQueuedMessages,
     writePendingQueuedMessages,
     MAX_PENDING_QUEUED_MESSAGES,
@@ -84,6 +89,11 @@ export interface DashboardConversationCommands {
      * the handler for why a local-only removal would be a lie.
      */
     handleCancelQueued: (pendingId: string) => Promise<boolean>
+    /**
+     * Retry a failed or unconfirmed-stale pending message by removing the
+     * failed entry and re-submitting its original text/attachments with a new id.
+     */
+    handleRetryPendingMessage?: (pendingId?: string) => Promise<boolean>
     /**
      * ★ (QUEUED-SEND-STUCK-FOREVER) Reconcile the local queue against the live
      * transcript: retire bodies the daemon has echoed back, and mark bodies that
@@ -433,23 +443,98 @@ export function useDashboardConversationCommands({
 
     const receiptConversationRef = useRef(activeConv)
     receiptConversationRef.current = activeConv
-    const hasReceiptPending = pendingLocalMessages.some(entry => entry.requiresReceipt)
+    const conversationMountedAtRef = useRef(Date.now())
+    const dismissedUncertainOnRender = readDismissedUncertainMessageIds()
+    const activeReceiptPendingKey = pendingLocalMessages
+        .filter(entry =>
+            entry.requiresReceipt
+            && !entry.sendFailed
+            && entry.outgoingReceipt?.state !== 'failed'
+            && !dismissedUncertainOnRender.has(entry.id),
+        )
+        .map(entry => entry.id)
+        .join(',')
     // Reconcile native sends from authoritative, correlated write receipts.
     // Read-only replay survives missing transcript events and reconnects; it
     // never resubmits a body. Text echoes remain a legacy non-PTY render aid.
+    // Polls with exponential backoff and a bounded max age after which an
+    // unconfirmed message is marked stale/uncertain (with Retry) and polling stops.
     useEffect(() => {
         const conversation = receiptConversationRef.current
-        if (!conversation || !hasReceiptPending) return
+        if (!conversation || !activeReceiptPendingKey) return
         const key = conversation.tabKey
+        const mountAt = conversationMountedAtRef.current
         let cancelled = false
         let reading = false
+        let attempt = 0
+        let timer: ReturnType<typeof setTimeout> | null = null
+
+        const clearScheduled = () => {
+            if (timer !== null) {
+                clearTimeout(timer)
+                timer = null
+            }
+        }
+
+        const getPollableEntries = (now: number) => {
+            const dismissed = readDismissedUncertainMessageIds(now)
+            return pendingLocalMessagesRef.current.filter(e =>
+                e.requiresReceipt
+                && !e.sendFailed
+                && e.outgoingReceipt?.state !== 'failed'
+                && !dismissed.has(e.id)
+                && (now - Math.max(e.sentAt, mountAt) < OUTGOING_RECEIPT_POLL_MAX_AGE_MS),
+            )
+        }
+
+        const markExpiredEntriesStale = (now: number) => {
+            const dismissed = readDismissedUncertainMessageIds(now)
+            updatePendingMessages(prev => {
+                let changed = false
+                const next = prev.map(entry => {
+                    if (
+                        entry.requiresReceipt
+                        && !entry.sendFailed
+                        && entry.outgoingReceipt?.state !== 'failed'
+                        && (!entry.stale || !entry.deliveryUncertain)
+                        && !dismissed.has(entry.id)
+                        && (now - Math.max(entry.sentAt, mountAt) >= OUTGOING_RECEIPT_POLL_MAX_AGE_MS)
+                    ) {
+                        changed = true
+                        return { ...entry, stale: true, deliveryUncertain: true }
+                    }
+                    return entry
+                })
+                return changed ? next : prev
+            })
+        }
+
+        const scheduleNext = () => {
+            if (cancelled) return
+            const now = Date.now()
+            markExpiredEntriesStale(now)
+            if (getPollableEntries(now).length === 0) return
+            const delay = Math.min(OUTGOING_RECEIPT_POLL_MAX_MS, OUTGOING_RECEIPT_POLL_BASE_MS * Math.pow(2, attempt))
+            attempt += 1
+            clearScheduled()
+            timer = setTimeout(() => {
+                timer = null
+                void refresh()
+            }, delay)
+        }
+
         const refresh = async () => {
+            if (cancelled) return
+            const now = Date.now()
+            markExpiredEntriesStale(now)
+            const pollable = getPollableEntries(now)
+            if (pollable.length === 0) return
             if (reading) return
             reading = true
             try {
                 const target = getRouteTarget(conversation)
                 if (!target) return
-                const ids = pendingLocalMessagesRef.current.filter(e => e.requiresReceipt).map(e => e.id)
+                const ids = pollable.map(e => e.id)
                 const raw = await sendDaemonCommand(target, 'outgoing_receipts', { ...getProviderArgs(conversation), messageIds: ids })
                 const result = unwrapCommandResult(raw)
                 if (cancelled || pendingStoreKeyRef.current !== key || !Array.isArray(result?.receipts)) return
@@ -457,17 +542,27 @@ export function useDashboardConversationCommands({
             } catch {
                 if (!cancelled && pendingStoreKeyRef.current === key) {
                     updatePendingMessages(prev => prev.map(entry => entry.requiresReceipt
-                        ? { ...entry, queued: true, deliveryUncertain: true } : entry))
+                        ? { ...entry, deliveryUncertain: true } : entry))
                 }
+            } finally {
+                reading = false
+                scheduleNext()
             }
-            finally { reading = false }
         }
+
         void refresh()
-        const timer = setInterval(() => void refresh(), 1000)
-        const reconnect = () => { void refresh() }
+        const reconnect = () => {
+            attempt = 0
+            clearScheduled()
+            void refresh()
+        }
         window.addEventListener('online', reconnect)
-        return () => { cancelled = true; clearInterval(timer); window.removeEventListener('online', reconnect) }
-    }, [activeConv?.tabKey, activeConv?.sessionId, activeConv?.daemonId, activeConv?.connectionState, hasReceiptPending, sendDaemonCommand, updatePendingMessages])
+        return () => {
+            cancelled = true
+            clearScheduled()
+            window.removeEventListener('online', reconnect)
+        }
+    }, [activeConv?.tabKey, activeConv?.sessionId, activeConv?.daemonId, activeConv?.connectionState, activeReceiptPendingKey, sendDaemonCommand, updatePendingMessages])
 
     const retireEchoedPendingMessages = useCallback((liveMessages: DashboardMessage[]) => {
         updatePendingMessages(prev => {
@@ -477,6 +572,7 @@ export function useDashboardConversationCommands({
     }, [updatePendingMessages])
 
     useEffect(() => {
+        conversationMountedAtRef.current = Date.now()
         setSendFeedbackMessage(null)
         setLastSendQueued(false)
         // Scoped per conversation: a pending bubble belongs to the tab it was
@@ -489,7 +585,7 @@ export function useDashboardConversationCommands({
         // conversation with their message missing.
         setPendingLocalMessages(pendingStoreKey ? readPendingQueuedMessages(pendingStoreKey).map(entry => {
             if (entry.requiresReceipt || activeConv?.transport !== 'pty') return entry
-            return { ...entry, queued: true, requiresReceipt: true, targetSessionId: activeConv?.sessionId,
+            return { ...entry, queued: entry.queued === true, requiresReceipt: true, targetSessionId: activeConv?.sessionId,
                 inputDigest: outgoingInputDigest(entry.input ?? { parts: [{ type: 'text', text: entry.content }], textFallback: entry.content }),
                 deliveryUncertain: true }
         }) : [])
@@ -533,7 +629,7 @@ export function useDashboardConversationCommands({
         const inputEnvelope = buildInputEnvelope(message, attachments)
         const inputDigest = outgoingInputDigest(inputEnvelope ?? { parts: [{ type: 'text', text: message }], textFallback: message })
         if (pendingLocalMessagesRef.current.some(entry => entry.requiresReceipt && entry.inputDigest === inputDigest
-            && entry.targetSessionId === activeConv.sessionId && entry.outgoingReceipt?.state !== 'failed' && (entry.deliveryUncertain || !entry.outgoingReceipt))) {
+            && entry.targetSessionId === activeConv.sessionId && entry.outgoingReceipt?.state !== 'failed' && !entry.sendFailed && (entry.deliveryUncertain || !entry.outgoingReceipt))) {
             setSendFeedbackMessage('Delivery unconfirmed — do not resend.')
             return false
         }
@@ -582,7 +678,7 @@ export function useDashboardConversationCommands({
         let sendSettlement: SendSettlement = 'not-parked'
         updatePendingMessages(prev => [
             ...prev,
-            { id: pendingId, content: message, sentAt: now, requiresReceipt: activeConv.transport === 'pty',
+            { id: pendingId, content: message, sentAt: now, queued: false, requiresReceipt: activeConv.transport === 'pty',
                 targetSessionId: activeConv.sessionId,
                 inputDigest,
                 ...(inputEnvelope ? { input: inputEnvelope } : {}) },
@@ -593,9 +689,9 @@ export function useDashboardConversationCommands({
             if (!routeTarget) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
                 // Nothing was sent, so no echo will ever retire the bubble.
-                // Remove only THIS entry — other bodies may still be legitimately
-                // parked in the daemon queue.
-                updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
+                // Mark as failed so the owner keeps their text and can Retry.
+                updatePendingMessages(prev => prev.map(entry => entry.id === pendingId
+                    ? { ...entry, sendFailed: true, deliveryUncertain: true } : entry))
                 setSendFeedbackMessage('Unable to send message right now.')
                 return false
             }
@@ -608,6 +704,8 @@ export function useDashboardConversationCommands({
                 && receipt.sessionId === activeConv.sessionId && receipt.inputDigest === inputDigest) {
                 lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
                 setLastSendQueued(false)
+                updatePendingMessages(prev => prev.map(entry => entry.id === pendingId
+                    ? { ...entry, sendFailed: true, deliveryUncertain: true } : entry))
                 setSendFeedbackMessage(getInlineSendFailureMessage(new Error(res?.error || res?.reason || 'Rejected before writing.')))
                 return false
             }
@@ -647,8 +745,11 @@ export function useDashboardConversationCommands({
                 throw new Error(res?.error || 'Send failed')
             }
 
+            // Accepted by an idle session: keep `queued: false` so it renders
+            // immediately as a normal sent user message in the transcript
+            // rather than flashing as a queued strip item first.
             updatePendingMessages(prev => prev.map(entry => entry.id === pendingId && entry.requiresReceipt
-                ? { ...entry, queued: true, deliveryUncertain: true } : entry))
+                ? { ...entry, queued: false, deliveryUncertain: true } : entry))
             setLastSendQueued(false)
             setSendFeedbackMessage(null)
             return true
@@ -660,11 +761,10 @@ export function useDashboardConversationCommands({
                 console.warn('Send blocked/failed', e)
             }
             lastSendRef.current = clearRecentSendOnFailure(lastSendRef.current, attempt)
-            // A command timeout cannot prove whether a native write occurred.
-            // Retain the exact native input as uncertain; legacy non-PTY
-            // optimistic bubbles keep their previous failure behavior.
-            updatePendingMessages(prev => prev.flatMap(entry => entry.id !== pendingId ? [entry]
-                : entry.requiresReceipt ? [{ ...entry, queued: true, deliveryUncertain: true }] : []))
+            // Keep the message text marked as failed/uncertain so the owner
+            // can retry without re-typing.
+            updatePendingMessages(prev => prev.map(entry => entry.id === pendingId
+                ? { ...entry, sendFailed: true, deliveryUncertain: true } : entry))
             setSendFeedbackMessage(getInlineSendFailureMessage(e))
             return false
         } finally {
@@ -785,7 +885,7 @@ export function useDashboardConversationCommands({
             if (res?.queuedWithAgent === true) {
                 setLastSendQueued(false)
                 updatePendingMessages(prev => prev.map(entry => (
-                    entry.id === targetId ? { ...entry, queued: true, deliveryUncertain: true } : entry
+                    entry.id === targetId ? { ...entry, queued: false, deliveryUncertain: true } : entry
                 )))
                 setSendFeedbackMessage(null)
                 return true
@@ -807,7 +907,7 @@ export function useDashboardConversationCommands({
             // until matching write evidence retires it, exactly as a normal send.
             setLastSendQueued(false)
             updatePendingMessages(prev => prev.map(entry => (
-                entry.id === targetId ? { ...entry, queued: true, deliveryUncertain: true } : entry
+                entry.id === targetId ? { ...entry, queued: false, deliveryUncertain: true } : entry
             )))
             setSendFeedbackMessage(null)
             return true
@@ -846,7 +946,8 @@ export function useDashboardConversationCommands({
     const handleCancelQueued = useCallback(async (pendingId: string): Promise<boolean> => {
         if (!activeConv || !pendingId) return false
         const pending = pendingLocalMessagesRef.current.find(entry => entry.id === pendingId)
-        if (pending?.outgoingReceipt?.state === 'failed' && pending.outgoingReceipt.proof === 'not_written') {
+        if ((pending?.outgoingReceipt?.state === 'failed' && pending.outgoingReceipt.proof === 'not_written') || pending?.sendFailed === true) {
+            clearDismissedUncertainMessageId(pendingId)
             updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
             return true
         }
@@ -870,6 +971,7 @@ export function useDashboardConversationCommands({
         // `cancelled: 0`, while skipping the ask costs the owner a message they
         // believed they had withdrawn.
         if (pending.settled && !pending.queued) {
+            if (pending.requiresReceipt) return false
             updatePendingMessages(prev => prev.filter(entry => entry.id !== pendingId))
             return true
         }
@@ -944,6 +1046,29 @@ export function useDashboardConversationCommands({
             return false
         }
     }, [activeConv, sendDaemonCommand, updatePendingMessages])
+
+    const handleRetryPendingMessage = useCallback(async (pendingId?: string): Promise<boolean> => {
+        if (!activeConv || sendInFlightRef.current) return false
+        const queue = pendingLocalMessagesRef.current
+        const target = pendingId
+            ? queue.find(entry => entry.id === pendingId)
+            : queue.find(entry => entry.sendFailed === true || entry.outgoingReceipt?.state === 'failed' || entry.stale === true || entry.deliveryUncertain === true)
+        if (!target) return false
+        const attachments: ImageAttachment[] | undefined = target.input?.parts
+            ?.filter(part => part.type === 'image' && typeof part.data === 'string' && part.data.length > 0)
+            .map((part, idx) => ({
+                id: `retry-${target.id}-${idx}`,
+                dataUrl: `data:${part.mimeType || 'image/png'};base64,${part.data}`,
+                mimeType: part.mimeType || 'image/png',
+                name: part.alt || `image-${idx + 1}.png`,
+            }))
+        clearDismissedUncertainMessageId(target.id)
+        lastSendRef.current = null
+        const nextQueue = queue.filter(entry => entry.id !== target.id)
+        pendingLocalMessagesRef.current = nextQueue
+        updatePendingMessages(prev => prev.filter(entry => entry.id !== target.id))
+        return handleSendChat(target.content, attachments && attachments.length > 0 ? attachments : undefined)
+    }, [activeConv, handleSendChat, updatePendingMessages])
 
     const handleRelaunch = useCallback(async () => {
         if (!activeConv) return
@@ -1043,6 +1168,7 @@ export function useDashboardConversationCommands({
         handleSendChat,
         handleSendNowQueued,
         handleCancelQueued,
+        handleRetryPendingMessage,
         retireEchoedPendingMessages,
         handleRelaunch,
         handleModalButton,
@@ -1057,6 +1183,7 @@ export function useDashboardConversationCommands({
         handleSendChat,
         handleSendNowQueued,
         handleCancelQueued,
+        handleRetryPendingMessage,
         retireEchoedPendingMessages,
         handleRelaunch,
         handleModalButton,

@@ -171,7 +171,7 @@ export interface ISpecDriver {
      *
      * Optional so test doubles implementing ISpecDriver need not provide it.
      */
-    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean): QueuedWriteOutcome;
+    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome;
     /**
      * NOTIF-IMMEDIACY: does the loaded spec declare
      * `send_message.mid_generation_queue`?

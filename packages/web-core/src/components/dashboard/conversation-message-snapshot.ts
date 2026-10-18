@@ -1,3 +1,4 @@
+import { unwrapPastedContent } from '@adhdev/mesh-shared'
 import { applyOutgoingReceipts, type ReceiptPending } from '../../utils/outgoingReceipts'
 import type { SessionChatSnapshot } from './session-chat-controller'
 import type { ActiveConversation, DashboardMessage } from './types'
@@ -51,6 +52,17 @@ export interface PendingLocalMessage extends ReceiptPending {
      * owner most likely wants to resend.
      */
     stale?: boolean
+    /** True when the send was rejected or threw before delivery could be confirmed. */
+    sendFailed?: boolean
+}
+
+export function shouldRenderInPendingQueueStrip(entry: PendingLocalMessage): boolean {
+    if (!entry.id) return false
+    return entry.queued === true
+        || entry.sendFailed === true
+        || entry.outgoingReceipt?.state === 'failed'
+        || entry.stale === true
+        || (entry.deliveryUncertain === true && entry.queued !== false)
 }
 
 /**
@@ -65,7 +77,7 @@ export interface PendingLocalMessage extends ReceiptPending {
 export const PENDING_LOCAL_MESSAGE_MAX_AGE_MS = 120_000
 
 function normalizeForEchoMatch(value: unknown): string {
-    if (typeof value === 'string') return value.trim()
+    if (typeof value === 'string') return unwrapPastedContent(value).trim()
     if (value == null) return ''
     try {
         return JSON.stringify(value)
@@ -420,18 +432,38 @@ export function withPendingLocalMessages(
 
     // Echo budget per distinct body: each live echo retires at most one entry.
     const echoBudget = new Map<string, number>()
+    const contentBudgetMessages = liveMessages.some(message => hasSourceMessageId(message))
+        ? liveMessages.filter(message => !hasSourceMessageId(message))
+        : liveMessages
     const bubbles: DashboardMessage[] = []
 
     for (const entry of pending) {
         if (entry.requiresReceipt) {
-            if (entry.queued || entry.deliveryUncertain || applyOutgoingReceipts([entry], liveMessages.map(m => (m.meta as Record<string, unknown> | undefined)?.outgoingReceipt)).length === 0) continue;
-            bubbles.push(buildPendingBubble(entry));
-            continue;
+            if (applyOutgoingReceipts([entry], liveMessages.map(m => (m.meta as Record<string, unknown> | undefined)?.outgoingReceipt)).length === 0) continue
+            const target = entry.content.trim()
+            if (liveMessages.some(message => String(message.role || '').toLowerCase() === 'user' && echoMatchesByMessageId(message, entry.id))) {
+                continue
+            }
+            if (target) {
+                if (!echoBudget.has(target)) echoBudget.set(target, countEchoedMessages(contentBudgetMessages, target))
+                const remaining = echoBudget.get(target) || 0
+                if (remaining > 0) {
+                    echoBudget.set(target, remaining - 1)
+                    continue
+                }
+            }
+            if (options.excludeQueued && shouldRenderInPendingQueueStrip(entry)) continue
+            if (!options.excludeQueued && (entry.queued || (entry.deliveryUncertain && entry.queued !== false))) continue
+            bubbles.push(buildPendingBubble(entry))
+            continue
         }
         const target = entry.content.trim()
         if (!target) continue
         if (now - entry.sentAt > PENDING_LOCAL_MESSAGE_MAX_AGE_MS) continue
-        if (!echoBudget.has(target)) echoBudget.set(target, countEchoedMessages(liveMessages, target))
+        if (liveMessages.some(message => String(message.role || '').toLowerCase() === 'user' && echoMatchesByMessageId(message, entry.id))) {
+            continue
+        }
+        if (!echoBudget.has(target)) echoBudget.set(target, countEchoedMessages(contentBudgetMessages, target))
         const remaining = echoBudget.get(target) || 0
         if (remaining > 0) {
             // This entry is accounted for by an echo already on screen — retire it
@@ -452,7 +484,7 @@ export function withPendingLocalMessages(
         // address (both its controls act on one FIFO entry by id), so dropping
         // an idless entry here too would remove the owner's waiting message from
         // every surface at once. The two filters must agree.
-        if (options.excludeQueued && entry.queued === true && !!entry.id) continue
+        if (options.excludeQueued && shouldRenderInPendingQueueStrip(entry)) continue
         bubbles.push(buildPendingBubble(entry))
     }
 

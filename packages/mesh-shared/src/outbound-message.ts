@@ -321,3 +321,20 @@ export function isOutboundMessage(value: unknown): value is OutboundMessage {
         && isSendPolicy(candidate.policy)
         && typeof candidate.createdAt === 'number'
 }
+
+const PASTED_OPEN_RE = /^\s*<pasted_content(?:\s+id="[^"]*")?\s*>\s*$/
+const PASTED_CLOSE_RE = /^\s*<\/pasted_content(?:\s+id="[^"]*")?\s*>\s*$/
+
+/**
+ * Drop the `<pasted_content>` envelope lines Claude Code wraps around a pasted
+ * input. Only a text that OPENS with the envelope is touched; anything else is
+ * returned unchanged. Shared across daemon transcript merge and web echo/display
+ * normalization so wrapped turns correlate identically.
+ */
+export function unwrapPastedContent(text: string): string {
+    const lines = text.replace(/\r\n?/g, '\n').split('\n')
+    const first = lines.findIndex((line) => line.trim())
+    if (first < 0 || !PASTED_OPEN_RE.test(lines[first])) return text
+    return lines.filter((line) => !PASTED_OPEN_RE.test(line) && !PASTED_CLOSE_RE.test(line)).join('\n')
+}
+

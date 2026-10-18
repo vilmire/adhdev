@@ -404,3 +404,79 @@ it('dismisses uncertainty only in local UI, then resurfaces an actual failed rec
     expect(strip()).not.toBeNull(); expect(container.querySelector('[role="status"]')).not.toBeNull();
     expect(container.querySelector('[role="img"]')?.textContent).toBe('⚠');
 });
+
+it('durably persists uncertain dismissal across unmount/remount, hides non-queued idle sends, and renders Retry on failed/stale rows', () => {
+    let store: Record<string, string> = {};
+    const storage: Storage = {
+        getItem: (key: string) => (key === 'lang' ? 'en' : (key in store ? store[key] : null)),
+        setItem: (key: string, val: string) => { store[key] = String(val); },
+        removeItem: (key: string) => { delete store[key]; },
+        clear: () => { store = {}; },
+        key: (i: number) => Object.keys(store)[i] ?? null,
+        get length() { return Object.keys(store).length; },
+    };
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true, writable: true });
+
+    // 1. An idle send (queued: false, deliveryUncertain: true, not stale/failed) is never rendered in PendingQueueStrip
+    render({
+        entries: [{
+            id: 'idle-send-1',
+            content: 'sent while idle',
+            sentAt: 1000,
+            queued: false,
+            deliveryUncertain: true,
+        }],
+    });
+    expect(strip()).toBeNull();
+
+    // 2. Durable dismiss survives remount
+    const uncertainEntry: PendingLocalMessage = {
+        ...parked('stuck-uncertain-1', 'historical stuck bubble'),
+        deliveryUncertain: true,
+        stale: true,
+        outgoingReceipt: {
+            version: 1,
+            messageId: 'stuck-uncertain-1',
+            sessionId: 's',
+            attemptId: 'a',
+            generation: 'g',
+            inputDigest: 'digest',
+            revision: 2,
+            state: 'uncertain',
+            proof: 'none',
+        },
+    };
+    render({ entries: [uncertainEntry] });
+    expect(strip()).not.toBeNull();
+    const dismissBtn = container.querySelector<HTMLButtonElement>('button');
+    expect(dismissBtn).not.toBeNull();
+    act(() => { dismissBtn!.click(); });
+    expect(strip()).toBeNull();
+
+    // Unmount and remount a fresh tree: still dismissed!
+    act(() => { root.unmount(); });
+    root = createRoot(container);
+    render({ entries: [uncertainEntry] });
+    expect(strip()).toBeNull();
+
+    // 3. Failed or max-age stale entry shows Retry button when onRetry is wired
+    const onRetry = vi.fn();
+    const onCancelQueued = vi.fn();
+    render({
+        entries: [{
+            id: 'failed-1',
+            content: 'failed to send',
+            sentAt: 2000,
+            queued: false,
+            sendFailed: true,
+            deliveryUncertain: true,
+        }],
+        onRetry,
+        onCancelQueued,
+    });
+    expect(strip()).not.toBeNull();
+    const retryBtn = container.querySelector<HTMLButtonElement>('[data-testid="pending-queue-retry"]');
+    expect(retryBtn).not.toBeNull();
+    act(() => { retryBtn!.click(); });
+    expect(onRetry).toHaveBeenCalledWith('failed-1');
+});

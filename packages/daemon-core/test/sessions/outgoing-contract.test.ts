@@ -152,11 +152,146 @@ it('outgoing_receipts command replays exact correlated receipts without writing 
     await f.submit(message);
     const accepted = f.receipts([message.messageId])[0];
     const beforeWrites = f.writes.length;
-    const result = await f.receiptsHandler([message.messageId, 'foreign-id']);
-    expect(result).toMatchObject({ success: true });
-    expect(result.receipts).toEqual([accepted]);
+    expect(await f.receiptsHandler([message.messageId, 'foreign-id'])).toMatchObject({ success: true, receipts: [accepted] });
     expect(f.writes).toHaveLength(beforeWrites);
     expect(await f.submit(message)).toMatchObject({ kind: 'duplicate' });
     expect(f.writes).toHaveLength(beforeWrites);
     expect(await f.receiptsHandler([])).toMatchObject({ success: true, receipts: [] });
+});
+
+it.each(['queue_drain', 'queue_send_now', 'fresh_send_now', 'interrupt', 'idle_immediate'] as const)(
+    'correlates native write acks to submitted receipt across route %s (and keeps void backend uncertain)',
+    async route => {
+        if (process.platform === 'win32' && (route === 'queue_send_now' || route === 'fresh_send_now')) return;
+        const f = outgoingContractFixture(message.sessionId, true);
+        fixtures.push(f);
+        let initialReceipt: any;
+
+        if (route === 'queue_drain') {
+            expect((await f.submit(message)).kind).toBe('queued');
+            initialReceipt = f.receipts([message.messageId])[0];
+            f.drain();
+        } else if (route === 'queue_send_now') {
+            expect((await f.submit(message)).kind).toBe('queued');
+            initialReceipt = f.receipts([message.messageId])[0];
+            const out = await f.sendNow(message);
+            expect(out).toMatchObject({ kind: 'delivered', route: 'agent_queue' });
+        } else if (route === 'fresh_send_now') {
+            const out = await f.sendNow(message);
+            expect(out).toMatchObject({ kind: 'delivered', route: 'agent_queue' });
+            initialReceipt = f.receipts([message.messageId])[0];
+        } else if (route === 'interrupt') {
+            const out = await f.submit({ ...message, policy: { mode: 'interrupt' } });
+            expect(out).toMatchObject({ kind: 'delivered', route: 'interrupt' });
+            initialReceipt = f.receipts([message.messageId])[0];
+        } else {
+            f.idle();
+            const out = await f.submit(message);
+            expect(out.kind).toBe('delivered');
+            initialReceipt = f.receipts([message.messageId])[0];
+        }
+
+        await expect.poll(() => f.writes.length, { timeout: 2000 }).toBe(2);
+        const uncertain = f.receipts([message.messageId])[0];
+        expect(uncertain).toMatchObject({ state: 'uncertain', revision: 2, attemptId: initialReceipt.attemptId, generation: initialReceipt.generation });
+
+        f.acknowledgeOne();
+        await sleep(0);
+        expect(f.receipts([message.messageId])[0].state).toBe('uncertain');
+
+        f.acknowledge();
+        await sleep(0);
+        const submitted = f.receipts([message.messageId])[0];
+        expect(submitted).toMatchObject({
+            state: 'submitted',
+            proof: 'native_write_ack',
+            revision: 3,
+            attemptId: initialReceipt.attemptId,
+            generation: initialReceipt.generation,
+        });
+        expect(f.wire()[0].outgoingReceipt?.state).toBe('submitted');
+
+        // Negative control: unconfirmed (void) backend stays uncertain on the same route
+        const fVoid = outgoingContractFixture(`${message.sessionId}-void`, false);
+        fixtures.push(fVoid);
+        if (route === 'queue_drain') {
+            await fVoid.submit({ ...message, sessionId: `${message.sessionId}-void` });
+            fVoid.drain();
+        } else if (route === 'queue_send_now') {
+            await fVoid.submit({ ...message, sessionId: `${message.sessionId}-void` });
+            await fVoid.sendNow({ ...message, sessionId: `${message.sessionId}-void` });
+        } else if (route === 'fresh_send_now') {
+            await fVoid.sendNow({ ...message, sessionId: `${message.sessionId}-void` });
+        } else if (route === 'interrupt') {
+            await fVoid.submit({ ...message, sessionId: `${message.sessionId}-void`, policy: { mode: 'interrupt' } });
+        } else {
+            fVoid.idle();
+            await fVoid.submit({ ...message, sessionId: `${message.sessionId}-void` });
+        }
+        await expect.poll(() => fVoid.writes.length, { timeout: 2000 }).toBe(2);
+        expect(fVoid.receipts([message.messageId])[0].state).toBe('uncertain');
+    },
+);
+
+it('isolates concurrent ordinary attempt A from mid-generation send-now attempt B', async () => {
+    if (process.platform === 'win32') return;
+    const f = outgoingContractFixture(message.sessionId, true);
+    fixtures.push(f);
+    const msgA = { ...message, messageId: 'attempt-a' };
+    const msgB = { ...message, messageId: 'attempt-b', input: { parts: [{ type: 'text', text: 'Follow up' }], textFallback: 'Follow up' } };
+
+    // A drains on idle and writes 2 chunks (unacknowledged), then session enters generating
+    f.idle();
+    expect((await f.submit(msgA)).kind).toBe('delivered');
+    await expect.poll(() => f.writes.length, { timeout: 2000 }).toBe(2);
+    expect(f.receipts(['attempt-a'])[0].state).toBe('uncertain');
+
+    // Flip status to generating while A's 2 native write acks are still pending, and send-now B
+    f.generating();
+    expect(await f.sendNow(msgB)).toMatchObject({ kind: 'delivered', route: 'agent_queue' });
+    await expect.poll(() => f.writes.length, { timeout: 2000 }).toBe(4);
+    expect(f.receipts(['attempt-a'])[0].state).toBe('uncertain');
+    expect(f.receipts(['attempt-b'])[0].state).toBe('uncertain');
+
+    // Acknowledge B's 2 writes (indices 2 and 3) first: B must become submitted while A stays uncertain
+    const ackB1 = f.acknowledgments[2];
+    const ackB2 = f.acknowledgments[3];
+    ackB1();
+    ackB2();
+    await sleep(0);
+    expect(f.receipts(['attempt-b'])[0].state).toBe('submitted');
+    expect(f.receipts(['attempt-a'])[0].state).toBe('uncertain');
+
+    // Now acknowledge A's 2 writes (indices 0 and 1): A advances to submitted
+    f.acknowledgments[0]();
+    f.acknowledgments[1]();
+    await sleep(0);
+    expect(f.receipts(['attempt-a'])[0].state).toBe('submitted');
+});
+
+it('pairs runtime user input acks with <pasted_content id="240c"> wrapped native transcript turns without duplicate bubbles', async () => {
+    const { mergeConversationMessages } = await import('../../src/providers/cli-provider-transcript-merge.js');
+    const { WRAPPED_TURN } = await import('../helpers/outgoing-contract-fixture.js');
+    const body = 'Multi-line relay prompt:\nLine 2 of the prompt\nLine 3 of the prompt';
+    const f = outgoingContractFixture(message.sessionId, true);
+    fixtures.push(f);
+    f.idle();
+    const msg = {
+        ...message,
+        messageId: 'wrapped-turn-msg',
+        input: { parts: [{ type: 'text', text: body }], textFallback: body },
+    };
+    await f.submit(msg);
+    await expect.poll(() => f.writes.length, { timeout: 2000 }).toBe(2);
+    f.acknowledge();
+    await sleep(0);
+
+    const merged = mergeConversationMessages(f.host.runtimeMessages, [
+        { role: 'user', content: WRAPPED_TURN(body), timestamp: Date.now() },
+        { role: 'assistant', content: 'Synthetic response', timestamp: Date.now() + 1 },
+    ]);
+    const userBubbles = merged.filter((m: any) => m.role === 'user');
+    expect(userBubbles).toHaveLength(1);
+    expect(userBubbles[0].meta?.sourceMessageId).toBe('wrapped-turn-msg');
+    expect(userBubbles[0].meta?.outgoingReceipt?.state).toBe('submitted');
 });

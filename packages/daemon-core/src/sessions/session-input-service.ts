@@ -86,7 +86,7 @@ export interface SessionInputTarget {
         options?: { bracketedPaste?: boolean; messageId?: string },
     ): Promise<{ status: 'queued'; position?: number } | { status: 'delivered' } | void>;
     /** POSIX split write into the agent's own input queue (driver refuses win32 first). */
-    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean): { accepted: boolean; reason?: string };
+    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean, messageId?: string): { accepted: boolean; reason?: string };
     /** Press the provider's own stop key. */
     interruptTurn?(): Promise<
         | { ok: true; keyName: string; bytes: number; confidence: 'proven' | 'declared' }
@@ -350,7 +350,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     }
 
     /** send_now while generating: claim (if parked) → split write → restore on refusal. */
-    async function splitWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean, input = msg.input): Promise<SubmitOutcome> {
+    async function splitWrite(target: SessionInputTarget, msg: OutboundMessage, parked: boolean, input = msg.input, noticeObserver?: (state: 'started' | 'submitted' | 'uncertain') => void): Promise<SubmitOutcome> {
         if (typeof target.sendMessageDuringGeneration !== 'function') {
             return refuse('not_supported', { restored: true });
         }
@@ -367,10 +367,20 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             if ('kind' in built) return built;
             body = built;
         }
+        const receipt = outgoingAttempts.get(msg.messageId);
+        if (receipt || noticeObserver) target.observeSendWrite?.(msg.messageId, state => {
+            if (noticeObserver) { try { noticeObserver(state); } catch { /* Persisted intent remains unknown; never retry native input. */ } }
+            if (!receipt) return;
+            try {
+                const updated = receiptStore.advance(receipt, state === 'submitted' ? 'submitted' : 'uncertain');
+                if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
+                if (state !== 'started') outgoingAttempts.delete(msg.messageId);
+            } catch { /* Native write is never retried when receipt persistence is uncertain. */ }
+        });
         let outcome: { accepted: boolean; reason?: string };
         try {
             assertMaintenanceAdmission();
-            outcome = target.sendMessageDuringGeneration(body.text, body.bracketedPaste);
+            outcome = target.sendMessageDuringGeneration(body.text, body.bracketedPaste, msg.messageId);
         } catch (e) {
             outcome = { accepted: false, reason: `threw:${(e as Error)?.message ?? e}` };
         }
@@ -514,7 +524,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             if ('refusal' in prepared) return refuse('unsupported_input', { message: prepared.refusal });
             input = prepared;
         }
-        if (strategy === 'split_write') return splitWrite(target, msg, parked, input);
+        if (strategy === 'split_write') return splitWrite(target, msg, parked, input, noticeObserver);
         if (strategy === 'interrupt') return interruptThenWrite(target, msg, parked, input, noticeObserver);
 
         // write

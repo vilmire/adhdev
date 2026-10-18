@@ -66,6 +66,8 @@ export interface ChatPaneProps {
     handleSendNowQueued?: (pendingId?: string) => Promise<boolean>;
     /** (QUEUED-SEND-CANCEL) Withdraw one still-waiting body by its pending id. */
     handleCancelQueued?: (pendingId: string) => Promise<boolean>;
+    /** Retry sending a failed or timed-out pending message. */
+    handleRetryPendingMessage?: (pendingId?: string) => Promise<boolean>;
     isSendingChat?: boolean;
     sendFeedbackMessage?: string | null;
     /** (OPTIMISTIC-USER-BUBBLE) Newest locally-rendered message awaiting its echo. */
@@ -192,6 +194,7 @@ export default function ChatPane({
     handleSendChat,
     handleSendNowQueued,
     handleCancelQueued,
+    handleRetryPendingMessage,
     isSendingChat = false,
     sendFeedbackMessage = null,
     pendingLocalMessage = null,
@@ -804,6 +807,7 @@ export default function ChatPane({
                 entries={pendingLocalMessages ?? (pendingLocalMessage ? [pendingLocalMessage] : [])}
                 onSendNow={handleSendNowQueued}
                 onCancelQueued={handleCancelQueued}
+                onRetry={handleRetryPendingMessage}
                 isSendingNow={isSendingChat}
             />
 

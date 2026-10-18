@@ -23695,6 +23695,7 @@ var require_dist3 = __commonJS({
       summarizeGitShape: () => summarizeGitShape,
       supportsQuota: () => supportsQuota,
       touchedFilesOutsideOwnership: () => touchedFilesOutsideOwnership,
+      unwrapPastedContent: () => unwrapPastedContent,
       withStatusProbeMarker: () => withStatusProbeMarker2
     });
     function readRecord2(value) {
@@ -24721,6 +24722,12 @@ var require_dist3 = __commonJS({
       if (!value || typeof value !== "object") return false;
       const candidate = value;
       return isMessageId(candidate.messageId) && typeof candidate.sessionId === "string" && candidate.sessionId.length > 0 && isInputEnvelopeWire(candidate.input) && isOutboundMessageOrigin(candidate.origin) && isSendPolicy(candidate.policy) && typeof candidate.createdAt === "number";
+    }
+    function unwrapPastedContent(text4) {
+      const lines = text4.replace(/\r\n?/g, "\n").split("\n");
+      const first = lines.findIndex((line) => line.trim());
+      if (first < 0 || !PASTED_OPEN_RE.test(lines[first])) return text4;
+      return lines.filter((line) => !PASTED_OPEN_RE.test(line) && !PASTED_CLOSE_RE.test(line)).join("\n");
     }
     function truncateString2(value, max) {
       if (value.length <= max) return value;
@@ -26300,6 +26307,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     var SEND_POLICY_MODES2;
     var SEND_REFUSAL_REASONS2;
     var SUBMIT_OUTCOME_KINDS;
+    var PASTED_OPEN_RE;
+    var PASTED_CLOSE_RE;
     var GOAL_MAX;
     var LIST_ITEM_MAX;
     var LIST_MAX_ITEMS;
@@ -26907,6 +26916,8 @@ ${renderWorkerProtocolFooter2(input)}`;
           "internal_error"
         ];
         SUBMIT_OUTCOME_KINDS = ["delivered", "queued", "duplicate", "refused"];
+        PASTED_OPEN_RE = /^\s*<pasted_content(?:\s+id="[^"]*")?\s*>\s*$/;
+        PASTED_CLOSE_RE = /^\s*<\/pasted_content(?:\s+id="[^"]*")?\s*>\s*$/;
         GOAL_MAX = 500;
         LIST_ITEM_MAX = 200;
         LIST_MAX_ITEMS = 12;
@@ -112698,6 +112709,7 @@ ${marker2}`,
       }
     };
     init_control_effects();
+    init_dist();
     init_dist2();
     function readOutgoingReceipt(value) {
       if (!value || typeof value !== "object") return null;
@@ -112737,7 +112749,7 @@ ${marker2}`,
       }));
       const getRole = (message) => typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
       const metadata = (message) => message.meta && typeof message.meta === "object" && !Array.isArray(message.meta) ? message.meta : {};
-      const normalizeText = (message) => flattenContent(message.content).replace(/\s+/g, " ").trim();
+      const normalizeText = (message) => unwrapPastedContent(flattenContent(message.content)).replace(/\s+/g, " ").trim();
       const parsedUserTurnsByText = /* @__PURE__ */ new Map();
       for (const parsedEntry of parsedEntries) {
         const parsedRole = getRole(parsedEntry.message);
@@ -129111,7 +129123,7 @@ ${output}` : "";
         log("info", `submit(${msg.messageId}) ${msg.origin}/${msg.policy.mode} \u2192 delivered (session ${msg.sessionId}, route=${opts.route}, len=${body.text.length})`);
         return { kind: "delivered", route: opts.route, ...detail };
       }
-      async function splitWrite(target, msg, parked, input = msg.input) {
+      async function splitWrite(target, msg, parked, input = msg.input, noticeObserver) {
         if (typeof target.sendMessageDuringGeneration !== "function") {
           return refuse3("not_supported", { restored: true });
         }
@@ -129126,10 +129138,26 @@ ${output}` : "";
           if ("kind" in built) return built;
           body = built;
         }
+        const receipt = outgoingAttempts.get(msg.messageId);
+        if (receipt || noticeObserver) target.observeSendWrite?.(msg.messageId, (state2) => {
+          if (noticeObserver) {
+            try {
+              noticeObserver(state2);
+            } catch {
+            }
+          }
+          if (!receipt) return;
+          try {
+            const updated = receiptStore.advance(receipt, state2 === "submitted" ? "submitted" : "uncertain");
+            if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
+            if (state2 !== "started") outgoingAttempts.delete(msg.messageId);
+          } catch {
+          }
+        });
         let outcome;
         try {
           assertMaintenanceAdmission();
-          outcome = target.sendMessageDuringGeneration(body.text, body.bracketedPaste);
+          outcome = target.sendMessageDuringGeneration(body.text, body.bracketedPaste, msg.messageId);
         } catch (e) {
           outcome = { accepted: false, reason: `threw:${e?.message ?? e}` };
         }
@@ -129252,7 +129280,7 @@ ${output}` : "";
           if ("refusal" in prepared) return refuse3("unsupported_input", { message: prepared.refusal });
           input = prepared;
         }
-        if (strategy === "split_write") return splitWrite(target, msg, parked, input);
+        if (strategy === "split_write") return splitWrite(target, msg, parked, input, noticeObserver);
         if (strategy === "interrupt") return interruptThenWrite(target, msg, parked, input, noticeObserver);
         if (parked) {
           const claimed = target.claimQueuedSend?.(msg.messageId) ?? null;
@@ -129514,7 +129542,7 @@ ${output}` : "";
         buildBody: (input) => buildCliInputBody(provider, input),
         sendMessage: (text4, options) => adapter.sendMessage(text4, options)
       };
-      if (typeof adapter.sendMessageDuringGeneration === "function") target.sendMessageDuringGeneration = (t, b) => adapter.sendMessageDuringGeneration(t, b);
+      if (typeof adapter.sendMessageDuringGeneration === "function") target.sendMessageDuringGeneration = (t, b, id4) => adapter.sendMessageDuringGeneration(t, b, id4);
       if (typeof adapter.interruptTurn === "function") target.interruptTurn = () => adapter.interruptTurn();
       if (typeof adapter.observeSendWrite === "function") target.observeSendWrite = (id4, observer) => adapter.observeSendWrite(id4, observer);
       if (typeof adapter.hasQueuedSend === "function") target.hasQueuedSend = (id4) => adapter.hasQueuedSend(id4);
@@ -148117,7 +148145,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (submit) {
           void Promise.all([...attempt.bodyWrites, confirmed]).then((writes) => {
             this.notifyWrite(attempt, writes.every(Boolean) ? "submitted" : "uncertain");
-            if (writes.slice(0, -1).some((written) => !written) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
+            if ((writes.slice(0, -1).some((written) => !written) || this.win32SubmitTimer === null) && this.writeObservers.get(attempt.messageId) === attempt.observer) this.writeObservers.delete(attempt.messageId);
           });
         }
       }
@@ -148149,6 +148177,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       win32SubmitTimer = null;
       win32WriteTimer = null;
       plainSubmitTimer = null;
+      plainSubmitAttempt = null;
       /** Number of bodies still parked, for shutdown logging. */
       get queueDepth() {
         return this.pendingSends.length;
@@ -148167,6 +148196,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       cancelTimers() {
         this.writeObservers.clear();
         this.writeAttempt = void 0;
+        this.plainSubmitAttempt = null;
         if (this.win32SubmitTimer) {
           clearTimeout(this.win32SubmitTimer);
           this.win32SubmitTimer = null;
@@ -148189,7 +148219,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text4, bracketedPaste) {
+      sendMessageDuringGeneration(text4, bracketedPaste, messageId) {
         if (process.platform === "win32") {
           LOG.info("FsmDriver", `[${this.host.specTag()}] mid-generation send refused \u2014 win32 split write unverified`);
           return { accepted: false, reason: "platform_unsupported" };
@@ -148201,7 +148231,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           "FsmDriver",
           `[${this.host.specTag()}] mid-generation split write \u2014 agent input queue (len=${text4.length})`
         );
-        this.actuallySendMessage(text4, bracketedPaste, { midGeneration: true });
+        const attempt = messageId ? { messageId, bodyWrites: [], bodyFinished: false, observer: this.writeObservers.get(messageId) } : void 0;
+        if (attempt) this.notifyWrite(attempt, "started");
+        this.actuallySendMessage(text4, bracketedPaste, { midGeneration: true, attempt });
         return { accepted: true };
       }
       /** SEND-NOW-WRONG-ITEM: see ISpecDriver.reserveDrain. */
@@ -148397,9 +148429,20 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        *  cancel it instead of letting it fire into a killed PTY. */
       schedulePlainSubmit(submitKey, delayMs, receiptAttempt = this.writeAttempt) {
         const attempt = receiptAttempt;
-        if (this.plainSubmitTimer) clearTimeout(this.plainSubmitTimer);
+        if (this.plainSubmitTimer) {
+          clearTimeout(this.plainSubmitTimer);
+          this.plainSubmitTimer = null;
+          if (this.plainSubmitAttempt && this.plainSubmitAttempt !== attempt) {
+            this.notifyWrite(this.plainSubmitAttempt, "uncertain");
+            if (this.writeObservers.get(this.plainSubmitAttempt.messageId) === this.plainSubmitAttempt.observer) {
+              this.writeObservers.delete(this.plainSubmitAttempt.messageId);
+            }
+          }
+        }
+        this.plainSubmitAttempt = attempt;
         this.plainSubmitTimer = setTimeout(() => {
           this.plainSubmitTimer = null;
+          this.plainSubmitAttempt = null;
           this.writeKeys(submitKey, true, attempt);
         }, delayMs);
       }
@@ -148447,7 +148490,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         });
       }
       actuallySendMessage(text4, bracketedPaste, opts) {
-        const attempt = opts?.midGeneration ? null : this.writeAttempt;
+        const attempt = opts?.midGeneration ? opts.attempt ?? null : this.writeAttempt;
         const sm = this.host.spec.send_message;
         this.submitUnconfirmed = false;
         const perChar = sm.delay_ms_per_char ?? 0;
@@ -148456,7 +148499,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (opts?.midGeneration) {
           const body = wrapInPaste ? `${BRACKETED_PASTE_OPEN}${text4}${BRACKETED_PASTE_CLOSE}` : text4;
           this.writeKeys(body, false, attempt);
-          this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), null);
+          if (attempt) attempt.bodyFinished = true;
+          this.schedulePlainSubmit(sm.submit_key, Math.max(beforeSubmit, MID_GENERATION_SUBMIT_MIN_GAP_MS), attempt);
           return;
         }
         if (wrapInPaste) {
@@ -150008,8 +150052,8 @@ trust_level = "trusted"
         return this.sends.handleSendMessage(text4, bracketedPaste, messageId);
       }
       /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-      sendMessageDuringGeneration(text4, bracketedPaste) {
-        return this.sends.sendMessageDuringGeneration(text4, bracketedPaste);
+      sendMessageDuringGeneration(text4, bracketedPaste, messageId) {
+        return this.sends.sendMessageDuringGeneration(text4, bracketedPaste, messageId);
       }
       /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */
       supportsMidGenerationQueue() {
@@ -153129,12 +153173,12 @@ ${text4}` : text4;
        * the caller's whole contract here is that `accepted: false` means nothing
        * was written and its previous fallback is safe to take.
        */
-      sendMessageDuringGeneration(text4, bracketedPaste) {
+      sendMessageDuringGeneration(text4, bracketedPaste, messageId) {
         if (typeof this.driver.sendMessageDuringGeneration !== "function") {
           return { accepted: false, reason: "not_supported" };
         }
         LOG.info("SpecAdapter", `[${this.cliType}] sendMessageDuringGeneration(len=${text4.length})`);
-        const outcome = this.driver.sendMessageDuringGeneration(text4, bracketedPaste);
+        const outcome = this.driver.sendMessageDuringGeneration(text4, bracketedPaste, messageId);
         if (!outcome.accepted) {
           LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text4.length})`);
         }

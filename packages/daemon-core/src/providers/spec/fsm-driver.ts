@@ -314,8 +314,8 @@ export class FsmDriver implements ISpecDriver {
     }
 
     /** SEND-NOW-AGENT-QUEUE: see ISpecDriver.sendMessageDuringGeneration. */
-    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean): QueuedWriteOutcome {
-        return this.sends.sendMessageDuringGeneration(text, bracketedPaste);
+    sendMessageDuringGeneration(text: string, bracketedPaste?: boolean, messageId?: string): QueuedWriteOutcome {
+        return this.sends.sendMessageDuringGeneration(text, bracketedPaste, messageId);
     }
 
     /** NOTIF-IMMEDIACY: see ISpecDriver.supportsMidGenerationQueue. */

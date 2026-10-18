@@ -53,7 +53,8 @@
  */
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PendingLocalMessage } from './conversation-message-snapshot';
+import { dismissUncertainMessageId, readDismissedUncertainMessageIds } from '../../utils/pendingQueuedMessages';
+import { shouldRenderInPendingQueueStrip, type PendingLocalMessage } from './conversation-message-snapshot';
 
 export interface PendingQueueStripProps {
     /** Every body still waiting, oldest first — the daemon's own drain order. */
@@ -68,20 +69,30 @@ export interface PendingQueueStripProps {
     onSendNow?: (pendingId?: string) => void;
     /** Withdraw this body from the daemon FIFO. */
     onCancelQueued?: (pendingId: string) => void;
+    /** Retry sending a failed or timed-out message while keeping its text. */
+    onRetry?: (pendingId: string) => void;
+    /** Notify the owner hook when an uncertain row is durably dismissed in the UI. */
+    onDismissUncertain?: (pendingId: string) => void;
     /** Disables the cancel affordance while a send/cancel round trip is open. */
     isSendingNow?: boolean;
+}
+
+function isFailedEntry(entry: PendingLocalMessage): boolean {
+    return entry.sendFailed === true || entry.outgoingReceipt?.state === 'failed';
 }
 
 function PendingQueueStripImpl({
     entries,
     onSendNow,
     onCancelQueued,
+    onRetry,
+    onDismissUncertain,
     isSendingNow,
 }: PendingQueueStripProps) {
     const { t } = useTranslation();
-    const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
+    const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissedUncertainMessageIds());
 
-    // Show parked bodies and unresolved native submissions. Explicit uncertainty
+    // Show parked bodies and unresolved/failed submissions. Explicit uncertainty
     // prevents this placement from claiming the body is still in the FIFO.
     //
     // An entry without an id is skipped rather than rendered action-less: both
@@ -89,7 +100,10 @@ function PendingQueueStripImpl({
     // destructive, so a row that cannot name its target would be a button that
     // acts on "whatever is current". Only the legacy single-entry prop can
     // produce one, and that path keeps its in-transcript bubble.
-    const waiting = entries.filter(entry => (entry.queued === true || entry.deliveryUncertain === true) && !!entry.id && !(entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed' && dismissed.has(entry.id)));
+    const waiting = entries.filter(entry =>
+        shouldRenderInPendingQueueStrip(entry)
+        && !(entry.deliveryUncertain && !isFailedEntry(entry) && dismissed.has(entry.id!)),
+    );
     if (waiting.length === 0) return null;
 
     // The region's own label must not out-live the claim its rows are making: a
@@ -97,8 +111,12 @@ function PendingQueueStripImpl({
     // would tell a screen-reader user the exact thing this change exists to stop
     // saying. Any still-waiting row keeps the waiting label, since that is then
     // true of the region as a whole.
-    const hasLiveWait = waiting.some(entry => entry.stale !== true && !entry.deliveryUncertain);
-    const regionLabel = hasLiveWait ? t('chat.waitingToSendAria') : waiting.some(entry => entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed') ? t('chat.deliveryUncertain') : t('chat.notDeliveredAria');
+    const hasLiveWait = waiting.some(entry => entry.stale !== true && !entry.deliveryUncertain && !isFailedEntry(entry));
+    const regionLabel = hasLiveWait
+        ? t('chat.waitingToSendAria')
+        : waiting.some(entry => entry.deliveryUncertain && !isFailedEntry(entry))
+            ? t('chat.deliveryUncertain')
+            : t('chat.notDeliveredAria');
 
     return (
         <div
@@ -108,87 +126,109 @@ function PendingQueueStripImpl({
             role="region"
             aria-label={regionLabel}
         >
-            {waiting.map(entry => (
-                <div
-                    key={entry.id}
-                    className="chat-pending-queue-row"
-                    data-chat-queued-row="true"
-                    // ★ (QUEUED-SEND-STUCK-FOREVER) Marks a body that has waited past
-                    // the window in which "waiting to send" is still a true statement.
-                    // See the marker below for what changes when it is set.
-                    data-chat-delivery-uncertain={entry.deliveryUncertain ? 'true' : undefined}
-                    data-chat-queued-stale={entry.stale === true ? 'true' : undefined}
-                >
-                    {/* `.chat-bubble` + `.chat-bubble-user` is the transcript's own
-                        user skin, reused verbatim so a theme change moves both at
-                        once and a waiting body is recognisably the same object as
-                        the delivered one it becomes. */}
+            {waiting.map(entry => {
+                const failed = isFailedEntry(entry);
+                return (
                     <div
-                        className="chat-bubble chat-bubble-user chat-pending-queue-bubble"
-                        title={entry.content}
+                        key={entry.id}
+                        className="chat-pending-queue-row"
+                        data-chat-queued-row="true"
+                        // ★ (QUEUED-SEND-STUCK-FOREVER) Marks a body that has waited past
+                        // the window in which "waiting to send" is still a true statement.
+                        // See the marker below for what changes when it is set.
+                        data-chat-delivery-uncertain={entry.deliveryUncertain ? 'true' : undefined}
+                        data-chat-queued-stale={entry.stale === true ? 'true' : undefined}
+                        data-chat-send-failed={failed ? 'true' : undefined}
                     >
-                        <div className="chat-pending-queue-body">{entry.content}</div>
-                        {entry.outgoingReceipt?.state === 'failed' && <div className="text-2xs" role="status">{t('chat.deliveryFailed')}</div>}
-                        {/* Accepted queues and unconfirmed native writes stay neutral.
-                            Only a proven rejection or expired queue gets a warning;
-                            the localized accessible label carries the exact state. */}
-                        <span
-                            className={entry.stale === true && !entry.deliveryUncertain
-                                ? 'chat-pending-queue-clock chat-pending-queue-stale'
-                                : 'chat-pending-queue-clock'}
-                            role="img"
-                            aria-label={entry.outgoingReceipt?.state === 'failed' ? t('chat.deliveryFailed') : entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
-                            title={entry.outgoingReceipt?.state === 'failed' ? t('chat.deliveryFailed') : entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
+                        {/* `.chat-bubble` + `.chat-bubble-user` is the transcript's own
+                            user skin, reused verbatim so a theme change moves both at
+                            once and a waiting body is recognisably the same object as
+                            the delivered one it becomes. */}
+                        <div
+                            className="chat-bubble chat-bubble-user chat-pending-queue-bubble"
+                            title={entry.content}
                         >
-                            {entry.outgoingReceipt?.state === 'failed' || (entry.stale === true && !entry.deliveryUncertain) ? '⚠' : '⏱'}
-                        </span>
+                            <div className="chat-pending-queue-body">{entry.content}</div>
+                            {failed && <div className="text-2xs" role="status">{t('chat.deliveryFailed')}</div>}
+                            {/* Accepted queues and unconfirmed native writes stay neutral.
+                                Only a proven rejection or expired queue gets a warning;
+                                the localized accessible label carries the exact state. */}
+                            <span
+                                className={entry.stale === true && !entry.deliveryUncertain
+                                    ? 'chat-pending-queue-clock chat-pending-queue-stale'
+                                    : 'chat-pending-queue-clock'}
+                                role="img"
+                                aria-label={failed ? t('chat.deliveryFailed') : entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDeliveredAria') : t('chat.waitingToSendAria')}
+                                title={failed ? t('chat.deliveryFailed') : entry.deliveryUncertain ? t('chat.deliveryUncertain') : entry.stale === true ? t('chat.notDelivered') : t('chat.waitingToSendAria')}
+                            >
+                                {failed || (entry.stale === true && !entry.deliveryUncertain) ? '⚠' : '⏱'}
+                            </span>
+                        </div>
+                        {onRetry && (failed || entry.stale === true) && (
+                            <button
+                                type="button"
+                                onClick={() => onRetry(entry.id!)}
+                                disabled={isSendingNow}
+                                className="chat-pending-queue-send chat-pending-queue-retry"
+                                data-testid="pending-queue-retry"
+                                aria-label={t('common.retry', { defaultValue: 'Retry' })}
+                                title={t('common.retry', { defaultValue: 'Retry' })}
+                            >
+                                ↻
+                            </button>
+                        )}
+                        {entry.deliveryUncertain && !failed && <button
+                            type="button" className="chat-pending-queue-cancel"
+                            aria-label={t('common.close')} title={t('chat.deliveryUncertain')}
+                            onClick={() => {
+                                const id = entry.id!;
+                                dismissUncertainMessageId(id);
+                                setDismissed(previous => new Set(previous).add(id));
+                                onDismissUncertain?.(id);
+                            }}>✕</button>}
+                        {onSendNow && !entry.deliveryUncertain && !failed && (
+                            // ★ (QUEUE-SEND-NOW-RESTORED) Same always-in-DOM,
+                            // hover-dimmed treatment as cancel below — a phone has no
+                            // hover, so touch must not lose the affordance either.
+                            // SEND-NOW-AGENT-QUEUE: this hands the body to the
+                            // agent's own queue and does NOT discard the running
+                            // turn; what it does lives in the tooltip, not in a
+                            // permanent sentence next to every row.
+                            <button
+                                type="button"
+                                onClick={() => onSendNow(entry.id)}
+                                disabled={isSendingNow || entry.deliveryUncertain || (entry.requiresReceipt && !entry.outgoingReceipt)}
+                                className="chat-pending-queue-send"
+                                aria-label={t('chat.sendNowAria')}
+                                title={t('chat.sendNowTitle')}
+                            >
+                                ↑
+                            </button>
+                        )}
+                        {onCancelQueued && (!entry.deliveryUncertain || failed) && (
+                            // ★ Always in the DOM, never hover-gated in markup.
+                            //
+                            // Hover-only would make cancelling unreachable on a phone,
+                            // which is the surface the owner reported this from. It is
+                            // instead always present and always tappable, dimmed until
+                            // hover/focus on pointer devices (see `.chat-pending-queue-
+                            // cancel` — a `@media (hover: hover)` rule, so touch keeps
+                            // it visible). Keyboard focus reveals it the same way, so
+                            // tabbing to it does not press an invisible control.
+                            <button
+                                type="button"
+                                onClick={() => onCancelQueued(entry.id)}
+                                disabled={isSendingNow || (entry.deliveryUncertain && !failed) || (entry.requiresReceipt && !entry.outgoingReceipt && !failed)}
+                                className="chat-pending-queue-cancel"
+                                aria-label={t('chat.cancelQueuedAria')}
+                                title={t('chat.cancelQueuedTitle')}
+                            >
+                                ✕
+                            </button>
+                        )}
                     </div>
-                    {entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed' && <button
-                        type="button" className="chat-pending-queue-cancel"
-                        aria-label={t('common.close')} title={t('chat.deliveryUncertain')}
-                        onClick={() => setDismissed(previous => new Set(previous).add(entry.id!))}>✕</button>}
-                    {onSendNow && !entry.deliveryUncertain && (
-                        // ★ (QUEUE-SEND-NOW-RESTORED) Same always-in-DOM,
-                        // hover-dimmed treatment as cancel below — a phone has no
-                        // hover, so touch must not lose the affordance either.
-                        // SEND-NOW-AGENT-QUEUE: this hands the body to the
-                        // agent's own queue and does NOT discard the running
-                        // turn; what it does lives in the tooltip, not in a
-                        // permanent sentence next to every row.
-                        <button
-                            type="button"
-                            onClick={() => onSendNow(entry.id)}
-                            disabled={isSendingNow || entry.deliveryUncertain || (entry.requiresReceipt && !entry.outgoingReceipt)}
-                            className="chat-pending-queue-send"
-                            aria-label={t('chat.sendNowAria')}
-                            title={t('chat.sendNowTitle')}
-                        >
-                            ↑
-                        </button>
-                    )}
-                    {onCancelQueued && (!entry.deliveryUncertain || entry.outgoingReceipt?.state === 'failed') && (
-                        // ★ Always in the DOM, never hover-gated in markup.
-                        //
-                        // Hover-only would make cancelling unreachable on a phone,
-                        // which is the surface the owner reported this from. It is
-                        // instead always present and always tappable, dimmed until
-                        // hover/focus on pointer devices (see `.chat-pending-queue-
-                        // cancel` — a `@media (hover: hover)` rule, so touch keeps
-                        // it visible). Keyboard focus reveals it the same way, so
-                        // tabbing to it does not press an invisible control.
-                        <button
-                            type="button"
-                            onClick={() => onCancelQueued(entry.id)}
-                            disabled={isSendingNow || (entry.deliveryUncertain && entry.outgoingReceipt?.state !== 'failed') || (entry.requiresReceipt && !entry.outgoingReceipt)}
-                            className="chat-pending-queue-cancel"
-                            aria-label={t('chat.cancelQueuedAria')}
-                            title={t('chat.cancelQueuedTitle')}
-                        >
-                            ✕
-                        </button>
-                    )}
-                </div>
-            ))}
+                );
+            })}
         </div>
     );
 }
@@ -203,6 +243,8 @@ export const PendingQueueStrip = memo(PendingQueueStripImpl, (prev, next) => (
     // closure here would fire a previous render's handler on click.
     prev.onSendNow === next.onSendNow
     && prev.onCancelQueued === next.onCancelQueued
+    && prev.onRetry === next.onRetry
+    && prev.onDismissUncertain === next.onDismissUncertain
     && prev.isSendingNow === next.isSendingNow
     && prev.entries.length === next.entries.length
     && prev.entries.every((entry, index) => {
@@ -215,6 +257,7 @@ export const PendingQueueStrip = memo(PendingQueueStripImpl, (prev, next) => (
             // strip keep rendering "Waiting to send" after the entry had already
             // been marked undelivered — the memo would report no visible change.
             && entry.stale === other.stale
+            && entry.sendFailed === other.sendFailed
             && entry.deliveryUncertain === other.deliveryUncertain
             && entry.outgoingReceipt === other.outgoingReceipt;
     })

@@ -47,6 +47,11 @@ import { readOutgoingReceipt, type OutgoingReceipt } from '@adhdev/daemon-core/s
  */
 
 const PENDING_QUEUED_MESSAGES_KEY = 'adhdev-pending-queued-messages-v1'
+const DISMISSED_UNCERTAIN_MESSAGES_KEY = 'adhdev-dismissed-uncertain-messages-v1'
+
+export const OUTGOING_RECEIPT_POLL_BASE_MS = 1_000
+export const OUTGOING_RECEIPT_POLL_MAX_MS = 16_000
+export const OUTGOING_RECEIPT_POLL_MAX_AGE_MS = 30_000
 
 /**
  * Cap on how many bytes of attachment `data` (base64) one entry may carry in
@@ -191,10 +196,70 @@ export interface PendingQueuedMessage {
      * a reload forever and force a daemon call for a body nothing is tracking.
      */
     settled?: boolean
+    /** True when the send was rejected or threw before delivery could be confirmed. */
+    sendFailed?: boolean
 }
 
 interface PendingQueuedMessagesStore {
     byKey: Record<string, PendingQueuedMessage[]>
+}
+
+interface DismissedUncertainMessagesStore {
+    byId: Record<string, number>
+}
+
+function readDismissedStore(now: number): DismissedUncertainMessagesStore {
+    if (typeof window === 'undefined') return { byId: {} }
+    try {
+        const parsed = JSON.parse(
+            window.localStorage.getItem(DISMISSED_UNCERTAIN_MESSAGES_KEY) || '{}',
+        ) as Partial<DismissedUncertainMessagesStore>
+        const rawById = parsed.byId && typeof parsed.byId === 'object' ? parsed.byId : {}
+        const byId: Record<string, number> = {}
+        for (const [id, ts] of Object.entries(rawById)) {
+            if (!id || typeof ts !== 'number' || !Number.isFinite(ts)) continue
+            if (now - ts <= PENDING_QUEUED_MESSAGE_MAX_AGE_MS) {
+                byId[id] = ts
+            }
+        }
+        return { byId }
+    } catch {
+        return { byId: {} }
+    }
+}
+
+function writeDismissedStore(store: DismissedUncertainMessagesStore): void {
+    if (typeof window === 'undefined') return
+    try {
+        if (Object.keys(store.byId).length > 0) {
+            window.localStorage.setItem(DISMISSED_UNCERTAIN_MESSAGES_KEY, JSON.stringify(store))
+        } else {
+            window.localStorage.removeItem(DISMISSED_UNCERTAIN_MESSAGES_KEY)
+        }
+    } catch {
+        /* quota / private mode — best-effort */
+    }
+}
+
+export function readDismissedUncertainMessageIds(now: number = Date.now()): Set<string> {
+    return new Set(Object.keys(readDismissedStore(now).byId))
+}
+
+export function dismissUncertainMessageId(id: string, now: number = Date.now()): void {
+    const trimmed = String(id || '').trim()
+    if (!trimmed) return
+    const store = readDismissedStore(now)
+    store.byId[trimmed] = now
+    writeDismissedStore(store)
+}
+
+export function clearDismissedUncertainMessageId(id: string, now: number = Date.now()): void {
+    const trimmed = String(id || '').trim()
+    if (!trimmed) return
+    const store = readDismissedStore(now)
+    if (!(trimmed in store.byId)) return
+    delete store.byId[trimmed]
+    writeDismissedStore(store)
 }
 
 function readStore(): PendingQueuedMessagesStore {
@@ -350,6 +415,7 @@ function sanitizeEntries(raw: unknown, now: number): PendingQueuedMessage[] {
                 content,
                 sentAt,
                 queued: candidate.queued === true,
+                ...(candidate.sendFailed === true ? { sendFailed: true } : {}),
                 ...(candidate.requiresReceipt === true ? {
                     requiresReceipt: true, targetSessionId: candidate.targetSessionId, inputDigest: candidate.inputDigest,
                     outgoingReceipt: readOutgoingReceipt(candidate.outgoingReceipt) ?? undefined,

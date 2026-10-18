@@ -9,6 +9,7 @@ import {
     isSendRefusal,
     isSubmitOutcome,
     isInputEnvelopeWire,
+    unwrapPastedContent,
     OUTBOUND_MESSAGE_ORIGINS,
     SEND_POLICY_MODES,
     SEND_REFUSAL_REASONS,
@@ -189,3 +190,19 @@ describe('isOutboundMessage', () => {
         expect(isOutboundMessage('message')).toBe(false)
     })
 })
+
+describe('unwrapPastedContent', () => {
+    it('returns plain strings unchanged', () => {
+        expect(unwrapPastedContent('plain single line')).toBe('plain single line')
+    })
+
+    it('strips attribute-less and Claude 2.1.302 id-carrying closing tags', () => {
+        expect(unwrapPastedContent('<pasted_content id="240c">\nmulti-line\nbody\n</pasted_content id="240c">'))
+            .toBe('multi-line\nbody')
+        expect(unwrapPastedContent('\n\n<pasted_content id="240c">\nmulti-line\nbody\n</pasted_content id="240c">\n').trim())
+            .toBe('multi-line\nbody')
+        expect(unwrapPastedContent('<pasted_content>\nsimple\n</pasted_content>'))
+            .toBe('simple')
+    })
+})
+

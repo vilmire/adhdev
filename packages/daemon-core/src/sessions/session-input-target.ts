@@ -29,7 +29,7 @@ export interface SessionInputAdapterLike {
     getStatus?(options?: { allowParse?: boolean }): { status?: string } | undefined;
     observeSendWrite?(messageId: string, observer: (state: 'started' | 'submitted' | 'uncertain') => void): void;
     sendMessage(text: string, options?: { bracketedPaste?: boolean; messageId?: string }): Promise<{ status: 'queued'; position?: number } | { status: 'delivered' } | void>;
-    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean): { accepted: boolean; reason?: string };
+    sendMessageDuringGeneration?(text: string, bracketedPaste?: boolean, messageId?: string): { accepted: boolean; reason?: string };
     interruptTurn?: SessionInputTarget['interruptTurn'];
     hasQueuedSend?(messageId: string): boolean;
     claimQueuedSend?(messageId: string): ClaimedSessionInput | null;
@@ -85,7 +85,7 @@ export function buildSessionInputTarget(args: {
         buildBody: (input) => buildCliInputBody(provider, input),
         sendMessage: (text, options) => adapter.sendMessage(text, options),
     };
-    if (typeof adapter.sendMessageDuringGeneration === 'function') target.sendMessageDuringGeneration = (t, b) => adapter.sendMessageDuringGeneration!(t, b);
+    if (typeof adapter.sendMessageDuringGeneration === 'function') target.sendMessageDuringGeneration = (t, b, id) => adapter.sendMessageDuringGeneration!(t, b, id);
     if (typeof adapter.interruptTurn === 'function') target.interruptTurn = () => adapter.interruptTurn!();
     if (typeof adapter.observeSendWrite === 'function') target.observeSendWrite = (id, observer) => adapter.observeSendWrite!(id, observer);
     if (typeof adapter.hasQueuedSend === 'function') target.hasQueuedSend = (id) => adapter.hasQueuedSend!(id);
