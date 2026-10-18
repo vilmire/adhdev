@@ -610,11 +610,12 @@ export function compactTranscriptTail(readChat: Record<string, unknown>, tail: n
     const picked = visible.slice(-tail).map((m) => {
         const text = messageText(m);
         const truncated = text.length > maxChars;
-        const at = typeof m.timestamp === 'number' ? new Date(m.timestamp).toISOString() : readText(m.timestamp) || readText(m.createdAt) || undefined;
+        const time = m.timestamp ?? m.receivedAt ?? m.createdAt;
+        const at = typeof time === 'number' ? new Date(time).toISOString() : readText(time) || undefined;
         return {
             messageId: reportMessageId(m),
             totalChars: text.length,
-            complete: !truncated,
+            complete: !truncated && m.bubbleState !== 'streaming' && m.isStreaming !== true && m.meta?.streaming !== true,
             nextOffset: truncated ? maxChars : null,
             role: readText(m.role).toLowerCase() === 'user' ? 'user' : 'assistant',
             text: truncated ? `${text.slice(0, maxChars)}…` : text,
@@ -634,7 +635,11 @@ export function compactTranscriptTail(readChat: Record<string, unknown>, tail: n
 export function reportMessageId(message: unknown): string {
     const m = message as any;
     return createHash('sha256').update(JSON.stringify([
-        m?.messageId ?? m?.bubbleId ?? m?.id ?? null, m?.role,
-        m?.timestamp ?? m?.createdAt ?? null, messageText(m),
+        // read_chat stamps presentation ids; chat_history returns native rows.
+        // A timestamped native reply must keep one cursor across both lanes.
+        m?.timestamp == null && m?.receivedAt == null && m?.createdAt == null
+            ? m?.messageId ?? m?.bubbleId ?? m?.id ?? null : null,
+        m?.role, m?.timestamp ?? m?.receivedAt ?? m?.createdAt ?? null,
+        m?.kind ?? m?.messageKind ?? 'standard', messageText(m),
     ])).digest('hex');
 }

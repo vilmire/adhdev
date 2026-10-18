@@ -82,6 +82,8 @@ export interface AssistantRelayStore {
      * v1 rows are not returned: they pinned a truncated screen row.
      */
     readVerifiedAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, stablePrefix: string): VerifiedAttemptBody | null;
+    readReceipt(key: string, now: number): string | null;
+    writeReceipt(key: string, value: string, at: number): void;
     /** Retention: bodies after 24 h, delivered rows after 7 d, closed threads after 30 d. */
     prune(now: number): void;
 }
@@ -156,6 +158,16 @@ export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): Unrende
 }
 
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
+    private readonly receipts = new Map<string, { value: string; at: number }>();
+    readReceipt(key: string, now: number): string | null {
+        const row = this.receipts.get(key);
+        return row && now - row.at < RELAY_DELIVERED_RETENTION_MS ? row.value : null;
+    }
+    writeReceipt(key: string, value: string, at: number): void {
+        this.receipts.delete(key);
+        this.receipts.set(key, { value, at });
+        while (this.receipts.size > 4096) this.receipts.delete(this.receipts.keys().next().value!);
+    }
     private readonly coverage = new Map<string, StoredAttemptCoverage>();
     private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string; parts: Array<{ at: number; chars: number }> }>();
     private readonly threads = new Map<string, AssistantThreadRow>();

@@ -1,3 +1,4 @@
+import { continueReport } from './report-continuation.js';
 import { localAttemptReport } from '../commands/high-family/assistant.js';
 import { TerminalWatchStore } from './terminal-watch.js';
 import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
@@ -204,6 +205,15 @@ export function buildAssistantRelayPorts(
                 db: MeshRuntimeStore.getInstance().db, sinceMs, now: Date.now(), coordinatorSessions,
                 execute: (cmd, args) => components.router.execute(cmd, args, 'ipc', { inProcess: true }),
             });
+        },
+        canReadCoordinatorReply: async (reply) => {
+            if (!reply.messageId) return false;
+            const ports = await projectPorts();
+            if (!reply.meshId || ports.coordinatorSessionAuthorized?.(reply.meshId, reply.sessionId) === false
+                || !ports.listMeshes().some(mesh => mesh.id === reply.meshId && ports.isHostedHere(mesh))) return false;
+            const page = await continueReport(ports.execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
+            return page.success === true && page.totalChars === reply.text.length
+                && typeof page.text === 'string' && reply.text.startsWith(page.text);
         },
         onRelayGap: (_klass, at) => metrics?.bump('relay_gaps', '', at),
         readCoordinatorTail: async (sessionId) => {
@@ -463,6 +473,7 @@ export function wireAssistantRuntime(
         },
         isThreadOpen: (meshId) => store.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
+        recordProjectRead: (result) => relay.recordProjectRead(result),
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics?.bump('skill_attaches', meshId, Date.now(), count),
         remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor),

@@ -15,7 +15,7 @@ import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
 const dbs: Database.Database[] = [];
 const dirs: string[] = [];
 afterEach(() => { for (const db of dbs.splice(0)) if (db.open) db.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
-it('restart relay rehydrates each original session/attempt independently; missing evidence is explicit and 24h folding stays intact', async () => {
+it('restart relay rehydrates each original session/attempt independently; missing evidence stays pending and 24h folding stays intact', async () => {
     const now = Date.now(); const store = new InMemoryAssistantRelayStore();
     for (const [attemptId, sid, meshId, committedAt] of [['first', 'old-coord', 'mesh', now], ['second', 'new-coord', 'mesh', now], ['aged', 'old-coord', 'oldmesh', now - 25 * 60 * 60_000]] as const) {
         store.recordCommitted({ attemptId, meshId, coordinatorSessionId: sid, committedAt, kind: 'relay', outcome: 'completed' });
@@ -27,7 +27,7 @@ it('restart relay rehydrates each original session/attempt independently; missin
         isAssistantReady: () => false, submit: async () => ({ kind: 'delivered' }), inputLog: new AssistantInputLog(), store });
     relay.start(); const events = await relay.pullPending(null); relay.stop();
     const text = events.map(e => e.text).join('\n');
-    expect(text).toContain('older than 24 h'); expect(text).toContain('first original'); expect(text).toContain('original report unavailable');
+    expect(text).toContain('older than 24 h'); expect(text).toContain('first original'); expect(text).not.toContain('original report unavailable');
     expect(rehydrate.mock.calls).toEqual([['mesh', 'old-coord', 'first'], ['mesh', 'new-coord', 'second']]); expect(tail).not.toHaveBeenCalled();
     expect(text).toContain('reportId');
 });
@@ -203,8 +203,9 @@ it.each([false, true])('delayed relay commits retain exact real-attempt attribut
     expect(tail).not.toHaveBeenCalled();
     expect(db.prepare('SELECT attempt_id FROM assistant_attempt_bodies').all()).toEqual([{ attempt_id: attempts[1].attemptId }]);
     const restarted = new AssistantRelay({ ...ports, store: new SqliteAssistantRelayStore(db) }); restarted.start();
-    const text = (await restarted.pullPending(null)).map(e => e.text).join('\n'); restarted.stop();
-    expect(text).toContain('original report unavailable'); expect(text.match(/second turn body/g)).toHaveLength(1);
+    const text = (await restarted.pullPending(null)).map(e => e.text).join('\n');
+    expect(store.listUndelivered().map(r => r.attemptId)).toEqual([attempts[0].attemptId]); restarted.stop();
+    expect(text).not.toContain('original report unavailable'); expect(text.match(/second turn body/g)).toHaveLength(1);
 });
 
 it('relays a short multi-sentence reply whole when it wraps past one screen row', async () => {

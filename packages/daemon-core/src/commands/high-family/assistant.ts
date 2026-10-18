@@ -403,10 +403,12 @@ const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args
     if (p.remote) {
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'read', { tail, ...(continuation ?? {}) });
         if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
+        ports.relay.recordProjectRead?.(remoteBody(out));
         return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: 'relay' });
     }
     const r = await localProjectRead(ports, meshId, tail, continuation);
     if (!r.ok) return fail('project_read_failed', r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
+    ports.relay.recordProjectRead?.(r.result);
     return wrap(p.slug, meshId, r.result);
 });
 

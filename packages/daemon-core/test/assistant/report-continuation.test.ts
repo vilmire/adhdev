@@ -49,3 +49,13 @@ it('refuses unauthorized exact attempt reads before opening any durable body or 
     expect(await localAttemptReport(ports, 'mesh', 'foreign', 'plain:coord:1')).toMatchObject({ body: null, reason: 'coordinator_session_no_longer_authorized' });
     expect(execute).not.toHaveBeenCalled();
 });
+
+it('keeps a native cursor readable after the message leaves read_chat and only chat_history has it', async () => {
+    const native = { role: 'assistant', kind: 'standard', receivedAt: 19_000, content: 'Synthetic final reply. Its second sentence remains readable.' };
+    const live = { ...native, messageId: 'presentation-id', id: 'presentation-id', bubbleState: 'final' };
+    expect(reportMessageId(live)).toBe(reportMessageId(native));
+    const cursor = { coordinatorSessionId: 'coord', messageId: reportMessageId(live), offset: 0 };
+    const execute = vi.fn(async (command: string) => command === 'read_chat'
+        ? { success: true, messages: [] } : { success: true, source: 'provider-native', hasMore: false, messages: [native] });
+    expect(await continueReport(execute, cursor)).toMatchObject({ success: true, complete: true, text: native.content });
+});

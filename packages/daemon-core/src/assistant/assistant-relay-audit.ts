@@ -1,3 +1,5 @@
+import { renderNativeReplies } from './assistant-native-window.js';
+import { reportBodyId } from './report-continuation.js';
 /**
  * List native coordinator finals for the relay's missing-reply detector.
  * Classification (no_attempt / inside_attempt / restart_closed) stays in
@@ -36,7 +38,7 @@ export async function collectCoordinatorReplies(opts: {
     execute: Execute;
     sinceMs: number;
     now: number;
-    coordinatorSessions?: readonly { sessionId: string; cliType?: string }[];
+    coordinatorSessions?: readonly { sessionId: string; cliType?: string; meshId?: string }[];
 }): Promise<AuditedCoordinatorReply[] & { complete?: boolean }> {
     // Replay bounded history, rather than discarding a bubble first observed
     // while open or before this process started. Delivery hashes deduplicate it.
@@ -50,7 +52,7 @@ export async function collectCoordinatorReplies(opts: {
     const first = inventory.length ? (Math.floor(opts.now / 60_000) * SESSION_CAP) % inventory.length : 0;
     const sessions = [...inventory.slice(first), ...inventory.slice(0, first)].slice(0, SESSION_CAP);
     const out: AuditedCoordinatorReply[] = [];
-    const scans = await Promise.all(sessions.map(async ({ sessionId, cliType }) => {
+    const scans = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
         if (!sessionId) return { sessionId, skipped: true } as const;
         // These timestamps cannot classify attempt membership. Until Grok has a
         // native record boundary contract, no exact missing-attempt claim is made.
@@ -64,20 +66,23 @@ export async function collectCoordinatorReplies(opts: {
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId) as AttemptSpan[];
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
-        return { sessionId, attempts, window };
+        return { sessionId, meshId, attempts, window };
     }));
     let complete = true;
     let successful = 0;
     let failed = false;
     for (const scan of scans) {
         if ('skipped' in scan) { complete = false; continue; }
-        const { sessionId, attempts, window } = scan;
+        const { sessionId, meshId, attempts, window } = scan;
         if (!window.complete || window.ambiguous) { complete = false; failed = true; continue; }
         successful += 1;
+        const reportIds = new Map<string, string>();
         for (const bubble of window.bubbles) {
             const containing = attempts.filter((a) => bubble.at >= a.accepted_at && bubble.at <= (a.terminal_at ?? opts.now));
             containing.sort((a, b) => b.accepted_at - a.accepted_at);
             const attempt = containing[0];
+            if (attempt && !reportIds.has(attempt.attempt_id)) reportIds.set(attempt.attempt_id,
+                reportBodyId(renderNativeReplies(window.bubbles.filter(b => b.at >= attempt.accepted_at && b.at <= (attempt.terminal_at ?? opts.now)))));
             // A pre-upgrade (or capacity-pruned) delivered row has no complete
             // delivery manifest. Its captured body cannot prove which parts were
             // shown. Keep this uncertainty rather than emit a false missing claim.
@@ -88,7 +93,8 @@ export async function collectCoordinatorReplies(opts: {
             const open = !!attempt && (!TERMINAL.has(attempt.state)
                 || attempt.terminal_at === null || opts.now < attempt.terminal_at + RELAY_QUIET_MS);
             out.push({
-                sessionId,
+                sessionId, meshId, messageId: window.targets.get(bubble.at),
+                ...(attempt ? { attemptReportId: reportIds.get(attempt.attempt_id) } : {}),
                 messageAt: bubble.at,
                 chars: Array.from(bubble.text).length,
                 text: bubble.text,

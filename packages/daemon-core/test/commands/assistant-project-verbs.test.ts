@@ -27,7 +27,7 @@ let hosted: Set<string>;
 let live: Record<string, AssistantCoordinatorView[]>;
 let responses: Record<string, (args: any) => any>;
 let execute: ReturnType<typeof vi.fn>;
-let relay: { openThread: ReturnType<typeof vi.fn>; recordSkillAttaches: ReturnType<typeof vi.fn>; remoteSent: ReturnType<typeof vi.fn>; isThreadOpen: (m: string) => boolean; lastRelayAt: () => number };
+let relay: { recordProjectRead: ReturnType<typeof vi.fn>; openThread: ReturnType<typeof vi.fn>; recordSkillAttaches: ReturnType<typeof vi.fn>; remoteSent: ReturnType<typeof vi.fn>; isThreadOpen: (m: string) => boolean; lastRelayAt: () => number };
 let remoteHosts: Record<string, RemoteHostView>;
 let callHost: ReturnType<typeof vi.fn>;
 let hostAnswers: Record<string, (args: any) => RemoteCallOutcome>;
@@ -50,7 +50,7 @@ beforeEach(() => {
     live = {};
     responses = {};
     execute = vi.fn(async (cmd: string, args: any) => (responses[cmd] ? responses[cmd](args) : { success: true }));
-    relay = { openThread: vi.fn(), recordSkillAttaches: vi.fn(), remoteSent: vi.fn(), isThreadOpen: (m) => m === 'mesh_a', lastRelayAt: () => Date.UTC(2026, 9, 7) };
+    relay = { recordProjectRead: vi.fn(), openThread: vi.fn(), recordSkillAttaches: vi.fn(), remoteSent: vi.fn(), isThreadOpen: (m) => m === 'mesh_a', lastRelayAt: () => Date.UTC(2026, 9, 7) };
     remoteHosts = {
         mesh_b: { label: 'win-box', hostDaemonId: 'daemon_mach_other', hostMeshId: 'mesh_b_on_host', reachable: true },
     };
@@ -324,6 +324,7 @@ describe('remote-hosted project (relay to the host)', () => {
         hostAnswers.read = (a) => ({ ok: true, result: { success: true, result: { coordinatorSessionId: 'host-coord', live: true, messages: [{ role: 'assistant', text: `tail ${a.tail}` }] } } });
         const r: any = await run(ASSISTANT_VERB.projectRead, { project: 'blog', tail: 3 });
         expect(r).toMatchObject({ success: true, project: 'blog', result: { coordinatorSessionId: 'host-coord', host: 'win-box', via: 'relay', messages: [{ role: 'assistant', text: 'tail 3' }] } });
+        expect(relay.recordProjectRead).toHaveBeenCalledWith(expect.objectContaining({ coordinatorSessionId: 'host-coord' }));
     });
 });
 
@@ -346,6 +347,7 @@ describe('assistant_project_read', () => {
         expect(r.result.messages).toMatchObject([{ role: 'assistant', text: 'second', complete: true, nextOffset: null }, { role: 'assistant', text: 'third', complete: true, nextOffset: null }]);
         expect(r.result.messages.every((m: any) => /^[a-f0-9]{64}$/.test(m.messageId))).toBe(true);
         expect(calls('read_chat')).toEqual([{ targetSessionId: 'coord-1', limit: 40 }]);
+        expect(relay.recordProjectRead).toHaveBeenCalledWith(r.result);
     });
 
     it('falls back to the last registry coordinator, or reports none', async () => {

@@ -1,3 +1,4 @@
+import { reportMessageId } from '../../src/assistant/project-views.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -39,7 +40,7 @@ function attempt(db: Database.Database, id = 'plain:a') {
 function relay(store: any, report: any, audit: any = async () => []) {
     return new AssistantRelay({ subscribe: () => () => {}, coordinatorMeshOf: () => 'mesh', projectSlug: () => 'p',
         readCoordinatorTail: async () => { throw new Error('forbidden tail'); }, rehydrateAttemptReport: async () => report,
-        auditCoordinatorReplies: audit, meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => null,
+        auditCoordinatorReplies: audit, canReadCoordinatorReply: async () => true, meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => null,
         isAssistantReady: () => false, submit: async () => ({ kind: 'delivered' }), inputLog: new AssistantInputLog(), store });
 }
 async function micro() { for (let n = 0; n < 20; n++) await Promise.resolve(); }
@@ -114,7 +115,7 @@ describe('delivered native coverage persistence', () => {
         expect((store as any).listDeliveredCoverage(NOW)).toEqual([]);
     });
 
-    it('reopens SQLite and covers only complete parts actually inside the delivered cap', async () => {
+    it('resumes a partially delivered native report after SQLite reopen and covers it only after the last page', async () => {
         vi.useFakeTimers(); vi.setSystemTime(NOW);
         const dir = mkdtempSync(join(tmpdir(), 'relay-delivered-coverage-')); directories.push(dir);
         const path = join(dir, 'runtime.db');
@@ -127,7 +128,7 @@ describe('delivered native coverage persistence', () => {
         first.stop(); db.close();
         const reopened = database(path); const nextStore = new SqliteAssistantRelayStore(reopened);
         const stored = (nextStore as any).listDeliveredCoverage(NOW);
-        expect(stored).toEqual([{ ...manifest(), renderedAt: NOW }]);
+        expect(stored).toEqual([]);
         expect(JSON.stringify(reopened.prepare('SELECT * FROM assistant_relay_coverage').all())).not.toContain('shown');
         const audit = (sinceMs: number) => collectCoordinatorReplies({ db: reopened, sinceMs, now: NOW + 60_000,
             coordinatorSessions: [{ sessionId: 'coord', cliType: 'codex-cli' }], execute: async () => ({ success: true, coverage: 'full',
@@ -135,10 +136,15 @@ describe('delivered native coverage persistence', () => {
                 messages: bubbles.map(b => ({ role: 'assistant', kind: 'standard', bubbleState: 'final', timestamp: b.at, content: b.text })),
             }),
         });
-        const restarted = relay(nextStore, null, audit); restarted.start(); restarted.tick(NOW + 60_000); await micro();
+        const restarted = relay(nextStore, report, audit); restarted.start();
+        const remaining = (await restarted.pullPending(null)).map(x => x.text).join('\n');
+        expect(remaining).toContain('UNDISPLAYED');
+        expect(remaining).not.toContain('\nshown\n');
+        expect(nextStore.listUndelivered()).toEqual([]);
+        expect(nextStore.listDeliveredCoverage(NOW)[0].replies).toHaveLength(2);
+        restarted.tick(NOW + 60_000); await micro();
         const gaps = (await restarted.pullPending(null)).filter(x => x.text.includes('[ADHDev relay gap]'));
-        expect(gaps).toHaveLength(1);
-        expect(gaps[0].text).toContain(new Date(NOW - 5_000).toISOString().slice(11, 19));
+        expect(gaps).toHaveLength(0);
         restarted.stop();
     });
 
@@ -183,4 +189,14 @@ describe('delivered native coverage persistence', () => {
         }
         expect(stores[0].listDeliveredCoverage(NOW)).toEqual(stores[1].listDeliveredCoverage(NOW));
     });
+});
+
+it('persists content-free read and notification receipts across SQLite reopen and expires them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'relay-receipts-')); directories.push(dir);
+    const path = join(dir, 'receipts.db');
+    const db = database(path); const store = new SqliteAssistantRelayStore(db);
+    store.writeReceipt('a'.repeat(64), 'full', NOW); db.close();
+    const reopened = database(path); const restored = new SqliteAssistantRelayStore(reopened);
+    expect(restored.readReceipt('a'.repeat(64), NOW + 1)).toBe('full');
+    expect(restored.readReceipt('a'.repeat(64), NOW + 8 * DAY)).toBeNull();
 });

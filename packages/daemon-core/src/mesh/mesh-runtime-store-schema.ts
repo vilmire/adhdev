@@ -199,6 +199,9 @@ export function migrate(self: MeshRuntimeStore): void {
  */
 export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     db.exec(`
+        CREATE TABLE IF NOT EXISTS assistant_relay_receipts (
+            receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL
+        );
         -- Delivery manifests are content-free and never backfilled from captured
         -- reports: old captures do not prove what survived the rendered cap.
         CREATE TABLE IF NOT EXISTS assistant_relay_coverage (

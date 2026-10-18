@@ -64,8 +64,9 @@ export function defangRelayBody(text: string): string {
 }
 
 /** Cap at `max` code points; the cut points the assistant at project_read. */
-export function compactRelayBody(text: string | null | undefined, max: number = RELAY_BODY_MAX_CHARS): string {
-    const body = String(text ?? '').replace(/\r\n?/g, '\n').trim();
+export function compactRelayBody(text: string | null | undefined, max: number = RELAY_BODY_MAX_CHARS, preserveWhitespace = false): string {
+    const normalized = String(text ?? '').replace(/\r\n?/g, '\n');
+    const body = preserveWhitespace ? normalized : normalized.trim();
     if (!body) return '(no coordinator message found — use project_read)';
     const points = Array.from(body);
     if (points.length <= max) return body;
@@ -87,6 +88,8 @@ export interface RelayEnvelopeInput {
      * 2026-10-10): a `[turn k/N]` label precedes each when there is more than one.
      */
     bodies: readonly (string | null)[];
+    /** Verified bounded pages retain spaces/newlines at chunk boundaries. */
+    preservePageWhitespace?: boolean;
     /** Content-free `[Mesh]` status line (`mesh-notification-status-line.ts`). */
     statusLine?: string | null;
     /** The thread closed with this relay (no work left in flight). */
@@ -108,7 +111,7 @@ export function buildRelayEnvelope(input: RelayEnvelopeInput): string {
     input.bodies.forEach((body, i) => {
         lines.push('');
         if (n > 1) lines.push(`[turn ${i + 1}/${n}]`);
-        lines.push(defangRelayBody(compactRelayBody(body)));
+        lines.push(defangRelayBody(compactRelayBody(body, RELAY_BODY_MAX_CHARS, input.preservePageWhitespace)));
     });
     lines.push('');
     const status = typeof input.statusLine === 'string' ? input.statusLine.replace(/[\r\n]+/g, ' ').trim() : '';

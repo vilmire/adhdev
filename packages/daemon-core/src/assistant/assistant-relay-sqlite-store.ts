@@ -58,6 +58,16 @@ function toRelay(r: RelayDbRow): AssistantRelayRow {
 export class SqliteAssistantRelayStore implements AssistantRelayStore {
     constructor(private readonly db: DatabaseHandle) {}
 
+    readReceipt(key: string, now: number): string | null {
+        const row = this.db.prepare('SELECT value FROM assistant_relay_receipts WHERE receipt_key=? AND at_ms>?')
+            .get(key, now - RELAY_DELIVERED_RETENTION_MS) as { value: string } | undefined;
+        return row?.value ?? null;
+    }
+    writeReceipt(key: string, value: string, at: number): void {
+        this.db.prepare('INSERT INTO assistant_relay_receipts(receipt_key,value,at_ms) VALUES(?,?,?) ON CONFLICT(receipt_key) DO UPDATE SET value=excluded.value,at_ms=excluded.at_ms').run(key, value, at);
+        this.db.prepare('DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET 4096)').run(at - RELAY_DELIVERED_RETENTION_MS);
+    }
+
     openThread(meshId: string, at: number): void {
         // An open thread keeps its openedAt and refreshes lastSendAt; a closed (or
         // absent) one starts over.

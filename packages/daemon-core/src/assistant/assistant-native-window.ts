@@ -26,6 +26,11 @@ export interface AttemptReportSnapshot {
 /** A native final the relay auditor hands to the missing-relay detector. */
 export interface AuditedCoordinatorReply {
     sessionId: string;
+    meshId?: string;
+    /** Content-bound project_read cursor, verified again before notice delivery. */
+    messageId?: string;
+    /** Identity of the complete native attempt body for paged report reads. */
+    attemptReportId?: string;
     messageAt: number;
     chars: number;
     /** Containment check only. Never log this. */

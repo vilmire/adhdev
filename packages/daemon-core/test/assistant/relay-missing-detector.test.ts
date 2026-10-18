@@ -1,3 +1,4 @@
+import { reportMessageId } from '../../src/assistant/project-views.js';
 /**
  * Missing-relay detector: a native final that no delivered relay part covers
  * gets one warn and one gap line. Open attempts are not flagged — capture
@@ -53,7 +54,8 @@ function makeRelay(opts: { audit: () => Promise<readonly AuditedCoordinatorReply
         coordinatorMeshOf: () => 'mesh',
         projectSlug: () => 'blog',
         rehydrateAttemptReport: async () => (opts.report ?? 'covered body') as never,
-        auditCoordinatorReplies: opts.audit,
+        auditCoordinatorReplies: async () => (await opts.audit()).map(r => ({ ...r, messageId: reportMessageId({ role: 'assistant', timestamp: r.messageAt, content: r.text }) })),
+        canReadCoordinatorReply: async () => true,
         meshWork: () => ({ activeMissions: 1, pending: 0, assigned: 1 }),
         hasAssistant: () => true,
         assistantSessionId: () => 'asst',

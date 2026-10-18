@@ -32,6 +32,46 @@ const native = (messages: unknown[], extra = {}) => ({ success: true, messageSou
     debugReadChat: { provider: 'codex-cli' }, providerObservedStatus: 'idle', coverage: 'full', messages, ...extra });
 
 describe('native relay capture review regressions', () => {
+    it('replaces the live streaming snapshot with finalized native history, including real Claude receivedAt rows', async () => {
+        const fragment = 'The synthetic workspace is ready, and that';
+        const full = fragment + ' completes the first sentence. A second sentence is also part of the final reply.';
+        const f = fixture(fragment);
+        const execute = vi.fn(async (command: string) => command === 'read_chat'
+            ? native([{ role: 'assistant', kind: 'standard', receivedAt: 19_000, content: fragment, bubbleState: 'streaming' }],
+                { debugReadChat: { provider: 'claude-cli' } })
+            : { success: true, source: 'provider-native', agent: 'claude-cli', hasMore: false,
+                messages: [{ role: 'assistant', kind: 'standard', receivedAt: 19_000, content: full }] });
+        const result = await f.recover(execute);
+        expect(result).toMatchObject({ body: full, completeness: 'final_native' });
+        expect(execute).toHaveBeenCalledTimes(2);
+        expect(f.db.prepare('SELECT body FROM assistant_attempt_bodies').get()).toEqual({ body: full });
+    });
+
+    it('accepts finalized history after live native rows omit bubbleState, without weakening explicit streaming checks', async () => {
+        const f = fixture();
+        const final = { role: 'assistant', kind: 'standard', receivedAt: 19_000, content: 'All sentences. The finalized native reply.' };
+        expect(await f.recover(async (command: string) => command === 'read_chat'
+            ? native([final]) : native([final], { hasMore: false })))
+            .toMatchObject({ body: final.content, completeness: 'final_native' });
+        expect((await f.recover(async () => native([{ ...final, isStreaming: true }], { hasMore: false }))).source)
+            .toBe('durable_attempt_capture');
+    });
+
+    it('captures a native flush after the FSM debounce timestamp and fences off the next attempt', async () => {
+        const prefix = 'The synthetic final';
+        const full = prefix + ' arrived after the debounce edge. Every sentence belongs to this attempt.';
+        const f = fixture(prefix);
+        f.db.prepare(`INSERT INTO turn_attempts(attempt_id,scope,session_id,owner_daemon_id,state,accepted_at,created_at,updated_at)
+            VALUES('next','plain','coord','host','running',23000,23000,23000)`).run();
+        const result = await f.recover(async () => native([
+            bubble(21_000, full), bubble(24_000, 'Next attempt reply must never be included.'),
+        ]));
+        expect(result).toMatchObject({ body: full, completeness: 'final_native', parts: [{ at: 21_000, chars: full.length }] });
+        const ref = JSON.parse(result.provenance!.evidenceRef);
+        expect(ref[2]).toBe(20_000); // original terminal cause remains bound
+        expect(ref[8]).toBe(22_999); // independently fenced transcript window
+    });
+
     it('never promotes a PTY fallback to native evidence or stores it as exact', async () => {
         const f = fixture('screen row');
         const result = await f.recover(async () => ({ success: true, source: 'pty-parser', messageSource: { selected: 'pty-parser' }, messages: [bubble(19_000, 'screen row')], hasMore: false }));

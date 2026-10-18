@@ -6,6 +6,7 @@ import type { Database } from 'better-sqlite3';
 import type { TurnAttempt } from '../mesh/turn-ledger/types.js';
 import type { Execute } from './assistant-project-ports.js';
 import { LOG } from '../logging/logger.js';
+import { reportMessageId } from './project-views.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import {
     formatReplyClock, partsOf, renderNativeReplies, selectNativeWindow, standardAssistantBubble,
@@ -36,12 +37,14 @@ export function isVerifiedNativeEvidenceRef(reference: unknown, generation?: num
     if (typeof reference !== 'string') return false;
     try {
         const parts: unknown = JSON.parse(reference);
-        return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION
+        return Array.isArray(parts) && (parts.length === 8 || parts.length === 9) && parts[0] === ATTEMPT_EVIDENCE_VERSION
             && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === undefined || parts[1] === generation)
             && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime())
             && [parts[3], parts[5]].every(v => typeof v === 'string' && v.length > 0 && v.length <= 512)
             && [parts[4], parts[6]].every(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v))
-            && typeof parts[7] === 'string' && /^verified-native-window:[a-f0-9]{64}$/.test(parts[7]);
+            && typeof parts[7] === 'string' && /^verified-native-window:[a-f0-9]{64}$/.test(parts[7])
+            && (parts.length === 8 || (Number.isSafeInteger(parts[8]) && Number(parts[8]) >= Number(parts[2])
+                && Number.isFinite(new Date(Number(parts[8])).getTime())));
     } catch { return false; }
 }
 
@@ -57,7 +60,7 @@ export function verifiedNativeReportParts(body: string, parts: unknown, referenc
         const part = rec(parts[i]);
         const at = part?.at, chars = part?.chars;
         if (typeof at !== 'number' || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime())
-            || at > Number(ref[2]) || (i > 0 && at <= bubbles[i - 1]!.at)
+            || at > Number(ref[8] ?? ref[2]) || (i > 0 && at <= bubbles[i - 1]!.at)
             || typeof chars !== 'number' || !Number.isSafeInteger(chars) || chars <= 0) return null;
         if (parts.length > 1) {
             const label = Array.from(`${i ? '\n\n' : ''}[reply ${i + 1}/${parts.length} · ${formatReplyClock(at)}]\n`);
@@ -100,9 +103,10 @@ function finalized(message: unknown, storedHistory = false): boolean {
 /** Bounded, source-checked paging. An exhausted/failed page never proves completeness. */
 export async function readNativeWindow(execute: NativeExecute, sessionId: string, start: number, end: number) {
     const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
-    const messages: unknown[] = [];
+    let messages: unknown[] = [];
     let providerIdle = false;
     let invalid = false;
+    const targets = new Map<number, string>();
     const request = async (command: string, args: Record<string, unknown>) => {
         const remaining = deadline - Date.now();
         if (remaining <= 0) return null;
@@ -125,11 +129,22 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
         messages.push(...read.messages);
         return true;
     };
-    const result = (complete: boolean) => ({ ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle });
+    const result = (complete: boolean) => {
+        for (const message of messages) {
+            const bubble = standardAssistantBubble(message);
+            if (bubble) targets.set(bubble.at, reportMessageId(message));
+        }
+        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets };
+    };
     const chat = await request('read_chat', { targetSessionId: sessionId, tailLimit: 200 });
     if (take(chat)) {
-        if (chat!.coverage === 'full' && chat!.hasMore !== true) return result(true);
+        if (!invalid && chat!.coverage === 'full' && chat!.hasMore !== true) return result(true);
     } else if (!chat) return result(false); // deadline/failure: do not launch a second hung request
+    // History is an independent authoritative snapshot. A live streaming row
+    // (or native row lacking bubbleState) must not poison a later finalized
+    // version, nor collide with that version as a second reply.
+    messages = [];
+    invalid = false;
     // Start at offset zero with no live-window exclusion. Overlap is deduplicated
     // by timestamp+text. A page older than the start proves lower-bound coverage.
     for (let offset = 0; offset < 400; offset += 100) {
@@ -224,11 +239,25 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
         return typeof envelope?.finalSummary === 'string' && envelope.finalSummary.trim() ? envelope.finalSummary : null;
     })();
     const windowStart = attempt.acceptedAt;
-    const windowEnd = attempt.terminal.at;
-    const selected = await readNativeWindow(execute, sessionId, windowStart, windowEnd);
-    if (selected.ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
+    // FSM completion carries the debounce's original timestamp, not the
+    // eventual transcript flush time. An unanchored turn_end may therefore
+    // precede its native final. Fence at the next accepted attempt, and still
+    // require independent idle + last-bubble/envelope agreement below.
+    const next = db.prepare("SELECT MIN(accepted_at) AS at FROM turn_attempts WHERE session_id=? AND scope='plain' AND accepted_at>?")
+        .get(sessionId, attempt.acceptedAt) as { at: number | null };
     const anchor = typeof evidence?.messageAt === 'number' ? evidence.messageAt : null;
-    const anchorOutside = anchor !== null && (anchor < windowStart || anchor > windowEnd);
+    let windowEnd = anchor === null ? Math.max(attempt.terminal.at, Math.min(Date.now(), (next.at ?? Infinity) - 1)) : attempt.terminal.at;
+    let selected = await readNativeWindow(execute, sessionId, windowStart, windowEnd);
+    // Prefer the original terminal window whenever it already contains the
+    // corroborated final. Unowned later replies must not hide that report.
+    const original = selected.bubbles.filter(b => b.at <= attempt.terminal!.at);
+    if (anchor === null && selected.complete && selected.providerIdle && envelopeText
+        && original.at(-1)?.text.startsWith(envelopeText.trim())) {
+        selected = { ...selected, bubbles: original };
+        windowEnd = attempt.terminal.at;
+    }
+    if (selected.ambiguous) return { body: null, source: 'unavailable', reason: 'ambiguous_original_native_bubble' };
+    const anchorOutside = anchor !== null && (anchor < windowStart || anchor > attempt.terminal.at);
     const last = selected.bubbles.at(-1);
     // A finalized intermediate is still only an intermediate. Native anchor
     // evidence must name the last bubble. An unanchored FSM end additionally
@@ -240,7 +269,8 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
             LOG.warn('Assistant', `envelope_native_mismatch attempt=${attempt.attemptId} envelopeChars=${envelopeText.length} nativeChars=${bubbles.reduce((n, b) => n + b.chars, 0)}`);
         }
         const parts = partsOf(bubbles);
-        const evidenceRef = JSON.stringify([...stable, VERIFIED_WINDOW_REF + hash(JSON.stringify(bubbles))]);
+        const evidenceRef = JSON.stringify([...stable, VERIFIED_WINDOW_REF + hash(JSON.stringify(bubbles)),
+            ...(windowEnd > attempt.terminal!.at ? [windowEnd] : [])]);
         const body = renderNativeReplies(bubbles);
         store.captureAttemptBody(attempt.attemptId, meshId, sessionId, body, Date.now(), evidenceRef, { completeness: 'final_native', parts });
         return { body, source, completeness: 'final_native', parts, provenance: provenanceFor(evidenceRef) };

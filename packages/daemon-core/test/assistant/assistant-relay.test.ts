@@ -262,7 +262,7 @@ describe('relay trigger and batching', () => {
         expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
     });
 
-    it('announces a historical gap once per assistant session while retaining its status count', async () => {
+    it('retains historical losses in status without emitting an unreadable cumulative notice', async () => {
         const h = harness();
         h.state.assistant = null;
         h.relay.openThread(MESH);
@@ -271,108 +271,43 @@ describe('relay trigger and batching', () => {
         h.state.assistant = ASSISTANT;
         h.emit({ kind: 'registered', sessionId: ASSISTANT, at: h.clock.now(), origin: 'launch', session: {} as never });
         await settle(h);
-        expect(h.submits[0]!.text).toMatch(/^\[project blog\]/);
         expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
-
-        expect(h.submits[0]!.text).toContain('[ADHDev relay gap]');
-        // A later clean relay must not restart the same project_read loop.
+        expect(h.submits[0].text).not.toContain('[ADHDev relay gap]');
         h.emit(turn('committed', COORD, 2, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits).toHaveLength(2);
-        expect(h.submits[1]!.text).not.toContain('[ADHDev relay gap]');
-        expect(h.relay.missedReports()).toEqual([{ slug: 'blog', count: 1 }]);
-        h.state.assistant = 'asst_2';
-        h.emit(turn('committed', COORD, 3, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits[2]!.text).toContain('blog: 1');
+        h.clock.advance(RELAY_QUIET_MS); await settle(h);
+        expect(h.submits[1].text).not.toContain('[ADHDev relay gap]');
+        h.relay.stop();
     });
 
-    it('a missed report stops counting once its 24 h window has passed', async () => {
-        const h = harness();
-        h.relay.openThread(MESH);
-        h.state.report = null;
+    it('keeps missing captures pending, retries on a later tick, then delivers once', async () => {
+        const h = harness(); h.relay.openThread(MESH); h.state.report = null;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.relay.missedReportsFor(MESH)).toBe(1);
-        h.clock.advance(23 * 60 * MIN);
-        expect(h.relay.missedReportsFor(MESH)).toBe(1);
-        h.clock.advance(2 * 60 * MIN);
+        await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
+        h.clock.advance(RELAY_QUIET_MS); await settle(h);
+        expect(h.submits).toHaveLength(0);
+        expect(h.store.listUndelivered()).toHaveLength(1);
         expect(h.relay.missedReportsFor(MESH)).toBe(0);
-        expect(h.relay.missedReports()).toEqual([]);
+        h.state.report = 'Complete final message. All sentences survived.';
+        h.relay.tick(); await micro(); await settle(h);
+        expect(h.submits).toHaveLength(1);
+        expect(h.submits[0].text).toContain(h.state.report);
+        h.relay.tick(); await settle(h);
+        expect(h.submits).toHaveLength(1);
+        h.relay.stop();
     });
 
-    it('counts a missing captured body as a gap and only announces increases', async () => {
-        const h = harness();
-        h.relay.openThread(MESH);
-        h.state.report = null;
+    it('retains an unavailable MCP report until exact native evidence exists', async () => {
+        const h = harness(); h.state.assistant = null; h.relay.openThread(MESH); h.state.report = null;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits[0]!.text).toContain('blog: 1');
-        expect(h.relay.missedReportsFor(MESH)).toBe(1);
-        h.state.report = 'Complete report';
-        h.emit(turn('committed', COORD, 2, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits[1]!.text).not.toContain('[ADHDev relay gap]');
-        h.state.report = null;
-        h.emit(turn('committed', COORD, 3, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits[2]!.text).toContain('blog: 2');
-        expect(h.relay.missedReportsFor(MESH)).toBe(2);
-    });
-
-    it('does not consume a gap notice when submission is refused', async () => {
-        const h = harness();
-        h.relay.openThread(MESH);
-        h.state.report = null;
-        h.state.outcome = { kind: 'refused', reason: 'session_busy' } as SubmitOutcome;
-        h.emit(turn('committed', COORD, 1, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits[0]!.text).toContain('blog: 1');
-        expect(h.relay.missedReportsFor(MESH)).toBe(0);
-        h.state.outcome = { kind: 'delivered' };
-        h.relay.tick();
-        await settle(h);
-        expect(h.submits[1]!.text).toContain('blog: 1');
-        expect(h.relay.missedReportsFor(MESH)).toBe(1);
-    });
-
-    it('announces a new loss even when retention removes the previous loss', async () => {
-        const h = harness();
-        h.relay.openThread(MESH);
-        h.state.report = null;
-        h.emit(turn('committed', COORD, 1, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        h.store.prune(h.clock.now() + 8 * 24 * 60 * MIN);
-        h.emit(turn('committed', COORD, 2, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        expect(h.submits[1]!.text).toContain('blog: 1');
-    });
-
-    it('includes a gap notice in MCP pull delivery without repeating it', async () => {
-        const h = harness();
-        h.state.assistant = null;
-        h.relay.openThread(MESH);
-        h.state.report = null;
-        h.emit(turn('committed', COORD, 1, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        const first = await h.relay.pullPending('mcp_client');
-        expect(first.map((e) => e.text).join('\n')).toContain('blog: 1');
-        h.state.report = 'Complete report';
-        h.emit(turn('committed', COORD, 2, h.clock.now()));
-        h.clock.advance(RELAY_QUIET_MS);
-        await settle(h);
-        const second = await h.relay.pullPending('mcp_client');
-        expect(second.map((e) => e.text).join('\n')).not.toContain('[ADHDev relay gap]');
+        await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
+        h.clock.advance(RELAY_QUIET_MS); await settle(h);
+        expect(await h.relay.pullPending('mcp_client')).toEqual([]);
+        expect(h.store.listUndelivered()).toHaveLength(1);
+        h.state.report = 'Complete report'; h.relay.tick(); await micro();
+        const events = await h.relay.pullPending('mcp_client');
+        expect(events.map(e => e.text).join('\n')).toContain('Complete report');
+        expect(events.map(e => e.text).join('\n')).not.toContain('[ADHDev relay gap]');
+        h.relay.stop();
     });
 
     it('dedupes a re-committed attempt id (restart-absorbed plain attempt)', async () => {
@@ -526,7 +461,7 @@ describe('delivery into the assistant', () => {
         const h = harness();
         const submits: string[] = [];
         const relay = new AssistantRelay({
-            subscribe: () => () => {}, coordinatorMeshOf: () => null, projectSlug: () => 'blog', readCoordinatorTail: async () => 'tail',
+            subscribe: () => () => {}, coordinatorMeshOf: () => null, projectSlug: () => 'blog', readCoordinatorTail: async () => 'tail', rehydrateAttemptReport: async () => 'original native body',
             meshWork: () => null, hasAssistant: () => true, assistantSessionId: () => ASSISTANT, isAssistantReady: () => true,
             submit: async (_s, i) => { submits.push(i.text); return { kind: 'delivered' }; }, inputLog: h.log, store, clock: h.clock,
         });
@@ -738,23 +673,24 @@ it('waits through thinking-only reads and relays the whole final, never a partia
     h.relay.stop();
 });
 
-it('delivers an unverified envelope flagged, with the gap line, and leaves relayed_at null', async () => {
-    const h = harness();
-    h.relay.openThread(MESH);
-    const row = 'Only the first screen row of a wrapped reply';
-    (h.relay as any).ports.rehydrateAttemptReport = async () => ({ body: row, completeness: 'envelope_unverified', source: 'existing_attempt_envelope' });
-    const capture = vi.spyOn(h.store, 'captureAttemptBody');
+it('never relays an unverified streaming envelope and later relays the finalized native body once', async () => {
+    const h = harness(); h.relay.openThread(MESH);
+    const row = 'The synthetic workspace is ready, and that';
+    const full = row + ' completes the first sentence. This second sentence must also arrive.';
+    let finalized = false;
+    (h.relay as any).ports.rehydrateAttemptReport = async () => finalized
+        ? { body: full, completeness: 'final_native' }
+        : { body: row, completeness: 'envelope_unverified' };
     h.emit(turn('committed', COORD, 1, h.clock.now()));
-    h.clock.advance(RELAY_QUIET_MS);
-    await settle(h);
-    const text = h.submits[0]!.text;
-    expect(text).toContain(row);
-    expect(text).toContain('may be truncated');
-    expect(text).toContain('[ADHDev relay gap]');
-    expect(text).toContain('"complete":false');
-    expect(h.store.countUnrendered().total).toBe(1);
-    expect(capture).not.toHaveBeenCalled();
-    expect(h.clock.now()).toBeLessThan(Date.parse('2026-10-07T12:00:00Z') + RELAY_NATIVE_WAIT_MS + RELAY_QUIET_MS + 1);
+    await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
+    h.clock.advance(RELAY_QUIET_MS); await settle(h);
+    expect(h.submits).toHaveLength(0);
+    expect(h.store.listUndelivered()).toHaveLength(1);
+    finalized = true; h.relay.tick(); await micro(); await settle(h);
+    expect(h.submits).toHaveLength(1);
+    expect(h.submits[0].text).toContain(full);
+    expect(h.submits[0].text).not.toContain('envelope_unverified');
+    h.relay.tick(); await settle(h); expect(h.submits).toHaveLength(1);
     h.relay.stop();
 });
 
@@ -763,6 +699,6 @@ it('refuses session-only tails when no exact reader is available', async () => {
     (h.relay as any).ports.rehydrateAttemptReport = undefined;
     h.state.report = 'newest session tail';
     h.emit(turn('committed', COORD, 1, h.clock.now())); h.clock.advance(RELAY_QUIET_MS); await settle(h);
-    expect(h.submits[0].text).not.toContain('newest session tail');
-    expect(h.submits[0].text).toContain('no coordinator message found'); h.relay.stop();
+    expect(h.submits).toHaveLength(0);
+    expect(h.store.listUndelivered()).toHaveLength(1); h.relay.stop();
 });
