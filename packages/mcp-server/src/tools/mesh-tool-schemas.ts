@@ -7,6 +7,7 @@
  * handlers are in the mesh-tools-* modules and mesh-tools.ts is the barrel.
  */
 
+import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL } from './driver-tools.js';
 import { annotateAll } from './tool-annotations.js';
 // Wiring-unification A3: every vocabulary enum is derived from the ONE tuple in
 // mesh-shared via enumOf(), so the published schema cannot drift from the code.
@@ -132,6 +133,8 @@ export const ALL_MESH_TOOLS = [
     MESH_MISSION_LIST_TOOL,
     MESH_REVIEW_INBOX_TOOL,
     MESH_NODE_SLOTS_TOOL,
+    DRIVER_LIST_TOOL,
+    DRIVER_DESCRIBE_TOOL,
 ];
 
 // Replace each slot with an annotated copy. Does not mutate the `*_TOOL`

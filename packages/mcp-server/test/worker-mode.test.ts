@@ -42,12 +42,12 @@ test('without --worker the mesh path is untouched', () => {
 
 // ─── Toolset shape (design §3) ────────────────────────────────────────────
 
-test('the worker toolset is minimal and shares NO tool name with mesh mode', () => {
+test('worker shares only driver discovery with mesh mode; invocation stays worker-only', () => {
   const meshNames = new Set(ALL_MESH_TOOLS.map(t => t.name));
-  for (const tool of ALL_WORKER_TOOLS) {
-    assert.ok(!meshNames.has(tool.name), `worker tool ${tool.name} must not be a mesh tool`);
-  }
-  assert.deepEqual(ALL_WORKER_TOOLS.map(t => t.name).sort(), ['peer_context_pull', 'progress_update', 'report_completion']);
+  const shared = ALL_WORKER_TOOLS.filter(t => meshNames.has(t.name)).map(t => t.name).sort();
+  assert.deepEqual(shared, ['driver_describe', 'driver_list']);
+  assert.deepEqual(ALL_WORKER_TOOLS.map(t => t.name).sort(),
+    ['driver_describe', 'driver_invoke', 'driver_list', 'peer_context_pull', 'progress_update', 'report_completion']);
 });
 
 test('no worker tool takes a task id — attribution is never caller-supplied', () => {

@@ -31,6 +31,7 @@ import {
   type AssistantTool,
 } from '@adhdev/mesh-shared';
 
+import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL } from './driver-tools.js';
 import type { CommandTransport } from '../transports/mode.js';
 import { annotateAll, type ToolBehaviorAnnotations } from './tool-annotations.js';
 
@@ -333,6 +334,8 @@ export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
   PROJECT_NOTE_TOOL,
   LAUNCH_DEFAULTS_TOOL,
   LAUNCH_DEFAULTS_SET_TOOL,
+  DRIVER_LIST_TOOL,
+  DRIVER_DESCRIBE_TOOL,
 ];
 
 export type AssistantModeTool = AssistantToolSchema & { annotations: ToolBehaviorAnnotations };

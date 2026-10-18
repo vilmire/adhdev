@@ -1063,7 +1063,7 @@ describe('Repo Mesh coordinator prompt', () => {
     const end = rest.indexOf('\n## ')
     const table = end >= 0 ? rest.slice(0, end) : rest
     const names = new Set<string>()
-    for (const m of table.matchAll(/`(mesh_[a-z0-9_]+)`/g)) {
+    for (const m of table.matchAll(/`((?:mesh_|driver_)[a-z0-9_]+)`/g)) {
       names.add(m[1])
     }
     return [...names]
@@ -1092,6 +1092,10 @@ describe('Repo Mesh coordinator prompt', () => {
 
     // Full set-equality + count guard (== the barrel "NN tools" comment count,
     // plus the flag-gated rows).
+    expect(exposed).toContain('driver_list')
+    expect(exposed).toContain('driver_describe')
+    expect(exposed).not.toContain('driver_invoke')
+    expect(prompt).toContain('invoke is delegated to a worker task')
     expect(exposed).toEqual(canonical)
     expect(exposed.length).toBe(CANONICAL_MESH_TOOL_COUNT + FLAG_GATED_PROMPT_TOOLS.length)
   })

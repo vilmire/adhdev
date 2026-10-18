@@ -11,9 +11,8 @@
  *   - the daemon-only verbs (launch / MCP-only pull / owner actions) that have
  *     no tool.
  *
- * Assistant tools are a separate set from the mesh tools: none of these names
- * belongs in `CANONICAL_MESH_TOOL_NAMES`, and the coordinator/worker MCP modes
- * never publish them.
+ * Assistant-specific tools remain separate from mesh tools. Driver discovery
+ * (list/describe) is shared across all three modes; invoke remains Worker-only.
  */
 
 export const ASSISTANT_TOOLS = [
@@ -33,6 +32,8 @@ export const ASSISTANT_TOOLS = [
     'project_note',
     'launch_defaults',
     'launch_defaults_set',
+    'driver_list',
+    'driver_describe',
 ] as const
 
 export type AssistantTool = typeof ASSISTANT_TOOLS[number]
@@ -46,6 +47,8 @@ export function isAssistantTool(value: unknown): value is AssistantTool {
 /** Daemon verb names (§4.4 table + the five verbs below it). */
 export const ASSISTANT_VERB = {
     // tool verbs
+    driverList: 'driver_list',
+    driverDescribe: 'driver_describe',
     projects: 'assistant_projects',
     environment: 'assistant_environment',
     action: 'assistant_action',
@@ -80,6 +83,8 @@ export type AssistantVerb = typeof ASSISTANT_VERB[keyof typeof ASSISTANT_VERB]
 
 /** The daemon verb each assistant tool calls. */
 export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>> = {
+    driver_list: ASSISTANT_VERB.driverList,
+    driver_describe: ASSISTANT_VERB.driverDescribe,
     projects: ASSISTANT_VERB.projects,
     environment: ASSISTANT_VERB.environment,
     assistant_action: ASSISTANT_VERB.action,

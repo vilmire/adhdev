@@ -35,6 +35,8 @@ const EMPTY_ENV = {} as NodeJS.ProcessEnv;
 
 /** Minimal valid arguments per tool, so the arg gate passes and the verb is reached. */
 const MINIMAL_ARGS: Record<string, Record<string, unknown>> = {
+  driver_list: {},
+  driver_describe: { type: 'browser' },
   projects: {},
   environment: {},
   assistant_action: { authorization: 'cap', meshId: 'm', targetSessionId: 's', action: 'approve', button: 'Accept' },
@@ -84,9 +86,10 @@ test('write annotations match ASSISTANT_WRITE_TOOLS exactly; every other assista
   assert.deepEqual(writes, [...ASSISTANT_WRITE_TOOLS].sort());
 });
 
-test('assistant tools share no name with mesh or worker tools', () => {
+test('assistant shares only driver discovery with mesh and worker tools', () => {
   const others = new Set<string>([...CANONICAL_MESH_TOOL_NAMES, ...WORKER_TOOLS]);
-  for (const name of ASSISTANT_TOOLS) assert.ok(!others.has(name), `${name} collides with a mesh/worker tool`);
+  assert.deepEqual(ASSISTANT_TOOLS.filter(name => others.has(name)).sort(), ['driver_describe', 'driver_list']);
+  assert.equal(ASSISTANT_TOOLS.some(name => (name as string) === 'driver_invoke'), false);
 });
 
 // ─── Startup assertion ─────────────────────────────────────────────────────

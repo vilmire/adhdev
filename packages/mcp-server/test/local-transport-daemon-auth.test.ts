@@ -6,6 +6,8 @@ import test from 'node:test';
 
 import { WORKER_MCP_DAEMON_VERBS } from '@adhdev/daemon-core';
 
+import { resolveWorkerModeTools, workerDriverTool, readWorkerCredentials } from '../src/tools/worker-tools.js';
+import type { CommandTransport } from '../src/transports/mode.js';
 import { parseArgs } from '../src/cli-args.js';
 import { LocalDaemonAuthError, LocalTransport } from '../src/transports/local.js';
 
@@ -99,7 +101,7 @@ test('cli args: --daemon-auth-file / ADHDEV_DAEMON_AUTH_FILE for coordinator and
 // The standalone worker-scope gate admits exactly WORKER_MCP_DAEMON_VERBS. A
 // worker tool that starts sending a new verb must add it there, or the worker
 // breaks on every gated daemon — this keeps the list in step with the sources.
-test('every daemon verb the worker toolset sends is admitted by the worker-scope gate', () => {
+test('every daemon verb the worker toolset sends is admitted by the worker-scope gate', async () => {
   const sources = [
     'src/tools/worker-tools.ts',
     'src/tools/worker-report-outbox.ts',
@@ -113,7 +115,14 @@ test('every daemon verb the worker toolset sends is admitted by the worker-scope
     for (const m of text.matchAll(/transport\.command\(\s*'([a-z_]+)'/g)) verbs.add(m[1]);
     for (const m of text.matchAll(/^\s+(?:report|progress): '([a-z_]+)',$/gm)) verbs.add(m[1]);
   }
-  assert.ok(verbs.size >= 8, `expected to find the worker verbs, found ${[...verbs].join(', ')}`);
+  // G1a-6's shared driver handler dispatches a parameterized verb, so exercise
+  // every published driver tool instead of weakening the literal-source scan.
+  const transport = { command: async (verb: string) => { verbs.add(verb); return { success: true }; } } as unknown as CommandTransport;
+  for (const tool of resolveWorkerModeTools().filter(t => t.name.startsWith('driver_'))) {
+    await workerDriverTool(transport, readWorkerCredentials({ ADHDEV_WORKER_SESSION_BIND: 'wsb_test' }),
+      tool.name as 'driver_list' | 'driver_describe' | 'driver_invoke', { type: 'browser', action: 'snapshot', args: {} });
+  }
+  assert.ok(verbs.size >= 11, `expected to find the worker verbs, found ${[...verbs].join(', ')}`);
   assert.deepEqual([...verbs].filter((v) => !WORKER_MCP_DAEMON_VERBS.includes(v)), []);
   assert.deepEqual(WORKER_MCP_DAEMON_VERBS.filter((v) => !verbs.has(v)), []);
 });

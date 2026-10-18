@@ -26,6 +26,7 @@
  * feature exists to close is exactly "the wrong task got the completion".
  */
 
+import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, callDriverTool, type DriverTool } from './driver-tools.js';
 import {
   WORKER_BRANCH_STATES,
   WORKER_REPORT_OUTCOMES,
@@ -197,9 +198,9 @@ export const PEER_CONTEXT_PULL_TOOL = {
 /**
  * The published worker toolset, each definition carrying its MCP behavior hints
  * (see tool-annotations.ts). `annotateAll` throws for an unclassified tool, so a
- * fourth worker tool cannot be added here without stating what it does.
+ * new worker tool cannot be added here without stating what it does.
  */
-export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL]);
+export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL]);
 
 /** Shape of a tool definition as worker mode publishes it. */
 interface WorkerModeTool {
@@ -575,4 +576,10 @@ export async function drainMailbox(
 /** How a background-delivered answer is described in the worker's next tool response. */
 export function describeWorkerDeliveryAnswer(kind: WorkerDeliveryKind, result: any): string {
   return kind === 'report' ? renderReportResult(result).text : renderProgressResult(result).text;
+}
+
+/** Driver commands carry the same launch credentials as other worker tools. */
+export async function workerDriverTool(transport: CommandTransport, credentials: WorkerCredentials,
+  tool: DriverTool, args: Record<string, unknown>): Promise<WorkerToolResult> {
+  return callDriverTool(transport, tool, args, credentials);
 }

@@ -21,7 +21,7 @@ describe('ASSISTANT_TOOLS', () => {
         expect([...ASSISTANT_TOOLS]).toEqual([
             'projects', 'environment', 'assistant_action', 'project_watch', 'project_status', 'project_send', 'project_read', 'project_add',
             'project_attach_remote', 'discover_repos', 'memory', 'skill_view', 'skill_manage', 'project_note',
-            'launch_defaults', 'launch_defaults_set',
+            'launch_defaults', 'launch_defaults_set', 'driver_list', 'driver_describe',
         ])
         expect(new Set(ASSISTANT_TOOLS).size).toBe(ASSISTANT_TOOLS.length)
     })
@@ -31,14 +31,14 @@ describe('ASSISTANT_TOOLS', () => {
         for (const t of ['mesh_status', 'report_completion', '', 'Memory', 42, null]) expect(isAssistantTool(t)).toBe(false)
     })
 
-    it('shares no name with the mesh or worker tool sets', () => {
+    it('shares only driver discovery with the mesh and worker tool sets', () => {
         const others = new Set<string>([...CANONICAL_MESH_TOOL_NAMES, ...WORKER_TOOLS])
-        expect(ASSISTANT_TOOLS.filter((t) => others.has(t))).toEqual([])
+        expect(ASSISTANT_TOOLS.filter((t) => others.has(t))).toEqual(['driver_list', 'driver_describe'])
     })
 
-    it('maps every tool to an assistant_<tool> verb, one verb per tool', () => {
+    it('maps assistant tools and shared driver discovery to their daemon verbs', () => {
         expect(Object.keys(ASSISTANT_TOOL_VERBS).sort()).toEqual([...ASSISTANT_TOOLS].sort())
-        for (const t of ASSISTANT_TOOLS) expect(ASSISTANT_TOOL_VERBS[t]).toBe(t === 'assistant_action' ? t : `assistant_${t}`)
+        for (const t of ASSISTANT_TOOLS) expect(ASSISTANT_TOOL_VERBS[t]).toBe(t === 'assistant_action' || t.startsWith('driver_') ? t : `assistant_${t}`)
     })
 
     it('write tools are memory, skill_manage and project_note', () => {
@@ -49,9 +49,9 @@ describe('ASSISTANT_TOOLS', () => {
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are twenty-five distinct names: sixteen tool verbs + launch/pull/state/threads + five owner verbs', () => {
-        expect(all.length).toBe(25)
-        expect(new Set(all).size).toBe(25)
+    it('are twenty-seven distinct names: eighteen tool verbs + launch/pull/state/threads + five owner verbs', () => {
+        expect(all.length).toBe(27)
+        expect(new Set(all).size).toBe(27)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
             'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',

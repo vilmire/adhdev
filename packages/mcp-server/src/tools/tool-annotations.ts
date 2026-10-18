@@ -289,6 +289,9 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   // ── Worker mode ──────────────────────────────────────────────────────
   // Files this worker's terminal completion report. Idempotent by design: the
   // daemon reports a duplicate as accepted rather than as a failure.
+  driver_list: READ_LOCAL,
+  driver_describe: READ_LOCAL,
+  driver_invoke: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   report_completion: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   // Each progress note is an additional note.
   progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },

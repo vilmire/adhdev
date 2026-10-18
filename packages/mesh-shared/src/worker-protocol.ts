@@ -40,6 +40,9 @@ export const WORKER_TOOLS = [
     'git_status',
     'git_log',
     'git_diff',
+    'driver_list',
+    'driver_describe',
+    'driver_invoke',
 ] as const
 
 export type WorkerTool = typeof WORKER_TOOLS[number]

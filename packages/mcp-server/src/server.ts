@@ -52,7 +52,7 @@ import { validateMeshToolArgs, unknownToolArgsError, enumValueError, canonicaliz
 import { retiredMeshToolError } from '@adhdev/mesh-shared';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
-  resolveWorkerModeTools, readWorkerCredentials, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
+  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
   describeWorkerDeliveryAnswer,
 } from './tools/worker-tools.js';
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
@@ -175,7 +175,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
   // ── Worker Mode ───────────────────────────────
   //
   // Checked BEFORE mesh mode. A delegated worker gets `report_completion` /
-  // `progress_update` plus read-only git inspection of its own workspace — and
+  // `progress_update`, read-only git inspection and credentialed local drivers — and
   // nothing from the coordinator surface. No mesh tools, and no
   // `coordinator://system-prompt` resource (note this block registers no
   // resource capability at all).
@@ -265,6 +265,9 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     const asResponse = (result: { text: string; isError?: boolean }): WorkerToolResponse =>
       ({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
     const workerHandlers: Record<WorkerTool, (a: Record<string, any>) => Promise<WorkerToolResponse>> = {
+      driver_list: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_list', a)),
+      driver_describe: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_describe', a)),
+      driver_invoke: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_invoke', a)),
       report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a, delivery)),
       progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a, delivery)),
       peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),

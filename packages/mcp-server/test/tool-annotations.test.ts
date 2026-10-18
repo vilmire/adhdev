@@ -76,7 +76,8 @@ test('every published mesh tool carries all four behavior hints', () => {
 });
 
 test('every published worker tool carries all four behavior hints', () => {
-  assert.equal(ALL_WORKER_TOOLS.length, 3);
+  // G1a-6 adds the three driver tools to the three worker report/context tools.
+  assert.equal(ALL_WORKER_TOOLS.length, 6);
   for (const tool of ALL_WORKER_TOOLS) {
     const annotations = (tool as any).annotations;
     assert.ok(annotations, `${tool.name} has no annotations`);
