@@ -377,3 +377,30 @@ describe('compactTranscriptTail', () => {
         expect(result.messages[0].truncated).toBe(true);
     });
 });
+
+describe('compactProjectStatus — stale missions (2026-10-18)', () => {
+    const DAY = 86_400_000;
+    const now = Date.parse('2026-10-18T00:00:00Z');
+    const extras = { queue: null, pendingApprovals: 0, coordinator: 'none' as const, threadOpen: null, lastRelayAt: null, now };
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const view = (missions: unknown[]) => ({ missions: { list: { missions } } });
+
+    it('lists active missions idle for more than 3 days, oldest first, by last task activity', () => {
+        const out: any = compactProjectStatus(view([
+            { id: 'fresh', title: 'Fresh', status: 'active', updatedAt: iso(now - 10 * DAY), tasks: { lastActivityAt: iso(now - DAY) } },
+            { id: 'old', title: 'Old', status: 'active', updatedAt: iso(now - 9 * DAY), tasks: { lastActivityAt: null } },
+            { id: 'older', title: 'Older', status: 'active', updatedAt: iso(now - 20 * DAY), tasks: { lastActivityAt: iso(now - 12 * DAY) } },
+            { id: 'paused', title: 'Paused', status: 'paused', updatedAt: iso(now - 30 * DAY) },
+        ]), extras);
+        expect(out.staleMissions).toEqual([
+            { id: 'older', title: 'Older', idleDays: 12 },
+            { id: 'old', title: 'Old', idleDays: 9 },
+        ]);
+        expect(out.activeMissions).toHaveLength(4);
+    });
+
+    it('is absent when nothing is stale', () => {
+        const out: any = compactProjectStatus(view([{ id: 'a', title: 'A', status: 'active', updatedAt: iso(now - DAY) }]), extras);
+        expect(out).not.toHaveProperty('staleMissions');
+    });
+});

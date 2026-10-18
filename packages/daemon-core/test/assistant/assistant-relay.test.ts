@@ -4,6 +4,7 @@ import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
 import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
 import {
     AssistantRelay,
+    RELAY_THREAD_STALE_CLOSE_MS,
     type AssistantRelayBusEvent,
     type MeshWorkCounts,
     type RelayClock,
@@ -616,6 +617,40 @@ describe('signals', () => {
         second.relay.tick();
         await settle(second);
         expect(second.submits.map((x) => x.text)).toEqual([expect.stringMatching(/^\[project blog\] no progress for 30 min/)]);
+    });
+
+    it('the owner can stop following a project: no more notices until the next send', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.state.work = { activeMissions: 16, pending: 1, assigned: 0 };
+        expect(h.relay.closeThread(MESH)).toBe(true);
+        expect(h.relay.closeThread(MESH)).toBe(false);
+        expect(h.store.isThreadOpen(MESH)).toBe(false);
+        h.clock.advance(31 * MIN);
+        h.relay.tick();
+        await settle(h);
+        expect(h.submits).toHaveLength(0);
+        h.relay.openThread(MESH);
+        expect(h.store.isThreadOpen(MESH)).toBe(true);
+    });
+
+    it('stops following a project after 7 quiet days, not while its coordinator works', async () => {
+        const quiet = harness();
+        quiet.relay.openThread(MESH);
+        quiet.state.work = { activeMissions: 0, pending: 0, assigned: 0 };
+        quiet.clock.advance(RELAY_THREAD_STALE_CLOSE_MS - MIN);
+        quiet.relay.tick();
+        expect(quiet.store.isThreadOpen(MESH)).toBe(true);
+        quiet.clock.advance(2 * MIN);
+        quiet.relay.tick();
+        expect(quiet.store.isThreadOpen(MESH)).toBe(false);
+
+        const busy = harness();
+        busy.relay.openThread(MESH);
+        busy.emit(turn('started', COORD, 1, busy.clock.now()));
+        busy.clock.advance(RELAY_THREAD_STALE_CLOSE_MS + MIN);
+        busy.relay.tick();
+        expect(busy.store.isThreadOpen(MESH)).toBe(true);
     });
 
     it('closes the thread of a project that disappeared', () => {

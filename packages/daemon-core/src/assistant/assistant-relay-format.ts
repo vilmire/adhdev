@@ -223,3 +223,34 @@ export function buildRestartNote(input: { endedAt: number; openThreads: readonly
 export function codePoints(s: string): number {
     return cps(s);
 }
+
+// ── previous-session context (2026-10-18) ──────────────────────────────────
+
+/** Daemon-typed lines in an assistant transcript — never the owner's own words. */
+const DAEMON_INPUT_PREFIX = /^\s*(?:<pasted_content[^>]*>\s*)?\[(?:ADHDev\b|project\s)/;
+
+export interface PreviousSessionMessage { role: 'user' | 'assistant'; text: string }
+
+const PREVIOUS_SESSION_MAX_MESSAGES = 6;
+const PREVIOUS_SESSION_MAX_CHARS = 400;
+
+/**
+ * A freshly launched assistant does not see its previous session (2026-10-18:
+ * it answered "the history is empty, I can't tell what you asked"). This note
+ * carries the last few owner requests and replies from that session — context
+ * only, never a new request. Daemon-typed inputs are dropped; null when nothing
+ * of the owner's remains.
+ */
+export function buildPreviousSessionNote(messages: readonly PreviousSessionMessage[]): string | null {
+    const kept = messages
+        .filter((m) => m.text.trim() && !(m.role === 'user' && DAEMON_INPUT_PREFIX.test(m.text)))
+        .slice(-PREVIOUS_SESSION_MAX_MESSAGES);
+    if (!kept.some((m) => m.role === 'user')) return null;
+    const lines = kept.map((m) => {
+        const flat = m.text.replace(/\s+/g, ' ').trim();
+        const clipped = flat.length > PREVIOUS_SESSION_MAX_CHARS ? `${flat.slice(0, PREVIOUS_SESSION_MAX_CHARS - 1)}…` : flat;
+        return `${m.role === 'user' ? 'User' : 'You'}: ${clipped}`;
+    });
+    return '[ADHDev previous session] Your previous session ended. Its last exchanges, for context only — '
+        + 'not new requests; act on them only if the user asks:\n' + lines.join('\n');
+}

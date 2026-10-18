@@ -98,7 +98,9 @@ describe('buildAssistantSystemPrompt', () => {
         // 6,600: +project_attach_remote's routing clause (the cap was within ~10 chars).
         // 6_600 → 6_700 (rc.18): the launch-defaults tools are named in the tool list
         // (every assistant tool must be); the whole prompt stays under its own cap below.
-        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(6_700);
+        // 2026-10-18: +choices line, no-preamble and attention-first rules, and the
+        // previous-session / digest markers (assistant review).
+        expect(ASSISTANT_FIXED_RULES.length).toBeLessThan(7_300);
     });
 
     it('stays well under the limit with full memory/skill budgets and 20 projects', () => {
@@ -205,6 +207,8 @@ describe('routing, notice and tool-boundary rules', () => {
         expect(ASSISTANT_FIXED_RULES).not.toContain('[ADHDev first run]');
         expect(ASSISTANT_FIXED_RULES).toContain('[ADHDev restart]');
         expect(ASSISTANT_FIXED_RULES).toContain('[ADHDev review]');
+        expect(ASSISTANT_FIXED_RULES).toContain('[ADHDev previous session]');
+        expect(ASSISTANT_FIXED_RULES).toContain('[ADHDev digest]');
     });
 
     it('treats [idle] as "nothing running now" and hides the marker', () => {
@@ -224,3 +228,11 @@ describe('routing, notice and tool-boundary rules', () => {
         expect(ASSISTANT_SAFETY_TAIL).toMatch(/Read tool[^\n]*only for your own skill and reference files/);
     });
 });
+
+describe('reply style rules (2026-10-18 review)', () => {
+    it('asks for a choices line the dashboard turns into buttons, and attention first', () => {
+        expect(ASSISTANT_FIXED_RULES).toContain('[[choices: option | option]]')
+        expect(ASSISTANT_FIXED_RULES).toContain('Do not announce what you are about to check')
+        expect(ASSISTANT_FIXED_RULES).toContain("put what needs the user's decision or attention first")
+    })
+})

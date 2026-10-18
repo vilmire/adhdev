@@ -46,6 +46,8 @@ import { setAssistantMemberMeshSource } from './member-meshes.js';
 import { compactTranscriptTail } from './project-views.js';
 import { AssistantCurator, startAssistantCuratorTimer } from './skills/skill-curator.js';
 import { liveAssistantQuotaPort, type AssistantQuotaPort } from './assistant-quota.js';
+import { buildPreviousSessionNote, type PreviousSessionMessage } from './assistant-relay-format.js';
+import { AssistantDigestScheduler } from './assistant-digest-scheduler.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
 import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
@@ -302,6 +304,17 @@ export function wireAssistantRuntime(
         },
     });
     const reviewScheduler = review;
+    const digestScheduler = new AssistantDigestScheduler({
+        liveSessionId,
+        isReady: (sid) => instanceReady(instanceOf(components, sid)),
+        modalOpen: (sid) => instanceModalOpen(instanceOf(components, sid)),
+        digestHour: () => registry.read()?.digestHour,
+        lastDigestAt: () => registry.read()?.lastDigestAt ?? null,
+        followsProjects: () => store.openThreads().length > 0,
+        relayBusy: () => relay.hasPendingInput(),
+        enqueue: (input) => relay.enqueueInput(input),
+        recordDigest: (at) => registry.recordDigest(at),
+    });
 
     // Meshes this daemon is a member of (no meshes.json record here): the
     // router's inline cache of the hosts' records joins the inventory.
@@ -373,6 +386,8 @@ export function wireAssistantRuntime(
             void terminalDelivery?.tick().catch(e => LOG.warn('Assistant', `terminal watch delivery failed: ${(e as Error).message}`));
             const r = reviewScheduler.evaluate(now);
             if (r.fired) LOG.info('Assistant', `idle review turn queued (${r.messageId})`);
+            const d = digestScheduler.evaluate(now);
+            if (d.fired) LOG.info('Assistant', `daily digest queued (${d.messageId})`);
             if (metrics && now - lastMetricsPrune >= METRICS_PRUNE_EVERY_MS) {
                 lastMetricsPrune = now;
                 metrics.prune(now);
@@ -389,6 +404,28 @@ export function wireAssistantRuntime(
         if (active || disposed) return;
         active = true;
         offs.push(subscribeAssistantRegistry(components.bus, registry));
+        // After each finished assistant turn, keep its last exchanges for the
+        // next session's [ADHDev previous session] note (read while alive: a
+        // dead session's history is not readable for every CLI).
+        let contextInFlight = false;
+        offs.push(components.bus.on(['turn'], (event) => {
+            if (event.kind !== 'turn' || event.phase !== 'committed' || contextInFlight) return;
+            if (registry.read()?.sessionId !== event.sessionId) return;
+            contextInFlight = true;
+            void (async () => {
+                try {
+                    const chat = await components.router.execute('read_chat', { targetSessionId: event.sessionId, limit: 40 }, 'ipc', { inProcess: true });
+                    if (!chat?.success) return;
+                    const messages = (compactTranscriptTail(chat, 20, 2000).messages as PreviousSessionMessage[]) ?? [];
+                    const text = buildPreviousSessionNote(messages);
+                    if (text) registry.recordContext(event.sessionId, text, Date.now());
+                } catch (e) {
+                    LOG.debug('Assistant', `context snapshot failed: ${(e as Error)?.message ?? e}`);
+                } finally {
+                    contextInFlight = false;
+                }
+            })();
+        }, { name: 'assistant.context' }));
         relay.start();
         offs.push(() => relay.stop());
         tickTimer = setInterval(tick, opts.tickMs ?? ASSISTANT_RELAY_TICK_MS);

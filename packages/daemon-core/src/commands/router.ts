@@ -66,6 +66,7 @@ import { meshStatusViewSpecs } from './high-family/mesh-status-view.js';
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
+import { assistantThreadSpecs } from './high-family/assistant-threads.js';
 import { assistantProjectSpecs } from './high-family/assistant.js';
 import { assistantRemoteSpecs } from './high-family/assistant-remote.js';
 import { assistantLaunchSpecs } from './high-family/assistant-launch.js';
@@ -347,6 +348,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...assistantStoreSpecs,
             ...assistantProjectSpecs,
             ...assistantActionSpecs,
+            ...assistantThreadSpecs,
             ...assistantWatchSpecs,
             ...assistantRemoteSpecs,
             ...assistantLaunchSpecs,

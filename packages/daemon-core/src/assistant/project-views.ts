@@ -177,7 +177,12 @@ export interface ProjectStatusExtras {
      * carrying it is itself the thing that went missing. A count, never a body.
      */
     missedReports?: number;
+    /** Clock for stale-mission ages (tests). */
+    now?: number;
 }
+
+/** An active mission with no task activity for this long is reported as stale. */
+export const STALE_MISSION_AFTER_MS = 3 * 24 * 60 * 60_000;
 
 function firstText(sources: readonly any[], pick: (x: any) => unknown[]): string {
     for (const x of sources) {
@@ -257,6 +262,19 @@ export function compactProjectStatus(view: Record<string, unknown>, extras: Proj
     const activeMissions = missionList
         .filter((m) => readText(m?.status) === 'active' || readText(m?.status) === 'paused')
         .map((m) => ({ id: readText(m?.id), title: readText(m?.title), status: readText(m?.status) }));
+    // Active missions nothing has happened in for days (2026-10-18: one project
+    // carried 16 "active" missions, most of them long dead, into every status
+    // answer). Last activity = latest task update, else the mission's own update.
+    const now = extras.now ?? Date.now();
+    const staleMissions = missionList
+        .filter((m) => readText(m?.status) === 'active')
+        .map((m) => {
+            const last = Date.parse(readText(rec(m?.tasks)?.lastActivityAt) || readText(m?.updatedAt) || readText(m?.createdAt));
+            return { id: readText(m?.id), title: readText(m?.title), last };
+        })
+        .filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS)
+        .sort((a, b) => a.last - b.last)
+        .map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 86_400_000) }));
     return {
         machines,
         machinesOnline: machines.filter((m) => m.online).length,
@@ -270,6 +288,7 @@ export function compactProjectStatus(view: Record<string, unknown>, extras: Proj
         // Only when there is something to report — a `0` every time is noise
         // the assistant would learn to skip.
         ...(extras.missedReports && extras.missedReports > 0 ? { missedReports: extras.missedReports } : {}),
+        ...(staleMissions.length ? { staleMissions } : {}),
     };
 }
 

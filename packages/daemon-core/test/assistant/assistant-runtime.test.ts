@@ -84,10 +84,11 @@ describe('wireAssistantRuntime', () => {
         const hooks = createDefaultProjectPorts({ components: () => components(), execute: async () => ({ success: true }), selfDaemonId: 'd' }).relay;
         hooks.openThread!('mesh_a');
         expect(runtime.isActive()).toBe(true);
-        expect(subs.map((s) => s.name).sort()).toEqual(['assistant.registry', 'assistant.relay']);
+        // assistant.context: saves the last exchanges after each finished turn (previous-session note).
+        expect(subs.map((s) => s.name).sort()).toEqual(['assistant.context', 'assistant.registry', 'assistant.relay']);
         expect(hooks.isThreadOpen!('mesh_a')).toBe(true);
         runtime.activate('launch');
-        expect(subs).toHaveLength(2);
+        expect(subs).toHaveLength(3);
     });
 
     it('activates at wire time when assistant.json has an entry; dispose unsubscribes and clears hooks', async () => {

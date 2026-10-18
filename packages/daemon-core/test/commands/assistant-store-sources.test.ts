@@ -31,6 +31,8 @@ const EXPECTED_SOURCES: Record<string, string[]> = {
     assistant_staged_resolve: ['p2p', 'standalone', 'ws'],
     assistant_store_admin: ['p2p', 'standalone', 'ws'],
     assistant_import_skills: ['p2p', 'standalone', 'ws'],
+    assistant_threads: ['ipc', 'p2p', 'standalone', 'ws'],
+    assistant_thread_close: ['p2p', 'standalone', 'ws'],
     launch_assistant: ['ipc', 'p2p', 'standalone', 'ws'],
     assistant_pending_relays: ['ipc', 'standalone'],
 };

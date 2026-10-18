@@ -192,6 +192,8 @@ export type AssistantInputSource =
     | 'stall'
     | 'restart_note'
     | 'first_run'
+    | 'previous_session'
+    | 'digest'
     | 'review';
 
 /**

@@ -71,6 +71,9 @@ export const ASSISTANT_VERB = {
     stagedResolve: 'assistant_staged_resolve',
     storeAdmin: 'assistant_store_admin',
     importSkills: 'assistant_import_skills',
+    /** Projects the assistant is following (open relay threads) — list / stop following. */
+    threads: 'assistant_threads',
+    threadClose: 'assistant_thread_close',
 } as const
 
 export type AssistantVerb = typeof ASSISTANT_VERB[keyof typeof ASSISTANT_VERB]
@@ -109,6 +112,7 @@ export const ASSISTANT_OWNER_VERBS: readonly AssistantVerb[] = [
     ASSISTANT_VERB.stagedResolve,
     ASSISTANT_VERB.storeAdmin,
     ASSISTANT_VERB.importSkills,
+    ASSISTANT_VERB.threadClose,
 ]
 
 /** The only assistant verbs accepted while an idle review turn is open (§4.10.7). */

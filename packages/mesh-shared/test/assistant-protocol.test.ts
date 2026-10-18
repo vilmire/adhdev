@@ -49,20 +49,20 @@ describe('ASSISTANT_TOOLS', () => {
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are twenty-three distinct names: sixteen tool verbs + launch/pull/state + four owner verbs', () => {
-        expect(all.length).toBe(23)
-        expect(new Set(all).size).toBe(23)
+    it('are twenty-five distinct names: sixteen tool verbs + launch/pull/state/threads + five owner verbs', () => {
+        expect(all.length).toBe(25)
+        expect(new Set(all).size).toBe(25)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
             'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',
-            'assistant_store_admin', 'launch_assistant',
+            'assistant_store_admin', 'assistant_thread_close', 'assistant_threads', 'launch_assistant',
         ])
     })
 
     it('owner verbs are not tool verbs (the MCP server never calls them)', () => {
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(ASSISTANT_OWNER_VERBS.filter((v) => toolVerbs.has(v))).toEqual([])
-        expect([...ASSISTANT_OWNER_VERBS].sort()).toEqual(['assistant_execution_settings', 'assistant_import_skills', 'assistant_staged_resolve', 'assistant_store_admin'])
+        expect([...ASSISTANT_OWNER_VERBS].sort()).toEqual(['assistant_execution_settings', 'assistant_import_skills', 'assistant_staged_resolve', 'assistant_store_admin', 'assistant_thread_close'])
     })
 
     it('the review-turn whitelist is the four store tool verbs', () => {

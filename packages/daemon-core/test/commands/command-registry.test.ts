@@ -295,7 +295,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // 2026-10-07-assistant-layer.md §4.4). Fresh additions; sources pinned by
     // assistant-store-sources.test.ts.
     'assistant_memory', 'assistant_skill_view', 'assistant_skill_manage', 'assistant_project_note',
-    'assistant_staged_resolve', 'assistant_store_admin', 'assistant_import_skills',
+    'assistant_staged_resolve', 'assistant_store_admin', 'assistant_import_skills', 'assistant_threads', 'assistant_thread_close',
     // Explicit daemon-owned launch defaults; fresh additions, not legacy migration.
     'launch_defaults_get', 'launch_defaults_set', 'assistant_launch_defaults', 'assistant_launch_defaults_set',
     // Assistant project verbs (high-family/assistant.ts, same design §4.2–§4.4).

@@ -109,6 +109,34 @@ async function promptProjects(ctx: HighFamilyContext): Promise<AssistantPromptPr
     });
 }
 
+async function queuePreviousSessionNote(
+    ctx: Parameters<HighFamilyHandler>[0],
+    runtime: { relay: { enqueueInput(input: { source: 'previous_session'; text: string; messageId: string; forSessionId?: string }): void } },
+    prevSid: string,
+    sessionId: string,
+): Promise<void> {
+    try {
+        // Saved while the previous session was alive (runtime 'assistant.context').
+        const saved = getAssistantRegistry().read()?.lastContext;
+        if (saved && saved.sessionId === prevSid) {
+            LOG.info('Assistant', `previous-session context: saved snapshot from ${prevSid}; note queued`);
+            runtime.relay.enqueueInput({ source: 'previous_session', text: saved.text, messageId: `prevctx:${sessionId}`, forSessionId: sessionId });
+            return;
+        }
+        const chat = await ctx.execute('read_chat', { targetSessionId: prevSid, limit: 40 }, 'ipc', { inProcess: true });
+        const { compactTranscriptTail } = await import('../../assistant/project-views.js');
+        const { buildPreviousSessionNote } = await import('../../assistant/assistant-relay-format.js');
+        const tail = compactTranscriptTail((chat ?? {}) as Record<string, unknown>, 20, 2000);
+        const messages = (Array.isArray(tail.messages) ? tail.messages : []) as Array<{ role: 'user' | 'assistant'; text: string }>;
+        const text = buildPreviousSessionNote(messages);
+        LOG.info('Assistant', `previous-session context: ${messages.length} message(s) read from ${prevSid}; ${text ? 'note queued' : 'nothing from the owner to carry over'}`);
+        if (!text) return;
+        runtime.relay.enqueueInput({ source: 'previous_session', text, messageId: `prevctx:${sessionId}`, forSessionId: sessionId });
+    } catch (e) {
+        LOG.warn('Assistant', `previous-session context unavailable for ${prevSid}: ${(e as Error)?.message ?? e}`);
+    }
+}
+
 const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const registry = getAssistantRegistry();
     const entry = registry.read();
@@ -223,6 +251,10 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     svc.inputLog.begin(sessionId);
     runtime?.activate('launch');
     const restartNote = runtime ? runtime.relay.armRestartNote({ previous }, sessionId) : false;
+    // Context from the previous assistant session (its last owner requests and
+    // replies). Background: a slow history read never delays the launch.
+    const prevSid = previous?.sessionId ?? entry?.sessionId ?? null;
+    if (runtime && prevSid && prevSid !== sessionId) void queuePreviousSessionNote(ctx, runtime, prevSid, sessionId);
     LOG.info('Assistant', `Launched ${cliType} assistant ${sessionId} in ${workspace} (prompt ${prompt.length} chars${restartNote ? ', restart note queued' : ''})`);
     return { success: true, launched: true, sessionId, cliType, workspace, promptLength: prompt.length, restartNote };
 };

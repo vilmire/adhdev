@@ -159,6 +159,13 @@ type Item =
     | { kind: 'relay'; meshId: string; coordinatorSessionId: string; attemptIds: string[]; outcome: TurnOutcome; committedAt: number; idle: boolean }
     | { kind: 'line'; source: AssistantInputSource; text: string; messageId: string; meshId?: string; forSessionId?: string };
 
+/**
+ * A followed project with no request and no report for this long stops being
+ * followed (2026-10-18: threads opened on 10-07 and 10-10 were still open a week
+ * later, feeding stall notices). The next project_send follows it again.
+ */
+export const RELAY_THREAD_STALE_CLOSE_MS = 7 * 24 * 60 * 60_000;
+
 export class AssistantRelay {
     private readonly clock: RelayClock;
     private readonly batches = new Map<string, Batch>();
@@ -251,6 +258,22 @@ export class AssistantRelay {
         this.idleSince.delete(meshId);
         this.ports.store.openThread(meshId, this.clock.now());
         this.stallSent.delete(meshId);
+    }
+
+    /**
+     * The owner stopped following the project from the dashboard: close its
+     * thread now (no more progress / stall notices; the remote poller stops on
+     * its next pass). A relay already batched still goes out. The next
+     * \`project_send\` opens the thread again.
+     */
+    closeThread(meshId: string): boolean {
+        if (!this.ports.store.isThreadOpen(meshId)) return false;
+        this.ports.store.closeThread(meshId, this.clock.now());
+        this.idleSince.delete(meshId);
+        this.stallSent.delete(meshId);
+        this.progressSent.delete(meshId);
+        this.working.delete(meshId);
+        return true;
     }
 
     /**
@@ -387,6 +410,11 @@ export class AssistantRelay {
                     this.progressSent.add(t.meshId);
                     this.pushLine('progress', buildProgressSignal(slug, this.workOf(t.meshId)?.assigned ?? null), t.meshId);
                 }
+                continue;
+            }
+            const quietFor = now - Math.max(t.lastSendAt, this.lastRelayAt.get(t.meshId) ?? 0);
+            if (!this.batches.has(t.meshId) && quietFor >= RELAY_THREAD_STALE_CLOSE_MS) {
+                this.closeThread(t.meshId);
                 continue;
             }
             if (this.batches.has(t.meshId) || this.stallSent.has(t.meshId)) continue;

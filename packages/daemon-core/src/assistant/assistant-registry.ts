@@ -84,6 +84,16 @@ export interface AssistantRegistryEntry {
      * delivered. Absent when empty.
      */
     reviewAts?: number[];
+    /** Daily digest local hour 0–23 (absent → default 9; null → off). */
+    digestHour?: number | null;
+    /** When the last daily digest was queued (one per local day, survives restarts). */
+    lastDigestAt?: number;
+    /**
+     * The bound session's last exchanges, saved after each finished turn while
+     * the session is alive, for the next session's \`[ADHDev previous session]\`
+     * note. A dead session's history is not readable for every CLI.
+     */
+    lastContext?: { sessionId: string; text: string; at: number };
 }
 
 export interface BindAssistantSessionInput {
@@ -94,7 +104,9 @@ export interface BindAssistantSessionInput {
     at: number;
 }
 
-export type AssistantSettingsPatch = Partial<Pick<AssistantRegistryEntry, 'aliases' | 'busyInputMode' | 'reviewTurn' | 'memoryBudget' | 'executionEnabled'>>;
+export type AssistantSettingsPatch = Partial<Pick<AssistantRegistryEntry, 'aliases' | 'busyInputMode' | 'reviewTurn' | 'memoryBudget' | 'executionEnabled' | 'digestHour'>>;
+
+const isDigestHour = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 23;
 
 export interface AssistantRegistryOptions {
     configDir?: string;
@@ -160,7 +172,16 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
         lastTurnState: normalizeTurnState(r.lastTurnState),
         ...(budget ? { memoryBudget: budget } : {}),
         ...(reviewAts.length ? { reviewAts } : {}),
+        ...(r.digestHour === null ? { digestHour: null } : isDigestHour(r.digestHour) ? { digestHour: r.digestHour } : {}),
+        ...(isNum(r.lastDigestAt) ? { lastDigestAt: r.lastDigestAt } : {}),
+        ...(normalizeContext(r.lastContext) ? { lastContext: normalizeContext(r.lastContext)! } : {}),
     };
+}
+
+function normalizeContext(v: unknown): { sessionId: string; text: string; at: number } | null {
+    const c = v as Record<string, unknown> | null;
+    if (!c || typeof c !== 'object') return null;
+    return isStr(c.sessionId) && isStr(c.text) && c.text.length <= 8_000 && isNum(c.at) ? { sessionId: c.sessionId, text: c.text, at: c.at } : null;
 }
 
 /**
@@ -260,6 +281,10 @@ export class AssistantRegistry {
             next.executionRevision = (next.executionRevision ?? 0) + 1;
         }
         if (patch.reviewTurn !== undefined) next.reviewTurn = patch.reviewTurn !== false;
+        if (patch.digestHour !== undefined) {
+            if (patch.digestHour !== null && !isDigestHour(patch.digestHour)) throw new Error(`invalid digestHour: ${String(patch.digestHour)}`);
+            next.digestHour = patch.digestHour;
+        }
         if (patch.memoryBudget !== undefined) {
             const b = normalizeBudget(patch.memoryBudget);
             if (b) next.memoryBudget = b;
@@ -289,6 +314,20 @@ export class AssistantRegistry {
         if (!prev || !isNum(at)) return;
         const reviewAts = normalizeReviewAts([...(prev.reviewAts ?? []), at].filter((t) => at - t < ASSISTANT_REVIEW_HISTORY_MS));
         this.write({ ...prev, reviewAts });
+    }
+
+    /** Save the bound session's last exchanges (previous-session note source). */
+    recordContext(sessionId: string, text: string, at: number): void {
+        const prev = this.read();
+        if (!prev || prev.sessionId !== sessionId || !text || text.length > 8_000) return;
+        this.write({ ...prev, lastContext: { sessionId, text, at } });
+    }
+
+    /** A daily digest was queued (one per local day). */
+    recordDigest(at: number): void {
+        const prev = this.read();
+        if (!prev || !isNum(at)) return;
+        this.write({ ...prev, lastDigestAt: at });
     }
 
     /**
