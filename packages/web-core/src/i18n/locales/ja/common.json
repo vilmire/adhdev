@@ -529,7 +529,8 @@
         "done": "完了",
         "openMeshGraphFor": "{{title}} のメッシュグラフを開く",
         "openLiveMeshGraph": "ライブの repo mesh グラフを開く",
-        "stopSessionTitle": "セッションを停止（エージェントを終了します）"
+        "stopSessionTitle": "セッションを停止（エージェントを終了します）",
+        "machineStatusConnecting": "接続中"
     },
     "mesh": {
         "hint": {

@@ -165,7 +165,10 @@ export function DashboardDockviewPanel({ params, api }: IDockviewPanelProps<Dash
                     hasRegisteredMachines={ctx.hasRegisteredMachines}
                     onOpenNewSession={ctx.onOpenNewSession}
                     suppressGuide={ctx.hasDetachedConversationPanels}
-                    isLoading={!areConversationsLoaded(ctx.ides, ctx.initialDataLoaded)}
+                    isLoading={!areConversationsLoaded(ctx.ides, ctx.initialDataLoaded, {
+                        isStandalone: ctx.isStandalone,
+                        connectionStates: ctx.connectionStates,
+                    })}
                 />
             </div>
         )
@@ -217,6 +220,7 @@ export default function DashboardDockviewWorkspace({
     liveSessionInboxState,
     layoutProfile,
     setCliViewModeOverrides,
+    connectionStates,
 }: DashboardDockviewWorkspaceProps) {
     const { t } = useTranslation('common')
     const { theme } = useTheme()
@@ -655,6 +659,7 @@ export default function DashboardDockviewWorkspace({
         floatTab,
         isTabFloating,
         setCliViewModeOverrides,
+        connectionStates,
     }), [
         actionLogs,
         clearedTabs,
@@ -678,6 +683,7 @@ export default function DashboardDockviewWorkspace({
         floatTab,
         isTabFloating,
         setCliViewModeOverrides,
+        connectionStates,
     ])
 
     const ctxMenuItems = ctxMenu ? buildDashboardDockviewContextMenuItems({

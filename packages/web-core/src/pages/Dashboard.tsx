@@ -139,7 +139,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
         [ides],
     )
     const daemonEntry = machineEntries[0]
-    const isStandalone = !!daemonEntry
+    const isStandalone = daemonCtx.usesP2P !== undefined ? !daemonCtx.usesP2P : !!daemonEntry
     useEffect(() => {
         const { metadataDaemonIds, runtimeDaemonIds } = getDashboardMachineRefreshTargets(machineEntries)
 

@@ -529,7 +529,8 @@
         "done": "Listo",
         "openMeshGraphFor": "Abrir el grafo de mesh de {{title}}",
         "openLiveMeshGraph": "Abrir el grafo de repo mesh en vivo",
-        "stopSessionTitle": "Detener la sesión (termina el agente)"
+        "stopSessionTitle": "Detener la sesión (termina el agente)",
+        "machineStatusConnecting": "Conectando"
     },
     "mesh": {
         "hint": {

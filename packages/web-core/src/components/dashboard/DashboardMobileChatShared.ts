@@ -17,6 +17,7 @@ export interface MobileMachineCard {
     id: string
     label: string
     subtitle: string
+    statusLabel?: 'Connected' | 'Connecting' | 'Offline'
     unread: number
     total: number
     /**

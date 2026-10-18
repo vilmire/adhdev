@@ -53,6 +53,7 @@ export interface DashboardDockviewContextValue {
     isTabFloating: (tabKey: string) => boolean
     /** Optimistic CLI view-mode overrides (owner-attention "Open terminal"); absent where the host does not own them. */
     setCliViewModeOverrides?: Dispatch<SetStateAction<Record<string, CliConversationViewMode>>>
+    connectionStates?: Record<string, string>
 }
 
 export const DashboardDockviewContext = createContext<DashboardDockviewContextValue | null>(null)
@@ -133,7 +134,10 @@ export function DashboardDockviewWatermark() {
                 hasRegisteredMachines={ctx.hasRegisteredMachines}
                 onOpenNewSession={ctx.onOpenNewSession}
                 suppressGuide={ctx.hasDetachedConversationPanels}
-                isLoading={!areConversationsLoaded(ctx.ides, ctx.initialDataLoaded)}
+                isLoading={!areConversationsLoaded(ctx.ides, ctx.initialDataLoaded, {
+                    isStandalone: ctx.isStandalone,
+                    connectionStates: ctx.connectionStates,
+                })}
             />
         </div>
     )

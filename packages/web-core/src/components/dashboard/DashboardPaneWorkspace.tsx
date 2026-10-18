@@ -35,6 +35,7 @@ interface DashboardPaneWorkspaceProps {
     onOpenNewSession?: () => void
     allowTabShortcuts?: boolean
     liveSessionInboxState: Map<string, LiveSessionInboxState>
+    connectionStates?: Record<string, string>
 }
 
 export default function DashboardPaneWorkspace({
@@ -66,6 +67,7 @@ export default function DashboardPaneWorkspace({
     onOpenNewSession,
     allowTabShortcuts = true,
     liveSessionInboxState,
+    connectionStates,
 }: DashboardPaneWorkspaceProps) {
     const { t } = useTranslation('common')
     return (
@@ -125,6 +127,7 @@ export default function DashboardPaneWorkspace({
                             onOpenNewSession={onOpenNewSession}
                             allowTabShortcuts={allowTabShortcuts}
                             liveSessionInboxState={liveSessionInboxState}
+                            connectionStates={connectionStates}
                         />
                     </React.Fragment>
                 )

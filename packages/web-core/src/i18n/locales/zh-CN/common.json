@@ -529,7 +529,8 @@
         "done": "完成",
         "openMeshGraphFor": "打开 {{title}} 的 mesh 图",
         "openLiveMeshGraph": "打开实时 repo mesh 图",
-        "stopSessionTitle": "停止会话（终止该智能体）"
+        "stopSessionTitle": "停止会话（终止该智能体）",
+        "machineStatusConnecting": "连接中"
     },
     "mesh": {
         "hint": {

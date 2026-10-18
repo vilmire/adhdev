@@ -104,32 +104,53 @@ export function groupMobileInboxItems(
  * Standalone injects sessions in the same payload that marks load complete, so every
  * entry is authoritative on arrival and this returns `initialDataLoaded` unchanged.
  */
-export function areConversationsLoaded(ides: DaemonData[], initialDataLoaded: boolean): boolean {
+export interface MobileMachineConnectionOptions {
+    isStandalone?: boolean
+    connectionStates?: Record<string, string | undefined>
+    statusLabels?: Partial<Record<'Connected' | 'Connecting' | 'Offline', string>>
+}
+
+export function areConversationsLoaded(
+    ides: DaemonData[],
+    initialDataLoaded: boolean,
+    options?: MobileMachineConnectionOptions,
+): boolean {
     if (!initialDataLoaded) return false
 
     const connectedDaemons = ides.filter(entry => (
         entry.type === 'adhdev-daemon'
-        && getMobileMachineConnectionLabel(entry) === 'Connected'
+        && getMobileMachineConnectionLabel(entry, options) === 'Connected'
     ))
 
     // No reachable daemon → nothing further to wait for; the empty state is honest
     // ("no machines connected" is rendered ahead of "no conversations").
     if (connectedDaemons.length === 0) return true
 
-    return connectedDaemons.every(entry => entry._sessionListAuthoritative === true)
+    return connectedDaemons.some(entry => entry._sessionListAuthoritative === true)
 }
 
-export function getMobileMachineConnectionLabel(machineEntry: DaemonData): 'Connected' | 'Connecting' | 'Offline' {
+export function getMobileMachineConnectionLabel(
+    machineEntry: DaemonData,
+    options?: MobileMachineConnectionOptions,
+): 'Connected' | 'Connecting' | 'Offline' {
+    if (machineEntry.status === 'offline') return 'Offline'
+    const isStandalone = options?.isStandalone ?? (options?.connectionStates === undefined)
+    if (!isStandalone) {
+        if (options?.connectionStates !== undefined) {
+            return options.connectionStates[machineEntry.id] === 'connected' ? 'Connected' : 'Connecting'
+        }
+        const p2pState = machineEntry.p2p?.state || ''
+        if (p2pState === 'connected') return 'Connected'
+        return 'Connecting'
+    }
     const p2pState = machineEntry.p2p?.state || ''
     if (p2pState === 'connected') return 'Connected'
     if (p2pState === 'connecting' || p2pState === 'new' || p2pState === 'checking') return 'Connecting'
     // Standalone (localhost WS, no P2P) never populates `p2p`, so P2P state alone would
     // mislabel a live local daemon as Offline. When there is no P2P telemetry at all, fall
-    // back to the daemon entry's own reported status — its presence means the daemon is
-    // reporting over WS, and desktop Machines derives "online" from this same signal. Cloud
-    // entries always carry p2p telemetry, so this fallback never changes cloud behavior.
+    // back to the daemon entry's own reported status — gated on standalone mode only.
     const hasP2pTelemetry = !!machineEntry.p2p?.available || !!machineEntry.p2p?.state
-    if (!hasP2pTelemetry && machineEntry.status && machineEntry.status !== 'offline') {
+    if (isStandalone && !hasP2pTelemetry && machineEntry.status && machineEntry.status !== 'offline') {
         return 'Connected'
     }
     return 'Offline'
@@ -181,6 +202,7 @@ export function buildMobileMachineCards(
     machineEntries: DaemonData[],
     items: MobileConversationListItem[],
     hiddenConversations: ActiveConversation[] = [],
+    options?: MobileMachineConnectionOptions,
 ): MobileMachineCard[] {
     const groupedItems = new Map<string, MobileConversationListItem[]>()
 
@@ -202,6 +224,12 @@ export function buildMobileMachineCards(
         else groupedHidden.set(key, [conversation])
     }
 
+    const statusOrder = (label: MobileMachineCard['statusLabel']): number => {
+        if (label === 'Connected') return 0
+        if (label === 'Connecting') return 1
+        return 2
+    }
+
     return machineEntries.map((machineEntry) => {
         const machineItems = groupedItems.get(machineEntry.id) || []
         const machineHidden = groupedHidden.get(machineEntry.id) || []
@@ -214,16 +242,18 @@ export function buildMobileMachineCards(
         const generatingCount =
             machineItems.filter(item => isConversationGenerating(item.conversation)).length
             + machineHidden.filter(isConversationGenerating).length
-        const statusLabel = getMobileMachineConnectionLabel(machineEntry)
+        const statusLabel = getMobileMachineConnectionLabel(machineEntry, options)
+        const displayStatus = options?.statusLabels?.[statusLabel] ?? statusLabel
         const subtitleParts = [
             machineEntry.platform || 'machine',
-            statusLabel,
+            displayStatus,
         ].filter(Boolean)
 
         return {
             id: machineEntry.id,
             label: getMachineDisplayName(machineEntry, { fallbackId: machineEntry.id }),
             subtitle: subtitleParts.join(' · '),
+            statusLabel,
             unread,
             total: machineItems.length,
             generatingCount,
@@ -240,6 +270,8 @@ export function buildMobileMachineCards(
                 : 'No active conversations yet. Open the machine, choose a workspace, then launch an IDE or CLI session.',
         }
     }).sort((a, b) => {
+        const statusDiff = statusOrder(a.statusLabel) - statusOrder(b.statusLabel)
+        if (statusDiff !== 0) return statusDiff
         const aTs = a.latestTimestamp || a.fallbackActivityAt || 0
         const bTs = b.latestTimestamp || b.fallbackActivityAt || 0
         if (bTs !== aTs) return bTs - aTs

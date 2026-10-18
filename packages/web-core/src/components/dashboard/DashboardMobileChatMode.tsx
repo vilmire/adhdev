@@ -300,15 +300,21 @@ export default function DashboardMobileChatMode({
     )
 
     const machineCards = useMemo<MobileMachineCard[]>(
-        () => buildMobileMachineCards(machineEntries, items, hiddenConversations),
-        [items, machineEntries, hiddenConversations],
+        () => buildMobileMachineCards(machineEntries, items, hiddenConversations, {
+            isStandalone,
+            connectionStates,
+        }),
+        [connectionStates, hiddenConversations, isStandalone, items, machineEntries],
     )
 
     // Conversations arrive over P2P after the daemon snapshot, so the conversation
     // empty state needs its own gate — `initialDataLoaded` alone turns true too early.
     const conversationsLoaded = useMemo(
-        () => areConversationsLoaded(ides, initialDataLoaded),
-        [ides, initialDataLoaded],
+        () => areConversationsLoaded(ides, initialDataLoaded, {
+            isStandalone,
+            connectionStates,
+        }),
+        [connectionStates, ides, initialDataLoaded, isStandalone],
     )
 
     const handleOpenRecent = useCallback(async (session: MachineRecentLaunch) => {

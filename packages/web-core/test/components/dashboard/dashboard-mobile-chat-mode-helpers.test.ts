@@ -108,6 +108,53 @@ describe('dashboard mobile chat mode helpers', () => {
         expect(getMobileMachineConnectionLabel(createMachine({ status: 'online', p2p: { available: true, state: 'disconnected', peers: 0 } }))).toBe('Offline')
     })
 
+    it('judges cloud mode from browser connectionStates and gates the no-telemetry Connected branch on standalone only', () => {
+        const wsBootstrappedCloudDaemon = createMachine({ id: 'cloud-1', status: 'online', p2p: undefined })
+
+        // Cloud mode without browser P2P connected -> Connecting ("연결 중"), never Connected
+        expect(
+            getMobileMachineConnectionLabel(wsBootstrappedCloudDaemon, {
+                isStandalone: false,
+                connectionStates: {},
+            }),
+        ).toBe('Connecting')
+        expect(
+            getMobileMachineConnectionLabel(wsBootstrappedCloudDaemon, {
+                isStandalone: false,
+                connectionStates: { 'cloud-1': 'connecting' },
+            }),
+        ).toBe('Connecting')
+        expect(
+            getMobileMachineConnectionLabel(wsBootstrappedCloudDaemon, {
+                isStandalone: false,
+                connectionStates: { 'cloud-1': 'failed' },
+            }),
+        ).toBe('Connecting')
+
+        // Cloud mode with browser P2P connected -> Connected
+        expect(
+            getMobileMachineConnectionLabel(wsBootstrappedCloudDaemon, {
+                isStandalone: false,
+                connectionStates: { 'cloud-1': 'connected' },
+            }),
+        ).toBe('Connected')
+
+        // Offline daemon in cloud mode stays Offline
+        expect(
+            getMobileMachineConnectionLabel(createMachine({ id: 'cloud-off', status: 'offline', p2p: undefined }), {
+                isStandalone: false,
+                connectionStates: { 'cloud-off': 'connecting' },
+            }),
+        ).toBe('Offline')
+
+        // Standalone mode without P2P telemetry remains Connected when online
+        expect(
+            getMobileMachineConnectionLabel(wsBootstrappedCloudDaemon, {
+                isStandalone: true,
+            }),
+        ).toBe('Connected')
+    })
+
     it('prefers daemon recent launches when available', () => {
         const machine = createMachine({
             recentLaunches: [{
@@ -345,7 +392,7 @@ describe('dashboard mobile chat mode helpers', () => {
             expect(areConversationsLoaded([connectedWithSessions()], true)).toBe(true)
         })
 
-        it('waits for every connected daemon, not just the first', () => {
+        it('unblocks as soon as any connected daemon is authoritative even if another connected daemon is still loading', () => {
             const ides = [
                 connectedWithSessions(),
                 createMachine({
@@ -353,7 +400,75 @@ describe('dashboard mobile chat mode helpers', () => {
                     p2p: { state: 'connected', available: true } as DaemonData['p2p'],
                 }),
             ]
-            expect(areConversationsLoaded(ides, true)).toBe(false)
+            expect(areConversationsLoaded(ides, true)).toBe(true)
+        })
+
+        it('stays unloaded when multiple daemons are connected in cloud mode but none is authoritative yet', () => {
+            const ides = [
+                createMachine({ id: 'machine-1', status: 'online', p2p: undefined }),
+                createMachine({ id: 'machine-2', status: 'online', p2p: undefined }),
+            ]
+            expect(
+                areConversationsLoaded(ides, true, {
+                    isStandalone: false,
+                    connectionStates: { 'machine-1': 'connected', 'machine-2': 'connecting' },
+                }),
+            ).toBe(false)
+
+            // As soon as machine-1 becomes authoritative, loading unblocks while machine-2 is still connecting
+            ides[0]._sessionListAuthoritative = true
+            expect(
+                areConversationsLoaded(ides, true, {
+                    isStandalone: false,
+                    connectionStates: { 'machine-1': 'connected', 'machine-2': 'connecting' },
+                }),
+            ).toBe(true)
+        })
+
+        it('does not falsely treat a WS-bootstrapped cloud daemon with no P2P telemetry as Connected before browser P2P connects', () => {
+            // Regression: WS initial_state injects online daemons with `p2p: undefined` and
+            // `_sessionListAuthoritative: undefined`. Under the old `!hasP2pTelemetry -> Connected`
+            // fallback, cloud mode treated them as Connected without an authoritative session list
+            // and hung on "세션을 불러오는 중..." forever.
+            const wsBootstrappedDaemon = createMachine({
+                id: 'machine-slow',
+                status: 'online',
+                p2p: undefined,
+            })
+            expect(
+                areConversationsLoaded([wsBootstrappedDaemon], true, {
+                    isStandalone: false,
+                    connectionStates: { 'machine-slow': 'connecting' },
+                }),
+            ).toBe(true)
+        })
+
+        it('sorts Connected machine cards ahead of Connecting and Offline machines and exposes statusLabel', () => {
+            const slowMachine = createMachine({ id: 'machine-slow', hostname: 'Slow Mac', status: 'online' })
+            const readyMachine = createMachine({ id: 'machine-ready', hostname: 'Ready Mac', status: 'online' })
+            const offlineMachine = createMachine({ id: 'machine-off', hostname: 'Offline Mac', status: 'offline' })
+
+            const cards = buildMobileMachineCards(
+                [slowMachine, offlineMachine, readyMachine],
+                [],
+                [],
+                {
+                    isStandalone: false,
+                    connectionStates: {
+                        'machine-slow': 'connecting',
+                        'machine-ready': 'connected',
+                    },
+                    statusLabels: {
+                        Connected: '연결됨',
+                        Connecting: '연결 중',
+                        Offline: '오프라인',
+                    },
+                },
+            )
+
+            expect(cards.map(c => c.id)).toEqual(['machine-ready', 'machine-slow', 'machine-off'])
+            expect(cards.map(c => c.statusLabel)).toEqual(['Connected', 'Connecting', 'Offline'])
+            expect(cards[1]?.subtitle).toBe('darwin · 연결 중')
         })
 
         it('does not wait on daemons that are offline or still connecting', () => {
@@ -396,8 +511,15 @@ describe('dashboard mobile chat mode helpers', () => {
                 p2p: undefined,
                 _sessionListAuthoritative: true,
             })
-            expect(areConversationsLoaded([standaloneDaemon], true)).toBe(true)
-            expect(areConversationsLoaded([standaloneDaemon], false)).toBe(false)
+            expect(areConversationsLoaded([standaloneDaemon], true, { isStandalone: true })).toBe(true)
+            expect(areConversationsLoaded([standaloneDaemon], false, { isStandalone: true })).toBe(false)
+            expect(
+                areConversationsLoaded(
+                    [createMachine({ id: 'standalone-unloaded', status: 'online', p2p: undefined })],
+                    true,
+                    { isStandalone: true },
+                ),
+            ).toBe(false)
         })
     })
 })

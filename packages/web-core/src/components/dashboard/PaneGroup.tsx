@@ -63,6 +63,7 @@ export interface PaneGroupProps {
     allowTabShortcuts?: boolean;
     onOpenNewSession?: () => void;
     liveSessionInboxState: Map<string, LiveSessionInboxState>;
+    connectionStates?: Record<string, string>;
 }
 
 export default function PaneGroup({
@@ -83,6 +84,7 @@ export default function PaneGroup({
     allowTabShortcuts = true,
     onOpenNewSession,
     liveSessionInboxState,
+    connectionStates,
 }: PaneGroupProps) {
     const { sendCommand } = useTransport()
     const terminalRef = useRef<CliTerminalHandle>(null)
@@ -218,7 +220,10 @@ export default function PaneGroup({
                             isStandalone={isStandalone}
                             hasRegisteredMachines={hasRegisteredMachines}
                             onOpenNewSession={onOpenNewSession}
-                            isLoading={!areConversationsLoaded(ides, initialDataLoaded)}
+                            isLoading={!areConversationsLoaded(ides, initialDataLoaded, {
+                                isStandalone,
+                                connectionStates,
+                            })}
                         />
                     </div>
                 ) : (

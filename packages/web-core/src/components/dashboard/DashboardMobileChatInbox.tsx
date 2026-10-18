@@ -664,7 +664,7 @@ export default function DashboardMobileChatInbox({
                                                         count={machine.generatingCount}
                                                         label={t('mobileInbox.generatingCount', { count: machine.generatingCount })}
                                                     />
-                                                    {machine.unread > 0 ? <span className="text-accent-primary">{t('mobileInbox.newCount', { count: machine.unread })}</span> : machine.total > 0 ? t('mobileInbox.chatCount', { count: machine.total }) : t('mobileInbox.idle')}
+                                                    {machine.statusLabel === 'Connecting' ? t('mobileInbox.machineStatusConnecting') : machine.unread > 0 ? <span className="text-accent-primary">{t('mobileInbox.newCount', { count: machine.unread })}</span> : machine.total > 0 ? t('mobileInbox.chatCount', { count: machine.total }) : t('mobileInbox.idle')}
                                                 </span>
                                             </div>
                                             <div className="text-xs font-medium text-text-secondary truncate">{machine.subtitle}</div>
@@ -675,6 +675,10 @@ export default function DashboardMobileChatInbox({
                                             ) : machine.generatingCount > 0 ? (
                                                 <div className="text-xxs text-accent-primary mt-0.5 font-medium">
                                                     {t('mobileInbox.generatingCount', { count: machine.generatingCount })}
+                                                </div>
+                                            ) : machine.statusLabel === 'Connecting' ? (
+                                                <div className="text-xxs text-text-muted mt-0.5 italic opacity-70">
+                                                    {t('mobileInbox.machineStatusConnecting')}
                                                 </div>
                                             ) : (
                                                 <div className="text-xxs text-text-muted mt-0.5 italic opacity-70">
@@ -863,6 +867,16 @@ export default function DashboardMobileChatInbox({
                         ) : (
                             <div className="py-8 text-center text-sm font-medium text-text-muted">
                                 {t('mobileInbox.allCaughtUp')}
+                            </div>
+                        )}
+                        {!isDisconnected && !isConversationBootstrapping && machineCards.some(m => m.statusLabel === 'Connecting') && (
+                            <div className="flex flex-col gap-1.5 px-2 pt-1" data-testid="mobile-inbox-connecting-machines">
+                                {machineCards.filter(m => m.statusLabel === 'Connecting').map(machine => (
+                                    <div key={machine.id} className="flex items-center justify-between gap-2 rounded-xl border border-border-subtle/60 bg-bg-secondary/25 px-3 py-2 text-xs text-text-muted">
+                                        <span className="font-semibold text-text-secondary truncate">{machine.label}</span>
+                                        <span className="shrink-0">{t('mobileInbox.machineStatusConnecting')}</span>
+                                    </div>
+                                ))}
                             </div>
                         )}
                     </section>

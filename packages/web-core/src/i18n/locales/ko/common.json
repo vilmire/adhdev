@@ -529,7 +529,8 @@
         "done": "완료",
         "openMeshGraphFor": "{{title}} 메시 그래프 열기",
         "openLiveMeshGraph": "실시간 리포 메시 그래프 열기",
-        "stopSessionTitle": "세션 중지 (에이전트를 종료합니다)"
+        "stopSessionTitle": "세션 중지 (에이전트를 종료합니다)",
+        "machineStatusConnecting": "연결 중"
     },
     "mesh": {
         "hint": {

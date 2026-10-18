@@ -783,6 +783,7 @@ export default function DashboardMainView({
                     onOpenNewSession={openNewSession}
                     allowTabShortcuts={false}
                     liveSessionInboxState={liveSessionInboxState}
+                    connectionStates={connectionStates}
                 />
             ) : (
                 <DashboardDockviewWorkspace
@@ -810,6 +811,7 @@ export default function DashboardMainView({
                     liveSessionInboxState={liveSessionInboxState}
                     layoutProfile={layoutProfile}
                     setCliViewModeOverrides={setCliViewModeOverrides}
+                    connectionStates={connectionStates}
                 />
             )}
             {newSessionOpen && (

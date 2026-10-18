@@ -52,4 +52,5 @@ export interface DashboardDockviewWorkspaceProps {
     layoutProfile: DashboardLayoutProfile
     /** Lets a panel switch its CLI conversation to the terminal view (owner-attention notice). */
     setCliViewModeOverrides?: Dispatch<SetStateAction<Record<string, CliConversationViewMode>>>
+    connectionStates?: Record<string, string>
 }

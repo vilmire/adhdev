@@ -529,7 +529,8 @@
         "done": "Done",
         "openMeshGraphFor": "Open mesh graph for {{title}}",
         "openLiveMeshGraph": "Open live repo mesh graph",
-        "stopSessionTitle": "Stop session (terminates the agent)"
+        "stopSessionTitle": "Stop session (terminates the agent)",
+        "machineStatusConnecting": "Connecting"
     },
     "mesh": {
         "hint": {
