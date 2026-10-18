@@ -21,6 +21,12 @@ export interface ProcessNodeInfo {
    * `etime`, Windows `CreationDate`). Undefined = unknown, never "old".
    */
   readonly startedAtMs?: number;
+  /**
+   * Cumulative CPU time (user+system) the process has consumed, in ms, when the
+   * platform query reports it (POSIX `ps time=`, Linux /proc utime+stime,
+   * Windows Win32_Process Kernel+UserModeTime). Undefined = unknown, never 0.
+   */
+  readonly cpuTimeMs?: number;
 }
 
 export interface ProcessTreeExclusionRule {
@@ -421,9 +427,25 @@ export function parsePsElapsed(token: string): number | null {
 }
 
 /**
- * Parse `ps -ax -o pid=,ppid=,etime=,comm=,args=` (or the legacy
- * `pid=,ppid=,comm=,args=` shape). `readAtMs` is when the table was read; with
- * it `etime` becomes an absolute start time.
+ * `ps time=` cumulative CPU: `[[dd-]hh:]mm:ss` (Linux) or `[hh:]mm:ss.cc`
+ * (macOS: `0:01.23`, `1:02:03`) → ms. Null when not a CPU-time field.
+ */
+export function parsePsCpuTime(token: string): number | null {
+  const m = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)(?:\.(\d+))?$/.exec(token);
+  if (!m) return null;
+  const days = m[1] ? Number.parseInt(m[1], 10) : 0;
+  const hours = m[2] ? Number.parseInt(m[2], 10) : 0;
+  const minutes = Number.parseInt(m[3]!, 10);
+  const seconds = Number.parseInt(m[4]!, 10);
+  const fraction = m[5] ? Math.round(Number.parseFloat(`0.${m[5]}`) * 1000) : 0;
+  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000 + fraction;
+}
+
+/**
+ * Parse `ps -ax -o pid=,ppid=,etime=,time=,comm=,args=` (or the older
+ * `pid=,ppid=,etime=,comm=,args=` / `pid=,ppid=,comm=,args=` shapes).
+ * `readAtMs` is when the table was read; with it `etime` becomes an absolute
+ * start time.
  */
 export function parsePosixPsOutput(stdout: string, readAtMs: number = Date.now()): ProcessNodeInfo[] {
   const out: ProcessNodeInfo[] = [];
@@ -439,16 +461,31 @@ export function parsePosixPsOutput(stdout: string, readAtMs: number = Date.now()
     let comm = match[3] ?? '';
     let rest = match[4] ?? '';
     let startedAtMs: number | undefined;
+    let cpuTimeMs: number | undefined;
     const elapsed = parsePsElapsed(comm);
     if (elapsed !== null) {
       startedAtMs = readAtMs - elapsed;
-      const withComm = /^(\S+)(?:\s+(.*))?$/.exec(rest);
+      let withComm = /^(\S+)(?:\s+(.*))?$/.exec(rest);
       if (!withComm) continue;
+      const cpu = parsePsCpuTime(withComm[1] ?? '');
+      if (cpu !== null && withComm[2] !== undefined) {
+        // `time=` column present: the next token is the real comm.
+        cpuTimeMs = cpu;
+        withComm = /^(\S+)(?:\s+(.*))?$/.exec(withComm[2]);
+        if (!withComm) continue;
+      }
       comm = withComm[1] ?? '';
       rest = withComm[2] ?? '';
     }
     const args = rest || comm;
-    out.push({ pid, ppid, comm, args, ...(startedAtMs !== undefined ? { startedAtMs } : {}) });
+    out.push({
+      pid,
+      ppid,
+      comm,
+      args,
+      ...(startedAtMs !== undefined ? { startedAtMs } : {}),
+      ...(cpuTimeMs !== undefined ? { cpuTimeMs } : {}),
+    });
   }
   return out;
 }
@@ -469,6 +506,7 @@ export function parseWin32ProcessOutput(stdout: string): ProcessNodeInfo[] {
         const name = typeof rec.Name === 'string' ? rec.Name : typeof rec.ProcessName === 'string' ? rec.ProcessName : '';
         const cmd = typeof rec.CommandLine === 'string' ? rec.CommandLine : name;
         const startMs = Number(rec.StartMs);
+        const cpuMs = rec.CpuMs === null || rec.CpuMs === undefined ? Number.NaN : Number(rec.CpuMs);
         if (Number.isFinite(pid) && pid > 0 && Number.isFinite(ppid) && ppid >= 0) {
           out.push({
             pid,
@@ -476,6 +514,7 @@ export function parseWin32ProcessOutput(stdout: string): ProcessNodeInfo[] {
             comm: name || cmd,
             args: cmd || name,
             ...(Number.isFinite(startMs) && startMs > 0 ? { startedAtMs: startMs } : {}),
+            ...(Number.isFinite(cpuMs) && cpuMs >= 0 ? { cpuTimeMs: cpuMs } : {}),
           });
         }
       }
@@ -515,7 +554,25 @@ export interface SessionProcessTreeInspection {
   readonly liveProcessNames: readonly string[];
   readonly livePids: readonly number[];
   readonly excludedPids: readonly number[];
+  /**
+   * Is the live set consuming CPU? Needs `previousProcessTable`. 'unknown'
+   * means CPU time was not available for some live process (or there is no
+   * earlier snapshot) — it is NEVER the same as 'idle'.
+   */
+  readonly cpuActivity: CpuActivity;
 }
+
+/** `active`: some live process burned CPU between two snapshots (or a new one appeared). */
+export type CpuActivity = 'active' | 'idle' | 'unknown';
+
+/**
+ * Noise floor for "CPU grew": an idle dev server with a file watcher ticks a
+ * few ms of CPU now and then, and `ps` resolves 10 ms. Growth counts as
+ * activity only at ≥ 1 % of one core averaged over the snapshot interval, and
+ * never less than one `ps` tick.
+ */
+export const CPU_ACTIVE_MIN_RATE = 0.01;
+export const CPU_ACTIVE_MIN_GROWTH_MS = 10;
 
 export interface InspectSessionProcessTreeOptions {
   /**
@@ -532,6 +589,10 @@ export interface InspectSessionProcessTreeOptions {
    * background work. Processes with an unknown start time are never baseline.
    */
   readonly startedAfterMs?: number;
+  /** The snapshot before `processTable`, for CPU growth. Omitted = CPU activity unknown. */
+  readonly previousProcessTable?: readonly ProcessNodeInfo[];
+  /** Wall-clock gap between `previousProcessTable` and `processTable` (scales the CPU noise floor). */
+  readonly snapshotIntervalMs?: number;
 }
 
 interface ProcessTableIndex {
@@ -562,7 +623,34 @@ function indexProcessTable(table: readonly ProcessNodeInfo[]): ProcessTableIndex
 }
 
 function emptyInspection(rootPid: number | undefined): SessionProcessTreeInspection {
-  return { rootPid, hasLiveBackgroundProcesses: false, liveProcessNames: [], livePids: [], excludedPids: [] };
+  return { rootPid, hasLiveBackgroundProcesses: false, liveProcessNames: [], livePids: [], excludedPids: [], cpuActivity: 'unknown' };
+}
+
+/** CPU activity of `livePids` between two snapshots; see `CpuActivity`. */
+function measureCpuActivity(
+  livePids: readonly number[],
+  byPid: Map<number, ProcessNodeInfo>,
+  previous: readonly ProcessNodeInfo[] | undefined,
+  intervalMs: number | undefined,
+): CpuActivity {
+  if (!previous || livePids.length === 0) return 'unknown';
+  const prevByPid = indexProcessTable(previous).byPid;
+  let grewMs = 0;
+  let allKnown = true;
+  for (const pid of livePids) {
+    const now = byPid.get(pid);
+    const before = prevByPid.get(pid);
+    // Not in the earlier snapshot (or a recycled pid): it STARTED since — activity.
+    if (!now || !before || before.comm !== now.comm || before.ppid !== now.ppid) return 'active';
+    if (now.cpuTimeMs === undefined || before.cpuTimeMs === undefined) {
+      allKnown = false;
+      continue;
+    }
+    if (now.cpuTimeMs > before.cpuTimeMs) grewMs += now.cpuTimeMs - before.cpuTimeMs;
+  }
+  const floor = Math.max(CPU_ACTIVE_MIN_GROWTH_MS, intervalMs && intervalMs > 0 ? intervalMs * CPU_ACTIVE_MIN_RATE : 0);
+  if (grewMs >= floor) return 'active';
+  return allKnown ? 'idle' : 'unknown';
 }
 
 /**
@@ -719,6 +807,7 @@ export function inspectSessionProcessTree(
     liveProcessNames,
     livePids,
     excludedPids,
+    cpuActivity: measureCpuActivity(livePids, byPid, options.previousProcessTable, options.snapshotIntervalMs),
   };
 }
 

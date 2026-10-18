@@ -32,7 +32,7 @@
 
 import { type LivenessResult, type SummaryRef, type TurnEvidence } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../../boot/daemon-components.js';
-import { extractSessionPtyPid, type SessionProcessTreeInspection } from '../../process/session-process-tree.js';
+import { extractSessionPtyPid, type CpuActivity, type SessionProcessTreeInspection } from '../../process/session-process-tree.js';
 import { readSessionBackgroundProcesses, type ProcessTableSource } from '../../process/process-table-snapshot.js';
 import {
     readTranscriptForDaemonConsumer,
@@ -173,6 +173,18 @@ export interface TurnProbeRead {
     transcript?: TranscriptObservation | null;
     /** Sanitized command names of live worker-started descendant processes under the session PTY. */
     liveBackgroundProcesses?: readonly string[];
+    /**
+     * False when the process table could not be read this tick (no usable snapshot: first read
+     * pending, failed, or stale). Absent = inspection not attempted. The guard never reads an
+     * unknown inspection as "the processes exited".
+     */
+    backgroundProcessesKnown?: boolean;
+    /** CPU activity of those processes between two snapshots (absent/'unknown' = not measurable — never idle). */
+    backgroundCpuActivity?: CpuActivity;
+    /** When the newer snapshot of that pair was read: the instant the CPU activity was observed. */
+    backgroundCpuAtMs?: number;
+    /** Newest sign the session's output is advancing: raw PTY output or the newest transcript bubble (epoch ms). */
+    outputAtMs?: number;
 }
 
 // ─── the pure mapping: read → evidence ────────────────────────────────────
@@ -382,7 +394,7 @@ interface ComponentsProbeReaderOptions {
     inspectProcessTree?: (
         rootPid: number | undefined,
         opts: { startedAfterMs: number },
-    ) => Promise<SessionProcessTreeInspection | null> | SessionProcessTreeInspection | null;
+    ) => Promise<(SessionProcessTreeInspection & { snapshotAtMs?: number }) | null> | (SessionProcessTreeInspection & { snapshotAtMs?: number }) | null;
 }
 
 type ProbeComponents = Pick<DaemonComponents,
@@ -430,17 +442,40 @@ export function createComponentsProbeReader(components: ProbeComponents, options
      * seen OR unknown — never blocks, never completes). The read is async and
      * bounded: it joins the daemon's single in-flight process-table read.
      */
-    async function readLocalBackgroundProcesses(attempt: TurnAttempt, instanceKey: string, fallbackInstance: unknown): Promise<readonly string[] | undefined> {
-        if (attempt.scope === 'plain') return undefined;
+    async function readLocalBackgroundProcesses(attempt: TurnAttempt, instanceKey: string, fallbackInstance: unknown): Promise<Pick<TurnProbeRead, 'liveBackgroundProcesses' | 'backgroundCpuActivity' | 'backgroundCpuAtMs' | 'backgroundProcessesKnown'>> {
+        if (attempt.scope === 'plain') return {};
         try {
             const inst = fallbackInstance ?? components.instanceManager.getInstance(instanceKey);
             const pid = extractSessionPtyPid(inst);
-            if (!pid) return undefined;
+            if (!pid) return {};
             const tree = await inspectTree(pid, { startedAfterMs: backgroundWorkBaselineMs(attempt) });
-            return tree && tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
+            if (!tree) return { backgroundProcessesKnown: false };
+            if (tree.liveProcessNames.length === 0) return { backgroundProcessesKnown: true };
+            return {
+                backgroundProcessesKnown: true,
+                liveBackgroundProcesses: tree.liveProcessNames,
+                backgroundCpuActivity: tree.cpuActivity,
+                ...(typeof tree.snapshotAtMs === 'number' ? { backgroundCpuAtMs: tree.snapshotAtMs } : {}),
+            };
+        } catch {
+            return {};
+        }
+    }
+
+    /** Raw PTY output clock of a local session (bumped on every output chunk), when readable. */
+    function readLocalPtyOutputAt(instanceKey: string, fallbackInstance: unknown): number | undefined {
+        try {
+            const inst = (fallbackInstance ?? components.instanceManager.getInstance(instanceKey)) as { adapter?: { getStatus?: (o?: { allowParse: boolean }) => { lastOutputAt?: unknown } } } | undefined;
+            const at = inst?.adapter?.getStatus?.({ allowParse: false })?.lastOutputAt;
+            return typeof at === 'number' && Number.isFinite(at) && at > 0 ? at : undefined;
         } catch {
             return undefined;
         }
+    }
+
+    function outputAtFor(ptyAt: number | undefined, transcript: TranscriptObservation | null | undefined): number | undefined {
+        const candidates = [ptyAt, transcript?.newestActivityAt].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        return candidates.length > 0 ? Math.max(...candidates) : undefined;
     }
 
     async function readLocal(attempt: TurnAttempt, holds: readonly HoldReason[]): Promise<TurnProbeRead> {
@@ -450,20 +485,26 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         const instanceKey = target?.instanceKey || attempt.sessionId;
         const status = localInstanceStatus(components, instanceKey, target?.transport ?? 'pty');
         if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };
-        const liveBackgroundProcesses = await readLocalBackgroundProcesses(attempt, instanceKey, instance);
+        const background = await readLocalBackgroundProcesses(attempt, instanceKey, instance);
+        const ptyOutputAt = attempt.scope === 'plain' ? undefined : readLocalPtyOutputAt(instanceKey, instance);
         try {
             const result = await components.commandHandler.handle('read_chat', readArgsFor(attempt));
+            const transcript = analyze(unwrapReadChatPayload(result), attempt);
+            const outputAtMs = outputAtFor(ptyOutputAt, transcript);
             return {
                 presence: 'present',
                 ...(status ? { status } : {}),
-                ...(liveBackgroundProcesses ? { liveBackgroundProcesses } : {}),
-                transcript: analyze(unwrapReadChatPayload(result), attempt),
+                ...background,
+                ...(outputAtMs !== undefined ? { outputAtMs } : {}),
+                transcript,
             };
         } catch {
+            const outputAtMs = outputAtFor(ptyOutputAt, null);
             return {
                 presence: 'present',
                 ...(status ? { status } : {}),
-                ...(liveBackgroundProcesses ? { liveBackgroundProcesses } : {}),
+                ...background,
+                ...(outputAtMs !== undefined ? { outputAtMs } : {}),
                 transcript: null,
             };
         }

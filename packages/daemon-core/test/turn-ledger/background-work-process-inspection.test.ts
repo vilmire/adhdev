@@ -9,7 +9,9 @@ import {
 import {
   inspectSessionProcessTree,
   isPendingBackgroundWorkSummary,
+  CPU_ACTIVE_MIN_GROWTH_MS,
   parsePosixPsOutput,
+  parsePsCpuTime,
   parsePsElapsed,
   parseWin32ProcessOutput,
   type ProcessNodeInfo,
@@ -193,6 +195,8 @@ describe.skipIf(process.platform === 'win32')('readSystemProcessTableAsync (real
     expect(self!.ppid).toBe(process.ppid);
     expect(self!.startedAtMs).toBeGreaterThan(Date.now() - 24 * 3_600_000);
     expect(self!.startedAtMs).toBeLessThanOrEqual(Date.now() + 2_000);
+    // cumulative CPU time (this test process has burned some): the new ps `time=` column
+    expect(self!.cpuTimeMs).toBeGreaterThan(0);
   });
 });
 
@@ -380,5 +384,109 @@ describe('secondary text signal: a small allow-list that only ever HOLDS, and on
     expect(isPendingBackgroundWorkSummary(longResult)).toBe(false);
     expect(isPendingBackgroundWorkSummary(null)).toBe(false);
     expect(isPendingBackgroundWorkSummary('{"outcome":"completed","summary":"waiting for it to finish"}')).toBe(false);
+  });
+});
+
+describe('CPU activity: cumulative CPU time per pid, growth between two snapshots', () => {
+  it('parses ps time= in the macOS and Linux shapes, alone and as the extra ps column', () => {
+    expect(parsePsCpuTime('0:01.23')).toBe(1_230);
+    expect(parsePsCpuTime('12:34.50')).toBe((12 * 60 + 34) * 1000 + 500);
+    expect(parsePsCpuTime('1:02:03')).toBe(((1 * 60 + 2) * 60 + 3) * 1000);
+    expect(parsePsCpuTime('2-03:04:05')).toBe((((2 * 24 + 3) * 60 + 4) * 60 + 5) * 1000);
+    expect(parsePsCpuTime('node')).toBeNull();
+    const rows = parsePosixPsOutput([
+      '  100     1    01:00:00    0:02.50 -zsh -zsh',
+      '  101   100       00:30 1-00:00:01 node node server.js',
+      '  102   101       00:05    0:00.00 /usr/bin/tee /usr/bin/tee /tmp/a log',
+    ].join('\n'), T);
+    expect(rows.map((r) => [r.pid, r.comm, r.cpuTimeMs, r.startedAtMs])).toEqual([
+      [100, '-zsh', 2_500, T - 3_600_000],
+      [101, 'node', 86_401_000, T - 30_000],
+      [102, '/usr/bin/tee', 0, T - 5_000],
+    ]);
+    expect(rows[1]!.args).toBe('node server.js');
+    // the etime-only shape keeps working and reports CPU as unknown (undefined), never 0
+    const noCpu = parsePosixPsOutput('  100     1    01:00:00 -zsh -zsh\n  101   100       00:30 node node a.js', T);
+    expect(noCpu.every((r) => r.cpuTimeMs === undefined)).toBe(true);
+    expect(noCpu[1]!.comm).toBe('node');
+  });
+
+  it('reads CpuMs from the CIM JSON (null = unknown)', () => {
+    const rows = parseWin32ProcessOutput(JSON.stringify([
+      { ProcessId: 5, ParentProcessId: 4, Name: 'node.exe', CommandLine: 'node.exe a.js', CpuMs: 1234 },
+      { ProcessId: 6, ParentProcessId: 4, Name: 'node.exe', CommandLine: 'node.exe b.js', CpuMs: null },
+    ]));
+    expect(rows[0]!.cpuTimeMs).toBe(1234);
+    expect(rows[1]!.cpuTimeMs).toBeUndefined();
+  });
+
+  const table = (cpu: number | undefined, extra: ProcessNodeInfo[] = []): ProcessNodeInfo[] => [
+    { pid: 100, ppid: 1, comm: '-zsh', args: '-zsh' },
+    { pid: 101, ppid: 100, comm: 'claude', args: 'claude' },
+    { pid: 110, ppid: 101, comm: 'npm', args: 'npm test', ...(cpu !== undefined ? { cpuTimeMs: cpu } : {}) },
+    ...extra,
+  ];
+  const activity = (prev: ProcessNodeInfo[] | undefined, cur: ProcessNodeInfo[], intervalMs = 3_000) =>
+    inspectSessionProcessTree(100, { processTable: cur, selfPid: 9, ...(prev ? { previousProcessTable: prev, snapshotIntervalMs: intervalMs } : {}) }).cpuActivity;
+
+  it('active when CPU grew, idle when it did not, unknown when it cannot be told', () => {
+    expect(activity(table(1_000), table(2_000))).toBe('active');
+    expect(activity(table(1_000), table(1_000))).toBe('idle');
+    expect(activity(undefined, table(2_000))).toBe('unknown'); // no earlier snapshot
+    expect(activity(table(undefined), table(undefined))).toBe('unknown'); // CPU not reported: NOT idle
+    expect(activity(table(1_000), table(undefined))).toBe('unknown');
+  });
+
+  it('a process absent from the earlier snapshot just started: activity', () => {
+    expect(activity(table(1_000), table(1_000, [{ pid: 120, ppid: 110, comm: 'tsc', args: 'tsc -b', cpuTimeMs: 0 }]))).toBe('active');
+  });
+
+  it('noise floor: a watcher ticking a few ms is idle; ≥ 1 % of a core over the interval is active', () => {
+    expect(CPU_ACTIVE_MIN_GROWTH_MS).toBeGreaterThanOrEqual(10);
+    expect(activity(table(1_000), table(1_010), 3_000)).toBe('idle'); // 10 ms in 3 s ≈ 0.3 %
+    expect(activity(table(1_000), table(1_040), 3_000)).toBe('active'); // 40 ms in 3 s ≈ 1.3 %
+    expect(activity(table(1_000), table(1_100), 60_000)).toBe('idle'); // 100 ms in 60 s ≈ 0.17 %
+    expect(activity(table(1_000), table(2_000), 60_000)).toBe('active');
+  });
+
+  it('mixed known/unknown: any growth is active; otherwise unknown, never idle', () => {
+    const prev = table(1_000, [{ pid: 120, ppid: 110, comm: 'tee', args: 'tee a' }]);
+    const grew = table(5_000, [{ pid: 120, ppid: 110, comm: 'tee', args: 'tee a' }]);
+    const flat = table(1_000, [{ pid: 120, ppid: 110, comm: 'tee', args: 'tee a' }]);
+    expect(activity(prev, grew)).toBe('active');
+    expect(activity(prev, flat)).toBe('unknown');
+  });
+});
+
+describe('snapshot pairs for CPU growth', () => {
+  const mk = (cpu: number): ProcessNodeInfo[] => [{ pid: 100, ppid: 1, comm: 'zsh', args: 'zsh' }, { pid: 110, ppid: 100, comm: 'npm', args: 'npm t', cpuTimeMs: cpu }];
+
+  it('keeps the previous sample (one deep), drops it when too old, and reports growth through the single-flight source', async () => {
+    let clock = T;
+    let cpu = 1_000;
+    const read = vi.fn(async () => mk(cpu));
+    const source = createProcessTableSource({ platform: 'linux', read, now: () => clock, ttlMs: 3_000, maxStaleMs: 12_000 });
+    const first = await source.snapshot();
+    expect(first!.previous).toBeNull();
+    await expect(readSessionBackgroundProcesses(100, { source })).resolves.toMatchObject({ cpuActivity: 'unknown' });
+    clock += 4_000;
+    cpu += 5_000;
+    const second = await source.snapshot();
+    expect(second!.previous!.readAtMs).toBe(T);
+    expect(second!.previous!.table[1]!.cpuTimeMs).toBe(1_000);
+    const inspected = await readSessionBackgroundProcesses(100, { source });
+    expect(inspected).toMatchObject({ cpuActivity: 'active', snapshotAtMs: T + 4_000 });
+    clock += 30_000; // longer than maxStaleMs since the previous read: no usable pair
+    const third = await source.snapshot();
+    expect(third!.previous).toBeNull();
+  });
+
+  it('Windows keeps the 15 s throttle: CPU pairs are ≥ 15 s apart, one CIM read per interval', async () => {
+    let clock = T;
+    const read = vi.fn(async () => mk(1_000));
+    const source = createProcessTableSource({ platform: 'win32', read, now: () => clock });
+    await source.snapshot();
+    for (let i = 0; i < 28; i += 1) { clock += 500; source.peek(); }
+    expect(read).toHaveBeenCalledTimes(1);
   });
 });

@@ -35,6 +35,12 @@ export interface ProcessTableSnapshot {
   readonly table: readonly ProcessNodeInfo[];
   /** When the read BEGAN (epoch ms): conservative for `etime`-derived start times. */
   readonly readAtMs: number;
+  /**
+   * The snapshot immediately before this one (its own `previous` is dropped),
+   * kept only while the gap is within `maxStaleMs`: the second sample CPU growth
+   * is measured against. Null = no usable earlier sample (CPU activity unknown).
+   */
+  readonly previous: { readonly table: readonly ProcessNodeInfo[]; readonly readAtMs: number } | null;
 }
 
 export interface ProcessTableSource {
@@ -84,7 +90,9 @@ const PS_MAX_BUFFER = 16 * 1024 * 1024;
 
 const WIN32_CIM_COMMAND =
   'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
-  + "@{n='StartMs';e={if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null }}}"
+  + "@{n='StartMs';e={if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null }}},"
+  // Kernel/UserModeTime are cumulative CPU in 100 ns units: the same CIM query, no extra process.
+  + "@{n='CpuMs';e={if ($null -ne $_.KernelModeTime) { [math]::Round(([double]$_.KernelModeTime + [double]$_.UserModeTime) / 10000) } else { $null }}}"
   + ' | ConvertTo-Json -Compress';
 
 async function readLinuxProcTableAsync(): Promise<ProcessNodeInfo[]> {
@@ -112,7 +120,9 @@ async function readLinuxProcTableAsync(): Promise<ProcessNodeInfo[]> {
       } catch {
         // cmdline unreadable.
       }
-      if (Number.isFinite(ppid)) out.push({ pid, ppid, comm, args });
+      // utime+stime (fields 14,15 → rest[11], rest[12]) in clock ticks; 100 Hz is the Linux USER_HZ.
+      const ticks = Number.parseInt(rest[11] ?? '', 10) + Number.parseInt(rest[12] ?? '', 10);
+      if (Number.isFinite(ppid)) out.push({ pid, ppid, comm, args, ...(Number.isFinite(ticks) ? { cpuTimeMs: ticks * 10 } : {}) });
     } catch {
       // Process exited during the scan.
     }
@@ -156,10 +166,10 @@ export async function readSystemProcessTableAsync(
     }
   }
 
-  // POSIX (macOS / Linux / BSD). `etime` is the portable way to get a start time.
+  // POSIX (macOS / Linux / BSD). `etime` is the portable start time, `time` the cumulative CPU.
   const startedReadAt = Date.now();
   try {
-    const { stdout } = await hiddenExecFileAsync('ps', ['-ax', '-o', 'pid=,ppid=,etime=,comm=,args='], {
+    const { stdout } = await hiddenExecFileAsync('ps', ['-ax', '-o', 'pid=,ppid=,etime=,time=,comm=,args='], {
       encoding: 'utf8',
       timeout: timing.readTimeoutMs,
       maxBuffer: PS_MAX_BUFFER,
@@ -205,7 +215,10 @@ export function createProcessTableSource(options: ProcessTableSourceOptions = {}
       try {
         const table = await read(platform);
         if (table && table.length > 0) {
-          current = { table, readAtMs: startedAt };
+          const previous = current && startedAt - current.readAtMs <= maxStaleMs
+            ? { table: current.table, readAtMs: current.readAtMs }
+            : null;
+          current = { table, readAtMs: startedAt, previous };
           // The next read waits a TTL after this one FINISHED too, so a slow
           // read on a saturated machine is never followed by an immediate one.
           nextReadAllowedAt = now() + ttlMs;
@@ -272,6 +285,12 @@ export function __setSharedProcessTableSourceForTests(source: ProcessTableSource
   sharedSource = source;
 }
 
+/** What the guard learns about a session's background work from one snapshot pair. */
+export interface SessionBackgroundInspection extends SessionProcessTreeInspection {
+  /** When the newer snapshot of the pair was read: the instant CPU activity (if any) was observed. */
+  readonly snapshotAtMs: number;
+}
+
 export interface BackgroundInspectionOptions {
   readonly source?: ProcessTableSource;
   readonly startedAfterMs?: number;
@@ -286,7 +305,7 @@ export interface BackgroundInspectionOptions {
 export function peekSessionBackgroundProcesses(
   rootPid: number | undefined,
   options: BackgroundInspectionOptions = {},
-): SessionProcessTreeInspection | null {
+): SessionBackgroundInspection | null {
   if (typeof rootPid !== 'number' || !(rootPid > 0)) return null;
   const snapshot = (options.source ?? getSharedProcessTableSource()).peek();
   return snapshot ? inspectFromSnapshot(rootPid, snapshot, options) : null;
@@ -296,7 +315,7 @@ export function peekSessionBackgroundProcesses(
 export async function readSessionBackgroundProcesses(
   rootPid: number | undefined,
   options: BackgroundInspectionOptions & { readonly maxWaitMs?: number } = {},
-): Promise<SessionProcessTreeInspection | null> {
+): Promise<SessionBackgroundInspection | null> {
   if (typeof rootPid !== 'number' || !(rootPid > 0)) return null;
   const snapshot = await (options.source ?? getSharedProcessTableSource()).snapshot(options.maxWaitMs);
   return snapshot ? inspectFromSnapshot(rootPid, snapshot, options) : null;
@@ -306,10 +325,14 @@ function inspectFromSnapshot(
   rootPid: number,
   snapshot: ProcessTableSnapshot,
   options: BackgroundInspectionOptions,
-): SessionProcessTreeInspection {
-  return inspectSessionProcessTree(rootPid, {
+): SessionBackgroundInspection {
+  const inspection = inspectSessionProcessTree(rootPid, {
     processTable: snapshot.table,
+    ...(snapshot.previous
+      ? { previousProcessTable: snapshot.previous.table, snapshotIntervalMs: snapshot.readAtMs - snapshot.previous.readAtMs }
+      : {}),
     ...(options.selfPid !== undefined ? { selfPid: options.selfPid } : {}),
     ...(options.startedAfterMs !== undefined ? { startedAfterMs: options.startedAfterMs } : {}),
   });
+  return { ...inspection, snapshotAtMs: snapshot.readAtMs };
 }

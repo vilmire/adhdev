@@ -40,7 +40,7 @@ function createFakeWorkerFixture(opts?: {
   sessionId?: string;
   ptyPid?: number;
   timeoutMs?: number;
-  releaseMs?: number;
+  inactivityReleaseMs?: number;
   nudgeGraceMs?: number;
 }) {
   const taskId = opts?.taskId ?? '2c1bdbd2';
@@ -82,13 +82,24 @@ function createFakeWorkerFixture(opts?: {
     at: number;
   }> = [];
 
-  const inspectTreeForPid = (pid: number | undefined, opts?: { startedAfterMs: number }) =>
-    inspectSessionProcessTree(pid, {
+  // Two process-table samples, like the shared snapshot source keeps: setting a new table shifts
+  // the current one to `previousProcessTable`, so CPU growth is measured exactly as in production.
+  let previousProcessTable: readonly ProcessNodeInfo[] | undefined;
+  let snapshotAt = T0;
+  let previousSnapshotAt = T0;
+  let ptyOutputAt: number | undefined;
+  const inspectTreeForPid = (pid: number | undefined, opts?: { startedAfterMs: number }) => ({
+    ...inspectSessionProcessTree(pid, {
       processTable: currentProcessTable,
       selfPid: 999999,
       platform: 'darwin',
       ...(opts ? { startedAfterMs: opts.startedAfterMs } : {}),
-    });
+      ...(previousProcessTable
+        ? { previousProcessTable, snapshotIntervalMs: Math.max(1, snapshotAt - previousSnapshotAt) }
+        : {}),
+    }),
+    snapshotAtMs: snapshotAt,
+  });
 
   let backgroundWorkRef: ReturnType<typeof createBackgroundWorkMonitor> | undefined;
   let schedulerRef: ReturnType<typeof createTurnScheduler> | undefined;
@@ -131,7 +142,7 @@ function createFakeWorkerFixture(opts?: {
 
   const backgroundWork = createBackgroundWorkMonitor({
     timeoutMs,
-    ...(opts?.releaseMs !== undefined ? { releaseMs: opts.releaseMs } : {}),
+    ...(opts?.inactivityReleaseMs !== undefined ? { inactivityReleaseMs: opts.inactivityReleaseMs } : {}),
     ...(opts?.nudgeGraceMs !== undefined ? { nudgeGraceMs: opts.nudgeGraceMs } : {}),
     nudgeWorker: (sid, text, meta) => {
       nudges.push({
@@ -166,7 +177,10 @@ function createFakeWorkerFixture(opts?: {
         key === sessionId
           ? {
               getState: () => ({ status: workerStatus }),
-              adapter: { getPid: () => ptyPid },
+              adapter: {
+                getPid: () => ptyPid,
+                getStatus: () => ({ status: workerStatus, ...(ptyOutputAt !== undefined ? { lastOutputAt: ptyOutputAt } : {}) }),
+              },
             }
           : undefined,
     },
@@ -268,10 +282,18 @@ function createFakeWorkerFixture(opts?: {
       status?: string;
       messages?: Array<{ role: string; content: string; timestamp: string }>;
       processTable?: readonly ProcessNodeInfo[];
+      /** Raw PTY output clock (adapter status `lastOutputAt`). */
+      ptyOutputAt?: number;
     }) {
       if (patch.status !== undefined) workerStatus = patch.status;
       if (patch.messages !== undefined) workerMessages = patch.messages;
-      if (patch.processTable !== undefined) currentProcessTable = patch.processTable;
+      if (patch.processTable !== undefined) {
+        previousProcessTable = currentProcessTable;
+        previousSnapshotAt = snapshotAt;
+        currentProcessTable = patch.processTable;
+        snapshotAt = clock;
+      }
+      if (patch.ptyOutputAt !== undefined) ptyOutputAt = patch.ptyOutputAt;
     },
     queueStatus(tid = taskId) {
       const row = db
@@ -454,7 +476,8 @@ describe('premature weak completion when worker ends turn with background work r
 
       expect(fx.coordinatorNotices).toHaveLength(1);
       const notice = fx.coordinatorNotices[0]!;
-      expect(notice.text).toContain('ended turn with background work running, no results');
+      expect(notice.text).toContain('background work still running');
+      expect(notice.text).toContain('no results yet');
       expect(notice.text).toContain('sess-worker-timeout');
       expect(notice.text).toContain('2c1bdbd2-timeout');
       expect(notice.text).toContain('npm, tee');
@@ -731,8 +754,8 @@ function idleWorkerWith(table: readonly ProcessNodeInfo[], fx: ReturnType<typeof
 }
 
 describe('the guard is bounded: it can delay a weak completion, never pin the task', () => {
-  it('(A3) a child that never exits: one notice at the timeout, a RELEASE at releaseMs, then the ordinary weak-completion path decides and the guard never re-holds', async () => {
-    const fx = createFakeWorkerFixture({ taskId: 'bound-1', sessionId: 'sess-bound-1', ptyPid: 9000, timeoutMs: 25_000, releaseMs: 60_000 });
+  it('(A3) a child that never exits: one notice at the timeout, a RELEASE after the inactivity window, then the ordinary weak-completion path decides and the guard never re-holds', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'bound-1', sessionId: 'sess-bound-1', ptyPid: 9000, timeoutMs: 25_000, inactivityReleaseMs: 60_000 });
     idleWorkerWith([
       { pid: 9000, ppid: 1, comm: 'zsh', args: 'zsh' },
       { pid: 9001, ppid: 9000, comm: 'claude', args: 'claude' },
@@ -749,7 +772,7 @@ describe('the guard is bounded: it can delay a weak completion, never pin the ta
     expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('generating');
     expect(fx.queueStatus()).toBe('assigned');
 
-    // Cross releaseMs (60 s since first held): the hold expires.
+    // 60 s of continuous inactivity (no CPU sample, no output): idle-but-alive, so the hold expires.
     fx.advance(36_000);
     await fx.scheduler.tick();
     expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
@@ -803,7 +826,7 @@ describe('the guard is bounded: it can delay a weak completion, never pin the ta
   });
 
   it('(A5) once released, a process that reappears does not re-arm the hold (latched per attempt generation)', async () => {
-    const fx = createFakeWorkerFixture({ taskId: 'bound-3', sessionId: 'sess-bound-3', ptyPid: 9200, timeoutMs: 10_000, releaseMs: 20_000 });
+    const fx = createFakeWorkerFixture({ taskId: 'bound-3', sessionId: 'sess-bound-3', ptyPid: 9200, timeoutMs: 10_000, inactivityReleaseMs: 20_000 });
     const withChild = [
       { pid: 9200, ppid: 1, comm: 'zsh', args: 'zsh' },
       { pid: 9201, ppid: 9200, comm: 'claude', args: 'claude' },
@@ -873,5 +896,151 @@ describe('the guard is bounded: it can delay a weak completion, never pin the ta
       { envelope: { finalSummary: 'Build started.' } },
     );
     expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('generating');
+  });
+});
+
+describe('release rule: real activity never releases on a clock; only idle-but-alive does', () => {
+  const MIN = 60_000;
+  const N = 600_000; // DEFAULT_BACKGROUND_WORK_INACTIVITY_RELEASE_MS
+  const base = (root: number): ProcessNodeInfo[] => [
+    { pid: root, ppid: 1, comm: 'zsh', args: 'zsh' },
+    { pid: root + 1, ppid: root, comm: 'claude', args: 'claude' },
+  ];
+  /** A worker-started `npm test`, with cumulative CPU when `cpuMs` is given (undefined = CPU unknown). */
+  const withJob = (root: number, cpuMs?: number): ProcessNodeInfo[] => [
+    ...base(root),
+    { pid: root + 10, ppid: root + 1, comm: 'npm', args: 'npm run test:scripts', ...(cpuMs !== undefined ? { cpuTimeMs: cpuMs } : {}) },
+  ];
+  const start = async (taskId: string, root: number) => {
+    const fx = createFakeWorkerFixture({ taskId, sessionId: `sess-${taskId}`, ptyPid: root });
+    fx.setWorkerState({
+      status: 'idle',
+      messages: [{ role: 'assistant', content: WAITING_LINE, timestamp: new Date(T0 + 500).toISOString() }],
+      processTable: withJob(root, 1_000),
+    });
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+    return fx;
+  };
+
+  it('(R1) a child whose CPU keeps growing for 40 minutes is never released: still generating, one notice, no nudge', async () => {
+    const fx = await start('act-1', 11_000);
+    let cpu = 1_000;
+    for (let i = 0; i < 80; i += 1) { // 80 × 30 s = 40 min
+      fx.advance(30_000);
+      cpu += 12_000; // 40 % of a core: far above the noise floor
+      fx.setWorkerState({ processTable: withJob(11_000, cpu) });
+      await fx.scheduler.tick();
+    }
+    expect(fx.now - T0).toBeGreaterThan(40 * MIN);
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('generating');
+    expect(fx.queueStatus()).toBe('assigned');
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.coordinatorNotices[0]!.text).toContain('background work still running (live processes: npm)');
+    expect(fx.nudges).toHaveLength(0);
+  });
+
+  it('(R2) alive but no CPU growth and no output for more than N: released exactly once, one notice', async () => {
+    const fx = await start('idle-1', 12_000);
+    for (let i = 0; i < 24; i += 1) { // 12 min of identical samples
+      fx.advance(30_000);
+      fx.setWorkerState({ processTable: withJob(12_000, 1_000) }); // CPU time unchanged
+      await fx.scheduler.tick();
+      if (fx.now - T0 < N) expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    }
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.nudges).toHaveLength(0);
+    for (let i = 0; i < 12 && fx.queueStatus() === 'assigned'; i += 1) {
+      fx.advance(5_000);
+      fx.scheduler.requestProbe(fx.attemptId);
+      await fx.scheduler.tick();
+    }
+    expect(fx.store.getAttempt(fx.attemptId)!.terminal).toMatchObject({ reason: 'weak_end_confirmed' });
+    expect(fx.coordinatorNotices).toHaveLength(1);
+  });
+
+  it('(R3) CPU activity midway resets the inactivity timer', async () => {
+    const fx = await start('reset-1', 13_000);
+    const idleFor = async (minutes: number, cpu: number) => {
+      for (let i = 0; i < minutes * 2; i += 1) {
+        fx.advance(30_000);
+        fx.setWorkerState({ processTable: withJob(13_000, cpu) });
+        await fx.scheduler.tick();
+      }
+    };
+    await idleFor(8, 1_000); // 8 min idle (< N)
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    fx.advance(30_000);
+    fx.setWorkerState({ processTable: withJob(13_000, 60_000) }); // a burst of CPU: activity
+    await fx.scheduler.tick();
+    await idleFor(8, 60_000); // 16+ min since the start, but only ~8 since the burst
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    await idleFor(3, 60_000); // now > N since the burst
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.coordinatorNotices).toHaveLength(1);
+  });
+
+  it('(R4) CPU UNKNOWN but output advancing: never released (unknown is not idle)', async () => {
+    const fx = await start('unk-out-1', 14_000);
+    for (let i = 0; i < 60; i += 1) { // 30 min, one output chunk per minute, no CPU figures at all
+      fx.advance(30_000);
+      fx.setWorkerState({ processTable: withJob(14_000), ...(i % 2 === 0 ? { ptyOutputAt: fx.now - 1_000 } : {}) });
+      await fx.scheduler.tick();
+    }
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('generating');
+    expect(fx.queueStatus()).toBe('assigned');
+  });
+
+  it('(R5) CPU UNKNOWN and no output for more than N: released', async () => {
+    const fx = await start('unk-idle-1', 15_000);
+    for (let i = 0; i < 24; i += 1) {
+      fx.advance(30_000);
+      fx.setWorkerState({ processTable: withJob(15_000) });
+      await fx.scheduler.tick();
+    }
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.coordinatorNotices).toHaveLength(1);
+  });
+
+  it('(R6) a transient unreadable process table is not "the processes exited": no false nudge, hold carried', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'unk-read-1', sessionId: 'sess-unk-read-1', ptyPid: 16_000 });
+    fx.setWorkerState({
+      status: 'idle',
+      messages: [{ role: 'assistant', content: 'Build started.', timestamp: new Date(T0 + 500).toISOString() }],
+      processTable: withJob(16_000, 1_000),
+    });
+    // Drive the monitor directly: held on live processes, then the table becomes unreadable.
+    const attempt = fx.store.getAttempt(fx.attemptId)!;
+    const first = await fx.backgroundWork.observe({ attempt, nowMs: fx.now, status: 'idle', liveBackgroundProcesses: ['npm'], processesKnown: true });
+    expect(first.holdTurnEnd).toBe(true);
+    const unreadable = await fx.backgroundWork.observe({ attempt, nowMs: fx.now + 20_000, status: 'idle', processesKnown: false });
+    expect(unreadable.holdTurnEnd).toBe(true);
+    expect(unreadable.nudgedWorker).toBe(false);
+    expect(fx.nudges).toHaveLength(0);
+    // Known-and-gone is what triggers the (single) nudge.
+    const gone = await fx.backgroundWork.observe({ attempt, nowMs: fx.now + 40_000, status: 'idle', processesKnown: true });
+    expect(gone.nudgedWorker).toBe(true);
+    expect(fx.nudges).toHaveLength(1);
+  });
+
+  it('(R7) after the nudge, the worker answering (output) keeps the grace alive; silence for the grace window releases', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'nudge-act-1', sessionId: 'sess-nudge-act-1', ptyPid: 17_000, nudgeGraceMs: 60_000 });
+    idleWorkerWith(base(17_000), fx);
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+    expect(fx.nudges).toHaveLength(1);
+    for (let i = 0; i < 6; i += 1) { // 3 min of output every 30 s: the worker is working on the nudge
+      fx.advance(30_000);
+      fx.setWorkerState({ ptyOutputAt: fx.now - 500 });
+      await fx.scheduler.tick();
+    }
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    fx.advance(61_000); // silence for the grace window
+    await fx.scheduler.tick();
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.nudges).toHaveLength(1);
   });
 });

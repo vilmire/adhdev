@@ -266,6 +266,10 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
                     finalSummary: finalThisTurn ? t?.finalSummary : undefined,
                     ...(finalThisTurn && t?.finalAssistantAt !== undefined ? { finalAssistantAt: t.finalAssistantAt } : {}),
                     liveBackgroundProcesses: read.liveBackgroundProcesses,
+                    ...(read.backgroundProcessesKnown !== undefined ? { processesKnown: read.backgroundProcessesKnown } : {}),
+                    ...(read.backgroundCpuActivity ? { cpuActivity: read.backgroundCpuActivity } : {}),
+                    ...(read.backgroundCpuAtMs !== undefined ? { cpuObservedAtMs: read.backgroundCpuAtMs } : {}),
+                    ...(read.outputAtMs !== undefined ? { outputAtMs: read.outputAtMs } : {}),
                 });
                 bgHoldTurnEnd = bgOut.holdTurnEnd;
             } catch (error) {
