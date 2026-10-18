@@ -51,7 +51,7 @@ describe('send_chat policy send_now — ack skip for a parked body', () => {
     const result = await send('msg_parked')
     expect(result).toMatchObject({ success: true, queuedWithAgent: true, submitted: false, messageId: 'msg_parked' })
     expect(adapter.claimQueuedSend).toHaveBeenCalledWith('msg_parked')
-    expect(adapter.sendMessageDuringGeneration).toHaveBeenCalledWith('/tmp/img.png\nqueued body', true)
+    expect(adapter.sendMessageDuringGeneration).toHaveBeenCalledWith('/tmp/img.png\nqueued body', true, 'msg_parked')
     expect(instance.recordAcknowledgedUserInput).not.toHaveBeenCalled()
   })
 
@@ -59,7 +59,7 @@ describe('send_chat policy send_now — ack skip for a parked body', () => {
     const { adapter, instance, send } = fixture([])
     const result = await send('msg_fresh')
     expect(result).toMatchObject({ success: true, queuedWithAgent: true })
-    expect(adapter.sendMessageDuringGeneration).toHaveBeenCalledWith('queued body', undefined)
+    expect(adapter.sendMessageDuringGeneration).toHaveBeenCalledWith('queued body', undefined, 'msg_fresh')
     expect(instance.recordAcknowledgedUserInput).toHaveBeenCalledTimes(1)
     expect(instance.recordAcknowledgedUserInput.mock.calls[0][1]).toBe('msg_fresh')
   })
