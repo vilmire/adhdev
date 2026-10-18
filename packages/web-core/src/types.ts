@@ -8,7 +8,7 @@ import type {
     DetectedIdeInfo,
     WorkspaceEntry,
     AvailableProviderInfo,
-    ProviderCategory,
+    LaunchableProviderCategory,
     ProviderResumeCapability,
     SessionEntry,
     SessionTransport,
@@ -20,13 +20,6 @@ import type {
     StatusReportPayload,
 } from '@adhdev/daemon-core';
 import type { InteractivePrompt } from '@adhdev/daemon-core';
-
-// Wiring-unification A4: daemon-core's dist/index.d.ts (what web-core resolves
-// types from) predates the LaunchableProviderCategory export, so it is derived
-// locally from the already-exported ProviderCategory rather than imported
-// directly. Once daemon-core is rebuilt and re-exports it, this can switch to
-// a plain `import type { LaunchableProviderCategory } from '@adhdev/daemon-core'`.
-type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>;
 
 /**
  * A CLI session parked on a prompt only the OWNER may answer in the terminal
