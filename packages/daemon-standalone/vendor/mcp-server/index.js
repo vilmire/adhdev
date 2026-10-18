@@ -95263,8 +95263,11 @@ ${grant.exp}`).digest("hex");
     function bubbleTimestamp(m) {
       const r = rec3(m);
       if (!r) return null;
-      const timestamp2 = typeof r.timestamp === "number" ? r.timestamp : Date.parse(String(r.timestamp ?? r.createdAt ?? ""));
-      return Number.isFinite(timestamp2) ? timestamp2 : null;
+      for (const v of [r.timestamp, r.receivedAt]) {
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+      }
+      const parsed = Date.parse(String(r.timestamp ?? r.createdAt ?? r.ts ?? ""));
+      return Number.isFinite(parsed) ? parsed : null;
     }
     function standardAssistantBubble(m) {
       if (!isVisible(m)) return null;
@@ -95359,9 +95362,10 @@ ${b.text}`).join("\n\n");
       if (source2?.selected === "pty-parser" && source2.nativeOnlyContentPreserved !== true) return false;
       return read2.source === "provider-native" || source2?.selected === "native-history" || source2?.nativeOnlyContentPreserved === true;
     }
-    function finalized(message) {
+    function finalized(message, storedHistory = false) {
       const r = rec4(message);
-      return !!r && r.bubbleState === "final" && r.isStreaming !== true && r.truncated !== true;
+      if (!r || r.isStreaming === true || r.truncated === true) return false;
+      return r.bubbleState === "final" || storedHistory && (r.bubbleState === void 0 || r.bubbleState === null);
     }
     async function readNativeWindow(execute, sessionId, start, end) {
       const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
@@ -95385,12 +95389,12 @@ ${b.text}`).join("\n\n");
           if (timer !== void 0) clearTimeout(timer);
         }
       };
-      const take = (read2) => {
+      const take = (read2, storedHistory = false) => {
         if (!read2 || !verifiedNativeRead(read2, sessionId) || !Array.isArray(read2.messages)) return false;
         providerIdle ||= read2.providerObservedStatus === "idle";
         for (const message of read2.messages) {
           const b = standardAssistantBubble(message);
-          if (b && b.at >= start && b.at <= end && !finalized(message)) invalid = true;
+          if (b && b.at >= start && b.at <= end && !finalized(message, storedHistory)) invalid = true;
         }
         messages.push(...read2.messages);
         return true;
@@ -95402,7 +95406,7 @@ ${b.text}`).join("\n\n");
       } else if (!chat) return result(false);
       for (let offset = 0; offset < 400; offset += 100) {
         const history = await request("chat_history", { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
-        if (!take(history)) return result(false);
+        if (!take(history, true)) return result(false);
         const oldest = history.messages.map(standardAssistantBubble).filter((b) => b !== null).reduce((at, b) => Math.min(at, b.at), Infinity);
         if (history.hasMore === false || oldest < start) return result(true);
       }
@@ -95497,6 +95501,7 @@ ${b.text}`).join("\n\n");
         return { body, source: source2, completeness: "final_native", parts, provenance: provenanceFor(evidenceRef) };
       };
       if (selected2.complete && terminalPresent) return finishNative(selected2.bubbles, "native_window");
+      LOG.warn("Assistant", `attempt_report_unverified attempt=${attempt.attemptId} bubbles=${selected2.bubbles.length} complete=${selected2.complete} providerIdle=${selected2.providerIdle} anchor=${anchor ?? "none"} anchorOutside=${anchorOutside}`);
       const durable2 = store2.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
       if (durable2 && verifiedNativeReportParts(durable2.body, durable2.parts, durable2.evidenceRef, attempt.generation)) return {
         body: durable2.body,

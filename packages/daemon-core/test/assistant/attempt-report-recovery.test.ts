@@ -1,6 +1,6 @@
 import { ensureTurnLedgerSchema } from '../../src/mesh/turn-ledger/schema.js';
 import { createTurnLedger } from '../../src/mesh/turn-ledger/ledger.js';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -297,4 +297,33 @@ it('replaces a pinned v1 body when the native window is a different evidence ref
     expect(result.provenance?.version).toBe(2);
     expect(JSON.parse(result.provenance!.evidenceRef)[0]).toBe(2);
     expect(store.readAttemptBody(attempt.attemptId, 'mesh', 'coord', Date.now(), result.provenance!.evidenceRef)).toBe(full);
+});
+
+// 2026-10-18 (preview): every relay fell back to the bare envelope because live
+// read_chat / chat_history messages carry their time as `receivedAt`, never
+// `timestamp`, and history rows carry no `bubbleState`. Fixtures above use
+// `timestamp`; these use the shapes the daemon actually returns.
+describe('native window over the real message shapes', () => {
+    it('recovers the report from read_chat messages timed by receivedAt', async () => {
+        const { db, finish } = producer(); const attempt = finish(undefined, 'native');
+        const execute = vi.fn(async () => ({ success: true, coverage: 'full', hasMore: false,
+            messageSource: { selected: 'native-history' }, debugReadChat: { provider: 'codex-cli' }, providerObservedStatus: 'idle',
+            messages: [
+                { role: 'assistant', kind: 'standard', bubbleState: 'final', receivedAt: 190, content: 'original report' },
+                { role: 'assistant', kind: 'standard', bubbleState: 'final', receivedAt: 190 + 1e12, content: 'unrelated latest tail' },
+            ] }));
+        expect(await recoverAttemptReport(db, attempt, 'mesh', 'coord', execute)).toMatchObject({ body: 'original report',
+            source: 'native_window', completeness: 'final_native' });
+    });
+
+    it('treats stored chat_history rows (no bubbleState) as final', async () => {
+        const { readNativeWindow } = await import('../../src/assistant/attempt-report-recovery.js');
+        const execute = vi.fn(async (command: string) => command === 'read_chat'
+            ? { success: true, coverage: 'tail', hasMore: true, messageSource: { selected: 'native-history' }, debugReadChat: { provider: 'codex-cli' }, providerObservedStatus: 'idle', messages: [] }
+            : { success: true, hasMore: false, messageSource: { selected: 'native-history' }, debugReadChat: { provider: 'codex-cli' },
+                messages: [{ role: 'assistant', kind: 'standard', receivedAt: 150, content: 'from history' }] });
+        const out = await readNativeWindow(execute as any, 'coord', 100, 200);
+        expect(out.complete).toBe(true);
+        expect(out.bubbles.map(b => b.text)).toEqual(['from history']);
+    });
 });

@@ -40,11 +40,21 @@ export interface AuditedCoordinatorReply {
 const rec = (v: unknown): Record<string, unknown> | null =>
     v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
 
+/**
+ * A bubble's wall-clock time. Live `read_chat` / `chat_history` messages carry
+ * it as \`receivedAt\` (provider-native-history.ts), not \`timestamp\`; reading
+ * only \`timestamp\`/\`createdAt\` found no bubble at all, so every relay fell
+ * back to the bare envelope (2026-10-18). Which providers' times count as
+ * wall-clock evidence is decided upstream (TIMESTAMPED_PROVIDERS).
+ */
 export function bubbleTimestamp(m: unknown): number | null {
     const r = rec(m);
     if (!r) return null;
-    const timestamp = typeof r.timestamp === 'number' ? r.timestamp : Date.parse(String(r.timestamp ?? r.createdAt ?? ''));
-    return Number.isFinite(timestamp) ? timestamp : null;
+    for (const v of [r.timestamp, r.receivedAt]) {
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+    }
+    const parsed = Date.parse(String(r.timestamp ?? r.createdAt ?? r.ts ?? ''));
+    return Number.isFinite(parsed) ? parsed : null;
 }
 
 /** Visible assistant/agent text that is a standard bubble. Missing kind counts as standard; thinking and tool bubbles do not. */

@@ -87,9 +87,14 @@ export function verifiedNativeRead(read: Record<string, unknown>, sessionId: str
         || source?.nativeOnlyContentPreserved === true;
 }
 
-function finalized(message: unknown): boolean {
+/**
+ * A history page is the stored conversation: its rows carry no \`bubbleState\`
+ * and are final unless they say otherwise. A live read must say \`final\`.
+ */
+function finalized(message: unknown, storedHistory = false): boolean {
     const r = rec(message);
-    return !!r && r.bubbleState === 'final' && r.isStreaming !== true && r.truncated !== true;
+    if (!r || r.isStreaming === true || r.truncated === true) return false;
+    return r.bubbleState === 'final' || (storedHistory && (r.bubbleState === undefined || r.bubbleState === null));
 }
 
 /** Bounded, source-checked paging. An exhausted/failed page never proves completeness. */
@@ -110,12 +115,12 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
         } catch { return null; }
         finally { if (timer !== undefined) clearTimeout(timer); }
     };
-    const take = (read: Record<string, unknown> | null): boolean => {
+    const take = (read: Record<string, unknown> | null, storedHistory = false): boolean => {
         if (!read || !verifiedNativeRead(read, sessionId) || !Array.isArray(read.messages)) return false;
         providerIdle ||= read.providerObservedStatus === 'idle';
         for (const message of read.messages) {
             const b = standardAssistantBubble(message);
-            if (b && b.at >= start && b.at <= end && !finalized(message)) invalid = true;
+            if (b && b.at >= start && b.at <= end && !finalized(message, storedHistory)) invalid = true;
         }
         messages.push(...read.messages);
         return true;
@@ -129,7 +134,7 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
     // by timestamp+text. A page older than the start proves lower-bound coverage.
     for (let offset = 0; offset < 400; offset += 100) {
         const history = await request('chat_history', { targetSessionId: sessionId, offset, limit: 100, excludeRecentCount: 0 });
-        if (!take(history)) return result(false);
+        if (!take(history, true)) return result(false);
         const oldest = (history!.messages as unknown[]).map(standardAssistantBubble).filter(b => b !== null)
             .reduce((at, b) => Math.min(at, b.at), Infinity);
         if (history!.hasMore === false || oldest < start) return result(true);
@@ -241,6 +246,9 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
         return { body, source, completeness: 'final_native', parts, provenance: provenanceFor(evidenceRef) };
     };
     if (selected.complete && terminalPresent) return finishNative(selected.bubbles, 'native_window');
+    // Say why the exact report could not be verified: this fallback used to be
+    // silent, and a relay carrying only the envelope looked like a lost report.
+    LOG.warn('Assistant', `attempt_report_unverified attempt=${attempt.attemptId} bubbles=${selected.bubbles.length} complete=${selected.complete} providerIdle=${selected.providerIdle} anchor=${anchor ?? 'none'} anchorOutside=${anchorOutside}`);
     const durable = store.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
     // Earlier v2 captures did not check native provenance, paging or finality.
     // They may be replaced, but cannot be read back as independently verified.
