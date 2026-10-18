@@ -1,3 +1,5 @@
+import { validateLaunchDefault } from '../launch-defaults/validate.js';
+import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
 import { maintenanceHeld, withMaintenanceAdmission, assertMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
@@ -779,11 +781,38 @@ export class DaemonCliManager {
         const dir = rdir.path;
         if (!cliType) throw new Error('cliType required');
         const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
+        if (args?.targetSessionId && !found) return { success: false, code: 'session_not_found',
+            error: 'The addressed session is not attached; use its session-host restart record.' };
+        const recorded = found ? this.deps.getSessionRegistry?.()?.get(found.key)?.launch : undefined;
+        const settings = found ? this.deps.getInstanceManager()?.getInstance(found.key)?.getState().settings : undefined;
+        const isRole = settings?.assistant === true || recorded?.launchedBy === 'assistant' || !!settings?.meshCoordinatorFor || !!recorded?.roleLaunch;
+        // A restart is an explicit operation on an existing session, not a fresh
+        // role launch. Replay its recorded argv/selection; never read current defaults.
+        if (isRole && !recorded) return { success: false,
+            code: 'restart_selection_unavailable', error: 'The role session has no recorded launch selection; restart refused.' };
+        const roleSelection = recorded?.roleLaunch?.selection ?? (isRole && recorded ? {
+            provider: recorded.providerType, ...(recorded.model.requested ? { model: recorded.model.requested } : {}),
+            ...(recorded.thinkingLevel.requested ? { thinkingLevel: recorded.thinkingLevel.requested } : {}) } : undefined);
+        if (roleSelection) {
+            const valid = validateLaunchDefault(recorded?.roleLaunch?.role ?? (settings?.assistant ? 'assistant' : 'coordinator'), roleSelection,
+                createLaunchValidationPorts({ deps: { providerLoader: this.providerLoader } }));
+            if (!valid.ok) return { success: false, code: 'restart_selection_unavailable',
+                error: `Recorded provider '${roleSelection.provider}' cannot restart: ${valid.issue.reason}` };
+        }
         const prevCliArgs = found ? (found.adapter as CliAdapterWithExtraArgs).extraArgs : undefined;
+        if (isRole && !prevCliArgs) return { success: false, code: 'restart_selection_unavailable',
+            error: 'The role session launch arguments are unavailable; restart refused.' };
         if (found) await this.stopSession(found.key);
-        await this.startSession(cliType, dir, args?.cliArgs || prevCliArgs, args?.initialModel, {
-            launchProvenance: resolveLaunchProvenance(args, undefined),
-        });
+        await this.startSession(isRole ? recorded!.providerType : cliType,
+            isRole ? recorded!.workspace || found!.adapter.workingDir || dir : dir,
+            isRole ? prevCliArgs : args?.cliArgs || prevCliArgs,
+            isRole ? undefined : args?.initialModel, {
+                ...(isRole ? { settingsOverride: settings, restartRecord: recorded, presetSessionKey: found!.key,
+                    initialThinkingLevel: roleSelection?.thinkingLevel } : {}),
+                launchProvenance: isRole ? { roleLaunch: recorded!.roleLaunch,
+                    launchedBy: recorded!.launchedBy, modelSource: recorded!.model.source,
+                    thinkingLevelSource: recorded!.thinkingLevel.source } : resolveLaunchProvenance(args, undefined),
+            });
         return { success: true, restarted: true };
     }
     agentCommand(args: AgentCommandArgs): Promise<CommandResult> { return agentCommand(this, args); }

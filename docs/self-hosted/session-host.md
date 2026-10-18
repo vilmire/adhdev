@@ -52,6 +52,12 @@ If you intentionally want startup restore for a local operator setup, enable:
 ADHDEV_RESTORE_HOSTED_SESSIONS_ON_STARTUP=1 adhdev-standalone
 ```
 
+## Role Launch Defaults and Restarts
+
+Fresh assistant and coordinator sessions resolve provider, model and thinking level on the host daemon. Explicit launch arguments override its saved role default; a host project coordinator override replaces the global triple as a whole. Missing setup, an unavailable provider or a measured quota block fails the launch without selecting another provider. Worker capability slots are independent.
+
+Changing defaults affects the next fresh launch. It never changes a running session. An explicit CLI or session-host restart replays that session's recorded launch selection and provenance, including the original default revision, even when newer defaults exist. Hosted CLI restarts use the session host's original argv and environment, preserving private HOME and MCP bindings. CLI restart refuses before stopping if it cannot recover the role's recorded selection or launch arguments. Reattaching a surviving hosted runtime also preserves the original selection.
+
 ## Where You See It
 
 You can reach session-host-backed recovery flows in a few places:

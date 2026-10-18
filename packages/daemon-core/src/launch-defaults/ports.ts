@@ -1,3 +1,5 @@
+import { evaluateProviderQuotaGate } from '../mesh/mesh-quota-routing.js';
+import { liveLocalQuotaForRouting } from '../mesh/mesh-quota-sources.js';
 /** Production adapters for the existing defaults core. No launch effects,
  * catalog refreshes, repo config, browser state or parallel persistence. */
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
@@ -27,11 +29,11 @@ function stateOf(mesh: LocalMeshEntry): HostProjectLaunchState | null {
     return { projectId: mesh.id, revision: raw.revision as number, entry: raw.entry as HostProjectLaunchState['entry'] };
 }
 
-export function createLaunchValidationPorts(ctx: Pick<HighFamilyContext, 'deps'>, configDir = getConfigDir()): LaunchValidationPorts {
+export function createLaunchValidationPorts(ctx: { deps: Pick<HighFamilyContext['deps'], 'providerLoader'> }, configDir = getConfigDir()): LaunchValidationPorts {
     const loader = ctx.deps.providerLoader;
     return {
         resolveAlias: value => loader.resolveAlias(value, ['cli']),
-        getProvider: type => {
+        getProvider: (type, model) => {
             const manifest = loader.getMeta(type);
             if (!manifest) return undefined;
             const availability = loader.getAvailableProviderInfos().find(p => p.type === type);
@@ -39,6 +41,9 @@ export function createLaunchValidationPorts(ctx: Pick<HighFamilyContext, 'deps'>
                 adhdevMcpCommand: 'adhdev', adhdevMcpTransport: 'ipc', adhdevMcpPort: 1 });
             return { type: manifest.type, category: manifest.category, enabled: availability?.enabled === true,
                 detected: availability?.installed === true,
+                quotaGated: !!evaluateProviderQuotaGate({}, type, null, Date.now(), {
+                    liveLocalQuota: liveLocalQuotaForRouting(() => true), suppressObservabilityLogs: true,
+                }, { model }),
                 assistant: describeAssistantEligibility({ cliType: type, provider: manifest, configDir }),
                 coordinator: setup.kind === 'unsupported' ? 'unsupported' : setup.kind === 'manual' ? 'manual' : 'supported',
                 modelLaunchArgs: manifest.modelLaunchArgs, modelOptions: manifest.modelOptions,

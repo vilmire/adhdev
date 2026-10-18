@@ -23,6 +23,9 @@ beforeAll(() => {
   workspace = mkdtempSync(join(tmpdir(), 'adhdev-coord-launch-record-ws-'))
   const mcpEntry = join(workspace, 'mcp-server.js')
   writeFileSync(mcpEntry, '#!/usr/bin/env node\n', 'utf-8')
+  writeFileSync(join(configDir, 'launch-defaults.json'), JSON.stringify({ version: 1, revision: 1, history: [],
+    coordinator: { provider: 'claude-cli', revision: 1, setBy: 'owner', setAt: 1 } }))
+  writeFileSync(join(configDir, 'meshes.json'), JSON.stringify({ version: 1, meshes: [] }))
   previousMcpEntry = process.env.ADHDEV_MCP_SERVER_PATH
   process.env.ADHDEV_MCP_SERVER_PATH = mcpEntry
 })
@@ -42,6 +45,7 @@ const provider: ProviderModule = {
   type: 'claude-cli',
   name: 'Claude Code',
   category: 'cli',
+  modelLaunchArgs: ['--model', '{{model}}'], thinkingLaunchArgs: ['--effort', '{{level}}'], thinkingLevelOptions: ['low', 'high'],
   spawn: { command: 'claude' },
   meshCoordinator: {
     supported: true,
@@ -56,7 +60,8 @@ async function launchCoordinator(extra: Record<string, unknown>) {
     commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
     cliManager: { launchCli } as any,
     cdpManagers: new Map(),
-    providerLoader: { resolve: vi.fn(() => provider), getMeta: vi.fn(() => provider) } as any,
+    providerLoader: { resolveAlias: (t: string) => t, resolve: vi.fn(() => provider), getMeta: vi.fn(() => provider),
+      getAvailableProviderInfos: () => [{ type: 'claude-cli', enabled: true, installed: true }] } as any,
     instanceManager: { collectAllStates: () => [], listInstanceIds: () => [], getInstance: () => null } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
@@ -87,15 +92,15 @@ describe('launch_mesh_coordinator — launch provenance forwarded to launch_cli'
     })
   })
 
-  it('a dialog-declared remembered value stays remembered', async () => {
+  it('legacy source claims cannot turn explicit args into remembered defaults', async () => {
     const call = await launchCoordinator({ initialModel: 'opus', modelSource: 'remembered', thinkingLevelSource: 'bogus', initialThinkingLevel: 'low' })
-    expect(call).toMatchObject({ modelSource: 'remembered', thinkingLevelSource: 'user' })
+    expect(call).toMatchObject({ modelSource: 'user', thinkingLevelSource: 'user' })
   })
 
   it('no model requested → no model source claimed (the daemon resolves the default)', async () => {
     const call = await launchCoordinator({})
     expect(call.launchedBy).toBe('mesh')
-    expect(call).not.toHaveProperty('modelSource')
-    expect(call).not.toHaveProperty('thinkingLevelSource')
+    expect(call).toMatchObject({ modelSource: 'provider_default', thinkingLevelSource: 'provider_default',
+      roleLaunch: { documentRevision: 1, applied: { provider: { source: 'user' } } } })
   })
 })

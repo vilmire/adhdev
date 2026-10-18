@@ -50,7 +50,7 @@ export interface LaunchDefaultsProjectPort {
 export type LaunchDefaultsStagingProposal = LaunchDefaultsProposal;
 export interface LaunchDefaultsCommandPorts {
     /** Same store and facts as launch resolution, never a second authority. */
-    store: Pick<LaunchDefaultsStore, 'read' | 'write'>;
+    store: Pick<LaunchDefaultsStore, 'read' | 'write'> & Partial<Pick<LaunchDefaultsStore, 'withSnapshot'>>;
     validation: LaunchValidationPorts;
     projects?: LaunchDefaultsProjectPort;
     /** Adapter to existing AssistantInputLog, never origin data from request args. */

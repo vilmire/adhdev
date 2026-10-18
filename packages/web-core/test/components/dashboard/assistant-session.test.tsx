@@ -18,14 +18,11 @@ import { buildConversations } from '../../../src/components/dashboard/buildConve
 import { compareConversationRecency } from '../../../src/components/dashboard/conversation-sort'
 import { sortMobileInboxItems } from '../../../src/components/dashboard/dashboard-mobile-chat-mode-helpers'
 import {
-    ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY,
     countHostedProjectsByMachine,
     isAssistantConversation,
     listAssistantLaunchMachines,
     pickAssistantLaunchTarget,
-    readAssistantLaunchChoice,
     shouldOfferStartAssistant,
-    writeAssistantLaunchChoice,
 } from '../../../src/components/dashboard/assistant-session'
 import { fetchHostedProjectCounts, useStartAssistant } from '../../../src/hooks/useStartAssistant'
 import { statusPayloadToEntries } from '../../../src/utils/status-transform'
@@ -126,26 +123,15 @@ const ok = (toolRestriction: 'enforced' | 'prompt_only' = 'prompt_only') => ({ a
 const refused = (reason: string) => ({ assistant: { supported: false, toolRestriction: 'prompt_only', code: 'assistant_mcp_setup_unsupported', reason } })
 
 describe('Start assistant target and visibility', () => {
-    it('defaults to claude-cli when eligible, else the first eligible CLI; an ineligible CLI is never the default', () => {
+    it('chooses only a host and leaves role provider selection to the daemon', () => {
         expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('codex-cli', ok()), cliProvider('claude-cli', ok('enforced'))])]))
-            .toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+            .toEqual({ machineId: 'm1', cliType: '' })
         expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('claude-cli', refused('no')), cliProvider('antigravity-cli', refused('global')), cliProvider('kimi', ok())])]))
-            .toEqual({ machineId: 'm1', cliType: 'kimi' })
+            .toEqual({ machineId: 'm1', cliType: '' })
         expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('antigravity-cli', refused('global'))])])).toBeNull()
         // An older daemon without the field: the CLI is assumed eligible (the daemon still decides).
         expect(pickAssistantLaunchTarget([machine('m1', [cliProvider('aider-cli')])]))
-            .toEqual({ machineId: 'm1', cliType: 'aider-cli' })
-    })
-
-    it('honours a remembered choice while it is still eligible on a listed machine', () => {
-        const machines = [
-            machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok())]),
-            machine('m2', [cliProvider('claude-cli', ok('enforced')), cliProvider('kimi', ok()), cliProvider('antigravity-cli', refused('global'))]),
-        ]
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'm2', cliType: 'kimi' })).toEqual({ machineId: 'm2', cliType: 'kimi' })
-        expect(pickAssistantLaunchTarget(machines, { cliType: 'kimi' })).toEqual({ machineId: 'm2', cliType: 'kimi' })
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'm2', cliType: 'antigravity-cli' })).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'gone', cliType: 'codex-cli' })).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
+            .toEqual({ machineId: 'm1', cliType: '' })
     })
 
     it('lists eligible CLIs first (claude-cli leading) and keeps ineligible ones with their reason', () => {
@@ -167,7 +153,7 @@ describe('Start assistant target and visibility', () => {
             machine('off', [cliProvider('claude-cli')], 'offline'),
             machine('none', [cliProvider('claude-cli', { enabled: false })]),
             machine('ok', [cliProvider('codex-cli')]),
-        ])).toEqual({ machineId: 'ok', cliType: 'codex-cli' })
+        ])).toEqual({ machineId: 'ok', cliType: '' })
         expect(pickAssistantLaunchTarget([])).toBeNull()
     })
 
@@ -180,29 +166,13 @@ describe('Start assistant target and visibility', () => {
         // Host ids arrive in another canonical form (mach_ / standalone_mach_): matched, not raw-compared.
         const counts = countHostedProjectsByMachine(['mach_bbbb2222', 'standalone_mach_bbbb2222', 'mach_cccc3333', '', 'mach_unknown9'], machines)
         expect(counts).toEqual({ daemon_mach_bbbb2222: 2, daemon_mach_cccc3333: 1 })
-        expect(pickAssistantLaunchTarget(machines, null, counts)).toEqual({ machineId: 'daemon_mach_bbbb2222', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget(machines, counts)).toEqual({ machineId: 'daemon_mach_bbbb2222', cliType: '' })
         expect(listAssistantLaunchMachines(machines, counts).map(m => [m.machineId, m.hostedProjects])).toEqual([
             ['daemon_mach_bbbb2222', 2], ['daemon_mach_cccc3333', 1], ['daemon_mach_aaaa1111', 0],
         ])
         // No hosting known yet (or none hosted): the caller's order stands.
-        expect(pickAssistantLaunchTarget(machines)).toEqual({ machineId: 'daemon_mach_aaaa1111', cliType: 'claude-cli' })
-        expect(pickAssistantLaunchTarget(machines, null, {})).toEqual({ machineId: 'daemon_mach_aaaa1111', cliType: 'claude-cli' })
-    })
-
-    it('a remembered choice still wins over the host while eligible; otherwise the host is the default', () => {
-        const machines = [
-            machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok())]),
-            machine('m2', [cliProvider('claude-cli', ok('enforced')), cliProvider('antigravity-cli', refused('global'))]),
-        ]
-        const counts = { m2: 3 }
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'm1', cliType: 'codex-cli' }, counts)).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'm1', cliType: 'claude-cli' }, counts)).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
-        // A remembered CLI without a machine: the host is tried first.
-        expect(pickAssistantLaunchTarget(machines, { cliType: 'claude-cli' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
-        // Ineligible / vanished choices fall back to the host.
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'm2', cliType: 'antigravity-cli' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
-        expect(pickAssistantLaunchTarget(machines, { machineId: 'gone', cliType: 'codex-cli' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
-        expect(pickAssistantLaunchTarget(machines, { cliType: 'kimi' }, counts)).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+        expect(pickAssistantLaunchTarget(machines)).toEqual({ machineId: 'daemon_mach_aaaa1111', cliType: '' })
+        expect(pickAssistantLaunchTarget(machines, {})).toEqual({ machineId: 'daemon_mach_aaaa1111', cliType: '' })
     })
 
     it('counts hosted projects from the list_meshes fan-out: host pin, else the host node, host copy first', async () => {
@@ -234,21 +204,6 @@ describe('Start assistant target and visibility', () => {
         // Offline machines are not asked.
         expect(send.mock.calls.map(c => c[0]).sort()).toEqual(['daemon_mach_aaaa1111', 'daemon_mach_bbbb2222'])
         expect(send).toHaveBeenCalledWith('daemon_mach_aaaa1111', 'list_meshes', {})
-    })
-
-    it('remembers the choice in storage and survives a throwing storage', () => {
-        const store = new Map<string, string>()
-        const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) } }
-        writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'codex-cli' }, storage)
-        expect(store.get(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)).toBe(JSON.stringify({ machineId: 'm1', cliType: 'codex-cli' }))
-        expect(readAssistantLaunchChoice(storage)).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
-        writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'max' }, storage)
-        expect(readAssistantLaunchChoice(storage)).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'max' })
-        const throwing = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } }
-        expect(readAssistantLaunchChoice(throwing)).toBeNull()
-        expect(() => writeAssistantLaunchChoice({ machineId: 'm1', cliType: 'x' }, throwing)).not.toThrow()
-        store.set(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY, '{not json')
-        expect(readAssistantLaunchChoice(storage)).toBeNull()
     })
 
     it('is offered only while no assistant session exists and a machine can host one', () => {
@@ -404,63 +359,28 @@ describe('assistant in the dashboard header', () => {
         expect(onStartAssistantWith).toHaveBeenLastCalledWith({ machineId: 'm1', cliType: 'claude-cli', model: 'sonnet', thinkingLevel: 'max' })
     })
 
-    it('useStartAssistant sends model / thinkingLevel, persists them, and drops values the CLI no longer advertises', async () => {
-        const store = new Map<string, string>()
-        vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } })
-        const send = vi.fn(async () => ({ success: true, sessionId: 'asst-1' }))
-        let state: ReturnType<typeof useStartAssistant> | null = null
-        let entries = [machine('m1', [cliProvider('claude-cli', { ...ok('enforced'), modelOptions: ['opus', 'sonnet'], thinkingLevelOptions: ['low', 'high'] })])]
-        function Probe() {
-            state = useStartAssistant({ machineEntries: entries, conversations: [], sendDaemonCommand: send })
-            return null
-        }
-        render(<Probe />)
-        await act(async () => { await Promise.resolve() })
-        await act(async () => { await state!.start({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' }) })
-        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
-        expect(JSON.parse(store.get(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)!)).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
-        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
-        await act(async () => { await state!.start() })
-        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
-        // Remount against a manifest that dropped 'opus' and the thinking levels: the stale values fall back to defaults.
-        entries = [machine('m1', [cliProvider('claude-cli', { ...ok('enforced'), modelOptions: ['sonnet'] })])]
-        state = null
-        act(() => root.unmount())
-        root = createRoot(container)
-        render(<Probe />)
-        await act(async () => { await Promise.resolve() })
-        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
-        await act(async () => { await state!.start() })
-        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli' })
-    })
-
-    it('useStartAssistant sends a dropdown choice as cliType and remembers it as the next default', async () => {
-        // test/setup.ts stubs a no-op localStorage; give this case a real one.
-        const store = new Map<string, string>()
-        vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } })
-        const send = vi.fn(async () => ({ success: true, sessionId: 'asst-1' }))
+    it('explicit assistant picks affect one launch and never create browser role defaults', async () => {
+        const memory = new Map([['adhdev_assistant_launch_choice', JSON.stringify({ cliType: 'stale-cli', model: 'stale-model' })]])
+        const setItem = vi.fn(), removeItem = vi.fn((key: string) => memory.delete(key))
+        vi.stubGlobal('localStorage', { getItem: (key: string) => memory.get(key) ?? null, setItem, removeItem })
+        const send = vi.fn(async (_id: string, type: string) => type === 'launch_defaults_get'
+            ? { success: true, roles: { assistant: { stored: { provider: 'claude-cli', model: 'sonnet' } } } }
+            : { success: true, sessionId: 'asst-1' })
         let state: ReturnType<typeof useStartAssistant> | null = null
         const entries = [machine('m1', [cliProvider('claude-cli', ok('enforced')), cliProvider('codex-cli', ok())])]
-        function Probe() {
-            state = useStartAssistant({ machineEntries: entries, conversations: [], sendDaemonCommand: send })
-            return null
-        }
+        function Probe() { state = useStartAssistant({ machineEntries: entries, conversations: [], sendDaemonCommand: send }); return null }
         render(<Probe />)
         await act(async () => { await Promise.resolve() })
-        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
-        await act(async () => { await state!.start({ machineId: 'm1', cliType: 'codex-cli' }) })
-        expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', { cliType: 'codex-cli' })
-        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
-        expect(readAssistantLaunchChoice()).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        expect(send).toHaveBeenCalledWith('m1', 'launch_defaults_get', { role: 'assistant' })
+        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'sonnet' })
+        await act(async () => { await state!.start({ machineId: 'm1', cliType: 'codex-cli', model: 'gpt-custom', thinkingLevel: 'high' }) })
+        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'codex-cli', model: 'gpt-custom', thinkingLevel: 'high' })
+        expect(setItem).not.toHaveBeenCalled()
+        expect(removeItem).toHaveBeenCalledWith('adhdev_assistant_launch_choice')
+        expect(memory.has('adhdev_assistant_launch_choice')).toBe(false)
         await act(async () => { await state!.start() })
-        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'codex-cli' })
-        // A fresh mount reads the remembered choice back as the default.
-        state = null
-        act(() => root.unmount())
-        root = createRoot(container)
-        render(<Probe />)
-        await act(async () => { await Promise.resolve() })
-        expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
+        expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', {})
+        expect(state!.defaultTarget?.cliType).toBe('claude-cli')
     })
 
     it('useStartAssistant sends launch_assistant with the picked CLI through the command transport', async () => {
@@ -474,7 +394,7 @@ describe('assistant in the dashboard header', () => {
         await act(async () => { await Promise.resolve() })
         expect(state!.visible).toBe(true)
         await act(async () => { await state!.start() })
-        expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli' })
+        expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', {})
         expect(state!.error).toBeNull()
 
         render(<Probe conversations={[conversation(), assistant()]} />)
@@ -499,10 +419,10 @@ describe('assistant in the dashboard header', () => {
         }
         render(<Probe />)
         await act(async () => { await Promise.resolve() })
-        expect(state!.defaultTarget).toEqual({ machineId: 'm2', cliType: 'claude-cli' })
+        expect(state!.defaultTarget).toEqual({ machineId: 'm2', cliType: '' })
         expect(state!.machines.map(m => [m.machineId, m.hostedProjects])).toEqual([['m2', 2], ['m1', 0]])
         await act(async () => { await state!.start() })
-        expect(send).toHaveBeenLastCalledWith('m2', 'launch_assistant', { cliType: 'claude-cli' })
+        expect(send).toHaveBeenLastCalledWith('m2', 'launch_assistant', {})
     })
 
     it('split button heading says how many projects a machine hosts', () => {

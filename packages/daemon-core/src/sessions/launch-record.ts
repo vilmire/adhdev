@@ -12,6 +12,8 @@
  */
 
 import {
+    parseRoleLaunchSelection,
+    type RoleLaunchSelection,
     MODEL_SELECTION_HISTORY_LIMIT,
     isModelAxisSource,
     isSessionLaunchedBy,
@@ -90,6 +92,7 @@ export function classifyMeshLaunchAxisSource(input: {
 
 /** Launch-provenance fields accepted on `launch_cli` args (all optional, all validated). */
 export interface LaunchProvenanceArgs {
+    roleLaunch?: RoleLaunchSelection;
     launchedBy?: SessionLaunchedBy;
     modelSource?: ModelAxisSource;
     thinkingLevelSource?: ModelAxisSource;
@@ -102,7 +105,9 @@ export interface LaunchProvenanceArgs {
  */
 export function readLaunchProvenanceArgs(args: unknown): LaunchProvenanceArgs {
     const record = args && typeof args === 'object' ? args as Record<string, unknown> : {};
+    const roleLaunch = parseRoleLaunchSelection(record.roleLaunch);
     return {
+        ...(roleLaunch ? { roleLaunch } : {}),
         ...(isSessionLaunchedBy(record.launchedBy) && record.launchedBy !== 'restore'
             ? { launchedBy: record.launchedBy }
             : {}),
@@ -174,6 +179,7 @@ export function buildModelSelection(input: LaunchAxisInput, at: number): ModelSe
 }
 
 export interface SessionLaunchRecordInput {
+    roleLaunch?: RoleLaunchSelection;
     sessionId: string;
     providerType: string;
     providerVersion?: string;
@@ -190,7 +196,14 @@ export function buildSessionLaunchRecord(input: SessionLaunchRecordInput): Sessi
     const providerVersion = trimmed(input.providerVersion);
     const workspace = trimmed(input.workspace);
     const autoApproveModeId = trimmed(input.autoApproveModeId);
+    const model = buildModelSelection(input.model, input.launchedAt);
+    const thinkingLevel = buildModelSelection(input.thinkingLevel, input.launchedAt);
+    // An omitted role axis explicitly delegates selection to the provider, even
+    // when the provider cannot report which built-in default it will use.
+    if (input.roleLaunch?.applied.model.source === 'provider_default') model.source = 'provider_default';
+    if (input.roleLaunch?.applied.thinkingLevel.source === 'provider_default') thinkingLevel.source = 'provider_default';
     return {
+        ...(input.roleLaunch ? { roleLaunch: structuredClone(input.roleLaunch) } : {}),
         sessionId: input.sessionId,
         providerType: input.providerType,
         ...(providerVersion ? { providerVersion } : {}),
@@ -200,8 +213,8 @@ export function buildSessionLaunchRecord(input: SessionLaunchRecordInput): Sessi
         launchedBy: input.launchedBy,
         launchedAt: input.launchedAt,
         ...(workspace ? { workspace } : {}),
-        model: buildModelSelection(input.model, input.launchedAt),
-        thinkingLevel: buildModelSelection(input.thinkingLevel, input.launchedAt),
+        model,
+        thinkingLevel,
         ...(autoApproveModeId ? { autoApproveModeId } : {}),
     };
 }
@@ -235,7 +248,7 @@ export function buildRestoredLaunchRecord(
 /** Deep-enough copy for handing a record to a bus subscriber (axes + history arrays). */
 export function cloneLaunchRecord(record: SessionLaunchRecord): SessionLaunchRecord {
     const cloneAxis = (axis: ModelSelection): ModelSelection => ({ ...axis, history: axis.history.map((entry) => ({ ...entry })) });
-    return { ...record, model: cloneAxis(record.model), thinkingLevel: cloneAxis(record.thinkingLevel) };
+    return { ...record, ...(record.roleLaunch ? { roleLaunch: structuredClone(record.roleLaunch) } : {}), model: cloneAxis(record.model), thinkingLevel: cloneAxis(record.thinkingLevel) };
 }
 
 /** Append to an axis history, keeping the first `launch` entry and the newest rest. */

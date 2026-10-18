@@ -59,7 +59,7 @@ export interface DashboardHeaderProps {
     onStartAssistant?: () => void;
     startAssistantPending?: boolean;
     startAssistantError?: string | null;
-    /** The split button's dropdown: launch a chosen CLI/machine (remembered). */
+    /** The split button's dropdown: launch a chosen CLI/machine for this session. */
     onStartAssistantWith?: (target: AssistantLaunchTarget) => void;
     startAssistantMachines?: AssistantMachineOption[];
     startAssistantDefault?: AssistantLaunchTarget | null;

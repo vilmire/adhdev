@@ -1,3 +1,4 @@
+import { parseRoleLaunchSelection, type RoleLaunchSelection } from './role-launch'
 /**
  * session-launch — how a session was launched: provider, model and thinking
  * level, and WHERE each value came from.
@@ -35,11 +36,14 @@ export const MODEL_AXIS_SOURCES = [
     'user',
     /** The dashboard dialog restored it from the last launch (browser-local memory). */
     'remembered',
+    /** The authoritative daemon role default or host project override. */
+    'stored_default',
+    'project_default',
     /** A mesh capability slot supplied it (or a difficulty preset the slot outranked). */
     'mesh_slot',
     /** An explicit per-task model / thinking level on a mesh queue task. */
     'task_override',
-    /** Nothing was requested; the provider's default is known (discovery / manifest). */
+    /** Nothing requested: the provider chooses; resolvedDefault records it when known. */
     'provider_default',
     /** A value was requested without saying where it came from, or nothing is known. */
     'unspecified',
@@ -102,6 +106,7 @@ export interface ModelSelection {
 }
 
 export interface SessionLaunchRecord {
+    roleLaunch?: RoleLaunchSelection
     sessionId: string
     providerType: string
     providerVersion?: string
@@ -230,7 +235,9 @@ export function parseSessionLaunchRecord(raw: unknown): SessionLaunchRecord | un
     const providerVersion = readString(record.providerVersion)
     const workspace = readString(record.workspace)
     const autoApproveModeId = readString(record.autoApproveModeId)
+    const roleLaunch = parseRoleLaunchSelection(record.roleLaunch)
     return {
+        ...(roleLaunch ? { roleLaunch } : {}),
         sessionId,
         providerType,
         ...(providerVersion ? { providerVersion } : {}),

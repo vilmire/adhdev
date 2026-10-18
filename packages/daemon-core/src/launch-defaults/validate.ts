@@ -15,6 +15,7 @@ export interface LaunchProviderFacts {
     category: string;
     enabled: boolean;
     detected: boolean;
+    quotaGated?: boolean;
     assistant: { supported: boolean; toolRestriction: ToolRestriction };
     coordinator: 'supported' | 'manual' | 'unsupported';
     modelLaunchArgs?: readonly string[];
@@ -30,11 +31,11 @@ export interface LaunchProviderFacts {
  * Adapters must not install, enable, discover or otherwise mutate providers. */
 export interface LaunchValidationPorts {
     resolveAlias(provider: string): string;
-    getProvider(canonicalProvider: string): LaunchProviderFacts | undefined;
+    getProvider(canonicalProvider: string, model?: string): LaunchProviderFacts | undefined;
 }
 export type LaunchValidationReason =
     | 'invalid_schema' | 'provider_unknown' | 'provider_not_cli'
-    | 'provider_disabled' | 'provider_not_detected' | 'provider_not_eligible'
+    | 'provider_disabled' | 'provider_not_detected' | 'provider_not_eligible' | 'provider_quota_gated'
     | 'model_unsupported' | 'model_provider_mismatch' | 'model_not_offered'
     | 'thinking_unsupported' | 'thinking_not_offered' | 'catalog_unavailable';
 export interface LaunchValidationIssue {
@@ -89,11 +90,12 @@ export function validateLaunchDefault(
         ({ ok: false, issue: { field, reason, ...(candidates ? { candidates } : {}) } });
     try {
         selection.provider = ports.resolveAlias(selection.provider);
-        const facts = ports.getProvider(selection.provider);
+        const facts = ports.getProvider(selection.provider, selection.model);
         if (!facts || facts.type !== selection.provider) return fail('provider', 'provider_unknown');
         if (facts.category !== 'cli') return fail('provider', 'provider_not_cli');
         if (facts.enabled !== true) return fail('provider', 'provider_disabled');
         if (facts.detected !== true) return fail('provider', 'provider_not_detected');
+        if (facts.quotaGated === true) return fail('provider', 'provider_quota_gated');
         if (role === 'assistant' ? facts.assistant.supported !== true : !['supported', 'manual'].includes(facts.coordinator)) {
             return fail('provider', 'provider_not_eligible');
         }

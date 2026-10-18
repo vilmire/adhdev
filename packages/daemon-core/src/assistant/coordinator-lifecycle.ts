@@ -48,10 +48,8 @@ export interface CoordinatorLaunchOutcome {
 export interface EnsureCoordinatorPorts {
     /** This daemon's live coordinator sessions of the mesh. */
     coordinators(meshId: string): AssistantCoordinatorView[];
-    /** cliType to launch with (mesh's last registry cliType, else the assistant default); null → the launch command decides. */
-    cliTypeFor(meshId: string): string | null;
     /** In-process `launch_mesh_coordinator`. */
-    launch(input: { meshId: string; cliType: string | null; extraSystemPrompt: string; managedByAssistant: true }): Promise<CoordinatorLaunchOutcome>;
+    launch(input: { meshId: string; extraSystemPrompt: string; managedByAssistant: true }): Promise<CoordinatorLaunchOutcome>;
     /** `set_conversation_prefs { hidden: true }` — best-effort. */
     hide(sessionId: string): Promise<void>;
 }
@@ -87,7 +85,6 @@ export function ensureCoordinator(meshId: string, ports: EnsureCoordinatorPorts)
         if (live) return { ok: true, sessionId: live.sessionId, launched: false, managedByAssistant: live.managedByAssistant };
         const launched = await ports.launch({
             meshId,
-            cliType: ports.cliTypeFor(meshId),
             extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT,
             managedByAssistant: true,
         });

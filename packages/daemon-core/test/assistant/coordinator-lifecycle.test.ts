@@ -22,7 +22,6 @@ function ports(over: Partial<EnsureCoordinatorPorts> = {}): EnsureCoordinatorPor
     return {
         live,
         coordinators: () => live,
-        cliTypeFor: () => 'claude-cli',
         launch: vi.fn(async () => {
             await new Promise((r) => setTimeout(r, 5));
             live.push(view('coord-new', { managedByAssistant: true, idle: true }));
@@ -50,10 +49,10 @@ describe('ensureCoordinator', () => {
         expect(p.launch).not.toHaveBeenCalled();
     });
 
-    it('launches with the managed stamp, the fixed prompt and the mesh cliType, then hides the tab', async () => {
+    it('launches with the managed stamp, the fixed prompt and daemon-resolved defaults, then hides the tab', async () => {
         const p = ports();
         expect(await ensureCoordinator('mesh_a', p)).toEqual({ ok: true, sessionId: 'coord-new', launched: true, managedByAssistant: true });
-        expect(p.launch).toHaveBeenCalledWith({ meshId: 'mesh_a', cliType: 'claude-cli', extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT, managedByAssistant: true });
+        expect(p.launch).toHaveBeenCalledWith({ meshId: 'mesh_a', extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT, managedByAssistant: true });
         expect(p.hide).toHaveBeenCalledWith('coord-new');
         // The assistant guidance moved into the base coordinator prompt (it must reach
         // reused, user-started coordinators too), so the launch adds nothing.

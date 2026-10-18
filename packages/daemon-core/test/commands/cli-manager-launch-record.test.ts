@@ -169,6 +169,27 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
     expect(launch?.thinkingLevel).toMatchObject({ requested: 'high', source: 'user', launchValue: 'high' });
   }, 15000);
 
+  it.each(['stored_default', 'project_default'] as const)('role launch persists %s axes and revision in the registry and hosted metadata', async source => {
+    const updateRuntimeMeta = vi.fn();
+    addInstance.mockImplementation(async (_key: string, instance: any) => { instance.getAdapter = () => ({ updateRuntimeMeta }); });
+    const defaultRef = { role: 'coordinator' as const, scope: source === 'stored_default' ? 'global' as const : 'project' as const,
+      revision: 3, ...(source === 'project_default' ? { projectId: 'm' } : {}) };
+    const roleLaunch = { role: 'coordinator' as const, documentRevision: 5, defaultRef,
+      selection: { provider: 'sample-cli', model: 'sonnet' }, applied: {
+        provider: { value: 'sample-cli', source, defaultRef }, model: { value: 'sonnet', source, defaultRef },
+        thinkingLevel: { value: null, source: 'provider_default' as const } } };
+    const result = await createManager(setupLoader()).launchCli({ cliType: 'sample-cli', dir: workingDir,
+      initialModel: 'sonnet', modelSource: source, roleLaunch, settings: { meshCoordinatorFor: 'm' } });
+    const record = registry.get(result.sessionId as string)?.launch;
+    expect(record).toMatchObject({ roleLaunch, model: { source }, thinkingLevel: { source: 'provider_default' } });
+    const meta = updateRuntimeMeta.mock.calls.map(row => row[0]).find(m => m.launchRecord);
+    expect(meta.launchRecord.roleLaunch).toEqual(roleLaunch);
+    const restored = await createManager(setupLoader()).restoreHostedSessions([{ runtimeId: 'restored-role', cliType: 'sample-cli', workspace: workingDir,
+      launchRecord: JSON.parse(JSON.stringify(record)) }]);
+    expect(restored).toBe(1);
+    expect(registry.get('restored-role')?.launch).toMatchObject({ roleLaunch, model: { source }, thinkingLevel: { source: 'provider_default' }, launchedBy: 'restore' });
+  }, 15000);
+
   it('CLI, remembered value: the dialog-declared source is kept verbatim', async () => {
     const result = await createManager(setupLoader()).launchCli({
       cliType: 'sample-cli', dir: workingDir, initialModel: 'sonnet', modelSource: 'remembered', launchedBy: 'dashboard',

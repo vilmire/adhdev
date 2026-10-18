@@ -246,7 +246,10 @@ async function startCliPtySession(
     // a template consumed the request, absent when no template did (the
     // warnings above). A runtime-control thinking level (hermes) is applied
     // after spawn, so it stays requested-only here.
-    const cliLaunchRecord = buildSessionLaunchRecord({
+    const cliLaunchRecord = options?.restartRecord
+        ? { ...structuredClone(options.restartRecord), sessionId: key, launchedAt: Date.now() }
+        : buildSessionLaunchRecord({
+        roleLaunch: options?.launchProvenance?.roleLaunch,
         sessionId: key,
         providerType: normalizedType,
         providerVersion: (launchProvider as { providerVersion?: string } | undefined)?.providerVersion,
@@ -543,6 +546,8 @@ export type CliStartOptions = {
      * Phase E launch provenance: who launched the session and where the model /
      * thinking values came from. Absent → `api` launcher, `unspecified` sources.
      */
+    /** Restart replays the original launch argv and provenance, never newer defaults. */
+    restartRecord?: import('../sessions/launch-record.js').SessionLaunchRecord;
     launchProvenance?: LaunchProvenanceArgs & { launchedBy?: SessionLaunchedBy };
 };
 

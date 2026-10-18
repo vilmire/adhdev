@@ -83,8 +83,6 @@ export interface AssistantProjectPorts {
     coordinators(meshId: string): AssistantCoordinatorView[];
     /** Newest coordinator registry session of the mesh (live or not) — read_chat history fallback. */
     lastCoordinatorSessionId(meshId: string): string | null;
-    /** Mesh's last coordinator cliType, else the assistant's default; null → launch decides. */
-    cliTypeFor(meshId: string): string | null;
     queueCounts(meshId: string): QueueCounts | null;
     activeMissionCount(meshId: string): number | null;
     /** Local CLI sessions of the mesh (coordinator or worker) parked on an approval/choice. */
@@ -192,10 +190,6 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
             }));
         },
         lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
-        cliTypeFor: (meshId) => {
-            const fromMesh = lazy.listCoordinatorsForMesh(meshId).find((e) => readText(e.cliType))?.cliType;
-            return readText(fromMesh) || readText(lazy.assistantCliType()) || null;
-        },
         queueCounts: (meshId) => {
             try {
                 const s = lazy.getMeshQueueStats(meshId);
@@ -258,7 +252,6 @@ interface MeshReaders {
     getMeshQueueStats: typeof import('../mesh/mesh-work-queue.js').getMeshQueueStats;
     getMeshMissions: typeof import('../mesh/mesh-missions.js').getMeshMissions;
     assistantAliases: () => Record<string, string>;
-    assistantCliType: () => string | null;
     turnStore: () => import('../mesh/turn-ledger/store.js').TurnStore;
     meshStatusLine: (meshId: string) => string | null;
     /** Mesh ids of this daemon's member peer-secret records for a host (ids only — never the secret). */
@@ -289,7 +282,6 @@ export async function preloadAssistantProjectReaders(): Promise<void> {
         getMeshQueueStats: queue.getMeshQueueStats,
         getMeshMissions: missions.getMeshMissions,
         assistantAliases: () => assistantRegistry.reload()?.aliases ?? {},
-        assistantCliType: () => assistantRegistry.reload()?.cliType ?? null,
         turnStore: () => runtimeStore.MeshRuntimeStore.getInstance().turnStore(),
         meshStatusLine: (meshId) => statusLine.buildMeshStatusLineForNotification(meshId),
         peerHostMeshIds: (hostDaemonId) => {

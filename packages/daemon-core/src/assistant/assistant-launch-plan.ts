@@ -53,7 +53,6 @@ import { resolveWorkerMcpConfigPath } from '../mesh/worker-mcp-config.js';
 import type { ProviderModule } from '../providers/contracts.js';
 import type { ProviderAssistantEligibility } from '../shared-types.js';
 
-export const DEFAULT_ASSISTANT_CLI_TYPE = 'claude-cli';
 export const ASSISTANT_MCP_SERVER_NAME = 'adhdev-assistant';
 /**
  * Env every claude-cli assistant launch carries. Claude Code's auto memory

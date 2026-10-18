@@ -72,7 +72,6 @@ beforeEach(() => {
         aliases: () => ({}),
         coordinators: () => coordinators,
         lastCoordinatorSessionId: () => null,
-        cliTypeFor: () => 'claude-cli',
         queueCounts: () => ({ pending: 0, assigned: 1, failed: 0 }),
         activeMissionCount: () => 1,
         pendingApprovals: () => 0,

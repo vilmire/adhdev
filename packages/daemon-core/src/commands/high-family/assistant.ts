@@ -128,10 +128,8 @@ function remoteBody(out: Extract<RemoteCallOutcome, { ok: true }>): Record<strin
 export function coordinatorPorts(ports: AssistantProjectPorts): EnsureCoordinatorPorts {
     return {
         coordinators: (meshId) => ports.coordinators(meshId),
-        cliTypeFor: (meshId) => ports.cliTypeFor(meshId),
         launch: (input) => ports.execute('launch_mesh_coordinator', {
             meshId: input.meshId,
-            ...(input.cliType ? { cliType: input.cliType } : {}),
             extraSystemPrompt: input.extraSystemPrompt,
             managedByAssistant: input.managedByAssistant,
         }),

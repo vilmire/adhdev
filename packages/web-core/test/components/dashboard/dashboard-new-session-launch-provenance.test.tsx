@@ -68,7 +68,7 @@ function machine(providerType = 'claude'): DaemonData {
     } as DaemonData
 }
 
-function render(onLaunchProvider: ReturnType<typeof vi.fn>, providerType = 'claude') {
+function render(onLaunchProvider: ReturnType<typeof vi.fn>, providerType = 'claude', extra: Record<string, any> = {}) {
     act(() => {
         root.render(React.createElement(DashboardNewSessionDialog, {
             machines: [machine(providerType)],
@@ -81,12 +81,13 @@ function render(onLaunchProvider: ReturnType<typeof vi.fn>, providerType = 'clau
             onListMeshes: async () => [],
             onLaunchMeshCoordinator: async () => ({ ok: true }),
             onListSavedSessions: async () => [],
+            ...extra,
         }))
     })
 }
 
 function launchButton(): HTMLButtonElement {
-    const btn = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Start fresh')
+    const btn = [...document.body.querySelectorAll('button')].find((b) => ['Start fresh', 'Start mesh coordinator'].includes(b.textContent?.trim() || ''))
     if (!btn) throw new Error('launch button not found')
     return btn as HTMLButtonElement
 }
@@ -111,6 +112,23 @@ async function launch(): Promise<void> {
 }
 
 describe('DashboardNewSessionDialog — launch provenance (Phase E)', () => {
+    it('coordinator launch ignores and removes browser role choices, leaving selection to the daemon', async () => {
+        const key = 'adhdev.remember.new-session-mesh'
+        store.set(key, JSON.stringify({ meshId: 'm', cliType: 'unavailable-cli', model: 'stale-model', thinkingLevel: 'high' }))
+        const onLaunchMeshCoordinator = vi.fn(async () => ({ ok: true }))
+        render(vi.fn(), 'claude', { initialLaunchMode: 'mesh', initialMeshWorkspacePath: '/repo',
+            onListMeshes: async () => [{ id: 'm', name: 'M', workspace: '/repo' }], onLaunchMeshCoordinator })
+        await act(async () => { await Promise.resolve() })
+        const saved = [...document.body.querySelectorAll('button[role="radio"]')].find(b => b.textContent?.includes('Saved coordinator default'))!
+        expect(saved.getAttribute('aria-checked')).toBe('true')
+        await launch()
+        expect(onLaunchMeshCoordinator).toHaveBeenCalledWith('machine-1', 'm', '', expect.objectContaining({ initialModel: null, initialThinkingLevel: null }))
+        const remembered = JSON.parse(store.get(key)!)
+        expect(remembered).not.toHaveProperty('cliType')
+        expect(remembered).not.toHaveProperty('model')
+        expect(remembered).not.toHaveProperty('thinkingLevel')
+    })
+
     it('opts in a new Codex session without changing defaults or other providers', async () => {
         const onLaunchProvider = vi.fn(async () => ({ ok: true }))
         render(onLaunchProvider, 'codex-cli')

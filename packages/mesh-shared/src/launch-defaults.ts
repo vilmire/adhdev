@@ -57,7 +57,7 @@ export interface LaunchDefaultAxis {
 export type LaunchDefaultWarning = 'catalog_unverified' | 'manual_mcp_setup_required';
 export type LaunchDefaultValidationReason =
     | 'invalid_schema' | 'provider_unknown' | 'provider_not_cli' | 'provider_disabled'
-    | 'provider_not_detected' | 'provider_not_eligible' | 'model_unsupported'
+    | 'provider_not_detected' | 'provider_not_eligible' | 'provider_quota_gated' | 'model_unsupported'
     | 'model_provider_mismatch' | 'model_not_offered' | 'thinking_unsupported'
     | 'thinking_not_offered' | 'catalog_unavailable';
 export type LaunchDefaultResolution =

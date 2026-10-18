@@ -1,3 +1,5 @@
+import { useTransport } from '../../context/TransportContext'
+import { removeRetiredRoleLaunchMemory } from '../../utils/retired-role-launch-memory'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useDaemonMetadataLoader } from '../../hooks/useDaemonMetadataLoader'
@@ -73,6 +75,7 @@ export default function DashboardNewSessionDialog({
     initialMeshWorkspacePath,
 }: DashboardNewSessionDialogProps) {
     const { t } = useTranslation()
+    const { sendCommand } = useTransport()
     const loadDaemonMetadata = useDaemonMetadataLoader()
     const sortedMachines = useMemo(
         () => [...machines].sort(compareMachineEntries),
@@ -81,11 +84,13 @@ export default function DashboardNewSessionDialog({
     // Snapshot of the remembered (last successfully launched) choices, read once
     // per dialog open. Explicit initial* props always outrank these; every apply
     // below is one-shot and validated against the live option lists (fail-open).
-    const [remembered] = useState(() => ({
+    const [remembered] = useState(() => {
+        removeRetiredRoleLaunchMemory()
+        return ({
         dialog: readRememberedChoice(REMEMBER_SCOPE_DIALOG),
         workspace: readRememberedChoice(REMEMBER_SCOPE_WORKSPACE),
         mesh: readRememberedChoice(REMEMBER_SCOPE_MESH),
-    }))
+    }) })
     const [selectedMachineId, setSelectedMachineId] = useState(() => {
         if (initialMachineId && machines.some(machine => machine.id === initialMachineId)) return initialMachineId
         const rememberedMachineId = remembered.dialog?.machineId
@@ -111,6 +116,25 @@ export default function DashboardNewSessionDialog({
     const [meshError, setMeshError] = useState('')
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
+    const [coordinatorDefaultLabel, setCoordinatorDefaultLabel] = useState('')
+    useEffect(() => {
+        if (workspaceMode !== 'mesh') return
+        setSelectedTarget('__daemon_default__')
+    }, [workspaceMode])
+    useEffect(() => {
+        setCoordinatorDefaultLabel('')
+        if (workspaceMode !== 'mesh' || !selectedMachine?.id) return
+        let cancelled = false
+        void sendCommand(selectedMachine.id, 'launch_defaults_get', { role: 'coordinator',
+            ...(selectedMeshId ? { project: selectedMeshId } : {}) }).then(raw => {
+            const body = raw?.result || raw
+            const effective = body?.roles?.coordinator?.effective
+            if (!cancelled) setCoordinatorDefaultLabel(effective?.ok
+                ? [effective.selection.provider, effective.selection.model, effective.selection.thinkingLevel].filter(Boolean).join(' · ')
+                : effective?.reason || body?.error || '')
+        }).catch(() => { /* The launch command reports the store error. */ })
+        return () => { cancelled = true }
+    }, [workspaceMode, selectedMachine?.id, selectedMeshId, sendCommand])
     const [launchArgs, setLaunchArgs] = useState('')
     const [codexManagedQuestions, setCodexManagedQuestions] = useState(false)
     const [legacyAutoApprove, setLegacyAutoApprove] = useState(false)
@@ -181,7 +205,6 @@ export default function DashboardNewSessionDialog({
     )
     const pendingRememberedTargetRef = useRef<string | null>(remembered.workspace?.target || null)
     const pendingRememberedMeshIdRef = useRef<string | null>(remembered.mesh?.meshId || null)
-    const pendingRememberedMeshCliTypeRef = useRef<string | null>(remembered.mesh?.cliType || null)
     // Per-flow one-shot for the tuning block (model / thinking / auto-approve).
     const pendingRememberedWorkspaceTuningRef = useRef(true)
     const pendingRememberedMeshTuningRef = useRef(true)
@@ -234,23 +257,23 @@ export default function DashboardNewSessionDialog({
     )
     const providerTargets = useMemo(
         () => activeKind === 'cli'
-            ? cliProviders.map(provider => ({
+            ? [...(workspaceMode === 'mesh' ? [{ id: '__daemon_default__', label: 'Saved coordinator default', meta: coordinatorDefaultLabel }] : []), ...cliProviders.map(provider => ({
                 id: provider.type,
                 label: provider.displayName || provider.type,
                 meta: '',
-            }))
+            }))]
             : ideTargets,
-        [activeKind, cliProviders, ideTargets],
+        [activeKind, cliProviders, ideTargets, workspaceMode, coordinatorDefaultLabel],
     )
     // One grouped provider list (CLI, then IDE) instead of a category
     // chip row + a per-category list: picking a row sets kind and target together,
     // and the protocol is only a small hint on the row. Mesh coordinators are CLI-only.
     const launchTargets = useMemo(() => {
         const cli = cliProviders.map(provider => ({ kind: 'cli' as const, id: provider.type, label: provider.displayName || provider.type, meta: '' }))
-        if (workspaceMode === 'mesh') return cli
+        if (workspaceMode === 'mesh') return [{ kind: 'cli' as const, id: '__daemon_default__', label: 'Saved coordinator default', meta: coordinatorDefaultLabel }, ...cli]
         const ide = ideTargets.map(target => ({ kind: 'ide' as const, ...target }))
         return [...cli, ...ide]
-    }, [cliProviders, ideTargets, workspaceMode])
+    }, [cliProviders, ideTargets, workspaceMode, coordinatorDefaultLabel])
 
     const selectedMesh = useMemo(
         () => meshOptions.find(mesh => mesh.id === selectedMeshId) || null,
@@ -332,7 +355,6 @@ export default function DashboardNewSessionDialog({
                 pendingRememberedKindRef.current = null
                 pendingRememberedTargetRef.current = null
                 pendingRememberedMeshIdRef.current = null
-                pendingRememberedMeshCliTypeRef.current = null
                 pendingRememberedWorkspaceTuningRef.current = false
                 pendingRememberedMeshTuningRef.current = false
             }
@@ -476,17 +498,6 @@ export default function DashboardNewSessionDialog({
         setSelectedTarget(nextTarget)
     }, [activeKind, providerTargets, rememberedWorkspaceKind, selectedTarget, workspaceMode])
 
-    // Mesh flow keeps its own remembered CLI type: the coordinator CLI choice
-    // is independent from the workspace flow's provider pick. Applied once when
-    // the dialog is (or switches into) mesh mode and the CLI list is known.
-    useEffect(() => {
-        if (workspaceMode !== 'mesh') return
-        const rememberedCliType = pendingRememberedMeshCliTypeRef.current
-        if (!rememberedCliType || cliProviders.length === 0) return
-        pendingRememberedMeshCliTypeRef.current = null
-        if (cliProviders.some(provider => provider.type === rememberedCliType)) setSelectedTarget(rememberedCliType)
-    }, [cliProviders, workspaceMode])
-
     useEffect(() => {
         setMeshManualSetup(null)
     }, [selectedMachine?.id, selectedMeshId, selectedTarget, workspaceMode])
@@ -521,7 +532,16 @@ export default function DashboardNewSessionDialog({
         const pendingTuningRef = isMeshFlow ? pendingRememberedMeshTuningRef : pendingRememberedWorkspaceTuningRef
         if (!pendingTuningRef.current) return
         const values = isMeshFlow ? remembered.mesh : remembered.workspace
-        const valuesTarget = isMeshFlow ? values?.cliType : values?.target
+        // Role provider/model/thinking never come from browser memory.
+        if (isMeshFlow) {
+            if (values?.autoApproveModeId && autoApproveModes) {
+                const mode = autoApproveModes.modes.find((m: AutoApproveMode) => m.id === values.autoApproveModeId)
+                if (mode && deriveAutoApproveModeRisk(mode) !== 'dangerous') setSelectedAutoApproveModeId(mode.id)
+                pendingTuningRef.current = false
+            }
+            return
+        }
+        const valuesTarget = values?.target
         if (!values || valuesTarget !== selectedTarget) return
         pendingTuningRef.current = false
         const rememberedModel = values.model || ''
@@ -796,7 +816,7 @@ export default function DashboardNewSessionDialog({
             setBusy(true)
             setMessage('')
             setMeshManualSetup(null)
-            const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget, {
+            const result = await onLaunchMeshCoordinator(selectedMachine.id, selectedMeshId, selectedTarget === '__daemon_default__' ? '' : selectedTarget, {
                 initialModel: initialModel.trim() ? initialModel.trim() : null,
                 initialThinkingLevel: initialThinkingLevel.trim() ? initialThinkingLevel.trim() : null,
                 ...launchValueSources(modelChoice, thinkingChoice),
@@ -818,9 +838,6 @@ export default function DashboardNewSessionDialog({
             writeRememberedChoice(REMEMBER_SCOPE_DIALOG, { machineId: selectedMachine.id, mode: 'mesh' })
             writeRememberedChoice(REMEMBER_SCOPE_MESH, {
                 meshId: selectedMeshId,
-                cliType: selectedTarget,
-                model: initialModel.trim(),
-                thinkingLevel: initialThinkingLevel.trim(),
                 autoApproveModeId: selectedAutoApproveModeId,
             })
             onClose()
@@ -1104,7 +1121,6 @@ export default function DashboardNewSessionDialog({
                                 // Manual pick wins over any not-yet-applied remembered kind/target.
                                 pendingRememberedKindRef.current = null
                                 pendingRememberedTargetRef.current = null
-                                pendingRememberedMeshCliTypeRef.current = null
                                 setActiveKind(target.kind)
                                 setSelectedTarget(target.id)
                             }}

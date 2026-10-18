@@ -1,19 +1,6 @@
-/**
- * "Start assistant" (design 2026-10-07-assistant-layer.md §4.7): offered while
- * no assistant session exists and some machine can host one. Sends
- * `launch_assistant {cliType, model?, thinkingLevel?}` through the dashboard's normal command transport
- * (standalone REST/WS, cloud P2P) — the daemon is idempotent, so a double click
- * or a race with another dashboard returns the live session instead of a second one.
- *
- * The main click launches the default target (the remembered choice when still
- * eligible, else claude-cli, else the first eligible CLI) on the machine that
- * hosts the most projects — an assistant can only route work to projects
- * (meshes) hosted on its own daemon. Hosting comes from a one-shot `list_meshes`
- * fan-out while the button is on offer (the dashboard state carries no mesh
- * list); until it answers, machines keep the caller's order. `start(target)` from
- * the dropdown launches that CLI/machine (with its model / thinking level) and
- * remembers it (localStorage).
- */
+import { removeRetiredRoleLaunchMemory } from '../utils/retired-role-launch-memory'
+/** Assistant host selection and launch. The main click sends no role axes;
+ * the daemon resolves its saved default. Explicit picks affect one launch only. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DaemonData } from '../types'
 import type { ActiveConversation } from '../components/dashboard/types'
@@ -26,10 +13,8 @@ import {
     assistantLaunchArgs,
     countHostedProjectsByMachine,
     hasAssistantConversation,
-    readAssistantLaunchChoice,
     resolveAssistantLaunchOptions,
     shouldOfferStartAssistant,
-    writeAssistantLaunchChoice,
     type AssistantHostedProjectCounts,
     type AssistantLaunchTarget,
     type AssistantMachineOption,
@@ -109,35 +94,47 @@ export interface StartAssistantState {
     defaultTarget: AssistantLaunchTarget | null
     /** Machines and their CLIs for the dropdown (ineligible CLIs included, flagged). */
     machines: AssistantMachineOption[]
-    /** Launch `target` (a dropdown choice, remembered) or the default target. */
+    /** Launch an explicit dropdown choice or ask the daemon for its default. */
     start: (target?: AssistantLaunchTarget) => Promise<void>
 }
 
 export function useStartAssistant({ machineEntries, conversations, sendDaemonCommand }: UseStartAssistantOptions): StartAssistantState {
     const [pending, setPending] = useState(false)
     const [error, setError] = useState<string | null>(null)
-    const [choice, setChoice] = useState(() => readAssistantLaunchChoice())
     const inFlight = useRef(false)
+    useEffect(() => { removeRetiredRoleLaunchMemory() }, [])
     const hostedCounts = useHostedProjectCounts(machineEntries, sendDaemonCommand, !hasAssistantConversation(conversations))
     const options = useMemo(
-        () => resolveAssistantLaunchOptions(machineEntries, choice, hostedCounts),
-        [machineEntries, choice, hostedCounts],
+        () => resolveAssistantLaunchOptions(machineEntries, hostedCounts),
+        [machineEntries, hostedCounts],
     )
-    const defaultTarget = options.defaultTarget
+    // Machine ranking selects only the host. The daemon selects the role's CLI;
+    // the display is a read-only snapshot, never a remembered launch preference.
+    const [savedTarget, setSavedTarget] = useState<AssistantLaunchTarget | null>(null)
+    const defaultMachineId = options.defaultTarget?.machineId
+    useEffect(() => {
+        setSavedTarget(null)
+        if (!defaultMachineId) return
+        let cancelled = false
+        void sendDaemonCommand(defaultMachineId, 'launch_defaults_get', { role: 'assistant' }).then(raw => {
+            const result = raw?.result || raw
+            const selection = result?.roles?.assistant?.stored
+            if (!cancelled && selection?.provider) setSavedTarget({ machineId: defaultMachineId,
+                cliType: selection.provider, model: selection.model, thinkingLevel: selection.thinkingLevel })
+        }).catch(() => { /* The launch command surfaces an unavailable store. */ })
+        return () => { cancelled = true }
+    }, [defaultMachineId, sendDaemonCommand])
+    const defaultTarget = savedTarget?.machineId === defaultMachineId ? savedTarget : options.defaultTarget
     const visible = shouldOfferStartAssistant(conversations, defaultTarget)
 
     const start = useCallback(async (picked?: AssistantLaunchTarget) => {
         const target = picked || defaultTarget
         if (!target || inFlight.current) return
-        if (picked) {
-            writeAssistantLaunchChoice(picked)
-            setChoice({ ...picked })
-        }
         inFlight.current = true
         setPending(true)
         setError(null)
         try {
-            const res: any = await sendDaemonCommand(target.machineId, LAUNCH_ASSISTANT_COMMAND, assistantLaunchArgs(target))
+            const res: any = await sendDaemonCommand(target.machineId, LAUNCH_ASSISTANT_COMMAND, picked ? assistantLaunchArgs(picked) : {})
             const result = res?.result || res
             if (res?.success === false || result?.success === false) {
                 setError(String(result?.error || res?.error || result?.code || 'launch_assistant failed'))

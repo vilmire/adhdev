@@ -1,3 +1,4 @@
+import { restartHostedSession } from '../low-family/session-host.js';
 /**
  * RF-ROUTER MED family — CLI agent + saved-session + restart commands.
  *
@@ -411,6 +412,18 @@ export const cliAgentHandlers: Record<string, MedFamilyHandler> = {
             await ctx.stopIde(targetType, true);
             const launchResult = await ctx.launchIde({ ideType: targetType, enableCdp: true, workspace: args?.workspace });
             return { success: true, restarted: true, ideType: targetType, launch: launchResult };
+        }
+
+        const sessionId = readStringValue(args?.targetSessionId, args?.sessionId);
+        const recorded = sessionId ? ctx.deps.sessionRegistry.get?.(sessionId)?.launch : undefined;
+        const settings = sessionId ? ctx.deps.instanceManager.getInstance(sessionId)?.getState().settings : undefined;
+        const role = recorded?.roleLaunch || recorded?.launchedBy === 'assistant' || settings?.assistant || settings?.meshCoordinatorFor;
+        if (role && ctx.deps.sessionHostControl?.listSessions) {
+            const hosted = await ctx.deps.sessionHostControl.listSessions();
+            if (hosted.some(record => record.sessionId === sessionId)) {
+                const result = await restartHostedSession(ctx.deps, { sessionId });
+                return { ...result, restarted: result.success === true };
+            }
         }
 
         // CLI restart: delegate to CliManager

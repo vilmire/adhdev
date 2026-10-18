@@ -24,8 +24,6 @@ import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils
 
 /** Brand label used as the assistant conversation's primary label. */
 export const ASSISTANT_DISPLAY_LABEL = 'Assistant'
-/** The daemon's default (DEFAULT_ASSISTANT_CLI_TYPE in daemon-core assistant-launch-plan.ts). */
-export const DEFAULT_ASSISTANT_CLI_TYPE = 'claude-cli'
 export const LAUNCH_ASSISTANT_COMMAND = 'launch_assistant'
 
 type AssistantSource = { assistant?: boolean; settings?: Record<string, any> } | null | undefined
@@ -219,7 +217,7 @@ export function listAssistantLaunchMachines(
             .filter(provider => isLaunchableMachineProvider(provider, 'cli'))
             .map(cliOption)
         if (clis.length === 0) continue
-        const rank = (o: AssistantCliOption) => (o.supported ? 0 : 2) + (o.cliType === DEFAULT_ASSISTANT_CLI_TYPE ? 0 : 1)
+        const rank = (o: AssistantCliOption) => (o.supported ? 0 : 2) + (o.cliType === 'claude-cli' ? 0 : 1)
         clis.sort((a, b) => rank(a) - rank(b))
         out.push({
             machineId: machine.id,
@@ -232,72 +230,21 @@ export function listAssistantLaunchMachines(
     return out.sort((a, b) => b.hostedProjects - a.hostedProjects)
 }
 
-/**
- * Where the main "Start assistant" click launches: the remembered choice when
- * that machine is still listed and the CLI still eligible, else the first
- * machine — the one hosting the most projects, ties in the caller's order —
- * with an eligible CLI: claude-cli when eligible, else its first eligible CLI.
- * Null when no machine can host one — the affordance is then not shown.
- */
+/** Choose an assistant HOST only. The daemon alone selects its role provider. */
 export function pickAssistantLaunchTarget(
     machines: ReadonlyArray<DaemonData>,
-    preferred?: Partial<AssistantLaunchTarget> | null,
     hostedCounts?: AssistantHostedProjectCounts | null,
 ): AssistantLaunchTarget | null {
-    return resolveAssistantLaunchOptions(machines, preferred, hostedCounts).defaultTarget
+    return resolveAssistantLaunchOptions(machines, hostedCounts).defaultTarget
 }
 
 export function resolveAssistantLaunchOptions(
     machines: ReadonlyArray<DaemonData>,
-    preferred?: Partial<AssistantLaunchTarget> | null,
     hostedCounts?: AssistantHostedProjectCounts | null,
 ): AssistantLaunchOptions {
     const list = listAssistantLaunchMachines(machines, hostedCounts)
-    const eligible = (m: AssistantMachineOption, cliType?: string) => m.clis.find(c => c.supported && (!cliType || c.cliType === cliType))
-    if (preferred?.cliType) {
-        const candidates = preferred.machineId ? list.filter(m => m.machineId === preferred.machineId) : list
-        for (const m of candidates) {
-            const cli = eligible(m, preferred.cliType)
-            if (cli) return { machines: list, defaultTarget: assistantLaunchTargetFor(m.machineId, cli, preferred) }
-        }
-    }
-    for (const m of list) {
-        const cli = eligible(m)
-        if (cli) return { machines: list, defaultTarget: assistantLaunchTargetFor(m.machineId, cli) }
-    }
-    return { machines: list, defaultTarget: null }
-}
-
-/** localStorage key for the last CLI (and machine, model, thinking level) the picker launched. */
-export const ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY = 'adhdev_assistant_launch_choice'
-
-export function readAssistantLaunchChoice(
-    storage: Pick<Storage, 'getItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined,
-): Partial<AssistantLaunchTarget> | null {
-    try {
-        const raw = storage?.getItem(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)
-        if (!raw) return null
-        const parsed = JSON.parse(raw)
-        if (!parsed || typeof parsed.cliType !== 'string' || !parsed.cliType) return null
-        const opt = (key: 'machineId' | 'model' | 'thinkingLevel') => (typeof parsed[key] === 'string' && parsed[key] ? { [key]: parsed[key] as string } : {})
-        return { cliType: parsed.cliType, ...opt('machineId'), ...opt('model'), ...opt('thinkingLevel') }
-    } catch {
-        return null
-    }
-}
-
-export function writeAssistantLaunchChoice(
-    target: AssistantLaunchTarget,
-    storage: Pick<Storage, 'setItem'> | undefined = typeof localStorage !== 'undefined' ? localStorage : undefined,
-): void {
-    try {
-        storage?.setItem(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY, JSON.stringify({
-            machineId: target.machineId,
-            cliType: target.cliType,
-            ...(target.model ? { model: target.model } : {}),
-            ...(target.thinkingLevel ? { thinkingLevel: target.thinkingLevel } : {}),
-        }))
-    } catch { /* storage unavailable — the choice is a convenience */ }
+    const host = list.find(machine => machine.clis.some(cli => cli.supported))
+    return { machines: list, defaultTarget: host ? { machineId: host.machineId, cliType: '' } : null }
 }
 
 /** Show "Start assistant" only when no assistant session exists and a machine can host one. */

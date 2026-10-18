@@ -99,6 +99,17 @@ export class LaunchDefaultsStore {
                 : { status: 'invalid', reason: 'launch_defaults_schema_invalid' };
         } catch { return { status: 'invalid', reason: 'launch_defaults_json_invalid' }; }
     }
+    /** Resolve an entire launch against one snapshot under the writer's lock.
+     * The callback must be synchronous and read-only; release before launch effects. */
+    withSnapshot<T>(operation: (snapshot: LaunchDefaultsRead) => T): T {
+        const acquired = acquireOwnedLock(`${this.path}.lock`, this.lockOptions);
+        if (!acquired.ok) {
+            return operation(acquired.errno === 'ENOENT'
+                ? { status: 'missing', reason: 'launch_defaults_read_failed' }
+                : { status: 'unreadable', reason: acquired.reason });
+        }
+        try { return operation(this.read()); } finally { acquired.release(); }
+    }
     /** Call only after owner/tool authorization and staging decisions. */
     write(request: LaunchDefaultsWrite): LaunchDefaultsWriteResult {
         const fail = (code: Extract<LaunchDefaultsWriteResult, { ok: false }>['code'], reason: string): LaunchDefaultsWriteResult =>

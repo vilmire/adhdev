@@ -1,3 +1,4 @@
+import { resolveRoleLaunch, roleLaunchFailure, roleLaunchProvenance } from '../../launch-defaults/consumer.js';
 import { assistantExecution } from '../../assistant/assistant-execution.js';
 /**
  * Assistant session verbs (design docs/design/2026-10-07-assistant-layer.md
@@ -55,7 +56,7 @@ import { getAssistantProjectPorts } from '../../assistant/assistant-project-port
 import { projectSlugs } from '../../assistant/assistant-projects.js';
 import { isUnmanagedRepoIdentity, meshHostLabel } from '../../assistant/project-views.js';
 import {
-    DEFAULT_ASSISTANT_CLI_TYPE, assistantSessionSettings, assistantWorkspaceDir, planAssistantMcp,
+    assistantSessionSettings, assistantWorkspaceDir, planAssistantMcp,
     resolveAssistantApprovalSettings, type AssistantMcpConfigWrite,
 } from '../../assistant/assistant-launch-plan.js';
 
@@ -137,7 +138,7 @@ async function queuePreviousSessionNote(
     }
 }
 
-const launchAssistant: HighFamilyHandler = async (ctx, args) => {
+const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     const registry = getAssistantRegistry();
     const entry = registry.read();
     const { getAssistantRuntime } = await import('../../assistant/assistant-runtime.js');
@@ -147,8 +148,14 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
         return { success: true, launched: false, sessionId: entry.sessionId, cliType: entry.cliType, workspace: entry.workspace };
     }
 
-    let cliType = str(args?.cliType) || entry?.cliType || DEFAULT_ASSISTANT_CLI_TYPE;
-    cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ['cli']) || cliType;
+    const resolved = resolveRoleLaunch(ctx, 'assistant', {
+        ...(args?.cliType !== undefined ? { provider: args.cliType } : {}),
+        ...(args?.model !== undefined ? { model: args.model } : {}),
+        ...(args?.thinkingLevel !== undefined ? { thinkingLevel: args.thinkingLevel } : {}),
+    });
+    if (!resolved.ok) return roleLaunchFailure(resolved);
+    const { provider: cliType, model, thinkingLevel } = resolved.selection;
+    const provenance = roleLaunchProvenance('assistant', resolved);
     const provider = ctx.deps.providerLoader.resolve?.(cliType) || ctx.deps.providerLoader.getMeta(cliType);
     const configDir = getConfigDir();
     const workspace = assistantWorkspaceDir(configDir);
@@ -209,8 +216,6 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a: unknown): a is string => typeof a === 'string' && !!a.trim()));
     cliArgs.push(...mcp.cliArgs);
 
-    const model = str(args?.model);
-    const thinkingLevel = str(args?.thinkingLevel);
     // Same inject-then-remove as the coordinator (coordinator-injection-cleanup.ts):
     // after the session is ready, or at once when the launch fails or throws.
     const { scheduleInjectionCleanup, localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
@@ -223,8 +228,9 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
             env: Object.keys(launchEnv).length ? launchEnv : undefined,
             settings: assistantSessionSettings(approval.settings),
             assistantSessionKey,
-            ...(model ? { initialModel: model, modelSource: 'user' } : {}),
-            ...(thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: 'user' } : {}),
+            ...(model ? { initialModel: model } : {}),
+            ...(thinkingLevel ? { initialThinkingLevel: thinkingLevel } : {}),
+            ...provenance,
             launchedBy: 'assistant',
         }, 'ipc', { inProcess: true });
     } catch (e) {
@@ -256,7 +262,20 @@ const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const prevSid = previous?.sessionId ?? entry?.sessionId ?? null;
     if (runtime && prevSid && prevSid !== sessionId) void queuePreviousSessionNote(ctx, runtime, prevSid, sessionId);
     LOG.info('Assistant', `Launched ${cliType} assistant ${sessionId} in ${workspace} (prompt ${prompt.length} chars${restartNote ? ', restart note queued' : ''})`);
-    return { success: true, launched: true, sessionId, cliType, workspace, promptLength: prompt.length, restartNote };
+    return { success: true, launched: true, sessionId, cliType, workspace, promptLength: prompt.length, restartNote, ...provenance };
+};
+
+// A second start arriving during launch joins that operation. It must never
+// bind over the assistant the first start is still bringing up.
+const assistantStarts = new WeakMap<ReturnType<typeof getAssistantRegistry>, Promise<CommandRouterResult>>();
+const launchAssistant: HighFamilyHandler = (ctx, args) => {
+    const registry = getAssistantRegistry();
+    const pending = assistantStarts.get(registry);
+    if (pending) return pending.then(result => result.success ? { ...result, launched: false } : result);
+    const operation = launchAssistantOnce(ctx, args);
+    assistantStarts.set(registry, operation);
+    void operation.finally(() => { if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry); }).catch(() => {});
+    return operation;
 };
 
 const pendingRelays: HighFamilyHandler = async (ctx, args) => {

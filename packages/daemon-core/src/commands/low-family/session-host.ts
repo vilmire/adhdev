@@ -1,3 +1,6 @@
+import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
+import { validateLaunchDefault } from '../../launch-defaults/validate.js';
+import { createLaunchValidationPorts } from '../../launch-defaults/ports.js';
 /**
  * RF-ROUTER LOW family — session-host control commands.
  *
@@ -30,6 +33,8 @@ function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor |
             : null,
         cliType,
         workspace,
+        // Restart uses the hosted spawn argv and original role intent, never newer defaults.
+        launchRecord: record.meta?.launchRecord,
         cliArgs: Array.isArray(record.meta?.cliArgs) ? record.meta.cliArgs as string[] : [],
         providerSessionId: typeof record.meta?.providerSessionId === 'string'
             ? String(record.meta.providerSessionId)
@@ -155,6 +160,35 @@ async function traceSessionHostAction<T>(
     }
 }
 
+/** Restart replays the session host's own argv/env/record, never machine defaults.
+ * CLI restart shares this path for hosted roles so private HOME/MCP bindings survive. */
+export async function restartHostedSession(deps: LowFamilyContext['deps'], args: any) {
+    if (!deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
+    const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
+    if (!sessionId) return { success: false, error: 'sessionId required' };
+    const current = deps.sessionHostControl.listSessions
+        ? (await deps.sessionHostControl.listSessions()).find(item => item.sessionId === sessionId) : undefined;
+    const launch = parseSessionLaunchRecord(current?.meta?.launchRecord);
+    if (launch?.roleLaunch) {
+        const valid = validateLaunchDefault(launch.roleLaunch.role, launch.roleLaunch.selection,
+            createLaunchValidationPorts({ deps }));
+        if (!valid.ok) return { success: false, code: 'restart_selection_unavailable',
+            error: `Recorded provider '${launch.providerType}' cannot restart: ${valid.issue.reason}` };
+    }
+    const record = await traceSessionHostAction('session_host_restart_session', args, async () => {
+        const nextRecord = await deps.sessionHostControl!.restartSession(sessionId);
+        const hosted = toHostedCliRuntimeDescriptor(nextRecord);
+        if (hosted) {
+            await deps.cliManager.restoreHostedSessions([hosted]);
+        }
+        return nextRecord;
+    }, (result) => ({
+        ...summarizeSessionHostRecord(result),
+        restoredHostedSession: !!toHostedCliRuntimeDescriptor(result),
+    }));
+    return { success: true, record };
+}
+
 export const sessionHostHandlers: Record<string, LowFamilyHandler> = {
     session_host_get_diagnostics: async (ctx: LowFamilyContext, args: any) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
@@ -201,23 +235,7 @@ export const sessionHostHandlers: Record<string, LowFamilyHandler> = {
         return { success: true, record };
     },
 
-    session_host_restart_session: async (ctx: LowFamilyContext, args: any) => {
-        if (!ctx.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };
-        const sessionId = typeof args?.sessionId === 'string' ? args.sessionId : '';
-        if (!sessionId) return { success: false, error: 'sessionId required' };
-        const record = await traceSessionHostAction('session_host_restart_session', args, async () => {
-            const nextRecord = await ctx.deps.sessionHostControl!.restartSession(sessionId);
-            const hosted = toHostedCliRuntimeDescriptor(nextRecord);
-            if (hosted) {
-                await ctx.deps.cliManager.restoreHostedSessions([hosted]);
-            }
-            return nextRecord;
-        }, (result) => ({
-            ...summarizeSessionHostRecord(result),
-            restoredHostedSession: !!toHostedCliRuntimeDescriptor(result),
-        }));
-        return { success: true, record };
-    },
+    session_host_restart_session: (ctx, args) => restartHostedSession(ctx.deps, args),
 
     session_host_send_signal: async (ctx: LowFamilyContext, args: any) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: 'Session host control unavailable' };

@@ -1,3 +1,4 @@
+import { resolveRoleLaunch, roleLaunchFailure, roleLaunchProvenance } from '../../launch-defaults/consumer.js';
 /**
  * RF-ROUTER HIGH family — mesh coordinator launch.
  *
@@ -21,8 +22,6 @@ import { inspectMeshCoordinatorMcpServerPaths, resolveCoordinatorDisallowedTools
 import { normalizeMeshNodeId } from '@adhdev/mesh-shared';
 import { delegatedWorkerAutoApproveSettings } from '../../repo-mesh-types.js';
 import {
-    readProviderPriorityFromPolicy,
-    resolveProviderTypeFromPriority,
     readLiveMeshNodeWorkspace,
     buildMeshCoordinatorMcpServerEntry,
     getMcpServersKey,
@@ -190,27 +189,6 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                 const extraSystemPrompt = typeof args?.extraSystemPrompt === 'string'
                     ? args.extraSystemPrompt.trim()
                     : '';
-                // Optional per-launch model / thinking-level override for the
-                // coordinator session. Passed straight through to launch_cli,
-                // which applies them best-effort for providers that support it
-                // (claude --effort, codex model_reasoning_effort). Blank / absent
-                // => provider default. This is a launch-time override only; it is
-                // NOT persisted to the mesh coordinator config.
-                const initialModel = typeof args?.initialModel === 'string' && args.initialModel.trim()
-                    ? args.initialModel.trim()
-                    : null;
-                const initialThinkingLevel = typeof args?.initialThinkingLevel === 'string' && args.initialThinkingLevel.trim()
-                    ? args.initialThinkingLevel.trim()
-                    : null;
-                // Phase E launch provenance: a coordinator's model / thinking value is
-                // an explicit per-launch pick ('user') unless the dialog says it
-                // restored it from the last launch ('remembered'). Forwarded to
-                // launch_cli, which writes the session's launch record.
-                const coordinatorLaunchProvenance = {
-                    launchedBy: 'mesh' as const,
-                    ...(initialModel ? { modelSource: args?.modelSource === 'remembered' ? 'remembered' as const : 'user' as const } : {}),
-                    ...(initialThinkingLevel ? { thinkingLevelSource: args?.thinkingLevelSource === 'remembered' ? 'remembered' as const : 'user' as const } : {}),
-                };
                 // Optional per-launch approval-mode override, picked in the new-coordinator
                 // dialog. Takes precedence over the repo-declared providerDefaults inside
                 // delegatedWorkerAutoApproveSettings, same precedence rule as a delegated
@@ -397,32 +375,17 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     const effectiveMesh = applyRepoMeshConfig(mesh, repoMeshConfigLoad.config);
                     const buildEffectiveOperatingNotes = async (id: string) =>
                         mergeEffectiveOperatingNotes(repoMeshConfigLoad.config?.operatingNotes, await buildOperatingNotesBestEffort(id));
-                    if (!cliType) {
-                        const resolved = await resolveProviderTypeFromPriority({
-                            nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || 'coordinator'),
-                            providerPriority: readProviderPriorityFromPolicy(coordinatorNode.policy),
-                            providerLoader: ctx.deps.providerLoader,
-                            onStatusChange: ctx.deps.onStatusChange,
-                        });
-                        if (!resolved.providerType) {
-                            return {
-                                success: false,
-                                code: 'mesh_coordinator_provider_priority_unusable',
-                                error: resolved.error || 'No usable provider found from node providerPriority',
-                                meshId,
-                                cliType,
-                                workspace,
-                            };
-                        }
-                        cliType = resolved.providerType;
-                    }
-                    // COORD-ALIAS: canonicalize before the manifest gate. resolve()/getMeta()
-                    // are exact-type lookups, so an alias ('claude' for 'claude-cli') would
-                    // return no provider and misreport a coordinator-capable CLI as
-                    // mesh_coordinator_unsupported. Scope to cli — coordinator sessions
-                    // are never IDE-webview providers, and the unscoped direct match would
-                    // hit e.g. extension/codex (type 'codex') instead of cli/codex-cli.
-                    cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ['cli']) || cliType;
+                    const resolved = resolveRoleLaunch(ctx, 'coordinator', {
+                        ...(args?.cliType !== undefined ? { provider: args.cliType } : {}),
+                        ...(args?.initialModel !== undefined && args.initialModel !== null ? { model: args.initialModel } : {}),
+                        ...(args?.initialThinkingLevel !== undefined && args.initialThinkingLevel !== null ? { thinkingLevel: args.initialThinkingLevel } : {}),
+                    }, meshId);
+                    if (!resolved.ok) return roleLaunchFailure(resolved);
+                    cliType = resolved.selection.provider;
+                    const initialModel = resolved.selection.model;
+                    const initialThinkingLevel = resolved.selection.thinkingLevel;
+                    const coordinatorLaunchProvenance = { launchedBy: 'mesh' as const,
+                        ...roleLaunchProvenance('coordinator', resolved) };
                     const providerMeta = ctx.deps.providerLoader.resolve?.(cliType) || ctx.deps.providerLoader.getMeta(cliType);
                     const coordinatorSetup = resolveMeshCoordinatorSetup({
                         provider: providerMeta,

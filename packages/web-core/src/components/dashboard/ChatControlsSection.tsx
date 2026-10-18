@@ -35,6 +35,8 @@ export function readSessionLaunchSurface(entry: unknown): SessionLaunchSurface {
 const SOURCE_LABEL_DEFAULTS: Record<ModelAxisSource, string> = {
     user: 'chosen',
     remembered: 'remembered',
+    stored_default: 'saved default',
+    project_default: 'project default',
     mesh_slot: 'mesh slot',
     task_override: 'task',
     provider_default: 'default',

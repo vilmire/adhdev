@@ -29,6 +29,13 @@ let registry: AssistantRegistry;
 let runtime: AssistantRuntime | null;
 let launchCount: number;
 
+function loader(manifest: any) {
+    const p = { category: 'cli', modelLaunchArgs: ['--model', '{{model}}'],
+        thinkingLaunchArgs: ['--effort', '{{level}}'], thinkingLevelOptions: ['low', 'high'], ...manifest };
+    return { resolveAlias: (t: string) => t === 'claude' ? 'claude-cli' : t,
+        resolve: () => p, getMeta: () => p,
+        getAvailableProviderInfos: () => [{ type: p.type, enabled: true, installed: true }] };
+}
 const provider: any = {
     type: 'claude-cli',
     meshCoordinator: {
@@ -44,7 +51,7 @@ function ctx(): any {
         deps: {
             statusInstanceId: SELF,
             instanceManager: { getInstance: (id: string) => (live.has(id) ? { getState: () => ({ status: 'idle', settings: { assistant: true } }) } : undefined) },
-            providerLoader: { resolveAlias: (t: string) => (t === 'claude' ? 'claude-cli' : t), resolve: () => provider, getMeta: () => provider },
+            providerLoader: loader(provider),
         },
         components: () => ({ instanceManager: { getInstance: () => undefined }, cliManager: { adapters: new Map() } }),
         execute,
@@ -67,6 +74,8 @@ beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'adhdev-assistant-launch-'));
     prevConfigDir = process.env.ADHDEV_CONFIG_DIR;
     process.env.ADHDEV_CONFIG_DIR = dir;
+    writeFileSync(join(dir, 'launch-defaults.json'), JSON.stringify({ version: 1, revision: 1, history: [],
+        assistant: { provider: 'claude-cli', revision: 1, setBy: 'owner', setAt: 1 } }));
     live = new Set();
     launchCount = 0;
     execute = vi.fn(async (cmd: string) => {
@@ -139,7 +148,7 @@ describe('launch_assistant', () => {
             },
         };
         const c = ctx();
-        c.deps.providerLoader = { resolveAlias: (t: string) => t, resolve: () => codex, getMeta: () => codex };
+        c.deps.providerLoader = loader(codex);
         const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
         expect(r).toMatchObject({ success: true, cliType: 'codex-cli' });
         const [launch] = launchCalls();
@@ -169,7 +178,7 @@ describe('launch_assistant', () => {
                 },
             };
             const c = ctx();
-            c.deps.providerLoader = { resolveAlias: (t: string) => t, resolve: () => agy, getMeta: () => agy };
+            c.deps.providerLoader = loader(agy);
             const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'antigravity-cli' });
             expect(r).toMatchObject({ success: true, launched: true, cliType: 'antigravity-cli', workspace: join(dir, 'assistant') });
             const home = join(dir, 'assistant-home', 'antigravity-cli');
@@ -213,7 +222,7 @@ describe('launch_assistant', () => {
         try {
             const agy: any = { type: 'antigravity-cli', meshCoordinator: { supported: true, mcpConfig: { mode: 'auto_import', format: 'claude_mcp_json', path: '~/.gemini/config/mcp_config.json' } } };
             const c = ctx();
-            c.deps.providerLoader = { resolveAlias: (t: string) => t, resolve: () => agy, getMeta: () => agy };
+            c.deps.providerLoader = loader(agy);
             const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'antigravity-cli' });
             expect(r).toMatchObject({ success: false, code: 'assistant_private_home_failed' });
             expect(launchCalls()).toHaveLength(0);

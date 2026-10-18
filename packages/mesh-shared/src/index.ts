@@ -45,3 +45,5 @@ export * from './keyed-doc-delta'
 export * from './provider-approval'
 export * from './provider-question'
 export * from './launch-defaults'
+
+export * from './role-launch';

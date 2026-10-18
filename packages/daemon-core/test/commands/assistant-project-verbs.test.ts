@@ -67,7 +67,6 @@ beforeEach(() => {
         aliases: () => ({ main: 'mesh_a' }),
         coordinators: (meshId) => live[meshId] ?? [],
         lastCoordinatorSessionId: (meshId) => (meshId === 'mesh_a' ? 'coord-old' : null),
-        cliTypeFor: () => 'codex-cli',
         queueCounts: () => ({ pending: 2, assigned: 1, failed: 3 }),
         activeMissionCount: () => 1,
         pendingApprovals: () => 0,
@@ -241,7 +240,7 @@ describe('assistant_project_send', () => {
             success: true, project: 'adhdev', meshId: 'mesh_a',
             result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-1', messageId: 'assistant:mesh_a:turn7-1', attachedSkills: ['release-steps'] },
         });
-        expect(calls('launch_mesh_coordinator')).toEqual([{ meshId: 'mesh_a', cliType: 'codex-cli', extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT, managedByAssistant: true }]);
+        expect(calls('launch_mesh_coordinator')).toEqual([{ meshId: 'mesh_a', extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT, managedByAssistant: true }]);
         expect(calls('set_conversation_prefs')).toEqual([{ sessionId: 'coord-1', hidden: true }]);
         expect(calls('send_chat')).toEqual([{
             targetSessionId: 'coord-1',

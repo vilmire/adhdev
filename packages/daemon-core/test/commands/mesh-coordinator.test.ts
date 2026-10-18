@@ -55,11 +55,15 @@ function createAutoImportRouter(
   cliManager: { launchCli: ReturnType<typeof vi.fn> },
   sessionHostControl?: { listSessions?: ReturnType<typeof vi.fn> },
 ) {
+  // These tests exercise coordinator setup after explicit machine-default setup.
+  writeFileSync(join(process.env.ADHDEV_CONFIG_DIR!, 'launch-defaults.json'), JSON.stringify({ version: 1, revision: 1, history: [] }))
   return new DaemonCommandRouter({
     commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
     cliManager: cliManager as any,
     cdpManagers: new Map(),
     providerLoader: {
+      resolveAlias: (t: string) => t,
+      getAvailableProviderInfos: () => [{ type: provider.type, enabled: true, installed: true }],
       resolve: vi.fn(() => provider),
       getMeta: vi.fn(() => provider),
     } as any,
