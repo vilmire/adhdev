@@ -174,7 +174,7 @@ does not substitute for this task.
 
 ## Related verification
 
-From `oss/packages/daemon-core`, the final related run passed **39 tests across
+From `oss/packages/daemon-core`, the focused related run passed **39 tests across
 5 files** (38 unit/spawn checks and the real inheritance test):
 
 ```sh
@@ -191,3 +191,8 @@ enabled run had 1 failing test (nice latency); the intentional opt-out run had
 1 failing test (3 soft assertions). Both outcomes are part of the evidence.
 `check:windows-hide`, `check:boundaries`, `check:shape-guards`, `check:file-sizes`
 and both session-host package typechecks passed.
+
+A further `npx vitest run test/commands/cooperative-maintenance.test.ts` passed
+all **22 tests**. Its synthetic PID 1 spawn now explicitly opts out, just as the
+native-load retry fixture does, so no mocked PID reaches the real scheduler.
+Total related passing coverage: **61 tests across 6 selected files**.

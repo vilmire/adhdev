@@ -229,7 +229,7 @@ it('local PTY kill and resize refuse held state before harmless mocked native ef
     open(); const {NodePtyTransportFactory,__setNodePtyLoaderForTests}=await import('../../src/cli-adapters/pty-transport.js');
     const handle={pid:1,kill:vi.fn(),resize:vi.fn()};
     __setNodePtyLoaderForTests(()=>({spawn:()=>handle})); cleanup.push(()=>__setNodePtyLoaderForTests(null));
-    const transport=new NodePtyTransportFactory().spawn('synthetic',[],{cwd:root,env:{},cols:80,rows:24});
+    const transport=new NodePtyTransportFactory().spawn('synthetic',[],{cwd:root,env:{ADHDEV_CLI_CHILD_NICE:'0'},cols:80,rows:24});
     transport.resize(90,30);expect(handle.resize).toHaveBeenCalledTimes(1);handle.resize.mockClear();
     state={...state,epoch:1,phase:'held',release:undefined};writeCooperativeMaintenance(root,state);
     expect(()=>transport.kill()).toThrow('cooperative_maintenance_held');expect(()=>transport.resize(90,30)).toThrow('cooperative_maintenance_held');
