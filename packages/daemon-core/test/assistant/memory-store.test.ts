@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
     AssistantMemoryStore,
+    DEFAULT_MEMORY_BUDGETS,
     MAX_MEMORY_BUDGETS,
+    MEMORY_WARNING_THRESHOLD_PCT,
+    MIN_MEMORY_BUDGETS,
     parseMemoryEntries,
     renderMemorySnapshot,
     resolveMemoryBudgets,
@@ -91,26 +94,77 @@ describe('add / replace / remove', () => {
 
 describe('budget', () => {
     it('refuses (never truncates) a write that would exceed the budget', () => {
-        const s = mk({ memory: 30 });
-        expect(s.apply({ action: 'add', target: 'memory', content: 'x'.repeat(20) }, 'human').result).toBe('applied');
+        mkdirSync(join(dir, 'assistant', 'memory'), { recursive: true });
+        writeFileSync(memPath('MEMORY.md'), `${'a'.repeat(500)}\n§\n${'b'.repeat(500)}\n§\n${'c'.repeat(500)}\n§\n${'d'.repeat(500)}\n§\n${'e'.repeat(178)}\n`);
+        // 500*4 + 178 + 4*3 = 2,190 chars
+        const s = mk();
         const r = s.apply({ action: 'add', target: 'memory', content: 'y'.repeat(10) }, 'human');
-        // 20 + "\n§\n"(3) + 10 = 33 > 30
-        expect(r).toMatchObject({ result: 'memory_budget_exceeded', used: 33, budget: 30 });
-        expect(s.readFile('memory').entries).toEqual(['x'.repeat(20)]);
-        expect(s.apply({ action: 'add', target: 'memory', content: 'y'.repeat(7) }, 'human').result).toBe('applied'); // exactly 30
+        // 2190 + "\n§\n"(3) + 10 = 2203 > 2200
+        expect(r).toMatchObject({ result: 'memory_budget_exceeded', used: 2203, budget: 2200 });
+        expect(s.readFile('memory').entries).toHaveLength(5);
+        expect(s.apply({ action: 'add', target: 'memory', content: 'y'.repeat(7) }, 'human').result).toBe('applied'); // exactly 2,200
     });
 
     it('a shrinking write passes even when a human edit left the file over budget', () => {
         mkdirSync(join(dir, 'assistant', 'memory'), { recursive: true });
-        writeFileSync(memPath('MEMORY.md'), `${'a'.repeat(40)}\n§\nkeep`);
-        const s = mk({ memory: 20 });
+        writeFileSync(memPath('MEMORY.md'), `${'a'.repeat(2300)}\n§\nkeep`);
+        const s = mk();
         expect(s.apply({ action: 'remove', target: 'memory', match: 'aaa' }, 'human').result).toBe('applied');
         expect(s.readFile('memory').entries).toEqual(['keep']);
     });
 
-    it('budget overrides clamp to the 8,000 / 4,000 ceiling and fall back to Hermes defaults', () => {
+    it('budget overrides clamp to [2,200..8,800] / [1,375..5,500], never below current content, and fall back to defaults', () => {
+        expect(DEFAULT_MEMORY_BUDGETS).toEqual({ memory: 2200, user: 1375 });
+        expect(MIN_MEMORY_BUDGETS).toEqual({ memory: 2200, user: 1375 });
+        expect(MAX_MEMORY_BUDGETS).toEqual({ memory: 8800, user: 5500 });
         expect(resolveMemoryBudgets()).toEqual({ memory: 2200, user: 1375 });
-        expect(resolveMemoryBudgets({ memory: 99999, user: 0 })).toEqual({ memory: MAX_MEMORY_BUDGETS.memory, user: 1375 });
+        expect(resolveMemoryBudgets({ memory: 99999, user: 0 })).toEqual({ memory: 8800, user: 1375 });
+        expect(resolveMemoryBudgets({ memory: 1000, user: 500 })).toEqual({ memory: 2200, user: 1375 });
+        expect(resolveMemoryBudgets({ memory: 2200, user: 1375 }, { memory: 3100, user: 1900 })).toEqual({
+            memory: 3100,
+            user: 1900,
+        });
+    });
+
+    it('enforcement, usage %, and prompt snapshot all use the configured limit from assistant.json', () => {
+        mkdirSync(join(dir, 'assistant', 'memory'), { recursive: true });
+        writeFileSync(
+            memPath('MEMORY.md'),
+            `${'a'.repeat(500)}\n§\n${'b'.repeat(500)}\n§\n${'c'.repeat(500)}\n§\n${'d'.repeat(500)}\n§\n${'e'.repeat(178)}\n`,
+        ); // 2,190 chars
+        const s = mk();
+        expect(s.apply({ action: 'add', target: 'memory', content: 'z'.repeat(100) }, 'human').result).toBe('memory_budget_exceeded');
+        expect(s.usage().memory).toBe('100%');
+
+        const updated = s.setBudgets({ memory: 4400, user: 2750 });
+        expect(updated).toEqual({ memory: 4400, user: 2750 });
+        expect(s.usage().memory).toBe('50%');
+        expect(s.renderSnapshot().split('\n')[0]).toContain('MEMORY 2,190/4,400 = 50% · USER 0/2,750 = 0%');
+
+        // Enforcement now allows writes beyond 2,200 up to 4,400:
+        const applied = s.apply({ action: 'add', target: 'memory', content: 'z'.repeat(100) }, 'human');
+        expect(applied.result).toBe('applied');
+        // Cannot shrink below today's content (2,293 chars):
+        expect(s.setBudgets({ memory: 2200 }).memory).toBe(2293);
+    });
+
+    it('status() reports nearLimit when usage reaches >= 90%', () => {
+        expect(MEMORY_WARNING_THRESHOLD_PCT).toBe(90);
+        mkdirSync(join(dir, 'assistant', 'memory'), { recursive: true });
+        writeFileSync(
+            memPath('MEMORY.md'),
+            `${'a'.repeat(500)}\n§\n${'b'.repeat(500)}\n§\n${'c'.repeat(500)}\n§\n${'d'.repeat(471)}\n`,
+        ); // 1,980 / 2,200 = 90%
+        const s = mk();
+        const st = s.status();
+        expect(st.memory).toMatchObject({ used: 1980, budget: 2200, percent: 90, nearLimit: true });
+        expect(st.user).toMatchObject({ used: 0, budget: 1375, percent: 0, nearLimit: false });
+        expect(st.nearLimit).toBe(true);
+
+        s.setBudgets({ memory: 4400 });
+        const afterRaise = s.status();
+        expect(afterRaise.memory).toMatchObject({ used: 1980, budget: 4400, percent: 45, nearLimit: false });
+        expect(afterRaise.nearLimit).toBe(false);
     });
 });
 
@@ -127,7 +181,9 @@ describe('credential rejection', () => {
     });
 
     it('a secret that fails an earlier check (budget) is still kept out of the journal', () => {
-        const s = mk({ user: 10 });
+        mkdirSync(join(dir, 'assistant', 'memory'), { recursive: true });
+        writeFileSync(memPath('USER.md'), `${'a'.repeat(500)}\n§\n${'b'.repeat(500)}\n§\n${'c'.repeat(360)}\n`); // 1,366 chars
+        const s = mk();
         const secret = fakeSecret();
         expect(s.apply({ action: 'add', target: 'user', content: secret }, 'human').result).toBe('memory_budget_exceeded');
         expect(readFileSync(memPath('.journal.jsonl'), 'utf-8')).not.toContain(secret);
@@ -167,7 +223,12 @@ describe('origin staging', () => {
     });
 
     it('approving re-checks against the current file and keeps the staged write when it no longer fits', () => {
-        const s = mk({ memory: 25 });
+        mkdirSync(join(dir, 'assistant', 'memory'), { recursive: true });
+        writeFileSync(
+            memPath('MEMORY.md'),
+            `${'a'.repeat(500)}\n§\n${'b'.repeat(500)}\n§\n${'c'.repeat(500)}\n§\n${'d'.repeat(500)}\n§\n${'e'.repeat(167)}\n`,
+        ); // 2,179 chars
+        const s = mk();
         const st = s.apply({ action: 'add', target: 'memory', content: 'z'.repeat(15) }, 'relay');
         if (st.result !== 'staged') throw new Error('expected staged');
         s.apply({ action: 'add', target: 'memory', content: 'h'.repeat(15) }, 'human');

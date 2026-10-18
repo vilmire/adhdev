@@ -4378,5 +4378,22 @@
         "docs": "Documentación",
         "about": "Acerca de",
         "chats": "Chats"
+    },
+    "assistantMemoryLimits": {
+        "title": "Límites de memoria persistente del asistente",
+        "promptNote": "La memoria persistente se inyecta en cada prompt del asistente. Aumentar estos límites incrementa el tamaño del prompt en cada turno.",
+        "memoryLabel": "MEMORY (Entorno y reglas)",
+        "userLabel": "USER (Sobre el usuario)",
+        "usageSummary": "{{used}} / {{budget}} caracteres ({{percent}}%)",
+        "boundsHint": "Predeterminado: {{default}} · Mín.: {{min}} · Máx.: {{max}}",
+        "headerBadge": "Memoria {{percent}}%",
+        "warningTitle": "La memoria del asistente está cerca del límite (≥90%)",
+        "warningBody": "El uso de la memoria persistente es del 90% o superior. Combina o elimina entradas, o aumenta el límite en Ajustes para evitar que se rechacen nuevas escrituras.",
+        "save": "Guardar límites de memoria",
+        "saving": "Guardando…",
+        "saved": "Límites de memoria del asistente guardados.",
+        "saveFailed": "Error al guardar los límites de memoria del asistente.",
+        "resetDefaults": "Restablecer valores predeterminados"
     }
 }
+

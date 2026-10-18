@@ -100,7 +100,7 @@ describe('AssistantRegistry', () => {
         expect(() => r.updateSettings({ busyInputMode: 'yolo' as never })).toThrow(/busyInputMode/);
         r.updateSettings({ reviewTurn: false, memoryBudget: { memory: 99_999 } });
         expect(r.read()!.reviewTurn).toBe(false);
-        expect(r.memoryBudgets().memory).toBe(8000); // clamped by resolveMemoryBudgets
+        expect(r.memoryBudgets().memory).toBe(8800); // clamped by resolveMemoryBudgets
         r.markFirstRelay(7000);
         r.markFirstRelay(8000);
         expect(r.read()!.firstRelayAt).toBe(7000);

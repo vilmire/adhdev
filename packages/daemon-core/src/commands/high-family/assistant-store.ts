@@ -40,6 +40,7 @@ import { PROJECT_NOTE_CATEGORIES, type ProjectNoteCategory, type ProjectNoteOp, 
 import { detectCredential, isReviewOrigin, mustStage, scanWriteContent, type StoreWriteOrigin } from '../../assistant/store-guards.js';
 import { scanHermesHome, importFromHermes, type HermesImportRequest } from '../../assistant/skills/hermes-import.js';
 import type { MemoryOperation, MemoryTarget } from '../../assistant/memory/memory-store.js';
+import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import type { SkillManageOp } from '../../assistant/skills/skill-store.js';
 import { createLaunchDefaultsHandlers } from './launch-defaults.js';
 import { getLaunchDefaultsCommandPorts } from '../../launch-defaults/ports.js';
@@ -48,6 +49,8 @@ import { getLaunchDefaultsCommandPorts } from '../../launch-defaults/ports.js';
 export const ASSISTANT_TOOL_SOURCES = ['ipc', 'standalone'] as const;
 /** Owner (dashboard) sources — never `ipc`. */
 export const ASSISTANT_OWNER_SOURCES = ['p2p', 'ws', 'standalone'] as const;
+/** Owner-only verb for reading and setting persistent memory character limits. */
+export const ASSISTANT_MEMORY_LIMITS_COMMAND = 'assistant_memory_limits' as const;
 
 /** Result codes that mean "the verb did its job" (refusal codes → success:false). */
 const OK_RESULTS: ReadonlySet<string> = new Set(['applied', 'staged', 'memory_duplicate', 'ok', 'list', 'discarded']);
@@ -309,7 +312,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const action = str(args?.action) || 'resolve';
         if (action === 'list') {
             return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
-                launchDefaults: svc.launchDefaults?.list() ?? [] };
+                launchDefaults: svc.launchDefaults?.list() ?? [], memoryStatus: svc.memory.status() };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);
@@ -346,12 +349,32 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
             return invalidArgs('skill action must be pin, unpin, clear_review or restore');
         }
         if (target === 'memory') {
-            if (action !== 'remove') return invalidArgs('memory action must be remove');
+            if (action === 'get_limits') {
+                return { success: true, result: 'ok', ...svc.memory.status() };
+            }
+            if (action === 'set_limits') {
+                return applyMemoryLimitsUpdate(svc, args);
+            }
+            if (action !== 'remove') return invalidArgs('memory action must be remove, get_limits or set_limits');
             const file = str(args?.file) as MemoryTarget;
             if (file !== 'memory' && file !== 'user') return invalidArgs('file must be memory or user');
             return respond(svc.memory.apply({ action: 'remove', target: file, match: rawStr(args?.match) ?? '' }, 'owner'));
         }
         return invalidArgs('target must be skill or memory');
+    },
+
+    [ASSISTANT_MEMORY_LIMITS_COMMAND]: async (_ctx, args) => {
+        const svc = getAssistantServices();
+        const rawAction = str(args?.action);
+        const hasBudgetField = args !== null && typeof args === 'object' && ('memory' in args || 'user' in args);
+        const action = rawAction || (hasBudgetField ? 'set' : 'get');
+        if (action === 'get') {
+            return { success: true, result: 'ok', ...svc.memory.status() };
+        }
+        if (action === 'set') {
+            return applyMemoryLimitsUpdate(svc, args);
+        }
+        return invalidArgs('action must be get or set');
     },
 
     [ASSISTANT_VERB.importSkills]: async (ctx, args) => {
@@ -486,6 +509,28 @@ async function resolveStagedNote(ctx: HighFamilyContext, svc: AssistantServices,
     return respond(applied, wrap);
 }
 
+function applyMemoryLimitsUpdate(svc: AssistantServices, args: any): CommandRouterResult {
+    const hasMemory = args !== null && typeof args === 'object' && args.memory !== undefined;
+    const hasUser = args !== null && typeof args === 'object' && args.user !== undefined;
+    if (!hasMemory && !hasUser) {
+        return invalidArgs('memory or user limit required');
+    }
+    if (hasMemory && (typeof args.memory !== 'number' || !Number.isFinite(args.memory))) {
+        return invalidArgs('memory limit must be a finite number');
+    }
+    if (hasUser && (typeof args.user !== 'number' || !Number.isFinite(args.user))) {
+        return invalidArgs('user limit must be a finite number');
+    }
+    svc.memory.setBudgets({
+        ...(hasMemory ? { memory: args.memory } : {}),
+        ...(hasUser ? { user: args.user } : {}),
+    });
+    try {
+        getAssistantRegistry().reload();
+    } catch { /* registry singleton may not be initialized in unit tests */ }
+    return { success: true, result: 'applied', ...svc.memory.status() };
+}
+
 export const assistantStoreSpecs = defineCommandSpecs('high', assistantStoreHandlers, {
     [ASSISTANT_VERB.memory]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.skillView]: { sources: [...ASSISTANT_TOOL_SOURCES] },
@@ -493,5 +538,6 @@ export const assistantStoreSpecs = defineCommandSpecs('high', assistantStoreHand
     [ASSISTANT_VERB.projectNote]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.stagedResolve]: { sources: [...ASSISTANT_OWNER_SOURCES] },
     [ASSISTANT_VERB.storeAdmin]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+    [ASSISTANT_MEMORY_LIMITS_COMMAND]: { sources: [...ASSISTANT_OWNER_SOURCES] },
     [ASSISTANT_VERB.importSkills]: { sources: [...ASSISTANT_OWNER_SOURCES] },
 });

@@ -9,7 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
-import { assistantStoreHandlers, assistantToolGate } from '../../src/commands/high-family/assistant-store.js';
+import { ASSISTANT_MEMORY_LIMITS_COMMAND, assistantStoreHandlers, assistantToolGate } from '../../src/commands/high-family/assistant-store.js';
+import { DaemonCommandRouter } from '../../src/commands/router.js';
 import { createAssistantServices, setAssistantServicesForTests, type AssistantServices } from '../../src/assistant/assistant-services.js';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
 import { setAssistantProjectPortsForTests, type AssistantProjectPorts } from '../../src/assistant/assistant-project-ports.js';
@@ -352,6 +353,79 @@ describe('owner verbs', () => {
         expect(real).toMatchObject({ success: true, dryRun: false, operatingNoteResults: [{ result: 'applied', meshId: 'mesh_a' }] });
         expect(record).toHaveBeenCalledWith('mesh_a', expect.objectContaining({ text: 'oss commits are in English', sourceCoordinator: 'assistant:owner' }));
         expect(svc.memory.readFile('memory').entries).toEqual(['Windows git spawn is slow']);
+    });
+
+    it('assistant_memory_limits accepts owner sources (p2p, ws, standalone), rejects ipc, clamps limits, and updates enforcement + usage %', async () => {
+        const router = new DaemonCommandRouter({} as any);
+        // IPC is rejected by the command router:
+        const ipcDenied = await router.execute(
+            ASSISTANT_MEMORY_LIMITS_COMMAND,
+            { action: 'set', memory: 8800, user: 5500 },
+            'ipc',
+        );
+        expect(ipcDenied).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+
+        // Owner sources (p2p, ws, standalone) succeed:
+        for (const source of ['p2p', 'ws', 'standalone'] as const) {
+            const readRes = await router.execute(
+                ASSISTANT_MEMORY_LIMITS_COMMAND,
+                { action: 'get' },
+                source,
+            );
+            expect(readRes).toMatchObject({
+                success: true,
+                result: 'ok',
+                memory: { used: 0, budget: 2200, percent: 0, nearLimit: false },
+                user: { used: 0, budget: 1375, percent: 0, nearLimit: false },
+                defaults: { memory: 2200, user: 1375 },
+                max: { memory: 8800, user: 5500 },
+                warningThresholdPct: 90,
+            });
+        }
+
+        // Set limits via owner source (clamps above 8800/5500 and below 2200/1375):
+        const clampedMax = await router.execute(
+            ASSISTANT_MEMORY_LIMITS_COMMAND,
+            { action: 'set', memory: 50_000, user: 100 },
+            'p2p',
+        );
+        expect(clampedMax).toMatchObject({
+            success: true,
+            result: 'applied',
+            memory: { budget: 8800 },
+            user: { budget: 1375 },
+        });
+
+        // Set custom budget (4,400 / 2,750) and verify enforcement + usage %:
+        await router.execute(
+            ASSISTANT_MEMORY_LIMITS_COMMAND,
+            { action: 'set', memory: 4400, user: 2750 },
+            'standalone',
+        );
+        svc.inputLog.append(SID, 'human');
+        for (const [i, len] of [[1, 500], [2, 500], [3, 500], [4, 500], [5, 178]] as const) {
+            const chunk = `rule ${i} `.padEnd(len, 'w');
+            await run(ASSISTANT_VERB.memory, { action: 'add', target: 'memory', text: chunk, assistantSessionId: SID });
+        }
+        // 2,190 chars used; adding 100 chars (total 2,293 > 2,200 default) succeeds under 4,400 limit:
+        const writeOverDefault = await run(ASSISTANT_VERB.memory, {
+            action: 'add',
+            target: 'memory',
+            text: 'rule 6 '.padEnd(100, 'w'),
+            assistantSessionId: SID,
+        });
+        expect(writeOverDefault).toMatchObject({
+            success: true,
+            result: 'applied',
+            usage: { memory: '52%', user: '0%' },
+        });
+
+        // Staged resolve list includes memoryStatus for the dashboard header/Inbox:
+        const listed = await run(ASSISTANT_VERB.stagedResolve, { action: 'list' });
+        expect(listed.memoryStatus).toMatchObject({
+            memory: { used: 2293, budget: 4400, percent: 52, nearLimit: false },
+            user: { used: 0, budget: 2750, percent: 0, nearLimit: false },
+        });
     });
 });
 

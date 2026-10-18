@@ -16,12 +16,36 @@
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared'
 
 export const ASSISTANT_STAGED_COMMAND = ASSISTANT_VERB.stagedResolve
+export const ASSISTANT_MEMORY_LIMITS_COMMAND = 'assistant_memory_limits' as const
 
 /** What the write changes: the assistant's own memory, the person's profile, a skill, a project note,
  * or this machine's launch default for a role (assistant / coordinator). */
 export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault'
 export type AssistantStagedLaunchRole = 'assistant' | 'coordinator'
 export type AssistantStagedDecision = 'apply' | 'discard'
+
+export interface AssistantMemoryTargetStatus {
+    used: number
+    budget: number
+    percent: number
+    usage: string
+    nearLimit: boolean
+    defaultBudget: number
+    min: number
+    max: number
+}
+
+export interface AssistantMemoryStatus {
+    budgets: { memory: number; user: number }
+    defaults: { memory: number; user: number }
+    min: { memory: number; user: number }
+    max: { memory: number; user: number }
+    warningThresholdPct: number
+    nearLimit: boolean
+    usage: { memory: string; user: string }
+    memory: AssistantMemoryTargetStatus
+    user: AssistantMemoryTargetStatus
+}
 
 export interface AssistantStagedItem {
     id: string
@@ -68,12 +92,16 @@ function s(v: unknown): string {
     return typeof v === 'string' ? v : ''
 }
 
+function num(v: unknown, fallback: number): number {
+    return typeof v === 'number' && Number.isFinite(v) ? v : fallback
+}
+
 /** Cloud wraps the daemon answer once (`{success, result:{…}}`); standalone does not. */
 export function unwrapStagedAnswer(raw: unknown): Record<string, any> | null {
     const r = rec(raw)
     if (!r) return null
     const inner = rec(r.result)
-    return inner && (Array.isArray(inner.memory) || Array.isArray(inner.results) || 'success' in inner) ? inner : r
+    return inner && (Array.isArray(inner.memory) || Array.isArray(inner.results) || 'success' in inner || rec(inner.memory)) ? inner : r
 }
 
 function base(r: Record<string, any>, kind: AssistantStagedKind, action: string, target: string): AssistantStagedItem | null {
@@ -237,3 +265,52 @@ export function parseResolveOutcomes(raw: unknown, ids: ReadonlyArray<string>): 
     for (const id of ids) out[id] = ok ? { ok: true } : { ok: false, code: codeOf(r, 'failed') }
     return out
 }
+
+function parseTargetStatus(raw: unknown, defaultBudget: number, maxBudget: number): AssistantMemoryTargetStatus | null {
+    const r = rec(raw)
+    if (!r || typeof r.used !== 'number' || typeof r.budget !== 'number') return null
+    const used = Math.max(0, Math.floor(r.used))
+    const budget = Math.max(1, Math.floor(r.budget))
+    const percent = typeof r.percent === 'number' && Number.isFinite(r.percent)
+        ? Math.round(r.percent)
+        : Math.round((used / budget) * 100)
+    const def = num(r.defaultBudget, defaultBudget)
+    const max = num(r.max, maxBudget)
+    const min = num(r.min, Math.min(max, Math.max(def, used)))
+    return {
+        used,
+        budget,
+        percent,
+        usage: s(r.usage) || `${percent}%`,
+        nearLimit: typeof r.nearLimit === 'boolean' ? r.nearLimit : percent >= 90,
+        defaultBudget: def,
+        min,
+        max,
+    }
+}
+
+/**
+ * Parse `AssistantMemoryStatus` from either `assistant_staged_resolve {action:'list'}`
+ * (`memoryStatus` field) or `assistant_memory_limits` (top-level status fields).
+ */
+export function parseStagedMemoryStatus(raw: unknown): AssistantMemoryStatus | null {
+    const outer = unwrapStagedAnswer(raw)
+    if (!outer || outer.success === false) return null
+    const src = rec(outer.memoryStatus) ?? outer
+    const memory = parseTargetStatus(src.memory, 2200, 8800)
+    const user = parseTargetStatus(src.user, 1375, 5500)
+    if (!memory || !user) return null
+    const warningThresholdPct = num(src.warningThresholdPct, 90)
+    return {
+        budgets: { memory: memory.budget, user: user.budget },
+        defaults: { memory: memory.defaultBudget, user: user.defaultBudget },
+        min: { memory: memory.min, user: user.min },
+        max: { memory: memory.max, user: user.max },
+        warningThresholdPct,
+        nearLimit: typeof src.nearLimit === 'boolean' ? src.nearLimit : memory.nearLimit || user.nearLimit,
+        usage: { memory: memory.usage, user: user.usage },
+        memory,
+        user,
+    }
+}
+

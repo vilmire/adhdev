@@ -231,7 +231,7 @@ export class AssistantRegistry {
     }
 
     memoryBudgets(): MemoryBudgets {
-        return resolveMemoryBudgets(this.read()?.memoryBudget);
+        return resolveMemoryBudgets(this.read()?.memoryBudget ?? this.loadMemoryBudget());
     }
 
     /**
@@ -243,6 +243,7 @@ export class AssistantRegistry {
      */
     bindSession(input: BindAssistantSessionInput): { entry: AssistantRegistryEntry; previous: AssistantTurnState | null } {
         const prev = this.read();
+        const preLaunchBudget = prev ? undefined : this.loadMemoryBudget();
         const sameSession = !!prev && prev.sessionId === input.sessionId;
         const next: AssistantRegistryEntry = {
             ...(prev ?? {
@@ -254,6 +255,7 @@ export class AssistantRegistry {
                 executionEnabled: true,
                 executionRevision: 0,
                 lastTurnState: null,
+                ...(preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}),
             }),
             sessionId: input.sessionId,
             cliType: input.cliType,
@@ -287,7 +289,7 @@ export class AssistantRegistry {
         }
         if (patch.memoryBudget !== undefined) {
             const b = normalizeBudget(patch.memoryBudget);
-            if (b) next.memoryBudget = b;
+            if (b) next.memoryBudget = resolveMemoryBudgets({ ...(prev.memoryBudget ?? {}), ...b });
             else delete next.memoryBudget;
         }
         return this.write(next);
@@ -369,6 +371,18 @@ export class AssistantRegistry {
         }
     }
 
+    private loadMemoryBudget(): Partial<MemoryBudgets> | undefined {
+        if (!existsSync(this.path)) return undefined;
+        try {
+            const parsed = JSON.parse(readFileSync(this.path, 'utf-8')) as Record<string, unknown> | null;
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                ? normalizeBudget(parsed.memoryBudget)
+                : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     private write(entry: AssistantRegistryEntry): AssistantRegistryEntry {
         this.keepCorruptAside();
         writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}\n`);
@@ -380,7 +394,9 @@ export class AssistantRegistry {
     private keepCorruptAside(): void {
         if (!existsSync(this.path)) return;
         try {
-            if (normalizeAssistantRegistryEntry(JSON.parse(readFileSync(this.path, 'utf-8')))) return;
+            const parsed = JSON.parse(readFileSync(this.path, 'utf-8'));
+            if (normalizeAssistantRegistryEntry(parsed)) return;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && normalizeBudget((parsed as Record<string, unknown>).memoryBudget)) return;
         } catch { /* corrupt → fall through */ }
         try {
             renameSync(this.path, `${this.path}.corrupt-${Date.now()}`);

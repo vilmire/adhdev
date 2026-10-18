@@ -52,24 +52,63 @@ export const MEMORY_JOURNAL_FILE = '.journal.jsonl';
 
 /** Hermes defaults (§4.10.1, Q5). */
 export const DEFAULT_MEMORY_BUDGETS: Readonly<MemoryBudgets> = { memory: 2200, user: 1375 };
-/** Ceiling for an `assistant.json` `memoryBudget` override. */
-export const MAX_MEMORY_BUDGETS: Readonly<MemoryBudgets> = { memory: 8000, user: 4000 };
+/** Lower bound for an `assistant.json` `memoryBudget` override (never shrink below default). */
+export const MIN_MEMORY_BUDGETS: Readonly<MemoryBudgets> = DEFAULT_MEMORY_BUDGETS;
+/** Ceiling for an `assistant.json` `memoryBudget` override (4× defaults). */
+export const MAX_MEMORY_BUDGETS: Readonly<MemoryBudgets> = { memory: 8800, user: 5500 };
+/** Usage percentage at or above which the dashboard warns the owner. */
+export const MEMORY_WARNING_THRESHOLD_PCT = 90;
 export const MAX_MEMORY_ENTRY_CHARS = 500;
 export const MEMORY_ENTRY_SEPARATOR = '\n§\n';
 export const STAGED_WRITE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const CANDIDATE_PREVIEW_CHARS = 60;
+const ASSISTANT_CONFIG_FILE = 'assistant.json';
 
 export interface MemoryBudgets {
     memory: number;
     user: number;
 }
 
-/** Clamp an override to [1, MAX]; missing / non-integer values fall back to the default. */
-export function resolveMemoryBudgets(override?: Partial<MemoryBudgets> | null): MemoryBudgets {
+export interface MemoryTargetStatus {
+    used: number;
+    budget: number;
+    percent: number;
+    usage: string;
+    nearLimit: boolean;
+    defaultBudget: number;
+    min: number;
+    max: number;
+}
+
+export interface AssistantMemoryStatus {
+    budgets: MemoryBudgets;
+    defaults: MemoryBudgets;
+    min: MemoryBudgets;
+    max: MemoryBudgets;
+    warningThresholdPct: number;
+    nearLimit: boolean;
+    usage: { memory: string; user: string };
+    memory: MemoryTargetStatus;
+    user: MemoryTargetStatus;
+}
+
+/**
+ * Clamp an override to [max(MIN, currentUsed), MAX]; missing / non-finite
+ * values fall back to the default (clamped up to currentUsed when content is larger).
+ */
+export function resolveMemoryBudgets(
+    override?: Partial<MemoryBudgets> | null,
+    currentUsed?: Partial<MemoryBudgets> | null,
+): MemoryBudgets {
     const pick = (t: MemoryTarget): number => {
+        const used = currentUsed?.[t];
+        const usedFloor = typeof used === 'number' && Number.isFinite(used) ? Math.max(0, Math.floor(used)) : 0;
+        const min = Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], usedFloor));
         const v = override?.[t];
-        if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) return DEFAULT_MEMORY_BUDGETS[t];
-        return Math.min(v, MAX_MEMORY_BUDGETS[t]);
+        if (typeof v !== 'number' || !Number.isFinite(v)) {
+            return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(min, DEFAULT_MEMORY_BUDGETS[t]));
+        }
+        return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(min, Math.floor(v)));
     };
     return { memory: pick('memory'), user: pick('user') };
 }
@@ -133,8 +172,16 @@ function serialize(entries: readonly string[]): string {
     return entries.length ? `${entries.join(MEMORY_ENTRY_SEPARATOR)}\n` : '';
 }
 
+export function usagePercentNumber(used: number, budget: number): number {
+    return budget > 0 ? Math.round((used / budget) * 100) : 0;
+}
+
 export function usagePercent(used: number, budget: number): string {
-    return `${Math.round((used / budget) * 100)}%`;
+    return `${usagePercentNumber(used, budget)}%`;
+}
+
+export function isMemoryNearLimit(used: number, budget: number): boolean {
+    return usagePercentNumber(used, budget) >= MEMORY_WARNING_THRESHOLD_PCT;
 }
 
 // ── Operations & results ────────────────────────────────────────────────────
@@ -228,17 +275,54 @@ export interface AssistantMemoryStoreOptions {
 }
 
 export class AssistantMemoryStore {
+    readonly configDir: string;
+    readonly configPath: string;
     readonly memoryDir: string;
     readonly stagedDir: string;
-    readonly budgets: MemoryBudgets;
+    private budgetOverride: Partial<MemoryBudgets> | null | undefined;
     private readonly now: () => Date;
 
     constructor(opts: AssistantMemoryStoreOptions = {}) {
-        const assistantDir = join(opts.configDir ?? getConfigDir(), 'assistant');
+        this.configDir = opts.configDir ?? getConfigDir();
+        this.configPath = join(this.configDir, ASSISTANT_CONFIG_FILE);
+        const assistantDir = join(this.configDir, 'assistant');
         this.memoryDir = join(assistantDir, 'memory');
         this.stagedDir = join(assistantDir, 'staged');
-        this.budgets = resolveMemoryBudgets(opts.budgets);
+        this.budgetOverride = opts.budgets;
         this.now = opts.now ?? (() => new Date());
+    }
+
+    get budgets(): MemoryBudgets {
+        return resolveMemoryBudgets(this.readConfiguredBudgets(), {
+            memory: this.readRawUsed('memory'),
+            user: this.readRawUsed('user'),
+        });
+    }
+
+    /**
+     * Persist owner-configured memory limits to `<configDir>/assistant.json`
+     * (`memoryBudget`) after clamping to [max(MIN, currentUsed), MAX].
+     */
+    setBudgets(patch: Partial<MemoryBudgets>): MemoryBudgets {
+        const currentUsed = {
+            memory: this.readRawUsed('memory'),
+            user: this.readRawUsed('user'),
+        };
+        const current = this.readConfiguredBudgets() ?? {};
+        const resolved = resolveMemoryBudgets({ ...current, ...patch }, currentUsed);
+        this.budgetOverride = resolved;
+        let doc: Record<string, unknown> = {};
+        if (existsSync(this.configPath)) {
+            try {
+                const parsed = JSON.parse(readFileSync(this.configPath, 'utf-8'));
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    doc = { ...(parsed as Record<string, unknown>) };
+                }
+            } catch { /* corrupt file kept or overwritten by registry; keep doc minimal if unreadable */ }
+        }
+        doc.memoryBudget = resolved;
+        writeFileAtomic600(this.configPath, `${JSON.stringify(doc, null, 2)}\n`);
+        return resolved;
     }
 
     filePath(target: MemoryTarget): string {
@@ -251,8 +335,9 @@ export class AssistantMemoryStore {
 
     /** Read one file. Never throws: missing → empty, undecodable → `unreadable`. */
     readFile(target: MemoryTarget): MemoryFileState {
-        const budget = this.budgets[target];
-        const empty: MemoryFileState = { target, entries: [], invalid: [], used: 0, budget };
+        const configured = this.readConfiguredBudgets();
+        const defaultBudget = resolveMemoryBudgets(configured)[target];
+        const empty: MemoryFileState = { target, entries: [], invalid: [], used: 0, budget: defaultBudget };
         const path = this.filePath(target);
         if (!existsSync(path)) return empty;
         let text: string;
@@ -275,7 +360,12 @@ export class AssistantMemoryStore {
             const problem = entryProblem(e);
             if (problem) invalid.push({ index, problem, preview: firstChars(e, CANDIDATE_PREVIEW_CHARS) });
         });
-        return { target, entries, invalid, used: usedOf(entries), budget };
+        const used = usedOf(entries);
+        // Note: if a human hand-edited the file past the configured budget, keep
+        // the configured budget as `budget` so `renderClampedMemorySnapshot` and
+        // `usage()` report over-budget (>100%) and clamp entries to `budget`.
+        // `resolveMemoryBudgets(configured)` enforces [MIN_MEMORY_BUDGETS, MAX_MEMORY_BUDGETS].
+        return { target, entries, invalid, used, budget: defaultBudget };
     }
 
     read(): { memory: MemoryFileState; user: MemoryFileState } {
@@ -285,6 +375,38 @@ export class AssistantMemoryStore {
     usage(): { memory: string; user: string } {
         const s = this.read();
         return { memory: usagePercent(s.memory.used, s.memory.budget), user: usagePercent(s.user.used, s.user.budget) };
+    }
+
+    status(): AssistantMemoryStatus {
+        const s = this.read();
+        const buildTarget = (t: MemoryTarget): MemoryTargetStatus => {
+            const st = s[t];
+            const percent = usagePercentNumber(st.used, st.budget);
+            const min = Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], st.used));
+            return {
+                used: st.used,
+                budget: st.budget,
+                percent,
+                usage: usagePercent(st.used, st.budget),
+                nearLimit: isMemoryNearLimit(st.used, st.budget),
+                defaultBudget: DEFAULT_MEMORY_BUDGETS[t],
+                min,
+                max: MAX_MEMORY_BUDGETS[t],
+            };
+        };
+        const memory = buildTarget('memory');
+        const user = buildTarget('user');
+        return {
+            budgets: { memory: memory.budget, user: user.budget },
+            defaults: { ...DEFAULT_MEMORY_BUDGETS },
+            min: { memory: memory.min, user: user.min },
+            max: { ...MAX_MEMORY_BUDGETS },
+            warningThresholdPct: MEMORY_WARNING_THRESHOLD_PCT,
+            nearLimit: memory.nearLimit || user.nearLimit,
+            usage: { memory: memory.usage, user: user.usage },
+            memory,
+            user,
+        };
     }
 
     /** The frozen snapshot block for the assistant system prompt (§4.10.2). */
@@ -502,6 +624,37 @@ export class AssistantMemoryStore {
             reviewTurnId: rec.reviewTurnId,
         });
         this.unlinkStaged(rec.id);
+    }
+
+    private readConfiguredBudgets(): Partial<MemoryBudgets> | undefined {
+        const out: Partial<MemoryBudgets> = { ...(this.budgetOverride ?? {}) };
+        if (existsSync(this.configPath)) {
+            try {
+                const parsed = JSON.parse(readFileSync(this.configPath, 'utf-8')) as Record<string, unknown> | null;
+                const mb = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                    ? parsed.memoryBudget as Record<string, unknown> | null
+                    : null;
+                if (mb && typeof mb === 'object' && !Array.isArray(mb)) {
+                    if (typeof mb.memory === 'number' && Number.isFinite(mb.memory)) out.memory = mb.memory;
+                    if (typeof mb.user === 'number' && Number.isFinite(mb.user)) out.user = mb.user;
+                }
+            } catch { /* ignore unreadable config file */ }
+        }
+        return Object.keys(out).length ? out : undefined;
+    }
+
+    private readRawUsed(target: MemoryTarget): number {
+        const path = this.filePath(target);
+        if (!existsSync(path)) return 0;
+        try {
+            const bytes = readFileSync(path);
+            let text = bytes.toString('utf8');
+            if (!Buffer.from(text, 'utf8').equals(bytes)) return 0;
+            if (text.startsWith('\uFEFF')) text = text.slice(1);
+            return usedOf(parseMemoryEntries(text));
+        } catch {
+            return 0;
+        }
     }
 }
 

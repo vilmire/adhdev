@@ -17,6 +17,8 @@ import {
     ASSISTANT_STAGED_COMMAND,
     parseResolveOutcomes,
     parseStagedList,
+    parseStagedMemoryStatus,
+    type AssistantMemoryStatus,
     type AssistantStagedDecision,
     type AssistantStagedItem,
     type AssistantStagedOutcome,
@@ -32,6 +34,8 @@ export type AssistantStagedTarget = { id: string } | { reviewTurnId: string; ids
 export interface AssistantStagedWritesState {
     /** null until the first answer, and while the daemon has no list verb (surface hidden). */
     items: AssistantStagedItem[] | null
+    /** Persistent memory usage and limits returned alongside the staged list. */
+    memoryStatus?: AssistantMemoryStatus | null
     /** Outcome of the last resolve per item id (failures stay until the item leaves the list). */
     outcomes: Record<string, AssistantStagedOutcome>
     /** Item ids with a resolve in flight. */
@@ -48,6 +52,7 @@ export function useAssistantStagedWrites(options: {
 }): AssistantStagedWritesState {
     const { daemonId, enabled, status, sendCommand } = options
     const [items, setItems] = useState<AssistantStagedItem[] | null>(null)
+    const [memoryStatus, setMemoryStatus] = useState<AssistantMemoryStatus | null>(null)
     const [outcomes, setOutcomes] = useState<Record<string, AssistantStagedOutcome>>({})
     const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set())
     const sendRef = useRef(sendCommand)
@@ -58,13 +63,18 @@ export function useAssistantStagedWrites(options: {
         if (!enabled || !daemonId) return
         const mine = ++seq.current
         let next: AssistantStagedItem[] | null = null
+        let nextMemoryStatus: AssistantMemoryStatus | null = null
         try {
-            next = parseStagedList(await sendRef.current(daemonId, ASSISTANT_STAGED_COMMAND, { action: 'list' }))
+            const raw = await sendRef.current(daemonId, ASSISTANT_STAGED_COMMAND, { action: 'list' })
+            next = parseStagedList(raw)
+            nextMemoryStatus = parseStagedMemoryStatus(raw)
         } catch {
             next = null
+            nextMemoryStatus = null
         }
         if (mine !== seq.current) return
         setItems(next)
+        setMemoryStatus(nextMemoryStatus)
         // Drop outcomes of items that left the list (resolved here or elsewhere).
         const live = new Set((next || []).map(i => i.id))
         setOutcomes(prev => {
@@ -76,6 +86,7 @@ export function useAssistantStagedWrites(options: {
 
     useEffect(() => {
         setItems(null)
+        setMemoryStatus(null)
         setOutcomes({})
         void refresh()
     }, [refresh])
@@ -108,5 +119,5 @@ export function useAssistantStagedWrites(options: {
         await refresh()
     }, [daemonId, refresh])
 
-    return { items, outcomes, busyIds, refresh, resolve }
+    return { items, memoryStatus, outcomes, busyIds, refresh, resolve }
 }

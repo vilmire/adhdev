@@ -4375,5 +4375,22 @@
         "docs": "文档",
         "about": "关于",
         "chats": "聊天"
+    },
+    "assistantMemoryLimits": {
+        "title": "助手持久记忆上限",
+        "promptNote": "持久记忆会注入到每一次助手提示词中。提高上限会增加每轮提示词的大小。",
+        "memoryLabel": "MEMORY（环境与规则）",
+        "userLabel": "USER（关于用户）",
+        "usageSummary": "{{used}} / {{budget}} 字符 ({{percent}}%)",
+        "boundsHint": "默认: {{default}} · 最小: {{min}} · 最大: {{max}}",
+        "headerBadge": "记忆 {{percent}}%",
+        "warningTitle": "助手记忆已接近上限 (≥90%)",
+        "warningBody": "持久记忆使用率已达到或超过 90%。请合并或删除条目，或在设置中提高上限，以免新写入被拒绝。",
+        "save": "保存记忆上限",
+        "saving": "保存中…",
+        "saved": "已保存助手记忆上限。",
+        "saveFailed": "保存助手记忆上限失败。",
+        "resetDefaults": "恢复默认值"
     }
 }
+

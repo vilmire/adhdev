@@ -4375,5 +4375,22 @@
         "docs": "Docs",
         "about": "About",
         "chats": "Chats"
+    },
+    "assistantMemoryLimits": {
+        "title": "Assistant persistent memory limits",
+        "promptNote": "Persistent memory is injected into every assistant prompt. Raising these limits increases prompt size on every turn.",
+        "memoryLabel": "MEMORY (Environment & rules)",
+        "userLabel": "USER (About the user)",
+        "usageSummary": "{{used}} / {{budget}} chars ({{percent}}%)",
+        "boundsHint": "Default: {{default}} · Min: {{min}} · Max: {{max}}",
+        "headerBadge": "Memory {{percent}}%",
+        "warningTitle": "Assistant memory is near its limit (≥90%)",
+        "warningBody": "Persistent memory usage is at or above 90%. Merge or remove entries, or raise the limit in Settings so new writes are not refused.",
+        "save": "Save memory limits",
+        "saving": "Saving…",
+        "saved": "Assistant memory limits saved.",
+        "saveFailed": "Failed to save assistant memory limits.",
+        "resetDefaults": "Reset to defaults"
     }
 }
+

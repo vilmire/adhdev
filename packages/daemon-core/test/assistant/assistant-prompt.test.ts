@@ -127,7 +127,7 @@ describe('buildAssistantSystemPrompt', () => {
         });
         expect(p.withinLimit).toBe(true);
         expect(p.length).toBeLessThan(ASSISTANT_PROMPT_MAX_LENGTH);
-        expect(p.length).toBeLessThan(27_000); // headroom under 30k for the CLI's own arguments
+        expect(p.length).toBeLessThan(29_300); // headroom under 30k for the CLI's own arguments (at 8,800/5,500 max memory)
         expect(p.text.endsWith(ASSISTANT_SAFETY_TAIL)).toBe(true);
     });
 

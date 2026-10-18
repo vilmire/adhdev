@@ -4,6 +4,9 @@ import { GeneralThemeSection } from './GeneralThemeSection'
 import { ChatThemeSection } from './ChatThemeSection'
 import { ChatActivitySection } from './ChatActivitySection'
 import { MobileDashboardModeSection } from './MobileDashboardModeSection'
+import { AssistantMemoryLimitsSection } from './AssistantMemoryLimitsSection'
+
+export { AssistantMemoryLimitsSection, type AssistantMemoryLimitsSectionProps } from './AssistantMemoryLimitsSection'
 
 export interface AppearanceSettingsSectionProps {
     /**
@@ -16,7 +19,8 @@ export interface AppearanceSettingsSectionProps {
 
 /**
  * Shared Appearance settings body used by both the cloud and standalone
- * dashboards. Renders the Mode / Theme / (optional Fonts) / Mobile blocks.
+ * dashboards. Renders the Mode / Theme / (optional Fonts) / Mobile / Assistant
+ * persistent memory limits blocks.
  *
  * The surrounding <Section> wrapper (title, top-level description) stays with
  * each host so they can keep their own copy and framing.
@@ -53,6 +57,13 @@ export function AppearanceSettingsSection({
                 <div className="text-xs text-text-muted mb-2 font-medium">{t('settings.appearance.mobileLabel')}</div>
                 <MobileDashboardModeSection />
             </div>
+
+            {/* Assistant persistent memory limits */}
+            <div className="border-t border-border-subtle pt-4">
+                <div className="text-xs text-text-muted mb-1 font-medium">{t('assistantMemoryLimits.title')}</div>
+                <AssistantMemoryLimitsSection />
+            </div>
         </div>
     )
 }
+

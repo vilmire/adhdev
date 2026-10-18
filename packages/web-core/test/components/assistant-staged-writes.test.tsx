@@ -13,6 +13,7 @@ import {
     groupStagedItems,
     parseResolveOutcomes,
     parseStagedList,
+    parseStagedMemoryStatus,
 } from '../../src/components/dashboard/assistant-staged'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -238,4 +239,36 @@ describe('AssistantStagedWrites', () => {
         await mount(send, 'idle')
         expect(send).toHaveBeenCalledTimes(2)
     })
+
+    it('shows a visible warning badge and banner at ≥90% memory usage even when no writes are staged', async () => {
+        const nearLimitStatus = {
+            budgets: { memory: 2200, user: 1375 },
+            defaults: { memory: 2200, user: 1375 },
+            min: { memory: 2200, user: 1375 },
+            max: { memory: 8800, user: 5500 },
+            warningThresholdPct: 90,
+            nearLimit: true,
+            usage: { memory: '99%', user: '40%' },
+            memory: { used: 2178, budget: 2200, percent: 99, usage: '99%', nearLimit: true, defaultBudget: 2200, min: 2200, max: 8800 },
+            user: { used: 550, budget: 1375, percent: 40, usage: '40%', nearLimit: false, defaultBudget: 1375, min: 1375, max: 5500 },
+        }
+        expect(parseStagedMemoryStatus({ success: true, memoryStatus: nearLimitStatus })?.nearLimit).toBe(true)
+
+        const send = vi.fn(async () => ({
+            success: true,
+            memory: [],
+            skills: [],
+            notes: [],
+            memoryStatus: nearLimitStatus,
+        }))
+        await mount(send)
+        const warnBadge = container.querySelector('[data-assistant-memory-warning]')
+        expect(warnBadge).toBeTruthy()
+        expect(warnBadge?.textContent).toContain('99%')
+        await click(warnBadge)
+        const banner = container.querySelector('[data-assistant-memory-warning-banner]')
+        expect(banner).toBeTruthy()
+        expect(banner?.textContent).toContain('2,178 / 2,200 (99%)')
+    })
 })
+

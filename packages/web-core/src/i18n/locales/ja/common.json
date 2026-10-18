@@ -4375,5 +4375,22 @@
         "docs": "ドキュメント",
         "about": "情報",
         "chats": "チャット"
+    },
+    "assistantMemoryLimits": {
+        "title": "アシスタント永続メモリ上限",
+        "promptNote": "永続メモリはすべてのアシスタントプロンプトに注入されます。上限を引き上げると毎ターンのプロンプトサイズが増加します。",
+        "memoryLabel": "MEMORY（環境とルール）",
+        "userLabel": "USER（ユーザー情報）",
+        "usageSummary": "{{used}} / {{budget}} 文字 ({{percent}}%)",
+        "boundsHint": "既定: {{default}} · 最小: {{min}} · 最大: {{max}}",
+        "headerBadge": "メモリ {{percent}}%",
+        "warningTitle": "アシスタントのメモリが上限に近づいています (90%以上)",
+        "warningBody": "永続メモリの使用率が 90% 以上に達しています。新しい書き込みが拒否されないよう項目を統合・削除するか、設定で上限を引き上げてください。",
+        "save": "メモリ上限を保存",
+        "saving": "保存中…",
+        "saved": "アシスタントのメモリ上限を保存しました。",
+        "saveFailed": "アシスタントのメモリ上限の保存に失敗しました。",
+        "resetDefaults": "既定値に戻す"
     }
 }
+

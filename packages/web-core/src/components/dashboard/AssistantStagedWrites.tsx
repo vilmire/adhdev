@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '../../lib/utils'
+import { AlertBanner } from '../ui/AlertBanner'
 import { RelativeTime } from '../ui/RelativeTime'
 import { IconX } from '../Icons'
 import { groupStagedItems, type AssistantStagedGroup, type AssistantStagedItem } from './assistant-staged'
@@ -42,11 +43,19 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
     const [open, setOpen] = useState(false)
     const rootRef = useRef<HTMLDivElement>(null)
     const count = state.items?.length ?? 0
+    const memoryStatus = state.memoryStatus ?? null
+    const nearLimit = memoryStatus?.nearLimit === true
+    const maxNearPercent = memoryStatus
+        ? Math.max(
+            memoryStatus.memory.nearLimit ? memoryStatus.memory.percent : 0,
+            memoryStatus.user.nearLimit ? memoryStatus.user.percent : 0,
+        )
+        : 0
     const groups = useMemo(() => groupStagedItems(state.items || []), [state.items])
 
     useEffect(() => {
-        if (count === 0) setOpen(false)
-    }, [count])
+        if (count === 0 && !nearLimit) setOpen(false)
+    }, [count, nearLimit])
 
     useEffect(() => {
         if (!open) return
@@ -64,7 +73,7 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
         }
     }, [open])
 
-    if (count === 0) return null
+    if (count === 0 && !nearLimit) return null
 
     const toggle = () => {
         setOpen(v => {
@@ -74,33 +83,73 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
     }
 
     return (
-        <div ref={rootRef} className="assistant-staged relative" data-assistant-staged-count={count}>
-            <button
-                type="button"
-                className={cn('chat-activity-toggle assistant-staged-badge', open && 'chat-activity-toggle-active')}
-                onClick={toggle}
-                aria-expanded={open}
-                aria-haspopup="dialog"
-                title={t('assistantStaged.badgeTitle')}
-                aria-label={`${t('assistantStaged.badge', { count })} — ${t('assistantStaged.badgeTitle')}`}
-            >
-                <span className="chat-activity-toggle-dot" />
-                {t('assistantStaged.badge', { count })}
-            </button>
+        <div
+            ref={rootRef}
+            className="assistant-staged relative flex items-center gap-1.5"
+            data-assistant-staged-count={count}
+            data-assistant-memory-near-limit={nearLimit ? 'true' : undefined}
+        >
+            {nearLimit && memoryStatus && (
+                <button
+                    type="button"
+                    className={cn(
+                        'chat-activity-toggle assistant-memory-warning-badge border-status-warning/50 bg-status-warning/15 text-status-warning',
+                        open && 'chat-activity-toggle-active',
+                    )}
+                    onClick={toggle}
+                    aria-expanded={open}
+                    aria-haspopup="dialog"
+                    data-assistant-memory-warning
+                    title={t('assistantMemoryLimits.warningBody')}
+                    aria-label={`${t('assistantMemoryLimits.headerBadge', { percent: maxNearPercent })} — ${t('assistantMemoryLimits.warningBody')}`}
+                >
+                    <span className="chat-activity-toggle-dot bg-status-warning" />
+                    {t('assistantMemoryLimits.headerBadge', { percent: maxNearPercent })}
+                </button>
+            )}
+            {count > 0 && (
+                <button
+                    type="button"
+                    className={cn('chat-activity-toggle assistant-staged-badge', open && 'chat-activity-toggle-active')}
+                    onClick={toggle}
+                    aria-expanded={open}
+                    aria-haspopup="dialog"
+                    title={t('assistantStaged.badgeTitle')}
+                    aria-label={`${t('assistantStaged.badge', { count })} — ${t('assistantStaged.badgeTitle')}`}
+                >
+                    <span className="chat-activity-toggle-dot" />
+                    {t('assistantStaged.badge', { count })}
+                </button>
+            )}
             {open && (
                 <div
                     role="dialog"
-                    aria-label={t('assistantStaged.title')}
+                    aria-label={count > 0 ? t('assistantStaged.title') : t('assistantMemoryLimits.warningTitle')}
                     className="assistant-staged-panel pointer-events-auto absolute right-0 top-full mt-1.5 flex max-h-[min(60vh,520px)] w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-lg border border-border-default bg-bg-card text-xs text-text-secondary shadow-xl backdrop-blur-xl"
                 >
                     <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-2">
-                        <span className="font-semibold text-text-primary">{t('assistantStaged.title')}</span>
-                        <span className="text-text-muted">{t('assistantStaged.hint')}</span>
+                        <span className="font-semibold text-text-primary">
+                            {count > 0 ? t('assistantStaged.title') : t('assistantMemoryLimits.title')}
+                        </span>
+                        {count > 0 && <span className="text-text-muted">{t('assistantStaged.hint')}</span>}
                         <button type="button" className="btn-ghost ml-auto rounded p-1" onClick={() => setOpen(false)} aria-label={t('assistantStaged.close')}>
                             <IconX size={12} />
                         </button>
                     </div>
                     <div className="flex flex-col gap-2 overflow-y-auto p-2">
+                        {nearLimit && memoryStatus && (
+                            <AlertBanner variant="warning">
+                                <div className="flex flex-col gap-1" data-assistant-memory-warning-banner>
+                                    <div className="font-semibold">{t('assistantMemoryLimits.warningTitle')}</div>
+                                    <div>
+                                        MEMORY: {memoryStatus.memory.used.toLocaleString()} / {memoryStatus.memory.budget.toLocaleString()} ({memoryStatus.memory.percent}%)
+                                        {' · '}
+                                        USER: {memoryStatus.user.used.toLocaleString()} / {memoryStatus.user.budget.toLocaleString()} ({memoryStatus.user.percent}%)
+                                    </div>
+                                    <div>{t('assistantMemoryLimits.warningBody')}</div>
+                                </div>
+                            </AlertBanner>
+                        )}
                         {groups.map(group => (
                             <StagedGroupCard key={group.reviewTurnId || group.items[0].id} group={group} state={state} />
                         ))}

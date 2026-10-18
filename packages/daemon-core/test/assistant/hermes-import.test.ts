@@ -147,7 +147,12 @@ describe('importFromHermes', () => {
     });
 
     it('memory import still enforces the budget', () => {
-        const st = { ...stores(), memory: new AssistantMemoryStore({ configDir: config, budgets: { memory: 30 }, now: () => clock }) };
+        const st = stores();
+        for (const [i, len] of [[1, 500], [2, 500], [3, 500], [4, 500], [5, 158]] as const) {
+            const chunk = `rule ${i} `.padEnd(len, 'w');
+            expect(st.memory.apply({ action: 'add', target: 'memory', content: chunk }, 'owner').result).toBe('applied');
+        }
+        // 500*4 + 158 + 4*3 = 2,170 chars used; memory:0 (25 chars + 3 sep = 2,198) fits, memory:2 exceeds 2,200
         const r = importFromHermes({ dryRun: false, memory: [{ id: 'memory:0', destination: 'memory' }, { id: 'memory:2', destination: 'memory' }] }, st);
         expect(r.memory.map((m) => m.result)).toEqual(['applied', 'memory_budget_exceeded']);
         const dry = importFromHermes({ memory: [{ id: 'memory:2', destination: 'memory' }] }, st);
