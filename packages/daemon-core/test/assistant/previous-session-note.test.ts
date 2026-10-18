@@ -38,3 +38,29 @@ describe('saved previous-session context in the registry', () => {
         expect(normalizeAssistantRegistryEntry({ ...base, lastContext: { text: 'note' } })).not.toHaveProperty('lastContext');
     });
 });
+
+describe('previous-session context across CLIs (2026-10-18 owner question)', () => {
+    it('a Codex session\'s saved context is handed to a Claude Code relaunch unchanged', async () => {
+        const { mkdtempSync, rmSync } = await import('fs');
+        const { tmpdir } = await import('os');
+        const { join } = await import('path');
+        const { AssistantRegistry } = await import('../../src/assistant/assistant-registry.js');
+        const dir = mkdtempSync(join(tmpdir(), 'asst-ctx-'));
+        try {
+            const registry = new AssistantRegistry({ configDir: dir });
+            registry.bindSession({ sessionId: 'codex-1', cliType: 'codex-cli', workspace: dir, at: 1 });
+            registry.recordContext('codex-1', '[ADHDev previous session] … User: deploy it', 2);
+            // Relaunch with another CLI: the launch reads `previous.sessionId` and
+            // the saved snapshot for that id, which is plain text for any CLI.
+            const { entry, previous } = registry.bindSession({ sessionId: 'claude-2', cliType: 'claude-cli', workspace: dir, at: 3 });
+            expect(entry.cliType).toBe('claude-cli');
+            expect(previous?.sessionId).toBe('codex-1');
+            expect(entry.lastContext).toEqual({ sessionId: 'codex-1', text: '[ADHDev previous session] … User: deploy it', at: 2 });
+            // A snapshot is only ever recorded for the session that is bound.
+            registry.recordContext('codex-1', 'stale', 4);
+            expect(registry.read()?.lastContext?.text).toContain('deploy it');
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});

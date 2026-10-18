@@ -105,6 +105,31 @@ describe('LaunchDefaultsCard', () => {
         })
     }
 
+    it('offers the CLI\'s advertised models and thinking levels as dropdowns (2026-10-18)', async () => {
+        const withOptions = [
+            { type: 'claude-cli', name: 'claude-cli', displayName: 'Claude Code', category: 'cli', icon: '', modelOptions: ['sonnet', 'opus'], thinkingLevelOptions: ['low', 'high'] },
+            { type: 'codex-cli', name: 'codex-cli', displayName: 'Codex', category: 'cli', icon: '', modelOptions: ['gpt-5'], thinkingLevelOptions: ['high', 'xhigh'] },
+            { type: 'grok-cli', name: 'grok-cli', displayName: 'Grok', category: 'cli', icon: '' },
+        ] as ProviderInfo[]
+        const send = vi.fn(async (_id: string, type: string) =>
+            type === 'launch_defaults_get' ? getAnswer() : { success: true, result: 'applied', durable: true })
+        await act(async () => { root.render(<LaunchDefaultsCard machineId="daemon-1" providers={withOptions} sendDaemonCommand={send} />) })
+        const field = (r: string, f: string) => role(r).querySelector(`[data-launch-default-field="${f}"]`)!
+        const values = (el: Element) => [...el.querySelectorAll('option')].map(o => (o as HTMLOptionElement).value)
+        // The saved assistant model is shown inside the dropdown with the advertised ones.
+        expect(field('assistant', 'model').tagName).toBe('SELECT')
+        expect(values(field('assistant', 'model'))).toEqual(['', 'sonnet', 'opus'])
+        expect((field('assistant', 'model') as HTMLSelectElement).value).toBe('opus')
+        expect(values(field('assistant', 'thinkingLevel'))).toEqual(['', 'low', 'high'])
+        // Switching CLI drops a model the new CLI does not offer.
+        await choose(role('assistant').querySelector('[data-launch-default-field="provider"]'), 'codex-cli')
+        expect(values(field('assistant', 'model'))).toEqual(['', 'gpt-5'])
+        expect((field('assistant', 'model') as HTMLSelectElement).value).toBe('')
+        // A CLI that advertises nothing keeps a text box.
+        await choose(role('assistant').querySelector('[data-launch-default-field="provider"]'), 'grok-cli')
+        expect(field('assistant', 'model').tagName).toBe('INPUT')
+    })
+
     it('renders nothing on a daemon without the verb', async () => {
         await mount(vi.fn(async () => ({ success: false, error: 'Unknown command' })))
         expect(container.innerHTML).toBe('')

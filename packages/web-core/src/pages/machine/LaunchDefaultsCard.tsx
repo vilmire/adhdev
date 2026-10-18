@@ -14,6 +14,7 @@ import type { LaunchDefaultRole } from '@adhdev/mesh-shared'
 import Card from '../../components/Card'
 import { InfoTip } from '../../components/ui/InfoTip'
 import type { ProviderInfo } from './types'
+import { modelOptionsForProvider, thinkingOptionsForProvider } from '../../utils/provider-priority'
 import {
     LAUNCH_DEFAULT_ROLE_ORDER,
     buildLaunchDefaultsSetArgs,
@@ -90,6 +91,7 @@ export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCom
                             role={role}
                             state={read.state.roles[role]}
                             cliTypes={cliTypes}
+                            providers={providers}
                             saving={savingRole === role}
                             outcome={outcomes[role]}
                             onSave={draft => void write(role, draft)}
@@ -102,10 +104,41 @@ export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCom
     )
 }
 
-function LaunchDefaultRoleRow({ role, state, cliTypes, saving, outcome, onSave, onClear }: {
+/**
+ * Model / thinking level: the selected CLI's advertised options as a dropdown,
+ * first entry "provider default". A saved value the list does not contain stays
+ * selectable (so it is visible); a CLI that advertises nothing keeps a text box.
+ */
+function OptionField({ field, label, value, options, onChange }: {
+    field: 'model' | 'thinkingLevel'
+    label: string
+    value: string
+    options: string[]
+    onChange: (value: string) => void
+}) {
+    const { t } = useTranslation('common')
+    const list = value && !options.includes(value) ? [...options, value] : options
+    return (
+        <label className="flex flex-col gap-1 text-2xs text-text-secondary">
+            <span className="font-medium text-text-primary">{label}</span>
+            {options.length > 0 ? (
+                <select value={value} onChange={e => onChange(e.target.value)} className="machine-input text-2xs" data-launch-default-field={field}>
+                    <option value="">{t('machine.launchDefaults.providerDefault')}</option>
+                    {list.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+            ) : (
+                <input type="text" value={value} onChange={e => onChange(e.target.value)}
+                    placeholder={t('machine.launchDefaults.providerDefault')} className="machine-input text-2xs" data-launch-default-field={field} />
+            )}
+        </label>
+    )
+}
+
+function LaunchDefaultRoleRow({ role, state, cliTypes, providers, saving, outcome, onSave, onClear }: {
     role: LaunchDefaultRole
     state: LaunchDefaultRoleState | undefined
     cliTypes: Array<{ type: string; label: string }>
+    providers: ProviderInfo[]
     saving: boolean
     outcome?: Outcome
     onSave: (draft: LaunchDefaultSelectionView) => void
@@ -123,6 +156,17 @@ function LaunchDefaultRoleRow({ role, state, cliTypes, saving, outcome, onSave, 
         setModel(stored?.model ?? '')
         setThinkingLevel(stored?.thinkingLevel ?? '')
     }, [storedKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const modelOptions = useMemo(() => modelOptionsForProvider(providers, provider), [providers, provider])
+    const thinkingOptions = useMemo(() => thinkingOptionsForProvider(providers, provider), [providers, provider])
+    // Switching CLI drops a model / level the new CLI does not offer.
+    const changeProvider = (next: string) => {
+        setProvider(next)
+        const nextModels = modelOptionsForProvider(providers, next)
+        const nextLevels = thinkingOptionsForProvider(providers, next)
+        if (model && nextModels.length > 0 && !nextModels.includes(model)) setModel('')
+        if (thinkingLevel && nextLevels.length > 0 && !nextLevels.includes(thinkingLevel)) setThinkingLevel('')
+    }
 
     // A saved provider that is no longer listed stays selectable, so it is visible.
     const options = stored && !cliTypes.some(c => c.type === stored.provider)
@@ -153,21 +197,13 @@ function LaunchDefaultRoleRow({ role, state, cliTypes, saving, outcome, onSave, 
             <div className="grid gap-2 items-end md:grid-cols-[minmax(140px,1fr)_minmax(110px,1fr)_minmax(110px,1fr)_auto]">
                 <label className="flex flex-col gap-1 text-2xs text-text-secondary">
                     <span className="font-medium text-text-primary">{t('machine.launchDefaults.provider')}</span>
-                    <select value={provider} onChange={e => setProvider(e.target.value)} className="machine-input text-2xs" data-launch-default-field="provider">
+                    <select value={provider} onChange={e => changeProvider(e.target.value)} className="machine-input text-2xs" data-launch-default-field="provider">
                         <option value="">{t('machine.launchDefaults.chooseProvider')}</option>
                         {options.map(c => <option key={c.type} value={c.type}>{c.label}</option>)}
                     </select>
                 </label>
-                <label className="flex flex-col gap-1 text-2xs text-text-secondary">
-                    <span className="font-medium text-text-primary">{t('machine.launchDefaults.model')}</span>
-                    <input type="text" value={model} onChange={e => setModel(e.target.value)}
-                        placeholder={t('machine.launchDefaults.providerDefault')} className="machine-input text-2xs" data-launch-default-field="model" />
-                </label>
-                <label className="flex flex-col gap-1 text-2xs text-text-secondary">
-                    <span className="font-medium text-text-primary">{t('machine.launchDefaults.thinking')}</span>
-                    <input type="text" value={thinkingLevel} onChange={e => setThinkingLevel(e.target.value)}
-                        placeholder={t('machine.launchDefaults.providerDefault')} className="machine-input text-2xs" data-launch-default-field="thinkingLevel" />
-                </label>
+                <OptionField field="model" label={t('machine.launchDefaults.model')} value={model} options={modelOptions} onChange={setModel} />
+                <OptionField field="thinkingLevel" label={t('machine.launchDefaults.thinking')} value={thinkingLevel} options={thinkingOptions} onChange={setThinkingLevel} />
                 <div className="flex gap-1">
                     <button
                         type="button"
