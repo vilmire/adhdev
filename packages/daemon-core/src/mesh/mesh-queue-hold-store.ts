@@ -2,6 +2,7 @@ import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { queueHoldContext, queueTaskHoldView, setQueueTaskHold, QUEUE_HOLD_NOTICE_AFTER_MS } from './mesh-queue-hold.js';
 import { notifyMeshCoordinator } from './turn-ledger/deliver.js';
+import { isDifficultyFloorWaitReason } from './mesh-difficulty-floor.js';
 import { getMachineId } from '../config/config.js';
 
 function persistHold(store: MeshRuntimeStore, task: MeshWorkQueueEntry): void {
@@ -33,6 +34,12 @@ export function notifyHeldQueueTasks(meshId: string, now = Date.now()): void {
     for (const snapshot of queue) {
         const view = queueTaskHoldView(snapshot, queue, now);
         if (!view || view.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
+        // Floor-wait holds already have their own bounded-wait pager with a double
+        // debounce (handleDifficultyFloorSkip, 10 min); paging them again here after
+        // 3 min would duplicate that notice for the same stuck task. The hold itself
+        // stays recorded for status/dashboard visibility — only the page is skipped.
+        // 'difficulty_floor_unmet' is the claim path's literal for the same condition.
+        if (isDifficultyFloorWaitReason(view.reason) || view.reason === 'difficulty_floor_unmet') continue;
         store.transaction(() => {
             const task = store.findQueueEntryById(meshId, snapshot.id);
             if (!task || task.status !== 'pending' || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
