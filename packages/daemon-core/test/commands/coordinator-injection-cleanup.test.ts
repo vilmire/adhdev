@@ -173,11 +173,17 @@ describe('scheduleInjectionCleanup timing', () => {
 })
 
 function createRouter(provider: ProviderModule, cliManager: { launchCli: ReturnType<typeof vi.fn> }) {
+  writeFileSync(join(process.env.ADHDEV_CONFIG_DIR!, 'launch-defaults.json'), JSON.stringify({ version: 1, revision: 1, history: [] }))
   return new DaemonCommandRouter({
     commandHandler: { handle: vi.fn(async () => ({ success: false })) } as any,
     cliManager: cliManager as any,
     cdpManagers: new Map(),
-    providerLoader: { resolve: vi.fn(() => provider), getMeta: vi.fn(() => provider) } as any,
+    providerLoader: {
+      resolveAlias: (t: string) => t,
+      getAvailableProviderInfos: () => [{ type: provider.type, enabled: true, installed: true }],
+      resolve: vi.fn(() => provider),
+      getMeta: vi.fn(() => provider),
+    } as any,
     instanceManager: { collectAllStates: () => [], listInstanceIds: () => [], getInstance: () => null } as any,
     detectedIdes: { value: [] },
     sessionRegistry: {} as any,
