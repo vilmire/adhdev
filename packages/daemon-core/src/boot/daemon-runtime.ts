@@ -124,8 +124,10 @@ export async function bootDaemonRuntime(
             // Every termination from here on carries `daemon_shutdown`, so no
             // subscriber that is still attached records a daemon teardown as a death.
             s3.sessionRegistry.beginShutdown();
-            // 1. Stop producers, reverse stage order (all synchronous).
+            // 1. Stop producers in reverse stage order; await managed driver teardown.
             runDisposer('loops', disposeLoops);
+            try { await s5.router.closeDrivers?.(); }
+            catch (e) { LOG.warn('Shutdown', `driver teardown failed (continuing): ${String(e)}`); }
             runDisposer('mesh runtime', s7.disposeMeshRuntime);
             runDisposer('seqscribe projections', s6.disarmProjections);
             runDisposer('seqscribe producers', () => s4.seqscribe?.quiesce());

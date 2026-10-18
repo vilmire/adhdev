@@ -20,7 +20,7 @@ export const ASSISTANT_MEMORY_LIMITS_COMMAND = 'assistant_memory_limits' as cons
 
 /** What the write changes: the assistant's own memory, the person's profile, a skill, a project note,
  * or this machine's launch default for a role (assistant / coordinator). */
-export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault' | 'driver_activation'
+export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault' | 'driver_activation' | 'driver_action_request'
 export type AssistantStagedLaunchRole = 'assistant' | 'coordinator'
 export type AssistantStagedDecision = 'apply' | 'discard'
 
@@ -212,6 +212,21 @@ function driverActivationItem(r: Record<string, any>): AssistantStagedItem | nul
     return item
 }
 
+/** Destructive requests use the existing text preview and per-item owner resolve buttons. */
+function driverActionItem(r: Record<string, any>): AssistantStagedItem | null {
+    const requester = rec(r.requester)
+    if (r.kind !== 'driver_action_request' || r.status !== 'pending' || !s(r.id).startsWith('driver-action-')
+        || !s(r.type) || !s(r.action) || !rec(r.args) || !requester || !s(requester.taskId)
+        || !/^sha256:[a-f0-9]{64}$/.test(s(r.activationDigest))
+        || !Number.isFinite(new Date(r.createdAt).getTime()) || !Number.isFinite(new Date(r.expiresAt).getTime())) return null
+    const item = base({ ...r, origin: 'driver', createdAt: new Date(r.createdAt).toISOString() },
+        'driver_action_request', r.action, r.type)
+    if (item) item.text = JSON.stringify({ type: r.type, action: r.action, args: r.args,
+        resourceKey: r.resourceKey, activationDigest: r.activationDigest,
+        requesterTaskId: requester.taskId, expiresAt: new Date(r.expiresAt).toISOString() }, null, 2)
+    return item
+}
+
 /**
  * The list answer → items, oldest first. Returns null when the answer is not
  * a list at all (older daemon without the verb, refusal, transport error) so
@@ -220,7 +235,7 @@ function driverActivationItem(r: Record<string, any>): AssistantStagedItem | nul
 export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     const r = unwrapStagedAnswer(raw)
     if (!r || r.success === false) return null
-    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults) && !Array.isArray(r.driverActivations)) return null
+    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults) && !Array.isArray(r.driverActivations) && !Array.isArray(r.driverActions)) return null
     const out: AssistantStagedItem[] = []
     const take = (list: unknown, fn: (x: Record<string, any>) => AssistantStagedItem | null) => {
         if (!Array.isArray(list)) return
@@ -235,6 +250,7 @@ export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     take(r.notes, noteItem)
     take(r.launchDefaults, launchDefaultItem)
     take(r.driverActivations, driverActivationItem)
+    take(r.driverActions, driverActionItem)
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 

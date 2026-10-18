@@ -63,6 +63,7 @@ import { meshCoordinatorLaunchSpecs } from './high-family/mesh-coordinator-launc
 import { meshStatusSpecs } from './high-family/mesh-status.js';
 import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
 import { meshStatusViewSpecs } from './high-family/mesh-status-view.js';
+import { driverSpecs, closeDriverService } from './med-family/drivers.js';
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
@@ -346,6 +347,7 @@ export function getDaemonCommandRegistry(): CommandRegistry {
             ...meshNodeStateSpecs,
             ...meshStatusViewSpecs,
             ...assistantStoreSpecs,
+            ...driverSpecs,
             ...assistantProjectSpecs,
             ...assistantActionSpecs,
             ...assistantThreadSpecs,
@@ -528,6 +530,8 @@ export class DaemonCommandRouter {
      */
     readonly meshCoordinatorBootId: string = randomUUID();
     private meshNodeStatePushRestore: Promise<number> | null = null;
+
+    async closeDrivers(): Promise<void> { await closeDriverService(this.deps); }
 
     constructor(deps: CommandRouterDeps) {
         this.deps = deps;

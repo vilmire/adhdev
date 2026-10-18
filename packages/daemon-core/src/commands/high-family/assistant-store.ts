@@ -25,6 +25,8 @@
  * resolves them together.
  */
 
+import { getDriverService } from '../med-family/drivers.js';
+import { readCommandSource } from '../command-args.js';
 import { ASSISTANT_SESSION_ID_ARG, ASSISTANT_VERB, readOptionalRecord } from '@adhdev/mesh-shared';
 import { defineCommandSpecs } from '../command-registry.js';
 import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
@@ -314,7 +316,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         if (action === 'list') {
             return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
                 launchDefaults: svc.launchDefaults?.list() ?? [], driverActivations: svc.driverStaging?.list() ?? [],
-                memoryStatus: svc.memory.status() };
+                driverActions: getDriverService(ctx).stagedActions(), memoryStatus: svc.memory.status() };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);
@@ -326,13 +328,18 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
             // Defaults consent is only the owner resolving this exact Inbox id.
             // Reject supplied scope/modal/generation/authorization instead of
             // silently treating consent for another operation as this decision.
-            if (Object.keys(args ?? {}).some(key => !['action', 'id', 'decision', '_interactionId', '_meshSenderDaemonId'].includes(key))) {
+            if (Object.keys(args ?? {}).some(key => !['action', 'id', 'decision', '_interactionId', '_meshSenderDaemonId', '_commandSource'].includes(key))) {
                 return invalidArgs('Launch-default resolution accepts only id and decision.');
             }
             if (decision !== 'apply' && decision !== 'discard' && decision !== 'reject') return invalidArgs('decision must be apply, discard or reject');
             return resolveStagedOne(ctx, svc, id, decision === 'reject' ? 'discard' : decision);
         }
         if (decision !== 'apply' && decision !== 'discard') return invalidArgs('decision must be apply or discard');
+        if (id.startsWith('driver-action-')) {
+            const source = readCommandSource(args);
+            if (source !== 'p2p' && source !== 'ws' && source !== 'standalone') return { success: false, code: 'COMMAND_SOURCE_REJECTED' };
+            return getDriverService(ctx).resolveAction(id, decision, source);
+        }
         if (reviewTurnId) return resolveReviewBatch(ctx, svc, reviewTurnId, decision);
         return resolveStagedOne(ctx, svc, id, decision);
     },

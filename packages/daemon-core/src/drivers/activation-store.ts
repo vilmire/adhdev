@@ -72,6 +72,11 @@ export class DriverActivationStore {
         const rows = this.list().filter(row => disabled || row.type !== module.type || !row.disabled);
         return this.saveRecord(rows, module, digest, 'owner', disabled);
     }
+    /** Owner re-enable of external code clears disables without granting activation. */
+    clearDisabled(type: string): void {
+        const rows = this.list().filter(row => row.type !== type || !row.disabled);
+        writeFileAtomic600(this.path, JSON.stringify({ version: 1, activations: rows }, null, 2));
+    }
     private record(module: DriverManifest, digest: string, approvedBy: DriverActivation['approvedBy']): DriverActivation | null {
         const rows = this.list();
         if (rows.some(r => r.type === module.type && r.disabled === true)) return null;

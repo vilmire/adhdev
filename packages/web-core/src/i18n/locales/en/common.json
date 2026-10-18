@@ -1701,7 +1701,8 @@
             "skill": "Skill",
             "note": "Note",
             "launchDefault": "Launch default",
-            "driver_activation": "Driver activation"
+            "driver_activation": "Driver activation",
+            "driver_action_request": "Destructive driver action"
         },
         "action": {
             "add": "Add",

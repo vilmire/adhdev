@@ -1701,7 +1701,8 @@
             "skill": "스킬",
             "note": "노트",
             "launchDefault": "실행 기본값",
-            "driver_activation": "드라이버 활성화"
+            "driver_activation": "드라이버 활성화",
+            "driver_action_request": "파괴적 드라이버 작업"
         },
         "action": {
             "add": "추가",

@@ -73,6 +73,9 @@ export const WORKER_MCP_DAEMON_VERBS: readonly string[] = Object.freeze([
     // read nor overwrite another worker's row. Omitting it 403'd the prepare and
     // quarantined the report as `provenance_unavailable_at_creation` — the
     // worker's completion was silently never delivered.
+    'driver_list',
+    'driver_describe',
+    'driver_invoke',
     'worker_bridge_prepare',
     'worker_report_completion',
     'worker_progress_update',

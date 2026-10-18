@@ -1701,7 +1701,8 @@
             "skill": "スキル",
             "note": "ノート",
             "launchDefault": "起動デフォルト",
-            "driver_activation": "ドライバーの有効化"
+            "driver_activation": "ドライバーの有効化",
+            "driver_action_request": "破壊的なドライバー操作"
         },
         "action": {
             "add": "追加",

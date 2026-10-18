@@ -1704,7 +1704,8 @@
             "skill": "Habilidad",
             "note": "Nota",
             "launchDefault": "Inicio predeterminado",
-            "driver_activation": "Activación del controlador"
+            "driver_activation": "Activación del controlador",
+            "driver_action_request": "Acción destructiva del controlador"
         },
         "action": {
             "add": "Añadir",

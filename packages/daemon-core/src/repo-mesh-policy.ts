@@ -129,6 +129,8 @@ export interface RepoMeshAutoFastForwardPolicy {
  * requirePostTaskCheckpoint, dirtyWorkspaceBehavior — see RETIRED_MESH_POLICY_KEYS.
  */
 export interface RepoMeshPolicy {
+    /** Local driver action allowlist; absent means no driver execution. No UI yet. */
+    drivers?: Record<string, { actions: string[] }>;
     requireApprovalForPush: boolean;
     /**
      * Narrow Refinery opt-in: when validation and patch-equivalence have passed,

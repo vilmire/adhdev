@@ -1701,7 +1701,8 @@
             "skill": "技能",
             "note": "笔记",
             "launchDefault": "启动默认值",
-            "driver_activation": "驱动程序激活"
+            "driver_activation": "驱动程序激活",
+            "driver_action_request": "破坏性驱动操作"
         },
         "action": {
             "add": "添加",
