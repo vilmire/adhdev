@@ -8,6 +8,28 @@ import { SessionRegistry } from '../../src/sessions/registry.js';
 import * as modelRegistry from '../../src/models/registry.js';
 import { buildSessionLaunchRecord } from '../../src/sessions/launch-record.js';
 
+// The detector's `--version` probe has a 1.5 s production timeout; under the
+// full suite's load the fixture CLI's probe can miss it and the version-specific
+// path under test is skipped (flaked 2026-10-18). Re-read the fixture's version
+// without a timeout when the probe came back empty — production code unchanged.
+vi.mock('../../src/detection/cli-detector.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/detection/cli-detector.js')>();
+  const { execFileSync } = await import('child_process');
+  return {
+    ...orig,
+    detectCLI: async (...args: Parameters<typeof orig.detectCLI>) => {
+      const info = await orig.detectCLI(...args);
+      if (info?.installed && !info.version && info.path) {
+        try {
+          const out = execFileSync(info.path, ['--version'], { encoding: 'utf8', windowsHide: true }).trim();
+          if (/^\d+\.\d+/.test(out)) return { ...info, version: out };
+        } catch { /* fixture without a version */ }
+      }
+      return info;
+    },
+  };
+});
+
 // Phase E (wiring-unification §7 E1, RC5): every launch path writes a
 // SessionLaunchRecord whose `source` says where the model / thinking value came
 // from. These drive the real startSession / launchCli / restoreHostedSessions

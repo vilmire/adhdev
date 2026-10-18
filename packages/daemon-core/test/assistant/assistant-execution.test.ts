@@ -32,17 +32,26 @@ describe('D6 daemon capability', () => {
         if (!expired.success) throw Error('issue failed');
         expect(engine.consume(expired.authorization, state, action, modal, expired.expiresAt).success).toBe(false);
     });
-    it('OFF, prompt_only, unverified provider and stale runtime close execution at issue and consumption', () => {
+    it('OFF and a stale or replaced runtime close execution at issue and consumption', () => {
         const { engine, state } = fixture();
         const cap = engine.issue('standalone', state, action, modal, 1000); if (!cap.success) throw Error('issue failed');
         expect(engine.consume(cap.authorization, { ...state, enabled: false }, action, modal, 1100).success).toBe(false);
         expect(engine.consume(cap.authorization, { ...state, adapter: {} }, action, modal, 1100).success).toBe(false);
         expect(engine.issue('ws', { ...state, runtime: {} }, action, modal).success).toBe(false);
-        engine.attest('assistant', state.runtime, state.adapter, 'codex-cli', args, 'prompt_only');
-        expect(engine.available(state)).toBe(false);
-        engine.attest('assistant', state.runtime, state.adapter, 'unverified', args, 'enforced');
-        expect(engine.available({ ...state, provider: 'unverified' })).toBe(false);
         expect(new AssistantExecution().available(state)).toBe(false); // restart without launch evidence
+        engine.attest('assistant', null, state.adapter, 'codex-cli', args, 'prompt_only');
+        expect(engine.available(state)).toBe(false); // no live runtime bound
+    });
+    it('any assistant CLI can act once the owner turns it on; the tool lock is reported (owner decision 2026-10-18)', () => {
+        const { engine, state } = fixture();
+        expect(engine.toolRestriction()).toBe('enforced'); // claude-cli launched with its tool-lock flags
+        engine.attest('assistant', state.runtime, state.adapter, 'codex-cli', [], 'prompt_only');
+        expect(engine.available({ ...state, provider: 'codex-cli' })).toBe(true);
+        expect(engine.toolRestriction()).toBe('prompt_only');
+        expect(engine.available({ ...state, provider: 'codex-cli', enabled: false })).toBe(false);
+        // A claude-cli launch WITHOUT the tool-lock flags is prompt-only too.
+        engine.attest('assistant', state.runtime, state.adapter, 'claude-cli', [], 'enforced');
+        expect(engine.toolRestriction()).toBe('prompt_only');
     });
     it.each(['ipc', 'mesh', 'api', 'internal', undefined, 'relay', 'OWNER'])('refuses non-owner ingress %s', source => {
         const { engine, state } = fixture(); expect(engine.issue(source, state, action, modal).success).toBe(false);

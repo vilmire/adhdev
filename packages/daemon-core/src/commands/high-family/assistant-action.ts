@@ -10,7 +10,7 @@ import type { HighFamilyHandler } from './types.js';
 const state: HighFamilyHandler = async (ctx, args) => {
     const s = assistantExecutionState(ctx.components());
     const daemonId = typeof ctx.deps?.statusInstanceId === 'string' ? ctx.deps.statusInstanceId : null;
-    return { success: true, machine: { daemonId, hostname: hostname() }, executionEnabled: s.enabled, restriction: assistantExecution.available({ ...s, enabled: true }) ? 'enforced' : 'prompt_only',
+    return { success: true, machine: { daemonId, hostname: hostname() }, executionEnabled: s.enabled, restriction: assistantExecution.toolRestriction() ?? 'prompt_only',
         supportedActions: ['local_pty_approve', 'local_pty_reject'], limitations: 'Local PTY provider permissions only. Remote, extension, webview and arbitrary execution are unavailable. Staged writes require owner Inbox ratification.',
         choices: ownerActionChoices(ctx.components()).map(choice => ({ ...choice, daemonId })),
         executionAvailable: readAssistantSessionId(args) === s.sessionId && assistantExecution.available(s) };

@@ -6,7 +6,7 @@ export interface ExecutionState {
     sessionId: string | null; enabled: boolean; runtime: object | null; adapter: object | null;
     provider: string; assistant: boolean; policyRevision?: number;
 }
-interface Attestation { sessionId: string; runtime: object; adapter: object; provider: string }
+interface Attestation { sessionId: string; runtime: object; adapter: object; provider: string; restriction: 'enforced' | 'prompt_only' }
 /** Exact provider-approval episode a consent is bound to (null for a legacy adapter without lifecycle identity). */
 export interface AssistantApprovalTarget { modalKey: string; attemptId: string | null; generation: number | null }
 interface Consent { origin: 'OWNER'; sessionId: string; action: AssistantAction; modal: string; expiresAt: number; policyRevision: number; approvalTarget: AssistantApprovalTarget | null }
@@ -27,14 +27,26 @@ const actionKey = (a: AssistantAction) => JSON.stringify([a.meshId, a.targetSess
 export class AssistantExecution {
     private attestation: Attestation | null = null;
     private consents = new Map<string, Consent>();
+    /**
+     * Bind execution to this exact live assistant session (runtime + adapter
+     * identity). Any CLI may act once the owner turns execution on (owner
+     * decision 2026-10-18: the switch is explicit, and frontier models keep to
+     * the system prompt; a Claude-only gate only took the feature away). The
+     * tool lock is still recorded: 'enforced' when the CLI's built-in tools are
+     * locked by launch flags (claude-cli), 'prompt_only' otherwise, and the
+     * dashboard says which. Every action still needs fresh owner consent.
+     */
     attest(sessionId: string, runtime: object | null, adapter: object | null, provider: string, args: readonly string[], restriction: string): void {
         this.attestation = null; this.consents.clear();
-        // Only this verified provider mechanism exists today. Other providers keep read/send/relay.
-        if (restriction === 'enforced' && provider === 'claude-cli' && runtime && adapter
+        if (!runtime || !adapter) return;
+        const locked = restriction === 'enforced' && provider === 'claude-cli'
             && args.filter(a => a.startsWith('--tools')).length === 1
-            && args.includes('--tools=Read,WebSearch,WebFetch') && args.includes('--strict-mcp-config')) {
-            this.attestation = { sessionId, runtime, adapter, provider };
-        }
+            && args.includes('--tools=Read,WebSearch,WebFetch') && args.includes('--strict-mcp-config');
+        this.attestation = { sessionId, runtime, adapter, provider, restriction: locked ? 'enforced' : 'prompt_only' };
+    }
+    /** How the bound assistant's tools are restricted, or null when none is bound. */
+    toolRestriction(): 'enforced' | 'prompt_only' | null {
+        return this.attestation?.restriction ?? null;
     }
     available(state: ExecutionState): boolean {
         const a = this.attestation;

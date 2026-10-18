@@ -128554,12 +128554,25 @@ ${output}` : "";
     var AssistantExecution = class {
       attestation = null;
       consents = /* @__PURE__ */ new Map();
+      /**
+       * Bind execution to this exact live assistant session (runtime + adapter
+       * identity). Any CLI may act once the owner turns execution on (owner
+       * decision 2026-10-18: the switch is explicit, and frontier models keep to
+       * the system prompt; a Claude-only gate only took the feature away). The
+       * tool lock is still recorded: 'enforced' when the CLI's built-in tools are
+       * locked by launch flags (claude-cli), 'prompt_only' otherwise, and the
+       * dashboard says which. Every action still needs fresh owner consent.
+       */
       attest(sessionId, runtime, adapter, provider, args, restriction) {
         this.attestation = null;
         this.consents.clear();
-        if (restriction === "enforced" && provider === "claude-cli" && runtime && adapter && args.filter((a) => a.startsWith("--tools")).length === 1 && args.includes("--tools=Read,WebSearch,WebFetch") && args.includes("--strict-mcp-config")) {
-          this.attestation = { sessionId, runtime, adapter, provider };
-        }
+        if (!runtime || !adapter) return;
+        const locked = restriction === "enforced" && provider === "claude-cli" && args.filter((a) => a.startsWith("--tools")).length === 1 && args.includes("--tools=Read,WebSearch,WebFetch") && args.includes("--strict-mcp-config");
+        this.attestation = { sessionId, runtime, adapter, provider, restriction: locked ? "enforced" : "prompt_only" };
+      }
+      /** How the bound assistant's tools are restricted, or null when none is bound. */
+      toolRestriction() {
+        return this.attestation?.restriction ?? null;
       }
       available(state2) {
         const a = this.attestation;
@@ -139967,7 +139980,7 @@ ${ptyResult.output.slice(-2e3)}`);
         success: true,
         machine: { daemonId, hostname: (0, import_node_os22.hostname)() },
         executionEnabled: s2.enabled,
-        restriction: assistantExecution.available({ ...s2, enabled: true }) ? "enforced" : "prompt_only",
+        restriction: assistantExecution.toolRestriction() ?? "prompt_only",
         supportedActions: ["local_pty_approve", "local_pty_reject"],
         limitations: "Local PTY provider permissions only. Remote, extension, webview and arbitrary execution are unavailable. Staged writes require owner Inbox ratification.",
         choices: ownerActionChoices(ctx.components()).map((choice) => ({ ...choice, daemonId })),
