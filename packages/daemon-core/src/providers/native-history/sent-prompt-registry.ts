@@ -11,11 +11,19 @@
 
 const MAX_PROMPTS_PER_SESSION = 20;
 const MIN_SNIPPET_CHARS = 8;
+/**
+ * Inputs shorter than MIN_SNIPPET_CHARS ("ok", "dd?", "응") are kept apart and
+ * only ever matched EXACTLY against a whole user message, never as a substring
+ * (2026-10-18: an antigravity session whose only prompts were "dd" and "dd?"
+ * could never be bound to its conversation, so no reply ever showed).
+ */
+const MIN_SHORT_INPUT_CHARS = 2;
 const MAX_SNIPPET_CHARS = 80;
 
 const promptsByInstance = new Map<string, string[]>();
 // Keep complete input separately: the first line is often a shared worker wrapper.
 const inputsByInstance = new Map<string, string[]>();
+const shortInputsByInstance = new Map<string, string[]>();
 
 function normalizeInput(text: string): string {
     return text.replace(/\s+/g, ' ').trim();
@@ -27,7 +35,7 @@ function normalizeInput(text: string): string {
  */
 export function hasExclusiveSentInput(instanceId: string, userMessages: string[]): boolean {
     const id = instanceId.trim();
-    if (!inputsByInstance.has(id)) return false;
+    if (!inputsByInstance.has(id) && !shortInputsByInstance.has(id)) return false;
     const users = userMessages.map(normalizeInput);
     let matchedOwner = '';
     for (const [sender, inputs] of inputsByInstance) {
@@ -38,6 +46,17 @@ export function hasExclusiveSentInput(instanceId: string, userMessages: string[]
             if (shared) continue;
             // One store containing distinct input from multiple owners is also
             // ambiguous, even if only one conversation UUID matches this reader.
+            if (matchedOwner && matchedOwner !== sender) return false;
+            matchedOwner = sender;
+        }
+    }
+    // Short inputs: a whole user message equal to it, sent by no other session.
+    const exact = new Set(users);
+    for (const [sender, inputs] of shortInputsByInstance) {
+        for (const input of inputs) {
+            if (!exact.has(input)) continue;
+            const shared = [...shortInputsByInstance].some(([otherId, otherInputs]) => otherId !== sender && otherInputs.includes(input));
+            if (shared) continue;
             if (matchedOwner && matchedOwner !== sender) return false;
             matchedOwner = sender;
         }
@@ -60,6 +79,11 @@ export function recordSentPrompt(instanceId: string | undefined, text: string): 
         if (inputs[inputs.length - 1] !== input) inputs.push(input);
         if (inputs.length > MAX_PROMPTS_PER_SESSION) inputs.splice(0, inputs.length - MAX_PROMPTS_PER_SESSION);
         inputsByInstance.set(id, inputs);
+    } else if (id && input.length >= MIN_SHORT_INPUT_CHARS) {
+        const shorts = shortInputsByInstance.get(id) ?? [];
+        if (!shorts.includes(input)) shorts.push(input);
+        if (shorts.length > MAX_PROMPTS_PER_SESSION) shorts.splice(0, shorts.length - MAX_PROMPTS_PER_SESSION);
+        shortInputsByInstance.set(id, shorts);
     }
     const snippet = promptSnippet(text);
     if (!id || !snippet) return;
@@ -87,10 +111,12 @@ export function releaseSentPrompts(instanceId: string | undefined): void {
     if (id) {
         promptsByInstance.delete(id);
         inputsByInstance.delete(id);
+        shortInputsByInstance.delete(id);
     }
 }
 
 export function __resetSentPromptRegistry(): void {
     promptsByInstance.clear();
     inputsByInstance.clear();
+    shortInputsByInstance.clear();
 }

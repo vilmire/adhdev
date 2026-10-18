@@ -96,6 +96,7 @@ import { createGitWorkspaceMonitor } from '../git/git-monitor.js';
 import type { WorkspaceGitSubscriptionParams } from '../git/git-types.js';
 import { runAsyncBatch } from '../chat/async-batch.js';
 import { buildMachineInfo } from '../status/snapshot.js';
+import { readQuotaCacheWithRevalidate } from '../quota/index.js';
 import {
     DEFAULT_MACHINE_RUNTIME_SUBSCRIPTION_INTERVAL_MS,
     DEFAULT_SESSION_HOST_DIAGNOSTICS_SUBSCRIPTION_INTERVAL_MS,
@@ -184,6 +185,20 @@ function signatureOf(value: unknown): string {
     } catch {
         return '';
     }
+}
+
+/**
+ * Default machine.runtime body: the machine info plus the plan-quota cache, the
+ * same shape \`get_machine_runtime_stats\` returns. Without quota here, a page
+ * that subscribed kept the first quota reading forever (2026-10-18: machine
+ * list and detail showed an expired-token reading the session popup had long
+ * replaced). Stale-while-revalidate: the read never waits on a fetch, and the
+ * fetch it may schedule is single-flight and TTL-gated. A quota change changes
+ * the signature below, so it is pushed.
+ */
+function machineInfoWithQuota(): MachineInfo {
+    const quota = readQuotaCacheWithRevalidate();
+    return { ...buildMachineInfo('full'), ...(quota ? { quota } : {}) } as MachineInfo;
 }
 
 /**
@@ -600,7 +615,7 @@ export class TopicSubscriptionRegistry {
      * ({@link machineRuntimeSignature}).
      */
     private async flushMachineRuntime(connectionId?: string, key?: string): Promise<void> {
-        const source = this.opts.sources?.machineInfo ?? (() => buildMachineInfo('full'));
+        const source = this.opts.sources?.machineInfo ?? machineInfoWithQuota;
         let sample: { machine: MachineInfo; signature: string } | null = null;
         for (const entry of this.collectPushEntries('machine.runtime', connectionId, key)) {
             const params = entry.params as MachineRuntimeSubscriptionParams;

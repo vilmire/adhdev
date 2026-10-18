@@ -116399,21 +116399,33 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
     var MAX_PROMPTS_PER_SESSION = 20;
     var MIN_SNIPPET_CHARS = 8;
+    var MIN_SHORT_INPUT_CHARS = 2;
     var MAX_SNIPPET_CHARS = 80;
     var promptsByInstance = /* @__PURE__ */ new Map();
     var inputsByInstance = /* @__PURE__ */ new Map();
+    var shortInputsByInstance = /* @__PURE__ */ new Map();
     function normalizeInput(text4) {
       return text4.replace(/\s+/g, " ").trim();
     }
     function hasExclusiveSentInput(instanceId, userMessages) {
       const id4 = instanceId.trim();
-      if (!inputsByInstance.has(id4)) return false;
+      if (!inputsByInstance.has(id4) && !shortInputsByInstance.has(id4)) return false;
       const users = userMessages.map(normalizeInput);
       let matchedOwner = "";
       for (const [sender, inputs] of inputsByInstance) {
         for (const input of inputs) {
           if (!users.some((user) => user.includes(input))) continue;
           const shared = [...inputsByInstance].some(([otherId, otherInputs]) => otherId !== sender && otherInputs.some((other) => other.includes(input)));
+          if (shared) continue;
+          if (matchedOwner && matchedOwner !== sender) return false;
+          matchedOwner = sender;
+        }
+      }
+      const exact = new Set(users);
+      for (const [sender, inputs] of shortInputsByInstance) {
+        for (const input of inputs) {
+          if (!exact.has(input)) continue;
+          const shared = [...shortInputsByInstance].some(([otherId, otherInputs]) => otherId !== sender && otherInputs.includes(input));
           if (shared) continue;
           if (matchedOwner && matchedOwner !== sender) return false;
           matchedOwner = sender;
@@ -116433,6 +116445,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (inputs[inputs.length - 1] !== input) inputs.push(input);
         if (inputs.length > MAX_PROMPTS_PER_SESSION) inputs.splice(0, inputs.length - MAX_PROMPTS_PER_SESSION);
         inputsByInstance.set(id4, inputs);
+      } else if (id4 && input.length >= MIN_SHORT_INPUT_CHARS) {
+        const shorts = shortInputsByInstance.get(id4) ?? [];
+        if (!shorts.includes(input)) shorts.push(input);
+        if (shorts.length > MAX_PROMPTS_PER_SESSION) shorts.splice(0, shorts.length - MAX_PROMPTS_PER_SESSION);
+        shortInputsByInstance.set(id4, shorts);
       }
       const snippet2 = promptSnippet(text4);
       if (!id4 || !snippet2) return;
@@ -116455,6 +116472,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (id4) {
         promptsByInstance.delete(id4);
         inputsByInstance.delete(id4);
+        shortInputsByInstance.delete(id4);
       }
     }
     var fs48 = __toESM2(require("fs"));
@@ -146390,6 +146408,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return "";
       }
     }
+    function machineInfoWithQuota() {
+      const quota = readQuotaCacheWithRevalidate();
+      return { ...buildMachineInfo("full"), ...quota ? { quota } : {} };
+    }
     function machineRuntimeSignature(machine) {
       const total = typeof machine.totalMem === "number" && machine.totalMem > 0 ? machine.totalMem : 0;
       const pct = (value) => typeof value === "number" && total > 0 ? Math.round(value / total * 100) : value;
@@ -146700,7 +146722,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * ({@link machineRuntimeSignature}).
        */
       async flushMachineRuntime(connectionId, key4) {
-        const source2 = this.opts.sources?.machineInfo ?? (() => buildMachineInfo("full"));
+        const source2 = this.opts.sources?.machineInfo ?? machineInfoWithQuota;
         let sample = null;
         for (const entry of this.collectPushEntries("machine.runtime", connectionId, key4)) {
           const params = entry.params;
