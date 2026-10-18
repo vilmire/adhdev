@@ -120,6 +120,12 @@
             "dragHint": "Drag a tab here to hide it.",
             "resetPanels": "Reset panels",
             "restoreAll": "Restore all",
+            "restoreOne": "Restore",
+            "openOne": "Open",
+            "restoreOneAria": "Restore {{title}}",
+            "openOneAria": "Open {{title}}",
+            "statusInProgress": "In progress",
+            "statusCollapsed": "Collapsed",
             "hideCurrentTab": "Hide current tab",
             "empty": "No hidden tabs.",
             "resetPanelsConfirm": "Move every floating or popout panel back into the main dashboard grid?"

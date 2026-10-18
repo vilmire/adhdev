@@ -40,7 +40,7 @@ import type { Toast } from '../components/dashboard/ToastContainer'
 import type { DashboardMobileSection } from '../components/dashboard/DashboardMobileBottomNav'
 import { getMobileDashboardMode, subscribeMobileDashboardMode } from '../components/settings/MobileDashboardModeSection'
 import { getDashboardWarmChatOptions } from '../utils/dashboard-warm-chat'
-import { buildLiveSessionInboxStateMap, getConversationLiveInboxState, resolveSurfaceHidden } from '../components/dashboard/DashboardMobileChatShared'
+import { buildLiveSessionInboxStateMap } from '../components/dashboard/DashboardMobileChatShared'
 import { useConversationPrefs } from '../hooks/useConversationPrefs'
 import { appendWarningToast } from '../hooks/dashboardCommandUtils'
 import { compareMachineEntries } from '../utils/daemon-utils'
@@ -163,6 +163,19 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
     // resolveMuted), so there is no longer a web-side auto-hide/auto-mute pass or a
     // per-browser localStorage layer — every client of the daemon sees the same
     // state. Hide/Mute buttons send set_conversation_prefs (see handlers below).
+    const liveSessionInboxState = useMemo(
+        () => buildLiveSessionInboxStateMap(ides),
+        [ides],
+    )
+    // Daemon-owned Hide/Mute with an optimistic overlay (instant UI, reconciles
+    // with the status snapshot). Defined here so useDashboardConversations,
+    // hiddenConversations, and the notification/meta hooks below read the same
+    // optimistic overlay immediately on hide/restore.
+    const conversationPrefs = useConversationPrefs(
+        liveSessionInboxState,
+        sendDaemonCommand,
+        useCallback((message: string) => appendWarningToast(setToasts, message), [setToasts]),
+    )
     const {
         conversations,
         visibleConversations,
@@ -173,6 +186,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
         ides: effectiveIdes,
         connectionStates,
         clearedTabs,
+        isConversationHidden: conversationPrefs.isHidden,
     })
     const conversationByTabKey = useMemo(
         () => new Map(conversations.map(conversation => [conversation.tabKey, conversation])),
@@ -189,18 +203,6 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
     // daemon's presentationMode only changes via set_cli_view_mode, so a sticky
     // override always equals the true intended server state. The override is
     // overwritten by the next explicit user toggle for that session.
-    const liveSessionInboxState = useMemo(
-        () => buildLiveSessionInboxStateMap(ides),
-        [ides],
-    )
-    // Daemon-owned Hide/Mute with an optimistic overlay (instant UI, reconciles
-    // with the status snapshot). Defined here so the notification/meta hooks below
-    // can read conversationPrefs.isMuted.
-    const conversationPrefs = useConversationPrefs(
-        liveSessionInboxState,
-        sendDaemonCommand,
-        useCallback((message: string) => appendWarningToast(setToasts, message), [setToasts]),
-    )
     const {
         notifications,
         unreadCount: notificationUnreadCount,
@@ -336,11 +338,11 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
     )
     const showMobileChatMode = isMobile && mobileViewMode === 'chat'
     const hiddenConversations = useMemo(
-        // Render boundary: resolveSurfaceHidden turns "not reported" into a
-        // concrete shown/hidden decision exactly once, so an intermediate copy
-        // that merely omitted the field can no longer assert "not hidden".
-        () => conversations.filter(conversation => resolveSurfaceHidden(getConversationLiveInboxState(conversation, liveSessionInboxState))),
-        [conversations, liveSessionInboxState],
+        // Render boundary: conversationPrefs.isHidden uses resolveSurfaceHidden with
+        // the optimistic overlay so restoring/hiding one tab updates hiddenConversations
+        // and visibleConversations synchronously while set_conversation_prefs persists.
+        () => conversations.filter(conversation => conversationPrefs.isHidden(conversation)),
+        [conversations, conversationPrefs],
     )
 
     const handleRequestOpenSession = useCallback((sessionId: string) => {
@@ -449,6 +451,10 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
         sendDaemonCommand,
     })
 
+    const handleRestoreHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
+        conversationPrefs.setHidden(conversation, false)
+    }, [conversationPrefs])
+
     const handleShowHiddenConversation = useCallback((conversation: import('../components/dashboard/types').ActiveConversation) => {
         conversationPrefs.setHidden(conversation, false)
         openDesktopConversation(conversation)
@@ -543,6 +549,7 @@ export default function Dashboard({ suppressConnectionBanner = false }: Dashboar
                 onDesktopActiveTabChange={setDesktopActiveTab}
                 onRequestScrollToBottom={requestScrollToBottom}
                 onHideConversation={handleHideConversation}
+                onRestoreHiddenConversation={handleRestoreHiddenConversation}
                 onShowHiddenConversation={handleShowHiddenConversation}
                 onShowAllHiddenConversations={handleShowAllHiddenConversations}
                 scrollToBottomRequest={scrollToBottomRequest}

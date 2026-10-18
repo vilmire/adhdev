@@ -16,7 +16,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
-import { getConversationLiveInboxState, type LiveSessionInboxState } from '../components/dashboard/DashboardMobileChatShared'
+import { getConversationLiveInboxState, resolveMuted, resolveSurfaceHidden, type LiveSessionInboxState } from '../components/dashboard/DashboardMobileChatShared'
 import { getConversationMachineId, getCoordinatorRoutingHint } from '../components/dashboard/conversation-selectors'
 
 type PendingPref = { muted?: boolean; hidden?: boolean; at: number }
@@ -72,7 +72,7 @@ export function useConversationPrefs(
     // sessionId → optimistic pending prefs. A ref holds the source of truth; a
     // version counter forces re-render when it changes (the ref itself is stable).
     const pendingRef = useRef<Map<string, PendingPref>>(new Map())
-    const [, bumpVersion] = useState(0)
+    const [version, bumpVersion] = useState(0)
     const rerender = useCallback(() => bumpVersion(v => v + 1), [])
 
     // Reconcile: drop pending entries the live snapshot has caught up to, and
@@ -84,8 +84,8 @@ export function useConversationPrefs(
         let changed = false
         for (const [sessionId, pref] of pending) {
             const live = liveSessionInboxState.get(sessionId)
-            const mutedSettled = pref.muted === undefined || (live ? live.muted === pref.muted : false)
-            const hiddenSettled = pref.hidden === undefined || (live ? live.surfaceHidden === pref.hidden : false)
+            const mutedSettled = pref.muted === undefined || (live ? resolveMuted(live) === pref.muted : false)
+            const hiddenSettled = pref.hidden === undefined || (live ? resolveSurfaceHidden(live) === pref.hidden : false)
             const expired = now - pref.at > PENDING_TTL_MS
             if ((mutedSettled && hiddenSettled) || expired) {
                 pending.delete(sessionId)
@@ -118,18 +118,20 @@ export function useConversationPrefs(
     }, [rerender])
 
     const isMuted = useCallback((conversation: ActiveConversation) => {
+        void version
         const sessionId = conversation.sessionId
         const pending = sessionId ? pendingRef.current.get(sessionId) : undefined
         if (pending?.muted !== undefined) return pending.muted
-        return getConversationLiveInboxState(conversation, liveSessionInboxState).muted ?? false
-    }, [liveSessionInboxState])
+        return resolveMuted(getConversationLiveInboxState(conversation, liveSessionInboxState))
+    }, [liveSessionInboxState, version])
 
     const isHidden = useCallback((conversation: ActiveConversation) => {
+        void version
         const sessionId = conversation.sessionId
         const pending = sessionId ? pendingRef.current.get(sessionId) : undefined
         if (pending?.hidden !== undefined) return pending.hidden
-        return getConversationLiveInboxState(conversation, liveSessionInboxState).surfaceHidden ?? false
-    }, [liveSessionInboxState])
+        return resolveSurfaceHidden(getConversationLiveInboxState(conversation, liveSessionInboxState))
+    }, [liveSessionInboxState, version])
 
     const send = useCallback((conversation: ActiveConversation, prefs: { muted?: boolean; hidden?: boolean }) => {
         const daemonId = getConversationMachineId(conversation)

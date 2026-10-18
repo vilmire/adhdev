@@ -127,6 +127,7 @@ interface DashboardMainViewProps {
     onDesktopActiveTabChange: (tabKey: string | null) => void
     onRequestScrollToBottom: (tabKey: string | null | undefined, intent: DashboardScrollToBottomIntent) => void
     onHideConversation: (conversation: ActiveConversation) => void
+    onRestoreHiddenConversation?: (conversation: ActiveConversation) => void
     onShowHiddenConversation: (conversation: ActiveConversation) => void
     onShowAllHiddenConversations: () => void
     scrollToBottomRequest?: { tabKey: string; nonce: number } | null
@@ -243,6 +244,7 @@ export default function DashboardMainView({
     onDesktopActiveTabChange,
     onRequestScrollToBottom,
     onHideConversation,
+    onRestoreHiddenConversation,
     onShowHiddenConversation,
     onShowAllHiddenConversations,
     scrollToBottomRequest,
@@ -346,11 +348,19 @@ export default function DashboardMainView({
         setMeshGraphConversation(conversation)
     }, [])
 
+    const handleRestoreHiddenConversationWithDock = React.useCallback((conversation: ActiveConversation) => {
+        flushSync(() => {
+            (onRestoreHiddenConversation ?? onShowHiddenConversation)(conversation)
+        })
+        dockviewActionHandlersRef.current?.restoreHiddenTabToSavedLocation(conversation.tabKey)
+    }, [onRestoreHiddenConversation, onShowHiddenConversation])
+
     const handleShowHiddenConversationWithRestore = React.useCallback((conversation: ActiveConversation) => {
         flushSync(() => {
             onShowHiddenConversation(conversation)
         })
         dockviewActionHandlersRef.current?.restoreHiddenTabToSavedLocation(conversation.tabKey)
+        dockviewActionHandlersRef.current?.activateConversationTab(conversation.tabKey)
     }, [onShowHiddenConversation])
     const handleOpenNotification = React.useCallback((notification: DashboardNotificationRecord) => {
         const targetConversation = mobileChatConversations.find(conversation => conversationMatchesTarget(conversation, notification))
@@ -674,6 +684,7 @@ export default function DashboardMainView({
                     hiddenConversations={hiddenConversations}
                     onOpenHistory={onOpenHistory}
                     onHideConversation={onHideConversation}
+                    onRestoreConversation={handleRestoreHiddenConversationWithDock}
                     onShowConversation={handleShowHiddenConversationWithRestore}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onResetPanelsToMain={handleResetAllPanelsToMain}
@@ -734,6 +745,7 @@ export default function DashboardMainView({
                     initialDataLoaded={initialDataLoaded}
                     onShowAllHiddenConversations={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
+                    onRestoreHiddenConversation={handleRestoreHiddenConversationWithDock}
                     onShowHiddenConversation={handleShowHiddenConversationWithRestore}
                     onOpenMeshGraph={handleOpenMeshGraph}
                     onOpenNewSession={openNewSession}

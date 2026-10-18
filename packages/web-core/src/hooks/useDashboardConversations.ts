@@ -11,6 +11,7 @@ interface UseDashboardConversationsOptions {
     ides: DaemonData[]
     connectionStates: Record<string, string>
     clearedTabs: Record<string, number>
+    isConversationHidden?: (conversation: ActiveConversation) => boolean
 }
 
 export function dedupeChatIdes(ides: DaemonData[]) {
@@ -231,6 +232,7 @@ export function useDashboardConversations({
     ides,
     connectionStates,
     clearedTabs,
+    isConversationHidden,
 }: UseDashboardConversationsOptions) {
     const chatIdes = useMemo(() => dedupeChatIdes(ides), [ides])
     // Daemon-owned hidden split: a conversation is hidden from the tab strip /
@@ -356,11 +358,15 @@ export function useDashboardConversations({
     }, [conversationTargetMap])
 
     const visibleConversations = useMemo(() => {
-        const next = conversations.filter(conversation => !getConversationLiveInboxState(conversation, liveInboxState).surfaceHidden)
+        const next = conversations.filter(conversation => (
+            isConversationHidden
+                ? !isConversationHidden(conversation)
+                : !getConversationLiveInboxState(conversation, liveInboxState).surfaceHidden
+        ))
         if (sameArrayRefs(visibleConversationsRef.current, next)) return visibleConversationsRef.current
         visibleConversationsRef.current = next
         return next
-    }, [conversations, liveInboxState])
+    }, [conversations, isConversationHidden, liveInboxState])
 
     const visibleTabKeys = useMemo(() => {
         const next = visibleConversations.map(conversation => conversation.tabKey)

@@ -120,6 +120,12 @@
             "dragHint": "Arrastra una pestaña aquí para ocultarla.",
             "resetPanels": "Restablecer paneles",
             "restoreAll": "Restaurar todo",
+            "restoreOne": "Restaurar",
+            "openOne": "Abrir",
+            "restoreOneAria": "Restaurar {{title}}",
+            "openOneAria": "Abrir {{title}}",
+            "statusInProgress": "En curso",
+            "statusCollapsed": "Contraído",
             "hideCurrentTab": "Ocultar pestaña actual",
             "empty": "No hay pestañas ocultas.",
             "resetPanelsConfirm": "¿Devolver todos los paneles flotantes o emergentes a la cuadrícula principal del panel?"

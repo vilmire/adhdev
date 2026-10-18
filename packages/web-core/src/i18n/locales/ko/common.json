@@ -120,6 +120,12 @@
             "dragHint": "탭을 여기로 끌어다 놓으면 숨겨집니다.",
             "resetPanels": "패널 초기화",
             "restoreAll": "모두 복원",
+            "restoreOne": "복원",
+            "openOne": "열기",
+            "restoreOneAria": "{{title}} 복원",
+            "openOneAria": "{{title}} 열기",
+            "statusInProgress": "진행 중",
+            "statusCollapsed": "접힌 대화",
             "hideCurrentTab": "현재 탭 숨기기",
             "empty": "숨긴 탭이 없습니다.",
             "resetPanelsConfirm": "떠 있는 패널과 팝아웃 패널을 모두 메인 대시보드 그리드로 되돌릴까요?"

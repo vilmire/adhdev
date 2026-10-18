@@ -21,6 +21,7 @@ import { getMobileInboxRowType, type MobileInboxRowType } from './dashboard-mobi
 import StartAssistantButton from './StartAssistantButton'
 import type { StartAssistantState } from '../../hooks/useStartAssistant'
 import DashboardMobileApprovalsLink from './DashboardMobileApprovalsLink'
+import DashboardHiddenConversationsList from './DashboardHiddenConversationsList'
 
 type MobileInboxDebugBundleCollector = (conversation: ActiveConversation) => void | Promise<void>
 
@@ -46,6 +47,8 @@ interface DashboardMobileChatInboxProps {
     onOpenConversation: (conversation: ActiveConversation) => void
     onShowAllHidden: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    /** Restores one hidden conversation back into the visible list without switching screens. */
+    onRestoreHiddenConversation?: (conversation: ActiveConversation) => void
     /** Restores one hidden conversation — the hide toast's Undo. */
     onShowHiddenConversation?: (conversation: ActiveConversation) => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
@@ -462,6 +465,7 @@ export default function DashboardMobileChatInbox({
     onOpenConversation,
     onShowAllHidden,
     onHideConversation,
+    onRestoreHiddenConversation,
     onShowHiddenConversation,
     onOpenMeshGraph,
     onStopCli,
@@ -480,6 +484,7 @@ export default function DashboardMobileChatInbox({
     onOpenApprovals,
 }: DashboardMobileChatInboxProps) {
     const { t } = useTranslation()
+    const [hiddenTabsExpanded, setHiddenTabsExpanded] = useState(false)
     const isDisconnected = wsStatus === 'disconnected' || wsStatus === 'reconnecting' || wsStatus === 'offline' || wsStatus === 'auth_failed'
     // Distinct from isDisconnected: the socket is up, the data just is not here yet.
     // Machine-section scope — gated on the daemon discovery snapshot.
@@ -552,12 +557,13 @@ export default function DashboardMobileChatInbox({
                 label: t('mobileInbox.undo'),
                 variant: 'primary',
                 onClick: () => {
-                    if (onShowHiddenConversation) onShowHiddenConversation(conversation)
+                    if (onRestoreHiddenConversation) onRestoreHiddenConversation(conversation)
+                    else if (onShowHiddenConversation) onShowHiddenConversation(conversation)
                     else onShowAllHidden()
                 },
             }],
         })
-    }, [onHideConversation, onShowAllHidden, onShowHiddenConversation, t])
+    }, [onHideConversation, onRestoreHiddenConversation, onShowAllHidden, onShowHiddenConversation, t])
 
     return (
         <div className="flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-primary">
@@ -865,30 +871,66 @@ export default function DashboardMobileChatInbox({
                 {section === 'chats' && hiddenConversations.length > 0 && (() => {
                     const hiddenGeneratingCount = countGeneratingConversations(hiddenConversations)
                     return (
-                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch">
+                    <section className="flex w-full min-w-0 flex-col gap-2 self-stretch" data-testid="mobile-hidden-tabs-card">
                         <InboxListSection className="mt-4 border-dashed bg-bg-secondary/20">
                             <div className="flex items-center justify-between gap-3 px-4 py-3 text-left">
-                                <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</span>
-                                        <MobileGeneratingIndicator
-                                            count={hiddenGeneratingCount}
-                                            label={t('mobileInbox.generatingCount', { count: hiddenGeneratingCount })}
-                                        />
-                                    </div>
-                                    <div className="mt-0.5 text-xxs text-text-muted">
-                                        {t('mobileInbox.collapsedCount', { count: hiddenConversations.length })}
-                                        {hiddenGeneratingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: hiddenGeneratingCount }) : ''}
-                                    </div>
-                                </div>
                                 <button
                                     type="button"
-                                    className="shrink-0 rounded-full border border-border-subtle bg-bg-primary/70 px-3 py-1.5 text-xs font-semibold text-accent-primary hover:border-border-default"
+                                    className="flex min-h-[44px] min-w-0 flex-1 items-center justify-between gap-2 text-left"
+                                    aria-expanded={hiddenTabsExpanded}
+                                    data-testid="mobile-hidden-tabs-toggle"
+                                    onClick={() => setHiddenTabsExpanded(expanded => !expanded)}
+                                >
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">{t('mobileInbox.hiddenTabs')}</span>
+                                            <MobileGeneratingIndicator
+                                                count={hiddenGeneratingCount}
+                                                label={t('mobileInbox.generatingCount', { count: hiddenGeneratingCount })}
+                                            />
+                                        </div>
+                                        <div className="mt-0.5 text-xxs text-text-muted">
+                                            {t('mobileInbox.collapsedCount', { count: hiddenConversations.length })}
+                                            {hiddenGeneratingCount > 0 ? t('mobileInbox.collapsedGeneratingSuffix', { count: hiddenGeneratingCount }) : ''}
+                                        </div>
+                                    </div>
+                                    <svg
+                                        width="16"
+                                        height="16"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        aria-hidden="true"
+                                        className={`shrink-0 text-text-muted transition-transform ${hiddenTabsExpanded ? 'rotate-180' : ''}`}
+                                    >
+                                        <polyline points="6 9 12 15 18 9" />
+                                    </svg>
+                                </button>
+                                <button
+                                    type="button"
+                                    className="min-h-[36px] shrink-0 rounded-full border border-border-subtle bg-bg-primary/70 px-3 py-1.5 text-xs font-semibold text-accent-primary hover:border-border-default"
+                                    data-testid="mobile-hidden-tabs-restore-all"
                                     onClick={onShowAllHidden}
                                 >
                                     {t('mobileInbox.restoreAll')}
                                 </button>
                             </div>
+                            {hiddenTabsExpanded && (
+                                <DashboardHiddenConversationsList
+                                    conversations={hiddenConversations}
+                                    variant="mobile"
+                                    onRestoreConversation={conversation => {
+                                        (onRestoreHiddenConversation ?? onShowHiddenConversation)?.(conversation)
+                                    }}
+                                    onOpenConversation={conversation => {
+                                        (onRestoreHiddenConversation ?? onShowHiddenConversation)?.(conversation)
+                                        onOpenConversation(conversation)
+                                    }}
+                                />
+                            )}
                         </InboxListSection>
                     </section>
                     )

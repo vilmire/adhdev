@@ -120,6 +120,12 @@
             "dragHint": "将标签页拖到此处以将其隐藏。",
             "resetPanels": "重置面板",
             "restoreAll": "全部恢复",
+            "restoreOne": "恢复",
+            "openOne": "打开",
+            "restoreOneAria": "恢复 {{title}}",
+            "openOneAria": "打开 {{title}}",
+            "statusInProgress": "进行中",
+            "statusCollapsed": "已折叠",
             "hideCurrentTab": "隐藏当前标签页",
             "empty": "没有隐藏的标签页。",
             "resetPanelsConfirm": "将所有浮动或弹出面板移回主仪表盘网格？"

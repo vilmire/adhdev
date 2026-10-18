@@ -14,16 +14,16 @@ import StartAssistantButton from './StartAssistantButton';
 import type { AssistantLaunchTarget, AssistantMachineOption } from './assistant-session';
 import { useBaseDaemons } from '../../context/BaseDaemonContext';
 import CliViewModeToggle from './CliViewModeToggle';
-import { getConversationMetaText, getConversationTitle } from './conversation-presenters';
+import { getConversationTitle } from './conversation-presenters';
 import { isConversationGenerating } from './DashboardMobileChatShared';
 import type { DashboardActionShortcutId } from '../../hooks/useActionShortcuts';
 import { formatRelativeTime } from '../../utils/time';
 import type { DashboardNotificationRecord } from '../../utils/dashboard-notifications';
 import GitStatusPill from '../git/GitStatusPill';
-import LoadingSpinner from '../ui/LoadingSpinner';
 import ConversationActionsMenu from './ConversationActionsMenu';
 import ConversationMeshGraphButton from './ConversationMeshGraphButton';
 import { MeshRoleIcon } from './ConversationMeshRoleMarker';
+import DashboardHiddenConversationsList from './DashboardHiddenConversationsList';
 import { Tooltip } from '../ui/InfoTip';
 
 export interface DashboardHeaderProps {
@@ -39,6 +39,7 @@ export interface DashboardHeaderProps {
     onSetCliViewMode?: (mode: CliConversationViewMode) => void;
     onHideConversation?: (conversation: ActiveConversation) => void;
     hiddenConversations?: ActiveConversation[];
+    onRestoreConversation?: (conversation: ActiveConversation) => void;
     onShowConversation?: (conversation: ActiveConversation) => void;
     onShowAllHidden?: () => void;
     onResetPanelsToMain?: () => void;
@@ -251,6 +252,7 @@ export default function DashboardHeader({
     onSetCliViewMode,
     onHideConversation,
     hiddenConversations = [],
+    onRestoreConversation,
     onShowConversation,
     onShowAllHidden,
     onResetPanelsToMain,
@@ -585,33 +587,18 @@ export default function DashboardHeader({
                                     </button>
                                 )}
                                 {hiddenConversations.length > 0 ? (
-                                    <div className="dashboard-header-hidden-list">
-                                        {hiddenConversations.map(conversation => (
-                                            <button
-                                                key={conversation.tabKey}
-                                                type="button"
-                                                className="dashboard-header-inbox-item"
-                                                onClick={() => {
-                                                    onShowConversation?.(conversation);
-                                                    onHiddenOpenChange(false);
-                                                }}
-                                            >
-                                                <span className="dashboard-header-inbox-item-title">
-                                                    {isConversationGenerating(conversation) && (
-                                                        <LoadingSpinner size={12} thickness={2} color="success" label={t('dashboard.header.generating')} />
-                                                    )}
-                                                    <MeshRoleIcon conversation={conversation} size={12} />
-                                                    {getConversationTitle(conversation)}
-                                                </span>
-                                                <span className="dashboard-header-inbox-item-meta">
-                                                    {hiddenConversations.indexOf(conversation) < 9 ? (
-                                                        <span className="dashboard-header-item-shortcut">⌥{hiddenConversations.indexOf(conversation) + 1}</span>
-                                                    ) : null}
-                                                    {getConversationMetaText(conversation)}
-                                                </span>
-                                            </button>
-                                        ))}
-                                    </div>
+                                    <DashboardHiddenConversationsList
+                                        conversations={hiddenConversations}
+                                        variant="desktop"
+                                        showShortcuts
+                                        onRestoreConversation={conversation => {
+                                            (onRestoreConversation ?? onShowConversation)?.(conversation);
+                                        }}
+                                        onOpenConversation={conversation => {
+                                            onShowConversation?.(conversation);
+                                            onHiddenOpenChange(false);
+                                        }}
+                                    />
                                 ) : (
                                     <div className="dashboard-header-inbox-empty">{t('dashboard.hidden.empty')}</div>
                                 )}

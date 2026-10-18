@@ -61,6 +61,8 @@ interface DashboardMobileChatModeProps {
     initialDataLoaded?: boolean
     onShowAllHiddenConversations: () => void
     onHideConversation?: (conversation: ActiveConversation) => void
+    /** Restores one hidden conversation back into the visible list without switching screens. */
+    onRestoreHiddenConversation?: (conversation: ActiveConversation) => void
     /** Restores one hidden conversation (mobile hide → Undo toast). */
     onShowHiddenConversation?: (conversation: ActiveConversation) => void
     onOpenMeshGraph?: (conversation: ActiveConversation) => void
@@ -101,6 +103,7 @@ export default function DashboardMobileChatMode({
     initialDataLoaded = true,
     onShowAllHiddenConversations,
     onHideConversation,
+    onRestoreHiddenConversation,
     onShowHiddenConversation,
     onOpenMeshGraph,
     onOpenNewSession,
@@ -124,8 +127,11 @@ export default function DashboardMobileChatMode({
     const openApprovals = useCallback(() => navigate('/approvals'), [navigate])
 
     const selectedConversation = useMemo(
-        () => conversations.find(conversation => conversation.tabKey === selectedTabKey) || conversations[0] || null,
-        [conversations, selectedTabKey],
+        () => conversations.find(conversation => conversation.tabKey === selectedTabKey)
+            || hiddenConversations.find(conversation => conversation.tabKey === selectedTabKey)
+            || conversations[0]
+            || null,
+        [conversations, hiddenConversations, selectedTabKey],
     )
     const selectedIdeEntry = useMemo(
         () => selectedConversation ? ides.find(ide => ide.id === selectedConversation.routeId) : undefined,
@@ -376,6 +382,7 @@ export default function DashboardMobileChatMode({
                     onOpenConversation={navigation.openConversation}
                     onShowAllHidden={onShowAllHiddenConversations}
                     onHideConversation={onHideConversation}
+                    onRestoreHiddenConversation={onRestoreHiddenConversation}
                     onShowHiddenConversation={onShowHiddenConversation}
                     onOpenMeshGraph={onOpenMeshGraph}
                     onStopCli={onStopCli}
