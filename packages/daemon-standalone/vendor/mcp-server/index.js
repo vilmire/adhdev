@@ -149638,17 +149638,24 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function isOverBroadTrustRoot(real, configRoot) {
       if (!path83.isAbsolute(real)) return true;
-      const normalized = real.replace(/\/+$/, "") || "/";
-      if (normalized === "/" || path83.dirname(normalized) === normalized) return true;
-      const home = (() => {
+      const trimSlashes = (p) => p.replace(/\/+$/, "") || "/";
+      const canonicalForms = (p) => {
+        const raw = trimSlashes(p);
         try {
-          return fs90.realpathSync(os34.homedir());
+          const resolved = trimSlashes(fs90.realpathSync(raw));
+          return resolved === raw ? [raw] : [raw, resolved];
         } catch {
-          return os34.homedir();
+          return [raw];
         }
-      })();
-      if (normalized === home.replace(/\/+$/, "")) return true;
-      if (configRoot !== void 0 && normalized === configRoot.replace(/\/+$/, "")) return true;
+      };
+      const candidateForms = canonicalForms(real);
+      if (candidateForms.some((c) => c === "/" || path83.dirname(c) === c)) return true;
+      const homeForms = canonicalForms(os34.homedir());
+      if (candidateForms.some((c) => homeForms.includes(c))) return true;
+      if (configRoot !== void 0) {
+        const configForms = canonicalForms(configRoot);
+        if (candidateForms.some((c) => configForms.includes(c))) return true;
+      }
       return false;
     }
     function escapeTomlKey(value) {

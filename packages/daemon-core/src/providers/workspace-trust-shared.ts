@@ -58,17 +58,24 @@ export function registeredGrokRepoRoot(workingDir: string, registeredRoots: read
  */
 export function isOverBroadTrustRoot(real: string, configRoot?: string): boolean {
     if (!path.isAbsolute(real)) return true;
-    const normalized = real.replace(/\/+$/, '') || '/';
-    if (normalized === '/' || path.dirname(normalized) === normalized) return true;
-    const home = (() => {
+    const trimSlashes = (p: string) => p.replace(/\/+$/, '') || '/';
+    const canonicalForms = (p: string): string[] => {
+        const raw = trimSlashes(p);
         try {
-            return fs.realpathSync(os.homedir());
+            const resolved = trimSlashes(fs.realpathSync(raw));
+            return resolved === raw ? [raw] : [raw, resolved];
         } catch {
-            return os.homedir();
+            return [raw];
         }
-    })();
-    if (normalized === home.replace(/\/+$/, '')) return true;
-    if (configRoot !== undefined && normalized === configRoot.replace(/\/+$/, '')) return true;
+    };
+    const candidateForms = canonicalForms(real);
+    if (candidateForms.some((c) => c === '/' || path.dirname(c) === c)) return true;
+    const homeForms = canonicalForms(os.homedir());
+    if (candidateForms.some((c) => homeForms.includes(c))) return true;
+    if (configRoot !== undefined) {
+        const configForms = canonicalForms(configRoot);
+        if (candidateForms.some((c) => configForms.includes(c))) return true;
+    }
     return false;
 }
 
