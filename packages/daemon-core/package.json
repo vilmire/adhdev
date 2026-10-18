@@ -78,6 +78,7 @@
     "@adhdev/mesh-shared": "*",
     "@adhdev/session-host-core": "*",
     "@agentclientprotocol/sdk": "^0.16.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "better-sqlite3": "^12.10.0",

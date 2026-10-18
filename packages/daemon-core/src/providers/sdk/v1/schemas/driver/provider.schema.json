@@ -210,6 +210,15 @@
           "default": [],
           "description": "Argv array passed to runtime.command."
         },
+        "env": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "description": "Allowlist of parent environment variable names to inherit in addition to the minimal platform environment."
+        },
         "platforms": {
           "type": "array",
           "minItems": 1,

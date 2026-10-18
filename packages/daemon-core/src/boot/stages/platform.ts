@@ -13,6 +13,7 @@ import { applyDaemonEnvOverrides } from '../../config/env-overrides.js';
 import { clearUpgradeFailureNotice, readUpgradeFailureNotice } from '../../commands/upgrade-failure-notice.js';
 import { compareVersions } from '../../providers/provider-loader-support.js';
 import { installProviderProcessShim } from '../../providers/sdk/v1/sandbox/require-whitelist.js';
+import { primeDriverMcpSdk } from '../../drivers/mcp-client-sdk.js';
 import { applyProcessHardening } from '../process-hardening.js';
 import type { DaemonBootConfig } from '../daemon-components.js';
 import type { PlatformStage, UpgradeFailureNotice } from './types.js';
@@ -47,6 +48,8 @@ export function upgradeFailureResolvedBy(notice: UpgradeFailureNotice, statusVer
 export async function bootPlatform(cfg: DaemonBootConfig): Promise<PlatformStage> {
     // Freeze built-in prototypes and shadow process.exit/kill/abort/binding/dlopen
     // so provider-script callers throw instead of killing the daemon.
+    // Evaluate and construct the official SDK before freezing prototypes.
+    primeDriverMcpSdk();
     applyProcessHardening();
     installProviderProcessShim();
     installGlobalInterceptor();

@@ -11,6 +11,8 @@ export interface DriverManifest {
     kind: 'mcp-stdio';
     command: string;
     args?: string[];
+    /** Names of parent environment variables explicitly approved for inheritance. */
+    env?: string[];
     platforms?: Array<'win32' | 'darwin' | 'linux'>;
     startupTimeoutMs?: number;
     idleStopMs?: number;
