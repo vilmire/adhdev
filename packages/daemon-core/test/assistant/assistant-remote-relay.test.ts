@@ -212,6 +212,7 @@ describe('remote relay poller → AssistantRelay', () => {
 
     it('without a usable cursor only commits younger than the last send are relayed (host-clock ages)', async () => {
         const h = harness();
+        h.exactReader.mockResolvedValue('the answer'); // only verified final_native evidence is relayed
         h.relay.openThread(MESH);
         h.clock.advance(30_000); // the send was 30 s ago (this daemon restarted since: no cursor)
         h.setAnswer(() => ok({

@@ -60,6 +60,7 @@ function harness(opts: { registry?: AssistantRegistry; log?: AssistantInputLog }
         coordinatorMeshOf: (sid) => (sid === COORD ? MESH : null),
         projectSlug: () => 'blog',
         readCoordinatorTail: async () => 'Fixed it.',
+        rehydrateAttemptReport: async () => ({ body: 'Fixed it.', completeness: 'final_native' }), // only verified native evidence is relayed
         meshWork: () => ({ activeMissions: 1, pending: 0, assigned: 1 }),
         hasAssistant: () => true,
         assistantSessionId: () => registry.read()?.sessionId ?? null,

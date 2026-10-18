@@ -1,4 +1,4 @@
-import { RELAY_NATIVE_GRACE_MS, RELAY_NATIVE_WAIT_MS } from '../../src/assistant/assistant-relay-format.js';
+import { RELAY_NATIVE_GRACE_MS, RELAY_NATIVE_WAIT_MS, RELAY_READABILITY_CACHE_MS } from '../../src/assistant/assistant-relay-format.js';
 import { reportMessageId } from '../../src/assistant/project-views.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssistantRelay } from '../../src/assistant/assistant-relay.js';
@@ -188,20 +188,23 @@ describe('batched actionable relay gaps', () => {
         h.relay.stop();
     });
 
-    it('reports unreadable targets once without inventing a readable cursor', async () => {
+    it('never wakes for an unreadable target and emits one cursor notice once it becomes readable', async () => {
         const h = harness({ body: 'unused', completeness: 'final_native' });
-        const canRead = vi.fn(async () => false);
+        const canRead = vi.fn(async (_reply: unknown) => false);
         (h.relay as any).ports.canReadCoordinatorReply = canRead;
         h.audit.mockResolvedValue([missing(1)]); h.relay.tick(); await micro();
-        const unavailable = await h.relay.pullPending(null);
-        expect(unavailable[0].text).toContain('reply could not be read');
-        expect(unavailable[0].text).not.toContain('"messageId"');
+        expect(await h.relay.pullPending(null)).toEqual([]);
         expect(canRead).toHaveBeenCalledWith(expect.objectContaining({ messageId: cursorFor(missing(1)) }));
+        expect(h.relay.missedReportsFor('mesh')).toBe(1);
         canRead.mockResolvedValue(true);
         h.relay.tick(); await micro();
-        const notices = await h.relay.pullPending(null);
-        expect(notices).toHaveLength(0);
+        expect(await h.relay.pullPending(null)).toEqual([]);
         expect(canRead).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(RELAY_READABILITY_CACHE_MS + 1); h.relay.tick(); await micro();
+        const notices = await h.relay.pullPending(null);
+        expect(notices).toHaveLength(1);
+        expect(notices[0].text).toContain(cursorFor(missing(1)));
+        h.relay.tick(); await micro(); expect(await h.relay.pullPending(null)).toEqual([]);
         h.relay.stop();
     });
 

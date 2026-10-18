@@ -27,6 +27,11 @@ export const RELAY_CAPTURE_PROBE_MS = 3_000;
 export const RELAY_CAPTURE_BACKOFF_MS = 60_000;
 export const RELAY_CAPTURE_BACKOFF_MAX_MS = 15 * 60_000;
 export const RELAY_READABILITY_CACHE_MS = 5 * 60_000;
+/** A reply that stays unreadable this long stops being watched and is only counted. */
+export const RELAY_UNREADABLE_HOLD_MS = 30 * 60_000;
+/** Watched unreadable replies per queued notice, and abandoned ones remembered for counting. */
+export const RELAY_UNREADABLE_MAX_HELD = 32;
+export const RELAY_UNREADABLE_MAX_ABANDONED = 256;
 /** Further text remains available through the exact project_read cursor. */
 export const RELAY_MAX_AUTO_PAGES = 3;
 /** Longest a batch waits for the coordinator to stop chaining turns. */

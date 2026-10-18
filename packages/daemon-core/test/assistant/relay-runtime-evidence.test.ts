@@ -104,7 +104,7 @@ describe('runtime native relay evidence wiring', () => {
     });
 
     it('binds remote fallback context to the already known coordinator session', async () => {
-        remoteReply = { coordinatorSessionId: 'remote-coord', messages: [{ role: 'assistant', messageId: 'e'.repeat(64) }] };
+        remoteReply = { coordinatorSessionId: 'remote-coord', messages: [{ role: 'assistant', kind: 'standard', messageId: 'e'.repeat(64), text: 'Synthetic remote context.' }] };
         expect(await ports().readCoordinatorReference!('remote', 'remote-coord')).toEqual({ coordinatorSessionId: 'remote-coord', messageId: 'e'.repeat(64), offset: 0 });
         remoteReply.coordinatorSessionId = 'foreign';
         expect(await ports().readCoordinatorReference!('remote', 'remote-coord')).toBeNull();

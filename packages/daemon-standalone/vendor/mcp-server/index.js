@@ -94472,18 +94472,24 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           ...command === "chat_history" ? { offset: 0, excludeRecentCount: 0 } : {}
         });
         if (!read2.success || !Array.isArray(read2.messages)) continue;
-        const message = [...read2.messages].reverse().find((m) => isVisible(m) && ["assistant", "agent"].includes(String(m.role)) && (!m.kind || m.kind === "standard") && messageText(m).trim());
+        const message = [...read2.messages].reverse().find((m) => isVisible(m) && referenceable(m.role, m.kind, messageText(m)));
         if (message) return { coordinatorSessionId: sessionId, messageId: reportMessageId(message), offset: 0 };
       }
       return null;
     }
+    function remoteCoordinatorReference(messages, sessionId) {
+      const message = [...messages].reverse().find((m) => isVisible(m) && referenceable(m?.role, m?.kind, typeof m?.text === "string" ? m.text : "") && typeof m.messageId === "string" && /^[a-f0-9]{64}$/.test(m.messageId));
+      return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
+    }
     var normalize6;
+    var referenceable;
     var init_relay_transcript_reference = __esm2({
       "src/assistant/relay-transcript-reference.ts"() {
         "use strict";
         init_report_continuation();
         init_project_views();
         normalize6 = (text4) => text4.replace(/\r\n?/g, "\n");
+        referenceable = (role, kind, text4) => ["assistant", "agent"].includes(String(role)) && (kind === void 0 || kind === null || kind === "" || kind === "standard") && !!text4.trim();
       }
     });
     function githubRemote(value) {
@@ -95997,6 +96003,9 @@ ${b.text}`).join("\n\n");
       RELAY_QUIET_MS: () => RELAY_QUIET_MS,
       RELAY_READABILITY_CACHE_MS: () => RELAY_READABILITY_CACHE_MS,
       RELAY_STALL_AFTER_MS: () => RELAY_STALL_AFTER_MS,
+      RELAY_UNREADABLE_HOLD_MS: () => RELAY_UNREADABLE_HOLD_MS,
+      RELAY_UNREADABLE_MAX_ABANDONED: () => RELAY_UNREADABLE_MAX_ABANDONED,
+      RELAY_UNREADABLE_MAX_HELD: () => RELAY_UNREADABLE_MAX_HELD,
       RESTART_NOTE_MAX_AGE_MS: () => RESTART_NOTE_MAX_AGE_MS,
       buildApprovalSignal: () => buildApprovalSignal,
       buildCoordinatorEndedSignal: () => buildCoordinatorEndedSignal,
@@ -96127,6 +96136,9 @@ ${b.text}`).join("\n\n");
     var RELAY_CAPTURE_BACKOFF_MS;
     var RELAY_CAPTURE_BACKOFF_MAX_MS;
     var RELAY_READABILITY_CACHE_MS;
+    var RELAY_UNREADABLE_HOLD_MS;
+    var RELAY_UNREADABLE_MAX_HELD;
+    var RELAY_UNREADABLE_MAX_ABANDONED;
     var RELAY_MAX_AUTO_PAGES;
     var RELAY_MAX_WAIT_MS;
     var RELAY_IDLE_CLOSE_GRACE_MS;
@@ -96154,6 +96166,9 @@ ${b.text}`).join("\n\n");
         RELAY_CAPTURE_BACKOFF_MS = 6e4;
         RELAY_CAPTURE_BACKOFF_MAX_MS = 15 * 6e4;
         RELAY_READABILITY_CACHE_MS = 5 * 6e4;
+        RELAY_UNREADABLE_HOLD_MS = 30 * 6e4;
+        RELAY_UNREADABLE_MAX_HELD = 32;
+        RELAY_UNREADABLE_MAX_ABANDONED = 256;
         RELAY_MAX_AUTO_PAGES = 3;
         RELAY_MAX_WAIT_MS = 12e4;
         RELAY_IDLE_CLOSE_GRACE_MS = 10 * 6e4;
@@ -97005,6 +97020,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           markNotified(reply, recipient) {
             this.store.writeReceipt(receiptKey(recipient, gapGroup(reply)), "1", this.now(), "notice");
           }
+          /** Exact-reply notice receipt: a held unreadable reply is announced once, even after its group was. */
+          replyNotified(reply, recipient) {
+            return this.store.readReceipt(receiptKey("notified-reply", recipient, reply.sessionId, reply.messageId), this.now()) !== null;
+          }
+          markReplyNotified(reply, recipient) {
+            this.store.writeReceipt(receiptKey("notified-reply", recipient, reply.sessionId, reply.messageId), "1", this.now(), "notice");
+          }
           wasRead(reply, recipient) {
             return !!reply.messageId && this.store.readReceipt(receiptKey("read", recipient, reply.sessionId, reply.messageId), this.now()) === "full" || !!reply.attemptId && !!reply.attemptReportId && this.store.readReceipt(receiptKey("read", recipient, reply.sessionId, reply.attemptId, reply.attemptReportId), this.now()) === "full";
           }
@@ -97042,21 +97064,21 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "report could" : "reports could"} not be captured in full: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
       return cursor ? `${status} Inspect the latest readable coordinator context (not a verified report for this attempt) with project_read ${JSON.stringify({ project, ...cursor })}.` : `${status} No readable coordinator message is available; ${count} ${count === 1 ? "report could" : "reports could"} not be read. Check project_status ${JSON.stringify({ project })}.`;
     }
-    function unreadableReplyNotice(count) {
-      return `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "reply could" : "replies could"} not be read. No readable message cursor is available for these replies; inspect project_status for the coordinator state.`;
-    }
+    var replyKey;
     var RelayDeliveryPolicy;
     var init_relay_delivery_policy = __esm2({
       "src/assistant/relay-delivery-policy.ts"() {
         "use strict";
         init_relay_gap_tracker();
         init_assistant_relay_format();
+        replyKey = (r) => receiptKey(r.meshId, r.sessionId, r.messageId);
         RelayDeliveryPolicy = class {
           constructor(store2, now) {
             this.store = store2;
             this.now = now;
           }
           probes = /* @__PURE__ */ new Map();
+          abandoned = /* @__PURE__ */ new Map();
           expired(committedAt) {
             return this.now() >= committedAt + RELAY_NATIVE_WAIT_MS + RELAY_NATIVE_GRACE_MS;
           }
@@ -97075,25 +97097,93 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
           failed(id4) {
             const failures = this.retry(id4).failures + 1;
-            const nextAt = this.now() + Math.min(RELAY_CAPTURE_BACKOFF_MAX_MS, RELAY_CAPTURE_BACKOFF_MS * 2 ** Math.min(20, failures - 1));
-            this.store.writeReceipt(receiptKey("capture", id4), JSON.stringify({ failures, nextAt }), this.now(), "capture");
+            this.store.writeReceipt(receiptKey("capture", id4), JSON.stringify({ failures, nextAt: this.now() + this.backoff(failures) }), this.now(), "capture");
           }
-          /** Cache successes and failures, including bounded probe timeouts. */
-          readable(reply, probe) {
+          backoff(failures) {
+            return Math.min(RELAY_CAPTURE_BACKOFF_MAX_MS, RELAY_CAPTURE_BACKOFF_MS * 2 ** Math.min(20, failures - 1));
+          }
+          /**
+           * Definite answers are cached for RELAY_READABILITY_CACHE_MS. A probe that
+           * timed out or threw is "unknown": it is never cached as unreadable and
+           * is retried on the capture backoff.
+           */
+          async verdict(reply, probe) {
             const key4 = receiptKey("readability", reply.meshId, reply.sessionId, reply.messageId);
-            const cached5 = this.store.readReceipt(key4, this.now());
-            if (cached5) {
-              const verdict = JSON.parse(cached5);
-              if (this.now() - verdict.at < RELAY_READABILITY_CACHE_MS) return Promise.resolve(verdict.readable);
+            let cached5 = null;
+            try {
+              cached5 = JSON.parse(this.store.readReceipt(key4, this.now()) ?? "null");
+            } catch {
+            }
+            if (cached5?.v) {
+              const ttl = cached5.v === "unknown" ? this.backoff(cached5.n ?? 1) : RELAY_READABILITY_CACHE_MS;
+              if (this.now() - cached5.at < ttl) return cached5.v;
             }
             const pending = this.probes.get(key4);
             if (pending) return pending;
-            const run3 = Promise.resolve().then(probe).catch(() => false).then((readable) => {
-              this.store.writeReceipt(key4, JSON.stringify({ at: this.now(), readable }), this.now(), "readability");
-              return readable;
+            const run3 = Promise.resolve().then(probe).catch(() => void 0).then((answer) => {
+              const v = answer === void 0 ? "unknown" : answer ? "readable" : "unreadable";
+              this.store.writeReceipt(key4, JSON.stringify({ at: this.now(), v, ...v === "unknown" ? { n: (cached5?.v === "unknown" ? cached5.n ?? 1 : 0) + 1 } : {} }), this.now(), "readability");
+              return v;
             }).finally(() => this.probes.delete(key4));
             this.probes.set(key4, run3);
             return run3;
+          }
+          /** First time a reply was held back as not-yet-readable (durable, so a restart cannot extend the hold). */
+          heldSince(reply, create) {
+            const key4 = receiptKey("unreadable-since", reply.meshId, reply.sessionId, reply.messageId);
+            const stored = Number(this.store.readReceipt(key4, this.now()));
+            if (Number.isFinite(stored) && stored > 0) return stored;
+            if (create) this.store.writeReceipt(key4, String(this.now()), this.now(), "readability");
+            return create ? this.now() : null;
+          }
+          isHeld(reply) {
+            return this.heldSince(reply, false) !== null;
+          }
+          /**
+           * Split a gap notice's replies into readable-now and still-pending. Pending
+           * replies are not announced and not marked notified: a later readable
+           * verdict yields one actionable notice. Replies unreadable for longer than
+           * RELAY_UNREADABLE_HOLD_MS (or beyond the per-notice cap) stop being watched
+           * and are only counted.
+           */
+          async resolve(replies, recipient, gaps, covered, probe) {
+            const open = (r) => !covered(r) && !gaps.wasRead(r, recipient) && !gaps.replyNotified(r, recipient) && (!gaps.notified(r, recipient) || this.isHeld(r));
+            const readable = [];
+            const pending = [];
+            for (const reply of replies.filter(open)) {
+              const known = this.heldSince(reply, false);
+              if (known !== null && this.now() - known >= RELAY_UNREADABLE_HOLD_MS) {
+                this.abandon(reply);
+                continue;
+              }
+              if (await this.verdict(reply, probe(reply)) === "readable") readable.push(reply);
+              else pending.push(reply);
+            }
+            const live = readable.filter(open);
+            const keep = pending.filter(open);
+            for (const reply of keep.slice(0, Math.max(0, keep.length - RELAY_UNREADABLE_MAX_HELD))) this.abandon(reply);
+            const held = keep.slice(-RELAY_UNREADABLE_MAX_HELD);
+            for (const reply of held) this.heldSince(reply, true);
+            return { readable: live, pending: held };
+          }
+          abandon(reply) {
+            const key4 = replyKey(reply);
+            this.abandoned.delete(key4);
+            this.abandoned.set(key4, reply.meshId ?? "");
+            while (this.abandoned.size > RELAY_UNREADABLE_MAX_ABANDONED) this.abandoned.delete(this.abandoned.keys().next().value);
+          }
+          /** Held and abandoned unreadable replies per mesh, for the cumulative counter and project_status. */
+          unreadableByMesh(held, meshOf) {
+            const out = /* @__PURE__ */ new Map();
+            const seen2 = /* @__PURE__ */ new Set();
+            const add = (key4, mesh) => {
+              if (!mesh || seen2.has(key4)) return;
+              seen2.add(key4);
+              out.set(mesh, (out.get(mesh) ?? 0) + 1);
+            };
+            for (const [key4, mesh] of this.abandoned) add(key4, mesh);
+            for (const reply of held) if (this.isHeld(reply)) add(replyKey(reply), meshOf(reply));
+            return out;
           }
         };
       }
@@ -97848,7 +97938,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             const messageId = parts.length === 1 ? parts[0].messageId : `${parts[0].messageId}+${parts.length - 1}`;
             const missed = this.missedReportsIncluding(taken, parts);
-            const gap = !parts.some((p) => p.messageId.startsWith("gap:")) ? "" : this.newGapLine(sid, missed);
+            const gap = !parts.some((p) => p.messageId.startsWith("gap:") && !p.surfaced) ? "" : this.newGapLine(sid, missed);
             const text4 = [...parts.map((p) => p.text), ...gap ? [gap] : []].join("\n\n");
             const outcome = await this.ports.submit(sid, { text: text4, messageId, policy: { mode: "queue" } });
             if (outcome.kind === "refused") return;
@@ -97866,7 +97956,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
             if (lifecycle !== this.lifecycle) return [];
             const missed = this.missedReportsIncluding(taken, parts);
-            const gap = !parts.some((p) => p.messageId.startsWith("gap:")) ? "" : this.newGapLine(sessionId, missed);
+            const gap = !parts.some((p) => p.messageId.startsWith("gap:") && !p.surfaced) ? "" : this.newGapLine(sessionId, missed);
             if (gap && parts.length) parts.push({ text: gap, source: "relay", messageId: `gap:${this.clock.now()}:${++this.seq}` });
             this.commitTaken(taken, parts, sessionId);
             if (gap && parts.length) this.rememberGaps(sessionId, missed);
@@ -97906,34 +97996,37 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 if (held.length) this.queue.push({ ...item, attemptIds: held });
                 item.attemptIds = selected2;
               }
+              let gap;
+              let suffix = false;
               if (item.kind === "line" && item.gapReplies) {
-                const unread = item.gapReplies.filter((reply) => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
-                if (!unread.length) {
-                  taken.push(item);
+                const plan = await this.deliveryPolicy.resolve(
+                  item.gapReplies,
+                  sid,
+                  this.gaps,
+                  (reply) => this.replyCovered(reply, reply.text),
+                  (reply) => async () => this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2e3, void 0)
+                );
+                item.gapReplies = [...plan.readable, ...plan.pending];
+                if (!plan.readable.length) {
+                  if (!plan.pending.length) taken.push(item);
                   continue;
                 }
-                const readable = [];
-                for (const reply of unread) if (await this.deliveryPolicy.readable(
-                  reply,
-                  () => this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2e3, false)
-                )) readable.push(reply);
-                const remaining = unread.filter((reply) => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
-                if (!remaining.length) {
-                  taken.push(item);
-                  continue;
-                }
-                const readableNow = readable.filter((reply) => remaining.includes(reply));
-                const project = this.ports.projectSlug(remaining[0].meshId ?? this.ports.coordinatorMeshOf(remaining[0].sessionId) ?? "") ?? "";
-                item.text = [
-                  readableNow.length ? buildReadableReplyGap(readableNow, project) : "",
-                  remaining.length > readableNow.length ? unreadableReplyNotice(remaining.length - readableNow.length) : ""
-                ].filter(Boolean).join("\n");
+                const project = this.ports.projectSlug(plan.readable[0].meshId ?? this.ports.coordinatorMeshOf(plan.readable[0].sessionId) ?? "") ?? "";
+                item.text = buildReadableReplyGap(plan.readable, project);
+                gap = { item, replies: plan.readable };
+                suffix = plan.pending.length > 0 || plan.readable.some((r) => this.deliveryPolicy.isHeld(r));
               }
-              const part = item.kind === "line" ? { text: item.text, source: item.source, messageId: item.messageId, ...item.meshId ? { meshId: item.meshId } : {} } : item.attemptIds.some((id4) => !this.hasCapturedBody(id4)) ? await this.renderUnavailable(item) : await this.renderRelay(item);
+              const part = item.kind === "line" ? {
+                text: item.text,
+                source: item.source,
+                messageId: suffix ? `${item.messageId}:${receiptKey(gap.replies.map((r) => r.messageId)).slice(0, 16)}` : item.messageId,
+                ...item.meshId ? { meshId: item.meshId } : {},
+                ...gap ? { gap } : {}
+              } : item.attemptIds.some((id4) => !this.hasCapturedBody(id4)) ? await this.renderUnavailable(item) : await this.renderRelay(item);
               const cost = codePoints(part.text) + 2;
               if (parts.length && size + cost > RELAY_DELIVERY_MAX_CHARS) break;
               parts.push(part);
-              taken.push(item);
+              if (!gap || item.kind === "line" && !item.gapReplies?.some((r) => !gap.replies.includes(r))) taken.push(item);
               size += cost;
             }
             for (const [meshId, count] of folded) {
@@ -97944,12 +98037,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
           /** The taken items reached the assistant: dequeue, log, mark rows delivered, reset signals. */
           commitTaken(taken, parts, sid, submitted = false) {
-            this.queue = this.queue.filter((i) => !taken.includes(i));
             const at = this.clock.now();
-            const sent = new Set(parts.map((p) => p.messageId));
-            for (const item of taken) if (item.kind === "line" && item.gapReplies && sent.has(item.messageId)) {
-              this.gaps.markNotified(item.gapReplies[0], sid);
+            const emptied = /* @__PURE__ */ new Set();
+            for (const { gap } of parts) if (gap) {
+              this.gaps.markNotified(gap.replies[0], sid);
+              for (const r of gap.replies) this.gaps.markReplyNotified(r, sid);
+              gap.item.gapReplies = gap.item.gapReplies?.filter((r) => !gap.replies.includes(r));
+              if (!gap.item.gapReplies?.length) emptied.add(gap.item);
             }
+            this.queue = this.queue.filter((i) => !taken.includes(i) && !emptied.has(i));
             if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
             if (sid) {
               for (const p of parts) if (p.source === "review") this.ports.onReviewDelivered?.(sid, p.messageId, at);
@@ -97982,7 +98078,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 chars: 0
               }, sid);
             }
-            this.ports.store.markDelivered(settled, at, rendered, coverage);
+            const surfaced = /* @__PURE__ */ new Set([...parts.flatMap((p) => p.surfaced ?? []), ...[...sentReports.values()].filter((r) => r.autoStopped).map((r) => r.attemptId)]);
+            this.ports.store.markDelivered(settled, at, [...rendered, ...settled.filter((id4) => surfaced.has(id4))], coverage);
             if (relayItems.length) this.loadDeliveredCoverage(at);
             for (const id4 of settled) {
               this.attemptBodyCapture.delete(id4);
@@ -98025,13 +98122,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             for (const m of missed) this.ports.store.writeReceipt(receiptKey("counter", sessionId, m.slug), String(m.count), this.clock.now(), "counter");
           }
           /** Stored gaps (not yet counted again) per mesh. */
-          unrenderedByMesh() {
-            return new Map(this.ports.store.countUnrendered(this.clock.now() - MISSED_REPORT_WINDOW_MS).byMesh.map((r) => [r.meshId, r.count]));
+          unrenderedByMesh(announced = []) {
+            const counts = new Map(this.ports.store.countUnrendered(this.clock.now() - MISSED_REPORT_WINDOW_MS).byMesh.map((r) => [r.meshId, r.count]));
+            const held = this.queue.flatMap((i) => i.kind === "line" ? i.gapReplies ?? [] : []).filter((r) => !announced.includes(r));
+            for (const [meshId, n] of this.deliveryPolicy.unreadableByMesh(held, (r) => r.meshId ?? this.ports.coordinatorMeshOf(r.sessionId)))
+              counts.set(meshId, (counts.get(meshId) ?? 0) + n);
+            return counts;
           }
           /** Stored gaps plus the ones this pending delivery is about to create. */
           missedReportsIncluding(taken, parts) {
-            const counts = this.unrenderedByMesh();
-            const sentReports = new Set(parts.flatMap((p) => p.reports?.map((r) => r.attemptId) ?? []));
+            const counts = this.unrenderedByMesh(parts.flatMap((p) => p.gap?.replies ?? []));
+            const sentReports = new Set(parts.flatMap((p) => [...p.reports?.map((r) => r.attemptId) ?? [], ...p.surfaced ?? []]));
             for (const item of taken) {
               if (item.kind !== "relay") continue;
               const missed = item.attemptIds.filter((id4) => !sentReports.has(id4)).length;
@@ -98082,6 +98183,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               source: "relay",
               meshId: item.meshId,
               messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
+              surfaced: [...item.attemptIds],
               text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor)
             };
           }
@@ -98583,8 +98685,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!out.ok) return null;
           const result = out.result.result;
           if (result?.coordinatorSessionId !== sessionId || !Array.isArray(result.messages)) return null;
-          const message = [...result.messages].reverse().find((m) => m?.role === "assistant" && typeof m.messageId === "string" && /^[a-f0-9]{64}$/.test(m.messageId));
-          return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
+          return remoteCoordinatorReference(result.messages, sessionId);
         },
         onRelayGap: (_klass, at) => metrics2?.bump("relay_gaps", "", at),
         readCoordinatorTail: async (sessionId) => {

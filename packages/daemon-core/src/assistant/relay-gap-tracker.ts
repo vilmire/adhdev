@@ -16,6 +16,13 @@ export class RelayGapTracker {
     markNotified(reply: AuditedCoordinatorReply, recipient: string | null): void {
         this.store.writeReceipt(receiptKey(recipient, gapGroup(reply)), '1', this.now(), 'notice');
     }
+    /** Exact-reply notice receipt: a held unreadable reply is announced once, even after its group was. */
+    replyNotified(reply: AuditedCoordinatorReply, recipient: string | null): boolean {
+        return this.store.readReceipt(receiptKey('notified-reply', recipient, reply.sessionId, reply.messageId), this.now()) !== null;
+    }
+    markReplyNotified(reply: AuditedCoordinatorReply, recipient: string | null): void {
+        this.store.writeReceipt(receiptKey('notified-reply', recipient, reply.sessionId, reply.messageId), '1', this.now(), 'notice');
+    }
     wasRead(reply: AuditedCoordinatorReply, recipient: string | null): boolean {
         return (!!reply.messageId && this.store.readReceipt(receiptKey('read', recipient, reply.sessionId, reply.messageId), this.now()) === 'full')
             || (!!reply.attemptId && !!reply.attemptReportId

@@ -1,4 +1,4 @@
-import { RelayDeliveryPolicy, unavailableReportNotice, unreadableReplyNotice } from './relay-delivery-policy.js';
+import { RelayDeliveryPolicy, unavailableReportNotice } from './relay-delivery-policy.js';
 import { RelayGapTracker, receiptKey, gapGroup, buildReadableReplyGap } from './relay-gap-tracker.js';
 import { reportBodyId, type ReportContinuation } from './report-continuation.js';
 import { createHash } from 'node:crypto';
@@ -155,7 +155,9 @@ interface RenderedReportPage {
     coverage?: RenderedAttemptCoverage;
     autoStopped?: boolean;
 }
-type Part = { text: string; source: AssistantInputSource; messageId: string; meshId?: string; reports?: RenderedReportPage[] };
+/** `gap`: replies of a queued notice this part announces. `surfaced`: attempts the assistant is told about by notice/cursor instead of a body. */
+type Part = { text: string; source: AssistantInputSource; messageId: string; meshId?: string; reports?: RenderedReportPage[];
+    gap?: { item: Item & { kind: 'line' }; replies: AuditedCoordinatorReply[] }; surfaced?: string[] };
 
 /** One entry of `assistant_pending_relays` → `assistantEvents` (MCP-only assistant). */
 export interface AssistantPulledEvent {
@@ -937,7 +939,8 @@ export class AssistantRelay {
         // Historical counts accompany actionable gap pointers only. A clean
         // relay must not restart a project_read loop for an old, unreadable loss.
         const missed = this.missedReportsIncluding(taken, parts);
-        const gap = !parts.some(p => p.messageId.startsWith('gap:')) ? '' : this.newGapLine(sid, missed);
+        // The counter rides only with an actionable reply notice, never with an unavailable-report notice.
+        const gap = !parts.some(p => p.messageId.startsWith('gap:') && !p.surfaced) ? '' : this.newGapLine(sid, missed);
         const text = [...parts.map((p) => p.text), ...(gap ? [gap] : [])].join('\n\n');
         const outcome = await this.ports.submit(sid, { text, messageId, policy: { mode: 'queue' } });
         if (outcome.kind === 'refused') return;
@@ -956,7 +959,8 @@ export class AssistantRelay {
         const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
         if (lifecycle !== this.lifecycle) return [];
         const missed = this.missedReportsIncluding(taken, parts);
-        const gap = !parts.some(p => p.messageId.startsWith('gap:')) ? '' : this.newGapLine(sessionId, missed);
+        // The counter rides only with an actionable reply notice, never with an unavailable-report notice.
+        const gap = !parts.some(p => p.messageId.startsWith('gap:') && !p.surfaced) ? '' : this.newGapLine(sessionId, missed);
         if (gap && parts.length) parts.push({ text: gap, source: 'relay', messageId: `gap:${this.clock.now()}:${++this.seq}` });
         this.commitTaken(taken, parts, sessionId);
         if (gap && parts.length) this.rememberGaps(sessionId, missed);
@@ -999,26 +1003,25 @@ export class AssistantRelay {
                 if (held.length) this.queue.push({ ...item, attemptIds: held });
                 item.attemptIds = selected;
             }
+            let gap: Part['gap']; let suffix = false;
             if (item.kind === 'line' && item.gapReplies) {
-                const unread = item.gapReplies.filter(reply => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
-                if (!unread.length) { taken.push(item); continue; }
-                const readable: AuditedCoordinatorReply[] = [];
-                for (const reply of unread) if (await this.deliveryPolicy.readable(reply,
-                    () => this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2_000, false))) readable.push(reply);
-                const remaining = unread.filter(reply => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
-                if (!remaining.length) { taken.push(item); continue; }
-                const readableNow = readable.filter(reply => remaining.includes(reply));
-                const project = this.ports.projectSlug(remaining[0]!.meshId ?? this.ports.coordinatorMeshOf(remaining[0]!.sessionId) ?? '') ?? '';
-                item.text = [readableNow.length ? buildReadableReplyGap(readableNow, project) : '',
-                    remaining.length > readableNow.length ? unreadableReplyNotice(remaining.length - readableNow.length) : ''].filter(Boolean).join('\n');
+                const plan = await this.deliveryPolicy.resolve(item.gapReplies, sid, this.gaps, reply => this.replyCovered(reply, reply.text),
+                    reply => async () => this.bounded<boolean | undefined>(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2_000, undefined));
+                item.gapReplies = [...plan.readable, ...plan.pending];
+                // Nothing actionable: stay queued silently (counted, never a standalone wake-up) until readable or aged out.
+                if (!plan.readable.length) { if (!plan.pending.length) taken.push(item); continue; }
+                const project = this.ports.projectSlug(plan.readable[0]!.meshId ?? this.ports.coordinatorMeshOf(plan.readable[0]!.sessionId) ?? '') ?? '';
+                item.text = buildReadableReplyGap(plan.readable, project);
+                gap = { item, replies: plan.readable }; suffix = plan.pending.length > 0 || plan.readable.some(r => this.deliveryPolicy.isHeld(r));
             }
             const part: Part = item.kind === 'line'
-                ? { text: item.text, source: item.source, messageId: item.messageId, ...(item.meshId ? { meshId: item.meshId } : {}) }
+                ? { text: item.text, source: item.source, messageId: suffix ? `${item.messageId}:${receiptKey(gap!.replies.map(r => r.messageId)).slice(0, 16)}` : item.messageId,
+                    ...(item.meshId ? { meshId: item.meshId } : {}), ...(gap ? { gap } : {}) }
                 : item.attemptIds.some(id => !this.hasCapturedBody(id)) ? await this.renderUnavailable(item) : await this.renderRelay(item);
             const cost = codePoints(part.text) + 2;
             if (parts.length && size + cost > RELAY_DELIVERY_MAX_CHARS) break;
             parts.push(part);
-            taken.push(item);
+            if (!gap || (item.kind === 'line' && !item.gapReplies?.some(r => !gap!.replies.includes(r)))) taken.push(item);
             size += cost;
         }
         for (const [meshId, count] of folded) {
@@ -1030,12 +1033,16 @@ export class AssistantRelay {
 
     /** The taken items reached the assistant: dequeue, log, mark rows delivered, reset signals. */
     private commitTaken(taken: Item[], parts: Part[], sid: string | null, submitted = false): void {
-        this.queue = this.queue.filter((i) => !taken.includes(i));
         const at = this.clock.now();
-        const sent = new Set(parts.map(p => p.messageId));
-        for (const item of taken) if (item.kind === 'line' && item.gapReplies && sent.has(item.messageId)) {
-            this.gaps.markNotified(item.gapReplies[0]!, sid);
+        // An announced reply is notified exactly once; replies still unreadable stay queued and unmarked.
+        const emptied = new Set<Item>();
+        for (const { gap } of parts) if (gap) {
+            this.gaps.markNotified(gap.replies[0]!, sid);
+            for (const r of gap.replies) this.gaps.markReplyNotified(r, sid);
+            gap.item.gapReplies = gap.item.gapReplies?.filter(r => !gap.replies.includes(r));
+            if (!gap.item.gapReplies?.length) emptied.add(gap.item);
         }
+        this.queue = this.queue.filter((i) => !taken.includes(i) && !emptied.has(i));
         if (sid) for (const p of parts) this.ports.inputLog.append(sid, p.source, { at, messageId: p.messageId });
         if (sid) for (const p of parts) if (p.source === 'review') this.ports.onReviewDelivered?.(sid, p.messageId, at);
         const relayItems = taken.filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay');
@@ -1066,7 +1073,9 @@ export class AssistantRelay {
             this.gaps.markNotified({ sessionId: this.restoredAttempts.get(id)?.sessionId ?? item.coordinatorSessionId,
                 attemptId: id, messageAt: item.committedAt, text: '', chars: 0 }, sid);
         }
-        this.ports.store.markDelivered(settled, at, rendered, coverage);
+        // A notice or continuation cursor is a surfaced report, not a missed one (countUnrendered).
+        const surfaced = new Set([...parts.flatMap(p => p.surfaced ?? []), ...[...sentReports.values()].filter(r => r.autoStopped).map(r => r.attemptId)]);
+        this.ports.store.markDelivered(settled, at, [...rendered, ...settled.filter(id => surfaced.has(id))], coverage);
         if (relayItems.length) this.loadDeliveredCoverage(at);
         for (const id of settled) {
             this.attemptBodyCapture.delete(id); this.attemptBodies.delete(id); this.attemptMeta.delete(id); this.attemptBodyAt.delete(id); this.restoredAttempts.delete(id);
@@ -1111,14 +1120,19 @@ export class AssistantRelay {
     }
 
     /** Stored gaps (not yet counted again) per mesh. */
-    private unrenderedByMesh(): Map<string, number> {
-        return new Map(this.ports.store.countUnrendered(this.clock.now() - MISSED_REPORT_WINDOW_MS).byMesh.map((r) => [r.meshId, r.count]));
+    private unrenderedByMesh(announced: readonly AuditedCoordinatorReply[] = []): Map<string, number> {
+        const counts = new Map(this.ports.store.countUnrendered(this.clock.now() - MISSED_REPORT_WINDOW_MS).byMesh.map((r) => [r.meshId, r.count]));
+        // Unreadable replies are only counted (here and in project_status), never a wake-up of their own.
+        const held = this.queue.flatMap(i => i.kind === 'line' ? i.gapReplies ?? [] : []).filter(r => !announced.includes(r));
+        for (const [meshId, n] of this.deliveryPolicy.unreadableByMesh(held, r => r.meshId ?? this.ports.coordinatorMeshOf(r.sessionId)))
+            counts.set(meshId, (counts.get(meshId) ?? 0) + n);
+        return counts;
     }
 
     /** Stored gaps plus the ones this pending delivery is about to create. */
     private missedReportsIncluding(taken: readonly Item[], parts: readonly Part[]): Array<{ slug: string; count: number }> {
-        const counts = this.unrenderedByMesh();
-        const sentReports = new Set(parts.flatMap(p => p.reports?.map(r => r.attemptId) ?? []));
+        const counts = this.unrenderedByMesh(parts.flatMap(p => p.gap?.replies ?? []));
+        const sentReports = new Set(parts.flatMap(p => [...(p.reports?.map(r => r.attemptId) ?? []), ...(p.surfaced ?? [])]));
         for (const item of taken) {
             if (item.kind !== 'relay') continue;
             // Missing captures and aged-out items do not deliver their reports.
@@ -1173,7 +1187,7 @@ export class AssistantRelay {
         let cursor: ReportContinuation | null = null;
         try { cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2_000, null); } catch { /* absence is reported explicitly */ }
         return { source: 'relay', meshId: item.meshId,
-            messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
+            messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`, surfaced: [...item.attemptIds],
             text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor) };
     }
 

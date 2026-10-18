@@ -1,4 +1,4 @@
-import { coordinatorReplyReadable, latestCoordinatorReference } from './relay-transcript-reference.js';
+import { coordinatorReplyReadable, latestCoordinatorReference, remoteCoordinatorReference } from './relay-transcript-reference.js';
 import { localAttemptReport } from '../commands/high-family/assistant.js';
 import { TerminalWatchStore } from './terminal-watch.js';
 import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
@@ -229,9 +229,7 @@ export function buildAssistantRelayPorts(
             // The relay already knows this session from the host's committed
             // attempt. A remote payload cannot substitute a different session.
             if (result?.coordinatorSessionId !== sessionId || !Array.isArray(result.messages)) return null;
-            const message = [...result.messages].reverse().find(m => m?.role === 'assistant'
-                && typeof m.messageId === 'string' && /^[a-f0-9]{64}$/.test(m.messageId));
-            return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
+            return remoteCoordinatorReference(result.messages, sessionId);
         },
         onRelayGap: (_klass, at) => metrics?.bump('relay_gaps', '', at),
         readCoordinatorTail: async (sessionId) => {

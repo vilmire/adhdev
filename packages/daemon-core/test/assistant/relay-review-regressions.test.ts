@@ -11,7 +11,7 @@ import { pageAttemptReport, reportBodyId } from '../../src/assistant/report-cont
 import { verifiedNativeRead } from '../../src/assistant/attempt-report-recovery.js';
 import { LOG } from '../../src/logging/logger.js';
 import { RELAY_BODY_MAX_CHARS, RELAY_MAX_AUTO_PAGES, RELAY_NATIVE_GRACE_MS, RELAY_NATIVE_WAIT_MS,
-    RELAY_CAPTURE_BACKOFF_MS, RELAY_READABILITY_CACHE_MS } from '../../src/assistant/assistant-relay-format.js';
+    RELAY_CAPTURE_BACKOFF_MS, RELAY_READABILITY_CACHE_MS, RELAY_UNREADABLE_HOLD_MS } from '../../src/assistant/assistant-relay-format.js';
 
 const NOW = Date.parse('2026-10-18T06:00:00Z');
 const raw = { role: 'assistant', kind: 'standard', receivedAt: NOW - 1000, content: 'Synthetic coordinator context. All sentences are readable.' };
@@ -56,7 +56,10 @@ describe('review: bounded capture liveness', () => {
         expect(events[0].text).toContain(reportMessageId(raw));
         expect(events[0].text).not.toContain(partial);
         expect(h.store.listUndelivered()).toEqual([]);
-        expect(h.store.countUnrendered().total).toBe(1);
+        // The assistant was told by notice + cursor: surfaced, not missed, and no cumulative counter in the same delivery.
+        expect(h.store.countUnrendered().total).toBe(0);
+        expect(h.relay.missedReportsFor('mesh')).toBe(0);
+        expect(events.map(e => e.text).join('\n')).not.toContain('did not reach you');
         h.relay.tick(); await micro(); expect(await h.relay.pullPending('mcp')).toEqual([]);
         h.relay.stop();
     });
@@ -89,19 +92,85 @@ describe('review: bounded capture liveness', () => {
 });
 
 describe('review: gap receipt and readability boundaries', () => {
-    it('caches unreadability across refused flushes and emits one bounded unreadable notice', async () => {
-        const h = harness(null, 'assistant'); h.state.ready = true; h.state.refuse = true;
+    it('holds an unreadable reply silently: no standalone wake-up, counted in project_status, verdict cached', async () => {
+        const h = harness(null, 'assistant'); h.state.ready = true;
         h.readable.mockResolvedValue(false); h.audit.mockResolvedValue([reply()]);
         h.relay.tick(); await micro(); await h.relay.idle();
-        expect(h.submits[0]).toContain('1 coordinator reply could not be read');
-        expect(h.submits[0]).not.toContain('"messageId"');
         for (let n = 0; n < 3; n++) { h.relay.tick(); await micro(); await h.relay.idle(); }
+        expect(h.submits).toEqual([]);
         expect(h.readable).toHaveBeenCalledTimes(1);
+        expect(h.relay.missedReportsFor('mesh')).toBe(1);
         await vi.advanceTimersByTimeAsync(RELAY_READABILITY_CACHE_MS + 1); h.relay.tick(); await micro(); await h.relay.idle();
         expect(h.readable).toHaveBeenCalledTimes(2);
+        expect(h.submits).toEqual([]);
+        h.relay.stop();
+    });
+
+    it('announces a held reply once with its cursor when it becomes readable, even after a refused flush', async () => {
+        const h = harness(null, 'assistant'); h.state.ready = true;
+        h.readable.mockResolvedValue(false); h.audit.mockResolvedValue([reply()]);
+        h.relay.tick(); await micro(); await h.relay.idle();
+        expect(h.submits).toEqual([]);
+        h.readable.mockResolvedValue(true); h.state.refuse = true;
+        await vi.advanceTimersByTimeAsync(RELAY_READABILITY_CACHE_MS + 1); h.relay.tick(); await micro(); await h.relay.idle();
+        const refused = h.submits.length; // every refused attempt carried the cursor but marked nothing notified
+        expect(refused).toBeGreaterThan(0);
+        expect(h.submits.every(text => text.includes(reportMessageId(raw)))).toBe(true);
         h.state.refuse = false; h.relay.tick(); await micro(); await h.relay.idle();
-        const count = h.submits.length;
-        h.relay.tick(); await micro(); await h.relay.idle(); expect(h.submits).toHaveLength(count);
+        const accepted = h.submits.length;
+        expect(accepted).toBe(refused + 1);
+        expect(h.submits[accepted - 1]).not.toContain('did not reach you'); // it is no longer a held/missed reply
+        expect(h.relay.missedReportsFor('mesh')).toBe(0);
+        for (let n = 0; n < 3; n++) { h.relay.tick(); await micro(); await h.relay.idle(); }
+        expect(h.submits).toHaveLength(accepted);
+        h.relay.stop();
+    });
+
+    it('does not let a notified attempt group swallow a reply that was unreadable then became readable', async () => {
+        const h = harness(null, 'assistant'); h.state.ready = true;
+        const later = { ...reply(), messageAt: NOW, messageId: 'b'.repeat(64), text: 'Later synthetic reply B.', chars: 24 };
+        h.readable.mockImplementation(async (r: any) => r.messageId !== later.messageId);
+        h.audit.mockResolvedValue([reply(), later]);
+        h.relay.tick(); await micro(); await h.relay.idle();
+        expect(h.submits).toHaveLength(1);
+        expect(h.submits[0]).toContain(reportMessageId(raw)); expect(h.submits[0]).not.toContain(later.messageId);
+        expect(h.relay.missedReportsFor('mesh')).toBe(1);
+        h.readable.mockResolvedValue(true);
+        await vi.advanceTimersByTimeAsync(RELAY_READABILITY_CACHE_MS + 1); h.relay.tick(); await micro(); await h.relay.idle();
+        expect(h.submits).toHaveLength(2);
+        expect(h.submits[1]).toContain(later.messageId);
+        for (let n = 0; n < 3; n++) { h.relay.tick(); await micro(); await h.relay.idle(); }
+        expect(h.submits).toHaveLength(2);
+        h.relay.stop();
+    });
+
+    it.each(['timeout', 'throw'])('treats a probe %s as unknown, not unreadable: retried on backoff and announced once readable', async mode => {
+        const h = harness(null, 'assistant'); h.state.ready = true;
+        h.readable.mockImplementation(mode === 'timeout' ? () => new Promise(() => {}) : async () => { throw new Error('transient'); });
+        h.audit.mockResolvedValue([reply()]);
+        h.relay.tick(); await micro(); await vi.advanceTimersByTimeAsync(2_001); await h.relay.idle();
+        expect(h.submits).toEqual([]);
+        expect(h.readable).toHaveBeenCalledTimes(1);
+        h.readable.mockResolvedValue(true);
+        h.relay.tick(); await micro(); await h.relay.idle();
+        expect(h.readable).toHaveBeenCalledTimes(1); // still inside the retry backoff, not the 5-minute cache
+        await vi.advanceTimersByTimeAsync(RELAY_CAPTURE_BACKOFF_MS); h.relay.tick(); await micro(); await h.relay.idle();
+        expect(h.readable).toHaveBeenCalledTimes(2);
+        expect(h.submits).toHaveLength(1);
+        expect(h.submits[0]).toContain(reportMessageId(raw));
+        h.relay.stop();
+    });
+
+    it('stops watching a reply that stays unreadable past the hold: counted, never announced, queue drained', async () => {
+        const h = harness(null, 'assistant'); h.state.ready = true;
+        h.readable.mockResolvedValue(false); h.audit.mockResolvedValue([reply()]);
+        h.relay.tick(); await micro(); await h.relay.idle();
+        await vi.advanceTimersByTimeAsync(RELAY_UNREADABLE_HOLD_MS + 1); h.relay.tick(); await micro(); await h.relay.idle();
+        h.readable.mockResolvedValue(true); // too late: the hold is bounded
+        await vi.advanceTimersByTimeAsync(RELAY_READABILITY_CACHE_MS + 1); h.relay.tick(); await micro(); await h.relay.idle();
+        expect(h.submits).toEqual([]);
+        expect((h.relay as any).queue.filter((i: any) => i.kind === 'line')).toEqual([]);
+        expect(h.relay.missedReportsFor('mesh')).toBe(1);
         h.relay.stop();
     });
 
@@ -148,7 +217,9 @@ it('caps automatic pages at three and supplies one exact cursor for the remainin
     expect(pages[2].text).toContain(reportBodyId(body));
     expect(pages.map(p => p.text).join('\n').match(/Automatic delivery stopped/g)).toHaveLength(1);
     expect(h.store.listUndelivered()).toEqual([]);
-    expect(h.store.countUnrendered().total).toBe(1); // partial is never called a complete relay
+    expect(h.store.countUnrendered().total).toBe(0); // the continuation cursor makes it surfaced, not missed
+    expect(h.relay.missedReportsFor('mesh')).toBe(0);
+    expect(pages.map(p => p.text).join('\n')).not.toContain('did not reach you');
     const rest = pageAttemptReport(body, { attemptId: 'plain:a', coordinatorSessionId: 'coord', reportId: reportBodyId(body),
         offset: RELAY_MAX_AUTO_PAGES * RELAY_BODY_MAX_CHARS }, 'native_window');
     expect(rest.text).toBe(body.slice(RELAY_MAX_AUTO_PAGES * RELAY_BODY_MAX_CHARS, RELAY_MAX_AUTO_PAGES * RELAY_BODY_MAX_CHARS + 4000));
@@ -205,11 +276,12 @@ it('restores an available verified report after grace instead of replacing it wi
 });
 
 
-it('does not submit an unreadability notice when its asynchronous probe finishes after stop', async () => {
+it('does not submit anything when a readable verdict arrives after stop', async () => {
     const h = harness(null, 'assistant'); h.state.ready = true;
-    h.readable.mockImplementation(() => new Promise(() => {}));
+    let release: (v: boolean) => void = () => {};
+    h.readable.mockImplementation(() => new Promise<boolean>(resolve => { release = resolve; }));
     h.audit.mockResolvedValue([reply()]); h.relay.tick(); await micro();
     expect(h.readable).toHaveBeenCalledTimes(1);
-    h.relay.stop(); await micro(); await h.relay.idle();
+    h.relay.stop(); release(true); await micro(); await h.relay.idle();
     expect(h.submits).toEqual([]);
 });
