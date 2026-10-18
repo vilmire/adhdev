@@ -99,9 +99,6 @@ export class ProviderLoader extends ProviderRegistry {
   getDetectedVersion(type: string): string | null {
     return this.versionArchive?.getLatest(type) ?? null;
   }
-    return this.versionArchive?.getLatest(type) ?? null;
-  }
-
 
   /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;
