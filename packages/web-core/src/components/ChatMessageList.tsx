@@ -131,6 +131,12 @@ export interface ChatMessageListProps {
      * (read-only share views) loses nothing that would work.
      */
     fetchToolBlock?: FetchToolBlock;
+    /**
+     * Answer buttons: when the latest chat message is an assistant question
+     * that carries reply choices, tapping one sends it through this. Omitted
+     * by read-only hosts, which then show no buttons.
+     */
+    onChooseReply?: (text: string) => void;
 }
 
 export interface ChatMessageListRef {
@@ -141,7 +147,7 @@ export interface ChatMessageListRef {
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock, onChooseReply },
     ref
 ) {
     const { t } = useTranslation('common');
@@ -245,6 +251,16 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
         };
     }, [messages, showActivityMessages, agentName, userName, receivedAtMap]);
 
+    // The latest chat-surface message decides the answer buttons: they show
+    // only while an assistant question is the last thing said.
+    const latestReplyChoices = useMemo(() => {
+        for (let i = visibleMessages.length - 1; i >= 0; i--) {
+            const row = rowByMessage.get(visibleMessages[i]!);
+            if (!row || row.surface !== 'chat') continue;
+            return row.kind === 'assistant' && row.replyChoices ? row.replyChoices : [];
+        }
+        return [];
+    }, [visibleMessages, rowByMessage]);
     const visibleLastMessageHash = visibleMessages.length === messages.length ? lastMessageHash : undefined;
 
     // Last message signature — prefer daemon-owned hash so idle status renders don't re-hash large content.
@@ -646,6 +662,17 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                 );
             })}
 
+            {/* Answer buttons for the latest assistant question. */}
+            {onChooseReply && !isWorking && latestReplyChoices.length > 0 && (
+                <div className="chat-reply-choices self-start" data-testid="chat-reply-choices">
+                    {latestReplyChoices.map((choice) => (
+                        <button key={choice} type="button" className="chat-reply-choice" onClick={() => onChooseReply(choice)}>
+                            {choice}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {/* Typing indicator */}
             {isWorking && (
                 <div className="self-start chat-typing-wrapper">
@@ -698,6 +725,7 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.userName === next.userName
     && prev.isCliMode === next.isCliMode
     && prev.isWorking === next.isWorking
+    && prev.onChooseReply === next.onChooseReply
     && prev.contextKey === next.contextKey
     && prev.receivedAtMap === next.receivedAtMap
     && prev.lastMessageHash === next.lastMessageHash

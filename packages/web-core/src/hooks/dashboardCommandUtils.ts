@@ -1,3 +1,4 @@
+import { i18next } from '../i18n/config'
 import type { Dispatch, SetStateAction } from 'react'
 import type { ActiveConversation } from '../components/dashboard/types'
 import { getConversationDaemonRouteId, getConversationProviderType } from '../components/dashboard/conversation-selectors'
@@ -39,9 +40,9 @@ export function appendWarningToast(
     }])
 }
 
-/** Short, non-wrapping placeholders for the chat input while a modal blocks sending. */
-export const SEND_BLOCKED_APPROVAL_PLACEHOLDER = 'Waiting for approval…'
-export const SEND_BLOCKED_CHOICE_PLACEHOLDER = 'Waiting for your answer…'
+/** Short, non-wrapping placeholders for the chat input while a modal blocks sending (i18n keys). */
+export const SEND_BLOCKED_APPROVAL_PLACEHOLDER = 'chatPane.sendBlocked.approvalPlaceholder'
+export const SEND_BLOCKED_CHOICE_PLACEHOLDER = 'chatPane.sendBlocked.choicePlaceholder'
 
 export function getConversationSendBlockMessage(
     conv: Pick<ActiveConversation, 'status' | 'modalButtons'> | undefined,
@@ -49,9 +50,9 @@ export function getConversationSendBlockMessage(
     if (!conv) return null
     if (Array.isArray(conv.modalButtons) && conv.modalButtons.length > 0) {
         if (conv.status === 'waiting_choice') {
-            return 'Answer the pending question above.'
+            return i18next.t('chatPane.sendBlocked.choiceMessage', { ns: 'common' })
         }
-        return 'Approve or reject the pending request above.'
+        return i18next.t('chatPane.sendBlocked.approvalMessage', { ns: 'common' })
     }
 
     return null
@@ -61,9 +62,7 @@ export function getConversationSendBlockedPlaceholder(
     conv: Pick<ActiveConversation, 'status' | 'modalButtons'> | undefined,
 ): string | null {
     if (!getConversationSendBlockMessage(conv)) return null
-    return conv?.status === 'waiting_choice'
-        ? SEND_BLOCKED_CHOICE_PLACEHOLDER
-        : SEND_BLOCKED_APPROVAL_PLACEHOLDER
+    return i18next.t(conv?.status === 'waiting_choice' ? SEND_BLOCKED_CHOICE_PLACEHOLDER : SEND_BLOCKED_APPROVAL_PLACEHOLDER, { ns: 'common' })
 }
 
 export function getInlineSendFailureMessage(error: unknown): string {

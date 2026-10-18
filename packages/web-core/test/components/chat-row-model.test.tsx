@@ -34,7 +34,9 @@ import {
     buildRestartNote,
     buildStallSignal,
     buildUncoveredReplyGap,
+    buildPreviousSessionNote,
 } from '../../../daemon-core/src/assistant/assistant-relay-format'
+import { DIGEST_INPUT_TEXT } from '../../../daemon-core/src/assistant/assistant-digest-scheduler'
 import { REVIEW_INPUT_TEXT } from '../../../daemon-core/src/assistant/assistant-review'
 
 const T = 1_700_000_000_000
@@ -157,7 +159,9 @@ describe('injected-text detection', () => {
         const html = renderRow({ role: 'user', content: nudge })
         expect(html).not.toContain('chat-bubble-user')
         expect(html).not.toContain('pasted_content')
-        expect(html.split('class="chat-notice-chip"').length - 1).toBe(3)
+        // Three notices from one delivery fold into one "3 notices" line.
+        expect(html.split('class="chat-notice-chip"').length - 1).toBe(1)
+        expect(html).toContain('3 notices')
     })
 
     it('every [ADHDev …] notice header is a notice, the relay header stays a relay', () => {
@@ -199,6 +203,8 @@ describe('daemon notices are summarised in the user language', () => {
         expect(summaryOf(buildUncoveredReplyGap('no_attempt', T))?.key).toBe('chat.notice.replyGap')
         expect(summaryOf(buildRestartNote({ endedAt: T, openThreads: [], pendingRelays: 0 }))?.key).toBe('chat.notice.restart')
         expect(summaryOf('[ADHDev terminal delivery uncertainty] {"project":"m"}')?.key).toBe('chat.notice.deliveryUncertain')
+        expect(summaryOf(buildPreviousSessionNote([{ role: 'user', text: 'deploy it' }])!)?.key).toBe('chat.notice.previousSession')
+        expect(summaryOf(DIGEST_INPUT_TEXT)?.key).toBe('chat.notice.digest')
     })
     it('an unknown notice keeps its own text', () => {
         expect(summaryOf('[ADHDev something new] hello')).toBeNull()

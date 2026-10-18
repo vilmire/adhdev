@@ -1581,6 +1581,8 @@
         "agent": "エージェント",
         "tool": "ツール",
         "toolResult": "結果",
+        "noticeGroup": "通知 {{count}} 件",
+        "noticeGroupCollapse": "通知 {{count}} 件を閉じる",
         "notice": {
             "stall": "30分間進捗なし — 待機 {{pending}} 件、進行中ミッション {{missions}} 件",
             "progress": "30分経っても作業中、結果はまだありません",
@@ -1593,7 +1595,9 @@
             "relayTruncated": "この報告は一部のみの可能性があります",
             "deliveryUncertain": "通知の配信を確認できませんでした",
             "reportReferences": "報告の参照",
-            "reportUnavailable": "一部の報告の原文を読み込めませんでした"
+            "reportUnavailable": "一部の報告の原文を読み込めませんでした",
+            "previousSession": "前回のアシスタントセッションの直近のやり取りを引き継ぎました",
+            "digest": "1日のまとめ依頼"
         },
         "ranCommand": "実行したコマンド",
         "activityTerminal": "ターミナル",
@@ -1609,6 +1613,15 @@
         "relayIdle": "実行中の作業なし",
         "reviewLabel": "メモリーの見直し",
         "daemonNoticeLabel": "お知らせ"
+    },
+    "assistantWatched": {
+        "badge": "フォロー中 {{count}}",
+        "title": "アシスタントがフォロー中のプロジェクト",
+        "hint": "アシスタントは作業を依頼したプロジェクトの報告と進捗通知を伝えます。フォローをやめると通知が止まり、次の依頼で再開します。",
+        "lastRequest": "最後の依頼",
+        "stop": "フォローをやめる",
+        "removedProject": "削除されたプロジェクト",
+        "ownerRequired": "フォローの停止は所有者のみ可能です。このダッシュボードにログイン（パスワードを設定）するか、クラウドダッシュボードを使ってください。"
     },
     "assistantExecution": {
         "toggleLabel": "アシスタントの操作: {{state}}",
@@ -1696,6 +1709,17 @@
         "agentPanelHidden": "エージェントパネルはまだ表示されていません",
         "openPanelHint": "IDE でチャットを開いてください",
         "noMessagesYet": "メッセージはまだありません",
+        "sendBlocked": {
+            "approvalPlaceholder": "承認待ち…",
+            "choicePlaceholder": "回答待ち…",
+            "choiceMessage": "上の質問に先に答えてください。",
+            "approvalMessage": "上のリクエストを先に承認または拒否してください。"
+        },
+        "assistantStarter": {
+            "status": "プロジェクトの状況は？",
+            "blocked": "止まっている作業や失敗した作業をまとめて",
+            "decisions": "私が決めるべきことだけ教えて"
+        },
         "loadingChat": "チャットを読み込み中...",
         "openPanel": "{{label}} パネルを開く",
         "switchingPanel": "切り替え中...",

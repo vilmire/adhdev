@@ -203,11 +203,13 @@ export default function ApprovalBanner({ activeConv, onModalButton }: Props) {
                     {activeConv.modalMessage}
                 </div>
             )}
-            <div className="flex justify-between items-center">
-                <div className="font-black text-xs flex items-center gap-2">
+            {/* Wraps on narrow screens: long provider buttons used to squeeze the
+                label into a one-character-wide column (2026-10-18 mobile review). */}
+            <div className="flex flex-wrap justify-between items-center gap-2">
+                <div className="font-black text-xs flex items-center gap-2 shrink-0 whitespace-nowrap">
                     <IconWarning size={14} /> {pendingButton ? t('approval.processing') : t('approval.actionRequired')}
                 </div>
-                <div className="flex gap-2 flex-wrap">
+                <div className="flex gap-2 flex-wrap min-w-0">
                     {activeConv.modalButtons.map((btnText, idx) => {
                         const clean = cleanBtnText(btnText).toLowerCase();
                         // (O6) Visual hierarchy follows RISK, not affirmativeness. Button

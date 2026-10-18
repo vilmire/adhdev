@@ -9,7 +9,7 @@ type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<an
 type Choice = { meshId: string; targetSessionId: string; action: 'approve' | 'reject'; button: string; modalIdentity: string; label: string; message: string
     /** Authoritative provider episode from the daemon (absent from older daemons / legacy adapters). */
     modalKey?: string; attemptId?: string | null; generation?: number | null }
-type ExecutionView = { executionEnabled: boolean; executionAvailable: boolean; choices: Choice[] }
+type ExecutionView = { executionEnabled: boolean; executionAvailable: boolean; choices: Choice[]; restriction?: string }
 const choiceKey = (choice: Choice) => JSON.stringify([choice.meshId, choice.targetSessionId, choice.modalIdentity, choice.action, choice.button])
 
 /** Owner consent still travels through assistant chat; it is not a direct provider resolve. */
@@ -138,6 +138,10 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
     // Hide the request form only once the daemon has said this assistant cannot
     // act; while an answer is loading it stays (disabled) so a refresh does not flicker.
     const cannotAct = !!view && !view.executionAvailable
+    // This assistant's CLI can never answer permission requests (only a
+    // tool-restricted Claude Code assistant can): the control would only ever
+    // say "not supported", so it is not shown at all.
+    if (view?.restriction === 'prompt_only') return null
     return <div className="assistant-execution-controls relative text-xs">
         <button type="button" className="chat-activity-toggle assistant-execution-toggle" aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(!open); if (!open) void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(stateKey) })}</button>
         {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="assistant-execution-panel pointer-events-auto absolute right-0 z-20 w-96 max-w-[90vw] max-h-[70vh] overflow-y-auto rounded border border-border-default bg-bg-card p-3 shadow-xl space-y-3">

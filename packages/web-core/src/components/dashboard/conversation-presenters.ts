@@ -98,7 +98,9 @@ export function getConversationHistorySubtitle(conversation: ActiveConversation)
 }
 
 export function getConversationStopDialogLabel(conversation: ActiveConversation): string {
-    return getConversationProviderLabel(conversation) || 'CLI'
+    // The assistant by its name; others by CLI name without the English role suffix.
+    if (isAssistantConversation(conversation)) return getConversationTitle(conversation)
+    return (getConversationProviderLabel(conversation) || 'CLI').replace(/\s*\((?:Assistant|Coordinator|Mesh Node)\)$/, '')
 }
 
 export function getConversationNotificationLabel(conversation: ActiveConversation): string {

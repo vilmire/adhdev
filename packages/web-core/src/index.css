@@ -1810,6 +1810,98 @@
         font-weight: 700;
     }
 
+    /* Notice chips open on tap to show the full original text (2026-10-18). */
+    .chat-notice,
+    .chat-notice-group {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        align-self: stretch;
+        min-width: 0;
+    }
+
+    .chat-notice-chip-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+    }
+
+    .chat-notice-chip-toggle:disabled { cursor: default; }
+
+    .chat-notice-detail {
+        max-width: min(78ch, 92%);
+        padding: 6px 10px;
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+        color: var(--text-secondary);
+        font-size: 11px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .assistant-starters {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        max-width: 420px;
+        margin-top: 6px;
+    }
+
+    .btn.assistant-starter {
+        height: auto;
+        min-height: 32px;
+        padding: 6px 12px;
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+
+    .chat-reply-choices {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        max-width: var(--chat-bubble-max-width, 85%);
+        margin-top: -4px;
+    }
+
+    .chat-reply-choice {
+        min-height: 32px;
+        padding: 6px 12px;
+        border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-subtle));
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+        color: var(--text-primary);
+        font-size: 12px;
+        font-weight: 500;
+        text-align: left;
+        cursor: pointer;
+        transition: background-color 120ms ease;
+    }
+
+    .chat-reply-choice:hover {
+        background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    }
+
+    .chat-notice-group-close {
+        border: 0;
+        background: transparent;
+        color: var(--text-muted);
+        font-size: 11px;
+        cursor: pointer;
+    }
+
     .chat-notice-chip-text {
         min-width: 0;
         overflow: hidden;

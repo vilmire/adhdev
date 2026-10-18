@@ -85,11 +85,10 @@ it('retains the exact rejection and owner execution toggle contracts', async () 
 })
 it('never enables consent when execution is unavailable even with live roster evidence', async () => {
     const send = vi.fn(async () => state({ executionAvailable: false, restriction: 'prompt_only' }))
-    await render(send); await click('Assistant actions: not supported')
-    // Switched on but this assistant cannot act: the button and the panel say
-    // so, and no request form or send button is offered at all.
-    expect(container.textContent).toContain('Assistant actions: not supported')
-    expect(container.textContent).toContain('On, but this assistant cannot use it')
+    await render(send)
+    // A CLI that can never act (prompt_only): the control is not shown at all,
+    // so there is no request form and no send button to consent with.
+    expect(container.querySelector('.assistant-execution-toggle')).toBeNull()
     expect(container.querySelector('fieldset')).toBeNull()
     expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Send response to assistant')).toBe(false)
     expect(container.textContent).not.toContain('prompt_only')
@@ -218,4 +217,11 @@ it('hides choices whose daemon-stated generation differs from the live roster ep
     const send = vi.fn(async () => state({ choices: staleChoices }))
     await open(send)
     expect(labels()).toEqual([])
+})
+
+it('says "not supported" when an enforced assistant cannot act right now', async () => {
+    const send = vi.fn(async () => state({ executionAvailable: false, restriction: 'enforced' }))
+    await render(send); await click('Assistant actions: not supported')
+    expect(container.textContent).toContain('On, but this assistant cannot use it')
+    expect(container.querySelector('fieldset')).toBeNull()
 })

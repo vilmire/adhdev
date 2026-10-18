@@ -12,6 +12,7 @@ import ChatControlsSection, { readSessionLaunchSurface } from './ChatControlsSec
 import ChatInputBar, { type ImageAttachment } from './ChatInputBar';
 import PendingQueueStrip from './PendingQueueStrip';
 import AssistantStagedWrites from './AssistantStagedWrites';
+import AssistantWatchedProjects from './AssistantWatchedProjects';
 import ChatMachineReconnectButton from './ChatMachineReconnectButton';
 import { getVisibleBarControls } from './ControlsBar';
 import { useControlsBarVisibility } from '../../hooks/useControlsBarVisibility';
@@ -100,6 +101,9 @@ export interface ChatPaneProps {
     /** False when the mobile room header owns the session execution control. */
     showAssistantExecutionControls?: boolean;
 }
+
+/** Starter requests a new assistant chat offers (i18n keys). */
+const ASSISTANT_STARTER_KEYS = ['chatPane.assistantStarter.status', 'chatPane.assistantStarter.blocked', 'chatPane.assistantStarter.decisions'] as const;
 
 const LIVE_MESSAGE_PAGE_SIZE = 60;
 
@@ -379,6 +383,7 @@ export default function ChatPane({
     const hiddenLiveCount = Math.max(0, liveMessages.length - visibleLiveCount);
     // getConversationTitle names the assistant in the user's language (input placeholder, panel buttons).
     const panelLabel = getConversationTitle(activeConv)
+    const handleChooseReply = useCallback((text: string) => { void handleSendChat(text) }, [handleSendChat])
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     // A session parked for owner attention (e.g. Grok's consent prompt) is answered
@@ -688,6 +693,16 @@ export default function ChatPane({
                     <div className="text-center mt-16 flex flex-col items-center gap-3">
                         <div className="opacity-40"><IconChat size={26} /></div>
                         <div className="text-xxs opacity-40">{t('chatPane.noMessagesYet')}</div>
+                        {/* A new assistant shows what it is for: one tap sends the request. */}
+                        {isAssistantPane && (
+                            <div className="assistant-starters" data-testid="assistant-starters">
+                                {ASSISTANT_STARTER_KEYS.map(key => (
+                                    <button key={key} type="button" className="btn btn-quiet assistant-starter" onClick={() => { void handleSendChat(t(key)) }}>
+                                        {t(key)}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 );
             }
@@ -699,7 +714,7 @@ export default function ChatPane({
             );
         }
         return undefined;
-    }, [activeConv.connectionState, activeConv.status, canOpenPanel, firstViewState.awaitingFirstView, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating]);
+    }, [activeConv.connectionState, activeConv.status, canOpenPanel, firstViewState.awaitingFirstView, handleFocusAgent, hasMoreHistory, historyMessages.length, isFocusingAgent, isLoadingMore, liveMessages.length, panelLabel, viewStates.isGenerating, isAssistantPane, handleSendChat, t]);
 
     return (
         /* Keyed-view coverage readout — see `buildTranscriptPaneAttributes`
@@ -715,7 +730,9 @@ export default function ChatPane({
                 it flips the same global preference the Settings → Appearance toggle
                 writes, with the live activity-row count as the affordance. */}
             <div className={`chat-activity-toggle-bar ${isAssistantPane ? 'assistant-chat-activity-bar' : ''}`}>
-                <button
+                {/* Nothing to reveal yet (a new chat): no toggle. It appears with the
+                    first tool step, and stays while steps are shown so it can hide them. */}
+                {(activityToggleCount > 0 || showActivityMessages) && <button
                     type="button"
                     className={`chat-activity-toggle ${showActivityMessages ? 'chat-activity-toggle-active' : ''}`}
                     onClick={handleActivityToggle}
@@ -727,7 +744,7 @@ export default function ChatPane({
                     {activityToggleCount > 0 && (
                         <span className="chat-activity-toggle-count">{activityToggleCount}</span>
                     )}
-                </button>
+                </button>}
                 {/* Only present while this machine is parked. Mute and Session
                     info moved into the pane toolbar's "…" menu
                     (ConversationActionsMenu) so this row stays a single control. */}
@@ -735,6 +752,9 @@ export default function ChatPane({
                     {/* Assistant pane only: writes held for the owner's approval
                         (hidden while none are held). */}
                     {isAssistantPane && showAssistantExecutionControls && <AssistantExecutionControls daemonId={daemonId} sessionId={activeConv.sessionId} status={activeConv.status} sendCommand={sendCommand} />}
+                    {isAssistantPane && showAssistantStagedWrites && (
+                        <AssistantWatchedProjects daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
+                    )}
                     {isAssistantPane && showAssistantStagedWrites && (
                         <AssistantStagedWrites daemonId={daemonId} status={activeConv.status} sendCommand={sendCommand} />
                     )}
@@ -754,6 +774,7 @@ export default function ChatPane({
                 actionLogs={visibleActionLogs}
                 // The assistant speaks as "비서" / "Assistant"; which CLI runs it is in the header chip.
                 agentName={isAssistantPane ? t('dashboard.assistant.label') : (getConversationProviderLabel(activeConv) || panelLabel || 'Agent')}
+                onChooseReply={isAssistantPane ? handleChooseReply : undefined}
                 userName={userName}
                 isCliMode={controlsContext.isCli}
                 isWorking={firstViewState.showWorkingIndicator}

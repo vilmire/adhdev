@@ -40,6 +40,8 @@ const NOTICE_RULES: Readonly<Record<string, readonly Rule[]>> = {
     'terminal delivery uncertainty': [{ re: /^/, key: 'chat.notice.deliveryUncertain' }],
     'report references': [{ re: /^/, key: 'chat.notice.reportReferences' }],
     'original report unavailable': [{ re: /^/, key: 'chat.notice.reportUnavailable' }],
+    'previous session': [{ re: /^/, key: 'chat.notice.previousSession' }],
+    digest: [{ re: /^/, key: 'chat.notice.digest' }],
 };
 
 function apply(rules: readonly Rule[] | undefined, body: string): NoticeSummary | null {

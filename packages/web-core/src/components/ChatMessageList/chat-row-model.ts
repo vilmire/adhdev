@@ -24,6 +24,7 @@ import {
     type StructuredMessagePart,
     type ToolExpandAddress,
 } from './chatMessageHelpers';
+import { extractReplyChoices } from './reply-choices';
 import { detectInjectedText, type InjectedSegment, type InjectedSource } from './injected-text';
 
 export type ChatRowKind = 'user' | 'assistant' | 'system' | 'injected' | 'tool' | 'thought' | 'terminal' | 'activity';
@@ -79,6 +80,8 @@ export interface ChatRowModel {
     collapse: RowCollapse;
     injected?: InjectedMeta;
     status?: RowStatus;
+    /** Assistant question with fixed answers: the options (choices line stripped from the body). */
+    replyChoices?: string[];
     /** Render signature — every field above folded in. Memo comparators use this. */
     signature: string;
 }
@@ -257,6 +260,7 @@ function buildSignature(message: ChatMessage, model: Omit<ChatRowModel, 'signatu
         collapseSignature(model.collapse),
         model.status?.queued ? `queued:${model.status.queued.pendingId}` : '',
         model.injected ? model.injected.segments.map((s) => `${s.source}:${s.project ?? ''}:${s.outcome ?? ''}:${s.idle ? 1 : 0}`).join(',') : '',
+        model.replyChoices ? model.replyChoices.join('\u0001') : '',
     ]);
 }
 
@@ -281,16 +285,20 @@ function computeChatRow(message: ChatMessage, ctx: ResolveChatRowContext): ChatR
     const role = (message.role || '').toLowerCase();
     const structured = isStructuredMessagePartArray(message.content) ? message.content : null;
     const parts = structured?.some((part) => part.type !== 'text') ? structured : null;
-    const text = stringifyTextContent(message.content, { joiner: '\n' });
+    const rawText = stringifyTextContent(message.content, { joiner: '\n' });
 
     // A PTY-hosted session records daemon-typed input as USER turns. The
     // owner's own optimistic bubble is never injected.
     const detected = (role === 'user' || role === 'human') && !parts && meta.pendingLocal !== true
-        ? detectInjectedText(text)
+        ? detectInjectedText(rawText)
         : null;
     const injected = detected ? { source: detected.source, segments: detected.segments } : undefined;
 
     const kind = resolveKind(message, role, classification.isActivityFacing, injected);
+    // An assistant question may end with a `[[choices: …]]` line: never shown,
+    // offered as answer buttons instead (reply-choices.ts).
+    const extracted = kind === 'assistant' && !parts ? extractReplyChoices(rawText) : null;
+    const text = extracted ? extracted.text : rawText;
     const key = getChatMessageStableKey(message, 0);
     const receivedAt = ctx.receivedAt !== undefined
         ? ctx.receivedAt
@@ -309,6 +317,7 @@ function computeChatRow(message: ChatMessage, ctx: ResolveChatRowContext): ChatR
         collapse: resolveCollapse(kind, message, text, !!parts),
         ...(injected ? { injected } : {}),
         ...(kind === 'user' ? { status: resolveStatus(meta) } : {}),
+        ...(extracted && extracted.choices.length ? { replyChoices: extracted.choices } : {}),
     };
     if (model.status === undefined) delete model.status;
     return { ...model, signature: buildSignature(message, model) };

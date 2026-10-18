@@ -1581,6 +1581,8 @@
         "agent": "Agent",
         "tool": "Tool",
         "toolResult": "Result",
+        "noticeGroup": "{{count}} notices",
+        "noticeGroupCollapse": "Hide {{count}} notices",
         "notice": {
             "stall": "No progress for 30 min — {{pending}} waiting, {{missions}} active missions",
             "progress": "Still working after 30 min, no result yet",
@@ -1593,7 +1595,9 @@
             "relayTruncated": "This report may be incomplete",
             "deliveryUncertain": "Could not confirm a notice was delivered",
             "reportReferences": "Report references",
-            "reportUnavailable": "Some original reports could not be loaded"
+            "reportUnavailable": "Some original reports could not be loaded",
+            "previousSession": "Picked up the last exchanges from the previous assistant session",
+            "digest": "Daily summary request"
         },
         "ranCommand": "Ran command",
         "activityTerminal": "Terminal",
@@ -1609,6 +1613,15 @@
         "relayIdle": "Nothing left running",
         "reviewLabel": "Memory review",
         "daemonNoticeLabel": "Notice"
+    },
+    "assistantWatched": {
+        "badge": "Following {{count}}",
+        "title": "Projects the assistant follows",
+        "hint": "The assistant relays reports and progress notices from projects it gave work to. Stop following to silence them; the next request follows the project again.",
+        "lastRequest": "Last request",
+        "stop": "Stop following",
+        "removedProject": "Removed project",
+        "ownerRequired": "Only the owner can stop following a project. Sign in to this dashboard (set a dashboard password) or use the cloud dashboard."
     },
     "assistantExecution": {
         "toggleLabel": "Assistant actions: {{state}}",
@@ -1696,6 +1709,17 @@
         "agentPanelHidden": "Agent panel is not visible yet",
         "openPanelHint": "Open the chat in your IDE",
         "noMessagesYet": "No messages yet",
+        "sendBlocked": {
+            "approvalPlaceholder": "Waiting for approval…",
+            "choicePlaceholder": "Waiting for your answer…",
+            "choiceMessage": "Answer the pending question above.",
+            "approvalMessage": "Approve or reject the pending request above."
+        },
+        "assistantStarter": {
+            "status": "How are my projects doing?",
+            "blocked": "Sum up stuck or failed work",
+            "decisions": "Tell me only what I need to decide"
+        },
         "loadingChat": "Loading chat...",
         "openPanel": "Open {{label}} Panel",
         "switchingPanel": "Switching...",

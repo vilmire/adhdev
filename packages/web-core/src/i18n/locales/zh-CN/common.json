@@ -1581,6 +1581,8 @@
         "agent": "代理",
         "tool": "工具",
         "toolResult": "结果",
+        "noticeGroup": "{{count}} 条通知",
+        "noticeGroupCollapse": "收起 {{count}} 条通知",
         "notice": {
             "stall": "30 分钟无进展 — 等待 {{pending}} 个，进行中任务 {{missions}} 个",
             "progress": "已工作 30 分钟，尚无结果",
@@ -1593,7 +1595,9 @@
             "relayTruncated": "此报告可能不完整",
             "deliveryUncertain": "无法确认通知是否送达",
             "reportReferences": "报告引用",
-            "reportUnavailable": "部分原始报告无法加载"
+            "reportUnavailable": "部分原始报告无法加载",
+            "previousSession": "已接续上一个助手会话的最近对话",
+            "digest": "每日总结请求"
         },
         "ranCommand": "已运行命令",
         "activityTerminal": "终端",
@@ -1609,6 +1613,15 @@
         "relayIdle": "没有进行中的工作",
         "reviewLabel": "记忆整理",
         "daemonNoticeLabel": "通知"
+    },
+    "assistantWatched": {
+        "badge": "关注中 {{count}}",
+        "title": "助手关注的项目",
+        "hint": "助手会转达它分派过工作的项目的报告和进度通知。停止关注后通知会停止，下次请求时会重新关注。",
+        "lastRequest": "上次请求",
+        "stop": "停止关注",
+        "removedProject": "已删除的项目",
+        "ownerRequired": "只有所有者可以停止关注项目。请登录此仪表板（设置仪表板密码）或使用云端仪表板。"
     },
     "assistantExecution": {
         "toggleLabel": "助手操作：{{state}}",
@@ -1696,6 +1709,17 @@
         "agentPanelHidden": "代理面板尚未可见",
         "openPanelHint": "在 IDE 中打开聊天",
         "noMessagesYet": "尚无消息",
+        "sendBlocked": {
+            "approvalPlaceholder": "等待批准…",
+            "choicePlaceholder": "等待你的回答…",
+            "choiceMessage": "请先回答上方的问题。",
+            "approvalMessage": "请先批准或拒绝上方的请求。"
+        },
+        "assistantStarter": {
+            "status": "我的项目进展如何？",
+            "blocked": "整理卡住或失败的任务",
+            "decisions": "只告诉我需要我决定的事"
+        },
         "loadingChat": "正在加载聊天...",
         "openPanel": "打开 {{label}} 面板",
         "switchingPanel": "正在切换...",

@@ -1584,6 +1584,8 @@
         "agent": "Agente",
         "tool": "Herramienta",
         "toolResult": "Resultado",
+        "noticeGroup": "{{count}} avisos",
+        "noticeGroupCollapse": "Ocultar {{count}} avisos",
         "notice": {
             "stall": "Sin avances en 30 min — {{pending}} en espera, {{missions}} misiones activas",
             "progress": "Sigue trabajando tras 30 min, aún sin resultado",
@@ -1596,7 +1598,9 @@
             "relayTruncated": "Este informe puede estar incompleto",
             "deliveryUncertain": "No se pudo confirmar la entrega de un aviso",
             "reportReferences": "Referencias del informe",
-            "reportUnavailable": "No se pudieron cargar algunos informes originales"
+            "reportUnavailable": "No se pudieron cargar algunos informes originales",
+            "previousSession": "Se retomaron los últimos intercambios de la sesión anterior del asistente",
+            "digest": "Solicitud de resumen diario"
         },
         "ranCommand": "Comando ejecutado",
         "activityTerminal": "Terminal",
@@ -1612,6 +1616,15 @@
         "relayIdle": "Sin trabajo en curso",
         "reviewLabel": "Revisión de memoria",
         "daemonNoticeLabel": "Aviso"
+    },
+    "assistantWatched": {
+        "badge": "Siguiendo {{count}}",
+        "title": "Proyectos que sigue el asistente",
+        "hint": "El asistente transmite informes y avisos de progreso de los proyectos a los que encargó trabajo. Deja de seguirlos para silenciarlos; la próxima solicitud vuelve a seguirlos.",
+        "lastRequest": "Última solicitud",
+        "stop": "Dejar de seguir",
+        "removedProject": "Proyecto eliminado",
+        "ownerRequired": "Solo el propietario puede dejar de seguir un proyecto. Inicia sesión en este panel (define una contraseña) o usa el panel en la nube."
     },
     "assistantExecution": {
         "toggleLabel": "Acciones del asistente: {{state}}",
@@ -1699,6 +1712,17 @@
         "agentPanelHidden": "El panel del agente aún no está visible",
         "openPanelHint": "Abre el chat en tu IDE",
         "noMessagesYet": "Aún no hay mensajes",
+        "sendBlocked": {
+            "approvalPlaceholder": "Esperando aprobación…",
+            "choicePlaceholder": "Esperando tu respuesta…",
+            "choiceMessage": "Responde primero a la pregunta de arriba.",
+            "approvalMessage": "Aprueba o rechaza primero la solicitud de arriba."
+        },
+        "assistantStarter": {
+            "status": "¿Cómo van mis proyectos?",
+            "blocked": "Resume el trabajo atascado o fallido",
+            "decisions": "Dime solo lo que tengo que decidir"
+        },
         "loadingChat": "Cargando chat...",
         "openPanel": "Abrir panel de {{label}}",
         "switchingPanel": "Cambiando...",
