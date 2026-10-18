@@ -4,16 +4,19 @@ import {
   __resetWorkerSessionBindsForTest,
   __resetWorkerTaskTokensForTest,
   exchangeWorkerSessionBind,
+  expireWorkerTaskTokensForTask,
   findWorkerTaskTokenForSession,
   liveWorkerSessionBindCount,
   mintWorkerSessionBind,
   mintWorkerTaskToken,
   revokeWorkerSessionBind,
+  revokeWorkerSessionBindsForSession,
+  revokeWorkerTaskToken,
   verifyWorkerSessionBind,
   WORKER_BIND_CANARY_PREFIX,
   WORKER_TOKEN_CANARY_PREFIX,
 } from '../../src/mesh/worker-mcp-isolation'
-import { acceptWorkerCompletionReport, WORKER_BRANCH_STATES } from '../../src/mesh/worker-report';
+import { acceptWorkerCompletionReport, resolveWorkerIdentity, WORKER_BRANCH_STATES } from '../../src/mesh/worker-report';
 import { validateWorkerCompletionReport, WORKER_SUMMARY_MAX_CHARS } from '../../src/mesh/worker-report-validation.js';
 import {
   FINAL_SUMMARY_PROVENANCE_RANK,
@@ -140,6 +143,125 @@ describe('bind → token exchange', () => {
     mintWorkerTaskToken({ meshId: 'm', taskId: 't1', attemptId: 'a1', sessionId: 'sessionA' })
     expect(findWorkerTaskTokenForSession('m', 't1', 'sessionB')).toBeNull()
     expect(findWorkerTaskTokenForSession('m', 't1', 'sessionA')).not.toBeNull()
+  })
+})
+
+describe('resolveWorkerIdentity (G0-1 contract freeze)', () => {
+  let idSeq = 0
+  function freshAssignedWorker() {
+    idSeq += 1
+    const meshId = `mesh_rwi_${idSeq}`
+    const taskId = `task_rwi_${idSeq}`
+    const sessionId = `session_rwi_${idSeq}`
+    const otherSessionId = `session_rwi_other_${idSeq}`
+    const now = new Date().toISOString()
+    MeshRuntimeStore.getInstance().insertQueueEntry({
+      id: taskId,
+      meshId,
+      message: 'contract freeze test task',
+      status: 'assigned',
+      assignedSessionId: sessionId,
+      readonly: true,
+      taskMode: 'live_debug_readonly',
+      createdAt: now,
+      updatedAt: now,
+    } as any)
+    const attempt = seedMeshAttempt({ meshId, taskId, sessionId, stage: 'generating' })
+    const token = mintWorkerTaskToken({ meshId, taskId, attemptId: attempt.attemptId, sessionId, nodeId: 'node_1' })
+    const bind = mintWorkerSessionBind({ meshId, sessionId, nodeId: 'node_1', spawnedForTaskId: taskId })
+    return { meshId, taskId, sessionId, otherSessionId, attempt, token, bind }
+  }
+
+  it('returns null when token and bind are absent, empty, or unknown (including spoofed sessionId)', () => {
+    expect(resolveWorkerIdentity({})).toBeNull()
+    expect(resolveWorkerIdentity({ token: undefined, bind: undefined })).toBeNull()
+    expect(resolveWorkerIdentity({ token: '', bind: '   ' })).toBeNull()
+    expect(resolveWorkerIdentity({ token: null, bind: 42 })).toBeNull()
+    expect(resolveWorkerIdentity({ token: 'wtk_unknown', bind: 'wsb_unknown' })).toBeNull()
+    expect(resolveWorkerIdentity({ sessionId: 'coord-session-1' } as any)).toBeNull()
+  })
+
+  it('resolves a live token or a live session bind for the assigned session', () => {
+    const { meshId, taskId, sessionId, attempt, token, bind } = freshAssignedWorker()
+
+    expect(resolveWorkerIdentity({ token: token.token })).toMatchObject({
+      token: token.token,
+      meshId,
+      taskId,
+      attemptId: attempt.attemptId,
+      sessionId,
+      nodeId: 'node_1',
+    })
+    expect(resolveWorkerIdentity({ bind: bind.bind })).toMatchObject({
+      token: token.token,
+      meshId,
+      taskId,
+      attemptId: attempt.attemptId,
+      sessionId,
+      nodeId: 'node_1',
+    })
+  })
+
+  it('returns null when the task token is expired or revoked', () => {
+    const first = freshAssignedWorker()
+    revokeWorkerTaskToken(first.token.token)
+    expect(resolveWorkerIdentity({ token: first.token.token })).toBeNull()
+    // The session bind also fails closed once the task holds no live token.
+    expect(resolveWorkerIdentity({ bind: first.bind.bind })).toBeNull()
+
+    const second = freshAssignedWorker()
+    expireWorkerTaskTokensForTask(second.meshId, second.taskId)
+    expect(resolveWorkerIdentity({ token: second.token.token })).toBeNull()
+    expect(resolveWorkerIdentity({ bind: second.bind.bind })).toBeNull()
+  })
+
+  it('returns null when the session bind is revoked or superseded', () => {
+    const first = freshAssignedWorker()
+    revokeWorkerSessionBind(first.bind.bind)
+    expect(resolveWorkerIdentity({ bind: first.bind.bind })).toBeNull()
+
+    const second = freshAssignedWorker()
+    expect(revokeWorkerSessionBindsForSession(second.sessionId)).toBe(1)
+    expect(resolveWorkerIdentity({ bind: second.bind.bind })).toBeNull()
+
+    const third = freshAssignedWorker()
+    const replacement = mintWorkerSessionBind({ meshId: third.meshId, sessionId: third.sessionId, nodeId: 'node_1' })
+    expect(resolveWorkerIdentity({ bind: third.bind.bind })).toBeNull()
+    expect(resolveWorkerIdentity({ bind: replacement.bind })).toMatchObject({
+      token: third.token.token,
+      meshId: third.meshId,
+      taskId: third.taskId,
+      sessionId: third.sessionId,
+    })
+  })
+
+  it('returns null when the bind belongs to a different session', () => {
+    const { meshId, taskId, sessionId, otherSessionId, token } = freshAssignedWorker()
+    const otherBind = mintWorkerSessionBind({ meshId, sessionId: otherSessionId, nodeId: 'node_1', spawnedForTaskId: taskId })
+
+    // otherSessionId has no assigned task in the runtime store.
+    expect(resolveWorkerIdentity({ bind: otherBind.bind })).toBeNull()
+
+    // Even if a task row is assigned to otherSessionId, a token minted for
+    // `sessionId` is never handed to `otherSessionId`.
+    const orphanTaskId = `${taskId}_orphan`
+    const now = new Date().toISOString()
+    MeshRuntimeStore.getInstance().insertQueueEntry({
+      id: orphanTaskId,
+      meshId,
+      message: 'task assigned to otherSessionId while token belongs to sessionId',
+      status: 'assigned',
+      assignedSessionId: otherSessionId,
+      readonly: true,
+      taskMode: 'live_debug_readonly',
+      createdAt: now,
+      updatedAt: now,
+    } as any)
+    mintWorkerTaskToken({ meshId, taskId: orphanTaskId, attemptId: 'att_cross', sessionId })
+    expect(resolveWorkerIdentity({ bind: otherBind.bind })).toBeNull()
+
+    // Meanwhile the original session's token still resolves only for sessionId.
+    expect(resolveWorkerIdentity({ token: token.token })?.sessionId).toBe(sessionId)
   })
 })
 
