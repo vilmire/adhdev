@@ -13,6 +13,7 @@
 
 import type { Database as DatabaseHandle } from 'better-sqlite3';
 import {
+    RELAY_RECEIPT_CAPS, type RelayReceiptKind,
     ATTEMPT_BODY_TTL_MS, ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES,
     RELAY_DELIVERED_RETENTION_MS,
     RELAY_COVERAGE_TTL_MS, RELAY_COVERAGE_MAX_ROWS, RELAY_COVERAGE_MAX_REPLIES, RELAY_COVERAGE_MAX_BYTES,
@@ -63,9 +64,9 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
             .get(key, now - RELAY_DELIVERED_RETENTION_MS) as { value: string } | undefined;
         return row?.value ?? null;
     }
-    writeReceipt(key: string, value: string, at: number): void {
-        this.db.prepare('INSERT INTO assistant_relay_receipts(receipt_key,value,at_ms) VALUES(?,?,?) ON CONFLICT(receipt_key) DO UPDATE SET value=excluded.value,at_ms=excluded.at_ms').run(key, value, at);
-        this.db.prepare('DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET 4096)').run(at - RELAY_DELIVERED_RETENTION_MS);
+    writeReceipt(key: string, value: string, at: number, kind: RelayReceiptKind = 'legacy'): void {
+        this.db.prepare('INSERT INTO assistant_relay_receipts(receipt_key,value,at_ms,kind) VALUES(?,?,?,?) ON CONFLICT(receipt_key) DO UPDATE SET value=excluded.value,at_ms=excluded.at_ms,kind=excluded.kind').run(key, value, at, kind);
+        this.db.prepare('DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts WHERE kind=? ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET ?)').run(at - RELAY_DELIVERED_RETENTION_MS, kind, RELAY_RECEIPT_CAPS[kind]);
     }
 
     openThread(meshId: string, at: number): void {

@@ -29894,11 +29894,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       const override = env2.ADHDEV_CONFIG_DIR;
       if (!override || !override.trim()) return false;
       const sibling = otherTrackConfigDir(env2, homeDir2);
-      const normalize7 = (p) => {
+      const normalize8 = (p) => {
         const unified = p.trim().replace(/[\\/]+$/, "").replace(/\\/g, "/");
         return platform10 === "win32" ? unified.toLowerCase() : unified;
       };
-      return normalize7(override) === normalize7(sibling);
+      return normalize8(override) === normalize8(sibling);
     }
     function configDirChannelMismatch(resolvedConfigDir, resolvedChannel, hasExplicitChannelSignal) {
       if (hasExplicitChannelSignal) return null;
@@ -40408,7 +40408,7 @@ ${error.message || ""}`;
     function ensureAssistantRelaySchema(db) {
       db.exec(`
         CREATE TABLE IF NOT EXISTS assistant_relay_receipts (
-            receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL
+            receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'legacy'
         );
         -- Delivery manifests are content-free and never backfilled from captured
         -- reports: old captures do not prove what survived the rendered cap.
@@ -40492,6 +40492,9 @@ ${error.message || ""}`;
             credited_at INTEGER NOT NULL
         );
     `);
+      const receiptCols = new Set(db.prepare("PRAGMA table_info(assistant_relay_receipts)").all().map((r) => r.name));
+      if (!receiptCols.has("kind")) db.exec("ALTER TABLE assistant_relay_receipts ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_assistant_relay_receipts_kind_age ON assistant_relay_receipts(kind, at_ms DESC, receipt_key DESC)");
       const bodyCols = new Set(db.prepare("PRAGMA table_info(assistant_attempt_bodies)").all().map((r) => r.name));
       if (!bodyCols.has("evidence_ref")) db.exec("ALTER TABLE assistant_attempt_bodies ADD COLUMN evidence_ref TEXT");
       if (!bodyCols.has("parts_json")) db.exec("ALTER TABLE assistant_attempt_bodies ADD COLUMN parts_json TEXT");
@@ -94221,6 +94224,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           complete: !truncated && m.bubbleState !== "streaming" && m.isStreaming !== true && m.meta?.streaming !== true,
           nextOffset: truncated ? maxChars : null,
           role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
+          kind: readText3(m.kind ?? m.messageKind) || "standard",
           text: truncated ? `${text4.slice(0, maxChars)}\u2026` : text4,
           ...truncated ? { truncated: true } : {},
           ...at ? { at } : {}
@@ -94414,6 +94418,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           success: true,
           coordinatorSessionId: cursor.coordinatorSessionId,
           messageId: cursor.messageId,
+          role: found.role,
+          kind: found.kind ?? found.messageKind ?? "standard",
           text: body.slice(cursor.offset, end),
           offset: cursor.offset,
           totalChars: body.length,
@@ -94449,6 +94455,35 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         import_crypto32 = require("crypto");
         init_project_views();
         reportBodyId = (body) => (0, import_crypto32.createHash)("sha256").update(body).digest("hex");
+      }
+    });
+    async function coordinatorReplyReadable(execute, reply) {
+      if (!reply.messageId) return false;
+      const page = await continueReport(execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
+      if (page.success !== true || typeof page.text !== "string") return false;
+      const expected = normalize6(reply.text).trim();
+      return page.complete === true ? normalize6(page.text).trim() === expected : expected.startsWith(normalize6(page.text).trim());
+    }
+    async function latestCoordinatorReference(execute, sessionId) {
+      for (const command of ["read_chat", "chat_history"]) {
+        const read2 = await execute(command, {
+          targetSessionId: sessionId,
+          limit: 100,
+          ...command === "chat_history" ? { offset: 0, excludeRecentCount: 0 } : {}
+        });
+        if (!read2.success || !Array.isArray(read2.messages)) continue;
+        const message = [...read2.messages].reverse().find((m) => isVisible(m) && ["assistant", "agent"].includes(String(m.role)) && (!m.kind || m.kind === "standard") && messageText(m).trim());
+        if (message) return { coordinatorSessionId: sessionId, messageId: reportMessageId(message), offset: 0 };
+      }
+      return null;
+    }
+    var normalize6;
+    var init_relay_transcript_reference = __esm2({
+      "src/assistant/relay-transcript-reference.ts"() {
+        "use strict";
+        init_report_continuation();
+        init_project_views();
+        normalize6 = (text4) => text4.replace(/\r\n?/g, "\n");
       }
     });
     function githubRemote(value) {
@@ -95050,6 +95085,7 @@ ${grant.exp}`).digest("hex");
     var RELAY_DELIVERED_RETENTION_MS;
     var MISSED_REPORT_WINDOW_MS;
     var THREAD_CLOSED_RETENTION_MS;
+    var RELAY_RECEIPT_CAPS;
     var InMemoryAssistantRelayStore;
     var init_assistant_relay_store = __esm2({
       "src/assistant/assistant-relay-store.ts"() {
@@ -95066,16 +95102,18 @@ ${grant.exp}`).digest("hex");
         RELAY_DELIVERED_RETENTION_MS = 7 * 24 * 60 * 6e4;
         MISSED_REPORT_WINDOW_MS = ATTEMPT_BODY_TTL_MS;
         THREAD_CLOSED_RETENTION_MS = 30 * 24 * 60 * 6e4;
+        RELAY_RECEIPT_CAPS = { legacy: 4096, read: 4096, page: 4096, notice: 4096, counter: 4096, capture: 4096, readability: 4096 };
         InMemoryAssistantRelayStore = class {
           receipts = /* @__PURE__ */ new Map();
           readReceipt(key4, now) {
             const row2 = this.receipts.get(key4);
             return row2 && now - row2.at < RELAY_DELIVERED_RETENTION_MS ? row2.value : null;
           }
-          writeReceipt(key4, value, at) {
+          writeReceipt(key4, value, at, kind = "legacy") {
             this.receipts.delete(key4);
-            this.receipts.set(key4, { value, at });
-            while (this.receipts.size > 4096) this.receipts.delete(this.receipts.keys().next().value);
+            this.receipts.set(key4, { value, at, kind });
+            const bucket2 = [...this.receipts].filter(([, row2]) => row2.kind === kind);
+            for (const [oldKey] of bucket2.slice(0, Math.max(0, bucket2.length - RELAY_RECEIPT_CAPS[kind]))) this.receipts.delete(oldKey);
           }
           coverage = /* @__PURE__ */ new Map();
           bodies = /* @__PURE__ */ new Map();
@@ -95238,9 +95276,9 @@ ${grant.exp}`).digest("hex");
             const row2 = this.db.prepare("SELECT value FROM assistant_relay_receipts WHERE receipt_key=? AND at_ms>?").get(key4, now - RELAY_DELIVERED_RETENTION_MS);
             return row2?.value ?? null;
           }
-          writeReceipt(key4, value, at) {
-            this.db.prepare("INSERT INTO assistant_relay_receipts(receipt_key,value,at_ms) VALUES(?,?,?) ON CONFLICT(receipt_key) DO UPDATE SET value=excluded.value,at_ms=excluded.at_ms").run(key4, value, at);
-            this.db.prepare("DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET 4096)").run(at - RELAY_DELIVERED_RETENTION_MS);
+          writeReceipt(key4, value, at, kind = "legacy") {
+            this.db.prepare("INSERT INTO assistant_relay_receipts(receipt_key,value,at_ms,kind) VALUES(?,?,?,?) ON CONFLICT(receipt_key) DO UPDATE SET value=excluded.value,at_ms=excluded.at_ms,kind=excluded.kind").run(key4, value, at, kind);
+            this.db.prepare("DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts WHERE kind=? ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET ?)").run(at - RELAY_DELIVERED_RETENTION_MS, kind, RELAY_RECEIPT_CAPS[kind]);
           }
           openThread(meshId, at) {
             this.db.prepare(`
@@ -95712,7 +95750,6 @@ ${b.text}`).join("\n\n");
         return { body, source: source2, completeness: "final_native", parts, provenance: provenanceFor(evidenceRef) };
       };
       if (selected2.complete && terminalPresent) return finishNative(selected2.bubbles, "native_window");
-      LOG.warn("Assistant", `attempt_report_unverified attempt=${attempt.attemptId} bubbles=${selected2.bubbles.length} complete=${selected2.complete} providerIdle=${selected2.providerIdle} anchor=${anchor ?? "none"} anchorOutside=${anchorOutside}`);
       const durable2 = store2.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
       if (durable2 && verifiedNativeReportParts(durable2.body, durable2.parts, durable2.evidenceRef, attempt.generation)) return {
         body: durable2.body,
@@ -95944,15 +95981,21 @@ ${b.text}`).join("\n\n");
     __export2(assistant_relay_format_exports, {
       RELAY_BACKLOG_FOLD_AFTER_MS: () => RELAY_BACKLOG_FOLD_AFTER_MS,
       RELAY_BODY_MAX_CHARS: () => RELAY_BODY_MAX_CHARS,
+      RELAY_CAPTURE_BACKOFF_MAX_MS: () => RELAY_CAPTURE_BACKOFF_MAX_MS,
+      RELAY_CAPTURE_BACKOFF_MS: () => RELAY_CAPTURE_BACKOFF_MS,
+      RELAY_CAPTURE_PROBE_MS: () => RELAY_CAPTURE_PROBE_MS,
       RELAY_CLOSE: () => RELAY_CLOSE,
       RELAY_DELIVERY_MAX_CHARS: () => RELAY_DELIVERY_MAX_CHARS,
       RELAY_IDLE_CLOSE_GRACE_MS: () => RELAY_IDLE_CLOSE_GRACE_MS,
+      RELAY_MAX_AUTO_PAGES: () => RELAY_MAX_AUTO_PAGES,
       RELAY_MAX_WAIT_MS: () => RELAY_MAX_WAIT_MS,
       RELAY_MESSAGE_ID_PREFIX: () => RELAY_MESSAGE_ID_PREFIX,
+      RELAY_NATIVE_GRACE_MS: () => RELAY_NATIVE_GRACE_MS,
       RELAY_NATIVE_RETRY_MS: () => RELAY_NATIVE_RETRY_MS,
       RELAY_NATIVE_WAIT_MS: () => RELAY_NATIVE_WAIT_MS,
       RELAY_PROGRESS_AFTER_MS: () => RELAY_PROGRESS_AFTER_MS,
       RELAY_QUIET_MS: () => RELAY_QUIET_MS,
+      RELAY_READABILITY_CACHE_MS: () => RELAY_READABILITY_CACHE_MS,
       RELAY_STALL_AFTER_MS: () => RELAY_STALL_AFTER_MS,
       RESTART_NOTE_MAX_AGE_MS: () => RESTART_NOTE_MAX_AGE_MS,
       buildApprovalSignal: () => buildApprovalSignal,
@@ -96079,6 +96122,12 @@ ${b.text}`).join("\n\n");
     var RELAY_QUIET_MS;
     var RELAY_NATIVE_RETRY_MS;
     var RELAY_NATIVE_WAIT_MS;
+    var RELAY_NATIVE_GRACE_MS;
+    var RELAY_CAPTURE_PROBE_MS;
+    var RELAY_CAPTURE_BACKOFF_MS;
+    var RELAY_CAPTURE_BACKOFF_MAX_MS;
+    var RELAY_READABILITY_CACHE_MS;
+    var RELAY_MAX_AUTO_PAGES;
     var RELAY_MAX_WAIT_MS;
     var RELAY_IDLE_CLOSE_GRACE_MS;
     var RELAY_PROGRESS_AFTER_MS;
@@ -96100,6 +96149,12 @@ ${b.text}`).join("\n\n");
         RELAY_QUIET_MS = 15e3;
         RELAY_NATIVE_RETRY_MS = 1e3;
         RELAY_NATIVE_WAIT_MS = 8e3;
+        RELAY_NATIVE_GRACE_MS = 2 * 6e4;
+        RELAY_CAPTURE_PROBE_MS = 3e3;
+        RELAY_CAPTURE_BACKOFF_MS = 6e4;
+        RELAY_CAPTURE_BACKOFF_MAX_MS = 15 * 6e4;
+        RELAY_READABILITY_CACHE_MS = 5 * 6e4;
+        RELAY_MAX_AUTO_PAGES = 3;
         RELAY_MAX_WAIT_MS = 12e4;
         RELAY_IDLE_CLOSE_GRACE_MS = 10 * 6e4;
         RELAY_PROGRESS_AFTER_MS = 30 * 6e4;
@@ -96725,17 +96780,21 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
           const tail = readTailArg(args.tail);
+          const caller = readAssistantSessionId(args);
+          const acknowledge = (result) => {
+            if (caller && caller === ports.relay.assistantSessionId?.()) ports.relay.recordProjectRead?.(result, caller);
+          };
           const continuation = parseReportContinuation(args);
           if (typeof continuation === "string") return fail4("invalid_args", continuation);
           if (p.remote) {
             const out = await callRemote(ports, { ...p, remote: p.remote }, "read", { tail, ...continuation ?? {} });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
-            ports.relay.recordProjectRead?.(remoteBody(out));
+            acknowledge(remoteBody(out));
             return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: "relay" });
           }
           const r = await localProjectRead(ports, meshId, tail, continuation);
           if (!r.ok) return fail4("project_read_failed", r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
-          ports.relay.recordProjectRead?.(r.result);
+          acknowledge(r.result);
           return wrap(p.slug, meshId, r.result);
         });
         PLAN_EXISTS_CODES = /* @__PURE__ */ new Set(["ambiguous_mesh", "duplicate_workspace", "duplicate_node"]);
@@ -96944,11 +97003,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return this.store.readReceipt(receiptKey(recipient, gapGroup(reply)), this.now()) !== null;
           }
           markNotified(reply, recipient) {
-            this.store.writeReceipt(receiptKey(recipient, gapGroup(reply)), "1", this.now());
+            this.store.writeReceipt(receiptKey(recipient, gapGroup(reply)), "1", this.now(), "notice");
           }
           wasRead(reply, recipient) {
-            const through = Number(this.store.readReceipt(receiptKey("read-through", recipient, reply.sessionId), this.now()) ?? 0);
-            if (reply.messageAt < through) return true;
             return !!reply.messageId && this.store.readReceipt(receiptKey("read", recipient, reply.sessionId, reply.messageId), this.now()) === "full" || !!reply.attemptId && !!reply.attemptReportId && this.store.readReceipt(receiptKey("read", recipient, reply.sessionId, reply.attemptId, reply.attemptReportId), this.now()) === "full";
           }
           /** Called only for successful project_read results returned to the assistant. */
@@ -96957,16 +97014,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (typeof session !== "string" || result.success === false || result.sourceComplete === false) return;
             const pages = Array.isArray(result.messages) ? result.messages : [result];
             for (const page of pages) {
+              if (page.role !== void 0 && page.role !== "assistant" && page.role !== "agent") continue;
+              if (page.kind !== void 0 && page.kind !== "standard") continue;
               const id4 = page.attemptId ?? page.messageId;
               if (typeof id4 !== "string" || typeof page.text !== "string" || !Number.isSafeInteger(page.totalChars) || page.totalChars < 0 || page.sourceComplete === false) continue;
               const key4 = page.attemptId ? receiptKey("read", recipient, session, id4, page.reportId) : receiptKey("read", recipient, session, id4);
               const previous = this.store.readReceipt(key4, this.now());
-              const at = typeof page.at === "number" ? page.at : Date.parse(String(page.at ?? ""));
-              if (page.complete === true && (page.offset ?? 0) === 0 && page.text.length >= page.totalChars && result.sourceComplete === true && page.role === "assistant" && Number.isFinite(at)) {
-                const throughKey = receiptKey("read-through", recipient, session);
-                const oldThrough = Number(this.store.readReceipt(throughKey, this.now()) ?? 0);
-                this.store.writeReceipt(throughKey, String(Math.max(at, oldThrough)), this.now());
-              }
               if (previous === "full") continue;
               let old = { end: 0 };
               try {
@@ -96979,8 +97032,68 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (!Number.isSafeInteger(offset) || offset < 0 || offset > old.end) continue;
               const end = Math.max(old.end, Math.min(page.totalChars, Number.isSafeInteger(page.nextOffset) ? page.nextOffset : offset + page.text.length));
               const full = end === page.totalChars && page.complete === true;
-              this.store.writeReceipt(key4, full ? "full" : JSON.stringify({ end, reportId: identity2 }), this.now());
+              this.store.writeReceipt(key4, full ? "full" : JSON.stringify({ end, reportId: identity2 }), this.now(), "read");
             }
+          }
+        };
+      }
+    });
+    function unavailableReportNotice(count, project, cursor) {
+      const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "report could" : "reports could"} not be captured in full: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
+      return cursor ? `${status} Inspect the latest readable coordinator context (not a verified report for this attempt) with project_read ${JSON.stringify({ project, ...cursor })}.` : `${status} No readable coordinator message is available; ${count} ${count === 1 ? "report could" : "reports could"} not be read. Check project_status ${JSON.stringify({ project })}.`;
+    }
+    function unreadableReplyNotice(count) {
+      return `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "reply could" : "replies could"} not be read. No readable message cursor is available for these replies; inspect project_status for the coordinator state.`;
+    }
+    var RelayDeliveryPolicy;
+    var init_relay_delivery_policy = __esm2({
+      "src/assistant/relay-delivery-policy.ts"() {
+        "use strict";
+        init_relay_gap_tracker();
+        init_assistant_relay_format();
+        RelayDeliveryPolicy = class {
+          constructor(store2, now) {
+            this.store = store2;
+            this.now = now;
+          }
+          probes = /* @__PURE__ */ new Map();
+          expired(committedAt) {
+            return this.now() >= committedAt + RELAY_NATIVE_WAIT_MS + RELAY_NATIVE_GRACE_MS;
+          }
+          retry(id4) {
+            try {
+              return JSON.parse(this.store.readReceipt(receiptKey("capture", id4), this.now()) ?? "null") ?? { failures: 0, nextAt: 0 };
+            } catch {
+              return { failures: 0, nextAt: 0 };
+            }
+          }
+          due(id4) {
+            return this.now() >= this.retry(id4).nextAt;
+          }
+          initial(id4) {
+            return this.retry(id4).failures === 0;
+          }
+          failed(id4) {
+            const failures = this.retry(id4).failures + 1;
+            const nextAt = this.now() + Math.min(RELAY_CAPTURE_BACKOFF_MAX_MS, RELAY_CAPTURE_BACKOFF_MS * 2 ** Math.min(20, failures - 1));
+            this.store.writeReceipt(receiptKey("capture", id4), JSON.stringify({ failures, nextAt }), this.now(), "capture");
+          }
+          /** Cache successes and failures, including bounded probe timeouts. */
+          readable(reply, probe) {
+            const key4 = receiptKey("readability", reply.meshId, reply.sessionId, reply.messageId);
+            const cached5 = this.store.readReceipt(key4, this.now());
+            if (cached5) {
+              const verdict = JSON.parse(cached5);
+              if (this.now() - verdict.at < RELAY_READABILITY_CACHE_MS) return Promise.resolve(verdict.readable);
+            }
+            const pending = this.probes.get(key4);
+            if (pending) return pending;
+            const run3 = Promise.resolve().then(probe).catch(() => false).then((readable) => {
+              this.store.writeReceipt(key4, JSON.stringify({ at: this.now(), readable }), this.now(), "readability");
+              return readable;
+            }).finally(() => this.probes.delete(key4));
+            this.probes.set(key4, run3);
+            return run3;
           }
         };
       }
@@ -96998,6 +97111,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var init_assistant_relay = __esm2({
       "src/assistant/assistant-relay.ts"() {
         "use strict";
+        init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
         import_node_crypto25 = require("crypto");
@@ -97029,6 +97143,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.ports = ports;
             this.clock = ports.clock ?? realClock;
             this.gaps = new RelayGapTracker(ports.store, () => this.clock.now());
+            this.deliveryPolicy = new RelayDeliveryPolicy(ports.store, () => this.clock.now());
           }
           clock;
           batches = /* @__PURE__ */ new Map();
@@ -97043,6 +97158,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           lastRelayAt = /* @__PURE__ */ new Map();
           /** Durable read and notification acknowledgements, scoped to the recipient. */
           gaps;
+          deliveryPolicy;
           modalOpen = /* @__PURE__ */ new Set();
           /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
           remote = /* @__PURE__ */ new Map();
@@ -97078,7 +97194,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const rows = this.ports.store.listUndelivered();
             const byMesh = /* @__PURE__ */ new Map();
             for (const r of rows) {
-              this.restoredAttempts.set(r.attemptId, { meshId: r.meshId, sessionId: r.coordinatorSessionId });
+              this.restoredAttempts.set(r.attemptId, { meshId: r.meshId, sessionId: r.coordinatorSessionId, committedAt: r.committedAt });
               const item = byMesh.get(r.meshId);
               if (item) {
                 item.attemptIds.push(r.attemptId);
@@ -97437,8 +97553,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               outcome
             });
             if (!fresh) return;
-            this.restoredAttempts.set(e.attemptId, { meshId, sessionId: e.sessionId });
-            this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
+            this.restoredAttempts.set(e.attemptId, { meshId, sessionId: e.sessionId, committedAt: e.at });
+            this.captureAttemptBody(e.attemptId, meshId, e.sessionId, true);
             let b = this.batches.get(meshId);
             if (!b) {
               b = { coordinatorSessionId: e.sessionId, attemptIds: [], outcome, firstCommitAt: e.at, lastCommitAt: e.at, quietTimer: null, maxTimer: null };
@@ -97457,17 +97573,20 @@ ${supplement}`] : [], ...blocks].join("\n\n");
            * envelope. While the native text is absent, retry on the injected clock
            * for RELAY_NATIVE_WAIT_MS (inside the quiet window). Delivery/folding or
            * stop drops the cache token so a late read cannot repopulate it. */
-          captureAttemptBody(attemptId, meshId, coordinatorSessionId) {
+          captureAttemptBody(attemptId, meshId, coordinatorSessionId, retryWindow = false, restore = false) {
             const started = this.clock.now();
+            const firstProbe = this.deliveryPolicy.initial(attemptId);
+            if (!this.deliveryPolicy.due(attemptId) || this.deliveryPolicy.expired(this.restoredAttempts.get(attemptId)?.committedAt ?? started) && !(restore && firstProbe)) return;
+            const initial = retryWindow && firstProbe;
             let p;
             const live = () => this.attemptBodyCapture.get(attemptId) === p;
-            p = this.settleCapture(attemptId, meshId, coordinatorSessionId, started, live);
+            p = this.settleCapture(attemptId, meshId, coordinatorSessionId, started, live, initial);
             this.attemptBodyCapture.set(attemptId, p);
             void p.finally(() => {
               if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
             });
           }
-          async settleCapture(attemptId, meshId, coordinatorSessionId, started, live) {
+          async settleCapture(attemptId, meshId, coordinatorSessionId, started, live, initial) {
             let last = this.normalizeReport(null);
             for (; ; ) {
               let read2;
@@ -97479,7 +97598,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               await Promise.resolve();
               if (!live()) return;
               try {
-                const raw = await this.bounded(read2, Math.max(0, RELAY_NATIVE_WAIT_MS - (this.clock.now() - started)), null);
+                const raw = await this.bounded(read2, Math.max(0, (initial ? RELAY_NATIVE_WAIT_MS : RELAY_CAPTURE_PROBE_MS) - (this.clock.now() - started)), null);
                 const next = this.normalizeReport(raw);
                 if (next.body || !last.body) last = next;
               } catch {
@@ -97487,12 +97606,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               }
               if (!live()) return;
               if (last.completeness === "final_native" && last.body?.trim()) {
-                this.rememberReport(attemptId, last);
+                this.rememberCapture(attemptId, last);
                 return;
               }
               const elapsed = this.clock.now() - started;
-              if (elapsed >= RELAY_NATIVE_WAIT_MS) {
-                this.rememberReport(attemptId, last);
+              if (!initial || elapsed >= RELAY_NATIVE_WAIT_MS) {
+                this.rememberCapture(attemptId, last);
                 return;
               }
               const wait = Math.min(RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS - elapsed);
@@ -97500,7 +97619,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               }), wait, void 0);
               if (!live()) return;
               if (this.clock.now() - started >= RELAY_NATIVE_WAIT_MS) {
-                this.rememberReport(attemptId, last);
+                this.rememberCapture(attemptId, last);
                 return;
               }
             }
@@ -97540,6 +97659,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.attemptBodyAt.set(attemptId, this.clock.now());
             this.pruneBodyCache(this.clock.now());
           }
+          rememberCapture(id4, report) {
+            this.rememberReport(id4, report);
+            if (!this.hasCapturedBody(id4)) {
+              this.deliveryPolicy.failed(id4);
+              LOG.warn("Assistant", `native relay capture unavailable attempt=${id4}; retry scheduled with backoff`);
+            }
+          }
           pruneBodyCache(now) {
             let bytes = 0;
             let count = 0;
@@ -97578,7 +97704,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (reply.attemptId && (this.attemptBodyCapture.has(reply.attemptId) || [...this.batches.values()].some((b) => b.attemptIds.includes(reply.attemptId)) || this.queue.some((i) => i.kind === "relay" && i.attemptIds.includes(reply.attemptId)))) return;
             if (!reply.attemptId && (this.queue.some((i) => i.kind === "relay" && i.coordinatorSessionId === reply.sessionId) || [...this.batches.values()].some((b) => b.coordinatorSessionId === reply.sessionId))) return;
             const key4 = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text4);
-            if (this.replyCovered(reply, text4) || this.gaps.wasRead(reply, this.ports.assistantSessionId()) || this.gaps.notified(reply, this.ports.assistantSessionId())) return;
+            if (this.replyCovered(reply, text4)) return;
             const klass = !reply.attemptId ? "no_attempt" : reply.restartClosed ? "restart_closed" : "inside_attempt";
             if (!this.flaggedReplies.has(key4)) {
               this.flaggedReplies.set(key4, now);
@@ -97713,7 +97839,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           async deliverOnce() {
             const sid = this.ports.assistantSessionId();
             if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
+            const lifecycle = this.lifecycle;
             const { taken, parts } = await this.takeParts(this.clock.now(), sid);
+            if (lifecycle !== this.lifecycle) return;
             if (!parts.length) {
               this.queue = this.queue.filter((i) => !taken.includes(i));
               return;
@@ -97734,7 +97862,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
            */
           async pullPending(sessionId) {
             await this.idle();
+            const lifecycle = this.lifecycle;
             const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
+            if (lifecycle !== this.lifecycle) return [];
             const missed = this.missedReportsIncluding(taken, parts);
             const gap = !parts.some((p) => p.messageId.startsWith("gap:")) ? "" : this.newGapLine(sessionId, missed);
             if (gap && parts.length) parts.push({ text: gap, source: "relay", messageId: `gap:${this.clock.now()}:${++this.seq}` });
@@ -97768,28 +97898,38 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (item.kind === "relay") {
                 await this.bodiesFor(item);
                 const pending = item.attemptIds.filter((id4) => !this.hasCapturedBody(id4));
-                if (pending.length === item.attemptIds.length) continue;
-                if (pending.length) {
-                  this.queue.push({ ...item, attemptIds: pending });
-                  item.attemptIds = item.attemptIds.filter((id4) => this.hasCapturedBody(id4));
-                }
+                const ready2 = item.attemptIds.filter((id4) => this.hasCapturedBody(id4));
+                const expired = pending.filter((id4) => this.deliveryPolicy.expired(this.restoredAttempts.get(id4)?.committedAt ?? item.committedAt));
+                const selected2 = ready2.length ? ready2 : expired;
+                if (!selected2.length) continue;
+                const held = item.attemptIds.filter((id4) => !selected2.includes(id4));
+                if (held.length) this.queue.push({ ...item, attemptIds: held });
+                item.attemptIds = selected2;
               }
               if (item.kind === "line" && item.gapReplies) {
-                const readable = [];
-                for (const reply of item.gapReplies) {
-                  if (this.replyCovered(reply, reply.text) || this.gaps.wasRead(reply, sid) || this.gaps.notified(reply, sid)) continue;
-                  try {
-                    if (await this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2e3, false) && !this.gaps.wasRead(reply, sid) && !this.replyCovered(reply, reply.text)) readable.push(reply);
-                  } catch {
-                  }
-                }
-                if (!readable.length) {
+                const unread = item.gapReplies.filter((reply) => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
+                if (!unread.length) {
                   taken.push(item);
                   continue;
                 }
-                item.text = buildReadableReplyGap(readable, this.ports.projectSlug(readable.at(-1).meshId ?? this.ports.coordinatorMeshOf(readable.at(-1).sessionId) ?? "") ?? "");
+                const readable = [];
+                for (const reply of unread) if (await this.deliveryPolicy.readable(
+                  reply,
+                  () => this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2e3, false)
+                )) readable.push(reply);
+                const remaining = unread.filter((reply) => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
+                if (!remaining.length) {
+                  taken.push(item);
+                  continue;
+                }
+                const readableNow = readable.filter((reply) => remaining.includes(reply));
+                const project = this.ports.projectSlug(remaining[0].meshId ?? this.ports.coordinatorMeshOf(remaining[0].sessionId) ?? "") ?? "";
+                item.text = [
+                  readableNow.length ? buildReadableReplyGap(readableNow, project) : "",
+                  remaining.length > readableNow.length ? unreadableReplyNotice(remaining.length - readableNow.length) : ""
+                ].filter(Boolean).join("\n");
               }
-              const part = item.kind === "line" ? { text: item.text, source: item.source, messageId: item.messageId, ...item.meshId ? { meshId: item.meshId } : {} } : await this.renderRelay(item);
+              const part = item.kind === "line" ? { text: item.text, source: item.source, messageId: item.messageId, ...item.meshId ? { meshId: item.meshId } : {} } : item.attemptIds.some((id4) => !this.hasCapturedBody(id4)) ? await this.renderUnavailable(item) : await this.renderRelay(item);
               const cost = codePoints(part.text) + 2;
               if (parts.length && size + cost > RELAY_DELIVERY_MAX_CHARS) break;
               parts.push(part);
@@ -97818,20 +97958,29 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const sentReports = new Map(parts.flatMap((p) => (p.reports ?? []).map((r) => [r.attemptId, r])));
             const rendered = relayItems.flatMap((i) => i.attemptIds.filter((id4) => {
               const report = sentReports.get(id4);
-              return report && report.offset + RELAY_BODY_MAX_CHARS >= report.totalPoints;
+              return report && !report.autoStopped && report.offset + RELAY_BODY_MAX_CHARS >= report.totalPoints;
             }));
             const coverage = rendered.flatMap((id4) => sentReports.get(id4)?.coverage ?? []);
-            const settled = relayItems.flatMap((i) => i.attemptIds.filter((id4) => !sentReports.has(id4) || rendered.includes(id4)));
+            const settled = relayItems.flatMap((i) => i.attemptIds.filter((id4) => !sentReports.has(id4) || sentReports.get(id4)?.autoStopped || rendered.includes(id4)));
             for (const item of relayItems) {
-              const remaining = item.attemptIds.filter((id4) => sentReports.has(id4) && !rendered.includes(id4));
+              const remaining = item.attemptIds.filter((id4) => sentReports.has(id4) && !sentReports.get(id4)?.autoStopped && !rendered.includes(id4));
               for (const id4 of remaining) {
                 const report = sentReports.get(id4);
-                this.ports.store.writeReceipt(receiptKey("relay-page", id4, report.reportId), String(report.offset + RELAY_BODY_MAX_CHARS), at);
+                this.ports.store.writeReceipt(receiptKey("relay-page", id4, report.reportId), String(report.offset + RELAY_BODY_MAX_CHARS), at, "page");
               }
               if (remaining.length) {
                 this.queue.push({ ...item, attemptIds: remaining });
                 this.dirty = true;
               }
+            }
+            for (const item of relayItems) for (const id4 of item.attemptIds) if (settled.includes(id4) && !rendered.includes(id4)) {
+              this.gaps.markNotified({
+                sessionId: this.restoredAttempts.get(id4)?.sessionId ?? item.coordinatorSessionId,
+                attemptId: id4,
+                messageAt: item.committedAt,
+                text: "",
+                chars: 0
+              }, sid);
             }
             this.ports.store.markDelivered(settled, at, rendered, coverage);
             if (relayItems.length) this.loadDeliveredCoverage(at);
@@ -97873,7 +98022,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return buildMissedReportsLine(missed.filter((m) => this.ports.store.readReceipt(receiptKey("counter", sessionId, m.slug), this.clock.now()) !== String(m.count)));
           }
           rememberGaps(sessionId, missed) {
-            for (const m of missed) this.ports.store.writeReceipt(receiptKey("counter", sessionId, m.slug), String(m.count), this.clock.now());
+            for (const m of missed) this.ports.store.writeReceipt(receiptKey("counter", sessionId, m.slug), String(m.count), this.clock.now(), "counter");
           }
           /** Stored gaps (not yet counted again) per mesh. */
           unrenderedByMesh() {
@@ -97899,25 +98048,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /**
            * Every attempt in the batch, in commit order, each resolved to the body
            * captured for IT at ITS OWN commit time — never the batch's last turn's
-           * body reused for earlier ones. A local attempt still mid-capture (the
-           * async read fired in `commit()` has not settled) is awaited here rather
-           * than raced; only a capture that actually failed renders the no-body
-           * placeholder (via `compactRelayBody(null)` downstream).
+           * body reused for earlier ones. Await the initial capture, and use one
+           * bounded probe per backoff step for restores/retries. Unavailable captures
+           * get a content-free notice after the grace, never a partial body.
            */
           async bodiesFor(item) {
-            const pending = item.attemptIds.map((id4) => this.attemptBodyCapture.get(id4)).filter((p) => !!p);
-            if (pending.length) await Promise.all(pending);
             for (const id4 of item.attemptIds) {
+              if (this.hasCapturedBody(id4) || this.attemptBodyCapture.has(id4)) continue;
               const ref = this.restoredAttempts.get(id4);
-              if (!ref || this.attemptBodies.has(id4)) continue;
-              let report = null;
-              const lifecycle = this.lifecycle;
-              try {
-                report = this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id4) ?? Promise.resolve(null), RELAY_NATIVE_WAIT_MS, null));
-              } catch {
-              }
-              if (report && this.lifecycle === lifecycle) this.rememberReport(id4, report);
+              this.captureAttemptBody(id4, ref?.meshId ?? item.meshId, ref?.sessionId ?? item.coordinatorSessionId, false, true);
             }
+            await Promise.all(item.attemptIds.map((id4) => this.attemptBodyCapture.get(id4)));
             return item.attemptIds.map((id4) => this.attemptBodies.get(id4) ?? null);
           }
           pageOffset(id4, body) {
@@ -97929,10 +98070,24 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const paged = offsets.some((n) => n > 0) || bodies.some((body) => codePoints(body ?? "") > RELAY_BODY_MAX_CHARS);
             return paged ? `${base}:page:${receiptKey(bodies.map((body, index) => [reportBodyId(body ?? ""), offsets[index]]))}` : base;
           }
+          async renderUnavailable(item) {
+            const ref = this.restoredAttempts.get(item.attemptIds.at(-1));
+            const session = ref?.sessionId ?? item.coordinatorSessionId;
+            let cursor = null;
+            try {
+              cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2e3, null);
+            } catch {
+            }
+            return {
+              source: "relay",
+              meshId: item.meshId,
+              messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
+              text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor)
+            };
+          }
           async renderRelay(item) {
             const remote = this.remote.get(item.meshId);
             const bodies = await this.bodiesFor(item);
-            const unavailable2 = item.attemptIds.filter((id4, index) => this.restoredAttempts.has(id4) && !bodies[index]);
             const refs = item.attemptIds.slice(-12).map((attemptId) => {
               const index = item.attemptIds.indexOf(attemptId);
               const body = bodies[index];
@@ -97960,19 +98115,26 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               idle: item.idle
             });
             const headerEnd = envelope.indexOf("\n") + 1;
-            const missing = unavailable2.length ? `[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: ${unavailable2.join(", ")}. A new report would be regeneration.
-` : "";
-            const unverified = item.attemptIds.some((id4) => this.attemptMeta.get(id4)?.completeness === "envelope_unverified" && !!this.attemptBodies.get(id4)?.trim());
-            const caution = unverified ? "[ADHDev relay] This report may be truncated \u2014 the native transcript was not captured. Use project_read with the report reference.\n" : "";
-            const text4 = envelope.slice(0, headerEnd) + references + missing + caution + envelope.slice(headerEnd);
             const reports = item.attemptIds.map((id4, index) => {
               const body = bodies[index];
               const offset = this.pageOffset(id4, body);
               const totalPoints = codePoints(body);
               const meta = this.attemptMeta.get(id4) ?? { body, completeness: "final_native" };
+              const autoStopped = offset + RELAY_BODY_MAX_CHARS < totalPoints && offset / RELAY_BODY_MAX_CHARS + 1 >= RELAY_MAX_AUTO_PAGES;
               const coverage = offset + RELAY_BODY_MAX_CHARS >= totalPoints ? this.renderedParts(id4, this.restoredAttempts.get(id4)?.sessionId ?? item.coordinatorSessionId, body, meta, Infinity) : null;
-              return { attemptId: id4, reportId: reportBodyId(body), offset, totalPoints, ...coverage ? { coverage } : {} };
+              return { attemptId: id4, reportId: reportBodyId(body), offset, totalPoints, autoStopped, ...coverage ? { coverage } : {} };
             });
+            const continuations = reports.filter((r) => r.autoStopped).map((r) => {
+              const body = bodies[item.attemptIds.indexOf(r.attemptId)];
+              return `[ADHDev relay continuation] Automatic delivery stopped after ${RELAY_MAX_AUTO_PAGES} pages. Read the remaining text with project_read ${JSON.stringify({
+                project: this.ports.projectSlug(item.meshId) ?? item.meshId,
+                attemptId: r.attemptId,
+                reportId: r.reportId,
+                coordinatorSessionId: this.restoredAttempts.get(r.attemptId)?.sessionId ?? item.coordinatorSessionId,
+                offset: Array.from(body).slice(0, r.offset + RELAY_BODY_MAX_CHARS).join("").length
+              })}.`;
+            }).join("\n");
+            const text4 = envelope.slice(0, headerEnd) + references + (continuations ? continuations + "\n" : "") + envelope.slice(headerEnd);
             return { text: text4, source: "relay", messageId: this.relayPartId(item, bodies), meshId: item.meshId, reports };
           }
         };
@@ -98405,8 +98567,24 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!reply.messageId) return false;
           const ports = await projectPorts();
           if (!reply.meshId || ports.coordinatorSessionAuthorized?.(reply.meshId, reply.sessionId) === false || !ports.listMeshes().some((mesh) => mesh.id === reply.meshId && ports.isHostedHere(mesh))) return false;
-          const page = await continueReport(ports.execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
-          return page.success === true && page.totalChars === reply.text.length && typeof page.text === "string" && reply.text.startsWith(page.text);
+          return coordinatorReplyReadable(ports.execute, reply);
+        },
+        readCoordinatorReference: async (meshId, sessionId) => {
+          const ports = await projectPorts();
+          const mesh = ports.listMeshes().find((mesh2) => mesh2.id === meshId);
+          if (!mesh) return null;
+          if (ports.isHostedHere(mesh)) {
+            if (ports.coordinatorSessionAuthorized?.(meshId, sessionId) === false) return null;
+            return latestCoordinatorReference(ports.execute, sessionId);
+          }
+          const host = ports.remoteHost(mesh);
+          if (!host.reachable) return null;
+          const out = await ports.callHost(host, "read", { tail: 10 });
+          if (!out.ok) return null;
+          const result = out.result.result;
+          if (result?.coordinatorSessionId !== sessionId || !Array.isArray(result.messages)) return null;
+          const message = [...result.messages].reverse().find((m) => m?.role === "assistant" && typeof m.messageId === "string" && /^[a-f0-9]{64}$/.test(m.messageId));
+          return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
         },
         onRelayGap: (_klass, at) => metrics2?.bump("relay_gaps", "", at),
         readCoordinatorTail: async (sessionId) => {
@@ -98452,6 +98630,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
       const { store: store2, metrics: metrics2 } = opened;
       let sawCaller = false;
+      let mcpRecipient = null;
       let review = null;
       let terminalWatchStore = null;
       const relay = new AssistantRelay(buildAssistantRelayPorts(components, {
@@ -98646,7 +98825,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         },
         isThreadOpen: (meshId) => store2.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
-        recordProjectRead: (result) => relay.recordProjectRead(result),
+        assistantSessionId: () => liveSessionId() ?? mcpRecipient,
+        recordProjectRead: (result, caller) => {
+          if (caller && caller === (liveSessionId() ?? mcpRecipient)) relay.recordProjectRead(result, caller);
+        },
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics2?.bump("skill_attaches", meshId, Date.now(), count),
         remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor)
@@ -98661,6 +98843,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         isActive: () => active,
         activate,
         async pull(callerSessionId) {
+          const live = liveSessionId();
+          if (live && callerSessionId !== live) return [];
+          if (callerSessionId) mcpRecipient = callerSessionId;
           activate("pull");
           const slugs = projectSlugs(getAssistantServices().listMeshes());
           const events = await relay.pullPending(callerSessionId);
@@ -98696,7 +98881,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var init_assistant_runtime = __esm2({
       "src/assistant/assistant-runtime.ts"() {
         "use strict";
-        init_report_continuation();
+        init_relay_transcript_reference();
         init_assistant();
         init_terminal_watch();
         init_terminal_watch_runtime();
@@ -101597,8 +101782,8 @@ ${tail}` : ""
     async function refineBranchWorktreeDirtyStage(_self, ctx) {
       const startedAt = Date.now();
       const workspace = typeof ctx.node?.workspace === "string" ? ctx.node.workspace : "";
-      const normalize7 = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
-      if (!workspace || ctx.repoRoot && normalize7(workspace) === normalize7(ctx.repoRoot)) {
+      const normalize8 = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+      if (!workspace || ctx.repoRoot && normalize8(workspace) === normalize8(ctx.repoRoot)) {
         recordMeshRefineStage(ctx.refineStages, "branch_worktree_clean", "skipped", startedAt, { reason: "not_a_branch_worktree" });
         return { kind: "continue", ctx };
       }
@@ -115318,9 +115503,9 @@ ${marker2}`,
       return specCandidatePaths(providerDir, compatibility, version2).find((p) => fs44.existsSync(p)) ?? null;
     }
     function compareVersions(a, b) {
-      const normalize7 = (v) => v.split(/[-_+]/)[0].split(".").map((x) => parseInt(x, 10) || 0);
-      const pa = normalize7(a);
-      const pb = normalize7(b);
+      const normalize8 = (v) => v.split(/[-_+]/)[0].split(".").map((x) => parseInt(x, 10) || 0);
+      const pa = normalize8(a);
+      const pb = normalize8(b);
       for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
         const va = pa[i] || 0;
         const vb = pb[i] || 0;
@@ -159802,8 +159987,8 @@ ${buttons.join("\n")}`;
       };
     }
     function isPathInsideWorkspace(configPath, workspace) {
-      const normalize7 = (value) => value.replace(/[\\/]+$/, "");
-      const ws = normalize7(workspace);
+      const normalize8 = (value) => value.replace(/[\\/]+$/, "");
+      const ws = normalize8(workspace);
       if (!ws) return false;
       const separatorAgnostic = (value) => value.replace(/\\/g, "/");
       const normalizedPath = separatorAgnostic(configPath);

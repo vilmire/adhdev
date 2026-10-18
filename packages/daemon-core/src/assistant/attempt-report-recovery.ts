@@ -276,9 +276,8 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
         return { body, source, completeness: 'final_native', parts, provenance: provenanceFor(evidenceRef) };
     };
     if (selected.complete && terminalPresent) return finishNative(selected.bubbles, 'native_window');
-    // Say why the exact report could not be verified: this fallback used to be
-    // silent, and a relay carrying only the envelope looked like a lost report.
-    LOG.warn('Assistant', `attempt_report_unverified attempt=${attempt.attemptId} bubbles=${selected.bubbles.length} complete=${selected.complete} providerIdle=${selected.providerIdle} anchor=${anchor ?? 'none'} anchorOutside=${anchorOutside}`);
+    // Public report reads retain an explicitly unverified envelope. Automatic
+    // delivery never sends it. The relay logs once per capture/backoff step.
     const durable = store.readVerifiedAttemptBody(attempt.attemptId, meshId, sessionId, Date.now(), JSON.stringify(stable));
     // Earlier v2 captures did not check native provenance, paging or finality.
     // They may be replaced, but cannot be read back as independently verified.

@@ -1,5 +1,6 @@
+import { RelayDeliveryPolicy, unavailableReportNotice, unreadableReplyNotice } from './relay-delivery-policy.js';
 import { RelayGapTracker, receiptKey, gapGroup, buildReadableReplyGap } from './relay-gap-tracker.js';
-import { reportBodyId } from './report-continuation.js';
+import { reportBodyId, type ReportContinuation } from './report-continuation.js';
 import { createHash } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
 import { formatReplyClock, type AttemptReportSnapshot, type AuditedCoordinatorReply } from './assistant-native-window.js';
@@ -37,7 +38,7 @@ import { ATTEMPT_BODY_MAX_CHARS, ATTEMPT_BODY_MAX_ROWS, ATTEMPT_BODY_TOTAL_BYTES
 import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-registry.js';
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
-    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
+    RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_CAPTURE_PROBE_MS, RELAY_MAX_AUTO_PAGES, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
     RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
     buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
@@ -108,6 +109,7 @@ export interface AssistantRelayPorts {
     auditCoordinatorReplies?(sinceMs: number): Promise<readonly AuditedCoordinatorReply[] & { complete?: boolean }>;
     /** Recheck the exact project_read cursor before waking the assistant. */
     canReadCoordinatorReply?(reply: AuditedCoordinatorReply): Promise<boolean>;
+    readCoordinatorReference?(meshId: string, sessionId: string): Promise<ReportContinuation | null>;
     /** Local metric bump for one uncovered native final. */
     onRelayGap?(klass: 'no_attempt' | 'inside_attempt' | 'restart_closed', at: number): void;
     /** Content-free `[Mesh]` line (`buildMeshStatusLineForNotification`). */
@@ -151,6 +153,7 @@ interface Batch {
 interface RenderedReportPage {
     attemptId: string; reportId: string; offset: number; totalPoints: number;
     coverage?: RenderedAttemptCoverage;
+    autoStopped?: boolean;
 }
 type Part = { text: string; source: AssistantInputSource; messageId: string; meshId?: string; reports?: RenderedReportPage[] };
 
@@ -185,6 +188,7 @@ export class AssistantRelay {
     private readonly lastRelayAt = new Map<string, number>();
     /** Durable read and notification acknowledgements, scoped to the recipient. */
     private readonly gaps: RelayGapTracker;
+    private readonly deliveryPolicy: RelayDeliveryPolicy;
     private readonly modalOpen = new Set<string>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
@@ -214,11 +218,12 @@ export class AssistantRelay {
     private dirty = false;
     private seq = 0;
 
-    private readonly restoredAttempts = new Map<string, { meshId: string; sessionId: string }>();
+    private readonly restoredAttempts = new Map<string, { meshId: string; sessionId: string; committedAt: number }>();
 
     constructor(private readonly ports: AssistantRelayPorts) {
         this.clock = ports.clock ?? realClock;
         this.gaps = new RelayGapTracker(ports.store, () => this.clock.now());
+        this.deliveryPolicy = new RelayDeliveryPolicy(ports.store, () => this.clock.now());
     }
 
     /** Subscribe and load undelivered rows from the store as backlog. */
@@ -227,7 +232,7 @@ export class AssistantRelay {
         const rows = this.ports.store.listUndelivered();
         const byMesh = new Map<string, Item & { kind: 'relay' }>();
         for (const r of rows) {
-            this.restoredAttempts.set(r.attemptId, { meshId: r.meshId, sessionId: r.coordinatorSessionId });
+            this.restoredAttempts.set(r.attemptId, { meshId: r.meshId, sessionId: r.coordinatorSessionId, committedAt: r.committedAt });
             const item = byMesh.get(r.meshId);
             if (item) {
                 item.attemptIds.push(r.attemptId);
@@ -604,8 +609,8 @@ export class AssistantRelay {
             attemptId: e.attemptId, meshId, coordinatorSessionId: e.sessionId, committedAt: e.at, kind: 'relay', outcome,
         });
         if (!fresh) return;
-        this.restoredAttempts.set(e.attemptId, { meshId, sessionId: e.sessionId });
-        this.captureAttemptBody(e.attemptId, meshId, e.sessionId);
+        this.restoredAttempts.set(e.attemptId, { meshId, sessionId: e.sessionId, committedAt: e.at });
+        this.captureAttemptBody(e.attemptId, meshId, e.sessionId, true);
         let b = this.batches.get(meshId);
         if (!b) {
             b = { coordinatorSessionId: e.sessionId, attemptIds: [], outcome, firstCommitAt: e.at, lastCommitAt: e.at, quietTimer: null, maxTimer: null };
@@ -625,18 +630,21 @@ export class AssistantRelay {
      * envelope. While the native text is absent, retry on the injected clock
      * for RELAY_NATIVE_WAIT_MS (inside the quiet window). Delivery/folding or
      * stop drops the cache token so a late read cannot repopulate it. */
-    private captureAttemptBody(attemptId: string, meshId: string, coordinatorSessionId: string): void {
+    private captureAttemptBody(attemptId: string, meshId: string, coordinatorSessionId: string, retryWindow = false, restore = false): void {
         const started = this.clock.now();
+        const firstProbe = this.deliveryPolicy.initial(attemptId);
+        if (!this.deliveryPolicy.due(attemptId) || (this.deliveryPolicy.expired(this.restoredAttempts.get(attemptId)?.committedAt ?? started) && !(restore && firstProbe))) return;
+        const initial = retryWindow && firstProbe;
         let p!: Promise<void>;
         const live = () => this.attemptBodyCapture.get(attemptId) === p;
-        p = this.settleCapture(attemptId, meshId, coordinatorSessionId, started, live);
+        p = this.settleCapture(attemptId, meshId, coordinatorSessionId, started, live, initial);
         this.attemptBodyCapture.set(attemptId, p);
         void p.finally(() => {
             if (this.attemptBodyCapture.get(attemptId) === p) this.attemptBodyCapture.delete(attemptId);
         });
     }
 
-    private async settleCapture(attemptId: string, meshId: string, coordinatorSessionId: string, started: number, live: () => boolean): Promise<void> {
+    private async settleCapture(attemptId: string, meshId: string, coordinatorSessionId: string, started: number, live: () => boolean, initial: boolean): Promise<void> {
         let last = this.normalizeReport(null);
         for (;;) {
             // Call the reader synchronously so a commit-time snapshot is taken
@@ -653,7 +661,7 @@ export class AssistantRelay {
             await Promise.resolve();
             if (!live()) return;
             try {
-                const raw = await this.bounded(read, Math.max(0, RELAY_NATIVE_WAIT_MS - (this.clock.now() - started)), null);
+                const raw = await this.bounded(read, Math.max(0, (initial ? RELAY_NATIVE_WAIT_MS : RELAY_CAPTURE_PROBE_MS) - (this.clock.now() - started)), null);
                 const next = this.normalizeReport(raw);
                 if (next.body || !last.body) last = next;
             } catch {
@@ -661,18 +669,18 @@ export class AssistantRelay {
             }
             if (!live()) return;
             if (last.completeness === 'final_native' && last.body?.trim()) {
-                this.rememberReport(attemptId, last);
+                this.rememberCapture(attemptId, last);
                 return;
             }
             const elapsed = this.clock.now() - started;
-            if (elapsed >= RELAY_NATIVE_WAIT_MS) {
-                this.rememberReport(attemptId, last);
+            if (!initial || elapsed >= RELAY_NATIVE_WAIT_MS) {
+                this.rememberCapture(attemptId, last);
                 return;
             }
             const wait = Math.min(RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS - elapsed);
             await this.bounded(new Promise<void>(() => {}), wait, undefined);
             if (!live()) return;
-            if (this.clock.now() - started >= RELAY_NATIVE_WAIT_MS) { this.rememberReport(attemptId, last); return; }
+            if (this.clock.now() - started >= RELAY_NATIVE_WAIT_MS) { this.rememberCapture(attemptId, last); return; }
         }
     }
 
@@ -711,6 +719,14 @@ export class AssistantRelay {
         this.attemptBodyAt.delete(attemptId);
         this.attemptBodyAt.set(attemptId, this.clock.now());
         this.pruneBodyCache(this.clock.now());
+    }
+
+    private rememberCapture(id: string, report: AttemptReportSnapshot): void {
+        this.rememberReport(id, report);
+        if (!this.hasCapturedBody(id)) {
+            this.deliveryPolicy.failed(id);
+            LOG.warn('Assistant', `native relay capture unavailable attempt=${id}; retry scheduled with backoff`);
+        }
     }
 
     private pruneBodyCache(now: number): void {
@@ -764,8 +780,9 @@ export class AssistantRelay {
         if (!reply.attemptId && (this.queue.some(i => i.kind === 'relay' && i.coordinatorSessionId === reply.sessionId)
             || [...this.batches.values()].some(b => b.coordinatorSessionId === reply.sessionId))) return;
         const key = coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text);
-        if (this.replyCovered(reply, text) || this.gaps.wasRead(reply, this.ports.assistantSessionId())
-            || this.gaps.notified(reply, this.ports.assistantSessionId())) return;
+        // Audits have no caller identity in MCP-only mode. Recipient-scoped
+        // receipts are checked when the actual recipient claims the notice.
+        if (this.replyCovered(reply, text)) return;
         const klass = !reply.attemptId ? 'no_attempt' : reply.restartClosed ? 'restart_closed' : 'inside_attempt';
         if (!this.flaggedReplies.has(key)) {
             this.flaggedReplies.set(key, now);
@@ -909,7 +926,9 @@ export class AssistantRelay {
     private async deliverOnce(): Promise<void> {
         const sid = this.ports.assistantSessionId();
         if (!sid || this.pendingHuman.length || !this.ports.isAssistantReady(sid)) return;
+        const lifecycle = this.lifecycle;
         const { taken, parts } = await this.takeParts(this.clock.now(), sid);
+        if (lifecycle !== this.lifecycle) return;
         if (!parts.length) {
             this.queue = this.queue.filter((i) => !taken.includes(i));
             return;
@@ -933,7 +952,9 @@ export class AssistantRelay {
      */
     async pullPending(sessionId: string | null): Promise<AssistantPulledEvent[]> {
         await this.idle();
+        const lifecycle = this.lifecycle;
         const { taken, parts } = await this.takeParts(this.clock.now(), sessionId);
+        if (lifecycle !== this.lifecycle) return [];
         const missed = this.missedReportsIncluding(taken, parts);
         const gap = !parts.some(p => p.messageId.startsWith('gap:')) ? '' : this.newGapLine(sessionId, missed);
         if (gap && parts.length) parts.push({ text: gap, source: 'relay', messageId: `gap:${this.clock.now()}:${++this.seq}` });
@@ -970,24 +991,30 @@ export class AssistantRelay {
             if (item.kind === 'relay') {
                 await this.bodiesFor(item);
                 const pending = item.attemptIds.filter(id => !this.hasCapturedBody(id));
-                if (pending.length === item.attemptIds.length) continue;
-                if (pending.length) {
-                    this.queue.push({ ...item, attemptIds: pending });
-                    item.attemptIds = item.attemptIds.filter(id => this.hasCapturedBody(id));
-                }
+                const ready = item.attemptIds.filter(id => this.hasCapturedBody(id));
+                const expired = pending.filter(id => this.deliveryPolicy.expired(this.restoredAttempts.get(id)?.committedAt ?? item.committedAt));
+                const selected = ready.length ? ready : expired;
+                if (!selected.length) continue;
+                const held = item.attemptIds.filter(id => !selected.includes(id));
+                if (held.length) this.queue.push({ ...item, attemptIds: held });
+                item.attemptIds = selected;
             }
             if (item.kind === 'line' && item.gapReplies) {
+                const unread = item.gapReplies.filter(reply => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
+                if (!unread.length) { taken.push(item); continue; }
                 const readable: AuditedCoordinatorReply[] = [];
-                for (const reply of item.gapReplies) {
-                    if (this.replyCovered(reply, reply.text) || this.gaps.wasRead(reply, sid) || this.gaps.notified(reply, sid)) continue;
-                    try { if (await this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2_000, false) && !this.gaps.wasRead(reply, sid) && !this.replyCovered(reply, reply.text)) readable.push(reply); } catch { /* no actionable target */ }
-                }
-                if (!readable.length) { taken.push(item); continue; }
-                item.text = buildReadableReplyGap(readable, this.ports.projectSlug(readable.at(-1)!.meshId ?? this.ports.coordinatorMeshOf(readable.at(-1)!.sessionId) ?? '') ?? '');
+                for (const reply of unread) if (await this.deliveryPolicy.readable(reply,
+                    () => this.bounded(this.ports.canReadCoordinatorReply?.(reply) ?? Promise.resolve(false), 2_000, false))) readable.push(reply);
+                const remaining = unread.filter(reply => !this.replyCovered(reply, reply.text) && !this.gaps.wasRead(reply, sid) && !this.gaps.notified(reply, sid));
+                if (!remaining.length) { taken.push(item); continue; }
+                const readableNow = readable.filter(reply => remaining.includes(reply));
+                const project = this.ports.projectSlug(remaining[0]!.meshId ?? this.ports.coordinatorMeshOf(remaining[0]!.sessionId) ?? '') ?? '';
+                item.text = [readableNow.length ? buildReadableReplyGap(readableNow, project) : '',
+                    remaining.length > readableNow.length ? unreadableReplyNotice(remaining.length - readableNow.length) : ''].filter(Boolean).join('\n');
             }
             const part: Part = item.kind === 'line'
                 ? { text: item.text, source: item.source, messageId: item.messageId, ...(item.meshId ? { meshId: item.meshId } : {}) }
-                : await this.renderRelay(item);
+                : item.attemptIds.some(id => !this.hasCapturedBody(id)) ? await this.renderUnavailable(item) : await this.renderRelay(item);
             const cost = codePoints(part.text) + 2;
             if (parts.length && size + cost > RELAY_DELIVERY_MAX_CHARS) break;
             parts.push(part);
@@ -1020,20 +1047,24 @@ export class AssistantRelay {
         const sentReports = new Map(parts.flatMap(p => (p.reports ?? []).map(r => [r.attemptId, r] as const)));
         const rendered = relayItems.flatMap(i => i.attemptIds.filter(id => {
             const report = sentReports.get(id);
-            return report && report.offset + RELAY_BODY_MAX_CHARS >= report.totalPoints;
+            return report && !report.autoStopped && report.offset + RELAY_BODY_MAX_CHARS >= report.totalPoints;
         }));
         const coverage = rendered.flatMap(id => sentReports.get(id)?.coverage ?? []);
-        const settled = relayItems.flatMap(i => i.attemptIds.filter(id => !sentReports.has(id) || rendered.includes(id)));
+        const settled = relayItems.flatMap(i => i.attemptIds.filter(id => !sentReports.has(id) || sentReports.get(id)?.autoStopped || rendered.includes(id)));
         for (const item of relayItems) {
-            const remaining = item.attemptIds.filter(id => sentReports.has(id) && !rendered.includes(id));
+            const remaining = item.attemptIds.filter(id => sentReports.has(id) && !sentReports.get(id)?.autoStopped && !rendered.includes(id));
             for (const id of remaining) {
                 const report = sentReports.get(id)!;
-                this.ports.store.writeReceipt(receiptKey('relay-page', id, report.reportId), String(report.offset + RELAY_BODY_MAX_CHARS), at);
+                this.ports.store.writeReceipt(receiptKey('relay-page', id, report.reportId), String(report.offset + RELAY_BODY_MAX_CHARS), at, 'page');
             }
             if (remaining.length) {
                 this.queue.push({ ...item, attemptIds: remaining });
                 this.dirty = true;
             }
+        }
+        for (const item of relayItems) for (const id of item.attemptIds) if (settled.includes(id) && !rendered.includes(id)) {
+            this.gaps.markNotified({ sessionId: this.restoredAttempts.get(id)?.sessionId ?? item.coordinatorSessionId,
+                attemptId: id, messageAt: item.committedAt, text: '', chars: 0 }, sid);
         }
         this.ports.store.markDelivered(settled, at, rendered, coverage);
         if (relayItems.length) this.loadDeliveredCoverage(at);
@@ -1076,7 +1107,7 @@ export class AssistantRelay {
     }
 
     private rememberGaps(sessionId: string | null, missed: readonly { slug: string; count: number }[]): void {
-        for (const m of missed) this.ports.store.writeReceipt(receiptKey('counter', sessionId, m.slug), String(m.count), this.clock.now());
+        for (const m of missed) this.ports.store.writeReceipt(receiptKey('counter', sessionId, m.slug), String(m.count), this.clock.now(), 'counter');
     }
 
     /** Stored gaps (not yet counted again) per mesh. */
@@ -1111,24 +1142,18 @@ export class AssistantRelay {
     /**
      * Every attempt in the batch, in commit order, each resolved to the body
      * captured for IT at ITS OWN commit time — never the batch's last turn's
-     * body reused for earlier ones. A local attempt still mid-capture (the
-     * async read fired in `commit()` has not settled) is awaited here rather
-     * than raced; only a capture that actually failed renders the no-body
-     * placeholder (via `compactRelayBody(null)` downstream).
+     * body reused for earlier ones. Await the initial capture, and use one
+     * bounded probe per backoff step for restores/retries. Unavailable captures
+     * get a content-free notice after the grace, never a partial body.
      */
     private async bodiesFor(item: Item & { kind: 'relay' }): Promise<Array<string | null>> {
-        const pending = item.attemptIds.map((id) => this.attemptBodyCapture.get(id)).filter((p): p is Promise<void> => !!p);
-        if (pending.length) await Promise.all(pending);
         for (const id of item.attemptIds) {
+            if (this.hasCapturedBody(id) || this.attemptBodyCapture.has(id)) continue;
             const ref = this.restoredAttempts.get(id);
-            if (!ref || this.attemptBodies.has(id)) continue;
-            // Authorization is checked by the runtime reader for every attempt. The authorized reader prefers the durable exact capture.
-            let report: AttemptReportSnapshot | null = null;
-            const lifecycle = this.lifecycle;
-            try { report = this.normalizeReport(await this.bounded(this.ports.rehydrateAttemptReport?.(ref.meshId, ref.sessionId, id) ?? Promise.resolve(null), RELAY_NATIVE_WAIT_MS, null)); } catch { /* exact evidence unavailable */ }
-            if (report && this.lifecycle === lifecycle) this.rememberReport(id, report);
+            this.captureAttemptBody(id, ref?.meshId ?? item.meshId, ref?.sessionId ?? item.coordinatorSessionId, false, true);
         }
-        return item.attemptIds.map((id) => this.attemptBodies.get(id) ?? null);
+        await Promise.all(item.attemptIds.map(id => this.attemptBodyCapture.get(id)));
+        return item.attemptIds.map(id => this.attemptBodies.get(id) ?? null);
     }
 
     private pageOffset(id: string, body: string): number {
@@ -1142,10 +1167,19 @@ export class AssistantRelay {
         return paged ? `${base}:page:${receiptKey(bodies.map((body, index) => [reportBodyId(body ?? ''), offsets[index]]))}` : base;
     }
 
+    private async renderUnavailable(item: Item & { kind: 'relay' }): Promise<Part> {
+        const ref = this.restoredAttempts.get(item.attemptIds.at(-1)!);
+        const session = ref?.sessionId ?? item.coordinatorSessionId;
+        let cursor: ReportContinuation | null = null;
+        try { cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2_000, null); } catch { /* absence is reported explicitly */ }
+        return { source: 'relay', meshId: item.meshId,
+            messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
+            text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor) };
+    }
+
     private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {
         const remote = this.remote.get(item.meshId);
         const bodies = await this.bodiesFor(item);
-        const unavailable = item.attemptIds.filter((id, index) => this.restoredAttempts.has(id) && !bodies[index]);
         const refs = item.attemptIds.slice(-12).map(attemptId => {
             const index = item.attemptIds.indexOf(attemptId); const body = bodies[index];
             const meta = this.attemptMeta.get(attemptId);
@@ -1167,19 +1201,24 @@ export class AssistantRelay {
             idle: item.idle,
         });
         const headerEnd = envelope.indexOf('\n') + 1;
-        const missing = unavailable.length ? `[ADHDev original report unavailable] Exact authorized attempt evidence could not rehydrate: ${unavailable.join(', ')}. A new report would be regeneration.\n` : '';
-        const unverified = item.attemptIds.some((id) => this.attemptMeta.get(id)?.completeness === 'envelope_unverified' && !!this.attemptBodies.get(id)?.trim());
-        const caution = unverified ? '[ADHDev relay] This report may be truncated — the native transcript was not captured. Use project_read with the report reference.\n' : '';
-        const text = envelope.slice(0, headerEnd) + references + missing + caution + envelope.slice(headerEnd);
         const reports = item.attemptIds.map((id, index): RenderedReportPage => {
             const body = bodies[index]!;
             const offset = this.pageOffset(id, body);
             const totalPoints = codePoints(body);
             const meta = this.attemptMeta.get(id) ?? { body, completeness: 'final_native' as const };
+            const autoStopped = offset + RELAY_BODY_MAX_CHARS < totalPoints && offset / RELAY_BODY_MAX_CHARS + 1 >= RELAY_MAX_AUTO_PAGES;
             const coverage = offset + RELAY_BODY_MAX_CHARS >= totalPoints
                 ? this.renderedParts(id, this.restoredAttempts.get(id)?.sessionId ?? item.coordinatorSessionId, body, meta, Infinity) : null;
-            return { attemptId: id, reportId: reportBodyId(body), offset, totalPoints, ...(coverage ? { coverage } : {}) };
+            return { attemptId: id, reportId: reportBodyId(body), offset, totalPoints, autoStopped, ...(coverage ? { coverage } : {}) };
         });
+        const continuations = reports.filter(r => r.autoStopped).map(r => {
+            const body = bodies[item.attemptIds.indexOf(r.attemptId)]!;
+            return `[ADHDev relay continuation] Automatic delivery stopped after ${RELAY_MAX_AUTO_PAGES} pages. Read the remaining text with project_read ${JSON.stringify({
+                project: this.ports.projectSlug(item.meshId) ?? item.meshId, attemptId: r.attemptId, reportId: r.reportId,
+                coordinatorSessionId: this.restoredAttempts.get(r.attemptId)?.sessionId ?? item.coordinatorSessionId,
+                offset: Array.from(body).slice(0, r.offset + RELAY_BODY_MAX_CHARS).join('').length })}.`;
+        }).join('\n');
+        const text = envelope.slice(0, headerEnd) + references + (continuations ? continuations + '\n' : '') + envelope.slice(headerEnd);
         return { text, source: 'relay', messageId: this.relayPartId(item, bodies), meshId: item.meshId, reports };
     }
 }

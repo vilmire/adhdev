@@ -91,6 +91,20 @@ describe('wireAssistantRuntime', () => {
         expect(subs).toHaveLength(3);
     });
 
+    it('authenticates MCP-only read acknowledgements with the same non-null pull caller', async () => {
+        runtime = wireAssistantRuntime(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics: null, tickMs: 3_600_000 });
+        await preloadAssistantProjectReaders();
+        const hooks = createDefaultProjectPorts({ components: () => components(), execute: async () => ({ success: true }), selfDaemonId: 'd' }).relay;
+        const ack = vi.spyOn(runtime.relay, 'recordProjectRead');
+        const result = { coordinatorSessionId: 'coord', messages: [] };
+        hooks.recordProjectRead!(result, 'foreign'); expect(ack).not.toHaveBeenCalled();
+        await runtime.pull('mcp-assistant');
+        expect(hooks.assistantSessionId!()).toBe('mcp-assistant');
+        hooks.recordProjectRead!(result, 'mcp-assistant');
+        expect(ack).toHaveBeenCalledWith(result, 'mcp-assistant');
+        ack.mockClear(); hooks.recordProjectRead!(result, 'foreign'); expect(ack).not.toHaveBeenCalled();
+    });
+
     it('activates at wire time when assistant.json has an entry; dispose unsubscribes and clears hooks', async () => {
         registry.bindSession({ sessionId: 'asst', cliType: 'claude-cli', workspace: dir, at: 1 });
         runtime = wireAssistantRuntime(components(), { registry, store: new InMemoryAssistantRelayStore(), metrics: null, tickMs: 3_600_000 });

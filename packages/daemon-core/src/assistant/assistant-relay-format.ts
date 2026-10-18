@@ -21,6 +21,14 @@ export const RELAY_QUIET_MS = 15_000;
  */
 export const RELAY_NATIVE_RETRY_MS = 1_000;
 export const RELAY_NATIVE_WAIT_MS = 8_000;
+/** After this additional grace, surface a content-free unavailable notice. */
+export const RELAY_NATIVE_GRACE_MS = 2 * 60_000;
+export const RELAY_CAPTURE_PROBE_MS = 3_000;
+export const RELAY_CAPTURE_BACKOFF_MS = 60_000;
+export const RELAY_CAPTURE_BACKOFF_MAX_MS = 15 * 60_000;
+export const RELAY_READABILITY_CACHE_MS = 5 * 60_000;
+/** Further text remains available through the exact project_read cursor. */
+export const RELAY_MAX_AUTO_PAGES = 3;
 /** Longest a batch waits for the coordinator to stop chaining turns. */
 export const RELAY_MAX_WAIT_MS = 120_000;
 /**

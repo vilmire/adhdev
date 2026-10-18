@@ -1,3 +1,4 @@
+import { RELAY_NATIVE_GRACE_MS, RELAY_NATIVE_WAIT_MS } from '../../src/assistant/assistant-relay-format.js';
 import { reportMessageId } from '../../src/assistant/project-views.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AssistantRelay } from '../../src/assistant/assistant-relay.js';
@@ -121,6 +122,9 @@ describe('relay delivery review regressions', () => {
         await vi.advanceTimersByTimeAsync(15_001);
         expect(await h.relay.pullPending(null)).toEqual([]);
         expect(h.store.listUndelivered()).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(RELAY_NATIVE_GRACE_MS + RELAY_NATIVE_WAIT_MS); h.relay.tick(); await micro();
+        expect((await h.relay.pullPending(null)).map(x => x.text).join('\n')).toContain('native transcript unavailable');
+        expect(h.store.listUndelivered()).toHaveLength(0);
         h.relay.stop();
         expect(vi.getTimerCount()).toBe(0);
     });
@@ -184,19 +188,20 @@ describe('batched actionable relay gaps', () => {
         h.relay.stop();
     });
 
-    it('checks availability at delivery and suppresses unreadable and expired targets', async () => {
+    it('reports unreadable targets once without inventing a readable cursor', async () => {
         const h = harness({ body: 'unused', completeness: 'final_native' });
         const canRead = vi.fn(async () => false);
         (h.relay as any).ports.canReadCoordinatorReply = canRead;
         h.audit.mockResolvedValue([missing(1)]); h.relay.tick(); await micro();
-        expect(await h.relay.pullPending(null)).toEqual([]);
+        const unavailable = await h.relay.pullPending(null);
+        expect(unavailable[0].text).toContain('reply could not be read');
+        expect(unavailable[0].text).not.toContain('"messageId"');
         expect(canRead).toHaveBeenCalledWith(expect.objectContaining({ messageId: cursorFor(missing(1)) }));
         canRead.mockResolvedValue(true);
         h.relay.tick(); await micro();
         const notices = await h.relay.pullPending(null);
-        expect(notices).toHaveLength(1);
-        expect(notices[0].text).toContain('"coordinatorSessionId":"coord"');
-        expect(notices[0].text).toContain('"offset":0');
+        expect(notices).toHaveLength(0);
+        expect(canRead).toHaveBeenCalledTimes(1);
         h.relay.stop();
     });
 
@@ -255,14 +260,14 @@ it('suppresses fully paged attempt reads only for the same content-bound report'
     h.relay.stop();
 });
 
-it('suppresses replies older than a fully read native tail, while an unverified read cannot advance the fence', async () => {
+it('does not treat an unseen older reply as read when a small native tail returns only a later row', async () => {
     const tail = { coordinatorSessionId: 'coord', sourceComplete: true, messages: [{ role: 'assistant',
         messageId: 'c'.repeat(64), at: new Date(NOW).toISOString(), text: 'Later finalized native reply.',
         totalChars: 'Later finalized native reply.'.length, complete: true }] };
     const h = harness({ body: 'unused', completeness: 'final_native' });
     h.relay.recordProjectRead(tail, null);
     h.audit.mockResolvedValue([missing(1)]); h.relay.tick(); await micro();
-    expect(await h.relay.pullPending(null)).toEqual([]);
+    expect(await h.relay.pullPending(null)).toHaveLength(1);
     h.relay.stop();
     const unverified = harness({ body: 'unused', completeness: 'final_native' });
     unverified.relay.recordProjectRead({ ...tail, sourceComplete: false }, null);

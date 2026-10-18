@@ -83,7 +83,7 @@ export interface AssistantRelayStore {
      */
     readVerifiedAttemptBody(attemptId: string, meshId: string, sessionId: string, now: number, stablePrefix: string): VerifiedAttemptBody | null;
     readReceipt(key: string, now: number): string | null;
-    writeReceipt(key: string, value: string, at: number): void;
+    writeReceipt(key: string, value: string, at: number, kind?: RelayReceiptKind): void;
     /** Retention: bodies after 24 h, delivered rows after 7 d, closed threads after 30 d. */
     prune(now: number): void;
 }
@@ -157,16 +157,21 @@ export function toUnrenderedCounts(byMesh: ReadonlyMap<string, number>): Unrende
     return { total: rows.reduce((n, r) => n + r.count, 0), byMesh: rows };
 }
 
+/** Isolated budgets prevent transcript reads from evicting delivery state. */
+export const RELAY_RECEIPT_CAPS = { legacy: 4096, read: 4096, page: 4096, notice: 4096, counter: 4096, capture: 4096, readability: 4096 } as const;
+export type RelayReceiptKind = keyof typeof RELAY_RECEIPT_CAPS;
+
 export class InMemoryAssistantRelayStore implements AssistantRelayStore {
-    private readonly receipts = new Map<string, { value: string; at: number }>();
+    private readonly receipts = new Map<string, { value: string; at: number; kind: RelayReceiptKind }>();
     readReceipt(key: string, now: number): string | null {
         const row = this.receipts.get(key);
         return row && now - row.at < RELAY_DELIVERED_RETENTION_MS ? row.value : null;
     }
-    writeReceipt(key: string, value: string, at: number): void {
+    writeReceipt(key: string, value: string, at: number, kind: RelayReceiptKind = 'legacy'): void {
         this.receipts.delete(key);
-        this.receipts.set(key, { value, at });
-        while (this.receipts.size > 4096) this.receipts.delete(this.receipts.keys().next().value!);
+        this.receipts.set(key, { value, at, kind });
+        const bucket = [...this.receipts].filter(([, row]) => row.kind === kind);
+        for (const [oldKey] of bucket.slice(0, Math.max(0, bucket.length - RELAY_RECEIPT_CAPS[kind]))) this.receipts.delete(oldKey);
     }
     private readonly coverage = new Map<string, StoredAttemptCoverage>();
     private readonly bodies = new Map<string, { meshId: string; sessionId: string; body: string; at: number; evidenceRef: string; parts: Array<{ at: number; chars: number }> }>();

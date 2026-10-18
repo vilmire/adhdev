@@ -1,3 +1,4 @@
+import { reportMessageId } from '../../src/assistant/project-views.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -82,6 +83,31 @@ describe('runtime native relay evidence wiring', () => {
         const replies = await ports().auditCoordinatorReplies!(NOW);
         expect(replies.complete).toBe(false);
         expect(replies.map(r => r.sessionId)).toEqual(['coord']);
+    });
+
+    it.each(['leading whitespace', 'trailing whitespace', 'both'])('real readability predicate accepts %s without comparing raw and trimmed lengths', async variant => {
+        const body = (variant !== 'trailing whitespace' ? ' \n ' : '') + 'Synthetic final message. Second sentence.' + (variant !== 'leading whitespace' ? ' \n ' : '');
+        const message = { role: 'assistant', kind: 'standard', receivedAt: NOW - 5_000, content: body };
+        project.execute = execute;
+        execute.mockResolvedValue({ success: true, messages: [message], hasMore: false } as any);
+        const audited = { sessionId: 'coord', meshId: 'local', attemptId: 'plain:a', messageAt: message.receivedAt,
+            text: body.trim(), chars: body.trim().length, messageId: reportMessageId(message) };
+        expect(await ports().canReadCoordinatorReply!(audited)).toBe(true);
+        expect(await ports().canReadCoordinatorReply!({ ...audited, messageId: 'f'.repeat(64) })).toBe(false);
+    });
+
+    it('finds a real readable context cursor for an unsupported timestamp provider without promoting its finality', async () => {
+        const message = { role: 'assistant', kind: 'standard', receivedAt: NOW - 5_000, content: 'Synthetic unsupported-provider context.' };
+        project.execute = execute;
+        execute.mockResolvedValue({ success: true, agent: 'grok-cli', source: 'provider-native', messages: [message] } as any);
+        expect(await ports().readCoordinatorReference!('local', 'coord')).toEqual({ coordinatorSessionId: 'coord', messageId: reportMessageId(message), offset: 0 });
+    });
+
+    it('binds remote fallback context to the already known coordinator session', async () => {
+        remoteReply = { coordinatorSessionId: 'remote-coord', messages: [{ role: 'assistant', messageId: 'e'.repeat(64) }] };
+        expect(await ports().readCoordinatorReference!('remote', 'remote-coord')).toEqual({ coordinatorSessionId: 'remote-coord', messageId: 'e'.repeat(64), offset: 0 });
+        remoteReply.coordinatorSessionId = 'foreign';
+        expect(await ports().readCoordinatorReference!('remote', 'remote-coord')).toBeNull();
     });
 
     it('accepts a newer host with verified native provenance', async () => {

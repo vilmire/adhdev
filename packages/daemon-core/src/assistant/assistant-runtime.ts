@@ -1,4 +1,4 @@
-import { continueReport } from './report-continuation.js';
+import { coordinatorReplyReadable, latestCoordinatorReference } from './relay-transcript-reference.js';
 import { localAttemptReport } from '../commands/high-family/assistant.js';
 import { TerminalWatchStore } from './terminal-watch.js';
 import { TerminalWatchDelivery } from './terminal-watch-runtime.js';
@@ -211,9 +211,27 @@ export function buildAssistantRelayPorts(
             const ports = await projectPorts();
             if (!reply.meshId || ports.coordinatorSessionAuthorized?.(reply.meshId, reply.sessionId) === false
                 || !ports.listMeshes().some(mesh => mesh.id === reply.meshId && ports.isHostedHere(mesh))) return false;
-            const page = await continueReport(ports.execute, { coordinatorSessionId: reply.sessionId, messageId: reply.messageId, offset: 0 });
-            return page.success === true && page.totalChars === reply.text.length
-                && typeof page.text === 'string' && reply.text.startsWith(page.text);
+            return coordinatorReplyReadable(ports.execute, reply);
+        },
+        readCoordinatorReference: async (meshId, sessionId) => {
+            const ports = await projectPorts();
+            const mesh = ports.listMeshes().find(mesh => mesh.id === meshId);
+            if (!mesh) return null;
+            if (ports.isHostedHere(mesh)) {
+                if (ports.coordinatorSessionAuthorized?.(meshId, sessionId) === false) return null;
+                return latestCoordinatorReference(ports.execute, sessionId);
+            }
+            const host = ports.remoteHost(mesh);
+            if (!host.reachable) return null;
+            const out = await ports.callHost(host, 'read', { tail: 10 });
+            if (!out.ok) return null;
+            const result = out.result.result as { coordinatorSessionId?: unknown; messages?: unknown } | undefined;
+            // The relay already knows this session from the host's committed
+            // attempt. A remote payload cannot substitute a different session.
+            if (result?.coordinatorSessionId !== sessionId || !Array.isArray(result.messages)) return null;
+            const message = [...result.messages].reverse().find(m => m?.role === 'assistant'
+                && typeof m.messageId === 'string' && /^[a-f0-9]{64}$/.test(m.messageId));
+            return message ? { coordinatorSessionId: sessionId, messageId: message.messageId, offset: 0 } : null;
         },
         onRelayGap: (_klass, at) => metrics?.bump('relay_gaps', '', at),
         readCoordinatorTail: async (sessionId) => {
@@ -270,6 +288,7 @@ export function wireAssistantRuntime(
     const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
     const { store, metrics } = opened;
     let sawCaller = false;
+    let mcpRecipient: string | null = null;
     let review: AssistantReviewScheduler | null = null;
     let terminalWatchStore: TerminalWatchStore | null = null;
     const relay = new AssistantRelay(buildAssistantRelayPorts(components, {
@@ -473,7 +492,10 @@ export function wireAssistantRuntime(
         },
         isThreadOpen: (meshId) => store.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
-        recordProjectRead: (result) => relay.recordProjectRead(result),
+        assistantSessionId: () => liveSessionId() ?? mcpRecipient,
+        recordProjectRead: (result, caller) => {
+            if (caller && caller === (liveSessionId() ?? mcpRecipient)) relay.recordProjectRead(result, caller);
+        },
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics?.bump('skill_attaches', meshId, Date.now(), count),
         remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor),
@@ -489,6 +511,9 @@ export function wireAssistantRuntime(
         isActive: () => active,
         activate,
         async pull(callerSessionId) {
+            const live = liveSessionId();
+            if (live && callerSessionId !== live) return [];
+            if (callerSessionId) mcpRecipient = callerSessionId;
             activate('pull');
             const slugs = projectSlugs(getAssistantServices().listMeshes());
             const events = await relay.pullPending(callerSessionId);

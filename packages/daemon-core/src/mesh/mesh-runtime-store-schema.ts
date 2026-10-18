@@ -200,7 +200,7 @@ export function migrate(self: MeshRuntimeStore): void {
 export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     db.exec(`
         CREATE TABLE IF NOT EXISTS assistant_relay_receipts (
-            receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL
+            receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'legacy'
         );
         -- Delivery manifests are content-free and never backfilled from captured
         -- reports: old captures do not prove what survived the rendered cap.
@@ -284,6 +284,9 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             credited_at INTEGER NOT NULL
         );
     `);
+    const receiptCols = new Set((db.prepare('PRAGMA table_info(assistant_relay_receipts)').all() as Array<{ name: string }>).map(r => r.name));
+    if (!receiptCols.has('kind')) db.exec("ALTER TABLE assistant_relay_receipts ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'");
+    db.exec('CREATE INDEX IF NOT EXISTS idx_assistant_relay_receipts_kind_age ON assistant_relay_receipts(kind, at_ms DESC, receipt_key DESC)');
     const bodyCols = new Set((db.prepare('PRAGMA table_info(assistant_attempt_bodies)').all() as Array<{ name: string }>).map(r => r.name));
     if (!bodyCols.has('evidence_ref')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN evidence_ref TEXT');
     if (!bodyCols.has('parts_json')) db.exec('ALTER TABLE assistant_attempt_bodies ADD COLUMN parts_json TEXT');

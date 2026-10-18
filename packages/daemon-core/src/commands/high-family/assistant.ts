@@ -42,7 +42,7 @@ import type { CommandRouterResult } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import type { LocalMeshEntry } from '../../repo-mesh-types.js';
 import type { RemoteCallOutcome, RemoteHostView } from '../../assistant/assistant-remote-host.js';
-import { ASSISTANT_TOOL_SOURCES, assistantToolGate, projectPortsFor } from './assistant-store.js';
+import { ASSISTANT_TOOL_SOURCES, assistantToolGate, projectPortsFor, readAssistantSessionId } from './assistant-store.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
 import { projectSlugBase, projectSlugs, resolveAssistantProject } from '../../assistant/assistant-projects.js';
 import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
@@ -398,17 +398,21 @@ const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args
     if (!p.ok) return p.result;
     const meshId = p.mesh.id;
     const tail = readTailArg(args.tail);
+    const caller = readAssistantSessionId(args);
+    const acknowledge = (result: Record<string, unknown>) => {
+        if (caller && caller === ports.relay.assistantSessionId?.()) ports.relay.recordProjectRead?.(result, caller);
+    };
     const continuation = parseReportContinuation(args);
     if (typeof continuation === 'string') return fail('invalid_args', continuation);
     if (p.remote) {
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'read', { tail, ...(continuation ?? {}) });
         if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
-        ports.relay.recordProjectRead?.(remoteBody(out));
+        acknowledge(remoteBody(out));
         return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: 'relay' });
     }
     const r = await localProjectRead(ports, meshId, tail, continuation);
     if (!r.ok) return fail('project_read_failed', r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });
-    ports.relay.recordProjectRead?.(r.result);
+    acknowledge(r.result);
     return wrap(p.slug, meshId, r.result);
 });
 

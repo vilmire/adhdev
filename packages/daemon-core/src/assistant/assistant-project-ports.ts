@@ -29,7 +29,8 @@ import {
 import { refreshMemberMeshDescriptors } from './member-meshes.js';
 
 export interface AssistantRelayHooks {
-    recordProjectRead?(result: Record<string, unknown>): void;
+    assistantSessionId?(): string | null;
+    recordProjectRead?(result: Record<string, unknown>, caller: string): void;
     openThread?(meshId: string): void;
     isThreadOpen?(meshId: string): boolean;
     lastRelayAt?(meshId: string): number | null;

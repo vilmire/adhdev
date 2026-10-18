@@ -618,6 +618,7 @@ export function compactTranscriptTail(readChat: Record<string, unknown>, tail: n
             complete: !truncated && m.bubbleState !== 'streaming' && m.isStreaming !== true && m.meta?.streaming !== true,
             nextOffset: truncated ? maxChars : null,
             role: readText(m.role).toLowerCase() === 'user' ? 'user' : 'assistant',
+            kind: readText(m.kind ?? m.messageKind) || 'standard',
             text: truncated ? `${text.slice(0, maxChars)}…` : text,
             ...(truncated ? { truncated: true } : {}),
             ...(at ? { at } : {}),

@@ -14,6 +14,8 @@ import {
     RELAY_IDLE_CLOSE_GRACE_MS,
     RELAY_MAX_WAIT_MS,
     RELAY_NATIVE_WAIT_MS,
+    RELAY_CAPTURE_BACKOFF_MS,
+    RELAY_NATIVE_GRACE_MS,
     RELAY_QUIET_MS,
     buildRelayEnvelope,
     compactRelayBody,
@@ -288,7 +290,7 @@ describe('relay trigger and batching', () => {
         expect(h.store.listUndelivered()).toHaveLength(1);
         expect(h.relay.missedReportsFor(MESH)).toBe(0);
         h.state.report = 'Complete final message. All sentences survived.';
-        h.relay.tick(); await micro(); await settle(h);
+        h.clock.advance(RELAY_CAPTURE_BACKOFF_MS); h.relay.tick(); await micro(); await settle(h);
         expect(h.submits).toHaveLength(1);
         expect(h.submits[0].text).toContain(h.state.report);
         h.relay.tick(); await settle(h);
@@ -296,14 +298,14 @@ describe('relay trigger and batching', () => {
         h.relay.stop();
     });
 
-    it('retains an unavailable MCP report until exact native evidence exists', async () => {
+    it('retains an unavailable MCP report only during the bounded native grace', async () => {
         const h = harness(); h.state.assistant = null; h.relay.openThread(MESH); h.state.report = null;
         h.emit(turn('committed', COORD, 1, h.clock.now()));
         await micro(); h.clock.advance(RELAY_NATIVE_WAIT_MS); await micro();
         h.clock.advance(RELAY_QUIET_MS); await settle(h);
         expect(await h.relay.pullPending('mcp_client')).toEqual([]);
         expect(h.store.listUndelivered()).toHaveLength(1);
-        h.state.report = 'Complete report'; h.relay.tick(); await micro();
+        h.state.report = 'Complete report'; h.clock.advance(RELAY_CAPTURE_BACKOFF_MS); h.relay.tick(); await micro();
         const events = await h.relay.pullPending('mcp_client');
         expect(events.map(e => e.text).join('\n')).toContain('Complete report');
         expect(events.map(e => e.text).join('\n')).not.toContain('[ADHDev relay gap]');
@@ -636,7 +638,9 @@ it.each(['folded', 'stopped'])('does not repopulate memory when an exact capture
         expect(h.store.listUndelivered()).toEqual([]);
         expect(h.submits[0].text).toContain('older than 24 h');
     } else h.relay.stop();
-    resolve('exact body completed late'); await pending;
+    if (lifecycle === 'folded') expect(pending).toBeUndefined(); // aged rows never start another capture
+    else resolve('exact body completed late');
+    await pending;
     expect((h.relay as any).attemptBodies.has(id)).toBe(false);
     expect((h.relay as any).attemptBodyCapture.has(id)).toBe(false);
     h.relay.stop();
@@ -686,7 +690,7 @@ it('never relays an unverified streaming envelope and later relays the finalized
     h.clock.advance(RELAY_QUIET_MS); await settle(h);
     expect(h.submits).toHaveLength(0);
     expect(h.store.listUndelivered()).toHaveLength(1);
-    finalized = true; h.relay.tick(); await micro(); await settle(h);
+    finalized = true; h.clock.advance(RELAY_CAPTURE_BACKOFF_MS); h.relay.tick(); await micro(); await settle(h);
     expect(h.submits).toHaveLength(1);
     expect(h.submits[0].text).toContain(full);
     expect(h.submits[0].text).not.toContain('envelope_unverified');
@@ -700,5 +704,9 @@ it('refuses session-only tails when no exact reader is available', async () => {
     h.state.report = 'newest session tail';
     h.emit(turn('committed', COORD, 1, h.clock.now())); h.clock.advance(RELAY_QUIET_MS); await settle(h);
     expect(h.submits).toHaveLength(0);
-    expect(h.store.listUndelivered()).toHaveLength(1); h.relay.stop();
+    expect(h.store.listUndelivered()).toHaveLength(1);
+    h.clock.advance(RELAY_NATIVE_GRACE_MS + RELAY_NATIVE_WAIT_MS); h.relay.tick(); await settle(h);
+    expect(h.submits[0].text).toContain('native transcript unavailable');
+    expect(h.submits[0].text).not.toContain('newest session tail');
+    expect(h.store.listUndelivered()).toHaveLength(0); h.relay.stop();
 });

@@ -57,6 +57,7 @@ export async function continueReport(execute: Execute, cursor: ReportContinuatio
         if (cursor.offset > body.length) return { success: false, code: 'invalid_report_offset' };
         const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
         return { success: true, coordinatorSessionId: cursor.coordinatorSessionId, messageId: cursor.messageId,
+            role: found.role, kind: found.kind ?? found.messageKind ?? 'standard',
             text: body.slice(cursor.offset, end), offset: cursor.offset, totalChars: body.length,
             truncated: end < body.length, complete: end === body.length, nextOffset: end < body.length ? end : null };
     };
