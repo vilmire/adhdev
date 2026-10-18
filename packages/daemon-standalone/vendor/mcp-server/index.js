@@ -94890,6 +94890,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         inFlight3 = /* @__PURE__ */ new Set();
       }
     });
+    function formatProjectAttachDisabledHint(info) {
+      const roleLabel = info.role === "source" ? "source" : info.role === "target" ? "target" : "selected";
+      const name = str9(info.machineName).trim();
+      const id4 = str9(info.daemonId).trim();
+      const machineDesc = name && id4 && name !== id4 ? `${name} (${id4})` : name || id4 || "this machine";
+      const stagePart = str9(info.stage).trim() ? ` at stage "${str9(info.stage).trim()}"` : "";
+      return `Remote project attachment is disabled on the ${roleLabel} machine ${machineDesc}${stagePart} (\`allowRemoteProjectAttach\` is off). Turn on "Remote project attach" for ${machineDesc} in Dashboard \u2192 Settings, or set \`"allowRemoteProjectAttach": true\` in its daemon \`config.json\` (no restart required). Both source and target machines must have \`allowRemoteProjectAttach\` enabled.`;
+    }
     function selected(ctx, args) {
       if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str9(args?.targetDaemonId)) || !daemonIdsEquivalent4(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure("WRONG_MACHINE", "target_access", "Address the exact owner-selected canonical daemon.");
     }
@@ -94960,10 +94968,47 @@ ${grant.exp}`).digest("hex");
             return refusal(e);
           }
           if (!ctx.deps.attachRemoteProject) return fail3("CAPABILITY_NOT_AVAILABLE", "authentication", "This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.");
-          return ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
+          const res = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
+          if (res && res.code === "PROJECT_ATTACH_DISABLED") {
+            const role = res.role === "source" || res.role === "target" ? res.role : res.stage === "prepare" || res.stage === "register" ? "source" : "target";
+            const stage = str9(res.stage).trim() || (role === "source" ? "prepare" : "checkout");
+            const daemonId = str9(res.daemonId).trim() || (role === "source" ? str9(ctx.deps.statusInstanceId) : str9(args.targetDaemonId));
+            const machineName = str9(res.machineName).trim() || (role === "source" ? loadConfig().machineNickname?.trim() || daemonId : daemonId);
+            const hint = formatProjectAttachDisabledHint({ stage, role, daemonId, machineName });
+            return {
+              ...res,
+              success: false,
+              attached: false,
+              code: "PROJECT_ATTACH_DISABLED",
+              stage,
+              role,
+              daemonId,
+              machineName,
+              setting: "allowRemoteProjectAttach",
+              error: str9(res.error).includes("allowRemoteProjectAttach") ? res.error : hint,
+              action: str9(res.action).includes("allowRemoteProjectAttach") ? res.action : hint,
+              hint: str9(res.hint).includes("allowRemoteProjectAttach") ? res.hint : hint
+            };
+          }
+          return res;
         };
         remoteProjectHandlers = {
           attach_remote_project: attachRemoteProject,
+          remote_project_attach_settings: async (ctx, args) => {
+            const hasToggleArg = args?.enabled !== void 0 || args?.allowRemoteProjectAttach !== void 0;
+            const action2 = args?.action === void 0 ? hasToggleArg ? "set" : "get" : str9(args.action);
+            if (action2 === "get") {
+              const cfg = loadConfig();
+              const enabled2 = cfg.allowRemoteProjectAttach === true;
+              return { success: true, enabled: enabled2, allowRemoteProjectAttach: enabled2, daemonId: str9(ctx.deps.statusInstanceId) };
+            }
+            if (action2 !== "set") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected action get or set." };
+            const rawEnabled = args?.enabled !== void 0 ? args.enabled : args?.allowRemoteProjectAttach;
+            if (typeof rawEnabled !== "boolean") return { success: false, code: "INVALID_ARGUMENTS", error: "Expected boolean enabled." };
+            const updated = updateConfig({ allowRemoteProjectAttach: rawEnabled });
+            const enabled = updated.allowRemoteProjectAttach === true;
+            return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str9(ctx.deps.statusInstanceId) };
+          },
           remote_project_prepare: async (ctx, args) => {
             try {
               const { mesh, remote } = await prepare(ctx, args);
@@ -95019,6 +95064,7 @@ ${grant.exp}`).digest("hex");
         };
         remoteProjectSpecs = {
           attach_remote_project: { sources: ["ipc", "standalone"] },
+          remote_project_attach_settings: { sources: ["p2p", "ws", "standalone"] },
           remote_project_prepare: { sources: ["project_attach"] },
           remote_project_checkout: { sources: ["project_attach"] },
           remote_project_register: { sources: ["project_attach"] },
