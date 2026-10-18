@@ -84812,11 +84812,16 @@ ${result.stderr}`, result.code);
         ];
       }
     });
-    function resolveMemoryBudgets(override) {
+    function resolveMemoryBudgets(override, currentUsed) {
       const pick = (t) => {
+        const used2 = currentUsed?.[t];
+        const usedFloor = typeof used2 === "number" && Number.isFinite(used2) ? Math.max(0, Math.floor(used2)) : 0;
+        const min = Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], usedFloor));
         const v = override?.[t];
-        if (typeof v !== "number" || !Number.isInteger(v) || v < 1) return DEFAULT_MEMORY_BUDGETS[t];
-        return Math.min(v, MAX_MEMORY_BUDGETS[t]);
+        if (typeof v !== "number" || !Number.isFinite(v)) {
+          return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(min, DEFAULT_MEMORY_BUDGETS[t]));
+        }
+        return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(min, Math.floor(v)));
       };
       return { memory: pick("memory"), user: pick("user") };
     }
@@ -84854,8 +84859,14 @@ ${result.stderr}`, result.code);
       return entries.length ? `${entries.join(MEMORY_ENTRY_SEPARATOR)}
 ` : "";
     }
+    function usagePercentNumber(used2, budget) {
+      return budget > 0 ? Math.round(used2 / budget * 100) : 0;
+    }
     function usagePercent(used2, budget) {
-      return `${Math.round(used2 / budget * 100)}%`;
+      return `${usagePercentNumber(used2, budget)}%`;
+    }
+    function isMemoryNearLimit(used2, budget) {
+      return usagePercentNumber(used2, budget) >= MEMORY_WARNING_THRESHOLD_PCT;
     }
     function validateContent(content) {
       if (typeof content !== "string" || !content.trim()) return "empty";
@@ -84892,11 +84903,14 @@ ${result.stderr}`, result.code);
     var MEMORY_FILE_NAMES;
     var MEMORY_JOURNAL_FILE;
     var DEFAULT_MEMORY_BUDGETS;
+    var MIN_MEMORY_BUDGETS;
     var MAX_MEMORY_BUDGETS;
+    var MEMORY_WARNING_THRESHOLD_PCT;
     var MAX_MEMORY_ENTRY_CHARS;
     var MEMORY_ENTRY_SEPARATOR;
     var STAGED_WRITE_MAX_AGE_MS;
     var CANDIDATE_PREVIEW_CHARS;
+    var ASSISTANT_CONFIG_FILE;
     var CONTROL_CHARS;
     var REDACT_AFTER_RESULTS;
     var AssistantMemoryStore;
@@ -84916,11 +84930,14 @@ ${result.stderr}`, result.code);
         };
         MEMORY_JOURNAL_FILE = ".journal.jsonl";
         DEFAULT_MEMORY_BUDGETS = { memory: 2200, user: 1375 };
-        MAX_MEMORY_BUDGETS = { memory: 8e3, user: 4e3 };
+        MIN_MEMORY_BUDGETS = DEFAULT_MEMORY_BUDGETS;
+        MAX_MEMORY_BUDGETS = { memory: 8800, user: 5500 };
+        MEMORY_WARNING_THRESHOLD_PCT = 90;
         MAX_MEMORY_ENTRY_CHARS = 500;
         MEMORY_ENTRY_SEPARATOR = "\n\xA7\n";
         STAGED_WRITE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1e3;
         CANDIDATE_PREVIEW_CHARS = 60;
+        ASSISTANT_CONFIG_FILE = "assistant.json";
         CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
         REDACT_AFTER_RESULTS = /* @__PURE__ */ new Set([
           "memory_secret_rejected",
@@ -84928,16 +84945,53 @@ ${result.stderr}`, result.code);
           "memory_injection_rejected"
         ]);
         AssistantMemoryStore = class {
+          configDir;
+          configPath;
           memoryDir;
           stagedDir;
-          budgets;
+          budgetOverride;
           now;
           constructor(opts = {}) {
-            const assistantDir = (0, import_path20.join)(opts.configDir ?? getConfigDir2(), "assistant");
+            this.configDir = opts.configDir ?? getConfigDir2();
+            this.configPath = (0, import_path20.join)(this.configDir, ASSISTANT_CONFIG_FILE);
+            const assistantDir = (0, import_path20.join)(this.configDir, "assistant");
             this.memoryDir = (0, import_path20.join)(assistantDir, "memory");
             this.stagedDir = (0, import_path20.join)(assistantDir, "staged");
-            this.budgets = resolveMemoryBudgets(opts.budgets);
+            this.budgetOverride = opts.budgets;
             this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
+          }
+          get budgets() {
+            return resolveMemoryBudgets(this.readConfiguredBudgets(), {
+              memory: this.readRawUsed("memory"),
+              user: this.readRawUsed("user")
+            });
+          }
+          /**
+           * Persist owner-configured memory limits to `<configDir>/assistant.json`
+           * (`memoryBudget`) after clamping to [max(MIN, currentUsed), MAX].
+           */
+          setBudgets(patch) {
+            const currentUsed = {
+              memory: this.readRawUsed("memory"),
+              user: this.readRawUsed("user")
+            };
+            const current4 = this.readConfiguredBudgets() ?? {};
+            const resolved = resolveMemoryBudgets({ ...current4, ...patch }, currentUsed);
+            this.budgetOverride = resolved;
+            let doc = {};
+            if ((0, import_fs27.existsSync)(this.configPath)) {
+              try {
+                const parsed = JSON.parse((0, import_fs27.readFileSync)(this.configPath, "utf-8"));
+                if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                  doc = { ...parsed };
+                }
+              } catch {
+              }
+            }
+            doc.memoryBudget = resolved;
+            writeFileAtomic600(this.configPath, `${JSON.stringify(doc, null, 2)}
+`);
+            return resolved;
           }
           filePath(target) {
             return (0, import_path20.join)(this.memoryDir, MEMORY_FILE_NAMES[target]);
@@ -84947,8 +85001,9 @@ ${result.stderr}`, result.code);
           }
           /** Read one file. Never throws: missing → empty, undecodable → `unreadable`. */
           readFile(target) {
-            const budget = this.budgets[target];
-            const empty = { target, entries: [], invalid: [], used: 0, budget };
+            const configured = this.readConfiguredBudgets();
+            const defaultBudget = resolveMemoryBudgets(configured)[target];
+            const empty = { target, entries: [], invalid: [], used: 0, budget: defaultBudget };
             const path102 = this.filePath(target);
             if (!(0, import_fs27.existsSync)(path102)) return empty;
             let text4;
@@ -84966,7 +85021,8 @@ ${result.stderr}`, result.code);
               const problem = entryProblem(e);
               if (problem) invalid.push({ index, problem, preview: firstChars(e, CANDIDATE_PREVIEW_CHARS) });
             });
-            return { target, entries, invalid, used: usedOf(entries), budget };
+            const used2 = usedOf(entries);
+            return { target, entries, invalid, used: used2, budget: defaultBudget };
           }
           read() {
             return { memory: this.readFile("memory"), user: this.readFile("user") };
@@ -84974,6 +85030,37 @@ ${result.stderr}`, result.code);
           usage() {
             const s2 = this.read();
             return { memory: usagePercent(s2.memory.used, s2.memory.budget), user: usagePercent(s2.user.used, s2.user.budget) };
+          }
+          status() {
+            const s2 = this.read();
+            const buildTarget = (t) => {
+              const st = s2[t];
+              const percent = usagePercentNumber(st.used, st.budget);
+              const min = Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], st.used));
+              return {
+                used: st.used,
+                budget: st.budget,
+                percent,
+                usage: usagePercent(st.used, st.budget),
+                nearLimit: isMemoryNearLimit(st.used, st.budget),
+                defaultBudget: DEFAULT_MEMORY_BUDGETS[t],
+                min,
+                max: MAX_MEMORY_BUDGETS[t]
+              };
+            };
+            const memory = buildTarget("memory");
+            const user = buildTarget("user");
+            return {
+              budgets: { memory: memory.budget, user: user.budget },
+              defaults: { ...DEFAULT_MEMORY_BUDGETS },
+              min: { memory: memory.min, user: user.min },
+              max: { ...MAX_MEMORY_BUDGETS },
+              warningThresholdPct: MEMORY_WARNING_THRESHOLD_PCT,
+              nearLimit: memory.nearLimit || user.nearLimit,
+              usage: { memory: memory.usage, user: user.usage },
+              memory,
+              user
+            };
           }
           /** The frozen snapshot block for the assistant system prompt (§4.10.2). */
           renderSnapshot(frozenAt = this.now()) {
@@ -85154,6 +85241,34 @@ ${result.stderr}`, result.code);
             });
             this.unlinkStaged(rec5.id);
           }
+          readConfiguredBudgets() {
+            const out = { ...this.budgetOverride ?? {} };
+            if ((0, import_fs27.existsSync)(this.configPath)) {
+              try {
+                const parsed = JSON.parse((0, import_fs27.readFileSync)(this.configPath, "utf-8"));
+                const mb = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed.memoryBudget : null;
+                if (mb && typeof mb === "object" && !Array.isArray(mb)) {
+                  if (typeof mb.memory === "number" && Number.isFinite(mb.memory)) out.memory = mb.memory;
+                  if (typeof mb.user === "number" && Number.isFinite(mb.user)) out.user = mb.user;
+                }
+              } catch {
+              }
+            }
+            return Object.keys(out).length ? out : void 0;
+          }
+          readRawUsed(target) {
+            const path102 = this.filePath(target);
+            if (!(0, import_fs27.existsSync)(path102)) return 0;
+            try {
+              const bytes = (0, import_fs27.readFileSync)(path102);
+              let text4 = bytes.toString("utf8");
+              if (!Buffer.from(text4, "utf8").equals(bytes)) return 0;
+              if (text4.startsWith("\uFEFF")) text4 = text4.slice(1);
+              return usedOf(parseMemoryEntries(text4));
+            } catch {
+              return 0;
+            }
+          }
         };
         pad2 = (n) => String(n).padStart(2, "0");
         fmtInt = (n) => n.toLocaleString("en-US");
@@ -85320,7 +85435,7 @@ ${result.stderr}`, result.code);
             return this.read();
           }
           memoryBudgets() {
-            return resolveMemoryBudgets(this.read()?.memoryBudget);
+            return resolveMemoryBudgets(this.read()?.memoryBudget ?? this.loadMemoryBudget());
           }
           /**
            * `launch_assistant` / restore: bind the session, creating the entry on
@@ -85331,6 +85446,7 @@ ${result.stderr}`, result.code);
            */
           bindSession(input) {
             const prev = this.read();
+            const preLaunchBudget = prev ? void 0 : this.loadMemoryBudget();
             const sameSession = !!prev && prev.sessionId === input.sessionId;
             const next = {
               ...prev ?? {
@@ -85341,7 +85457,8 @@ ${result.stderr}`, result.code);
                 reviewTurn: true,
                 executionEnabled: true,
                 executionRevision: 0,
-                lastTurnState: null
+                lastTurnState: null,
+                ...preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}
               },
               sessionId: input.sessionId,
               cliType: input.cliType,
@@ -85374,7 +85491,7 @@ ${result.stderr}`, result.code);
             }
             if (patch.memoryBudget !== void 0) {
               const b = normalizeBudget(patch.memoryBudget);
-              if (b) next.memoryBudget = b;
+              if (b) next.memoryBudget = resolveMemoryBudgets({ ...prev.memoryBudget ?? {}, ...b });
               else delete next.memoryBudget;
             }
             return this.write(next);
@@ -85447,6 +85564,15 @@ ${result.stderr}`, result.code);
               return null;
             }
           }
+          loadMemoryBudget() {
+            if (!(0, import_fs28.existsSync)(this.path)) return void 0;
+            try {
+              const parsed = JSON.parse((0, import_fs28.readFileSync)(this.path, "utf-8"));
+              return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? normalizeBudget(parsed.memoryBudget) : void 0;
+            } catch {
+              return void 0;
+            }
+          }
           write(entry) {
             this.keepCorruptAside();
             writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}
@@ -85458,7 +85584,9 @@ ${result.stderr}`, result.code);
           keepCorruptAside() {
             if (!(0, import_fs28.existsSync)(this.path)) return;
             try {
-              if (normalizeAssistantRegistryEntry(JSON.parse((0, import_fs28.readFileSync)(this.path, "utf-8")))) return;
+              const parsed = JSON.parse((0, import_fs28.readFileSync)(this.path, "utf-8"));
+              if (normalizeAssistantRegistryEntry(parsed)) return;
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && normalizeBudget(parsed.memoryBudget)) return;
             } catch {
             }
             try {
@@ -94056,8 +94184,31 @@ ${asText(streams.stderr)}
       creditReview(svc, rec5.reviewTurnId, applied.result, "approved");
       return respond(applied, wrap2);
     }
+    function applyMemoryLimitsUpdate(svc, args) {
+      const hasMemory = args !== null && typeof args === "object" && args.memory !== void 0;
+      const hasUser = args !== null && typeof args === "object" && args.user !== void 0;
+      if (!hasMemory && !hasUser) {
+        return invalidArgs("memory or user limit required");
+      }
+      if (hasMemory && (typeof args.memory !== "number" || !Number.isFinite(args.memory))) {
+        return invalidArgs("memory limit must be a finite number");
+      }
+      if (hasUser && (typeof args.user !== "number" || !Number.isFinite(args.user))) {
+        return invalidArgs("user limit must be a finite number");
+      }
+      svc.memory.setBudgets({
+        ...hasMemory ? { memory: args.memory } : {},
+        ...hasUser ? { user: args.user } : {}
+      });
+      try {
+        getAssistantRegistry().reload();
+      } catch {
+      }
+      return { success: true, result: "applied", ...svc.memory.status() };
+    }
     var ASSISTANT_TOOL_SOURCES;
     var ASSISTANT_OWNER_SOURCES;
+    var ASSISTANT_MEMORY_LIMITS_COMMAND;
     var OK_RESULTS;
     var assistantStoreHandlers;
     var assistantStoreSpecs;
@@ -94074,10 +94225,12 @@ ${asText(streams.stderr)}
         init_note_staging();
         init_store_guards();
         init_hermes_import();
+        init_assistant_registry();
         init_launch_defaults2();
         init_ports();
         ASSISTANT_TOOL_SOURCES = ["ipc", "standalone"];
         ASSISTANT_OWNER_SOURCES = ["p2p", "ws", "standalone"];
+        ASSISTANT_MEMORY_LIMITS_COMMAND = "assistant_memory_limits";
         OK_RESULTS = /* @__PURE__ */ new Set(["applied", "staged", "memory_duplicate", "ok", "list", "discarded"]);
         assistantStoreHandlers = {
           [ASSISTANT_VERB2.memory]: async (_ctx, args) => {
@@ -94148,7 +94301,8 @@ ${asText(streams.stderr)}
                 memory: svc.memory.listStaged(),
                 skills: svc.skills.listStaged(),
                 notes: svc.notes.list(),
-                launchDefaults: svc.launchDefaults?.list() ?? []
+                launchDefaults: svc.launchDefaults?.list() ?? [],
+                memoryStatus: svc.memory.status()
               };
             }
             if (action2 !== "resolve") return invalidArgs("action must be list or resolve");
@@ -94182,12 +94336,31 @@ ${asText(streams.stderr)}
               return invalidArgs("skill action must be pin, unpin, clear_review or restore");
             }
             if (target === "memory") {
-              if (action2 !== "remove") return invalidArgs("memory action must be remove");
+              if (action2 === "get_limits") {
+                return { success: true, result: "ok", ...svc.memory.status() };
+              }
+              if (action2 === "set_limits") {
+                return applyMemoryLimitsUpdate(svc, args);
+              }
+              if (action2 !== "remove") return invalidArgs("memory action must be remove, get_limits or set_limits");
               const file = str8(args?.file);
               if (file !== "memory" && file !== "user") return invalidArgs("file must be memory or user");
               return respond(svc.memory.apply({ action: "remove", target: file, match: rawStr(args?.match) ?? "" }, "owner"));
             }
             return invalidArgs("target must be skill or memory");
+          },
+          [ASSISTANT_MEMORY_LIMITS_COMMAND]: async (_ctx, args) => {
+            const svc = getAssistantServices();
+            const rawAction = str8(args?.action);
+            const hasBudgetField = args !== null && typeof args === "object" && ("memory" in args || "user" in args);
+            const action2 = rawAction || (hasBudgetField ? "set" : "get");
+            if (action2 === "get") {
+              return { success: true, result: "ok", ...svc.memory.status() };
+            }
+            if (action2 === "set") {
+              return applyMemoryLimitsUpdate(svc, args);
+            }
+            return invalidArgs("action must be get or set");
           },
           [ASSISTANT_VERB2.importSkills]: async (ctx, args) => {
             const svc = getAssistantServices();
@@ -94228,6 +94401,7 @@ ${asText(streams.stderr)}
           [ASSISTANT_VERB2.projectNote]: { sources: [...ASSISTANT_TOOL_SOURCES] },
           [ASSISTANT_VERB2.stagedResolve]: { sources: [...ASSISTANT_OWNER_SOURCES] },
           [ASSISTANT_VERB2.storeAdmin]: { sources: [...ASSISTANT_OWNER_SOURCES] },
+          [ASSISTANT_MEMORY_LIMITS_COMMAND]: { sources: [...ASSISTANT_OWNER_SOURCES] },
           [ASSISTANT_VERB2.importSkills]: { sources: [...ASSISTANT_OWNER_SOURCES] }
         });
       }
