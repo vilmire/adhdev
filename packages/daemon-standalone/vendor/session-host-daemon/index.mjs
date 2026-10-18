@@ -295,13 +295,14 @@ var PtySessionRuntime = class {
         cwd = os.homedir();
       }
     }
-    this.ptyProcess = spawnCliChild(() => pty.spawn(command, args, {
+    const spawnRuntime = () => pty.spawn(command, args, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
       cwd,
       env
-    }), env);
+    });
+    this.ptyProcess = this.payload.category === "cli" || this.payload.category === "acp" ? spawnCliChild(spawnRuntime, env) : spawnRuntime();
     this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,

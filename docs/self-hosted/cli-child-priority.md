@@ -3,7 +3,9 @@
 Agent PTYs are lowered immediately after native spawn in
 `packages/daemon-core/src/cli-adapters/pty-transport.ts` and
 `packages/session-host-daemon/src/runtime.ts`. This covers agy, claude, codex
-and other providers using either PTY transport. `hiddenSpawnCli` is the explicit
+and other providers using either PTY transport. Hosted lowering is limited to
+`cli`/`acp` agent categories; user `shell` sessions and unknown categories retain
+their existing priority. `hiddenSpawnCli` is the explicit
 equivalent for stdio workloads. Generic `hiddenSpawn`/exec helpers retain their
 existing priority: git, version probes, daemon/session-host startup, and a future
 P2P signal worker must not acquire the workload policy.
@@ -155,7 +157,8 @@ It passed. No live CLI session was inspected for mutation or reprioritized.
    priority and quantify the spawn-to-adjustment inheritance race.
 4. Daemon, session-host IPC owner, any P2P signal worker, and short version/git
    helpers must remain `Normal`, before and during workload launch. Confirm
-   normal IPC snapshots/input/resize/exit handling and no console-window flash.
+   hosted `shell` sessions also remain `Normal`, normal IPC snapshots/input/
+   resize/exit handling, and no console-window flash.
 5. Repeat with `ADHDEV_CLI_CHILD_NICE=0` in the isolated launch environment:
    workloads and descendants should remain `Normal`. The Darwin option must be
    inert on Windows; verify no taskpolicy process is attempted.
@@ -174,8 +177,8 @@ does not substitute for this task.
 
 ## Related verification
 
-From `oss/packages/daemon-core`, the focused related run passed **39 tests across
-5 files** (38 unit/spawn checks and the real inheritance test):
+From `oss/packages/daemon-core`, the related checks cover **64 tests across
+6 files** (63 unit/spawn checks and the real inheritance test):
 
 ```sh
 ADHDEV_CLI_PRIORITY_LOAD=1 npx vitest run \
@@ -183,7 +186,8 @@ ADHDEV_CLI_PRIORITY_LOAD=1 npx vitest run \
   test/cli-adapters/cli-child-priority-spawns.test.ts \
   test/cli-adapters/pty-transport-load-retry.test.ts \
   test/session-host/managed-host-node-pin.test.ts \
-  test/cli-adapters/cli-child-priority-inheritance.load.test.ts
+  test/cli-adapters/cli-child-priority-inheritance.load.test.ts \
+  test/commands/cooperative-maintenance.test.ts
 ```
 
 The saturation file is deliberately run separately, as shown above. The latest
@@ -192,7 +196,6 @@ enabled run had 1 failing test (nice latency); the intentional opt-out run had
 `check:windows-hide`, `check:boundaries`, `check:shape-guards`, `check:file-sizes`
 and both session-host package typechecks passed.
 
-A further `npx vitest run test/commands/cooperative-maintenance.test.ts` passed
-all **22 tests**. Its synthetic PID 1 spawn now explicitly opts out, just as the
+The maintenance fixture's synthetic PID 1 spawn explicitly opts out, just as the
 native-load retry fixture does, so no mocked PID reaches the real scheduler.
-Total related passing coverage: **61 tests across 6 selected files**.
+Hosted scope cases verify CLI/ACP lowering and shell/unknown-category exclusion.

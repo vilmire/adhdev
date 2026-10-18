@@ -48,15 +48,28 @@ it('lowers the direct PTY CLI immediately after native spawn', () => {
   expect(mocks.spawn).toHaveBeenCalledOnce();
 });
 
-it('lowers the hosted PTY CLI while leaving its IPC owner normal', () => {
+it.each(['cli', 'acp'])('lowers the hosted %s agent PTY while leaving its IPC owner normal', (category) => {
   const handle = { pid: 3210, onData: vi.fn(), onExit: vi.fn() };
   mocks.spawn.mockReturnValueOnce(handle);
   const runtime = new PtySessionRuntime({
     sessionId: 'priority-test',
-    payload: { launchCommand: { command: process.execPath, args: [] }, workspace: process.cwd() } as any,
+    payload: { category, launchCommand: { command: process.execPath, args: [] }, workspace: process.cwd() } as any,
     onData: vi.fn(), onExit: vi.fn(),
   });
   expect(runtime.start()).toBe(handle.pid);
   expect(mocks.priority).toHaveBeenCalledOnce();
   expect(mocks.priority.mock.calls[0][1]).toHaveProperty('PATH');
+});
+
+it.each(['shell', undefined])('keeps hosted user/unknown category %s at normal priority', (category) => {
+  const handle = { pid: 3210, onData: vi.fn(), onExit: vi.fn() };
+  mocks.spawn.mockReturnValueOnce(handle);
+  const runtime = new PtySessionRuntime({
+    sessionId: 'priority-shell-test',
+    payload: { category, launchCommand: { command: process.execPath, args: [] }, workspace: process.cwd() } as any,
+    onData: vi.fn(), onExit: vi.fn(),
+  });
+  expect(runtime.start()).toBe(handle.pid);
+  expect(mocks.priority).not.toHaveBeenCalled();
+  expect(mocks.spawn).toHaveBeenCalledOnce();
 });

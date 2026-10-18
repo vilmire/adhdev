@@ -303,13 +303,14 @@ var PtySessionRuntime = class {
         cwd = os.homedir();
       }
     }
-    this.ptyProcess = (0, import_session_host_core.spawnCliChild)(() => pty.spawn(command, args, {
+    const spawnRuntime = () => pty.spawn(command, args, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
       cwd,
       env
-    }), env);
+    });
+    this.ptyProcess = this.payload.category === "cli" || this.payload.category === "acp" ? (0, import_session_host_core.spawnCliChild)(spawnRuntime, env) : spawnRuntime();
     this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,
