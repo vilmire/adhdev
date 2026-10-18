@@ -117,6 +117,7 @@ vi.mock('../../src/config/config.js', async (importOriginal) => {
 vi.mock('../../src/config/mesh-config.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/config/mesh-config.js')>()),
     getMesh: (id: string) => state.meshes.find(m => m.id === id),
+    loadMeshes: () => state.meshes,
 }));
 vi.mock('../../src/config/mesh-config-host-pairing.js', async (importOriginal) => ({
     ...(await importOriginal<typeof import('../../src/config/mesh-config-host-pairing.js')>()),
@@ -181,8 +182,11 @@ function workingGit() {
     };
 }
 
+const prevConfigDirEnv = process.env.ADHDEV_CONFIG_DIR;
+
 beforeEach(() => {
     state.configDir = mkdtempSync(join(tmpdir(), 'adhdev-remote-attach-'));
+    process.env.ADHDEV_CONFIG_DIR = state.configDir;
     state.meshes = [hostMesh()];
     state.hostRecords = {};
     state.python = true;
@@ -204,6 +208,8 @@ beforeEach(() => {
 afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    if (prevConfigDirEnv === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+    else process.env.ADHDEV_CONFIG_DIR = prevConfigDirEnv;
     rmSync(state.configDir, { recursive: true, force: true });
 });
 
@@ -246,6 +252,49 @@ describe('wiring: boot config → router deps → command', () => {
         expect(bridge).not.toHaveBeenCalled();
         expect(state.gitCalls.some(c => c.args[0] === 'clone')).toBe(false);
     });
+
+    it('remote_project_attach_settings rejects ipc/mesh/api and accepts owner sources while preserving existing config.json keys', async () => {
+        const registry = getDaemonCommandRegistry();
+        expect(registry.get('remote_project_attach_settings')?.sources).toEqual(['p2p', 'ws', 'standalone']);
+
+        const configPath = join(state.configDir, 'config.json');
+        writeFileSync(configPath, JSON.stringify({
+            userName: 'owner-user',
+            serverUrl: 'https://adhdev.example',
+            machineNickname: 'SourceMac',
+            providerSettings: { claude: { customFlag: true } },
+        }, null, 2));
+
+        const router = routerWith(SOURCE);
+
+        // Rejects ipc, mesh, api
+        for (const forbidden of ['ipc', 'mesh', 'api'] as const) {
+            const rejected: any = await router.execute('remote_project_attach_settings', { action: 'set', enabled: true }, forbidden as any);
+            expect(rejected.success).toBe(false);
+            expect(rejected.code).toBe('COMMAND_SOURCE_REJECTED');
+        }
+        expect(JSON.parse(readFileSync(configPath, 'utf-8')).allowRemoteProjectAttach).toBeUndefined();
+
+        // Owner sources can read default OFF and toggle ON/OFF without clobbering other config keys
+        const initial: any = await router.execute('remote_project_attach_settings', { action: 'get' }, 'p2p');
+        expect(initial).toMatchObject({ success: true, allowRemoteProjectAttach: false, enabled: false });
+
+        const enabledRes: any = await router.execute('remote_project_attach_settings', { action: 'set', enabled: true }, 'ws');
+        expect(enabledRes).toMatchObject({ success: true, allowRemoteProjectAttach: true, enabled: true });
+        const afterOn = JSON.parse(readFileSync(configPath, 'utf-8'));
+        expect(afterOn.allowRemoteProjectAttach).toBe(true);
+        expect(afterOn.userName).toBe('owner-user');
+        expect(afterOn.serverUrl).toBe('https://adhdev.example');
+        expect(afterOn.machineNickname).toBe('SourceMac');
+        expect(afterOn.providerSettings).toEqual({ claude: { customFlag: true } });
+
+        const disabledRes: any = await router.execute('remote_project_attach_settings', { action: 'set', enabled: false }, 'standalone');
+        expect(disabledRes).toMatchObject({ success: true, allowRemoteProjectAttach: false, enabled: false });
+        const afterOff = JSON.parse(readFileSync(configPath, 'utf-8'));
+        expect(afterOff.allowRemoteProjectAttach).toBe(false);
+        expect(afterOff.machineNickname).toBe('SourceMac');
+        expect(afterOff.providerSettings).toEqual({ claude: { customFlag: true } });
+    });
 });
 
 describe('attach_remote_project (source host)', () => {
@@ -277,6 +326,34 @@ describe('attach_remote_project (source host)', () => {
         expect(await attach({ meshId: 'mesh_batrp', targetDaemonId: TARGET }, { attachRemoteProject: bridge })).toMatchObject({ code: 'REMOTE_IDENTITY_MISMATCH' });
         expect(await attach({ meshId: 'mesh_missing', targetDaemonId: TARGET }, { attachRemoteProject: bridge })).toMatchObject({ code: 'PROJECT_NOT_FOUND' });
         expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('enriches PROJECT_ATTACH_DISABLED from the bridge with stage, role, machine attribution and the allowRemoteProjectAttach enable hint', async () => {
+        const bridge = vi.fn(async () => ({
+            success: false,
+            code: 'PROJECT_ATTACH_DISABLED',
+            stage: 'prepare',
+            role: 'source',
+            daemonId: SOURCE,
+            machineName: 'SourceMac',
+        }));
+        const router = routerWith(SOURCE, bridge as any);
+        const res: any = await router.execute('attach_remote_project', { meshId: 'mesh_batrp', targetDaemonId: TARGET }, 'ipc');
+        expect(res).toMatchObject({
+            success: false,
+            code: 'PROJECT_ATTACH_DISABLED',
+            stage: 'prepare',
+            role: 'source',
+            daemonId: SOURCE,
+            machineName: 'SourceMac',
+            setting: 'allowRemoteProjectAttach',
+            attached: false,
+        });
+        expect(res.error).toContain('allowRemoteProjectAttach');
+        expect(res.error).toContain('source machine SourceMac (daemon_mach_source1)');
+        expect(res.error).toContain('Dashboard → Settings');
+        expect(res.action).toBe(res.error);
+        expect(res.hint).toBe(res.error);
     });
 });
 

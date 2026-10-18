@@ -268,6 +268,14 @@ export type { MobileDashboardMode } from './components/settings/MobileDashboardM
 export { ChatActivitySection } from './components/settings/ChatActivitySection'
 export { AppearanceSettingsSection } from './components/settings/AppearanceSettingsSection'
 export type { AppearanceSettingsSectionProps } from './components/settings/AppearanceSettingsSection'
+export {
+    RemoteProjectAttachSection,
+    REMOTE_PROJECT_ATTACH_SETTINGS_COMMAND,
+} from './components/settings/RemoteProjectAttachSection'
+export type {
+    RemoteProjectAttachSectionProps,
+    RemoteProjectAttachMachine,
+} from './components/settings/RemoteProjectAttachSection'
 
 // ── Icons ──
 export {

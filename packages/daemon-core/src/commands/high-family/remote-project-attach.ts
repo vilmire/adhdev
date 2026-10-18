@@ -1,7 +1,7 @@
 /** Authenticated setup commands. These are never mesh-forwardable. */
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
-import { loadConfig } from '../../config/config.js';
+import { loadConfig, updateConfig } from '../../config/config.js';
 import { getMesh } from '../../config/mesh-config.js';
 import { setMeshHostPin } from '../../config/mesh-config-host-pairing.js';
 import { readMeshHostRecord, writeMeshHostRecord } from '../../mesh/mesh-host-memory.js';
@@ -10,6 +10,25 @@ import { githubRemote, git, checkoutRemote, managedCheckoutPath, verifyCheckout,
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 const str = (v: unknown) => typeof v === 'string' ? v : '';
 const fail = (code: string, stage: string, action: string, subcode?: string) => ({ success: false, code, ...(subcode ? { subcode } : {}), stage, action, attached: false });
+export type ProjectAttachStepStage = 'prepare' | 'checkout' | 'register' | 'accept';
+export type ProjectAttachRole = 'source' | 'target';
+export function projectAttachStepAttribution(command: string): { stage: ProjectAttachStepStage; role: ProjectAttachRole } {
+    switch (command) {
+        case 'remote_project_prepare': return { stage: 'prepare', role: 'source' };
+        case 'remote_project_register': return { stage: 'register', role: 'source' };
+        case 'remote_project_accept': return { stage: 'accept', role: 'target' };
+        case 'remote_project_checkout':
+        default: return { stage: 'checkout', role: 'target' };
+    }
+}
+export function formatProjectAttachDisabledHint(info: { stage?: string; role?: string; daemonId?: string; machineName?: string }): string {
+    const roleLabel = info.role === 'source' ? 'source' : info.role === 'target' ? 'target' : 'selected';
+    const name = str(info.machineName).trim();
+    const id = str(info.daemonId).trim();
+    const machineDesc = name && id && name !== id ? `${name} (${id})` : name || id || 'this machine';
+    const stagePart = str(info.stage).trim() ? ` at stage "${str(info.stage).trim()}"` : '';
+    return `Remote project attachment is disabled on the ${roleLabel} machine ${machineDesc}${stagePart} (\`allowRemoteProjectAttach\` is off). Turn on "Remote project attach" for ${machineDesc} in Dashboard → Settings, or set \`"allowRemoteProjectAttach": true\` in its daemon \`config.json\` (no restart required). Both source and target machines must have \`allowRemoteProjectAttach\`` + ' enabled.';
+}
 function selected(ctx: HighFamilyContext, args: any) {
     if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str(args?.targetDaemonId)) || !daemonIdsEquivalent(args.targetDaemonId, ctx.deps.statusInstanceId)) throw new AttachFailure('WRONG_MACHINE', 'target_access', 'Address the exact owner-selected canonical daemon.');
 }
@@ -53,10 +72,49 @@ export const attachRemoteProject: HighFamilyHandler = async (ctx, args) => {
     if (!/^daemon_mach_[a-zA-Z0-9]+$/.test(str(args?.targetDaemonId))) return fail('INVALID_TARGET', 'target_access', 'Pass the exact owner-selected canonical daemon_mach_* identity.');
     try { await prepare(ctx, args); } catch (e) { return refusal(e); }
     if (!ctx.deps.attachRemoteProject) return fail('CAPABILITY_NOT_AVAILABLE', 'authentication', 'This runtime has no authenticated remote attachment bridge. Activate the reviewed cloud preview capability.');
-    return ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
+    const res: any = await ctx.deps.attachRemoteProject(args.meshId, args.targetDaemonId);
+    if (res && res.code === 'PROJECT_ATTACH_DISABLED') {
+        const role: ProjectAttachRole = res.role === 'source' || res.role === 'target'
+            ? res.role
+            : (res.stage === 'prepare' || res.stage === 'register' ? 'source' : 'target');
+        const stage = str(res.stage).trim() || (role === 'source' ? 'prepare' : 'checkout');
+        const daemonId = str(res.daemonId).trim() || (role === 'source' ? str(ctx.deps.statusInstanceId) : str(args.targetDaemonId));
+        const machineName = str(res.machineName).trim() || (role === 'source' ? (loadConfig().machineNickname?.trim() || daemonId) : daemonId);
+        const hint = formatProjectAttachDisabledHint({ stage, role, daemonId, machineName });
+        return {
+            ...res,
+            success: false,
+            attached: false,
+            code: 'PROJECT_ATTACH_DISABLED',
+            stage,
+            role,
+            daemonId,
+            machineName,
+            setting: 'allowRemoteProjectAttach',
+            error: str(res.error).includes('allowRemoteProjectAttach') ? res.error : hint,
+            action: str(res.action).includes('allowRemoteProjectAttach') ? res.action : hint,
+            hint: str(res.hint).includes('allowRemoteProjectAttach') ? res.hint : hint,
+        };
+    }
+    return res;
 };
 export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
     attach_remote_project: attachRemoteProject,
+    remote_project_attach_settings: async (ctx, args) => {
+        const hasToggleArg = args?.enabled !== undefined || args?.allowRemoteProjectAttach !== undefined;
+        const action = args?.action === undefined ? (hasToggleArg ? 'set' : 'get') : str(args.action);
+        if (action === 'get') {
+            const cfg = loadConfig();
+            const enabled = cfg.allowRemoteProjectAttach === true;
+            return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str(ctx.deps.statusInstanceId) };
+        }
+        if (action !== 'set') return { success: false, code: 'INVALID_ARGUMENTS', error: 'Expected action get or set.' };
+        const rawEnabled = args?.enabled !== undefined ? args.enabled : args?.allowRemoteProjectAttach;
+        if (typeof rawEnabled !== 'boolean') return { success: false, code: 'INVALID_ARGUMENTS', error: 'Expected boolean enabled.' };
+        const updated = updateConfig({ allowRemoteProjectAttach: rawEnabled });
+        const enabled = updated.allowRemoteProjectAttach === true;
+        return { success: true, enabled, allowRemoteProjectAttach: enabled, daemonId: str(ctx.deps.statusInstanceId) };
+    },
     remote_project_prepare: async (ctx, args) => {
         try { const { mesh, remote } = await prepare(ctx, args); return { success: true, meshId: mesh.id, ...remote, hostDaemonId: ctx.deps.statusInstanceId }; } catch (e) { return refusal(e); }
     },
@@ -105,6 +163,7 @@ export const remoteProjectHandlers: Record<string, HighFamilyHandler> = {
 };
 export const remoteProjectSpecs = {
     attach_remote_project: { sources: ['ipc', 'standalone'] as const },
+    remote_project_attach_settings: { sources: ['p2p', 'ws', 'standalone'] as const },
     remote_project_prepare: { sources: ['project_attach'] as const },
     remote_project_checkout: { sources: ['project_attach'] as const },
     remote_project_register: { sources: ['project_attach'] as const },

@@ -3820,6 +3820,17 @@
             "rowLabel": "Mostrar actividad del agente en el chat",
             "descriptionOn": "Las llamadas a herramientas, la salida del terminal y el razonamiento se muestran entre los mensajes.",
             "descriptionOff": "Solo se muestra la conversación. Las llamadas a herramientas, la salida del terminal y el razonamiento permanecen ocultos."
+        },
+        "remoteProjectAttach": {
+            "sectionTitle": "Conexión remota de proyectos",
+            "sectionDescription": "Interruptor exclusivo del propietario por máquina para conectar proyectos entre máquinas (allowRemoteProjectAttach). Desactivado por defecto.",
+            "bothMachinesNote": "Tanto la máquina de origen como la de destino deben tener esta opción activada para conectar un proyecto entre máquinas.",
+            "rowDescription": "Permitir que esta máquina participe en la conexión remota de proyectos (allowRemoteProjectAttach).",
+            "noMachines": "No hay máquinas conectadas.",
+            "statusOn": "Activado",
+            "statusOff": "Desactivado",
+            "statusOffline": "Sin conexión",
+            "saveFailed": "No se pudo actualizar el ajuste de conexión remota de proyectos."
         }
     },
     "historyModal": {

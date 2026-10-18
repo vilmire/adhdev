@@ -3817,6 +3817,17 @@
             "rowLabel": "Show agent activity in chat",
             "descriptionOn": "Tool calls, terminal output and thinking are shown between chat messages.",
             "descriptionOff": "Only the conversation is shown. Tool calls, terminal output and thinking stay hidden."
+        },
+        "remoteProjectAttach": {
+            "sectionTitle": "Remote project attach",
+            "sectionDescription": "Owner-only switch per machine for cross-machine project attachment (allowRemoteProjectAttach). Default off.",
+            "bothMachinesNote": "Both the source and target machines must have this enabled before attaching a project across machines.",
+            "rowDescription": "Allow this machine to participate in remote project attach (allowRemoteProjectAttach).",
+            "noMachines": "No machines connected.",
+            "statusOn": "On",
+            "statusOff": "Off",
+            "statusOffline": "Offline",
+            "saveFailed": "Could not update remote project attach setting."
         }
     },
     "historyModal": {

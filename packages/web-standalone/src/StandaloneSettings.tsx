@@ -15,6 +15,7 @@ import {
     Button,
     Input,
     AppearanceSettingsSection,
+    RemoteProjectAttachSection,
     useBaseDaemons,
     useTransport,
     IconSettings,
@@ -444,6 +445,14 @@ export default function StandaloneSettings() {
                         />
                     </div>
                 </div>
+            </Section>
+
+            {/* ═══ Remote Project Attach (per machine, owner-only) ═══ */}
+            <Section
+                title={t('settings.remoteProjectAttach.sectionTitle')}
+                description={t('settings.remoteProjectAttach.sectionDescription')}
+            >
+                <RemoteProjectAttachSection />
             </Section>
         </AppPage>
     )

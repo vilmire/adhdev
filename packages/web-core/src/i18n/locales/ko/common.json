@@ -3817,6 +3817,17 @@
             "rowLabel": "채팅에 에이전트 활동 표시",
             "descriptionOn": "도구 호출, 터미널 출력, 생각이 채팅 메시지 사이에 표시됩니다.",
             "descriptionOff": "대화만 표시됩니다. 도구 호출·터미널 출력·생각은 숨겨집니다."
+        },
+        "remoteProjectAttach": {
+            "sectionTitle": "원격 프로젝트 연결",
+            "sectionDescription": "머신 간 프로젝트 연결을 허용하는 머신별 소유자 전용 스위치(allowRemoteProjectAttach)입니다. 기본값은 꺼짐입니다.",
+            "bothMachinesNote": "머신 간 프로젝트를 연결하려면 원본(source)과 대상(target) 머신 모두에서 이 스위치가 켜져 있어야 합니다.",
+            "rowDescription": "이 머신의 원격 프로젝트 연결 참여 허용(allowRemoteProjectAttach).",
+            "noMachines": "연결된 머신이 없습니다.",
+            "statusOn": "켜짐",
+            "statusOff": "꺼짐",
+            "statusOffline": "오프라인",
+            "saveFailed": "원격 프로젝트 연결 설정을 변경하지 못했습니다."
         }
     },
     "historyModal": {

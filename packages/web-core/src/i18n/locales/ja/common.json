@@ -3817,6 +3817,17 @@
             "rowLabel": "チャットにエージェントの活動を表示",
             "descriptionOn": "ツール呼び出し、ターミナル出力、思考過程がチャットメッセージの間に表示されます。",
             "descriptionOff": "会話のみが表示されます。ツール呼び出し・ターミナル出力・思考過程は非表示になります。"
+        },
+        "remoteProjectAttach": {
+            "sectionTitle": "リモートプロジェクト接続",
+            "sectionDescription": "マシン間のプロジェクト接続を許可するオーナー専用のマシン別スイッチ（allowRemoteProjectAttach）。既定はオフです。",
+            "bothMachinesNote": "マシン間でプロジェクトを接続するには、送信元と接続先の両方のマシンでこの設定をオンにする必要があります。",
+            "rowDescription": "このマシンでのリモートプロジェクト接続を許可する（allowRemoteProjectAttach）。",
+            "noMachines": "接続されているマシンがありません。",
+            "statusOn": "オン",
+            "statusOff": "オフ",
+            "statusOffline": "オフライン",
+            "saveFailed": "リモートプロジェクト接続の設定を更新できませんでした。"
         }
     },
     "historyModal": {

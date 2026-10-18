@@ -3817,6 +3817,17 @@
             "rowLabel": "在聊天中显示智能体活动",
             "descriptionOn": "工具调用、终端输出和思考过程将显示在聊天消息之间。",
             "descriptionOff": "仅显示对话。工具调用、终端输出和思考过程将保持隐藏。"
+        },
+        "remoteProjectAttach": {
+            "sectionTitle": "远程项目挂载",
+            "sectionDescription": "按机器控制的仅限所有者开关，用于跨机器挂载项目（allowRemoteProjectAttach）。默认关闭。",
+            "bothMachinesNote": "跨机器挂载项目前，源机器和目标机器都必须启用此选项。",
+            "rowDescription": "允许此机器参与远程项目挂载（allowRemoteProjectAttach）。",
+            "noMachines": "暂无已连接的机器。",
+            "statusOn": "开启",
+            "statusOff": "关闭",
+            "statusOffline": "离线",
+            "saveFailed": "无法更新远程项目挂载设置。"
         }
     },
     "historyModal": {
