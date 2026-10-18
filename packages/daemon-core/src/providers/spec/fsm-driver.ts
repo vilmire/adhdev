@@ -338,6 +338,9 @@ export class FsmDriver implements ISpecDriver {
         this.sends.releaseDrain();
     }
 
+    /** OS PID of the PTY child — see ISpecDriver.getPid. */
+    getPid(): number | undefined { return this.adapter.getPid(); }
+
     /** D2 messageId-keyed FIFO access — see ISpecDriver.claimQueuedSend. */
     hasQueuedSend(messageId: string): boolean { return this.sends.hasQueuedSend(messageId); }
     queuedMessageIds(): string[] { return this.sends.queuedMessageIds(); }

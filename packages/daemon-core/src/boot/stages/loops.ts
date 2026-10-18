@@ -209,31 +209,9 @@ export function startTurnLoops(components: TurnWiredComponents, env: NodeJS.Proc
             policy,
             bus: components.bus,
             sessionHealth: workerSessionHealthFor(components),
-            backgroundWork: createBackgroundWorkMonitor({
-                nudgeWorker: async (sessionId, text, meta) => {
-                    const inputPort = components.cliManager?.input;
-                    if (inputPort) {
-                        const out = await inputPort.submit({
-                            messageId: meta.messageId,
-                            sessionId,
-                            origin: 'mesh',
-                            policy: { mode: 'queue' },
-                            input: { parts: [{ type: 'text', text }], textFallback: text },
-                            createdAt: Date.now(),
-                        });
-                        if (out.kind === 'delivered' || out.kind === 'queued' || out.kind === 'duplicate') {
-                            return true;
-                        }
-                    }
-                    await components.commandHandler?.handle('send_message', {
-                        sessionId,
-                        targetSessionId: sessionId,
-                        message: text,
-                        messageId: meta.messageId,
-                    });
-                    return true;
-                },
-            }),
+            // The SAME monitor the ledger's evidence gate consults (wireTurnLedger),
+            // so a release decided here also stands the ledger gate down.
+            backgroundWork: components.meshTurn?.backgroundWork ?? createBackgroundWorkMonitor(),
             probe: {
                 reader,
                 locate: (attempt) => resolveProbeLocation({

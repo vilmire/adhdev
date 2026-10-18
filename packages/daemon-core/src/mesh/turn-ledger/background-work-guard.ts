@@ -5,10 +5,40 @@ import {
 import { notifyMeshCoordinator } from './deliver.js';
 import { isTerminalTurnState, type TurnAttempt } from './types.js';
 
+/** How long a held turn end waits before the coordinator is told (once) that the worker is still running background work. */
 export const DEFAULT_BACKGROUND_WORK_TIMEOUT_MS = 120_000;
 
+/**
+ * Hard bound on how long ONE attempt's turn end can be held (measured from the
+ * first held observation). When it expires the guard RELEASES: the ordinary
+ * weak-completion path (`weak_candidate` → `await_report` → "possible
+ * completion, awaiting confirmation") takes over, and the guard never holds
+ * that attempt generation again. A dev server or watcher the worker leaves
+ * running therefore delays the weak completion by this much and no more; it can
+ * never pin the task until the 90-minute hard ceiling.
+ */
+export const DEFAULT_BACKGROUND_WORK_RELEASE_MS = 600_000;
+
+/** After the single "your background command finished" nudge, how long the worker has to report before the guard releases. */
+export const DEFAULT_BACKGROUND_WORK_NUDGE_GRACE_MS = 180_000;
+
+/**
+ * Sent at most once per (attempt, generation). Worded to be true whether or not
+ * the process inspection was able to see the command exit: it is never claimed
+ * finished unless the worker confirms it.
+ */
 export const BACKGROUND_WORK_FINISHED_NUDGE_MESSAGE =
-  '[System] Your background command finished; report results with report_completion.';
+  '[System] You ended your turn while background work was pending and have not called report_completion. If the command has finished, report its results with report_completion now; if it is still running, wait for it, then report.';
+
+/**
+ * Epoch ms before which a descendant process is baseline for this attempt: the
+ * moment the task prompt reached the worker (falling back to acceptance). A
+ * process older than that is a CLI helper or a leftover from an earlier task
+ * in a reused session — not work this task started.
+ */
+export function backgroundWorkBaselineMs(attempt: Pick<TurnAttempt, 'deliveredAt' | 'acceptedAt'>): number {
+  return attempt.deliveredAt ?? attempt.acceptedAt;
+}
 
 export type IncompleteTurnEndReason =
   | 'live_background_processes'
@@ -17,7 +47,10 @@ export type IncompleteTurnEndReason =
 export interface TurnEndBackgroundWorkDecisionInput {
   readonly attempt: Pick<TurnAttempt, 'scope' | 'generation' | 'data'>;
   readonly finalSummary?: string | null;
+  /** Live worker-started processes; undefined/empty = none seen OR unknown (never blocks, never completes). */
   readonly liveBackgroundProcesses?: readonly string[] | null;
+  /** The monitor already released this attempt generation: the guard no longer holds it. */
+  readonly released?: boolean;
 }
 
 export type TurnEndBackgroundWorkDecision =
@@ -44,7 +77,7 @@ export function evaluateTurnEndBackgroundWork(
   input: TurnEndBackgroundWorkDecisionInput,
 ): TurnEndBackgroundWorkDecision {
   const { attempt, finalSummary, liveBackgroundProcesses } = input;
-  if (attempt.scope === 'plain') {
+  if (attempt.scope === 'plain' || input.released === true) {
     return { complete: true };
   }
 
@@ -86,8 +119,13 @@ export function formatBackgroundWorkTimeoutNotice(params: {
   readonly sessionId: string;
   readonly taskId?: string | null;
   readonly liveProcessNames: readonly string[];
+  /** `no_report_after_nudge`: the background work is gone but the nudged worker never reported. */
+  readonly phase?: 'still_running' | 'no_report_after_nudge';
 }): string {
   const taskLabel = params.taskId ?? 'unassigned';
+  if (params.phase === 'no_report_after_nudge') {
+    return `[System] Worker session ${params.sessionId} (task ${taskLabel}) was nudged after its background work finished but has not reported results.`;
+  }
   const procs =
     params.liveProcessNames.length > 0
       ? params.liveProcessNames.map((name) => sanitizeProcessCommandName(name)).join(', ')
@@ -108,7 +146,9 @@ export interface TrackedBackgroundWorkEntry {
   lastLiveProcessNames: readonly string[];
   nudgedAt?: number;
   timeoutNotifiedAt?: number;
-  resolution?: 'nudged_after_exit' | 'no_results';
+  /** Set when the hold expired: this attempt generation is never held again. */
+  releasedAt?: number;
+  resolution?: 'nudged_after_exit' | 'no_results' | 'released_unfinished';
 }
 
 export interface BackgroundWorkNudgeMeta {
@@ -133,6 +173,9 @@ export interface BackgroundWorkTimeoutNoticeMeta {
 
 export interface BackgroundWorkMonitorDeps {
   readonly timeoutMs?: number;
+  /** Total hold bound per attempt generation; see `DEFAULT_BACKGROUND_WORK_RELEASE_MS`. */
+  readonly releaseMs?: number;
+  readonly nudgeGraceMs?: number;
   readonly nudgeWorker?: (
     sessionId: string,
     text: string,
@@ -158,12 +201,15 @@ export interface BackgroundWorkObserveResult {
   readonly holdTurnEnd: boolean;
   readonly nudgedWorker: boolean;
   readonly emittedCoordinatorNotice: boolean;
-  readonly resolution?: 'nudged_after_exit' | 'no_results';
+  readonly resolution?: 'nudged_after_exit' | 'no_results' | 'released_unfinished';
 }
 
 export interface BackgroundWorkMonitor {
   observe(input: BackgroundWorkObserveInput): Promise<BackgroundWorkObserveResult>;
+  /** Attempts still being HELD (released ones are not probed on the guard's behalf). */
   trackedAttemptIds(): string[];
+  /** True once the hold expired for this attempt generation; the probe and ledger gates then stand down. */
+  isReleased(attemptId: string, generation: number): boolean;
   getEntry(attemptId: string): TrackedBackgroundWorkEntry | undefined;
   clear(attemptId: string): void;
 }
@@ -202,8 +248,52 @@ export function createBackgroundWorkMonitor(
   deps: BackgroundWorkMonitorDeps = {},
 ): BackgroundWorkMonitor {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_BACKGROUND_WORK_TIMEOUT_MS;
+  const releaseMs = Math.max(deps.releaseMs ?? DEFAULT_BACKGROUND_WORK_RELEASE_MS, timeoutMs);
+  const nudgeGraceMs = deps.nudgeGraceMs ?? DEFAULT_BACKGROUND_WORK_NUDGE_GRACE_MS;
   const notifyCoordinator = deps.notifyCoordinator ?? defaultNotifyCoordinator;
   const entries = new Map<string, TrackedBackgroundWorkEntry>();
+
+  // Attempts that went terminal between observations are never observed again;
+  // bound the map so a long-lived daemon cannot accumulate them.
+  const MAX_ENTRIES = 256;
+  function boundEntries(): void {
+    if (entries.size <= MAX_ENTRIES) return;
+    const oldest = [...entries.values()].sort((a, b) => a.firstObservedAt - b.firstObservedAt);
+    for (const entry of oldest.slice(0, entries.size - MAX_ENTRIES)) entries.delete(entry.attemptId);
+  }
+
+  const NOT_HELD: BackgroundWorkObserveResult = { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
+
+  /** Expire the hold: from here the ordinary weak-completion path decides, and this generation is never held again. */
+  function release(entry: TrackedBackgroundWorkEntry, nowMs: number): void {
+    entry.releasedAt = nowMs;
+    entry.resolution = 'released_unfinished';
+  }
+
+  async function sendNotice(
+    entry: TrackedBackgroundWorkEntry,
+    nowMs: number,
+    phase: 'still_running' | 'no_report_after_nudge',
+  ): Promise<void> {
+    entry.timeoutNotifiedAt = nowMs;
+    const notice = formatBackgroundWorkTimeoutNotice({
+      sessionId: entry.sessionId,
+      taskId: entry.taskId,
+      liveProcessNames: entry.lastLiveProcessNames,
+      phase,
+    });
+    await notifyCoordinator(entry.coordinator.sessionId, notice, {
+      attemptId: entry.attemptId,
+      generation: entry.generation,
+      meshId: entry.meshId,
+      nodeId: entry.nodeId,
+      sessionId: entry.sessionId,
+      taskId: entry.taskId,
+      coordinator: entry.coordinator,
+      liveProcessNames: entry.lastLiveProcessNames,
+      at: nowMs,
+    });
+  }
 
   return {
     async observe(input: BackgroundWorkObserveInput): Promise<BackgroundWorkObserveResult> {
@@ -225,6 +315,10 @@ export function createBackgroundWorkMonitor(
       const existing = entries.get(attempt.attemptId);
       if (existing && existing.generation !== attempt.generation) {
         entries.delete(attempt.attemptId);
+      }
+      // Latched: once released, this generation is never held again (no flapping).
+      if (existing && existing.generation === attempt.generation && existing.releasedAt !== undefined) {
+        return { ...NOT_HELD, resolution: 'released_unfinished' };
       }
 
       const decision = evaluateTurnEndBackgroundWork({
@@ -267,6 +361,7 @@ export function createBackgroundWorkMonitor(
           lastLiveProcessNames: liveNames,
         };
         entries.set(attempt.attemptId, entry);
+        boundEntries();
       } else if (liveNames.length > 0) {
         entry.lastLiveProcessNames = liveNames;
       }
@@ -274,36 +369,22 @@ export function createBackgroundWorkMonitor(
       // Case 1: Live background processes are STILL running.
       if (liveNames.length > 0) {
         const elapsed = nowMs - entry.firstObservedAt;
+        let emittedNotice = false;
         if (elapsed >= timeoutMs && entry.timeoutNotifiedAt === undefined) {
-          entry.timeoutNotifiedAt = nowMs;
           entry.resolution = 'no_results';
-          const notice = formatBackgroundWorkTimeoutNotice({
-            sessionId: entry.sessionId,
-            taskId: entry.taskId,
-            liveProcessNames: entry.lastLiveProcessNames,
-          });
-          await notifyCoordinator(entry.coordinator.sessionId, notice, {
-            attemptId: entry.attemptId,
-            generation: entry.generation,
-            meshId: entry.meshId,
-            nodeId: entry.nodeId,
-            sessionId: entry.sessionId,
-            taskId: entry.taskId,
-            coordinator: entry.coordinator,
-            liveProcessNames: entry.lastLiveProcessNames,
-            at: nowMs,
-          });
-          return {
-            holdTurnEnd: true,
-            nudgedWorker: false,
-            emittedCoordinatorNotice: true,
-            resolution: entry.resolution,
-          };
+          await sendNotice(entry, nowMs, 'still_running');
+          emittedNotice = true;
+        }
+        if (elapsed >= releaseMs) {
+          // Bounded outcome: a dev server / watcher / stuck child must not pin
+          // the task. Release to the ordinary weak-completion path.
+          release(entry, nowMs);
+          return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: emittedNotice, resolution: 'released_unfinished' };
         }
         return {
           holdTurnEnd: true,
           nudgedWorker: false,
-          emittedCoordinatorNotice: false,
+          emittedCoordinatorNotice: emittedNotice,
           resolution: entry.resolution,
         };
       }
@@ -351,6 +432,18 @@ export function createBackgroundWorkMonitor(
         }
       }
 
+      // Nudged (or notified) and still no report: the worker had its chance.
+      // Tell the coordinator once and release instead of holding forever.
+      if (entry.nudgedAt !== undefined && nowMs - entry.nudgedAt >= nudgeGraceMs) {
+        let emittedNotice = false;
+        if (entry.timeoutNotifiedAt === undefined) {
+          await sendNotice(entry, nowMs, 'no_report_after_nudge');
+          emittedNotice = true;
+        }
+        release(entry, nowMs);
+        return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: emittedNotice, resolution: 'released_unfinished' };
+      }
+
       return {
         holdTurnEnd: true,
         nudgedWorker: false,
@@ -360,7 +453,12 @@ export function createBackgroundWorkMonitor(
     },
 
     trackedAttemptIds(): string[] {
-      return [...entries.keys()];
+      return [...entries.values()].filter((e) => e.releasedAt === undefined).map((e) => e.attemptId);
+    },
+
+    isReleased(attemptId: string, generation: number): boolean {
+      const entry = entries.get(attemptId);
+      return !!entry && entry.generation === generation && entry.releasedAt !== undefined;
     },
 
     getEntry(attemptId: string): TrackedBackgroundWorkEntry | undefined {

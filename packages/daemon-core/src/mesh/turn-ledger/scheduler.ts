@@ -281,6 +281,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
             probeStartedAtMs,
             ...(summary ? { summary } : {}),
             ...(bgHoldTurnEnd ? { holdTurnEnd: true } : {}),
+            ...(backgroundWork.isReleased(postGuardLatest.attemptId, postGuardLatest.generation) ? { backgroundWorkReleased: true } : {}),
         });
         if (!readCurrent()) return;
         observeAll(evidence);

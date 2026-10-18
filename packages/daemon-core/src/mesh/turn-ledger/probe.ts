@@ -32,11 +32,8 @@
 
 import { type LivenessResult, type SummaryRef, type TurnEvidence } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../../boot/daemon-components.js';
-import {
-    extractSessionPtyPid,
-    inspectSessionProcessTree,
-    type SessionProcessTreeInspection,
-} from '../../process/session-process-tree.js';
+import { extractSessionPtyPid, type SessionProcessTreeInspection } from '../../process/session-process-tree.js';
+import { readSessionBackgroundProcesses, type ProcessTableSource } from '../../process/process-table-snapshot.js';
 import {
     readTranscriptForDaemonConsumer,
     TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
@@ -44,7 +41,7 @@ import {
 } from '../transcript-daemon-consumer-read.js';
 import { mapTranscriptViewToReadChatPayload } from '../transcript-read-chat-adapter.js';
 import type { ReplicatedTranscriptViewV2 } from '../../seqscribe/transcript-keyed-codec.js';
-import { evaluateTurnEndBackgroundWork } from './background-work-guard.js';
+import { backgroundWorkBaselineMs, evaluateTurnEndBackgroundWork } from './background-work-guard.js';
 import type { TurnPolicy } from './policy.js';
 import type { HoldReason, TurnAttempt } from './types.js';
 
@@ -189,6 +186,8 @@ interface ProbeEvidenceContext {
     summary?: SummaryRef;
     /** Set by the scheduler's background-work monitor while awaiting post-nudge worker results. */
     holdTurnEnd?: boolean;
+    /** The monitor's hold for this attempt generation expired: the weak-completion path decides again. */
+    backgroundWorkReleased?: boolean;
 }
 
 const BUSY_STATUSES = new Set(['generating', 'waiting_approval', 'waiting_choice', 'starting', 'thinking', 'busy']);
@@ -261,6 +260,7 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
             attempt,
             finalSummary: finalThisTurn ? t.finalSummary : undefined,
             liveBackgroundProcesses: read.liveBackgroundProcesses,
+            ...(ctx.backgroundWorkReleased ? { released: true } : {}),
         });
         if (ctx.holdTurnEnd || !bgDecision.complete) {
             if (attempt.state === 'finalizing') {
@@ -373,8 +373,16 @@ interface ComponentsProbeReaderOptions {
      * this probe tick answers `unknown`; the next one reads what was pushed.
      */
     requestHeldPush?: (attempt: TurnAttempt, daemonId: string, workspace?: string) => void;
-    /** Optional process-tree inspector override for tests. */
-    inspectProcessTree?: (rootPid: number | undefined) => SessionProcessTreeInspection;
+    /**
+     * Process-table source (default: the shared one). Reads are asynchronous,
+     * single-flight and TTL-cached; an unavailable/slow read means "unknown".
+     */
+    processSource?: ProcessTableSource;
+    /** Test override of the whole inspection. May be async; null = unknown. */
+    inspectProcessTree?: (
+        rootPid: number | undefined,
+        opts: { startedAfterMs: number },
+    ) => Promise<SessionProcessTreeInspection | null> | SessionProcessTreeInspection | null;
 }
 
 type ProbeComponents = Pick<DaemonComponents,
@@ -404,7 +412,11 @@ function replicaPayload(snapshot: ReplicatedTranscriptViewV2): Record<string, un
 
 /** The production reader: registry + in-process read_chat locally; coordinator-held status + replica/P2P read remotely. */
 export function createComponentsProbeReader(components: ProbeComponents, options: ComponentsProbeReaderOptions): TurnProbeReader {
-    const inspectTree = options.inspectProcessTree ?? ((pid: number | undefined) => inspectSessionProcessTree(pid));
+    const inspectTree = options.inspectProcessTree
+        ?? ((pid: number | undefined, opts: { startedAfterMs: number }) => readSessionBackgroundProcesses(pid, {
+            ...(options.processSource ? { source: options.processSource } : {}),
+            startedAfterMs: opts.startedAfterMs,
+        }));
     const analyze = (payload: Record<string, unknown> | null, attempt: TurnAttempt): TranscriptObservation | null => {
         if (!payload || (payload as { success?: boolean }).success === false) return null;
         return options.analyzer(payload, {
@@ -413,14 +425,19 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         });
     };
 
-    function readLocalBackgroundProcesses(attempt: TurnAttempt, instanceKey: string, fallbackInstance: unknown): readonly string[] | undefined {
+    /**
+     * Live worker-started descendants of the session PTY, or undefined (none
+     * seen OR unknown — never blocks, never completes). The read is async and
+     * bounded: it joins the daemon's single in-flight process-table read.
+     */
+    async function readLocalBackgroundProcesses(attempt: TurnAttempt, instanceKey: string, fallbackInstance: unknown): Promise<readonly string[] | undefined> {
         if (attempt.scope === 'plain') return undefined;
         try {
             const inst = fallbackInstance ?? components.instanceManager.getInstance(instanceKey);
             const pid = extractSessionPtyPid(inst);
             if (!pid) return undefined;
-            const tree = inspectTree(pid);
-            return tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
+            const tree = await inspectTree(pid, { startedAfterMs: backgroundWorkBaselineMs(attempt) });
+            return tree && tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
         } catch {
             return undefined;
         }
@@ -433,7 +450,7 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         const instanceKey = target?.instanceKey || attempt.sessionId;
         const status = localInstanceStatus(components, instanceKey, target?.transport ?? 'pty');
         if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };
-        const liveBackgroundProcesses = readLocalBackgroundProcesses(attempt, instanceKey, instance);
+        const liveBackgroundProcesses = await readLocalBackgroundProcesses(attempt, instanceKey, instance);
         try {
             const result = await components.commandHandler.handle('read_chat', readArgsFor(attempt));
             return {

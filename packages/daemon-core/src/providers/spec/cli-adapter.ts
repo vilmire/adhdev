@@ -393,6 +393,19 @@ export class SpecCliAdapter implements CliAdapter {
     }
 
     /** D2 messageId-keyed FIFO access (see ISpecDriver.claimQueuedSend). */
+    /**
+     * OS PID of the session's PTY child process, or undefined while it is not
+     * running. This is what the worker background-work guard walks; it is the
+     * only path from `CliProviderInstance.adapter` to the PTY's PID.
+     */
+    getPid(): number | undefined {
+        try {
+            const pid = this.driver.getPid?.();
+            return typeof pid === 'number' && Number.isFinite(pid) && pid > 0 ? pid : undefined;
+        } catch {
+            return undefined;
+        }
+    }
     hasQueuedSend(messageId: string): boolean { return this.driver.hasQueuedSend?.(messageId) === true; }
     claimQueuedSend(messageId: string): ClaimedQueuedSend | null { return this.driver.claimQueuedSend?.(messageId) ?? null; }
     restoreQueuedSend(claimed: ClaimedQueuedSend): void { this.driver.restoreQueuedSend?.(claimed); }

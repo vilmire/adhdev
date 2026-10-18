@@ -105,6 +105,12 @@ export interface ISpecDriver {
     /** Release the runtime without ending it (daemon shutdown/restart). */
     detach(): void;
     /**
+     * OS PID of the PTY's child process (0/undefined until it has started).
+     * For a session-host-hosted PTY this is the PID the host reported, which the
+     * daemon can walk in the OS process table. Optional so test doubles need not provide it.
+     */
+    getPid?(): number | undefined;
+    /**
      * BUTTON-INDEX-MISMAP (Fix C.3): click a modal button by its FSM display index and report
      * whether a button was actually matched and its confirm keys dispatched. Unlike the
      * fire-and-forget `dispatch('click_modal_button')`, callers that need to know the click

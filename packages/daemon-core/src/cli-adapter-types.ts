@@ -303,6 +303,8 @@ export interface CliAdapter {
     getLaunchInfo?(): CliLaunchInfo;
     // ── Runtime metadata used by CliProviderInstance for session tracking ──
     getRuntimeMetadata?(): unknown;
+    /** OS PID of the PTY child process (undefined when not running / no PTY, e.g. the codex app-server adapter). */
+    getPid?(): number | undefined;
     updateRuntimeMeta?(meta: Record<string, unknown>): void;
     refreshProviderDefinition?(provider: unknown): void;
     // ── Optional auxiliary fields some daemon paths read off the status ──

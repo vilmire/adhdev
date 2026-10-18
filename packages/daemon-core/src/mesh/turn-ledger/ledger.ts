@@ -37,7 +37,7 @@ import {
     type TurnEvidence,
     type TurnEvidenceOf,
 } from '@adhdev/mesh-shared';
-import { evaluateTurnEndBackgroundWork } from './background-work-guard.js';
+import { backgroundWorkBaselineMs, evaluateTurnEndBackgroundWork } from './background-work-guard.js';
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import { expireHolds, reduce, type ReduceResult } from './reducer.js';
 import { TurnStore, deliveryClaimId, type TurnEventRow } from './store.js';
@@ -80,8 +80,16 @@ export interface TurnLedgerDeps {
     log?: TurnLedgerLog;
     /** Publish after every committed observe (default true). Tests turn it off to drive flushes by hand. */
     autoFlush?: boolean;
-    /** Optional session process-tree inspector so provider-side turn_end is gated on live worker background processes. */
-    inspectBackgroundProcesses?: (sessionId: string) => readonly string[] | undefined;
+    /**
+     * Optional session process-tree inspector so provider-side turn_end is gated
+     * on live worker background processes. SYNCHRONOUS by contract (`observe`
+     * is), therefore it must be a cache read that never blocks — undefined means
+     * none seen OR unknown, and the turn end then proceeds as it always did (the
+     * scheduler's async probe corrects a stale answer).
+     */
+    inspectBackgroundProcesses?: (sessionId: string, opts: { startedAfterMs: number }) => readonly string[] | undefined;
+    /** The guard's hold for this attempt generation expired; stop gating it. */
+    backgroundWorkReleased?: (attemptId: string, generation: number) => boolean;
 }
 
 export interface ObserveOptions {
@@ -306,10 +314,14 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
             !(evidence.kind === 'turn_end' && (evidence.providerFailure || evidence.nativeOutcome === 'failed')) &&
             !(evidence.kind === 'transcript_final' && evidence.nativeMarker?.outcome === 'failed')
         ) {
+            const released = deps.backgroundWorkReleased?.(attempt.attemptId, attempt.generation) === true;
             const bgDecision = evaluateTurnEndBackgroundWork({
                 attempt,
                 finalSummary: opts.envelope?.finalSummary,
-                liveBackgroundProcesses: deps.inspectBackgroundProcesses?.(evidence.sessionId),
+                liveBackgroundProcesses: released
+                    ? undefined
+                    : deps.inspectBackgroundProcesses?.(evidence.sessionId, { startedAfterMs: backgroundWorkBaselineMs(attempt) }),
+                ...(released ? { released: true } : {}),
             });
             if (!bgDecision.complete) {
                 triggerBackgroundWorkProbe = true;

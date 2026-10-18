@@ -40,6 +40,8 @@ function createFakeWorkerFixture(opts?: {
   sessionId?: string;
   ptyPid?: number;
   timeoutMs?: number;
+  releaseMs?: number;
+  nudgeGraceMs?: number;
 }) {
   const taskId = opts?.taskId ?? '2c1bdbd2';
   const attemptId = opts?.attemptId ?? `a-${taskId}`;
@@ -80,13 +82,15 @@ function createFakeWorkerFixture(opts?: {
     at: number;
   }> = [];
 
-  const inspectTreeForPid = (pid: number | undefined) =>
+  const inspectTreeForPid = (pid: number | undefined, opts?: { startedAfterMs: number }) =>
     inspectSessionProcessTree(pid, {
       processTable: currentProcessTable,
       selfPid: 999999,
       platform: 'darwin',
+      ...(opts ? { startedAfterMs: opts.startedAfterMs } : {}),
     });
 
+  let backgroundWorkRef: ReturnType<typeof createBackgroundWorkMonitor> | undefined;
   let schedulerRef: ReturnType<typeof createTurnScheduler> | undefined;
 
   const ledger = createTurnLedger({
@@ -96,11 +100,12 @@ function createFakeWorkerFixture(opts?: {
     policy: TEST_POLICY,
     now: () => clock,
     autoFlush: false,
-    inspectBackgroundProcesses: (sid) => {
+    inspectBackgroundProcesses: (sid, opts) => {
       if (sid !== sessionId) return undefined;
-      const tree = inspectTreeForPid(ptyPid);
+      const tree = inspectTreeForPid(ptyPid, opts);
       return tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
     },
+    backgroundWorkReleased: (aid, generation) => backgroundWorkRef?.isReleased(aid, generation) === true,
     host: {
       requeue(effect) {
         db.prepare(`UPDATE mesh_queue SET status = 'pending' WHERE mesh_id = ? AND task_id = ?`).run(
@@ -126,6 +131,8 @@ function createFakeWorkerFixture(opts?: {
 
   const backgroundWork = createBackgroundWorkMonitor({
     timeoutMs,
+    ...(opts?.releaseMs !== undefined ? { releaseMs: opts.releaseMs } : {}),
+    ...(opts?.nudgeGraceMs !== undefined ? { nudgeGraceMs: opts.nudgeGraceMs } : {}),
     nudgeWorker: (sid, text, meta) => {
       nudges.push({
         sessionId: sid,
@@ -146,6 +153,8 @@ function createFakeWorkerFixture(opts?: {
       });
     },
   });
+
+  backgroundWorkRef = backgroundWork;
 
   const fakeComponents = {
     sessionRegistry: {
@@ -708,5 +717,161 @@ describe('premature weak completion when worker ends turn with background work r
       expect(tree.liveProcessNames).toEqual(['node.exe']);
       expect(sanitizeProcessCommandName('C:\\Program Files\\nodejs\\node.exe --secret=123')).toBe('node.exe');
     });
+  });
+});
+
+const WAITING_LINE = 'Running `npm run test:scripts` in the background. Waiting for it to complete.';
+
+function idleWorkerWith(table: readonly ProcessNodeInfo[], fx: ReturnType<typeof createFakeWorkerFixture>, line = WAITING_LINE) {
+  fx.setWorkerState({
+    status: 'idle',
+    messages: [{ role: 'assistant', content: line, timestamp: new Date(T0 + 500).toISOString() }],
+    processTable: table,
+  });
+}
+
+describe('the guard is bounded: it can delay a weak completion, never pin the task', () => {
+  it('(A3) a child that never exits: one notice at the timeout, a RELEASE at releaseMs, then the ordinary weak-completion path decides and the guard never re-holds', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'bound-1', sessionId: 'sess-bound-1', ptyPid: 9000, timeoutMs: 25_000, releaseMs: 60_000 });
+    idleWorkerWith([
+      { pid: 9000, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 9001, ppid: 9000, comm: 'claude', args: 'claude' },
+      // A dev server the worker legitimately leaves running.
+      { pid: 9010, ppid: 9001, comm: 'node', args: 'node server.js --port 3000' },
+    ], fx);
+
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+    fx.advance(26_000);
+    await fx.scheduler.tick();
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+    expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('generating');
+    expect(fx.queueStatus()).toBe('assigned');
+
+    // Cross releaseMs (60 s since first held): the hold expires.
+    fx.advance(36_000);
+    await fx.scheduler.tick();
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.backgroundWork.trackedAttemptIds()).toEqual([]);
+
+    // The ordinary path now runs to a terminal outcome even though the server is STILL alive.
+    for (let i = 0; i < 12 && fx.queueStatus() === 'assigned'; i += 1) {
+      fx.advance(5_000);
+      fx.scheduler.requestProbe(fx.attemptId);
+      await fx.scheduler.tick();
+    }
+    const attempt = fx.store.getAttempt(fx.attemptId)!;
+    // Terminal outcome of a held-then-released turn = exactly what a weak turn end produced before the guard existed.
+    expect(attempt.terminal).toMatchObject({ outcome: 'completed', reason: 'weak_end_confirmed', strength: 'weak' });
+    expect(fx.queueStatus()).toBe('completed');
+    // Exactly one guard notice, no nudge (the child never exited), and no re-hold.
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.nudges).toHaveLength(0);
+  });
+
+  it('(A4) child exited, worker nudged once, worker stays silent: one notice, then release — not held until the 90-minute ceiling', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'bound-2', sessionId: 'sess-bound-2', ptyPid: 9100, timeoutMs: 25_000, nudgeGraceMs: 30_000 });
+    // The child is already gone; only the waiting line remains.
+    idleWorkerWith([
+      { pid: 9100, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 9101, ppid: 9100, comm: 'claude', args: 'claude' },
+    ], fx);
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+    expect(fx.nudges).toHaveLength(1);
+
+    fx.advance(20_000);
+    await fx.scheduler.tick();
+    expect(fx.coordinatorNotices).toHaveLength(0);
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+
+    fx.advance(15_000);
+    await fx.scheduler.tick();
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.coordinatorNotices[0]!.text).toContain('nudged after its background work finished');
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+
+    for (let i = 0; i < 12 && fx.queueStatus() === 'assigned'; i += 1) {
+      fx.advance(5_000);
+      fx.scheduler.requestProbe(fx.attemptId);
+      await fx.scheduler.tick();
+    }
+    expect(fx.store.getAttempt(fx.attemptId)!.terminal).not.toBeNull();
+    expect(fx.nudges).toHaveLength(1);
+    expect(fx.coordinatorNotices).toHaveLength(1);
+  });
+
+  it('(A5) once released, a process that reappears does not re-arm the hold (latched per attempt generation)', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'bound-3', sessionId: 'sess-bound-3', ptyPid: 9200, timeoutMs: 10_000, releaseMs: 20_000 });
+    const withChild = [
+      { pid: 9200, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 9201, ppid: 9200, comm: 'claude', args: 'claude' },
+      { pid: 9210, ppid: 9201, comm: 'node', args: 'node watch.js' },
+    ];
+    idleWorkerWith(withChild, fx);
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+    fx.advance(25_000);
+    await fx.scheduler.tick();
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+
+    // Child exits, then a new one appears: still released, never nudged or re-noticed.
+    fx.setWorkerState({ processTable: withChild.slice(0, 2) });
+    fx.advance(1_000);
+    await fx.scheduler.tick();
+    fx.setWorkerState({ processTable: withChild });
+    fx.advance(1_000);
+    await fx.scheduler.tick();
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.nudges).toHaveLength(0);
+    expect(fx.coordinatorNotices).toHaveLength(1);
+
+    // The ledger's own evidence gate stands down too (it sees the live child but the hold was released).
+    fx.ledger.observe(
+      evd('turn_end', { strength: 'weak', live: LIVE_IDLE }, { at: fx.now, sessionId: fx.sessionId, observedBy: SELF, attemptRef: { attemptId: fx.attemptId, generation: 0 } }),
+      { envelope: { finalSummary: WAITING_LINE } },
+    );
+    expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('finalizing');
+  });
+
+  it('(A6) a leftover process from an EARLIER task in a reused session (started before this attempt was delivered) does not hold the new task', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'reuse-1', sessionId: 'sess-reuse-1', ptyPid: 9300, timeoutMs: 25_000 });
+    const realSummary = 'All 18 unit tests in turn-ledger passed with zero errors.';
+    idleWorkerWith([
+      { pid: 9300, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 9301, ppid: 9300, comm: 'claude', args: 'claude', startedAtMs: T0 - 3_600_000 },
+      // dev server left by the previous task, plus the child it respawns after file edits during THIS task
+      { pid: 9310, ppid: 9301, comm: 'node', args: 'node server.js', startedAtMs: T0 - 1_800_000 },
+      { pid: 9311, ppid: 9310, comm: 'node', args: 'node server.js --child', startedAtMs: T0 + 5_000 },
+    ], fx, realSummary);
+
+    fx.ledger.observe(
+      evd('turn_end', { strength: 'weak', live: LIVE_IDLE }, { at: fx.now, sessionId: fx.sessionId, observedBy: SELF, attemptRef: { attemptId: fx.attemptId, generation: 0 } }),
+      { envelope: { finalSummary: realSummary } },
+    );
+    // Not converted into a hold: the attempt entered the normal weak-completion window.
+    expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('finalizing');
+    fx.advance(500);
+    await fx.scheduler.tick();
+    fx.advance(500);
+    await fx.scheduler.tick();
+    expect(fx.queueStatus()).toBe('completed');
+    expect(fx.coordinatorNotices).toHaveLength(0);
+    expect(fx.nudges).toHaveLength(0);
+  });
+
+  it('(A7) the same table WITHOUT a baseline start time still holds (unknown start is never treated as old)', async () => {
+    const fx = createFakeWorkerFixture({ taskId: 'reuse-2', sessionId: 'sess-reuse-2', ptyPid: 9400, timeoutMs: 25_000 });
+    idleWorkerWith([
+      { pid: 9400, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 9401, ppid: 9400, comm: 'claude', args: 'claude' },
+      { pid: 9410, ppid: 9401, comm: 'node', args: 'node build.js' },
+    ], fx);
+    fx.ledger.observe(
+      evd('turn_end', { strength: 'weak', live: LIVE_IDLE }, { at: fx.now, sessionId: fx.sessionId, observedBy: SELF, attemptRef: { attemptId: fx.attemptId, generation: 0 } }),
+      { envelope: { finalSummary: 'Build started.' } },
+    );
+    expect(fx.store.getAttempt(fx.attemptId)!.state).toBe('generating');
   });
 });

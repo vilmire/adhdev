@@ -46,7 +46,9 @@ import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { closeInterruptedPlainAttempts, reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
 import { createTurnEvidencePort } from '../../providers/turn-evidence-port.js';
-import { extractSessionPtyPid, inspectSessionProcessTree } from '../../process/session-process-tree.js';
+import { extractSessionPtyPid } from '../../process/session-process-tree.js';
+import { peekSessionBackgroundProcesses } from '../../process/process-table-snapshot.js';
+import { createBackgroundWorkMonitor, type BackgroundWorkMonitor } from '../../mesh/turn-ledger/background-work-guard.js';
 import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
 import type { TurnLedgerPorts } from '../../mesh/turn-ledger/effects.js';
 import {
@@ -130,6 +132,12 @@ export interface TurnProbePort {
 export interface MeshTurnWiring {
     noticeSubmitInventory():ReturnType<ReturnType<typeof createNoticeSubmitInventory>['inventory']>;
     ledger: TurnLedger;
+    /**
+     * The ONE worker background-work monitor, shared by the ledger's evidence
+     * gate (which asks `isReleased`) and the turn scheduler (which feeds it
+     * probe reads and owns the nudge / notice / release state).
+     */
+    backgroundWork: BackgroundWorkMonitor;
     probePort: TurnProbePort;
     consumer: MeshTurnConsumer | null;
     index: MeshTopicIndex;
@@ -231,21 +239,52 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         },
         probe: (e) => lateProbe.port(e),
     };
+    const backgroundWork = createBackgroundWorkMonitor({
+        // `components.cliManager` is read at call time: the monitor is built here,
+        // before every component exists, and only nudges once a worker has ended a turn.
+        nudgeWorker: async (sessionId, text, meta) => {
+            const inputPort = components.cliManager?.input;
+            if (inputPort) {
+                const out = await inputPort.submit({
+                    messageId: meta.messageId,
+                    sessionId,
+                    origin: 'mesh',
+                    policy: { mode: 'queue' },
+                    input: { parts: [{ type: 'text', text }], textFallback: text },
+                    createdAt: Date.now(),
+                });
+                if (out.kind === 'delivered' || out.kind === 'queued' || out.kind === 'duplicate') {
+                    return true;
+                }
+            }
+            await components.commandHandler?.handle('send_message', {
+                sessionId,
+                targetSessionId: sessionId,
+                message: text,
+                messageId: meta.messageId,
+            });
+            return true;
+        },
+    });
     const ledger = createMeshRuntimeTurnLedger({
         selfDaemonId,
         ports,
-        inspectBackgroundProcesses: (sessionId) => {
+        // `observe` is synchronous, so this reads the shared process-table CACHE
+        // (never spawns, never waits). Unknown (no snapshot yet / read failed or
+        // stale / no PID) = undefined = the turn end proceeds as it always did.
+        inspectBackgroundProcesses: (sessionId, { startedAfterMs }) => {
             try {
                 const target = components.sessionRegistry.get(sessionId);
                 const inst = components.instanceManager.getInstance(target?.instanceKey || sessionId);
                 const pid = extractSessionPtyPid(inst);
                 if (!pid) return undefined;
-                const tree = inspectSessionProcessTree(pid);
-                return tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
+                const tree = peekSessionBackgroundProcesses(pid, { startedAfterMs });
+                return tree && tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
             } catch {
                 return undefined;
             }
         },
+        backgroundWorkReleased: (attemptId, generation) => backgroundWork.isReleased(attemptId, generation),
     });
 
     // The handoff publisher (`mesh.<id>.handoff`) is built here — before 2b —
@@ -384,6 +423,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
     let disposed = false;
     return {
         ledger,
+        backgroundWork,
         probePort,
         consumer,
         index,
