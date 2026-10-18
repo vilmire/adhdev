@@ -23556,7 +23556,7 @@ var require_dist3 = __commonJS({
       effectiveModelSelectionValue: () => effectiveModelSelectionValue,
       enumOf: () => enumOf2,
       expandDaemonIdForms: () => expandDaemonIdForms,
-      findOwnershipConflicts: () => findOwnershipConflicts,
+      findOwnershipConflicts: () => findOwnershipConflicts2,
       foldKeyedDoc: () => foldKeyedDoc,
       formatQuotaAccount: () => formatQuotaAccount,
       hasGitStatusEvidence: () => hasGitStatusEvidence,
@@ -25816,24 +25816,24 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return { declaration: { paths: kept }, rejected };
     }
-    function entryContains(base, path102) {
+    function entryContains2(base, path102) {
       if (path102 === base.path) return true;
       if (base.subtree && (base.path === "" || path102.startsWith(`${base.path}/`))) return true;
       return false;
     }
-    function entriesOverlap(a, b) {
-      return entryContains(a, b.path) || entryContains(b, a.path);
+    function entriesOverlap2(a, b) {
+      return entryContains2(a, b.path) || entryContains2(b, a.path);
     }
     function pathsOverlap(a, b) {
       if (a.paths.length === 0 || b.paths.length === 0) return false;
       for (const pa of a.paths) {
         for (const pb of b.paths) {
-          if (entriesOverlap(pa, pb)) return true;
+          if (entriesOverlap2(pa, pb)) return true;
         }
       }
       return false;
     }
-    function findOwnershipConflicts(candidate, inFlight4) {
+    function findOwnershipConflicts2(candidate, inFlight4) {
       if (candidate.paths.length === 0) return [];
       const conflicts = [];
       for (const other of inFlight4) {
@@ -25841,7 +25841,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         const overlappingPaths = [];
         for (const pa of candidate.paths) {
           for (const pb of other.paths.paths) {
-            if (entriesOverlap(pa, pb)) {
+            if (entriesOverlap2(pa, pb)) {
               const narrower = pa.path.length >= pb.path.length ? pa.path : pb.path;
               if (!overlappingPaths.includes(narrower)) overlappingPaths.push(narrower);
             }
@@ -25863,7 +25863,7 @@ ${renderWorkerProtocolFooter2(input)}`;
           undeclaredTouched.push(raw);
           continue;
         }
-        const matches = owned.paths.filter((base) => entryContains(base, entry.path));
+        const matches = owned.paths.filter((base) => entryContains2(base, entry.path));
         if (matches.length === 0) {
           undeclaredTouched.push(entry.path);
         } else {
@@ -40954,6 +40954,48 @@ ${error.message || ""}`;
         init_mesh_node_git_state();
         init_worker_session_bind_store();
         loggedMigrationFailureFlag = false;
+      }
+    });
+    function queueTaskShortTitle(task) {
+      return (task.message || "").trim().split("\n")[0].slice(0, 100);
+    }
+    function queueHoldContext(task, reason, queue, nodeId) {
+      const active = queue.filter((other) => other.id !== task.id && other.status === "assigned");
+      const overlaps = [];
+      if (reason === "owned_paths_conflict" && task.ownedPaths) {
+        for (const other of active) {
+          if (!other.ownedPaths || other.readonly || other.taskMode === "live_debug_readonly") continue;
+          for (const owned of task.ownedPaths.paths) for (const blocking of other.ownedPaths.paths) {
+            if (findOwnershipConflicts2({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
+              overlaps.push({ taskId: other.id, ownedPath: owned.path + (owned.subtree ? "/**" : ""), blockingPath: blocking.path + (blocking.subtree ? "/**" : "") });
+            }
+          }
+        }
+      }
+      const blockingTaskIds = reason === "owned_paths_conflict" ? [...new Set(overlaps.map((pair) => pair.taskId))] : reason === "dependencies_unsatisfied" ? (task.dependsOn || []).filter((id4) => !queue.some((other) => other.id === id4 && other.status === "completed")) : reason === "node_busy_with_active_assignment" || reason === "node_has_active_assignment" ? active.filter((other) => !other.readonly && other.taskMode !== "live_debug_readonly" && nodeId && meshNodeIdMatches7({ id: other.assignedNodeId }, nodeId)).map((other) => other.id) : [];
+      return { blockingTaskIds, detail: overlaps.length ? { overlappingPaths: overlaps } : {} };
+    }
+    function setQueueTaskHold(task, reason, context2, now = Date.now()) {
+      if (task.status !== "pending") return;
+      const blockers = [...new Set(context2.blockingTaskIds)].sort();
+      const same = task.hold?.reason === reason && JSON.stringify(task.hold.blockingTaskIds) === JSON.stringify(blockers);
+      task.hold = { reason, since: same ? task.hold.since : new Date(now).toISOString(), blockingTaskIds: blockers, detail: context2.detail };
+      if (!same) delete task.holdNoticeId;
+    }
+    function queueTaskHoldView(task, queue, now = Date.now()) {
+      if (task.status !== "pending" || !task.hold) return void 0;
+      return {
+        ...task.hold,
+        ageMs: Math.max(0, now - Date.parse(task.hold.since)) || 0,
+        blockingTasks: task.hold.blockingTaskIds.map((taskId) => ({ taskId, title: queueTaskShortTitle(queue.find((other) => other.id === taskId) || { message: taskId }) }))
+      };
+    }
+    var QUEUE_HOLD_NOTICE_AFTER_MS;
+    var init_mesh_queue_hold = __esm2({
+      "src/mesh/mesh-queue-hold.ts"() {
+        "use strict";
+        init_dist();
+        QUEUE_HOLD_NOTICE_AFTER_MS = 3 * 6e4;
       }
     });
     function inBridgeReceiptTransaction(db) {
@@ -62951,7 +62993,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }).filter((v) => v !== null);
     }
     function findTaskOwnedPathsConflicts(candidate, inFlightOwnership) {
-      return candidate.ownedPaths && !isTaskReadonly3(candidate) ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership) : [];
+      return candidate.ownedPaths && !isTaskReadonly3(candidate) ? findOwnershipConflicts2(candidate.ownedPaths, inFlightOwnership) : [];
     }
     function formatOwnedPathsConflictDetail(conflicts) {
       return conflicts.length ? `owned_paths overlap with task(s): ${conflicts.map((c) => `${c.taskId} [${c.overlappingPaths.join(", ")}]`).join("; ")}` : void 0;
@@ -63070,7 +63112,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const allowedTaskDifficulties = opts?.allowedTaskDifficulties;
         const difficultyAllows = (candidate) => !allowedTaskDifficulties || candidate.difficulty === "freeform" || !candidate.difficulty || allowedTaskDifficulties.includes(candidate.difficulty);
         const notParked = (candidate) => !taskIsParked(candidate);
-        const selected2 = selectClaimCandidate(candidates, [
+        const gates = [
           { reason: "required_tags_unsatisfied", test: (c) => nodeSatisfiesRequiredTags(c.requiredTags, capabilityTags) },
           { reason: "dependencies_unsatisfied", test: dependenciesSatisfied },
           { reason: "not_before_delayed", test: notBeforeReady },
@@ -63087,7 +63129,20 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           { reason: "owned_paths_conflict", test: ownedPathsAllows },
           { reason: "dirty_workspace", test: nodeNotDirty },
           { reason: "node_stale_behind_upstream", test: nodeNotStaleBehind }
-        ]);
+        ];
+        let holdBlockers;
+        const selected2 = selectClaimCandidate(candidates, gates.map((gate) => ({
+          reason: gate.reason,
+          test: (candidate) => {
+            if (gate.test(candidate)) return true;
+            holdBlockers ??= host.assignedRowsMeshWide(meshId).map((row2) => JSON.parse(row2.payload));
+            const context2 = queueHoldContext(candidate, gate.reason, holdBlockers, nodeId);
+            if (gate.reason === "dependencies_unsatisfied") context2.blockingTaskIds = (candidate.dependsOn || []).filter((id4) => depStatus.get(id4) !== "completed");
+            setQueueTaskHold(candidate, gate.reason, context2);
+            host.db.prepare("UPDATE mesh_queue SET payload = ? WHERE id = ? AND mesh_id = ? AND status = 'pending'").run(JSON.stringify(candidate), candidate.id, meshId);
+            return false;
+          }
+        })));
         if (!selected2.entry) {
           if (!candidates.length) return refuse3("no_pending_candidates");
           if (selected2.reason === "owned_paths_conflict" && selected2.deepest) {
@@ -63113,6 +63168,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
         const now = (/* @__PURE__ */ new Date()).toISOString();
         entry.status = "assigned";
+        delete entry.hold;
+        delete entry.holdNoticeId;
         entry.assignedNodeId = nodeId;
         entry.assignedSessionId = sessionId;
         if (providerType) entry.assignedProviderType = providerType;
@@ -63136,6 +63193,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var init_mesh_runtime_store_claim = __esm2({
       "src/mesh/mesh-runtime-store-claim.ts"() {
         "use strict";
+        init_mesh_queue_hold();
         init_worker_bridge();
         init_logger();
         init_mesh_work_queue();
@@ -74594,6 +74652,65 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         LOCAL_LAUNCH_READY_POLL_MS = 100;
       }
     });
+    function persistHold(store2, task) {
+      store2.db.prepare("UPDATE mesh_queue SET payload = ? WHERE mesh_id = ? AND id = ? AND status = 'pending'").run(JSON.stringify(task), task.meshId, task.id);
+      store2.maybeCheckpointWal();
+    }
+    function recordQueueTaskHold(meshId, taskId, reason, nodeId, preserveExisting = false) {
+      const store2 = MeshRuntimeStore.getInstance();
+      store2.transaction(() => {
+        const task = store2.findQueueEntryById(meshId, taskId);
+        if (!task || task.status !== "pending" || preserveExisting && task.hold) return;
+        const queue = store2.getQueueEntries(meshId, ["pending", "assigned"]);
+        const context2 = queueHoldContext(task, reason, queue, nodeId);
+        if (reason === "dependencies_unsatisfied") {
+          const completed = new Set(store2.getQueueHeads(meshId, ["completed"]).map((head) => head.id));
+          context2.blockingTaskIds = (task.dependsOn || []).filter((id4) => !completed.has(id4));
+        }
+        setQueueTaskHold(task, reason, context2);
+        persistHold(store2, task);
+      });
+    }
+    function notifyHeldQueueTasks(meshId, now = Date.now()) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const queue = store2.getQueueEntries(meshId, ["pending", "assigned"]);
+      for (const snapshot of queue) {
+        const view = queueTaskHoldView(snapshot, queue, now);
+        if (!view || view.ageMs < QUEUE_HOLD_NOTICE_AFTER_MS || snapshot.holdNoticeId) continue;
+        if (isDifficultyFloorWaitReason(view.reason) || view.reason === "difficulty_floor_unmet") continue;
+        store2.transaction(() => {
+          const task = store2.findQueueEntryById(meshId, snapshot.id);
+          if (!task || task.status !== "pending" || task.holdNoticeId || JSON.stringify(task.hold) !== JSON.stringify(snapshot.hold)) return;
+          const eventId = `queue-hold:${meshId}:${task.id}:${view.since}:${view.reason}:${view.blockingTaskIds.join(",")}`;
+          const blockers = view.blockingTasks.map((b) => `${b.taskId} (${b.title})`).join(", ");
+          const coordinatorMessage = `[System] Queue task ${task.id} has been held for ${Math.floor(view.ageMs / 6e4)} min: ${view.reason}${blockers ? ` by ${blockers}` : ""}. ${JSON.stringify(view.detail)}`;
+          if (notifyMeshCoordinator({
+            event: "mesh:queue_held",
+            meshId,
+            eventId,
+            nodeLabel: meshId,
+            coordinatorMessage,
+            queuedAt: now,
+            targetCoordinatorDaemonId: getMachineId(),
+            ...task.sourceCoordinatorSessionId ? { targetCoordinatorSessionId: task.sourceCoordinatorSessionId } : {},
+            metadataEvent: { source: "mesh_queue_hold", taskId: task.id, hold: view, coordinatorMessage }
+          })) {
+            task.holdNoticeId = eventId;
+            persistHold(store2, task);
+          }
+        });
+      }
+    }
+    var init_mesh_queue_hold_store = __esm2({
+      "src/mesh/mesh-queue-hold-store.ts"() {
+        "use strict";
+        init_mesh_runtime_store();
+        init_mesh_queue_hold();
+        init_deliver();
+        init_mesh_difficulty_floor();
+        init_config();
+      }
+    });
     async function waitForRemoteSessionReady(meshId, nodeId, sessionId, opts) {
       if (!sessionId) return false;
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
@@ -75310,6 +75427,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     }
     function markAutoLaunch(meshId, taskId, args) {
       const reason = args.reason || args.error;
+      if (args.status === "skipped" && reason) recordQueueTaskHold(meshId, taskId, reason, args.nodeId);
       const difficultyFloorSkip = args.status === "skipped" && isDifficultyFloorWaitReason(reason);
       if (difficultyFloorSkip) {
         handleDifficultyFloorSkip({ meshId, taskId, reason, nodeId: args.nodeId, coordinatorDaemonId: localCoordinatorDaemonId2() });
@@ -75372,6 +75490,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             }
             noteClaimDeferredForNode(meshId, alNodeId);
           }
+          recordQueueTaskHold(meshId, task.id, "awaiting_launched_session_claim", alNodeId, true);
           recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "awaiting_launched_session_claim", nodeId: alNodeId, sessionId: alSessionId });
           return "skip";
         }
@@ -75815,6 +75934,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       for (const task of pending) {
         const taskLaunchKey = `${meshId}::${task.id}`;
         if (autoLaunchTaskInProgress.has(taskLaunchKey)) {
+          recordQueueTaskHold(meshId, task.id, "auto_launch_task_in_progress", void 0, true);
           recordAutoLaunchEvent(meshId, { phase: "skipped", taskId: task.id, reason: "auto_launch_task_in_progress" });
           continue;
         }
@@ -75924,6 +76044,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     var init_mesh_queue_autolaunch = __esm2({
       "src/mesh/mesh-queue-autolaunch.ts"() {
         "use strict";
+        init_mesh_queue_hold_store();
         init_cooperative_gate();
         init_logger();
         init_mesh_autolaunch_spawn_budget();
@@ -76177,6 +76298,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const launchedAtMs = Date.parse(al.updatedAt);
         return isAutoLaunchWithinAwaitClaimWindow(launchedAtMs);
       });
+      notifyHeldQueueTasks(meshId);
       return {
         success: true,
         meshId,
@@ -76212,6 +76334,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
     var init_mesh_queue_trigger = __esm2({
       "src/mesh/mesh-queue-trigger.ts"() {
         "use strict";
+        init_mesh_queue_hold_store();
         init_dist();
         init_mesh_work_queue();
         init_mesh_queue_mesh_view();
@@ -77891,10 +78014,15 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         sourceCounts[item.source] += 1;
         statusCounts[item.status] += 1;
       }
+      const held = activeWork.filter((item) => item.status === "pending" && item.hold);
+      const heldReasons = {};
+      for (const item of held) heldReasons[item.hold.reason] = (heldReasons[item.hold.reason] || 0) + 1;
       const approvals = collectPendingApprovals2(activeWork);
       const staleDirectCount = activeWork.filter((item) => item.source === "direct" && item.staleReason).length;
       const staleDirectUnacknowledgedCount = activeWork.filter((item) => item.source === "direct" && item.staleDispatchUnacknowledged).length;
       return {
+        heldCount: held.length,
+        heldReasons,
         totalActiveCount: activeWork.length,
         queueActiveCount: sourceCounts.queue,
         directActiveCount: sourceCounts.direct,
@@ -77932,6 +78060,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         if (turnOverlay) queueStatus = turnOverlay.status;
         records.push({
           taskId: task.id,
+          ...task.hold ? { hold: queueTaskHoldView(task, opts.queue || [], now) } : {},
           source: "queue",
           status: queueStatus,
           providerApproval: queueLive.providerApproval,
@@ -78160,6 +78289,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
     var init_mesh_active_work = __esm2({
       "src/mesh/mesh-active-work.ts"() {
         "use strict";
+        init_mesh_queue_hold();
         init_dist();
         init_mesh_record();
         init_mesh_work_queue();
@@ -94397,10 +94527,15 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         const last = Date.parse(readText3(rec2(m?.tasks)?.lastActivityAt) || readText3(m?.updatedAt) || readText3(m?.createdAt));
         return { id: readText3(m?.id), title: readText3(m?.title), last };
       }).filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS).sort((a, b) => a.last - b.last).map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 864e5) }));
+      const activeWork = rec2(rec2(view.activeWork)?.activeWork);
+      const heldTasks = (Array.isArray(activeWork?.activeWork) ? activeWork.activeWork : []).filter((task) => task.status === "pending" && task.hold);
       return {
         machines,
         machinesOnline: machines.filter((m) => m.online).length,
         queue: extras.queue,
+        heldTasks: heldTasks.map((task) => ({ taskId: task.taskId, title: task.taskTitle, hold: task.hold })),
+        heldCount: rec2(activeWork?.summary)?.heldCount ?? heldTasks.length,
+        heldReasons: rec2(activeWork?.summary)?.heldReasons ?? {},
         activeMissions,
         failedTasks: extras.queue?.failed ?? null,
         pendingApprovals: extras.pendingApprovals,
@@ -134017,6 +134152,7 @@ ${output}` : "";
     init_logger();
     init_mesh_operating_notes();
     init_worker_mcp_isolation();
+    init_mesh_queue_hold();
     init_dist();
     init_mesh_record();
     init_mesh_local_records();
@@ -134183,7 +134319,10 @@ ${output}` : "";
       try {
         let entries = getQueue(req.meshId, req.statuses ? { status: [...req.statuses] } : void 0);
         if (req.taskId) entries = entries.filter((e) => e.id === req.taskId);
-        const wire = req.view ? entries.map((e) => summarizeQueueEntryInputForView2(e)) : entries;
+        const holdStore = MeshRuntimeStore.getInstance();
+        const blockerIds = [...new Set(entries.flatMap((entry) => entry.hold?.blockingTaskIds || []))];
+        const holdQueue = blockerIds.map((id4) => holdStore.findQueueEntryById(req.meshId, id4)).filter((entry) => entry !== null);
+        const wire = req.view ? entries.map((e) => ({ ...summarizeQueueEntryInputForView2(e), ...e.hold ? { hold: queueTaskHoldView(e, holdQueue) } : {} })) : entries;
         const response = { entries: wire };
         const store2 = req.withCounts || req.withDependencyHeads ? MeshRuntimeStore.getInstance() : null;
         if (store2 && req.withCounts) {
@@ -140072,6 +140211,7 @@ ${ptyResult.output.slice(-2e3)}`);
       }
     };
     var meshCoordinatorLaunchSpecs = defineCommandSpecs("high", meshCoordinatorLaunchHandlers, {}, { meshSender: "authenticated_peer" });
+    init_mesh_queue_hold();
     var fs87 = __toESM2(require("fs"));
     var import_os6 = require("os");
     init_config();
@@ -140338,7 +140478,8 @@ ${ptyResult.output.slice(-2e3)}`);
           }
           const refreshReason = refreshRequested ? "explicit_refresh" : rebuildFromHeld ? "held_state_rebuild" : pendingCoordinatorEventCount > 0 ? "pending_coordinator_events" : hadAggregateCache ? "stale_pending_cache_refresh" : "cold_cache_miss";
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
-          const queue = getQueue2(meshId).map(summarizeQueueEntryInputForView22);
+          const rawQueue = getQueue2(meshId);
+          const queue = rawQueue.map((task) => ({ ...summarizeQueueEntryInputForView22(task), ...task.hold ? { hold: queueTaskHoldView(task, rawQueue) } : {} }));
           const queueSummary = getMeshQueueStats2(meshId);
           const { buildMeshSchedulingRuntime: buildMeshSchedulingRuntime2 } = await Promise.resolve().then(() => (init_mesh_scheduling_runtime(), mesh_scheduling_runtime_exports));
           const schedulingRuntime = buildMeshSchedulingRuntime2(mesh, queue);
@@ -177330,6 +177471,34 @@ var TURN_IPC_COMMANDS = [
   "orphaned_pin_notify"
 ];
 var isTurnIpcCommand = makeGuard3(TURN_IPC_COMMANDS);
+function entryContains(base, path3) {
+  if (path3 === base.path) return true;
+  if (base.subtree && (base.path === "" || path3.startsWith(`${base.path}/`))) return true;
+  return false;
+}
+function entriesOverlap(a, b) {
+  return entryContains(a, b.path) || entryContains(b, a.path);
+}
+function findOwnershipConflicts(candidate, inFlight) {
+  if (candidate.paths.length === 0) return [];
+  const conflicts = [];
+  for (const other of inFlight) {
+    if (other.paths.paths.length === 0) continue;
+    const overlappingPaths = [];
+    for (const pa of candidate.paths) {
+      for (const pb of other.paths.paths) {
+        if (entriesOverlap(pa, pb)) {
+          const narrower = pa.path.length >= pb.path.length ? pa.path : pb.path;
+          if (!overlappingPaths.includes(narrower)) overlappingPaths.push(narrower);
+        }
+      }
+    }
+    if (overlappingPaths.length > 0) {
+      conflicts.push({ taskId: other.taskId, overlappingPaths });
+    }
+  }
+  return conflicts;
+}
 
 // src/transports/ipc.ts
 var import_daemon_core = __toESM(require_dist3());
@@ -180553,6 +180722,9 @@ function queueAssignmentStaleReason(task, liveness) {
   return void 0;
 }
 function buildQueueStatusSummary(queue) {
+  const held = queue.filter((task) => task.status === "pending" && task.hold);
+  const heldReasons = {};
+  for (const task of held) heldReasons[task.hold.reason] = (heldReasons[task.hold.reason] || 0) + 1;
   const counts = { pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0 };
   let staleAssigned = 0;
   for (const task of queue) {
@@ -180564,6 +180736,8 @@ function buildQueueStatusSummary(queue) {
   }
   const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
   return {
+    heldCount: held.length,
+    heldReasons,
     totalCount: queue.length,
     activeCount: counts.pending + liveAssigned,
     historicalCount: counts.completed + counts.failed + counts.cancelled,
@@ -180599,6 +180773,8 @@ function buildQueueStatusSummaryFromCounts(statusCounts, activeRows, allowed) {
   }
   const liveAssigned = Math.max(0, counts.assigned - staleAssigned);
   return {
+    heldCount: !allowed || allowed.has("pending") ? activeRows.filter((task) => task.status === "pending" && task.hold).length : 0,
+    heldReasons: !allowed || allowed.has("pending") ? buildQueueStatusSummary(activeRows).heldReasons : {},
     totalCount,
     activeCount: counts.pending + liveAssigned,
     historicalCount: counts.completed + counts.failed + counts.cancelled,
@@ -180738,6 +180914,7 @@ function compactQueueRow(task) {
   if (!task || typeof task !== "object") return task;
   const slim = {};
   for (const [k, v] of Object.entries(task)) {
+    if (k === "holdNoticeId") continue;
     if (k === "message") slim[k] = truncateForCompact(v, COMPACT_QUEUE_MESSAGE_CAP);
     else slim[k] = elideLargeNestedValue(k, v);
   }
@@ -182175,6 +182352,27 @@ async function meshRoutePreview(ctx, args) {
   }), null, 2);
 }
 
+// src/tools/mesh-owned-paths-warning.ts
+function broadOwnedPathsWarning(task, queue) {
+  if (task.taskMode !== "code_change" || task.readonly || !task.ownedPaths) return void 0;
+  const broadPaths = task.ownedPaths.paths.filter((entry) => {
+    const parts = entry.path.split("/").filter(Boolean);
+    if (!parts.length) return entry.subtree;
+    if (parts.length === 1) return entry.subtree || !parts[0].includes(".");
+    const packageIndex = parts.indexOf("packages");
+    if (packageIndex < 0 || parts.length < packageIndex + 2) return false;
+    return parts.length === packageIndex + 2 || entry.subtree && parts.length === packageIndex + 3 && ["src", "test"].includes(parts.at(-1));
+  }).map((entry) => entry.path ? entry.path + (entry.subtree ? "/**" : "") : "**");
+  if (!broadPaths.length) return void 0;
+  const relatedTasks = queue.filter((other) => other.id !== task.id && ["pending", "assigned"].includes(other.status) && !other.readonly && other.taskMode !== "live_debug_readonly" && other.ownedPaths && findOwnershipConflicts(task.ownedPaths, [{ taskId: other.id, paths: other.ownedPaths }]).length).map((other) => ({
+    taskId: other.id,
+    title: other.message.trim().split("\n")[0].slice(0, 100),
+    status: other.status,
+    relationship: other.status === "assigned" ? "blocked_by" : "potential_conflict"
+  }));
+  return { broadOwnedPathsWarning: { broadPaths, relatedTasks, message: "Broad owned_paths can serialize independent work. Prefer files or narrower subtrees. Informational only; task enqueued." } };
+}
+
 // src/tools/mesh-provider-pin-advisory.ts
 var import_daemon_core14 = __toESM(require_dist3());
 function withProviderPinWarning(response, requestedProviders) {
@@ -182831,6 +183029,7 @@ async function meshEnqueueTask(ctx, args) {
       targetNodeId,
       preferWorktree
     }) ?? {};
+    const ownershipWarning = broadOwnedPathsWarning(task, []) ? broadOwnedPathsWarning(task, await readQueueFromDaemon(ctx, { statuses: ["pending", "assigned"] }).catch(() => [])) ?? {} : {};
     const enqueueEcho = {
       ...task.priority ? { priority: task.priority } : {},
       ...task.notBefore ? { notBefore: task.notBefore } : {},
@@ -182846,6 +183045,7 @@ async function meshEnqueueTask(ctx, args) {
       requiredTags: task.requiredTags,
       ...buildProviderPinAdvisory(requiredTags),
       ...enqueueEcho,
+      ...ownershipWarning,
       ...targetNodeId ? { targetNodeId } : {},
       ...preferWorktree && !explicitTargetRaw && !targetNodeId ? { preferWorktreeNoOp: true } : {},
       ...duplicateWarning,
@@ -182987,6 +183187,7 @@ async function meshEnqueueBatch(ctx, args) {
     });
   }
   const tasks = committed.tasks;
+  const ownershipQueue = tasks.some((task) => broadOwnedPathsWarning(task, [])) ? await readQueueFromDaemon(ctx, { statuses: ["pending", "assigned"] }).catch(() => tasks) : [];
   const distinctMissionIds = [...new Set(specs.map((s) => s.missionId).filter((m) => !!m))];
   const missionWarnings = await Promise.all(distinctMissionIds.map((missionId) => buildMissionInactiveWarning(ctx, missionId)));
   const missionWarning = missionWarnings.find((w) => w !== void 0) ?? {};
@@ -183017,6 +183218,7 @@ async function meshEnqueueBatch(ctx, args) {
       status: task.status,
       taskMode: task.taskMode,
       ...buildProviderPinAdvisory(normalizedEntries[i].requiredTags),
+      ...broadOwnedPathsWarning(task, ownershipQueue) ?? {},
       ...Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { dependsOn: task.dependsOn } : {},
       ...task.targetNodeId ? { targetNodeId: task.targetNodeId } : {},
       ...task.priority ? { priority: task.priority } : {},
