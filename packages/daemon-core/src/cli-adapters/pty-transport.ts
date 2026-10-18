@@ -47,6 +47,8 @@ export function __setNodePtyLoaderForTests(loader: (() => any) | null): void {
 export interface PtySpawnOptions {
   cwd: string;
   env: Record<string, string>;
+  /** Only explicit launch overrides may be persisted for a later spawn. */
+  envOverrides?: Record<string, string>;
   cols: number;
   rows: number;
 }

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import type { SessionEntry, StatusReportPayload } from '@adhdev/daemon-core'
 
+import { removeRetiredRoleLaunchMemory } from '../../../src/utils/retired-role-launch-memory'
 import DashboardHeader from '../../../src/components/dashboard/DashboardHeader'
 import { BaseDaemonProvider } from '../../../src/context/BaseDaemonContext'
 import { TransportProvider } from '../../../src/context/TransportContext'
@@ -357,6 +358,21 @@ describe('assistant in the dashboard header', () => {
         const reopened = document.querySelector('[data-testid="dashboard-start-assistant-options"]')!
         act(() => reopened.querySelector<HTMLButtonElement>('[data-testid="assistant-launch-start"]')!.click())
         expect(onStartAssistantWith).toHaveBeenLastCalledWith({ machineId: 'm1', cliType: 'claude-cli', model: 'sonnet', thinkingLevel: 'max' })
+    })
+
+    it('retired role memory purge writes only when legacy fields are removed', () => {
+        const key = 'adhdev.remember.new-session-mesh'
+        const memory = new Map([[key, JSON.stringify({ cliType: 'old', model: 'old', thinkingLevel: 'high', dir: '/workspace' })]])
+        const setItem = vi.fn((k: string, value: string) => memory.set(k, value))
+        const removeItem = vi.fn((k: string) => memory.delete(k))
+        vi.stubGlobal('localStorage', { getItem: (k: string) => memory.get(k) ?? null, setItem, removeItem })
+        removeRetiredRoleLaunchMemory()
+        expect(JSON.parse(memory.get(key)!)).toEqual({ dir: '/workspace' })
+        expect(setItem).toHaveBeenCalledTimes(1)
+        removeRetiredRoleLaunchMemory()
+        removeRetiredRoleLaunchMemory()
+        expect(setItem).toHaveBeenCalledTimes(1)
+        expect(removeItem).not.toHaveBeenCalled()
     })
 
     it('explicit assistant picks affect one launch and never create browser role defaults', async () => {

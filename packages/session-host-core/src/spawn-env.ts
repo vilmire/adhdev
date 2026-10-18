@@ -117,6 +117,17 @@ export function sanitizeSpawnEnv(
     return env;
 }
 
+/** Recover only role bindings from legacy full-environment snapshots.
+ * New records distinguish explicit overrides, including intentional custom keys. */
+export function replayLaunchEnv(command: { env?: Record<string, string>; envMode?: 'launch_overrides' }): Record<string, string> {
+    if (command.envMode === 'launch_overrides') return { ...command.env };
+    const roleKeys = new Set(['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR',
+        'CODEX_HOME', 'KIMI_CODE_HOME', 'GEMINI_CLI_HOME', 'OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT',
+        'CLAUDE_CODE_DISABLE_AUTO_MEMORY', 'TERMINAL_CWD', 'ADHDEV_INLINE_MESH',
+        'ADHDEV_ASSISTANT_SESSION_ID', 'ADHDEV_COORDINATOR_SESSION_ID', 'ADHDEV_CONFIG_DIR']);
+    return Object.fromEntries(Object.entries(command.env ?? {}).filter(([key]) => roleKeys.has(key)));
+}
+
 /**
  * Apply preferred terminal colour environment variables.
  * Ensures TERM is set to xterm-256color and enables colour on Windows.

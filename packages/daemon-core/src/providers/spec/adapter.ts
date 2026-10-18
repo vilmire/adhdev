@@ -39,6 +39,7 @@ export interface TerminalAdapterOpts {
      * still passes a partial env.
      */
     envIsComplete?: boolean;
+    envOverrides?: Record<string, string>;
     cols?: number;
     rows?: number;
     /** Coalesce screen snapshots: emit on_screen_changed at most this often. */
@@ -142,6 +143,7 @@ export class TerminalAdapter {
         this.pty = factory.spawn(this.opts.binary, this.opts.args ?? [], {
             cwd: this.opts.cwd ?? process.cwd(),
             env,
+            envOverrides: this.opts.envOverrides ?? (this.opts.envIsComplete ? undefined : this.opts.env),
             cols: this.cols,
             rows: this.rows,
         });

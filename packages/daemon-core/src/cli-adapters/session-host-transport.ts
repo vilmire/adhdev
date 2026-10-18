@@ -326,7 +326,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
                     launchCommand: {
                         command: this.options.command,
                         args: this.options.args,
-                        env: this.options.spawnOptions.env,
+                        env: this.options.spawnOptions.envOverrides ?? {},
+                        envMode: 'launch_overrides',
                     },
                     cols: this.options.spawnOptions.cols,
                     rows: this.options.spawnOptions.rows,

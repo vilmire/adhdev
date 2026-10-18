@@ -29,12 +29,12 @@ function stateOf(mesh: LocalMeshEntry): HostProjectLaunchState | null {
     return { projectId: mesh.id, revision: raw.revision as number, entry: raw.entry as HostProjectLaunchState['entry'] };
 }
 
-export function createLaunchValidationPorts(ctx: { deps: Pick<HighFamilyContext['deps'], 'providerLoader'> }, configDir = getConfigDir()): LaunchValidationPorts {
+export function createLaunchValidationPorts(ctx: { deps: Pick<HighFamilyContext['deps'], 'providerLoader'> }, configDir = getConfigDir(), version?: string): LaunchValidationPorts {
     const loader = ctx.deps.providerLoader;
     return {
         resolveAlias: value => loader.resolveAlias(value, ['cli']),
         getProvider: (type, model) => {
-            const manifest = loader.getMeta(type);
+            const manifest = loader.resolve(type, { version });
             if (!manifest) return undefined;
             const availability = loader.getAvailableProviderInfos().find(p => p.type === type);
             const setup = resolveMeshCoordinatorSetup({ provider: manifest, cliType: type, meshId: '', workspace: configDir,

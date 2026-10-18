@@ -815,6 +815,7 @@ function buildHostDiagnostics(params) {
 
 // src/session-lifecycle.ts
 import {
+  replayLaunchEnv,
   resolveSessionHostCols as resolveSessionHostCols2,
   resolveSessionHostRows as resolveSessionHostRows2
 } from "@adhdev/session-host-core";
@@ -881,7 +882,7 @@ function buildPayloadFromRecord(record) {
     providerType: record.providerType,
     category: record.category,
     workspace: record.workspace,
-    launchCommand: record.launchCommand,
+    launchCommand: { ...record.launchCommand, env: replayLaunchEnv(record.launchCommand), envMode: "launch_overrides" },
     cols: resolveSessionHostCols2(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
     rows: resolveSessionHostRows2(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
     meta: record.meta

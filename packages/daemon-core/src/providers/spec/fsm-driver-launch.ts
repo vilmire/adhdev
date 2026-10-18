@@ -180,6 +180,7 @@ export function buildSpecAdapterOpts(spec: CliSpecV4, opts: SpecDriverOpts): Ter
         // plan.ptyOptions.env is already a complete, sanitized environment —
         // pass it verbatim, do not overlay process.env (see envIsComplete).
         env: plan.ptyOptions.env,
+        envOverrides: plan.ptyOptions.envOverrides,
         envIsComplete: true,
         cols,
         rows,

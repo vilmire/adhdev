@@ -12,6 +12,8 @@ export interface SessionLaunchCommand {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** Unmarked older daemon records contained the full inherited environment. */
+  envMode?: 'launch_overrides';
 }
 
 export interface SessionWriteOwner {

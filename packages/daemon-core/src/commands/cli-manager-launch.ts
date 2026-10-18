@@ -1,3 +1,5 @@
+import { validateLaunchDefault } from '../launch-defaults/validate.js';
+import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { assertMaintenanceAdmission, assertMaintenanceCommandIdentity, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
  * DaemonCliManager — session launch: `startSession` (CLI/PTY) and the
@@ -40,7 +42,7 @@ import type { DaemonCliManager } from './cli-manager.js';
 import { IDENTITY } from '../track-identity.js';
 
 /** The DaemonCliManager members these functions read or call (compiler-checked; no cast). */
-export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'createAdapter' | 'deps' | 'persistRecentActivity' | 'providerLoader' | 'readProviderChannel' | 'registerCliInstance' | 'scheduleAutoClean' | 'startSession'>;
+export type CliLaunchHost = Pick<DaemonCliManager, 'adapters' | 'roleRestartInputs' | 'createAdapter' | 'deps' | 'persistRecentActivity' | 'providerLoader' | 'readProviderChannel' | 'registerCliInstance' | 'scheduleAutoClean' | 'startSession'>;
 
  // ─── Session start/management ──────────────────────────────
 export async function startSession(host: CliLaunchHost, cliType: string, workingDir: string, cliArgs?: string[], initialModel?: string, options?: CliStartOptions): Promise<{ runtimeSessionId: string; providerSessionId?: string }> {
@@ -200,6 +202,15 @@ async function startCliPtySession(
     const modelResolvedProvider = versionResolvedProvider
         ? { ...versionResolvedProvider, ...buildModelOverlayPatch(modelSnapshot, versionResolvedProvider) }
         : undefined;
+    const role = options?.launchProvenance?.roleLaunch?.role ?? options?.restartRecord?.roleLaunch?.role
+        ?? (options?.restartRecord ? (launchSettings.assistant ? 'assistant' : 'coordinator') : undefined);
+    if (role) {
+        const valid = validateLaunchDefault(role, { provider: normalizedType,
+            ...(initialModel ? { model: initialModel } : {}),
+            ...(options?.initialThinkingLevel ? { thinkingLevel: options.initialThinkingLevel } : {}) },
+            createLaunchValidationPorts({ deps: { providerLoader: host.providerLoader } }, undefined, cliInfo.version));
+        if (!valid.ok) throw new Error(`Role launch selection cannot be applied by ${normalizedType} at version ${cliInfo.version || 'unknown'}: ${valid.issue.reason}`);
+    }
     const autoApproveLaunch = applyAutoApproveModeLaunchArgs(modelResolvedProvider, cliArgs, launchSettings);
     const launchProvider = autoApproveLaunch.provider || provider;
     const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
@@ -220,6 +231,7 @@ async function startCliPtySession(
         ? [...modelLaunchArgs, ...(cliArgsWithAutoApprove || [])]
         : cliArgsWithAutoApprove;
     if (initialModel && !modelLaunchArgs) {
+        if (options?.launchProvenance?.roleLaunch || options?.restartRecord) throw new Error(`Role model cannot be applied by ${normalizedType} at version ${cliInfo.version || 'unknown'}`);
         LOG.warn('CLI', `[${normalizedType}] initialModel='${initialModel}' requested but provider declares no modelLaunchArgs template — launching without model selection.`);
     }
 
@@ -234,11 +246,12 @@ async function startCliPtySession(
         ? [...thinkingLaunchArgs, ...(cliArgsWithModel || [])]
         : cliArgsWithModel;
     if (initialThinkingLevel && !thinkingLaunchArgs) {
+        if ((options?.launchProvenance?.roleLaunch || options?.restartRecord) && !launchProvider?.controls?.some(c => c.id === launchProvider.thinkingControlId && c.setScript)) throw new Error(`Role thinking level cannot be applied by ${normalizedType} at version ${cliInfo.version || 'unknown'}`);
         LOG.warn('CLI', `[${normalizedType}] initialThinkingLevel='${initialThinkingLevel}' requested but provider declares no thinkingLaunchArgs template — launching without thinking-level selection.`);
     }
 
  // ─── Resolve launch options → provider session binding ───
-    const sessionBinding = resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
+    const sessionBinding = options?.restartBinding ?? resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
     const resolvedCliArgs = sessionBinding.cliArgs;
 
     // ─── Phase E: launch record ───
@@ -308,7 +321,7 @@ async function startCliPtySession(
                 // BRAIN-ROUTING: for a provider with no thinkingLaunchArgs but a
                 // runtime reasoning control (hermes), apply the level post-launch.
                 // The launch-arg providers (claude/codex) already consumed it at spawn.
-                ...(options?.initialThinkingLevel && !provider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {}),
+                ...(options?.initialThinkingLevel && !launchProvider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {}),
                 launchRecord: cliLaunchRecord,
                 onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
                     host.persistRecentActivity({
@@ -373,6 +386,12 @@ async function startCliPtySession(
         title: provider?.displayName || provider?.name || normalizedType,
     });
 
+    if (cliLaunchRecord.roleLaunch || launchSettings.assistant || launchSettings.meshCoordinatorFor) {
+        // Private daemon memory: keep HOME/MCP bindings out of public launch records.
+        host.roleRestartInputs.set(key, { cliArgs: cliArgs ? [...cliArgs] : undefined, initialModel,
+            options: { ...options, extraEnv: { ...options?.extraEnv }, settingsOverride: { ...launchSettings },
+                restartBinding: structuredClone(sessionBinding) } });
+    }
     return {
         runtimeSessionId: key,
         providerSessionId: sessionBinding.providerSessionId,
@@ -547,6 +566,7 @@ export type CliStartOptions = {
      * thinking values came from. Absent → `api` launcher, `unspecified` sources.
      */
     /** Restart replays the original launch argv and provenance, never newer defaults. */
+    restartBinding?: import('./cli-session-binding.js').CliSessionBinding;
     restartRecord?: import('../sessions/launch-record.js').SessionLaunchRecord;
     launchProvenance?: LaunchProvenanceArgs & { launchedBy?: SessionLaunchedBy };
 };

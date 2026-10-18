@@ -1,3 +1,4 @@
+import { detectCLI } from '../detection/cli-detector.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
@@ -156,6 +157,7 @@ const AUTO_CLEAN_DELAY_MS = 5_000;
 
 export class DaemonCliManager {
     readonly adapters = new Map<string, CliAdapter>();
+    readonly roleRestartInputs = new Map<string, { cliArgs?: string[]; initialModel?: string; options: CliStartOptions }>();
     deps: CliManagerDeps;
     providerLoader: ProviderLoader;
     /**
@@ -400,6 +402,8 @@ export class DaemonCliManager {
             ? settings.autoLaunchedForQueueTaskId.trim()
             : '';
         const launchRecordMeta: Record<string, unknown> = {
+            ...(settings?.assistant === true ? { assistant: true } : {}),
+            ...(settings?.meshCoordinatorFor ? { meshCoordinatorFor: settings.meshCoordinatorFor } : {}),
             ...(launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {}),
             ...(launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {}),
             // The daemon that owns this worker's mesh work (see the descriptor field).
@@ -526,6 +530,7 @@ export class DaemonCliManager {
     }
 
     async stopSessionWithMode(key: string, mode: 'hard' | 'save'): Promise<void> {
+        this.roleRestartInputs.delete(key);
         const adapter = this.adapters.get(key);
         if (adapter) {
             try {
@@ -567,6 +572,7 @@ export class DaemonCliManager {
             else adapter.shutdown();
         }
         this.adapters.clear();
+        this.roleRestartInputs.clear();
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
     restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> { return restoreHostedSessions(this, records); }
@@ -794,21 +800,24 @@ export class DaemonCliManager {
             provider: recorded.providerType, ...(recorded.model.requested ? { model: recorded.model.requested } : {}),
             ...(recorded.thinkingLevel.requested ? { thinkingLevel: recorded.thinkingLevel.requested } : {}) } : undefined);
         if (roleSelection) {
+            const detected = await detectCLI(roleSelection.provider, this.providerLoader);
+            if (!detected) return { success: false, code: 'restart_selection_unavailable',
+                error: `Recorded provider '${roleSelection.provider}' is not installed; restart refused.` };
             const valid = validateLaunchDefault(recorded?.roleLaunch?.role ?? (settings?.assistant ? 'assistant' : 'coordinator'), roleSelection,
-                createLaunchValidationPorts({ deps: { providerLoader: this.providerLoader } }));
+                createLaunchValidationPorts({ deps: { providerLoader: this.providerLoader } }, undefined, detected.version));
             if (!valid.ok) return { success: false, code: 'restart_selection_unavailable',
                 error: `Recorded provider '${roleSelection.provider}' cannot restart: ${valid.issue.reason}` };
         }
         const prevCliArgs = found ? (found.adapter as CliAdapterWithExtraArgs).extraArgs : undefined;
-        if (isRole && !prevCliArgs) return { success: false, code: 'restart_selection_unavailable',
+        const replay = found ? this.roleRestartInputs.get(found.key) : undefined;
+        if (isRole && !replay) return { success: false, code: 'restart_selection_unavailable',
             error: 'The role session launch arguments are unavailable; restart refused.' };
         if (found) await this.stopSession(found.key);
         await this.startSession(isRole ? recorded!.providerType : cliType,
             isRole ? recorded!.workspace || found!.adapter.workingDir || dir : dir,
-            isRole ? prevCliArgs : args?.cliArgs || prevCliArgs,
-            isRole ? undefined : args?.initialModel, {
-                ...(isRole ? { settingsOverride: settings, restartRecord: recorded, presetSessionKey: found!.key,
-                    initialThinkingLevel: roleSelection?.thinkingLevel } : {}),
+            isRole ? replay!.cliArgs : args?.cliArgs || prevCliArgs,
+            isRole ? replay!.initialModel : args?.initialModel, {
+                ...(isRole ? { ...replay!.options, restartRecord: recorded, presetSessionKey: found!.key } : {}),
                 launchProvenance: isRole ? { roleLaunch: recorded!.roleLaunch,
                     launchedBy: recorded!.launchedBy, modelSource: recorded!.model.source,
                     thinkingLevelSource: recorded!.thinkingLevel.source } : resolveLaunchProvenance(args, undefined),

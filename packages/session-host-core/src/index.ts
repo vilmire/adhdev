@@ -101,6 +101,7 @@ export {
 } from './defaults.js';
 export {
   sanitizeSpawnEnv,
+  replayLaunchEnv,
   applyTerminalColorEnv,
   ensureNodePtySpawnHelperPermissions,
 } from './spawn-env.js';

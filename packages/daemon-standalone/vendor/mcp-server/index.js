@@ -2895,6 +2895,7 @@ var require_dist = __commonJS({
       isTerminalRecord: () => isTerminalRecord,
       partitionSessionHostDiagnosticsSessions: () => partitionSessionHostDiagnosticsSessions2,
       partitionSessionHostRecords: () => partitionSessionHostRecords2,
+      replayLaunchEnv: () => replayLaunchEnv,
       resolveAttachableRuntimeRecord: () => resolveAttachableRuntimeRecord,
       resolveInstanceConfigDir: () => resolveInstanceConfigDir,
       resolveRuntimeRecord: () => resolveRuntimeRecord,
@@ -3868,6 +3869,27 @@ var require_dist = __commonJS({
       delete env2.CLAUDE_CODE_BRIDGE_SESSION_ID;
       applyTerminalColorEnv(env2);
       return env2;
+    }
+    function replayLaunchEnv(command) {
+      if (command.envMode === "launch_overrides") return { ...command.env };
+      const roleKeys = /* @__PURE__ */ new Set([
+        "HOME",
+        "USERPROFILE",
+        "XDG_CONFIG_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "KIMI_CODE_HOME",
+        "GEMINI_CLI_HOME",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+        "TERMINAL_CWD",
+        "ADHDEV_INLINE_MESH",
+        "ADHDEV_ASSISTANT_SESSION_ID",
+        "ADHDEV_COORDINATOR_SESSION_ID",
+        "ADHDEV_CONFIG_DIR"
+      ]);
+      return Object.fromEntries(Object.entries(command.env ?? {}).filter(([key]) => roleKeys.has(key)));
     }
     function applyTerminalColorEnv(env2) {
       if (env2.NO_COLOR) return;
@@ -23662,6 +23684,7 @@ var require_dist3 = __commonJS({
       normalizeThinkingLevel: () => normalizeThinkingLevel,
       orderProvidersByBuiltinPreference: () => orderProvidersByBuiltinPreference2,
       parseJsonRecord: () => parseJsonRecord,
+      parseRoleLaunchSelection: () => parseRoleLaunchSelection,
       parseSemver: () => parseSemver,
       parseSessionLaunchRecord: () => parseSessionLaunchRecord,
       pathsOverlap: () => pathsOverlap,
@@ -23889,15 +23912,15 @@ var require_dist3 = __commonJS({
       }
       return best?.git;
     }
-    function deriveSyntheticSessionId(record3) {
+    function deriveSyntheticSessionId(record22) {
       const parts = [
-        readString2(record3.workspace),
-        readString2(record3.providerType, record3.provider),
-        readString2(record3.role),
-        readString2(record3.state, record3.status),
-        readString2(record3.title),
-        readString2(record3.createdAt, record3.created_at),
-        readString2(record3.startedAt, record3.started_at)
+        readString2(record22.workspace),
+        readString2(record22.providerType, record22.provider),
+        readString2(record22.role),
+        readString2(record22.state, record22.status),
+        readString2(record22.title),
+        readString2(record22.createdAt, record22.created_at),
+        readString2(record22.startedAt, record22.started_at)
       ].filter((part) => Boolean(part));
       if (parts.length === 0) return void 0;
       return `synthetic:${parts.join("|")}`;
@@ -23909,31 +23932,31 @@ var require_dist3 = __commonJS({
       return idA === idB;
     }
     function normalizeMeshSessionRecord(entry) {
-      const record3 = readRecord2(entry);
-      const sessionId = readString2(record3.sessionId, record3.session_id, record3.id) ?? deriveSyntheticSessionId(record3);
+      const record22 = readRecord2(entry);
+      const sessionId = readString2(record22.sessionId, record22.session_id, record22.id) ?? deriveSyntheticSessionId(record22);
       if (!sessionId) return null;
       return {
         sessionId,
-        ...readString2(record3.providerType, record3.provider) ? { providerType: readString2(record3.providerType, record3.provider) } : {},
-        ...readString2(record3.state, record3.status) ? { state: readString2(record3.state, record3.status) } : {},
-        ...readString2(record3.chatStatus, record3.chat_status) ? { chatStatus: readString2(record3.chatStatus, record3.chat_status) } : {},
-        ...readString2(record3.lifecycle) ? { lifecycle: readString2(record3.lifecycle) } : {},
-        ...readString2(record3.surfaceKind, record3.surface_kind) ? { surfaceKind: readString2(record3.surfaceKind, record3.surface_kind) } : {},
-        ...readString2(record3.recoveryState, record3.recovery_state) ? { recoveryState: readString2(record3.recoveryState, record3.recovery_state) } : {},
-        ...readString2(record3.workspace) ? { workspace: readString2(record3.workspace) } : {},
-        ...readString2(record3.title) ? { title: readString2(record3.title) } : {},
-        ...readString2(record3.role) ? { role: readString2(record3.role) } : {},
-        ...readBoolean(record3.isSelfCoordinator, record3.is_self_coordinator) !== void 0 ? { isSelfCoordinator: readBoolean(record3.isSelfCoordinator, record3.is_self_coordinator) } : {},
-        ...readString2(record3.statusNote, record3.status_note) ? { statusNote: readString2(record3.statusNote, record3.status_note) } : {},
-        ...readString2(record3.createdAt, record3.created_at) ? { createdAt: readString2(record3.createdAt, record3.created_at) } : {},
-        ...readString2(record3.startedAt, record3.started_at) ? { startedAt: readString2(record3.startedAt, record3.started_at) } : {},
-        ...readString2(record3.lastActivityAt, record3.last_activity_at) ? { lastActivityAt: readString2(record3.lastActivityAt, record3.last_activity_at) } : {},
-        ...readBoolean(record3.isCached, record3.is_cached) !== void 0 ? { isCached: readBoolean(record3.isCached, record3.is_cached) } : {}
+        ...readString2(record22.providerType, record22.provider) ? { providerType: readString2(record22.providerType, record22.provider) } : {},
+        ...readString2(record22.state, record22.status) ? { state: readString2(record22.state, record22.status) } : {},
+        ...readString2(record22.chatStatus, record22.chat_status) ? { chatStatus: readString2(record22.chatStatus, record22.chat_status) } : {},
+        ...readString2(record22.lifecycle) ? { lifecycle: readString2(record22.lifecycle) } : {},
+        ...readString2(record22.surfaceKind, record22.surface_kind) ? { surfaceKind: readString2(record22.surfaceKind, record22.surface_kind) } : {},
+        ...readString2(record22.recoveryState, record22.recovery_state) ? { recoveryState: readString2(record22.recoveryState, record22.recovery_state) } : {},
+        ...readString2(record22.workspace) ? { workspace: readString2(record22.workspace) } : {},
+        ...readString2(record22.title) ? { title: readString2(record22.title) } : {},
+        ...readString2(record22.role) ? { role: readString2(record22.role) } : {},
+        ...readBoolean(record22.isSelfCoordinator, record22.is_self_coordinator) !== void 0 ? { isSelfCoordinator: readBoolean(record22.isSelfCoordinator, record22.is_self_coordinator) } : {},
+        ...readString2(record22.statusNote, record22.status_note) ? { statusNote: readString2(record22.statusNote, record22.status_note) } : {},
+        ...readString2(record22.createdAt, record22.created_at) ? { createdAt: readString2(record22.createdAt, record22.created_at) } : {},
+        ...readString2(record22.startedAt, record22.started_at) ? { startedAt: readString2(record22.startedAt, record22.started_at) } : {},
+        ...readString2(record22.lastActivityAt, record22.last_activity_at) ? { lastActivityAt: readString2(record22.lastActivityAt, record22.last_activity_at) } : {},
+        ...readBoolean(record22.isCached, record22.is_cached) !== void 0 ? { isCached: readBoolean(record22.isCached, record22.is_cached) } : {}
       };
     }
     function normalizeMeshNodeId(node) {
-      const record3 = node && typeof node === "object" ? node : {};
-      return readString2(record3.id, record3.nodeId, record3.node_id);
+      const record22 = node && typeof node === "object" ? node : {};
+      return readString2(record22.id, record22.nodeId, record22.node_id);
     }
     function meshNodeIdMatches7(node, candidateId) {
       if (!candidateId) return false;
@@ -23943,12 +23966,12 @@ var require_dist3 = __commonJS({
     }
     function normalizeMeshNodeFacts(raw) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-      const record3 = raw;
-      const schemaVersion = Number(record3.schemaVersion);
-      const reportedAt = Number(record3.reportedAt);
+      const record22 = raw;
+      const schemaVersion = Number(record22.schemaVersion);
+      const reportedAt = Number(record22.reportedAt);
       if (!Number.isFinite(schemaVersion) || schemaVersion < 1) return void 0;
       if (!Number.isFinite(reportedAt) || reportedAt <= 0) return void 0;
-      return { ...record3, schemaVersion, reportedAt };
+      return { ...record22, schemaVersion, reportedAt };
     }
     function supportsQuota(providerType) {
       return !!providerType && QUOTA_SUPPORTED_PROVIDERS.includes(providerType);
@@ -24084,9 +24107,9 @@ var require_dist3 = __commonJS({
       return out;
     }
     function summarizeGitShape(status) {
-      const record3 = readRecord2(status);
-      if (!Object.keys(record3).length) return null;
-      const submodules = Array.isArray(record3.submodules) ? record3.submodules.map((entry) => {
+      const record22 = readRecord2(status);
+      if (!Object.keys(record22).length) return null;
+      const submodules = Array.isArray(record22.submodules) ? record22.submodules.map((entry) => {
         const sub = readRecord2(entry);
         return {
           path: readString2(sub.path) ?? null,
@@ -24096,23 +24119,23 @@ var require_dist3 = __commonJS({
         };
       }) : [];
       return {
-        isGitRepo: readBoolean(record3.isGitRepo),
-        workspace: readString2(record3.workspace) ?? null,
-        repoRoot: readString2(record3.repoRoot, record3.repo_root) ?? null,
-        branch: readString2(record3.branch) ?? null,
-        upstream: readString2(record3.upstream) ?? null,
-        upstreamStatus: readString2(record3.upstreamStatus, record3.upstream_status) ?? null,
-        headCommit: readString2(record3.headCommit, record3.head_commit)?.slice(0, 12) ?? null,
-        ahead: readNumber(record3.ahead) ?? null,
-        behind: readNumber(record3.behind) ?? null,
+        isGitRepo: readBoolean(record22.isGitRepo),
+        workspace: readString2(record22.workspace) ?? null,
+        repoRoot: readString2(record22.repoRoot, record22.repo_root) ?? null,
+        branch: readString2(record22.branch) ?? null,
+        upstream: readString2(record22.upstream) ?? null,
+        upstreamStatus: readString2(record22.upstreamStatus, record22.upstream_status) ?? null,
+        headCommit: readString2(record22.headCommit, record22.head_commit)?.slice(0, 12) ?? null,
+        ahead: readNumber(record22.ahead) ?? null,
+        behind: readNumber(record22.behind) ?? null,
         dirtyCounts: {
-          staged: readNumber(record3.staged) ?? 0,
-          modified: readNumber(record3.modified) ?? 0,
-          untracked: readNumber(record3.untracked) ?? 0,
-          deleted: readNumber(record3.deleted) ?? 0,
-          renamed: readNumber(record3.renamed) ?? 0
+          staged: readNumber(record22.staged) ?? 0,
+          modified: readNumber(record22.modified) ?? 0,
+          untracked: readNumber(record22.untracked) ?? 0,
+          deleted: readNumber(record22.deleted) ?? 0,
+          renamed: readNumber(record22.renamed) ?? 0
         },
-        lastCheckedAt: readNumber(record3.lastCheckedAt, record3.last_checked_at) ?? null,
+        lastCheckedAt: readNumber(record22.lastCheckedAt, record22.last_checked_at) ?? null,
         submoduleCount: submodules.length,
         submodules
       };
@@ -24658,10 +24681,10 @@ var require_dist3 = __commonJS({
       return typeof raw === "string" && TERMINAL_SESSION_RECORD_STATUSES.includes(raw.trim().toLowerCase());
     }
     function isIdleSessionState(state2) {
-      const record3 = state2 && typeof state2 === "object" ? state2 : {};
-      const status = typeof record3.status === "string" ? record3.status.trim().toLowerCase() : "";
+      const record22 = state2 && typeof state2 === "object" ? state2 : {};
+      const status = typeof record22.status === "string" ? record22.status.trim().toLowerCase() : "";
       if (isTerminalSessionRecordStatus(status) || isDeadStatus(status)) return false;
-      return isReadyStatus(status) || record3.activeChat?.status === "waiting_input";
+      return isReadyStatus(status) || record22.activeChat?.status === "waiting_input";
     }
     function makeGuard4(values) {
       const set2 = new Set(values);
@@ -25029,6 +25052,50 @@ ${renderWorkerProtocolFooter2(input)}`;
         evidence
       };
     }
+    function isLaunchDefaultRole(value) {
+      return typeof value === "string" && LAUNCH_DEFAULT_ROLES.includes(value);
+    }
+    function isLaunchDefaultSource(value) {
+      return typeof value === "string" && LAUNCH_DEFAULT_SOURCES.includes(value);
+    }
+    function record(value) {
+      return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+    }
+    function ref(value) {
+      const r = record(value);
+      if (!r || !isLaunchDefaultRole(r.role) || r.scope !== "global" && r.scope !== "project" || !Number.isSafeInteger(r.revision) || r.revision < 1 || r.scope === "project" && (typeof r.projectId !== "string" || !r.projectId)) return void 0;
+      return {
+        role: r.role,
+        scope: r.scope,
+        revision: r.revision,
+        ...r.scope === "project" ? { projectId: r.projectId } : {}
+      };
+    }
+    function axis(value) {
+      const a = record(value);
+      if (!a || !isLaunchDefaultSource(a.source) || a.value !== null && typeof a.value !== "string") return void 0;
+      const defaultRef = ref(a.defaultRef);
+      if (a.source === "stored_default" && defaultRef?.scope !== "global" || a.source === "project_default" && defaultRef?.scope !== "project" || (a.source === "user" || a.source === "provider_default") && a.defaultRef !== void 0) return void 0;
+      return { value: a.value, source: a.source, ...defaultRef ? { defaultRef } : {} };
+    }
+    function parseRoleLaunchSelection(value) {
+      const r = record(value), s2 = record(r?.selection), a = record(r?.applied);
+      if (!r || !isLaunchDefaultRole(r.role) || !s2 || typeof s2.provider !== "string" || !s2.provider || !Number.isSafeInteger(r.documentRevision) || r.documentRevision < 1 || s2.model !== void 0 && typeof s2.model !== "string" || s2.thinkingLevel !== void 0 && typeof s2.thinkingLevel !== "string") return void 0;
+      const provider = axis(a?.provider), model = axis(a?.model), thinkingLevel = axis(a?.thinkingLevel);
+      if (!provider || !model || !thinkingLevel || [provider, model, thinkingLevel].some((axis2) => axis2.defaultRef && (axis2.defaultRef.role !== r.role || axis2.defaultRef.scope === "global" && axis2.defaultRef.revision > r.documentRevision)) || provider.value !== s2.provider || model.value !== (s2.model ?? null) || thinkingLevel.value !== (s2.thinkingLevel ?? null)) return void 0;
+      const defaultRef = ref(r.defaultRef);
+      return {
+        role: r.role,
+        selection: {
+          provider: s2.provider,
+          ...typeof s2.model === "string" ? { model: s2.model } : {},
+          ...typeof s2.thinkingLevel === "string" ? { thinkingLevel: s2.thinkingLevel } : {}
+        },
+        applied: { provider, model, thinkingLevel },
+        ...defaultRef ? { defaultRef } : {},
+        documentRevision: r.documentRevision
+      };
+    }
     function isModelAxisSource(value) {
       return typeof value === "string" && MODEL_AXIS_SOURCES.includes(value);
     }
@@ -25065,10 +25132,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function parseModelSelection(raw) {
       if (!raw || typeof raw !== "object") return void 0;
-      const record3 = raw;
+      const record22 = raw;
       const history = [];
-      if (Array.isArray(record3.history)) {
-        for (const entry of record3.history) {
+      if (Array.isArray(record22.history)) {
+        for (const entry of record22.history) {
           if (!entry || typeof entry !== "object") continue;
           const e = entry;
           const value = readString2(e.value);
@@ -25077,14 +25144,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           if (value && at !== void 0 && via) history.push({ at, value, via });
         }
       }
-      const requested = readString2(record3.requested);
-      const launchValue = readString2(record3.launchValue);
-      const resolvedDefault = readString2(record3.resolvedDefault);
-      const current4 = readString2(record3.current);
-      const observed2 = readString2(record3.observed);
-      const observedAt = readFiniteNumber(record3.observedAt);
+      const requested = readString2(record22.requested);
+      const launchValue = readString2(record22.launchValue);
+      const resolvedDefault = readString2(record22.resolvedDefault);
+      const current4 = readString2(record22.current);
+      const observed2 = readString2(record22.observed);
+      const observedAt = readFiniteNumber(record22.observedAt);
       return {
-        source: isModelAxisSource(record3.source) ? record3.source : "unspecified",
+        source: isModelAxisSource(record22.source) ? record22.source : "unspecified",
         ...requested ? { requested } : {},
         ...launchValue ? { launchValue } : {},
         ...resolvedDefault ? { resolvedDefault } : {},
@@ -25096,22 +25163,24 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function parseSessionLaunchRecord(raw) {
       if (!raw || typeof raw !== "object") return void 0;
-      const record3 = raw;
-      const sessionId = readString2(record3.sessionId);
-      const providerType = readString2(record3.providerType);
-      const launchedAt = readFiniteNumber(record3.launchedAt);
-      const model = parseModelSelection(record3.model);
-      const thinkingLevel = parseModelSelection(record3.thinkingLevel);
+      const record22 = raw;
+      const sessionId = readString2(record22.sessionId);
+      const providerType = readString2(record22.providerType);
+      const launchedAt = readFiniteNumber(record22.launchedAt);
+      const model = parseModelSelection(record22.model);
+      const thinkingLevel = parseModelSelection(record22.thinkingLevel);
       if (!sessionId || !providerType || launchedAt === void 0 || !model || !thinkingLevel) return void 0;
-      const providerVersion = readString2(record3.providerVersion);
-      const workspace = readString2(record3.workspace);
-      const autoApproveModeId = readString2(record3.autoApproveModeId);
+      const providerVersion = readString2(record22.providerVersion);
+      const workspace = readString2(record22.workspace);
+      const autoApproveModeId = readString2(record22.autoApproveModeId);
+      const roleLaunch = parseRoleLaunchSelection(record22.roleLaunch);
       return {
+        ...roleLaunch ? { roleLaunch } : {},
         sessionId,
         providerType,
         ...providerVersion ? { providerVersion } : {},
-        ...record3.providerChannel === "stable" || record3.providerChannel === "preview" ? { providerChannel: record3.providerChannel } : {},
-        launchedBy: isSessionLaunchedBy(record3.launchedBy) ? record3.launchedBy : "api",
+        ...record22.providerChannel === "stable" || record22.providerChannel === "preview" ? { providerChannel: record22.providerChannel } : {},
+        launchedBy: isSessionLaunchedBy(record22.launchedBy) ? record22.launchedBy : "api",
         launchedAt,
         ...workspace ? { workspace } : {},
         model,
@@ -26208,12 +26277,6 @@ ${renderWorkerProtocolFooter2(input)}`;
       if (["sessionId", "generation", "threadId", "turnId", "itemId"].some((key4) => typeof b[key4] !== "string" || !b[key4].trim())) return false;
       return b.transport === "codex_async" ? b.requestId === void 0 : typeof b.requestId === "string" && !!b.requestId.trim() || typeof b.requestId === "number" && Number.isFinite(b.requestId);
     }
-    function isLaunchDefaultRole(value) {
-      return typeof value === "string" && LAUNCH_DEFAULT_ROLES.includes(value);
-    }
-    function isLaunchDefaultSource(value) {
-      return typeof value === "string" && LAUNCH_DEFAULT_SOURCES.includes(value);
-    }
     var QUOTA_SUPPORTED_PROVIDERS;
     var BUILTIN_PROVIDER_PREFERENCE2;
     var QUOTA_RETRY_INFLIGHT_GRACE_MS;
@@ -26374,6 +26437,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     var isCommitStrength2;
     var TURN_EVIDENCE_FLAGS;
     var MESH_TOPIC_ENTRY_KINDS;
+    var LAUNCH_DEFAULT_ROLES;
+    var LAUNCH_DEFAULT_SOURCES;
+    var LAUNCH_DEFAULTS_NEXT_LAUNCH_NOTE;
+    var LAUNCH_DEFAULT_ERROR_CODES;
     var MODEL_AXIS_SOURCES;
     var SESSION_LAUNCHED_BY;
     var MODEL_SELECTION_HISTORY_LIMIT;
@@ -26409,10 +26476,6 @@ ${renderWorkerProtocolFooter2(input)}`;
     var MAX_OWNED_PATHS;
     var DAEMON_METADATA_DOC_SPEC;
     var MESH_STATUS_DOC_SPEC;
-    var LAUNCH_DEFAULT_ROLES;
-    var LAUNCH_DEFAULT_SOURCES;
-    var LAUNCH_DEFAULTS_NEXT_LAUNCH_NOTE;
-    var LAUNCH_DEFAULT_ERROR_CODES;
     var init_dist = __esm2({
       "../mesh-shared/dist/index.mjs"() {
         "use strict";
@@ -27250,16 +27313,40 @@ ${renderWorkerProtocolFooter2(input)}`;
         isCommitStrength2 = makeGuard22(COMMIT_STRENGTHS2);
         TURN_EVIDENCE_FLAGS = ["hollow", "afterFinalizationTimeout", "nativeMarker", "selfAttributing"];
         MESH_TOPIC_ENTRY_KINDS = ["turn.evidence", "turn.committed", "turn.notify", "mesh.record"];
+        LAUNCH_DEFAULT_ROLES = ["assistant", "coordinator"];
+        LAUNCH_DEFAULT_SOURCES = ["user", "stored_default", "project_default", "provider_default"];
+        LAUNCH_DEFAULTS_NEXT_LAUNCH_NOTE = "Applies to the next launch; running sessions are unchanged.";
+        LAUNCH_DEFAULT_ERROR_CODES = [
+          "invalid_args",
+          "launch_default_required",
+          "launch_default_unavailable",
+          "launch_selection_invalid",
+          "launch_default_invalid",
+          "revision_conflict",
+          "store_unavailable",
+          "store_busy",
+          "persistence_failed",
+          "project_not_found",
+          "project_ambiguous",
+          "project_not_hosted",
+          "project_storage_unavailable",
+          "staging_unavailable",
+          "staging_failed",
+          "review_turn_tool_denied"
+        ];
         MODEL_AXIS_SOURCES = [
           /** Picked explicitly for this launch (dashboard dropdown, coordinator dialog). */
           "user",
           /** The dashboard dialog restored it from the last launch (browser-local memory). */
           "remembered",
+          /** The authoritative daemon role default or host project override. */
+          "stored_default",
+          "project_default",
           /** A mesh capability slot supplied it (or a difficulty preset the slot outranked). */
           "mesh_slot",
           /** An explicit per-task model / thinking level on a mesh queue task. */
           "task_override",
-          /** Nothing was requested; the provider's default is known (discovery / manifest). */
+          /** Nothing requested: the provider chooses; resolvedDefault records it when known. */
           "provider_default",
           /** A value was requested without saying where it came from, or nothing is known. */
           "unspecified"
@@ -27414,27 +27501,6 @@ ${renderWorkerProtocolFooter2(input)}`;
           ],
           stableRow: (collection, row2) => collection === "nodes" ? stableMeshNodeRow(row2) : row2
         };
-        LAUNCH_DEFAULT_ROLES = ["assistant", "coordinator"];
-        LAUNCH_DEFAULT_SOURCES = ["user", "stored_default", "project_default", "provider_default"];
-        LAUNCH_DEFAULTS_NEXT_LAUNCH_NOTE = "Applies to the next launch; running sessions are unchanged.";
-        LAUNCH_DEFAULT_ERROR_CODES = [
-          "invalid_args",
-          "launch_default_required",
-          "launch_default_unavailable",
-          "launch_selection_invalid",
-          "launch_default_invalid",
-          "revision_conflict",
-          "store_unavailable",
-          "store_busy",
-          "persistence_failed",
-          "project_not_found",
-          "project_ambiguous",
-          "project_not_hosted",
-          "project_storage_unavailable",
-          "staging_unavailable",
-          "staging_failed",
-          "review_turn_tool_denied"
-        ];
       }
     });
     function normalizeMeshSchedulingStrategy(value) {
@@ -27476,28 +27542,28 @@ ${renderWorkerProtocolFooter2(input)}`;
     }
     function normalizeQuotaRoutingPolicy(value) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
-      const record3 = value;
-      const resolved = resolveQuotaRoutingPolicy(record3);
+      const record4 = value;
+      const resolved = resolveQuotaRoutingPolicy(record4);
       const out = {};
-      if (record3.staleAfterMs !== void 0 && resolved.staleAfterMs !== DEFAULT_QUOTA_ROUTING_POLICY2.staleAfterMs) {
+      if (record4.staleAfterMs !== void 0 && resolved.staleAfterMs !== DEFAULT_QUOTA_ROUTING_POLICY2.staleAfterMs) {
         out.staleAfterMs = resolved.staleAfterMs;
       }
-      if (record3.sessionMinRemainingPercent !== void 0 && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionMinRemainingPercent) {
+      if (record4.sessionMinRemainingPercent !== void 0 && resolved.sessionMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionMinRemainingPercent) {
         out.sessionMinRemainingPercent = resolved.sessionMinRemainingPercent;
       }
-      if (record3.sessionResetImminentMs !== void 0 && resolved.sessionResetImminentMs !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionResetImminentMs) {
+      if (record4.sessionResetImminentMs !== void 0 && resolved.sessionResetImminentMs !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionResetImminentMs) {
         out.sessionResetImminentMs = resolved.sessionResetImminentMs;
       }
-      if (record3.weeklyMinRemainingPercent !== void 0 && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.weeklyMinRemainingPercent) {
+      if (record4.weeklyMinRemainingPercent !== void 0 && resolved.weeklyMinRemainingPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.weeklyMinRemainingPercent) {
         out.weeklyMinRemainingPercent = resolved.weeklyMinRemainingPercent;
       }
-      if (record3.spreadBonusMax !== void 0 && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY2.spreadBonusMax) {
+      if (record4.spreadBonusMax !== void 0 && resolved.spreadBonusMax !== DEFAULT_QUOTA_ROUTING_POLICY2.spreadBonusMax) {
         out.spreadBonusMax = resolved.spreadBonusMax;
       }
-      if (record3.sessionAxisWeeklyHeadroomPercent !== void 0 && resolved.sessionAxisWeeklyHeadroomPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionAxisWeeklyHeadroomPercent) {
+      if (record4.sessionAxisWeeklyHeadroomPercent !== void 0 && resolved.sessionAxisWeeklyHeadroomPercent !== DEFAULT_QUOTA_ROUTING_POLICY2.sessionAxisWeeklyHeadroomPercent) {
         out.sessionAxisWeeklyHeadroomPercent = resolved.sessionAxisWeeklyHeadroomPercent;
       }
-      if (record3.quotaBusyFallback !== void 0 && resolved.quotaBusyFallback !== DEFAULT_QUOTA_ROUTING_POLICY2.quotaBusyFallback) {
+      if (record4.quotaBusyFallback !== void 0 && resolved.quotaBusyFallback !== DEFAULT_QUOTA_ROUTING_POLICY2.quotaBusyFallback) {
         out.quotaBusyFallback = resolved.quotaBusyFallback;
       }
       return Object.keys(out).length ? out : void 0;
@@ -27674,14 +27740,14 @@ ${renderWorkerProtocolFooter2(input)}`;
       return resolveDelegatedSessionIdleTtlMinutes(value) * 6e4;
     }
     function normalizeAutoFastForwardPolicy(value) {
-      const record3 = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-      const maxBehind = Number(record3.maxBehind);
+      const record4 = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const maxBehind = Number(record4.maxBehind);
       return {
-        enabled: record3.enabled !== false,
+        enabled: record4.enabled !== false,
         ...Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {},
-        requireCleanSubmodules: record3.requireCleanSubmodules !== false,
-        ...record3.remoteNodes === true ? { remoteNodes: true } : {},
-        ...record3.mode === "continuous" ? { mode: "continuous" } : {}
+        requireCleanSubmodules: record4.requireCleanSubmodules !== false,
+        ...record4.remoteNodes === true ? { remoteNodes: true } : {},
+        ...record4.mode === "continuous" ? { mode: "continuous" } : {}
       };
     }
     function policyRecord(value) {
@@ -27737,13 +27803,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       return normalizePolicyOverrides2(merged);
     }
     function migratePolicyToSparseOverrides(stored) {
-      const record3 = { ...policyRecord(stored) };
-      if (record3.sessionCleanupOnNodeRemove === "preserve") delete record3.sessionCleanupOnNodeRemove;
+      const record4 = { ...policyRecord(stored) };
+      if (record4.sessionCleanupOnNodeRemove === "preserve") delete record4.sessionCleanupOnNodeRemove;
       try {
-        return normalizePolicyOverrides2(record3);
+        return normalizePolicyOverrides2(record4);
       } catch {
         const out = {};
-        for (const [key4, raw] of Object.entries(record3)) {
+        for (const [key4, raw] of Object.entries(record4)) {
           if (RETIRED_KEYS.has(key4) || raw === void 0 || raw === null) continue;
           try {
             const one = normalizePolicyOverrides2({ [key4]: raw });
@@ -29384,10 +29450,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     function withCollectionTimeout(options) {
       return options.timeoutMs === void 0 ? { ...options, timeoutMs: GIT_STATUS_TIMEOUT_MS } : options;
     }
-    function validateBaseRef(ref) {
-      const trimmed2 = ref.trim();
+    function validateBaseRef(ref2) {
+      const trimmed2 = ref2.trim();
       if (!trimmed2 || trimmed2.startsWith("-") || trimmed2.includes("..") || !/^[A-Za-z0-9][A-Za-z0-9._/@-]*$/.test(trimmed2)) {
-        throw new GitCommandError("invalid_args", `Invalid base ref: ${ref}`);
+        throw new GitCommandError("invalid_args", `Invalid base ref: ${ref2}`);
       }
       return trimmed2;
     }
@@ -32324,16 +32390,16 @@ try {
       if (typeof parsed !== "object" || parsed === null) {
         return null;
       }
-      const record3 = parsed;
-      if (record3.version !== SNAPSHOT_VERSION) {
+      const record4 = parsed;
+      if (record4.version !== SNAPSHOT_VERSION) {
         return null;
       }
-      const capturedAt = toNumber(record3.capturedAt);
+      const capturedAt = toNumber(record4.capturedAt);
       if (capturedAt === null) {
         return null;
       }
-      const fiveHour = parseRecordedWindow(record3.fiveHour);
-      const sevenDay = parseRecordedWindow(record3.sevenDay);
+      const fiveHour = parseRecordedWindow(record4.fiveHour);
+      const sevenDay = parseRecordedWindow(record4.sevenDay);
       if (fiveHour === null && sevenDay === null) {
         return null;
       }
@@ -32342,20 +32408,20 @@ try {
         capturedAt,
         fiveHour,
         sevenDay,
-        ...typeof record3.cliVersion === "string" ? { cliVersion: record3.cliVersion } : {},
-        ...typeof record3.model === "string" && record3.model.trim() ? { model: record3.model.trim() } : {}
+        ...typeof record4.cliVersion === "string" ? { cliVersion: record4.cliVersion } : {},
+        ...typeof record4.model === "string" && record4.model.trim() ? { model: record4.model.trim() } : {}
       };
     }
     function parseRecordedWindow(raw) {
       if (typeof raw !== "object" || raw === null) {
         return null;
       }
-      const record3 = raw;
-      const usedPercent = toNumber(record3.usedPercent);
+      const record4 = raw;
+      const usedPercent = toNumber(record4.usedPercent);
       if (usedPercent === null) {
         return null;
       }
-      const resetsAt = toNumber(record3.resetsAt);
+      const resetsAt = toNumber(record4.resetsAt);
       return { usedPercent, resetsAt: resetsAt === null ? null : resetsAt };
     }
     var SNAPSHOT_VERSION;
@@ -32808,11 +32874,11 @@ child.on('exit', () => process.exit(0));
       if (result.kind !== "ok") {
         return null;
       }
-      const record3 = result.value;
-      if (record3.version !== 1) {
+      const record4 = result.value;
+      if (record4.version !== 1) {
         return null;
       }
-      const statusLine = record3.statusLine;
+      const statusLine = record4.statusLine;
       if (statusLine === null) {
         return { version: 1, savedAt: 0, statusLine: null };
       }
@@ -32821,7 +32887,7 @@ child.on('exit', () => process.exit(0));
       }
       return {
         version: 1,
-        savedAt: typeof record3.savedAt === "number" ? record3.savedAt : 0,
+        savedAt: typeof record4.savedAt === "number" ? record4.savedAt : 0,
         statusLine
       };
     }
@@ -32916,11 +32982,11 @@ child.on('exit', () => process.exit(0));
         };
       }
     });
-    function toWindow(record3, windowMinutes3) {
-      if (record3 === null) {
+    function toWindow(record4, windowMinutes3) {
+      if (record4 === null) {
         return null;
       }
-      return windowFromPercent(record3.usedPercent, windowMinutes3, record3.resetsAt);
+      return windowFromPercent(record4.usedPercent, windowMinutes3, record4.resetsAt);
     }
     async function fetchClaudeQuota(overrides = {}) {
       const before = readClaudeQuotaAccountLineage(overrides);
@@ -33108,23 +33174,23 @@ child.on('exit', () => process.exit(0));
     }
     function mapRolloutWindow(raw, fallbackMinutes) {
       if (typeof raw !== "object" || raw === null) return null;
-      const record3 = raw;
-      const minutes = toNumber(record3.window_minutes) ?? fallbackMinutes;
-      return windowFromPercent(toNumber(record3.used_percent), minutes, toEpochResetMs(record3.resets_at));
+      const record4 = raw;
+      const minutes = toNumber(record4.window_minutes) ?? fallbackMinutes;
+      return windowFromPercent(toNumber(record4.used_percent), minutes, toEpochResetMs(record4.resets_at));
     }
     function parseRolloutLine(line) {
       const trimmed2 = line.trim();
       if (trimmed2 === "" || !trimmed2.startsWith("{")) return null;
       if (!trimmed2.includes('"rate_limits"')) return null;
-      let record3;
+      let record4;
       try {
         const parsed = JSON.parse(trimmed2);
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-        record3 = parsed;
+        record4 = parsed;
       } catch {
         return null;
       }
-      const payload = record3.payload;
+      const payload = record4.payload;
       if (typeof payload !== "object" || payload === null) return null;
       const limits = payload.rate_limits;
       if (typeof limits !== "object" || limits === null) return null;
@@ -33136,7 +33202,7 @@ child.on('exit', () => process.exit(0));
       if (secondary) reported.push(secondary);
       if (reported.length === 0) return null;
       const { session, weekly } = assignWindows(reported);
-      const capturedAt = Date.parse(typeof record3.timestamp === "string" ? record3.timestamp : "");
+      const capturedAt = Date.parse(typeof record4.timestamp === "string" ? record4.timestamp : "");
       if (!Number.isFinite(capturedAt)) {
         return null;
       }
@@ -33386,9 +33452,9 @@ child.on('exit', () => process.exit(0));
       if (typeof raw !== "object" || raw === null) {
         return null;
       }
-      const record3 = raw;
-      const minutes = toNumber(record3.windowDurationMins) ?? fallbackMinutes;
-      return windowFromPercent(toNumber(record3.usedPercent), minutes, toEpochResetMs(record3.resetsAt));
+      const record4 = raw;
+      const minutes = toNumber(record4.windowDurationMins) ?? fallbackMinutes;
+      return windowFromPercent(toNumber(record4.usedPercent), minutes, toEpochResetMs(record4.resetsAt));
     }
     function withAccountEmail(quota, accountResult) {
       const root = typeof accountResult === "object" && accountResult !== null ? accountResult : {};
@@ -33774,8 +33840,8 @@ child.on('exit', () => process.exit(0));
       if (typeof parsed !== "object" || parsed === null) {
         return { kind: "invalid", reason: "Cursor auth file is not an object" };
       }
-      const record3 = parsed;
-      const token = record3.accessToken ?? record3.access_token;
+      const record4 = parsed;
+      const token = record4.accessToken ?? record4.access_token;
       if (typeof token !== "string" || token.trim() === "") {
         return { kind: "invalid", reason: "Cursor auth file has no access token" };
       }
@@ -33873,8 +33939,8 @@ child.on('exit', () => process.exit(0));
     function asRecord2(value) {
       return typeof value === "object" && value !== null ? value : null;
     }
-    function field(record3, snake, camel) {
-      return record3?.[snake] ?? record3?.[camel];
+    function field(record4, snake, camel) {
+      return record4?.[snake] ?? record4?.[camel];
     }
     function toOptionalNumber(value) {
       return value === void 0 || value === null ? void 0 : toNumber(value) ?? void 0;
@@ -34144,12 +34210,12 @@ child.on('exit', () => process.exit(0));
         if (typeof entry !== "object" || entry === null) {
           continue;
         }
-        const record3 = entry;
-        const token = typeof record3.key === "string" && record3.key.length > 0 ? record3.key : typeof record3.access_token === "string" && record3.access_token.length > 0 ? record3.access_token : null;
+        const record4 = entry;
+        const token = typeof record4.key === "string" && record4.key.length > 0 ? record4.key : typeof record4.access_token === "string" && record4.access_token.length > 0 ? record4.access_token : null;
         if (token === null) {
           continue;
         }
-        const expiresRaw = record3.expires_at;
+        const expiresRaw = record4.expires_at;
         let expiresAtMs = null;
         if (typeof expiresRaw === "string" && expiresRaw.trim() !== "") {
           const ms3 = new Date(expiresRaw).getTime();
@@ -34406,12 +34472,12 @@ child.on('exit', () => process.exit(0));
       if (typeof parsed !== "object" || parsed === null) {
         return { kind: "invalid", reason: "Kimi credentials file is not an object" };
       }
-      const record3 = parsed;
-      const accessToken = record3.access_token;
+      const record4 = parsed;
+      const accessToken = record4.access_token;
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         return { kind: "invalid", reason: "Kimi credentials file has no access token" };
       }
-      const expiresAtRaw = record3.expires_at;
+      const expiresAtRaw = record4.expires_at;
       const expiresAt = typeof expiresAtRaw === "number" && Number.isFinite(expiresAtRaw) ? expiresAtRaw : null;
       return { kind: "ok", credentials: { accessToken, expiresAt } };
     }
@@ -34444,12 +34510,12 @@ child.on('exit', () => process.exit(0));
       if (typeof window !== "object" || window === null) {
         return null;
       }
-      const record3 = window;
-      const duration = toNumber(record3.duration);
+      const record4 = window;
+      const duration = toNumber(record4.duration);
       if (duration === null) {
         return null;
       }
-      const unit = String(record3.timeUnit ?? "").toUpperCase();
+      const unit = String(record4.timeUnit ?? "").toUpperCase();
       if (unit.includes("SECOND")) return Math.round(duration / 60);
       if (unit.includes("MINUTE")) return duration;
       if (unit.includes("HOUR")) return duration * 60;
@@ -34460,23 +34526,23 @@ child.on('exit', () => process.exit(0));
       if (typeof detail !== "object" || detail === null) {
         return null;
       }
-      const record3 = detail;
-      const limit = toNumber(record3.limit);
-      let used2 = toNumber(record3.used);
+      const record4 = detail;
+      const limit = toNumber(record4.limit);
+      let used2 = toNumber(record4.used);
       if (used2 === null) {
-        const remaining = toNumber(record3.remaining);
+        const remaining = toNumber(record4.remaining);
         if (remaining !== null && limit !== null) {
           used2 = limit - remaining;
         }
       }
-      const resetsAt = toIsoResetMs(record3.resetTime) ?? toIsoResetMs(record3.resetAt);
+      const resetsAt = toIsoResetMs(record4.resetTime) ?? toIsoResetMs(record4.resetAt);
       return windowFromUsage(used2, limit, minutes, resetsAt);
     }
     function mapUsageResponse2(data) {
-      const record3 = typeof data === "object" && data !== null ? data : {};
-      const weekly = mapDetail(record3.usage, WEEKLY_WINDOW_MINUTES);
+      const record4 = typeof data === "object" && data !== null ? data : {};
+      const weekly = mapDetail(record4.usage, WEEKLY_WINDOW_MINUTES);
       let session = null;
-      const limits = Array.isArray(record3.limits) ? record3.limits : [];
+      const limits = Array.isArray(record4.limits) ? record4.limits : [];
       for (const entry of limits) {
         if (typeof entry !== "object" || entry === null) {
           continue;
@@ -34871,12 +34937,12 @@ child.on('exit', () => process.exit(0));
         return void 0;
       }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
-      const record3 = parsed;
-      if (record3.version !== QUOTA_CACHE_VERSION) {
-        LOG.info("Quota", `Ignoring quota cache written by a different version (${String(record3.version)})`);
+      const record4 = parsed;
+      if (record4.version !== QUOTA_CACHE_VERSION) {
+        LOG.info("Quota", `Ignoring quota cache written by a different version (${String(record4.version)})`);
         return void 0;
       }
-      const providers = record3.providers;
+      const providers = record4.providers;
       if (!providers || typeof providers !== "object" || Array.isArray(providers)) return void 0;
       const restored = {};
       for (const [provider, value] of Object.entries(providers)) {
@@ -35775,8 +35841,8 @@ ${error.message || ""}`;
           } else if (line.startsWith("HEAD ")) {
             entry.head = line.slice("HEAD ".length).trim();
           } else if (line.startsWith("branch ")) {
-            const ref = line.slice("branch ".length).trim();
-            entry.branch = ref.replace(/^refs\/heads\//, "");
+            const ref2 = line.slice("branch ".length).trim();
+            entry.branch = ref2.replace(/^refs\/heads\//, "");
           } else if (line === "bare") {
             entry.bare = true;
           }
@@ -36344,8 +36410,8 @@ ${error.message || ""}`;
       let hostSynthesized = false;
       const nodes = Array.isArray(meshRecord2?.nodes) ? meshRecord2.nodes : [];
       const nodeDaemonIdOf = (node) => {
-        const record3 = readObject(node);
-        return readString2(record3?.daemonId) ?? readString2(record3?.daemon_id);
+        const record4 = readObject(node);
+        return readString2(record4?.daemonId) ?? readString2(record4?.daemon_id);
       };
       if (role === "host" && !hostDaemonId) {
         const declaredHostNode = nodes.find((n) => normalizeMeshDaemonRole(readObject(n)?.role) === "host");
@@ -39903,9 +39969,9 @@ ${error.message || ""}`;
     function readTimestamp(value) {
       return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : void 0;
     }
-    function compact(record3) {
+    function compact(record4) {
       const out = {};
-      for (const [key4, value] of Object.entries(record3)) if (value !== void 0) out[key4] = value;
+      for (const [key4, value] of Object.entries(record4)) if (value !== void 0) out[key4] = value;
       return Object.keys(out).length > 0 ? out : void 0;
     }
     function sanitizeMeshNodeRuntimeSession(raw) {
@@ -40006,10 +40072,10 @@ ${error.message || ""}`;
     function buildMeshNodeRuntimeProviders(rows, providerVersions) {
       if (!Array.isArray(rows)) return void 0;
       return sanitizeProviders(rows.map((row2) => {
-        const record3 = readOptionalRecord2(row2);
-        const type2 = readId(record3?.type);
+        const record4 = readOptionalRecord2(row2);
+        const type2 = readId(record4?.type);
         const version2 = type2 && providerVersions ? readId(providerVersions[type2]) : void 0;
-        return record3 ? { ...record3, version: version2 } : row2;
+        return record4 ? { ...record4, version: version2 } : row2;
       }));
     }
     function sanitizeDaemonBuild(raw) {
@@ -40039,9 +40105,9 @@ ${error.message || ""}`;
       }) ?? {};
     }
     function sanitizeMeshNodeRuntimeSummary(raw) {
-      const record3 = readOptionalRecord2(raw);
-      if (!record3) return null;
-      const rawSessions = Array.isArray(record3.sessions) ? record3.sessions : null;
+      const record4 = readOptionalRecord2(raw);
+      if (!record4) return null;
+      const rawSessions = Array.isArray(record4.sessions) ? record4.sessions : null;
       if (!rawSessions) return null;
       const sessions = [];
       for (const entry of rawSessions) {
@@ -40050,13 +40116,13 @@ ${error.message || ""}`;
         if (sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS) break;
         sessions.push(session);
       }
-      const daemonBuild = sanitizeDaemonBuild(record3.daemonBuild);
-      const upgradeFailure = sanitizeUpgradeFailure(record3.upgradeFailure);
-      const nodeFacts = normalizeMeshNodeFacts(record3.nodeFacts);
-      const daemonId = readId(record3.daemonId);
-      const daemonBootId = readId(record3.daemonBootId);
-      const truncated = record3.sessionsTruncated === true || rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
-      const providers = sanitizeProviders(record3.providers);
+      const daemonBuild = sanitizeDaemonBuild(record4.daemonBuild);
+      const upgradeFailure = sanitizeUpgradeFailure(record4.upgradeFailure);
+      const nodeFacts = normalizeMeshNodeFacts(record4.nodeFacts);
+      const daemonId = readId(record4.daemonId);
+      const daemonBootId = readId(record4.daemonBootId);
+      const truncated = record4.sessionsTruncated === true || rawSessions.length > sessions.length && sessions.length >= MESH_NODE_RUNTIME_MAX_SESSIONS;
+      const providers = sanitizeProviders(record4.providers);
       return {
         schemaVersion: MESH_NODE_RUNTIME_SUMMARY_SCHEMA_VERSION,
         ...daemonId ? { daemonId } : {},
@@ -40089,12 +40155,12 @@ ${error.message || ""}`;
       if (!summary) return "none";
       const stripTimes = (value) => {
         if (Array.isArray(value)) return value.map(stripTimes);
-        const record3 = readOptionalRecord2(value);
-        if (!record3) return value;
+        const record4 = readOptionalRecord2(value);
+        if (!record4) return value;
         const out = {};
-        for (const key4 of Object.keys(record3).sort()) {
+        for (const key4 of Object.keys(record4).sort()) {
           if (/At$/.test(key4) || key4 === "ageMs") continue;
-          out[key4] = stripTimes(record3[key4]);
+          out[key4] = stripTimes(record4[key4]);
         }
         return out;
       };
@@ -40145,25 +40211,25 @@ ${error.message || ""}`;
       return false;
     }
     function sanitizeObservedGit(git4) {
-      const record3 = readOptionalRecord2(git4);
-      if (!record3) return null;
+      const record4 = readOptionalRecord2(git4);
+      if (!record4) return null;
       const next = {};
-      for (const [key4, value] of Object.entries(record3)) {
+      for (const [key4, value] of Object.entries(record4)) {
         if (key4.startsWith("reporter")) continue;
         next[key4] = value;
       }
       return next;
     }
     function computeMeshNodeGitSignature(git4) {
-      const record3 = readOptionalRecord2(git4);
-      if (!record3) return "none";
+      const record4 = readOptionalRecord2(git4);
+      if (!record4) return "none";
       const head = {};
-      for (const key4 of SIGNATURE_GIT_KEYS) head[key4] = record3[key4] ?? null;
-      const submodules = Array.isArray(record3.submodules) ? record3.submodules.map((entry) => {
+      for (const key4 of SIGNATURE_GIT_KEYS) head[key4] = record4[key4] ?? null;
+      const submodules = Array.isArray(record4.submodules) ? record4.submodules.map((entry) => {
         const sub = readOptionalRecord2(entry) ?? {};
         return [sub.path ?? null, sub.commit ?? null, sub.dirty ?? null, sub.outOfSync ?? null, sub.error ?? null];
       }) : [];
-      const buildBehind = readOptionalRecord2(record3.daemonBuildBehind);
+      const buildBehind = readOptionalRecord2(record4.daemonBuildBehind);
       const buildKey = buildBehind ? [buildBehind.buildCommit ?? null, buildBehind.head ?? null] : null;
       return JSON.stringify([head, submodules, buildKey]);
     }
@@ -41934,9 +42000,9 @@ ${pattern}
     }
     function recordSharedWorkerMcpEntry(input) {
       const key4 = sharedEntryKey(input.target, input.serverName);
-      let record3 = SHARED_ENTRIES.get(key4);
-      if (!record3) {
-        record3 = {
+      let record4 = SHARED_ENTRIES.get(key4);
+      if (!record4) {
+        record4 = {
           target: input.target,
           format: input.format,
           serverName: input.serverName,
@@ -41947,10 +42013,10 @@ ${pattern}
           original: input.previousEntry,
           holders: []
         };
-        SHARED_ENTRIES.set(key4, record3);
+        SHARED_ENTRIES.set(key4, record4);
       }
-      record3.holders = record3.holders.filter((holder) => holder.sessionId !== input.sessionId);
-      record3.holders.push({ sessionId: input.sessionId, entry: input.entry });
+      record4.holders = record4.holders.filter((holder) => holder.sessionId !== input.sessionId);
+      record4.holders.push({ sessionId: input.sessionId, entry: input.entry });
     }
     function isDeadWorkerEntry(entry) {
       const env2 = entry || null;
@@ -41962,17 +42028,17 @@ ${pattern}
       const sid = String(sessionId || "").trim();
       if (!sid) return 0;
       let changed = 0;
-      for (const [key4, record3] of [...SHARED_ENTRIES.entries()]) {
-        const mine = record3.holders.find((holder) => holder.sessionId === sid);
+      for (const [key4, record4] of [...SHARED_ENTRIES.entries()]) {
+        const mine = record4.holders.find((holder) => holder.sessionId === sid);
         if (!mine) continue;
-        record3.holders = record3.holders.filter((holder) => holder.sessionId !== sid);
-        const survivor = record3.holders[record3.holders.length - 1];
-        const restoreEntry = survivor ? survivor.entry : record3.original !== void 0 && !isDeadWorkerEntry(record3.original) ? record3.original : void 0;
+        record4.holders = record4.holders.filter((holder) => holder.sessionId !== sid);
+        const survivor = record4.holders[record4.holders.length - 1];
+        const restoreEntry = survivor ? survivor.entry : record4.original !== void 0 && !isDeadWorkerEntry(record4.original) ? record4.original : void 0;
         if (removeWorkerMcpConfigEntry({
-          declaredPath: record3.target,
-          format: record3.format,
-          serverName: record3.serverName,
-          workspace: record3.workspace,
+          declaredPath: record4.target,
+          format: record4.format,
+          serverName: record4.serverName,
+          workspace: record4.workspace,
           expectedEntry: mine.entry,
           ...restoreEntry !== void 0 ? { restoreEntry } : {}
         })) changed += 1;
@@ -44407,12 +44473,12 @@ ${rendered.join("\n\n")}`,
         return { rejection: "session_mismatch" };
       }
       const sessionProduced = SESSION_PRODUCED_KINDS.has(evidence.kind);
-      const ref = evidence.attemptRef;
-      if (ref) {
-        if (ref.attemptId !== attempt.attemptId) return { rejection: "attempt_mismatch" };
-        if (ref.generation !== attempt.generation) return { lane: "stale", effectiveGeneration: ref.generation };
+      const ref2 = evidence.attemptRef;
+      if (ref2) {
+        if (ref2.attemptId !== attempt.attemptId) return { rejection: "attempt_mismatch" };
+        if (ref2.generation !== attempt.generation) return { lane: "stale", effectiveGeneration: ref2.generation };
         if (sessionProduced && !sessionIdsEquivalent(evidence.sessionId, attempt.sessionId)) return { rejection: "session_mismatch" };
-        return { lane: "current", effectiveGeneration: ref.generation };
+        return { lane: "current", effectiveGeneration: ref2.generation };
       }
       if (!sessionProduced) return { lane: "current", effectiveGeneration: attempt.generation };
       if (sessionIdsEquivalent(evidence.sessionId, attempt.sessionId)) return { lane: "current", effectiveGeneration: attempt.generation };
@@ -45316,10 +45382,10 @@ ${rendered.join("\n\n")}`,
       const taskSuffix = taskId ? ` for task ${taskId}` : "";
       return `[System] ${label2} is not yet available${taskSuffix} \u2014 call mesh_task_report once it replicates; do not poll repeatedly.`;
     }
-    function resolve15(ref, resolveRef, missing) {
-      if (!ref) return null;
-      const text4 = resolveRef(ref);
-      if (text4 === null) missing.push(ref);
+    function resolve15(ref2, resolveRef, missing) {
+      if (!ref2) return null;
+      const text4 = resolveRef(ref2);
+      if (text4 === null) missing.push(ref2);
       return text4;
     }
     function truncate(text4, maxChars, suffix) {
@@ -45760,19 +45826,19 @@ ${summary}`;
       }
       return 0;
     }
-    function isMissingFinalAssistantDiagnostic(record3) {
-      const diag = readOptionalRecord2(record3?.completionDiagnostic);
+    function isMissingFinalAssistantDiagnostic(record4) {
+      const diag = readOptionalRecord2(record4?.completionDiagnostic);
       return diag?.finalAssistantPresent === false || diag?.transcriptFinalAssistantPresent === false || diag?.blockReason === "missing_final_assistant";
     }
-    function isFalseIdleCompletion(record3) {
-      return isMissingFinalAssistantDiagnostic(record3);
+    function isFalseIdleCompletion(record4) {
+      return isMissingFinalAssistantDiagnostic(record4);
     }
-    function isWeakCompletionEvidence(record3) {
-      if (!record3) return false;
-      const evidenceLevel = readText(record3.evidenceLevel);
+    function isWeakCompletionEvidence(record4) {
+      if (!record4) return false;
+      const evidenceLevel = readText(record4.evidenceLevel);
       if (evidenceLevel === "insufficient" || evidenceLevel === "weak") return true;
-      if (record3.reviewRecommended === true) return true;
-      return isMissingFinalAssistantDiagnostic(record3);
+      if (record4.reviewRecommended === true) return true;
+      return isMissingFinalAssistantDiagnostic(record4);
     }
     function isWeakCompletionMetadata(metadataEvent) {
       return isWeakCompletionEvidence(metadataEvent);
@@ -45852,10 +45918,10 @@ ${surfaced}`;
             }
             const options = Array.isArray(q.options) ? q.options : [];
             options.forEach((opt, i) => {
-              const record3 = opt && typeof opt === "object" ? opt : {};
-              const label2 = readText(record3.label);
+              const record4 = opt && typeof opt === "object" ? opt : {};
+              const label2 = readText(record4.label);
               if (!label2) return;
-              const description = readText(record3.description);
+              const description = readText(record4.description);
               lines.push(`  ${i + 1}. ${label2}${description ? ` \u2014 ${description}` : ""}`);
             });
           }
@@ -46159,8 +46225,8 @@ Next step: ${nextStep}`;
           const handoffPayload = { event: notice.event, ...local };
           const append = deps.appendHandoff ? deps.appendHandoff(notice.meshId, "mesh.notice", handoffPayload) : Promise.reject(new Error("no handoff writer"));
           void append.then(
-            (ref) => {
-              deps.ledger.notifyMeshEvent({ ...base, targetDaemonId: target, ref });
+            (ref2) => {
+              deps.ledger.notifyMeshEvent({ ...base, targetDaemonId: target, ref: ref2 });
             },
             (error) => {
               log.warn(`notice ${notice.event} for daemon ${target} (mesh ${notice.meshId}) has no handoff text: ${error instanceof Error ? error.message : String(error)} \u2014 the coordinator gets a pointer line`);
@@ -46261,9 +46327,9 @@ Next step: ${nextStep}`;
       const rowPayload = row2?.payload ?? {};
       const local = isRecord6(rowPayload.local) ? rowPayload.local : {};
       const localPayload2 = isRecord6(local.payload) ? local.payload : null;
-      const ref = isSummaryRef(rowPayload.ref) ? rowPayload.ref : void 0;
-      const handoff = ref && ctx.resolveHandoff ? ctx.resolveHandoff(ref) : null;
-      const missing = ref && !handoff ? 1 : 0;
+      const ref2 = isSummaryRef(rowPayload.ref) ? rowPayload.ref : void 0;
+      const handoff = ref2 && ctx.resolveHandoff ? ctx.resolveHandoff(ref2) : null;
+      const missing = ref2 && !handoff ? 1 : 0;
       const event = str3(rowPayload.event) ?? null;
       if (notify2 === "mesh_event") {
         const source2 = localPayload2 && !str3(localPayload2.relayedFrom) ? localPayload2 : handoff;
@@ -46327,9 +46393,9 @@ ${line}`;
       };
       const refs = {};
       if (localTexts.has("summary")) refs.summary = localRef("summary");
-      else if (ref) refs.summary = ref;
+      else if (ref2) refs.summary = ref2;
       if (notify2 === "choice" && !localTexts.has("summary") && localTexts.has("modal")) refs.summary = localRef("modal");
-      if (notify2 === "progress") refs.note = localTexts.has("note") ? localRef("note") : localTexts.has("summary") ? localRef("summary") : ref;
+      if (notify2 === "progress") refs.note = localTexts.has("note") ? localRef("note") : localTexts.has("summary") ? localRef("summary") : ref2;
       const statusLine = STATUS_LINE_KINDS.has(notify2) ? ctx.statusLine?.(meshId) ?? null : null;
       const rendered = renderTurnNotify({
         notify: renderKind,
@@ -46601,8 +46667,8 @@ ${line}`;
         const entry = isRecord6(row2.payload.entry) ? row2.payload.entry : null;
         if (!entry || !isSelf(selfIds, str3(entry.targetDaemonId))) continue;
         const local = isRecord6(row2.payload.local) && isRecord6(row2.payload.local.payload) ? row2.payload.local.payload : null;
-        const ref = isSummaryRef(row2.payload.ref) ? row2.payload.ref : void 0;
-        const source2 = local && !str3(local.relayedFrom) ? local : ref ? deps.resolveHandoff?.(ref) ?? null : null;
+        const ref2 = isSummaryRef(row2.payload.ref) ? row2.payload.ref : void 0;
+        const source2 = local && !str3(local.relayedFrom) ? local : ref2 ? deps.resolveHandoff?.(ref2) ?? null : null;
         const name = str3(row2.payload.event) === "relayed" ? str3(source2?.event) : str3(row2.payload.event);
         if (name !== event || !source2) continue;
         notices.push({
@@ -46969,7 +47035,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       });
     }
     function readNodeProviderTypes(policy) {
-      const record3 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
+      const record4 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
       const seen2 = /* @__PURE__ */ new Set();
       const out = [];
       const push = (type2) => {
@@ -46978,9 +47044,9 @@ The instruction it carried was never delivered to anyone. If it still matters, r
         seen2.add(trimmed2);
         out.push(trimmed2);
       };
-      for (const slot of normalizeNodeCapabilitySlots2(record3.slots)) push(slot.provider);
-      if (Array.isArray(record3.providerPriority)) {
-        for (const type2 of record3.providerPriority) push(type2);
+      for (const slot of normalizeNodeCapabilitySlots2(record4.slots)) push(slot.provider);
+      if (Array.isArray(record4.providerPriority)) {
+        for (const type2 of record4.providerPriority) push(type2);
       }
       return out;
     }
@@ -52072,8 +52138,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               writer: e.writer
             });
           }
-          markApproved(ks, ref, approver) {
-            const req = ks.requests.find((r) => this.sameId(r.entry, ref));
+          markApproved(ks, ref2, approver) {
+            const req = ks.requests.find((r) => this.sameId(r.entry, ref2));
             if (req)
               req.approvedBy = approver;
           }
@@ -56059,10 +56125,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       promise.then(done, done);
       return promise;
     }
-    async function appendWithSlot(node, topic, kind, payload, ref) {
+    async function appendWithSlot(node, topic, kind, payload, ref2) {
       const release2 = await slots.acquire();
       try {
-        return await node.node.log(topic).append(kind, payload, ref ? { ref } : void 0);
+        return await node.node.log(topic).append(kind, payload, ref2 ? { ref: ref2 } : void 0);
       } finally {
         release2();
       }
@@ -56075,8 +56141,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         throw new Error(`entry over the seqscribe size ceiling (${estimated}B > ${ceiling}B, kind=${kind}) \u2014 a projection bug`);
       }
     }
-    function summaryRefToEntryId(ref) {
-      return [ref.topic, ref.writer, ref.seq];
+    function summaryRefToEntryId(ref2) {
+      return [ref2.topic, ref2.writer, ref2.seq];
     }
     function projectTurnTopicEntry(entry) {
       if (!isMeshTopicEntry(entry)) return null;
@@ -56144,8 +56210,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         LOG.error("Seqscribe", `mesh publisher: ${errorMessage(error)}`);
         return Promise.reject(error);
       }
-      const ref = opts.ref ? summaryRefToEntryId(opts.ref) : void 0;
-      return track(appendWithSlot(node, topic, entry.k, payload, ref).then(
+      const ref2 = opts.ref ? summaryRefToEntryId(opts.ref) : void 0;
+      return track(appendWithSlot(node, topic, entry.k, payload, ref2).then(
         (id4) => {
           counters.published++;
           return id4;
@@ -56811,19 +56877,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const ids = specs.map(() => (0, import_crypto11.randomUUID)());
       const idByRef = /* @__PURE__ */ new Map();
       specs.forEach((spec, i) => {
-        const ref = typeof spec.ref === "string" ? spec.ref.trim() : "";
-        if (!ref) return;
-        if (idByRef.has(ref)) {
-          throw new Error(`duplicate_task_ref: ref '${ref}' is used by more than one task in this batch`);
+        const ref2 = typeof spec.ref === "string" ? spec.ref.trim() : "";
+        if (!ref2) return;
+        if (idByRef.has(ref2)) {
+          throw new Error(`duplicate_task_ref: ref '${ref2}' is used by more than one task in this batch`);
         }
-        idByRef.set(ref, ids[i]);
+        idByRef.set(ref2, ids[i]);
       });
       const store2 = MeshRuntimeStore.getInstance();
       return withQueueLock(meshId, () => {
         const inserted = [];
         specs.forEach((spec, i) => {
-          const { ref, message, ...taskOpts } = spec;
-          const label2 = ref ? `'${ref}'` : `#${i}`;
+          const { ref: ref2, message, ...taskOpts } = spec;
+          const label2 = ref2 ? `'${ref2}'` : `#${i}`;
           const dependsOn = normalizeDependsOn(spec.dependsOn).map((dep) => {
             const mapped = idByRef.get(dep);
             if (mapped) return mapped;
@@ -57006,8 +57072,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         if (value && typeof value === "object" && !Array.isArray(value)) parsed = value;
       } catch {
       }
-      const record3 = row2.kind === MESH_RECORD_APPEND_KIND;
-      const scalars = record3 ? scalarPayload(parsed.payload) : scalarPayload(parsed);
+      const record4 = row2.kind === MESH_RECORD_APPEND_KIND;
+      const scalars = record4 ? scalarPayload(parsed.payload) : scalarPayload(parsed);
       return {
         writer: row2.writer,
         seq: row2.seq,
@@ -57017,7 +57083,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         kind: row2.ledger_kind ?? row2.kind,
         nodeId: row2.node_id ?? void 0,
         sessionId: row2.session_id ?? void 0,
-        providerType: record3 ? str4(parsed.providerType) : void 0,
+        providerType: record4 ? str4(parsed.providerType) : void 0,
         taskId: row2.task_id ?? void 0,
         payload: scalars
       };
@@ -57391,7 +57457,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const prevGoal = existing?.goal ?? "";
       const normalizedBrief = input.brief === void 0 ? void 0 : normalizeMissionBrief(input.brief).brief;
       const briefJson = input.brief === void 0 ? void 0 : normalizedBrief ? JSON.stringify(normalizedBrief) : null;
-      const record3 = {
+      const record4 = {
         id: id4,
         meshId,
         title,
@@ -57399,7 +57465,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         status: normalizeMissionStatus(input.status ?? existing?.status),
         briefJson
       };
-      store2.upsertMission(record3);
+      store2.upsertMission(record4);
       const saved = store2.getMission(meshId, id4);
       const result = {
         ...saved,
@@ -57415,38 +57481,38 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return result;
     }
     function appendMissionLedgerEntries(meshId, args) {
-      const { isCreate, record: record3, prevStatus, prevGoal } = args;
+      const { isCreate, record: record4, prevStatus, prevGoal } = args;
       try {
         if (isCreate) {
-          const goal = record3.goal ?? "";
+          const goal = record4.goal ?? "";
           meshRecord(meshId, "mission_created", {
             payload: {
-              missionId: record3.id,
-              title: record3.title,
+              missionId: record4.id,
+              title: record4.title,
               goalSummary: summarizeGoalForLedger(goal),
               goalLength: goal.length,
               goalTruncated: goal.length > LEDGER_GOAL_SUMMARY_MAX,
-              status: record3.status
+              status: record4.status
             }
           }, { local: true });
           return;
         }
-        if (prevStatus !== null && prevStatus !== record3.status) {
+        if (prevStatus !== null && prevStatus !== record4.status) {
           meshRecord(meshId, "mission_status_changed", {
             payload: {
-              missionId: record3.id,
-              title: record3.title,
+              missionId: record4.id,
+              title: record4.title,
               fromStatus: prevStatus,
-              toStatus: record3.status
+              toStatus: record4.status
             }
           }, { local: true });
         }
-        const nextGoal = record3.goal ?? "";
+        const nextGoal = record4.goal ?? "";
         if (nextGoal !== prevGoal) {
           meshRecord(meshId, "mission_goal_updated", {
             payload: {
-              missionId: record3.id,
-              title: record3.title,
+              missionId: record4.id,
+              title: record4.title,
               prevGoalSummary: summarizeGoalForLedger(prevGoal),
               nextGoalSummary: summarizeGoalForLedger(nextGoal),
               prevGoalLength: prevGoal.length,
@@ -57462,8 +57528,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return MeshRuntimeStore.getInstance().getMissions(meshId, statuses).map((m) => ({ ...m, status: normalizeMissionStatus(m.status), brief: parseStoredMissionBrief(m.briefJson) }));
     }
     function getMeshMission(meshId, missionId) {
-      const record3 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
-      return record3 ? { ...record3, status: normalizeMissionStatus(record3.status), brief: parseStoredMissionBrief(record3.briefJson) } : null;
+      const record4 = MeshRuntimeStore.getInstance().getMission(meshId, missionId);
+      return record4 ? { ...record4, status: normalizeMissionStatus(record4.status), brief: parseStoredMissionBrief(record4.briefJson) } : null;
     }
     function emptyMissionTaskAggregate() {
       return { total: 0, pending: 0, assigned: 0, completed: 0, failed: 0, cancelled: 0, blocked: 0, lastActivityAt: null };
@@ -60370,10 +60436,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (rejectedCommands.length) errors.push("one or more validation commands are invalid");
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function readConfigFromBaseRef(gitCwd, ref, relative14) {
-      if (!ref || ref.startsWith("-")) return void 0;
+    function readConfigFromBaseRef(gitCwd, ref2, relative14) {
+      if (!ref2 || ref2.startsWith("-")) return void 0;
       try {
-        return (0, import_child_process5.execFileSync)("git", ["show", `${ref}:${relative14}`], {
+        return (0, import_child_process5.execFileSync)("git", ["show", `${ref2}:${relative14}`], {
           cwd: gitCwd,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -60425,19 +60491,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           return { source: relative14, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
-      const baseRefs = (options?.baseRefs || []).filter((ref) => typeof ref === "string" && ref.trim().length > 0);
-      for (const ref of baseRefs) {
+      const baseRefs = (options?.baseRefs || []).filter((ref2) => typeof ref2 === "string" && ref2.trim().length > 0);
+      for (const ref2 of baseRefs) {
         for (const relative14 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text4 = readConfigFromBaseRef(options?.gitCwd || workspace, ref.trim(), relative14);
+          const text4 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative14);
           if (text4 === void 0) continue;
-          const source2 = `${ref.trim()}:${relative14}`;
+          const source2 = `${ref2.trim()}:${relative14}`;
           try {
             const parsed = parseConfigText(relative14, text4);
             const validation = validateMeshRefineConfig(parsed, source2);
-            if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-            return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref.trim() };
+            if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref2.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+            return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref2.trim() };
           } catch (error) {
-            return { source: source2, sourceType: "invalid", baseRef: ref.trim(), error: error?.message || String(error) };
+            return { source: source2, sourceType: "invalid", baseRef: ref2.trim(), error: error?.message || String(error) };
           }
         }
       }
@@ -61521,18 +61587,18 @@ CREATE TABLE IF NOT EXISTS sq_archive (
             if (id5) ids.add(id5);
             continue;
           }
-          const record3 = readObjectRecord(item);
-          const id4 = readStringValue(record3.id, record3.sessionId, record3.session_id, record3.runtimeSessionId, record3.instanceId);
+          const record4 = readObjectRecord(item);
+          const id4 = readStringValue(record4.id, record4.sessionId, record4.session_id, record4.runtimeSessionId, record4.instanceId);
           if (id4) ids.add(id4);
         }
       }
       return ids;
     }
     function resolveMeshNodeAttribution(node) {
-      const record3 = readObjectRecord(node);
+      const record4 = readObjectRecord(node);
       return {
-        daemonId: readMeshNodeDaemonId(record3),
-        machineName: readMeshNodeDisplayMachineName(record3)
+        daemonId: readMeshNodeDaemonId(record4),
+        machineName: readMeshNodeDisplayMachineName(record4)
       };
     }
     function readCachedInlineMeshActiveSessionDetails(node) {
@@ -61603,74 +61669,74 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const reason = rawReason && WORKER_MCP_DELIVERY_REASONS.includes(rawReason) ? rawReason : void 0;
       return { delivered, ...reason ? { reason } : {} };
     }
-    function summarizeMeshSessionRecord(record3) {
-      const meta = readObjectRecord(record3?.meta);
+    function summarizeMeshSessionRecord(record4) {
+      const meta = readObjectRecord(record4?.meta);
       const workerMcp = readWorkerMcpDeliveryFromMeta(meta);
       const isSelfCoordinator = Boolean(readStringValue(meta.meshCoordinatorFor));
-      let chatStatus = readStringValue(record3?.chatStatus, record3?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
-      const state2 = readLiveMeshSessionState(record3);
+      let chatStatus = readStringValue(record4?.chatStatus, record4?.activeChat?.status, meta.chatStatus, meta.sessionStatus);
+      const state2 = readLiveMeshSessionState(record4);
       const statusNote = isSelfCoordinator && (!chatStatus || chatStatus === "idle" || state2 === "idle") ? "Coordinator self status is sampled from the session host and may read idle while the coordinator is generating this response." : null;
-      const sessionId = readStringValue(record3?.sessionId) || "unknown";
+      const sessionId = readStringValue(record4?.sessionId) || "unknown";
       const turn = resolveSessionTurnPresentation({
         sessionId: sessionId === "unknown" ? void 0 : sessionId,
         providerStatus: chatStatus || state2,
-        providerType: readStringValue(record3?.providerType) || void 0,
+        providerType: readStringValue(record4?.providerType) || void 0,
         surface: "mesh_status"
       });
       if (turn.authority === "turn_reducer") chatStatus = turn.status;
-      const stopped = /stopped|exited|terminated|failed/.test(`${state2 || ""} ${record3?.lifecycle || ""}`);
-      const liveApproval = record3?.activeChat?.providerApproval !== void 0 ? record3.activeChat.providerApproval : record3?.providerApproval;
+      const stopped = /stopped|exited|terminated|failed/.test(`${state2 || ""} ${record4?.lifecycle || ""}`);
+      const liveApproval = record4?.activeChat?.providerApproval !== void 0 ? record4.activeChat.providerApproval : record4?.providerApproval;
       const rawApproval = liveApproval !== void 0 ? liveApproval : meta.providerApproval === void 0 ? void 0 : providerApprovalSnapshot(meta.providerApproval);
-      const providerApproval = stopped || record3?.activeInteractivePrompt || record3?.activeChat?.activeInteractivePrompt ? null : projectProviderApproval(readProviderDecision(
+      const providerApproval = stopped || record4?.activeInteractivePrompt || record4?.activeChat?.activeInteractivePrompt ? null : projectProviderApproval(readProviderDecision(
         rawApproval,
         /approval/.test(chatStatus || state2 || ""),
-        !!record3?.activeChat?.activeModal?.buttons?.length
-      ), sessionId, readStringValue(record3?.providerType) || "");
+        !!record4?.activeChat?.activeModal?.buttons?.length
+      ), sessionId, readStringValue(record4?.providerType) || "");
       return {
         sessionId,
-        providerType: readStringValue(record3?.providerType),
+        providerType: readStringValue(record4?.providerType),
         state: state2,
         chatStatus,
         providerApproval,
         ...turn.authority === "turn_reducer" ? { turn, attemptId: turn.attemptId, turnStage: turn.stage } : {},
-        lifecycle: readStringValue(record3?.lifecycle),
-        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record3),
+        lifecycle: readStringValue(record4?.lifecycle),
+        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record4),
         recoveryState: readStringValue(meta.runtimeRecoveryState) ?? null,
-        workspace: readStringValue(record3?.workspace) ?? null,
-        title: readStringValue(record3?.displayName, record3?.workspaceLabel) ?? null,
+        workspace: readStringValue(record4?.workspace) ?? null,
+        title: readStringValue(record4?.displayName, record4?.workspaceLabel) ?? null,
         role: isSelfCoordinator ? "coordinator" : readStringValue(meta.meshRole, meta.role) ?? null,
         isSelfCoordinator,
         statusNote,
-        createdAt: toIsoTimestamp(record3?.createdAt ?? record3?.created_at),
-        startedAt: toIsoTimestamp(record3?.startedAt ?? record3?.started_at ?? record3?.spawnedAtMs ?? record3?.spawned_at_ms),
-        lastActivityAt: toIsoTimestamp(record3?.updatedAt ?? record3?.lastActivityAt ?? record3?.last_activity_at),
+        createdAt: toIsoTimestamp(record4?.createdAt ?? record4?.created_at),
+        startedAt: toIsoTimestamp(record4?.startedAt ?? record4?.started_at ?? record4?.spawnedAtMs ?? record4?.spawned_at_ms),
+        lastActivityAt: toIsoTimestamp(record4?.updatedAt ?? record4?.lastActivityAt ?? record4?.last_activity_at),
         isCached: false,
         ...workerMcp ? { workerMcp } : {}
       };
     }
-    function liveSessionRecordMatchesMeshNode(record3, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
-      const recordNodeId = readStringValue(record3?.meta?.meshNodeId);
+    function liveSessionRecordMatchesMeshNode(record4, meshId, nodeId, nodeWorkspace = "", nodeIsMissingLocalWorktree = false) {
+      const recordNodeId = readStringValue(record4?.meta?.meshNodeId);
       if (!recordNodeId || !daemonIdsEquivalent4(recordNodeId, nodeId)) return false;
       if (nodeIsMissingLocalWorktree) return false;
-      const recordWorkspace = readStringValue(record3?.workspace);
+      const recordWorkspace = readStringValue(record4?.workspace);
       if (nodeWorkspace && recordWorkspace && !meshWorkspacesEquivalent(recordWorkspace, nodeWorkspace)) return false;
-      const recordMeshId = readStringValue(record3?.meta?.meshNodeFor);
+      const recordMeshId = readStringValue(record4?.meta?.meshNodeFor);
       return !recordMeshId || recordMeshId === meshId;
     }
-    function liveSessionRecordMatchesMeshWorkspace(record3, meshId, workspace) {
-      const recordWorkspace = readStringValue(record3?.workspace);
+    function liveSessionRecordMatchesMeshWorkspace(record4, meshId, workspace) {
+      const recordWorkspace = readStringValue(record4?.workspace);
       if (!recordWorkspace || !workspace || !meshWorkspacesEquivalent(recordWorkspace, workspace)) return false;
-      const recordMeshId = readStringValue(record3?.meta?.meshNodeFor);
+      const recordMeshId = readStringValue(record4?.meta?.meshNodeFor);
       if (recordMeshId) return recordMeshId === meshId;
-      return record3?.meta?.launchedByCoordinator === true || !!readStringValue(record3?.meta?.meshNodeId);
+      return record4?.meta?.launchedByCoordinator === true || !!readStringValue(record4?.meta?.meshNodeId);
     }
     function readLiveMeshNodeWorkspace(args) {
-      const directNodeWorkspace = args.liveSessionRecords.find((record3) => liveSessionRecordMatchesMeshNode(record3, args.meshId, args.nodeId) && readStringValue(record3?.workspace));
+      const directNodeWorkspace = args.liveSessionRecords.find((record4) => liveSessionRecordMatchesMeshNode(record4, args.meshId, args.nodeId) && readStringValue(record4?.workspace));
       if (directNodeWorkspace) {
         return readStringValue(directNodeWorkspace.workspace) || "";
       }
       if (args.allowCoordinatorSession) {
-        const coordinatorWorkspace = args.liveSessionRecords.find((record3) => readStringValue(record3?.meta?.meshCoordinatorFor) === args.meshId && readStringValue(record3?.workspace));
+        const coordinatorWorkspace = args.liveSessionRecords.find((record4) => readStringValue(record4?.meta?.meshCoordinatorFor) === args.meshId && readStringValue(record4?.workspace));
         if (coordinatorWorkspace) {
           return readStringValue(coordinatorWorkspace.workspace) || "";
         }
@@ -61680,19 +61746,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function collectLiveMeshSessionRecords(args) {
       const nodeWorkspace = readStringValue(args.node?.workspace);
       const nodeIsMissingLocalWorktree = args.node?.isLocalWorktree === true && !!nodeWorkspace && !fs17.existsSync(nodeWorkspace);
-      const matches = args.liveSessionRecords.filter((record3) => {
-        const recordNodeId = readStringValue(record3?.meta?.meshNodeId);
+      const matches = args.liveSessionRecords.filter((record4) => {
+        const recordNodeId = readStringValue(record4?.meta?.meshNodeId);
         if (recordNodeId && !daemonIdsEquivalent4(recordNodeId, args.nodeId)) return false;
-        if (liveSessionRecordMatchesMeshNode(record3, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
+        if (liveSessionRecordMatchesMeshNode(record4, args.meshId, args.nodeId, nodeWorkspace || "", nodeIsMissingLocalWorktree)) return true;
         if (nodeIsMissingLocalWorktree) return false;
-        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record3, args.meshId, nodeWorkspace);
+        return !!nodeWorkspace && liveSessionRecordMatchesMeshWorkspace(record4, args.meshId, nodeWorkspace);
       });
       if (args.allowCoordinatorSession) {
-        for (const record3 of args.liveSessionRecords) {
-          if (readStringValue(record3?.meta?.meshCoordinatorFor) !== args.meshId) continue;
-          const sessionId = readStringValue(record3?.sessionId);
+        for (const record4 of args.liveSessionRecords) {
+          if (readStringValue(record4?.meta?.meshCoordinatorFor) !== args.meshId) continue;
+          const sessionId = readStringValue(record4?.sessionId);
           if (sessionId && matches.some((entry) => sessionIdsEquivalent(readStringValue(entry?.sessionId), sessionId))) continue;
-          matches.push(record3);
+          matches.push(record4);
         }
       }
       return matches;
@@ -61711,17 +61777,17 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         }
       }
       const sessions = [];
-      for (const record3 of args.liveSessionRecords || []) {
-        const meta = readObjectRecord(record3?.meta);
+      for (const record4 of args.liveSessionRecords || []) {
+        const meta = readObjectRecord(record4?.meta);
         const recordMeshId = readStringValue(meta.meshNodeFor, meta.meshCoordinatorFor);
         if (recordMeshId !== args.meshId) continue;
         const recordNodeId = readStringValue(meta.meshNodeId);
-        const workspace = readStringValue(record3?.workspace);
+        const workspace = readStringValue(record4?.workspace);
         const removedNode = !!recordNodeId && (!liveNodeIds.has(recordNodeId) || missingLocalWorktreeNodeIds.has(recordNodeId));
         const orphanedWorkspace = !!workspace && !liveWorkspaces.has(workspace) && meta.meshCoordinatorFor !== args.meshId;
         if (!removedNode && !orphanedWorkspace) continue;
         sessions.push({
-          ...summarizeMeshSessionRecord(record3),
+          ...summarizeMeshSessionRecord(record4),
           classification: removedNode ? "removedNode" : "orphanedSession",
           historical: true,
           meshNodeId: recordNodeId || null,
@@ -61735,14 +61801,14 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         instruction: "These sessions are separated from normal node activeSessions because their mesh node/workspace is no longer live. Use mesh_cleanup_sessions only if cleanup is intended."
       };
     }
-    function readLiveMeshSessionState(record3) {
+    function readLiveMeshSessionState(record4) {
       return readStringValue(
-        record3?.meta?.sessionStatus,
-        record3?.meta?.status,
-        record3?.meta?.providerStatus,
-        record3?.status,
-        record3?.state,
-        record3?.lifecycle
+        record4?.meta?.sessionStatus,
+        record4?.meta?.status,
+        record4?.meta?.providerStatus,
+        record4?.status,
+        record4?.state,
+        record4?.lifecycle
       );
     }
     var fs17;
@@ -61762,9 +61828,9 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     });
     function readMeshNodeLinkPresence(connection) {
-      const record3 = readRecord2(connection);
-      if (record3.linkIsPresence !== true || record3.source !== "mesh_peer_status") return null;
-      return record3.state === "connected" ? "online" : "offline";
+      const record4 = readRecord2(connection);
+      if (record4.linkIsPresence !== true || record4.source !== "mesh_peer_status") return null;
+      return record4.state === "connected" ? "online" : "offline";
     }
     function applyMeshNodeLinkPresence(status) {
       const presence = readMeshNodeLinkPresence(status.connection);
@@ -62539,10 +62605,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       summarizeRepoMeshStatusDebug: () => summarizeRepoMeshStatusDebug
     });
     function readProviderPriorityFromPolicy(policy) {
-      const record3 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
-      const derived = deriveProviderPriorityFromSlots2(record3.slots);
+      const record4 = policy && typeof policy === "object" && !Array.isArray(policy) ? policy : {};
+      const derived = deriveProviderPriorityFromSlots2(record4.slots);
       if (derived.length) return derived;
-      const raw = record3.providerPriority;
+      const raw = record4.providerPriority;
       if (Array.isArray(raw)) {
         const seen2 = /* @__PURE__ */ new Set();
         const explicit = raw.map((type2) => typeof type2 === "string" ? type2.trim() : "").filter(Boolean).filter((type2) => {
@@ -62781,8 +62847,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function directDaemonKey(node) {
       if (!node || typeof node !== "object") return void 0;
-      const record3 = node;
-      const declared = readNonEmpty(readMeshNodeDaemonId(record3)) || readNonEmpty(readMeshNodeMachineId(record3));
+      const record4 = node;
+      const declared = readNonEmpty(readMeshNodeDaemonId(record4)) || readNonEmpty(readMeshNodeMachineId(record4));
       if (!declared) return void 0;
       return machineCoreFromDaemonId(declared);
     }
@@ -62903,15 +62969,15 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     }
     function readRecentSessionClaimRefusal(meshId, sessionId, nowMs2 = Date.now()) {
       if (!meshId || !sessionId) return null;
-      const record3 = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
-      if (!record3) return null;
-      const age = nowMs2 - record3.atMs;
+      const record4 = recentSessionClaimRefusals.get(sessionRefusalKey(meshId, sessionId));
+      if (!record4) return null;
+      const age = nowMs2 - record4.atMs;
       if (!(age >= 0 && age <= SESSION_CLAIM_REFUSAL_FRESH_MS)) return null;
-      return record3;
+      return record4;
     }
     function sessionClaimRefusalReleasesSpawnGate(meshId, sessionId, nowMs2 = Date.now()) {
-      const record3 = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
-      return !!record3 && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record3.reason);
+      const record4 = readRecentSessionClaimRefusal(meshId, sessionId, nowMs2);
+      return !!record4 && SPAWN_GATE_RELEASING_CLAIM_REFUSALS.has(record4.reason);
     }
     var claimDeferredByFastForward;
     var MAX_FAST_FORWARD_CLAIM_REDRIVES;
@@ -68312,8 +68378,8 @@ ${upstream}`;
       if (!input || typeof input !== "object") {
         return { parts: [], textFallback: "" };
       }
-      const record3 = input;
-      const nestedInput = record3.input;
+      const record4 = input;
+      const nestedInput = record4.input;
       if (nestedInput && typeof nestedInput === "object") {
         const nested = nestedInput;
         return {
@@ -68322,26 +68388,26 @@ ${upstream}`;
           metadata: normalizeInputMetadata(nested.metadata)
         };
       }
-      const directText = typeof record3.text === "string" ? record3.text : typeof record3.message === "string" ? record3.message : void 0;
+      const directText = typeof record4.text === "string" ? record4.text : typeof record4.message === "string" ? record4.message : void 0;
       if (directText !== void 0) {
         return { parts: [{ type: "text", text: directText }], textFallback: directText };
       }
-      const directParts = normalizeInputParts(record3.parts ?? record3.prompt);
+      const directParts = normalizeInputParts(record4.parts ?? record4.prompt);
       return {
         parts: directParts,
-        textFallback: typeof record3.textFallback === "string" ? record3.textFallback : void 0,
-        metadata: normalizeInputMetadata(record3.metadata)
+        textFallback: typeof record4.textFallback === "string" ? record4.textFallback : void 0,
+        metadata: normalizeInputMetadata(record4.metadata)
       };
     }
     function normalizeInputMetadata(value) {
       if (!value || typeof value !== "object") return void 0;
-      const record3 = value;
+      const record4 = value;
       const metadata = {};
-      if (record3.source === "dashboard" || record3.source === "shortcut_api" || record3.source === "provider_script" || record3.source === "session_replay") {
-        metadata.source = record3.source;
+      if (record4.source === "dashboard" || record4.source === "shortcut_api" || record4.source === "provider_script" || record4.source === "session_replay") {
+        metadata.source = record4.source;
       }
-      if (typeof record3.clientTimestamp === "number" && Number.isFinite(record3.clientTimestamp)) {
-        metadata.clientTimestamp = record3.clientTimestamp;
+      if (typeof record4.clientTimestamp === "number" && Number.isFinite(record4.clientTimestamp)) {
+        metadata.clientTimestamp = record4.clientTimestamp;
       }
       return Object.keys(metadata).length > 0 ? metadata : void 0;
     }
@@ -68497,14 +68563,14 @@ ${upstream}`;
     }
     function normalizeAnnotationsProperty(value) {
       if (!value || typeof value !== "object") return {};
-      const record3 = value;
+      const record4 = value;
       const annotations = {};
-      if (Array.isArray(record3.audience)) {
-        const audience = record3.audience.filter((item) => item === "user" || item === "assistant");
+      if (Array.isArray(record4.audience)) {
+        const audience = record4.audience.filter((item) => item === "user" || item === "assistant");
         if (audience.length > 0) annotations.audience = audience;
       }
-      if (typeof record3.priority === "number" && Number.isFinite(record3.priority)) {
-        annotations.priority = record3.priority;
+      if (typeof record4.priority === "number" && Number.isFinite(record4.priority)) {
+        annotations.priority = record4.priority;
       }
       return Object.keys(annotations).length > 0 ? { annotations } : {};
     }
@@ -68539,8 +68605,8 @@ ${upstream}`;
     }
     function readChatMessageTimestampMs(message) {
       if (!message) return void 0;
-      const record3 = message;
-      for (const value of [record3.timestamp, record3.createdAt, record3.created_at, record3.updatedAt, record3.time, record3.receivedAt]) {
+      const record4 = message;
+      for (const value of [record4.timestamp, record4.createdAt, record4.created_at, record4.updatedAt, record4.time, record4.receivedAt]) {
         if (typeof value === "number" && Number.isFinite(value)) {
           return value > 1e10 ? value : value * 1e3;
         }
@@ -68801,19 +68867,19 @@ ${upstream}`;
       return typeof value === "string" ? value.trim().toLowerCase() : "";
     }
     function readRecordField(message, meta, key4) {
-      const record3 = message;
-      return record3[key4] ?? meta?.[key4];
+      const record4 = message;
+      return record4[key4] ?? meta?.[key4];
     }
     function readVisibilityField(message, meta) {
       return readStringField(readRecordField(message, meta, "visibility"));
     }
     function readTranscriptVisibilityField(message, meta) {
-      const record3 = message;
-      return readStringField(record3.transcriptVisibility ?? meta?.transcriptVisibility ?? record3.visibility ?? meta?.visibility);
+      const record4 = message;
+      return readStringField(record4.transcriptVisibility ?? meta?.transcriptVisibility ?? record4.visibility ?? meta?.visibility);
     }
     function hasBooleanMarker(message, meta, keys) {
-      const record3 = message;
-      return keys.some((key4) => record3[key4] === true || meta?.[key4] === true);
+      const record4 = message;
+      return keys.some((key4) => record4[key4] === true || meta?.[key4] === true);
     }
     function isActivityKind(kind) {
       return kind === "thought" || kind === "tool" || kind === "terminal";
@@ -69854,11 +69920,11 @@ ${upstream}`;
       return -1;
     }
     function buildHistoryMessageIdentity(message) {
-      const record3 = message;
-      if (record3.providerUnitKey) return `unit:${record3.providerUnitKey}`;
-      if (record3.bubbleId) return `bubble:${record3.bubbleId}`;
-      if (typeof record3.sequence === "number" && Number.isFinite(record3.sequence)) {
-        return `seq:${record3.sequence}`;
+      const record4 = message;
+      if (record4.providerUnitKey) return `unit:${record4.providerUnitKey}`;
+      if (record4.bubbleId) return `bubble:${record4.bubbleId}`;
+      if (typeof record4.sequence === "number" && Number.isFinite(record4.sequence)) {
+        return `seq:${record4.sequence}`;
       }
       return "";
     }
@@ -70168,7 +70234,7 @@ ${upstream}`;
         }
         const targetDate = new Date(records[records.length - 1].receivedAt || Date.now()).toISOString().slice(0, 10);
         const filePath2 = path36.join(dir, `${prefix}${targetDate}.jsonl`);
-        fs25.writeFileSync(filePath2, `${records.map((record3) => JSON.stringify(record3)).join("\n")}
+        fs25.writeFileSync(filePath2, `${records.map((record4) => JSON.stringify(record4)).join("\n")}
 `, "utf-8");
         invalidatePersistedSavedHistoryIndex(agentType, dir);
         savedHistorySessionCache.delete(agentType.replace(/[^a-zA-Z0-9_-]/g, "_"));
@@ -70388,7 +70454,7 @@ ${upstream}`;
               const date = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
               const fileName = `${this.sanitize(id4)}_${date}.jsonl`;
               const filePath2 = path36.join(dir, fileName);
-              const record3 = {
+              const record4 = {
                 ts: (/* @__PURE__ */ new Date()).toISOString(),
                 receivedAt: Date.now(),
                 role: "system",
@@ -70399,7 +70465,7 @@ ${upstream}`;
                 historySessionId: id4,
                 workspace: ws
               };
-              fs25.appendFileSync(filePath2, JSON.stringify(record3) + "\n", "utf-8");
+              fs25.appendFileSync(filePath2, JSON.stringify(record4) + "\n", "utf-8");
               updateSavedHistoryIndexForSessionStart(agentType, dir, fileName, id4, ws);
             } catch {
             }
@@ -70593,16 +70659,16 @@ ${upstream}`;
     }
     function readMessageSourceAddress(value) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return void 0;
-      const record3 = value;
-      switch (record3.cls) {
+      const record4 = value;
+      switch (record4.cls) {
         case "n": {
-          const L = typeof record3.L === "string" ? record3.L : "";
-          const addr = typeof record3.addr === "string" ? record3.addr : "";
+          const L = typeof record4.L === "string" ? record4.L : "";
+          const addr = typeof record4.addr === "string" ? record4.addr : "";
           if (!LINEAGE_RE.test(L) || !ADDR_RE.test(addr)) return void 0;
           return { cls: "n", L, addr };
         }
         case "rt":
-          return runtimeSourceAddress(record3.key);
+          return runtimeSourceAddress(record4.key);
         default:
           return void 0;
       }
@@ -70651,48 +70717,48 @@ ${upstream}`;
     function normalizeProviderNativeHistoryRecords(agentType, historySessionId, records) {
       if (!Array.isArray(records)) return [];
       const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
-      return records.map((record3) => {
+      return records.map((record4) => {
         const base = {
-          ts: typeof record3?.ts === "string" ? record3.ts : new Date(Number(record3?.receivedAt) || Date.now()).toISOString(),
-          receivedAt: Number(record3?.receivedAt) || Date.parse(record3?.ts || "") || Date.now(),
-          role: record3?.role,
-          content: String(record3?.content || ""),
-          kind: record3?.kind || (record3?.role === "system" ? "session_start" : "standard"),
-          senderName: record3?.senderName,
+          ts: typeof record4?.ts === "string" ? record4.ts : new Date(Number(record4?.receivedAt) || Date.now()).toISOString(),
+          receivedAt: Number(record4?.receivedAt) || Date.parse(record4?.ts || "") || Date.now(),
+          role: record4?.role,
+          content: String(record4?.content || ""),
+          kind: record4?.kind || (record4?.role === "system" ? "session_start" : "standard"),
+          senderName: record4?.senderName,
           // The specific tool being invoked (e.g. 'read_file'), when the
           // reader resolves one — distinct from the generic
           // senderName:'Tool'. See dispatcher.ts toNativeHistoryMessage.
-          toolName: typeof record3?.toolName === "string" && record3.toolName ? record3.toolName : void 0,
+          toolName: typeof record4?.toolName === "string" && record4.toolName ? record4.toolName : void 0,
           agent: agentType,
-          instanceId: record3?.instanceId,
-          historySessionId: normalizeSavedHistorySessionId(record3?.historySessionId || normalizedSessionId),
-          sessionTitle: record3?.sessionTitle,
-          workspace: record3?.workspace
+          instanceId: record4?.instanceId,
+          historySessionId: normalizeSavedHistorySessionId(record4?.historySessionId || normalizedSessionId),
+          sessionTitle: record4?.sessionTitle,
+          workspace: record4?.workspace
         };
-        if (typeof record3?.providerUnitKey === "string" && record3.providerUnitKey) {
-          base.providerUnitKey = record3.providerUnitKey;
+        if (typeof record4?.providerUnitKey === "string" && record4.providerUnitKey) {
+          base.providerUnitKey = record4.providerUnitKey;
         }
-        if (typeof record3?.bubbleId === "string" && record3.bubbleId) {
-          base.bubbleId = record3.bubbleId;
+        if (typeof record4?.bubbleId === "string" && record4.bubbleId) {
+          base.bubbleId = record4.bubbleId;
         }
-        if (typeof record3?.sequence === "number" && Number.isFinite(record3.sequence)) {
-          base.sequence = record3.sequence;
+        if (typeof record4?.sequence === "number" && Number.isFinite(record4.sequence)) {
+          base.sequence = record4.sequence;
         }
-        if (typeof record3?._turnKey === "string" && record3._turnKey) {
-          base._turnKey = record3._turnKey;
+        if (typeof record4?._turnKey === "string" && record4._turnKey) {
+          base._turnKey = record4._turnKey;
         }
-        if (typeof record3?.bubbleState === "string" && record3.bubbleState) {
-          base.bubbleState = record3.bubbleState;
+        if (typeof record4?.bubbleState === "string" && record4.bubbleState) {
+          base.bubbleState = record4.bubbleState;
         }
-        const ref = record3?.toolBlockRef;
-        if (ref && typeof ref === "object" && typeof ref.sourceMtimeMs === "number" && typeof ref.recordIndex === "number" && typeof ref.blockIndex === "number") {
+        const ref2 = record4?.toolBlockRef;
+        if (ref2 && typeof ref2 === "object" && typeof ref2.sourceMtimeMs === "number" && typeof ref2.recordIndex === "number" && typeof ref2.blockIndex === "number") {
           base.toolBlockRef = {
-            sourceMtimeMs: ref.sourceMtimeMs,
-            recordIndex: ref.recordIndex,
-            blockIndex: ref.blockIndex
+            sourceMtimeMs: ref2.sourceMtimeMs,
+            recordIndex: ref2.recordIndex,
+            blockIndex: ref2.blockIndex
           };
         }
-        const src = readMessageSourceAddress(record3?._src);
+        const src = readMessageSourceAddress(record4?._src);
         if (src) base._src = src;
         return sanitizeHistoryMessage(agentType, base);
       }).filter(Boolean);
@@ -70774,8 +70840,8 @@ ${upstream}`;
       const nativeResult = callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, normalizedSessionId, workspace);
       const nativeRecords = nativeResult?.records || [];
       if (nativeRecords.length === 0) return false;
-      const normalizedRecords = nativeRecords.map((record3) => ({
-        ...record3,
+      const normalizedRecords = nativeRecords.map((record4) => ({
+        ...record4,
         agent: agentType,
         historySessionId: normalizedSessionId
       }));
@@ -71229,11 +71295,11 @@ ${upstream}`;
       if (!(remainingPercent2 > 0)) return 0;
       return remainingPercent2 * remainingPercent2 / (remainingPercent2 + 100 * timeLeftFraction);
     }
-    function expiryRiskForRanking(node, providerType, axis, policy, now = Date.now(), context2) {
+    function expiryRiskForRanking(node, providerType, axis2, policy, now = Date.now(), context2) {
       const entry = quotaEntryFor(node, providerType, context2, now);
       if (!entry) return void 0;
       const { facts, quota } = entry;
-      const window = axis === "session" ? quota.session : quota.weekly;
+      const window = axis2 === "session" ? quota.session : quota.weekly;
       if (!isWindowTrustworthy(window, facts, quota, policy, now)) return void 0;
       const remaining = remainingPercent(window);
       if (remaining === void 0) return void 0;
@@ -71243,7 +71309,7 @@ ${upstream}`;
       if (!Number.isFinite(ageMs2)) return { remainingPercent: remaining, risk: 0 };
       const reporterNowMs = Number(quota.updatedAt) + ageMs2;
       const windowMinutes3 = Number(window?.windowMinutes);
-      const fallbackMinutes = axis === "session" ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
+      const fallbackMinutes = axis2 === "session" ? DEFAULT_SESSION_WINDOW_MINUTES : DEFAULT_WEEKLY_WINDOW_MINUTES;
       const windowMs = (Number.isFinite(windowMinutes3) && windowMinutes3 > 0 ? windowMinutes3 : fallbackMinutes) * 60 * 1e3;
       const timeLeftFraction = Math.min(1, Math.max(0, (resetsAt - reporterNowMs) / windowMs));
       return { remainingPercent: remaining, risk: expiryRiskScore(remaining, timeLeftFraction) };
@@ -71291,10 +71357,10 @@ ${upstream}`;
       const rankingEvidence = clear.map((providerType) => {
         const session = sessionByProvider?.get(providerType);
         const reading = session ?? weeklyByProvider.get(providerType);
-        const axis = session ? "session" : "weekly";
+        const axis2 = session ? "session" : "weekly";
         return {
           providerType,
-          axis,
+          axis: axis2,
           ...reading ? {
             risk: reading.risk,
             remainingPercent: reading.remainingPercent
@@ -71329,11 +71395,11 @@ ${upstream}`;
       );
       return orderedProviderTypes.map((providerType) => {
         const evidence = evidenceByProvider.get(providerType);
-        const axis = evidence?.axis ?? (resolvedRanking.sessionAxisActive ? "session" : "weekly");
-        const w = expiryRiskForRanking(node, providerType, axis, policy, now, context2);
+        const axis2 = evidence?.axis ?? (resolvedRanking.sessionAxisActive ? "session" : "weekly");
+        const w = expiryRiskForRanking(node, providerType, axis2, policy, now, context2);
         return {
           providerType,
-          axis,
+          axis: axis2,
           ...w ? {
             remainingPercent: w.remainingPercent,
             risk: w.risk
@@ -71348,9 +71414,9 @@ ${upstream}`;
         ...losers.length > RATIONALE_LOSERS_MAX ? { losersOmitted: losers.length - RATIONALE_LOSERS_MAX } : {}
       };
     }
-    function recordLastQuotaRanking(nodeId, record3) {
+    function recordLastQuotaRanking(nodeId, record4) {
       if (!nodeId) return;
-      lastQuotaRankingByNode.set(nodeId, record3);
+      lastQuotaRankingByNode.set(nodeId, record4);
     }
     function getLastQuotaRanking(nodeId) {
       return lastQuotaRankingByNode.get(nodeId);
@@ -71634,10 +71700,10 @@ ${upstream}`;
       return trimmed2;
     }
     function readPlainObject(value) {
-      const record3 = readOptionalRecord2(value);
-      if (!record3) return void 0;
+      const record4 = readOptionalRecord2(value);
+      if (!record4) return void 0;
       try {
-        return JSON.parse(JSON.stringify(record3));
+        return JSON.parse(JSON.stringify(record4));
       } catch {
         return void 0;
       }
@@ -73516,7 +73582,7 @@ ${upstream}`;
       const attemptId = queueAttemptId(args.meshId, args.task.id, attemptNo);
       const coordinatorDaemonId = args.coordinatorDaemonId;
       const coordinatorSessionId = typeof args.task.sourceCoordinatorSessionId === "string" ? args.task.sourceCoordinatorSessionId.trim() : "";
-      const ref = { attemptId, generation: 0 };
+      const ref2 = { attemptId, generation: 0 };
       const baseEventId = `dispatch:${attemptId}`;
       const at = args.now ?? Date.now();
       let eventId = baseEventId;
@@ -73526,7 +73592,7 @@ ${upstream}`;
         at,
         source: "dispatch",
         sessionId: args.sessionId,
-        attemptRef: ref,
+        attemptRef: ref2,
         // The attempt's task binding: R1's open_dispatch reads the envelope taskId
         // (the queue_status / task_terminal effects key on it).
         taskId: args.task.id,
@@ -73553,7 +73619,7 @@ ${upstream}`;
       });
       if (result.verdict === "rejected") throw new Error(`dispatch_accepted rejected (${result.rejection ?? "unknown"})`);
       if (result.verdict !== "applied") throw new Error(`dispatch_accepted not applied (${result.verdict})`);
-      return { ref };
+      return { ref: ref2 };
     }
     var INJECTION_CLOSED_STATES;
     var init_mesh_queue_dispatch_evidence = __esm2({
@@ -73680,17 +73746,17 @@ ${upstream}`;
       autoFastForwardWorkspaceLease.clear();
     }
     function resolveAutoFastForwardPolicy2(mesh) {
-      const record3 = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === "object" && !Array.isArray(mesh.policy.autoFastForward) ? mesh.policy.autoFastForward : {};
-      const maxBehind = Number(record3.maxBehind);
+      const record4 = mesh?.policy?.autoFastForward && typeof mesh.policy.autoFastForward === "object" && !Array.isArray(mesh.policy.autoFastForward) ? mesh.policy.autoFastForward : {};
+      const maxBehind = Number(record4.maxBehind);
       return {
-        enabled: record3.enabled !== false,
+        enabled: record4.enabled !== false,
         ...Number.isFinite(maxBehind) && maxBehind >= 0 ? { maxBehind: Math.floor(maxBehind) } : {},
-        requireCleanSubmodules: record3.requireCleanSubmodules !== false,
+        requireCleanSubmodules: record4.requireCleanSubmodules !== false,
         // Strict opt-in: absent/false → self-only (historical behavior). Only an
         // explicit `true` extends auto ff to remote owning-daemon nodes.
-        remoteNodes: record3.remoteNodes === true,
+        remoteNodes: record4.remoteNodes === true,
         // Absent/anything-but-continuous → 'idle' (historical idle-edge-only detection).
-        mode: record3.mode === "continuous" ? "continuous" : "idle"
+        mode: record4.mode === "continuous" ? "continuous" : "idle"
       };
     }
     function dryRunSatisfiesAutoFastForwardPolicy(dryRun, policy) {
@@ -74784,11 +74850,13 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       return "mesh_slot";
     }
     function readLaunchProvenanceArgs(args) {
-      const record3 = args && typeof args === "object" ? args : {};
+      const record4 = args && typeof args === "object" ? args : {};
+      const roleLaunch = parseRoleLaunchSelection(record4.roleLaunch);
       return {
-        ...isSessionLaunchedBy(record3.launchedBy) && record3.launchedBy !== "restore" ? { launchedBy: record3.launchedBy } : {},
-        ...isModelAxisSource(record3.modelSource) ? { modelSource: record3.modelSource } : {},
-        ...isModelAxisSource(record3.thinkingLevelSource) ? { thinkingLevelSource: record3.thinkingLevelSource } : {}
+        ...roleLaunch ? { roleLaunch } : {},
+        ...isSessionLaunchedBy(record4.launchedBy) && record4.launchedBy !== "restore" ? { launchedBy: record4.launchedBy } : {},
+        ...isModelAxisSource(record4.modelSource) ? { modelSource: record4.modelSource } : {},
+        ...isModelAxisSource(record4.thinkingLevelSource) ? { thinkingLevelSource: record4.thinkingLevelSource } : {}
       };
     }
     function inferLaunchedBy(settings2) {
@@ -74829,7 +74897,12 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const providerVersion = trimmed(input.providerVersion);
       const workspace = trimmed(input.workspace);
       const autoApproveModeId = trimmed(input.autoApproveModeId);
+      const model = buildModelSelection(input.model, input.launchedAt);
+      const thinkingLevel = buildModelSelection(input.thinkingLevel, input.launchedAt);
+      if (input.roleLaunch?.applied.model.source === "provider_default") model.source = "provider_default";
+      if (input.roleLaunch?.applied.thinkingLevel.source === "provider_default") thinkingLevel.source = "provider_default";
       return {
+        ...input.roleLaunch ? { roleLaunch: structuredClone(input.roleLaunch) } : {},
         sessionId: input.sessionId,
         providerType: input.providerType,
         ...providerVersion ? { providerVersion } : {},
@@ -74837,8 +74910,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         launchedBy: input.launchedBy,
         launchedAt: input.launchedAt,
         ...workspace ? { workspace } : {},
-        model: buildModelSelection(input.model, input.launchedAt),
-        thinkingLevel: buildModelSelection(input.thinkingLevel, input.launchedAt),
+        model,
+        thinkingLevel,
         ...autoApproveModeId ? { autoApproveModeId } : {}
       };
     }
@@ -74855,17 +74928,17 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         thinkingLevel: {}
       });
     }
-    function cloneLaunchRecord(record3) {
-      const cloneAxis = (axis) => ({ ...axis, history: axis.history.map((entry) => ({ ...entry })) });
-      return { ...record3, model: cloneAxis(record3.model), thinkingLevel: cloneAxis(record3.thinkingLevel) };
+    function cloneLaunchRecord(record4) {
+      const cloneAxis = (axis2) => ({ ...axis2, history: axis2.history.map((entry) => ({ ...entry })) });
+      return { ...record4, ...record4.roleLaunch ? { roleLaunch: structuredClone(record4.roleLaunch) } : {}, model: cloneAxis(record4.model), thinkingLevel: cloneAxis(record4.thinkingLevel) };
     }
-    function appendAxisHistory(axis, entry) {
-      axis.history.push(entry);
-      if (axis.history.length <= MODEL_SELECTION_HISTORY_LIMIT) return;
-      const first = axis.history[0];
+    function appendAxisHistory(axis2, entry) {
+      axis2.history.push(entry);
+      if (axis2.history.length <= MODEL_SELECTION_HISTORY_LIMIT) return;
+      const first = axis2.history[0];
       const keepFirst = first?.via === "launch";
-      const tail = axis.history.slice(-(MODEL_SELECTION_HISTORY_LIMIT - (keepFirst ? 1 : 0)));
-      axis.history = keepFirst ? [first, ...tail] : tail;
+      const tail = axis2.history.slice(-(MODEL_SELECTION_HISTORY_LIMIT - (keepFirst ? 1 : 0)));
+      axis2.history = keepFirst ? [first, ...tail] : tail;
     }
     var init_launch_record = __esm2({
       "src/sessions/launch-record.ts"() {
@@ -78339,18 +78412,18 @@ ${continuationNotice}` } : task,
     function unwrapReadChatPayload(raw) {
       let cursor = raw;
       for (let depth = 0; depth < 4 && cursor && typeof cursor === "object"; depth++) {
-        const record3 = cursor;
-        if (Array.isArray(record3.messages)) return record3;
-        if (record3.payload && typeof record3.payload === "object") {
-          cursor = record3.payload;
+        const record4 = cursor;
+        if (Array.isArray(record4.messages)) return record4;
+        if (record4.payload && typeof record4.payload === "object") {
+          cursor = record4.payload;
           continue;
         }
-        if (record3.result && typeof record3.result === "object") {
-          cursor = record3.result;
+        if (record4.result && typeof record4.result === "object") {
+          cursor = record4.result;
           continue;
         }
-        if (record3.data && typeof record3.data === "object") {
-          cursor = record3.data;
+        if (record4.data && typeof record4.data === "object") {
+          cursor = record4.data;
           continue;
         }
         break;
@@ -79030,7 +79103,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       });
       const message = readString2(dispatch2.payload?.message) || readString2(dispatch2.payload?.summary) || "";
       const { title, summary } = summarizeMessage(message);
-      const record3 = {
+      const record4 = {
         taskId,
         source: "direct",
         status,
@@ -79052,7 +79125,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
         staleReason: live.staleReason || ledgerOnlyStaleReason,
         ...isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}
       };
-      return { record: record3, terminalRow };
+      return { record: record4, terminalRow };
     }
     function collectProviderDecisionAttention2(nodes) {
       const items = /* @__PURE__ */ new Map();
@@ -79076,39 +79149,39 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
     }
     function collectPendingApprovals2(activeWork) {
       const approvals = [];
-      for (const record3 of activeWork) {
-        if (record3.status !== "awaiting_approval") continue;
-        if (!record3.nodeId || !record3.sessionId) continue;
-        if (record3.providerApproval?.lifecycle === "resolved") continue;
-        const recorded = readProviderDecision(record3.providerApproval, false);
-        if (record3.providerApproval && !recorded) continue;
-        const hasLedgerPrompt = record3.terminalKind === "task_approval_needed";
-        if (record3.providerApproval === null && !hasLedgerPrompt) continue;
+      for (const record4 of activeWork) {
+        if (record4.status !== "awaiting_approval") continue;
+        if (!record4.nodeId || !record4.sessionId) continue;
+        if (record4.providerApproval?.lifecycle === "resolved") continue;
+        const recorded = readProviderDecision(record4.providerApproval, false);
+        if (record4.providerApproval && !recorded) continue;
+        const hasLedgerPrompt = record4.terminalKind === "task_approval_needed";
+        if (record4.providerApproval === null && !hasLedgerPrompt) continue;
         const approval = recorded ?? {
           ...readProviderDecision(void 0, true),
           source: hasLedgerPrompt ? "ledger_approval" : "status_only",
-          nodeId: record3.nodeId,
-          sessionId: record3.sessionId,
-          taskId: record3.taskId,
-          attemptId: record3.attemptId ?? null,
-          createdAt: hasLedgerPrompt && record3.terminalAt && Number.isFinite(Date.parse(record3.terminalAt)) ? Date.parse(record3.terminalAt) : null
+          nodeId: record4.nodeId,
+          sessionId: record4.sessionId,
+          taskId: record4.taskId,
+          attemptId: record4.attemptId ?? null,
+          createdAt: hasLedgerPrompt && record4.terminalAt && Number.isFinite(Date.parse(record4.terminalAt)) ? Date.parse(record4.terminalAt) : null
         };
-        const identityMatches = (!approval.taskId || approval.taskId === record3.taskId) && (!record3.attemptId || !approval.attemptId || record3.attemptId === approval.attemptId);
+        const identityMatches = (!approval.taskId || approval.taskId === record4.taskId) && (!record4.attemptId || !approval.attemptId || record4.attemptId === approval.attemptId);
         const actionable = identityMatches && isActionableProviderApproval(approval);
         const resource = identityMatches ? approval : { ...approval, evidence: "unavailable", actionable: false };
-        const recordedAt = record3.terminalKind === "task_approval_needed" ? record3.terminalAt : void 0;
+        const recordedAt = record4.terminalKind === "task_approval_needed" ? record4.terminalAt : void 0;
         const blockedAt = recordedAt && (approval.createdAt === null || Date.parse(recordedAt) >= approval.createdAt) ? recordedAt : void 0;
         const suspensionAt = approval.createdAt === null ? null : new Date(approval.createdAt).toISOString();
         const waitingSince = blockedAt || suspensionAt;
-        const dispatchAnchor = record3.dispatchedAt || record3.createdAt;
-        const now = new Date(dispatchAnchor).getTime() + record3.elapsedMs;
+        const dispatchAnchor = record4.dispatchedAt || record4.createdAt;
+        const now = new Date(dispatchAnchor).getTime() + record4.elapsedMs;
         const waitingMs = waitingSince ? Math.max(0, now - new Date(waitingSince).getTime()) : null;
         approvals.push({
-          nodeId: record3.nodeId,
-          sessionId: record3.sessionId,
-          providerType: record3.providerType,
-          taskId: record3.taskId,
-          taskTitle: record3.taskTitle,
+          nodeId: record4.nodeId,
+          sessionId: record4.sessionId,
+          providerType: record4.providerType,
+          taskId: record4.taskId,
+          taskTitle: record4.taskTitle,
           status: "awaiting_approval",
           waitingSince,
           waitingMs,
@@ -79227,7 +79300,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             dispatchedToIdleSession: dispatch2.dispatchedToIdleSession === true
           });
           const { title, summary: summary2 } = summarizeMessage(dispatch2.message || "");
-          const record3 = {
+          const record4 = {
             taskId: dispatch2.taskId,
             source: "direct",
             status,
@@ -79251,46 +79324,46 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
             ...isFreshUnacknowledged ? { staleDispatchUnacknowledged: true } : {}
           };
           if (isTerminal) {
-            terminalDirectWork.push(record3);
+            terminalDirectWork.push(record4);
             if (opts.includeTerminalDirect !== true) continue;
           }
           if ((live.staleReason || ledgerOnlyStaleReason) && !isTerminal) {
-            staleDirectWork.push(record3);
+            staleDirectWork.push(record4);
             continue;
           }
-          records.push(record3);
+          records.push(record4);
         }
         const ledgerDispatches = ledgerEntries.filter(isDirectDispatch);
         const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
         for (const dispatch2 of ledgerDispatches) {
           if (dbTaskIds.has(directDispatchTaskId(dispatch2))) continue;
           if (queueTaskIds.has(directDispatchTaskId(dispatch2))) continue;
-          const { record: record3, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
+          const { record: record4, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
           if (terminalRow) {
-            terminalDirectWork.push(record3);
+            terminalDirectWork.push(record4);
             if (opts.includeTerminalDirect !== true) continue;
           }
-          if (record3.staleReason && !terminalRow) {
-            staleDirectWork.push(record3);
+          if (record4.staleReason && !terminalRow) {
+            staleDirectWork.push(record4);
             continue;
           }
-          records.push(record3);
+          records.push(record4);
         }
       } else {
         const ledgerDispatches = ledgerEntries.filter(isDirectDispatch);
         const terminalByDispatch = ledgerSnapshot.matchDirectDispatchTerminals(ledgerDispatches);
         for (const dispatch2 of ledgerDispatches) {
           if (queueTaskIds.has(directDispatchTaskId(dispatch2))) continue;
-          const { record: record3, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
+          const { record: record4, terminalRow } = buildLedgerDirectDispatchRecord(dispatch2, { terminal: terminalByDispatch.get(dispatch2), nodes: opts.nodes, now, ledgerEntries });
           if (terminalRow) {
-            terminalDirectWork.push(record3);
+            terminalDirectWork.push(record4);
             if (opts.includeTerminalDirect !== true) continue;
           }
-          if (record3.staleReason && !terminalRow) {
-            staleDirectWork.push(record3);
+          if (record4.staleReason && !terminalRow) {
+            staleDirectWork.push(record4);
             continue;
           }
-          records.push(record3);
+          records.push(record4);
         }
       }
       records.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -79308,10 +79381,10 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       }
       return { activeWork: records, staleDirectWork, staleDirectWorkNote, terminalDirectWork, summary };
     }
-    function classifyStaleDirectForPrune(record3, opts = {}) {
-      if (record3.staleDispatchUnacknowledged === true) return "preserve_unacknowledged";
-      if (record3.terminal === true) return opts.includeTerminal ? "prunable_terminal" : "preserve_active";
-      if (record3.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record3.staleReason)) return "prunable_orphan";
+    function classifyStaleDirectForPrune(record4, opts = {}) {
+      if (record4.staleDispatchUnacknowledged === true) return "preserve_unacknowledged";
+      if (record4.terminal === true) return opts.includeTerminal ? "prunable_terminal" : "preserve_active";
+      if (record4.staleReason && PRUNABLE_ORPHAN_STALE_REASONS.has(record4.staleReason)) return "prunable_orphan";
       return "preserve_active";
     }
     async function pruneStaleDirectDispatches(opts) {
@@ -79339,29 +79412,29 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       const preservedUnacknowledged = [];
       const preservedLedgerOnly = [];
       const preservedNotOrphan = [];
-      for (const record3 of candidates) {
-        const classification = classifyStaleDirectForPrune(record3, { includeTerminal });
+      for (const record4 of candidates) {
+        const classification = classifyStaleDirectForPrune(record4, { includeTerminal });
         if (classification === "preserve_unacknowledged") {
-          preservedUnacknowledged.push(record3);
+          preservedUnacknowledged.push(record4);
           continue;
         }
         if (classification === "preserve_active") {
-          preservedNotOrphan.push(record3);
+          preservedNotOrphan.push(record4);
           continue;
         }
-        if (!storeTaskIds.has(record3.taskId)) {
-          preservedLedgerOnly.push(record3);
+        if (!storeTaskIds.has(record4.taskId)) {
+          preservedLedgerOnly.push(record4);
           continue;
         }
         if (minAgeMs > 0) {
-          const ageRef = record3.dispatchedAt || record3.createdAt;
+          const ageRef = record4.dispatchedAt || record4.createdAt;
           const ageMs2 = elapsedSince(ageRef, now);
           if (ageMs2 < minAgeMs) {
-            skippedTooYoung.push(record3);
+            skippedTooYoung.push(record4);
             continue;
           }
         }
-        prunable.push(record3);
+        prunable.push(record4);
       }
       let prunedCount = 0;
       if (execute && prunable.length) {
@@ -79967,7 +80040,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       return { assistant: true, ...approval };
     }
     var import_path16;
-    var DEFAULT_ASSISTANT_CLI_TYPE;
     var ASSISTANT_MCP_SERVER_NAME;
     var ASSISTANT_CLAUDE_LAUNCH_ENV;
     var ASSISTANT_CLAUDE_BUILTIN_TOOLS;
@@ -79980,7 +80052,6 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         init_auto_approve_modes();
         init_worker_home_specs();
         init_worker_mcp_config();
-        DEFAULT_ASSISTANT_CLI_TYPE = "claude-cli";
         ASSISTANT_MCP_SERVER_NAME = "adhdev-assistant";
         ASSISTANT_CLAUDE_LAUNCH_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
         ASSISTANT_CLAUDE_BUILTIN_TOOLS = "Read,WebSearch,WebFetch";
@@ -80082,14 +80153,14 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     function loadDeferredRestartSchedules() {
       return { ...loadState().deferredRestartSchedules };
     }
-    function recordDeferredRestartSchedule(record3) {
-      const key4 = deferredRestartScheduleKey(record3.meshId, record3.nodeId);
+    function recordDeferredRestartSchedule(record4) {
+      const key4 = deferredRestartScheduleKey(record4.meshId, record4.nodeId);
       const state2 = loadState();
       const existing = state2.deferredRestartSchedules[key4];
-      if (existing && existing.mode === record3.mode && existing.killSessionHost === record3.killSessionHost && existing.allowDowngrade === record3.allowDowngrade && existing.channel === record3.channel && existing.npmTag === record3.npmTag && existing.scheduledAt === record3.scheduledAt && existing.expiresAt === record3.expiresAt) return;
+      if (existing && existing.mode === record4.mode && existing.killSessionHost === record4.killSessionHost && existing.allowDowngrade === record4.allowDowngrade && existing.channel === record4.channel && existing.npmTag === record4.npmTag && existing.scheduledAt === record4.scheduledAt && existing.expiresAt === record4.expiresAt) return;
       saveState({
         ...state2,
-        deferredRestartSchedules: { ...state2.deferredRestartSchedules, [key4]: record3 }
+        deferredRestartSchedules: { ...state2.deferredRestartSchedules, [key4]: record4 }
       });
     }
     function clearDeferredRestartSchedule(meshId, nodeId) {
@@ -80196,19 +80267,19 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         updateInFlight = false;
       }
     });
-    function isModuleNotFoundError(error, ref) {
+    function isModuleNotFoundError(error, ref2) {
       if (!(error instanceof Error)) return false;
       const message = error.message || "";
       const code = "code" in error ? error.code : void 0;
-      return code === "MODULE_NOT_FOUND" && message.includes(ref);
+      return code === "MODULE_NOT_FOUND" && message.includes(ref2);
     }
     function runtimeTriplet() {
       return `${process.platform}-${process.arch}-node${process.versions.modules}`;
     }
-    function normalizeBinding(mod, ref) {
+    function normalizeBinding(mod, ref2) {
       const binding = mod?.default?.createTerminal ? mod.default : mod?.createTerminal ? mod : null;
       if (!binding) {
-        throw new Error(`Ghostty VT binding "${ref}" does not export createTerminal()`);
+        throw new Error(`Ghostty VT binding "${ref2}" does not export createTerminal()`);
       }
       return binding;
     }
@@ -80223,20 +80294,20 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
       }
       const errors = [];
       let allModuleNotFound = true;
-      for (const ref of getBindingCandidates()) {
+      for (const ref2 of getBindingCandidates()) {
         try {
-          const mod = require(ref);
-          cachedBinding = normalizeBinding(mod, ref);
+          const mod = require(ref2);
+          cachedBinding = normalizeBinding(mod, ref2);
           cachedBindingError = null;
           return cachedBinding;
         } catch (error) {
-          if (isModuleNotFoundError(error, ref)) {
-            errors.push(`${ref}: module not found`);
+          if (isModuleNotFoundError(error, ref2)) {
+            errors.push(`${ref2}: module not found`);
             continue;
           }
           allModuleNotFound = false;
           const message = error instanceof Error ? error.message : String(error);
-          errors.push(`${ref}: ${message}`);
+          errors.push(`${ref2}: ${message}`);
         }
       }
       const buildError = () => new Error(
@@ -80597,13 +80668,13 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         return { value: option, label: option };
       }
       if (!option || typeof option !== "object") return null;
-      const record3 = option;
-      const value = typeof record3.value === "string" ? record3.value : typeof record3.id === "string" ? record3.id : typeof record3.name === "string" ? record3.name : null;
+      const record4 = option;
+      const value = typeof record4.value === "string" ? record4.value : typeof record4.id === "string" ? record4.id : typeof record4.name === "string" ? record4.name : null;
       if (!value) return null;
-      const label2 = typeof record3.label === "string" ? record3.label : typeof record3.name === "string" ? record3.name : value;
+      const label2 = typeof record4.label === "string" ? record4.label : typeof record4.name === "string" ? record4.name : value;
       const normalized = { value, label: label2 };
-      if (typeof record3.description === "string") normalized.description = record3.description;
-      if (typeof record3.group === "string") normalized.group = record3.group;
+      if (typeof record4.description === "string") normalized.description = record4.description;
+      if (typeof record4.group === "string") normalized.group = record4.group;
       return normalized;
     }
     function isScalarControlValue(value) {
@@ -80830,16 +80901,16 @@ ${cleanBody}`;
       const result = [];
       for (const entry of raw) {
         if (!entry || typeof entry !== "object") continue;
-        const record3 = entry;
-        const mediaType = record3.mediaType;
+        const record4 = entry;
+        const mediaType = record4.mediaType;
         if (typeof mediaType !== "string" || !VALID_INPUT_MEDIA_TYPES.has(mediaType)) continue;
-        const strategies = Array.isArray(record3.strategies) ? record3.strategies.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
-        const degradation = Array.isArray(record3.degradation) ? record3.degradation.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
+        const strategies = Array.isArray(record4.strategies) ? record4.strategies.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
+        const degradation = Array.isArray(record4.degradation) ? record4.degradation.filter((value) => typeof value === "string" && VALID_INPUT_STRATEGIES.has(value)) : [];
         if (strategies.length === 0 && degradation.length === 0) continue;
         result.push({
           mediaType,
           strategies,
-          ...typeof record3.native === "boolean" ? { native: record3.native } : {},
+          ...typeof record4.native === "boolean" ? { native: record4.native } : {},
           ...degradation.length > 0 ? { degradation } : {}
         });
       }
@@ -82073,14 +82144,14 @@ ${cleanBody}`;
       if (!sessionId || !["monitor:no_progress", "worker:status_changed"].includes(eventName)) return;
       const taskId = readText(event.taskId) || readText(event.meshActiveTaskId) || readText(settings2.meshActiveTaskId);
       if (!taskId) return;
-      const ref = isTurnAttemptRef(event.attemptRef) ? event.attemptRef : void 0;
+      const ref2 = isTurnAttemptRef(event.attemptRef) ? event.attemptRef : void 0;
       const ledger = components.turnLedger;
       const current4 = ledger?.openAttemptForSession(sessionId);
-      if (current4 && (current4.taskId !== taskId || ref && (current4.attemptId !== ref.attemptId || current4.generation !== ref.generation))) return;
-      const attempt = ref ? ledger?.getAttempt(ref.attemptId) : current4;
+      if (current4 && (current4.taskId !== taskId || ref2 && (current4.attemptId !== ref2.attemptId || current4.generation !== ref2.generation))) return;
+      const attempt = ref2 ? ledger?.getAttempt(ref2.attemptId) : current4;
       let owner;
       if (attempt) {
-        if (attempt.terminal || attempt.meshId !== meshId || attempt.taskId !== taskId || attempt.sessionId !== sessionId || ref && attempt.generation !== ref.generation) return;
+        if (attempt.terminal || attempt.meshId !== meshId || attempt.taskId !== taskId || attempt.sessionId !== sessionId || ref2 && attempt.generation !== ref2.generation) return;
         owner = attempt;
       } else {
         const stampedTask = readText(settings2.meshActiveTaskId);
@@ -82090,8 +82161,8 @@ ${cleanBody}`;
           taskId,
           sessionId,
           nodeId,
-          attemptId: ref?.attemptId || readText(event.attemptId) || readText(settings2.meshActiveAttemptId),
-          generation: ref?.generation ?? (typeof settings2.meshActiveAttemptGeneration === "number" ? settings2.meshActiveAttemptGeneration : 0),
+          attemptId: ref2?.attemptId || readText(event.attemptId) || readText(settings2.meshActiveAttemptId),
+          generation: ref2?.generation ?? (typeof settings2.meshActiveAttemptGeneration === "number" ? settings2.meshActiveAttemptGeneration : 0),
           coordinator: { daemonId: input.coordinatorDaemonId, sessionId: input.coordinatorSessionId }
         };
       }
@@ -82848,11 +82919,11 @@ ${cleanBody}`;
       const found = readRecords(resolvePeerSecretsPath(opts)).find((rec5) => rec5.meshId === mesh && daemonIdsEquivalent4(rec5.peerDaemonId, canonical));
       return found ? { ...found } : null;
     }
-    function putPeerSecret(record3, opts = {}) {
-      if (!isValidRecord(record3)) {
+    function putPeerSecret(record4, opts = {}) {
+      if (!isValidRecord(record4)) {
         throw new Error("putPeerSecret requires { meshId, peerDaemonId, role, secret, createdAt } with non-empty strings");
       }
-      const normalized = normalizeRecord(record3);
+      const normalized = normalizeRecord(record4);
       const path103 = resolvePeerSecretsPath(opts);
       const others = readRecords(path103).filter((rec5) => !(rec5.meshId === normalized.meshId && daemonIdsEquivalent4(rec5.peerDaemonId, normalized.peerDaemonId)));
       writeRecords(path103, [...others, normalized]);
@@ -85151,10 +85222,10 @@ ${cleanBody}`;
       }
       return current4;
     }
-    function passesFilter(record3, filter) {
+    function passesFilter(record4, filter) {
       if (!filter) return true;
       for (const [field3, expected] of Object.entries(filter)) {
-        if (record3[field3] !== expected) return false;
+        if (record4[field3] !== expected) return false;
       }
       return true;
     }
@@ -85171,12 +85242,12 @@ ${cleanBody}`;
       const rows = [];
       items.forEach((item, index) => {
         if (!item || typeof item !== "object" || Array.isArray(item)) return;
-        const record3 = item;
-        if (!passesFilter(record3, parse2.filter)) return;
-        const slug = cleanToken(record3[slugField]);
+        const record4 = item;
+        if (!passesFilter(record4, parse2.filter)) return;
+        const slug = cleanToken(record4[slugField]);
         if (!slug) return;
-        const label2 = parse2.labelField ? cleanToken(record3[parse2.labelField]) : "";
-        const rawPriority = parse2.priorityField ? record3[parse2.priorityField] : void 0;
+        const label2 = parse2.labelField ? cleanToken(record4[parse2.labelField]) : "";
+        const rawPriority = parse2.priorityField ? record4[parse2.priorityField] : void 0;
         const priority = typeof rawPriority === "number" && Number.isFinite(rawPriority) ? rawPriority : Number.MAX_SAFE_INTEGER;
         rows.push({ model: label2 ? { slug, label: label2 } : { slug }, priority, index });
       });
@@ -85461,12 +85532,12 @@ ${result.stderr}`, result.code);
         return void 0;
       }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
-      const record3 = parsed;
-      if (record3.version !== MODEL_CACHE_VERSION) {
-        LOG.info("Models", `Ignoring model cache written by a different version (${String(record3.version)})`);
+      const record4 = parsed;
+      if (record4.version !== MODEL_CACHE_VERSION) {
+        LOG.info("Models", `Ignoring model cache written by a different version (${String(record4.version)})`);
         return void 0;
       }
-      const providers = record3.providers;
+      const providers = record4.providers;
       if (!providers || typeof providers !== "object" || Array.isArray(providers)) return void 0;
       const restored = {};
       for (const [provider, value] of Object.entries(providers)) {
@@ -85887,10 +85958,10 @@ ${result.stderr}`, result.code);
       }
       forceMode600(path103);
     }
-    function appendJsonLine600(path103, record3) {
+    function appendJsonLine600(path103, record4) {
       ensureDir((0, import_path19.dirname)(path103));
       const existed = (0, import_fs26.existsSync)(path103);
-      (0, import_fs26.appendFileSync)(path103, `${JSON.stringify(record3)}
+      (0, import_fs26.appendFileSync)(path103, `${JSON.stringify(record4)}
 `, { encoding: "utf-8", mode: 384 });
       if (!existed) forceMode600(path103);
     }
@@ -86487,9 +86558,9 @@ ${result.stderr}`, result.code);
       if (!c || typeof c !== "object") return null;
       return isStr(c.sessionId) && isStr(c.text) && c.text.length <= 8e3 && isNum(c.at) ? { sessionId: c.sessionId, text: c.text, at: c.at } : null;
     }
-    function matchesAssistantRestore(entry, record3) {
+    function matchesAssistantRestore(entry, record4) {
       const sid = entry?.sessionId;
-      const rid = record3?.runtimeId;
+      const rid = record4?.runtimeId;
       return typeof sid === "string" && sid.length > 0 && typeof rid === "string" && rid === sid;
     }
     function findAssistantRestoreRecord(entry, records) {
@@ -87481,9 +87552,9 @@ ${body}`;
             for (const name of this.skillNames()) {
               const s2 = this.stateFor(file, name);
               if (s2.pinned || s2.status === "archived") continue;
-              const ref = Date.parse(s2.lastViewedAt ?? s2.createdAt);
-              if (!Number.isFinite(ref)) continue;
-              const age = now - ref;
+              const ref2 = Date.parse(s2.lastViewedAt ?? s2.createdAt);
+              if (!Number.isFinite(ref2)) continue;
+              const age = now - ref2;
               const to = age >= archiveAfterMs ? "archived" : age >= staleAfterMs && s2.status === "active" ? "stale" : null;
               if (!to) continue;
               file.skills[name] = { ...s2, status: to, statusChangedAt: nowIso };
@@ -88009,11 +88080,12 @@ ${body}`;
       const fail7 = (field3, reason, candidates) => ({ ok: false, issue: { field: field3, reason, ...candidates ? { candidates } : {} } });
       try {
         selection.provider = ports.resolveAlias(selection.provider);
-        const facts = ports.getProvider(selection.provider);
+        const facts = ports.getProvider(selection.provider, selection.model);
         if (!facts || facts.type !== selection.provider) return fail7("provider", "provider_unknown");
         if (facts.category !== "cli") return fail7("provider", "provider_not_cli");
         if (facts.enabled !== true) return fail7("provider", "provider_disabled");
         if (facts.detected !== true) return fail7("provider", "provider_not_detected");
+        if (facts.quotaGated === true) return fail7("provider", "provider_quota_gated");
         if (role === "assistant" ? facts.assistant.supported !== true : !["supported", "manual"].includes(facts.coordinator)) {
           return fail7("provider", "provider_not_eligible");
         }
@@ -88107,6 +88179,19 @@ ${body}`;
               return { status: "invalid", reason: "launch_defaults_json_invalid" };
             }
           }
+          /** Resolve an entire launch against one snapshot under the writer's lock.
+           * The callback must be synchronous and read-only; release before launch effects. */
+          withSnapshot(operation) {
+            const acquired = acquireOwnedLock(`${this.path}.lock`, this.lockOptions);
+            if (!acquired.ok) {
+              return operation(acquired.errno === "ENOENT" ? { status: "missing", reason: "launch_defaults_read_failed" } : { status: "unreadable", reason: acquired.reason });
+            }
+            try {
+              return operation(this.read());
+            } finally {
+              acquired.release();
+            }
+          }
           /** Call only after owner/tool authorization and staging decisions. */
           write(request) {
             const fail7 = (code, reason) => ({ ok: false, code, reason, committed: false });
@@ -88193,13 +88278,13 @@ ${body}`;
       }
     });
     function resolveLaunchSelection(input, ports) {
-      const failure7 = (code, field3, reason, axis2, candidates) => ({
+      const failure7 = (code, field3, reason, axis3, candidates) => ({
         ok: false,
         code,
         role: input.role,
         field: field3,
         reason,
-        ...axis2,
+        ...axis3,
         ...candidates ? { candidates } : {},
         hint: code === "launch_default_required" ? "Explicitly save launch defaults on this daemon before launching." : "Correct the launch selection or explicitly update the default on the host daemon."
       });
@@ -88221,7 +88306,7 @@ ${body}`;
       }
       const base = project?.selection ?? document[input.role];
       const baseSource = project ? "project_default" : "stored_default";
-      const ref = project ? { role: input.role, scope: "project", revision: project.revision, projectId: project.projectId } : base ? { role: input.role, scope: "global", revision: document[input.role].revision } : void 0;
+      const ref2 = project ? { role: input.role, scope: "project", revision: project.revision, projectId: project.projectId } : base ? { role: input.role, scope: "global", revision: document[input.role].revision } : void 0;
       const provider = explicit.provider ?? (ignored.includes("provider") ? void 0 : base?.provider);
       if (!provider) return failure7("launch_default_required", "provider", "role_default_unset");
       let sameProvider = false;
@@ -88230,14 +88315,14 @@ ${body}`;
       } catch {
         return failure7("launch_default_unavailable", "provider", "catalog_unavailable");
       }
-      const axis = (field3) => {
+      const axis2 = (field3) => {
         if (explicit[field3] !== void 0) return { value: explicit[field3], source: "user" };
         if (!ignored.includes(field3) && (field3 === "provider" || sameProvider) && base?.[field3] !== void 0) {
-          return { value: base[field3], source: baseSource, defaultRef: ref };
+          return { value: base[field3], source: baseSource, defaultRef: ref2 };
         }
         return { value: null, source: "provider_default" };
       };
-      const applied = { provider: axis("provider"), model: axis("model"), thinkingLevel: axis("thinkingLevel") };
+      const applied = { provider: axis2("provider"), model: axis2("model"), thinkingLevel: axis2("thinkingLevel") };
       const candidate = {
         provider,
         ...applied.model.value !== null ? { model: applied.model.value } : {},
@@ -88260,7 +88345,7 @@ ${body}`;
         ok: true,
         selection: validated.selection,
         applied,
-        ...usedDefault ? { defaultRef: ref } : {},
+        ...usedDefault ? { defaultRef: ref2 } : {},
         documentRevision: document.revision,
         warnings: validated.warnings,
         toolRestriction: validated.toolRestriction
@@ -88352,7 +88437,7 @@ ${body}`;
               ...proposal
             };
             const id4 = `ldf-${body.generation}-${digest3(body)}`;
-            const record3 = { ...body, id: id4 };
+            const record4 = { ...body, id: id4 };
             const assistantDir = (0, import_node_path8.join)(this.configDir, "assistant");
             (0, import_node_fs8.mkdirSync)(assistantDir, { recursive: true, mode: 448 });
             syncDir(this.configDir);
@@ -88362,7 +88447,7 @@ ${body}`;
             try {
               const fd = (0, import_node_fs8.openSync)(tmp, "wx", 384);
               try {
-                (0, import_node_fs8.writeFileSync)(fd, JSON.stringify(record3, null, 2));
+                (0, import_node_fs8.writeFileSync)(fd, JSON.stringify(record4, null, 2));
                 (0, import_node_fs8.fsyncSync)(fd);
               } finally {
                 (0, import_node_fs8.closeSync)(fd);
@@ -88634,13 +88719,13 @@ ${body}`;
       }
     });
     function readTarget(value) {
-      const record3 = value && typeof value === "object" && !Array.isArray(value) ? value : null;
-      if (!record3) return null;
+      const record4 = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+      if (!record4) return null;
       const target = {
-        coordinatorDaemonId: readText(record3.coordinatorDaemonId),
-        meshId: readText(record3.meshId),
-        nodeId: readText(record3.nodeId),
-        workspace: readText(record3.workspace)
+        coordinatorDaemonId: readText(record4.coordinatorDaemonId),
+        meshId: readText(record4.meshId),
+        nodeId: readText(record4.nodeId),
+        workspace: readText(record4.workspace)
       };
       return target.coordinatorDaemonId && target.meshId && target.nodeId && target.workspace ? target : null;
     }
@@ -88681,9 +88766,9 @@ ${body}`;
         }
       });
       const out = [];
-      for (const record3 of args.hostRecords) {
-        const meshId = readText(record3?.meshId);
-        const host = readText(record3?.hostDaemonId);
+      for (const record4 of args.hostRecords) {
+        const meshId = readText(record4?.meshId);
+        const host = readText(record4?.hostDaemonId);
         if (!meshId || !host || daemonIdsEquivalent4(host, self)) continue;
         let nodes = [];
         try {
@@ -88988,6 +89073,222 @@ ${body}`;
         TERMINAL_SUBMITS_PER_WRITE_CAP = 1;
         BRACKETED_PASTE_START = "\x1B[200~";
         BRACKETED_PASTE_END = "\x1B[201~";
+      }
+    });
+    function projectSlugBase(repoIdentity) {
+      const parts = String(repoIdentity ?? "").replace(/\.git$/i, "").split(/[/:]+/).filter(Boolean);
+      return (parts[parts.length - 1] ?? "").toLowerCase();
+    }
+    function ownerSegment(repoIdentity) {
+      const parts = String(repoIdentity ?? "").replace(/\.git$/i, "").split(/[/:]+/).filter(Boolean);
+      return (parts[parts.length - 2] ?? "").toLowerCase();
+    }
+    function projectSlugs(meshes) {
+      const byBase = /* @__PURE__ */ new Map();
+      for (const m of meshes) {
+        const base = projectSlugBase(m.repoIdentity) || String(m.name ?? "").trim().toLowerCase();
+        if (!base) continue;
+        byBase.set(base, [...byBase.get(base) ?? [], m]);
+      }
+      const out = /* @__PURE__ */ new Map();
+      for (const [base, group] of byBase) {
+        for (const m of group) {
+          const owner = group.length > 1 ? ownerSegment(m.repoIdentity) : "";
+          out.set(m.id, owner ? `${owner}-${base}` : base);
+        }
+      }
+      return out;
+    }
+    function resolveAssistantProject(ref2, meshes, aliases = {}) {
+      const slugs = projectSlugs(meshes);
+      const slugOf = (m) => slugs.get(m.id) ?? "";
+      const r = typeof ref2 === "string" ? ref2.trim() : "";
+      const lower = r.toLowerCase();
+      const steps = [
+        (m) => m.id === r,
+        // The id the host dashboard shows for a standalone-paired member mesh (it differs from
+        // the member's local id); without this the host's mesh id answered project_not_found.
+        (m) => !!r && typeof m.meshHost?.hostMeshId === "string" && m.meshHost.hostMeshId.trim() === r,
+        (m) => !!m.name && m.name.trim().toLowerCase() === lower,
+        (m) => Object.entries(aliases).some(([alias, meshId]) => alias.trim().toLowerCase() === lower && meshId === m.id),
+        (m) => slugOf(m) === lower,
+        (m) => {
+          const id4 = String(m.repoIdentity ?? "").toLowerCase().replace(/\.git$/i, "");
+          return !!lower && (id4 === lower || id4.endsWith(`/${lower}`));
+        }
+      ];
+      if (r) {
+        for (const step of steps) {
+          const hits = meshes.filter(step);
+          if (hits.length === 1) return { ok: true, mesh: hits[0], slug: slugOf(hits[0]) };
+          if (hits.length > 1) {
+            return {
+              ok: false,
+              code: "project_ambiguous",
+              candidates: hits.map((m) => ({ meshId: m.id, ...m.name ? { name: m.name } : {}, slug: slugOf(m) }))
+            };
+          }
+        }
+      }
+      return { ok: false, code: "project_not_found", projects: meshes.map((m) => slugOf(m) || m.name || m.id) };
+    }
+    var init_assistant_projects = __esm2({
+      "src/assistant/assistant-projects.ts"() {
+        "use strict";
+      }
+    });
+    function stateOf(mesh) {
+      const raw = mesh.coordinatorLaunch;
+      if (raw === void 0) return { projectId: mesh.id, revision: 0, entry: null };
+      if (!isRecord8(raw) || !hasOnlyKeys3(raw, ["version", "revision", "entry"]) || raw.version !== 1 || !Number.isSafeInteger(raw.revision) || raw.revision < 1) return null;
+      if (raw.entry !== null && (!isRecord8(raw.entry) || raw.entry.revision !== raw.revision || !isLaunchDefaultsDocument({ version: 1, revision: raw.revision, coordinator: raw.entry, history: [] }))) return null;
+      return { projectId: mesh.id, revision: raw.revision, entry: raw.entry };
+    }
+    function createLaunchValidationPorts(ctx, configDir = getConfigDir2(), version2) {
+      const loader2 = ctx.deps.providerLoader;
+      return {
+        resolveAlias: (value) => loader2.resolveAlias(value, ["cli"]),
+        getProvider: (type2, model) => {
+          const manifest = loader2.resolve(type2, { version: version2 });
+          if (!manifest) return void 0;
+          const availability = loader2.getAvailableProviderInfos().find((p) => p.type === type2);
+          const setup = resolveMeshCoordinatorSetup({
+            provider: manifest,
+            cliType: type2,
+            meshId: "",
+            workspace: configDir,
+            adhdevMcpCommand: "adhdev",
+            adhdevMcpTransport: "ipc",
+            adhdevMcpPort: 1
+          });
+          return {
+            type: manifest.type,
+            category: manifest.category,
+            enabled: availability?.enabled === true,
+            detected: availability?.installed === true,
+            quotaGated: !!evaluateProviderQuotaGate3({}, type2, null, Date.now(), {
+              liveLocalQuota: liveLocalQuotaForRouting(() => true),
+              suppressObservabilityLogs: true
+            }, { model }),
+            assistant: describeAssistantEligibility({ cliType: type2, provider: manifest, configDir }),
+            coordinator: setup.kind === "unsupported" ? "unsupported" : setup.kind === "manual" ? "manual" : "supported",
+            modelLaunchArgs: manifest.modelLaunchArgs,
+            modelOptions: manifest.modelOptions,
+            modelLaunchValueMap: manifest.modelLaunchValueMap,
+            discovery: readModelCache(type2),
+            thinkingLaunchArgs: manifest.thinkingLaunchArgs,
+            thinkingLevelOptions: manifest.thinkingLevelOptions,
+            runtimeThinking: !!manifest.thinkingControlId && !!manifest.controls?.some((control) => control.id === manifest.thinkingControlId && !!control.setScript)
+          };
+        }
+      };
+    }
+    function createHostProjectPort(ctx) {
+      let transactionOpen = false;
+      const read2 = (ref2) => {
+        const config = readMeshConfigFromDisk();
+        if (!config) return { ok: false, code: "project_storage_unavailable" };
+        const resolved = resolveAssistantProject(ref2, config.meshes);
+        if (!resolved.ok) return { ok: false, code: resolved.code };
+        const host = resolveMeshHostStatus(resolved.mesh, { localDaemonId: ctx.deps.statusInstanceId });
+        if (!ctx.deps.statusInstanceId || !host.canOwnCoordinator || !host.hostDaemonId || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) {
+          return { ok: false, code: "project_not_hosted" };
+        }
+        const state2 = stateOf(resolved.mesh);
+        return state2 ? { ok: true, state: state2 } : { ok: false, code: "project_storage_unavailable" };
+      };
+      return {
+        read: read2,
+        withWriteLock: (operation) => withStrictMeshConfigWriteLock(() => {
+          const prior = transactionOpen;
+          transactionOpen = true;
+          try {
+            return operation();
+          } finally {
+            transactionOpen = prior;
+          }
+        }),
+        replace: (next) => {
+          if (!transactionOpen) return { ok: false, reason: "strict_write_lock_required", committed: false };
+          const current4 = read2(next.projectId);
+          if (!current4.ok) return { ok: false, reason: current4.code, committed: false };
+          if (current4.state.revision !== next.revision - 1) return { ok: false, reason: "revision_conflict", committed: false };
+          const config = readMeshConfigFromDisk();
+          const mesh = config?.meshes.find((m) => m.id === next.projectId);
+          if (!config || !mesh) return { ok: false, reason: "project_storage_unavailable", committed: false };
+          mesh.coordinatorLaunch = {
+            version: 1,
+            revision: next.revision,
+            entry: next.entry
+          };
+          return saveMeshConfigDurable(config);
+        }
+      };
+    }
+    function getLaunchDefaultsCommandPorts(ctx) {
+      const configDir = getConfigDir2();
+      const existing = instances.get(ctx.deps);
+      if (existing?.configDir === configDir) return existing.ports;
+      const validation = createLaunchValidationPorts(ctx, configDir);
+      const ports = {
+        store: new LaunchDefaultsStore(configDir, validation),
+        validation,
+        projects: createHostProjectPort(ctx),
+        assistantContext: (sessionId) => {
+          const log = getAssistantServices().inputLog;
+          return { origin: log.writeContext(sessionId).origin, reviewTurnOpen: !!sessionId && log.isReviewTurnOpen(sessionId) };
+        },
+        currentAssistantToolRestriction: () => {
+          const sessionId = getAssistantRegistry().read()?.sessionId;
+          const live = sessionId ? ctx.deps.instanceManager.getInstance(sessionId) : void 0;
+          if (!live) return void 0;
+          const eligibility = describeAssistantEligibility({
+            cliType: live.type,
+            provider: ctx.deps.providerLoader.getMeta(live.type),
+            configDir
+          });
+          if (!eligibility.supported) throw new LaunchDefaultsCatalogError("Cannot verify the active assistant tool restriction.");
+          return eligibility.toolRestriction;
+        },
+        get stage() {
+          const inbox = getAssistantServices().launchDefaults;
+          if (!inbox) return void 0;
+          return (proposal) => {
+            const stored = ports.store.read();
+            if (stored.status !== "ok" && !(stored.status === "missing" && !proposal.project && proposal.expectedRevision === 0)) {
+              throw new Error("Launch-default setup cannot be read for staging.");
+            }
+            return inbox.write(proposal, {
+              documentRevision: stored.status === "ok" ? stored.document.revision : 0
+            });
+          };
+        }
+      };
+      instances.set(ctx.deps, { configDir, ports });
+      return ports;
+    }
+    var instances;
+    var LaunchDefaultsCatalogError;
+    var init_ports = __esm2({
+      "src/launch-defaults/ports.ts"() {
+        "use strict";
+        init_mesh_quota_routing();
+        init_mesh_quota_sources();
+        init_dist();
+        init_config();
+        init_mesh_config_store();
+        init_mesh_host_ownership();
+        init_assistant_projects();
+        init_assistant_launch_plan();
+        init_assistant_services();
+        init_assistant_registry();
+        init_mesh_coordinator();
+        init_registry();
+        init_store3();
+        init_validate();
+        instances = /* @__PURE__ */ new WeakMap();
+        LaunchDefaultsCatalogError = class extends Error {
+        };
       }
     });
     function isV4Spec(raw) {
@@ -89544,13 +89845,13 @@ ${detail.join("\n")}` : stripped;
       }
       return null;
     }
-    function compilePattern(ref) {
-      const flags = ref.flags ?? "gm";
-      return new RegExp(ref.pattern, flags.includes("g") ? flags : flags + "g");
+    function compilePattern(ref2) {
+      const flags = ref2.flags ?? "gm";
+      return new RegExp(ref2.pattern, flags.includes("g") ? flags : flags + "g");
     }
-    function compileLinePattern(ref) {
-      const flags = (ref.flags ?? "m").replace(/g/g, "");
-      return new RegExp(ref.pattern, flags);
+    function compileLinePattern(ref2) {
+      const flags = (ref2.flags ?? "m").replace(/g/g, "");
+      return new RegExp(ref2.pattern, flags);
     }
     function mapButtonKeyToken(tokenRaw) {
       const token = tokenRaw.trim().toLowerCase();
@@ -90562,9 +90863,9 @@ ${tail}`;
         return [];
       }
     }
-    function readTreeObject(repoRoot, ref, path103) {
+    function readTreeObject(repoRoot, ref2, path103) {
       try {
-        const output = (0, import_node_child_process10.execFileSync)(GIT, ["ls-tree", ref, "--", path103], {
+        const output = (0, import_node_child_process10.execFileSync)(GIT, ["ls-tree", ref2, "--", path103], {
           cwd: repoRoot,
           encoding: "utf8",
           maxBuffer: 1024 * 1024,
@@ -90579,10 +90880,10 @@ ${tail}`;
       }
     }
     function gitRefsResolvable(cwd, refs) {
-      for (const ref of refs) {
-        if (!ref) return false;
+      for (const ref2 of refs) {
+        if (!ref2) return false;
         try {
-          (0, import_node_child_process10.execFileSync)(GIT, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+          (0, import_node_child_process10.execFileSync)(GIT, ["rev-parse", "--verify", "--quiet", `${ref2}^{commit}`], { cwd, stdio: "ignore", timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
         } catch {
           return false;
         }
@@ -90841,8 +91142,8 @@ ${tail}`;
           return void 0;
         };
         const treeOutput = await runGit4(repoRoot, ["ls-tree", "-r", "-z", mergedTree]);
-        const gitlinks = treeOutput.split("\0").filter(Boolean).map((record3) => {
-          const match = /^160000\s+commit\s+([0-9a-f]{40})\t(.+)$/.exec(record3);
+        const gitlinks = treeOutput.split("\0").filter(Boolean).map((record4) => {
+          const match = /^160000\s+commit\s+([0-9a-f]{40})\t(.+)$/.exec(record4);
           return match ? { commit: match[1], path: match[2] } : null;
         }).filter((entry) => !!entry);
         for (const gitlink of gitlinks) {
@@ -92152,7 +92453,7 @@ ${e?.stderr || ""}`
         };
       }
     }
-    async function checkWorktreeChangesPatchEquivalentInRef(repoRoot, ref, worktreeHead) {
+    async function checkWorktreeChangesPatchEquivalentInRef(repoRoot, ref2, worktreeHead) {
       const startedAt = Date.now();
       try {
         const { hiddenExecFileSync: hiddenExecFileSync3 } = await Promise.resolve().then(() => (init_hidden_spawn(), hidden_spawn_exports));
@@ -92161,46 +92462,46 @@ ${e?.stderr || ""}`
           encoding: "utf8",
           maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES
         });
-        const mergeBase = git4(["merge-base", ref, worktreeHead]).trim();
+        const mergeBase = git4(["merge-base", ref2, worktreeHead]).trim();
         let mergedTree = "";
         try {
-          mergedTree = git4(["merge-tree", "--write-tree", ref, worktreeHead]).trim().split(/\s+/)[0] || "";
+          mergedTree = git4(["merge-tree", "--write-tree", ref2, worktreeHead]).trim().split(/\s+/)[0] || "";
         } catch (mergeTreeErr) {
           const output = `${mergeTreeErr?.message || ""}
 ${mergeTreeErr?.stdout || ""}
 ${mergeTreeErr?.stderr || ""}`;
           const isSubmoduleConflict = /(submodule|160000)/i.test(output) || /Recursive merging with submodules/i.test(output);
           if (!isSubmoduleConflict) throw mergeTreeErr;
-          const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, ref, worktreeHead);
+          const evaluation = evaluateGitlinkTrivialFastForward(repoRoot, ref2, worktreeHead);
           if (!evaluation.trivial) {
-            warnGitlinkFastForwardUndeterminable(`containment check for ${ref}`, evaluation.gitlinks);
+            warnGitlinkFastForwardUndeterminable(`containment check for ${ref2}`, evaluation.gitlinks);
             return {
               contained: false,
-              ref,
+              ref: ref2,
               worktreeHead,
               mergeBase: mergeBase || void 0,
               durationMs: Date.now() - startedAt,
               error: `merge-tree submodule conflict is not a trivial fast-forward: ${evaluation.reason || "unknown"}`
             };
           }
-          mergedTree = synthesizeTrivialFastForwardMergeTree(repoRoot, ref, worktreeHead, evaluation.gitlinks) || "";
+          mergedTree = synthesizeTrivialFastForwardMergeTree(repoRoot, ref2, worktreeHead, evaluation.gitlinks) || "";
         }
         if (!mergedTree) {
           return {
             contained: false,
-            ref,
+            ref: ref2,
             worktreeHead,
             mergeBase: mergeBase || void 0,
             durationMs: Date.now() - startedAt,
             error: "could not resolve synthetic merge tree for containment check"
           };
         }
-        const ffGitlinkExcludePaths = collectFastForwardGitlinkPaths(repoRoot, ref, worktreeHead);
-        const residualPatchId = await computeGitPatchId(repoRoot, ref, mergedTree, ffGitlinkExcludePaths);
+        const ffGitlinkExcludePaths = collectFastForwardGitlinkPaths(repoRoot, ref2, worktreeHead);
+        const residualPatchId = await computeGitPatchId(repoRoot, ref2, mergedTree, ffGitlinkExcludePaths);
         const contained = residualPatchId === "";
         return {
           contained,
-          ref,
+          ref: ref2,
           worktreeHead,
           mergeBase: mergeBase || void 0,
           mergedTree,
@@ -92210,7 +92511,7 @@ ${mergeTreeErr?.stderr || ""}`;
       } catch (e) {
         return {
           contained: false,
-          ref,
+          ref: ref2,
           worktreeHead,
           durationMs: Date.now() - startedAt,
           error: e?.message || String(e)
@@ -92755,11 +93056,11 @@ ${asText(streams.stderr)}
     function acquireWorktreeRetentionLease(args) {
       const state2 = loadRetentionState();
       const key4 = stateKey(args.meshId, args.nodeId);
-      const record3 = state2.nodes[key4];
-      const lease = record3?.lease;
+      const record4 = state2.nodes[key4];
+      const lease = record4?.lease;
       if (lease && lease.owner !== args.owner && lease.expiresAt > args.nowMs) return false;
       state2.nodes[key4] = {
-        ...record3 ?? { firstPassAt: args.nowMs, lastPassAt: args.nowMs, lastTickId: "", passCount: 0 },
+        ...record4 ?? { firstPassAt: args.nowMs, lastPassAt: args.nowMs, lastTickId: "", passCount: 0 },
         lease: { owner: args.owner, expiresAt: args.nowMs + args.leaseMs }
       };
       saveRetentionState(state2);
@@ -92768,9 +93069,9 @@ ${asText(streams.stderr)}
     function releaseWorktreeRetentionLease(args) {
       const state2 = loadRetentionState();
       const key4 = stateKey(args.meshId, args.nodeId);
-      const record3 = state2.nodes[key4];
-      if (record3?.lease && record3.lease.owner === args.owner) {
-        delete record3.lease;
+      const record4 = state2.nodes[key4];
+      if (record4?.lease && record4.lease.owner === args.owner) {
+        delete record4.lease;
         saveRetentionState(state2);
       }
     }
@@ -92803,12 +93104,12 @@ ${asText(streams.stderr)}
     function isCoordinatorIdentityNode(node) {
       return node?.coordinator === true || node?.isCoordinator === true || typeof node?.coordinatorFor === "string" || typeof node?.meshCoordinatorFor === "string" || typeof node?.meta?.meshCoordinatorFor === "string";
     }
-    function sessionMatchesNode(record3, node, nodeId) {
-      const sessionId = typeof record3?.sessionId === "string" ? record3.sessionId : "";
+    function sessionMatchesNode(record4, node, nodeId) {
+      const sessionId = typeof record4?.sessionId === "string" ? record4.sessionId : "";
       if (!sessionId) return false;
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
-      if (workspace && record3?.workspace === workspace) return true;
-      if (record3?.meta?.meshNodeId === nodeId) return true;
+      if (workspace && record4?.workspace === workspace) return true;
+      if (record4?.meta?.meshNodeId === nodeId) return true;
       return false;
     }
     function resolveSourceRepoRoot(mesh, node) {
@@ -92860,7 +93161,7 @@ ${asText(streams.stderr)}
       if (ctx.sessions === void 0) {
         return skip("live_session", "Session inventory unavailable; refusing to plan removal without a liveness check (fail-closed).");
       }
-      const liveSession = ctx.sessions.find((record3) => sessionMatchesNode(record3, node, nodeId) && (0, import_session_host_core4.getSessionHostSurfaceKind)(record3) === "live_runtime");
+      const liveSession = ctx.sessions.find((record4) => sessionMatchesNode(record4, node, nodeId) && (0, import_session_host_core4.getSessionHostSurfaceKind)(record4) === "live_runtime");
       if (liveSession) {
         return skip("live_session", "A live/starting/generating/waiting/idle retained session is still attached to this node.");
       }
@@ -93126,8 +93427,8 @@ ${asText(streams.stderr)}
           if (!key4.startsWith(meshPrefix)) continue;
           const nodeId = key4.slice(meshPrefix.length);
           if (liveNodeIds.has(nodeId)) continue;
-          const record3 = state2.nodes[key4];
-          if (record3?.lease && record3.lease.expiresAt > opts.nowMs) continue;
+          const record4 = state2.nodes[key4];
+          if (record4?.lease && record4.lease.expiresAt > opts.nowMs) continue;
           delete state2.nodes[key4];
           orphansPruned++;
           stateDirty = true;
@@ -93147,41 +93448,41 @@ ${asText(streams.stderr)}
         }
         const now = opts.nowMs;
         const existing = state2.nodes[key4];
-        let record3;
+        let record4;
         if (!existing) {
           if (recordPasses) {
-            record3 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 1 };
-            state2.nodes[key4] = record3;
+            record4 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 1 };
+            state2.nodes[key4] = record4;
             stateDirty = true;
           } else {
-            record3 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 0 };
+            record4 = { firstPassAt: now, lastPassAt: now, lastTickId: opts.tickId, passCount: 0 };
           }
         } else {
-          record3 = existing;
+          record4 = existing;
           if (recordPasses) {
-            if (record3.lastTickId !== opts.tickId) {
-              record3.passCount += 1;
-              record3.lastTickId = opts.tickId;
+            if (record4.lastTickId !== opts.tickId) {
+              record4.passCount += 1;
+              record4.lastTickId = opts.tickId;
               stateDirty = true;
             }
-            if (record3.lastPassAt !== now) {
-              record3.lastPassAt = now;
+            if (record4.lastPassAt !== now) {
+              record4.lastPassAt = now;
               stateDirty = true;
             }
-            if (record3.convergenceStatus !== entry.convergence?.status) {
-              record3.convergenceStatus = entry.convergence?.status;
+            if (record4.convergenceStatus !== entry.convergence?.status) {
+              record4.convergenceStatus = entry.convergence?.status;
               stateDirty = true;
             }
           }
         }
-        const eligibleAt = record3.firstPassAt + graceMs;
-        const lease = record3.lease;
+        const eligibleAt = record4.firstPassAt + graceMs;
+        const lease = record4.lease;
         const leaseHeld = !!lease && lease.owner !== owner && lease.expiresAt > now;
         entry.auto = {
-          passCount: record3.passCount,
-          firstPassAt: record3.firstPassAt,
+          passCount: record4.passCount,
+          firstPassAt: record4.firstPassAt,
           eligibleAt,
-          autoEligible: record3.passCount >= 2 && now >= eligibleAt && !leaseHeld,
+          autoEligible: record4.passCount >= 2 && now >= eligibleAt && !leaseHeld,
           ...leaseHeld ? { leaseHeld: true, leaseOwner: lease?.owner } : {}
         };
         if (leaseHeld) metrics.leaseConflicts++;
@@ -93758,15 +94059,15 @@ ${asText(streams.stderr)}
         if (!(0, import_fs40.existsSync)(runtimesDir)) continue;
         for (const f of listDirFiles(runtimesDir)) {
           if (!f.path.endsWith(".json")) continue;
-          let record3 = null;
+          let record4 = null;
           try {
             const parsed = JSON.parse((0, import_fs40.readFileSync)(f.path, "utf-8"));
             const rec5 = parsed && typeof parsed === "object" ? parsed.record : null;
-            record3 = rec5 && typeof rec5 === "object" ? rec5 : null;
+            record4 = rec5 && typeof rec5 === "object" ? rec5 : null;
           } catch {
-            record3 = null;
+            record4 = null;
           }
-          candidates.push({ path: f.path, mtimeMs: f.mtimeMs, record: record3 });
+          candidates.push({ path: f.path, mtimeMs: f.mtimeMs, record: record4 });
         }
       }
       const expired = selectExpiredSessionHostRuntimes(candidates, now);
@@ -93923,13 +94224,13 @@ ${asText(streams.stderr)}
       const { meshId, records, activeWorkSessionIds, ttlMs, now } = args;
       const plan = { reap: [], skipped: [] };
       if (!Array.isArray(records) || ttlMs <= 0) return plan;
-      for (const record3 of records) {
-        const sessionId = readStringValue2(record3?.sessionId);
+      for (const record4 of records) {
+        const sessionId = readStringValue2(record4?.sessionId);
         if (!sessionId) continue;
-        const meta = record3?.meta && typeof record3.meta === "object" ? record3.meta : {};
+        const meta = record4?.meta && typeof record4.meta === "object" ? record4.meta : {};
         const skip = (reason, idleMs2) => plan.skipped.push({ sessionId, reason, ...idleMs2 !== void 0 ? { idleMs: idleMs2 } : {} });
-        const surfaceKind = readStringValue2(record3?.surfaceKind);
-        const lifecycle = readStringValue2(record3?.lifecycle);
+        const surfaceKind = readStringValue2(record4?.surfaceKind);
+        const lifecycle = readStringValue2(record4?.lifecycle);
         if (surfaceKind && surfaceKind !== "live_runtime" || lifecycle && lifecycle !== "running" && lifecycle !== "starting") {
           skip("not_live_runtime");
           continue;
@@ -93947,7 +94248,7 @@ ${asText(streams.stderr)}
           skip("other_mesh");
           continue;
         }
-        const lastActivityAt = typeof record3?.lastActivityAt === "number" && Number.isFinite(record3.lastActivityAt) ? record3.lastActivityAt : void 0;
+        const lastActivityAt = typeof record4?.lastActivityAt === "number" && Number.isFinite(record4.lastActivityAt) ? record4.lastActivityAt : void 0;
         if (lastActivityAt === void 0) {
           skip("missing_last_activity");
           continue;
@@ -94285,10 +94586,10 @@ ${asText(streams.stderr)}
       }
       const head = parts.length > 0 ? `[Mesh] active ${total}: ${parts.join(", ")}` : `[Mesh] active ${total}`;
       const entries = [];
-      const sorted = inputs.activeWork.filter((record3) => typeof record3?.taskId === "string" && record3.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
-      for (const record3 of sorted) {
-        const id4 = record3.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
-        entries.push(`${id4} ${record3.status}`);
+      const sorted = inputs.activeWork.filter((record4) => typeof record4?.taskId === "string" && record4.taskId.trim()).slice().sort((a, b) => (STATUS_ACTIONABILITY_RANK[a.status] ?? 99) - (STATUS_ACTIONABILITY_RANK[b.status] ?? 99));
+      for (const record4 of sorted) {
+        const id4 = record4.taskId.trim().slice(0, TASK_ID_PREFIX_CHARS);
+        entries.push(`${id4} ${record4.status}`);
       }
       if (entries.length === 0) return clampToBound(head);
       let line = head;
@@ -94407,10 +94708,6 @@ ${asText(streams.stderr)}
           }));
         },
         lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
-        cliTypeFor: (meshId) => {
-          const fromMesh = lazy.listCoordinatorsForMesh(meshId).find((e) => readText2(e.cliType))?.cliType;
-          return readText2(fromMesh) || readText2(lazy.assistantCliType()) || null;
-        },
         queueCounts: (meshId) => {
           try {
             const s2 = lazy.getMeshQueueStats(meshId);
@@ -94495,7 +94792,6 @@ ${asText(streams.stderr)}
         getMeshQueueStats: queue.getMeshQueueStats,
         getMeshMissions: missions.getMeshMissions,
         assistantAliases: () => assistantRegistry.reload()?.aliases ?? {},
-        assistantCliType: () => assistantRegistry.reload()?.cliType ?? null,
         turnStore: () => runtimeStore.MeshRuntimeStore.getInstance().turnStore(),
         meshStatusLine: (meshId) => statusLine.buildMeshStatusLineForNotification(meshId),
         peerHostMeshIds: (hostDaemonId) => {
@@ -94581,216 +94877,6 @@ ${asText(streams.stderr)}
         REVIEW_TURN_VERB_SET = new Set(ASSISTANT_REVIEW_TURN_VERBS2);
       }
     });
-    function projectSlugBase(repoIdentity) {
-      const parts = String(repoIdentity ?? "").replace(/\.git$/i, "").split(/[/:]+/).filter(Boolean);
-      return (parts[parts.length - 1] ?? "").toLowerCase();
-    }
-    function ownerSegment(repoIdentity) {
-      const parts = String(repoIdentity ?? "").replace(/\.git$/i, "").split(/[/:]+/).filter(Boolean);
-      return (parts[parts.length - 2] ?? "").toLowerCase();
-    }
-    function projectSlugs(meshes) {
-      const byBase = /* @__PURE__ */ new Map();
-      for (const m of meshes) {
-        const base = projectSlugBase(m.repoIdentity) || String(m.name ?? "").trim().toLowerCase();
-        if (!base) continue;
-        byBase.set(base, [...byBase.get(base) ?? [], m]);
-      }
-      const out = /* @__PURE__ */ new Map();
-      for (const [base, group] of byBase) {
-        for (const m of group) {
-          const owner = group.length > 1 ? ownerSegment(m.repoIdentity) : "";
-          out.set(m.id, owner ? `${owner}-${base}` : base);
-        }
-      }
-      return out;
-    }
-    function resolveAssistantProject(ref, meshes, aliases = {}) {
-      const slugs = projectSlugs(meshes);
-      const slugOf = (m) => slugs.get(m.id) ?? "";
-      const r = typeof ref === "string" ? ref.trim() : "";
-      const lower = r.toLowerCase();
-      const steps = [
-        (m) => m.id === r,
-        // The id the host dashboard shows for a standalone-paired member mesh (it differs from
-        // the member's local id); without this the host's mesh id answered project_not_found.
-        (m) => !!r && typeof m.meshHost?.hostMeshId === "string" && m.meshHost.hostMeshId.trim() === r,
-        (m) => !!m.name && m.name.trim().toLowerCase() === lower,
-        (m) => Object.entries(aliases).some(([alias, meshId]) => alias.trim().toLowerCase() === lower && meshId === m.id),
-        (m) => slugOf(m) === lower,
-        (m) => {
-          const id4 = String(m.repoIdentity ?? "").toLowerCase().replace(/\.git$/i, "");
-          return !!lower && (id4 === lower || id4.endsWith(`/${lower}`));
-        }
-      ];
-      if (r) {
-        for (const step of steps) {
-          const hits = meshes.filter(step);
-          if (hits.length === 1) return { ok: true, mesh: hits[0], slug: slugOf(hits[0]) };
-          if (hits.length > 1) {
-            return {
-              ok: false,
-              code: "project_ambiguous",
-              candidates: hits.map((m) => ({ meshId: m.id, ...m.name ? { name: m.name } : {}, slug: slugOf(m) }))
-            };
-          }
-        }
-      }
-      return { ok: false, code: "project_not_found", projects: meshes.map((m) => slugOf(m) || m.name || m.id) };
-    }
-    var init_assistant_projects = __esm2({
-      "src/assistant/assistant-projects.ts"() {
-        "use strict";
-      }
-    });
-    function stateOf(mesh) {
-      const raw = mesh.coordinatorLaunch;
-      if (raw === void 0) return { projectId: mesh.id, revision: 0, entry: null };
-      if (!isRecord8(raw) || !hasOnlyKeys3(raw, ["version", "revision", "entry"]) || raw.version !== 1 || !Number.isSafeInteger(raw.revision) || raw.revision < 1) return null;
-      if (raw.entry !== null && (!isRecord8(raw.entry) || raw.entry.revision !== raw.revision || !isLaunchDefaultsDocument({ version: 1, revision: raw.revision, coordinator: raw.entry, history: [] }))) return null;
-      return { projectId: mesh.id, revision: raw.revision, entry: raw.entry };
-    }
-    function createLaunchValidationPorts(ctx, configDir = getConfigDir2()) {
-      const loader2 = ctx.deps.providerLoader;
-      return {
-        resolveAlias: (value) => loader2.resolveAlias(value, ["cli"]),
-        getProvider: (type2) => {
-          const manifest = loader2.getMeta(type2);
-          if (!manifest) return void 0;
-          const availability = loader2.getAvailableProviderInfos().find((p) => p.type === type2);
-          const setup = resolveMeshCoordinatorSetup({
-            provider: manifest,
-            cliType: type2,
-            meshId: "",
-            workspace: configDir,
-            adhdevMcpCommand: "adhdev",
-            adhdevMcpTransport: "ipc",
-            adhdevMcpPort: 1
-          });
-          return {
-            type: manifest.type,
-            category: manifest.category,
-            enabled: availability?.enabled === true,
-            detected: availability?.installed === true,
-            assistant: describeAssistantEligibility({ cliType: type2, provider: manifest, configDir }),
-            coordinator: setup.kind === "unsupported" ? "unsupported" : setup.kind === "manual" ? "manual" : "supported",
-            modelLaunchArgs: manifest.modelLaunchArgs,
-            modelOptions: manifest.modelOptions,
-            modelLaunchValueMap: manifest.modelLaunchValueMap,
-            discovery: readModelCache(type2),
-            thinkingLaunchArgs: manifest.thinkingLaunchArgs,
-            thinkingLevelOptions: manifest.thinkingLevelOptions,
-            runtimeThinking: !!manifest.thinkingControlId && !!manifest.controls?.some((control) => control.id === manifest.thinkingControlId && !!control.setScript)
-          };
-        }
-      };
-    }
-    function createHostProjectPort(ctx) {
-      let transactionOpen = false;
-      const read2 = (ref) => {
-        const config = readMeshConfigFromDisk();
-        if (!config) return { ok: false, code: "project_storage_unavailable" };
-        const resolved = resolveAssistantProject(ref, config.meshes);
-        if (!resolved.ok) return { ok: false, code: resolved.code };
-        const host = resolveMeshHostStatus(resolved.mesh, { localDaemonId: ctx.deps.statusInstanceId });
-        if (!ctx.deps.statusInstanceId || !host.canOwnCoordinator || !host.hostDaemonId || !daemonIdsEquivalent4(host.hostDaemonId, ctx.deps.statusInstanceId)) {
-          return { ok: false, code: "project_not_hosted" };
-        }
-        const state2 = stateOf(resolved.mesh);
-        return state2 ? { ok: true, state: state2 } : { ok: false, code: "project_storage_unavailable" };
-      };
-      return {
-        read: read2,
-        withWriteLock: (operation) => withStrictMeshConfigWriteLock(() => {
-          const prior = transactionOpen;
-          transactionOpen = true;
-          try {
-            return operation();
-          } finally {
-            transactionOpen = prior;
-          }
-        }),
-        replace: (next) => {
-          if (!transactionOpen) return { ok: false, reason: "strict_write_lock_required", committed: false };
-          const current4 = read2(next.projectId);
-          if (!current4.ok) return { ok: false, reason: current4.code, committed: false };
-          if (current4.state.revision !== next.revision - 1) return { ok: false, reason: "revision_conflict", committed: false };
-          const config = readMeshConfigFromDisk();
-          const mesh = config?.meshes.find((m) => m.id === next.projectId);
-          if (!config || !mesh) return { ok: false, reason: "project_storage_unavailable", committed: false };
-          mesh.coordinatorLaunch = {
-            version: 1,
-            revision: next.revision,
-            entry: next.entry
-          };
-          return saveMeshConfigDurable(config);
-        }
-      };
-    }
-    function getLaunchDefaultsCommandPorts(ctx) {
-      const configDir = getConfigDir2();
-      const existing = instances.get(ctx.deps);
-      if (existing?.configDir === configDir) return existing.ports;
-      const validation = createLaunchValidationPorts(ctx, configDir);
-      const ports = {
-        store: new LaunchDefaultsStore(configDir, validation),
-        validation,
-        projects: createHostProjectPort(ctx),
-        assistantContext: (sessionId) => {
-          const log = getAssistantServices().inputLog;
-          return { origin: log.writeContext(sessionId).origin, reviewTurnOpen: !!sessionId && log.isReviewTurnOpen(sessionId) };
-        },
-        currentAssistantToolRestriction: () => {
-          const sessionId = getAssistantRegistry().read()?.sessionId;
-          const live = sessionId ? ctx.deps.instanceManager.getInstance(sessionId) : void 0;
-          if (!live) return void 0;
-          const eligibility = describeAssistantEligibility({
-            cliType: live.type,
-            provider: ctx.deps.providerLoader.getMeta(live.type),
-            configDir
-          });
-          if (!eligibility.supported) throw new LaunchDefaultsCatalogError("Cannot verify the active assistant tool restriction.");
-          return eligibility.toolRestriction;
-        },
-        get stage() {
-          const inbox = getAssistantServices().launchDefaults;
-          if (!inbox) return void 0;
-          return (proposal) => {
-            const stored = ports.store.read();
-            if (stored.status !== "ok" && !(stored.status === "missing" && !proposal.project && proposal.expectedRevision === 0)) {
-              throw new Error("Launch-default setup cannot be read for staging.");
-            }
-            return inbox.write(proposal, {
-              documentRevision: stored.status === "ok" ? stored.document.revision : 0
-            });
-          };
-        }
-      };
-      instances.set(ctx.deps, { configDir, ports });
-      return ports;
-    }
-    var instances;
-    var LaunchDefaultsCatalogError;
-    var init_ports = __esm2({
-      "src/launch-defaults/ports.ts"() {
-        "use strict";
-        init_dist();
-        init_config();
-        init_mesh_config_store();
-        init_mesh_host_ownership();
-        init_assistant_projects();
-        init_assistant_launch_plan();
-        init_assistant_services();
-        init_assistant_registry();
-        init_mesh_coordinator();
-        init_registry();
-        init_store3();
-        init_validate();
-        instances = /* @__PURE__ */ new WeakMap();
-        LaunchDefaultsCatalogError = class extends Error {
-        };
-      }
-    });
     function fail2(code, error, detail = {}) {
       return { success: false, code, error, ...detail };
     }
@@ -94833,9 +94919,9 @@ ${asText(streams.stderr)}
         { reason: stored.status === "ok" ? "launch_defaults_schema_invalid" : stored.reason }
       );
     }
-    function projectState(ports, ref) {
+    function projectState(ports, ref2) {
       if (!ports.projects) return { ok: false, code: "project_storage_unavailable" };
-      const read2 = ports.projects.read(ref);
+      const read2 = ports.projects.read(ref2);
       if (!read2.ok) return read2;
       const state2 = read2.state;
       if (!isRecord8(state2) || typeof state2.projectId !== "string" || !state2.projectId.trim() || !Number.isSafeInteger(state2.revision) || state2.revision < 0 || state2.entry !== null && (!isRecord8(state2.entry) || state2.entry.revision !== state2.revision || !isLaunchDefaultsDocument({ version: 1, revision: state2.revision, coordinator: state2.entry, history: [] }))) {
@@ -95123,8 +95209,8 @@ ${asText(streams.stderr)}
       if (decision.allowed) return null;
       return { success: false, code: decision.code, error: `${verb} is not available during the review turn` };
     }
-    async function resolveNoteProject(ctx, svc, ref) {
-      const r = resolveAssistantProject(ref, svc.listMeshes());
+    async function resolveNoteProject(ctx, svc, ref2) {
+      const r = resolveAssistantProject(ref2, svc.listMeshes());
       if (!r.ok) {
         const detail = r.code === "project_not_found" ? { projects: r.projects } : { candidates: r.candidates };
         return { ok: false, result: { success: false, code: r.code, error: r.code, ...detail } };
@@ -95878,7 +95964,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const zeroReason = readText3(bonus.zeroReason);
       const gateReason = readText3(gate.reason);
       const remainingPercent2 = routingNum(ranking?.remainingPercent);
-      const axis = axisOf(ranking?.axis);
+      const axis2 = axisOf(ranking?.axis);
       return {
         providerType,
         ...snapshotStatus ? { snapshotStatus } : {},
@@ -95888,7 +95974,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...gateReason ? { gateReason } : {},
         bonusValue: routingNum(bonus.value) ?? 0,
         ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
-        ...axis ? { axis } : {}
+        ...axis2 ? { axis: axis2 } : {}
       };
     }
     function routingNodeRow(v, labelOf) {
@@ -97386,14 +97472,14 @@ ${b.text}`).join("\n\n");
     }
     function verifiedNativeReportParts(body, parts, reference, generation) {
       if (body.length > ATTEMPT_BODY_MAX_CHARS || !isVerifiedNativeEvidenceRef(reference, generation) || !Array.isArray(parts) || !parts.length || parts.length > 600) return null;
-      const ref = JSON.parse(reference);
+      const ref2 = JSON.parse(reference);
       const points = Array.from(body);
       const bubbles = [];
       let offset = 0;
       for (let i = 0; i < parts.length; i++) {
         const part = rec4(parts[i]);
         const at = part?.at, chars = part?.chars;
-        if (typeof at !== "number" || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || at > Number(ref[8] ?? ref[2]) || i > 0 && at <= bubbles[i - 1].at || typeof chars !== "number" || !Number.isSafeInteger(chars) || chars <= 0) return null;
+        if (typeof at !== "number" || !Number.isSafeInteger(at) || !Number.isFinite(new Date(at).getTime()) || at > Number(ref2[8] ?? ref2[2]) || i > 0 && at <= bubbles[i - 1].at || typeof chars !== "number" || !Number.isSafeInteger(chars) || chars <= 0) return null;
         if (parts.length > 1) {
           const label2 = Array.from(`${i ? "\n\n" : ""}[reply ${i + 1}/${parts.length} \xB7 ${formatReplyClock(at)}]
 `);
@@ -97407,7 +97493,7 @@ ${b.text}`).join("\n\n");
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
       const digest4 = (0, import_node_crypto23.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
-      return ref[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
+      return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
       const source2 = rec4(read2.messageSource) ?? rec4(read2.transcriptProvenance);
@@ -97498,8 +97584,8 @@ ${b.text}`).join("\n\n");
       let payload = payloadOf(terminal);
       let evidence = rec4(payload?.evidence);
       const matchesEvidence = (row2, e) => {
-        const ref = rec4(e?.attemptRef);
-        return owns(row2) && e?.eventId === row2.event_id && e?.kind === row2.kind && e?.sessionId === sessionId && e?.at === row2.at_ms && (!ref || ref.attemptId === attempt.attemptId && ref.generation === attempt.generation);
+        const ref2 = rec4(e?.attemptRef);
+        return owns(row2) && e?.eventId === row2.event_id && e?.kind === row2.kind && e?.sessionId === sessionId && e?.at === row2.at_ms && (!ref2 || ref2.attemptId === attempt.attemptId && ref2.generation === attempt.generation);
       };
       if (!matchesEvidence(terminal, evidence) || !owns(committed) || terminal.to_state !== attempt.terminal.outcome || terminal.at_ms !== attempt.terminal.at || committed.event_id !== terminal.event_id + "#committed" || committed.verdict !== "applied" || committed.from_state !== null || committed.source !== terminal.source || committed.to_state !== attempt.terminal.outcome || committed.at_ms !== terminal.at_ms || commitPayload?.outcome !== attempt.terminal.outcome || commitPayload?.reason !== attempt.terminal.reason || commitPayload?.strength !== attempt.terminal.strength || evidence?.source !== attempt.terminal.source) {
         return { body: null, source: "unavailable", reason: "original_terminal_evidence_unavailable" };
@@ -97772,7 +97858,6 @@ ${b.text}`).join("\n\n");
         if (live) return { ok: true, sessionId: live.sessionId, launched: false, managedByAssistant: live.managedByAssistant };
         const launched = await ports.launch({
           meshId,
-          cliType: ports.cliTypeFor(meshId),
           extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT,
           managedByAssistant: true
         });
@@ -98211,7 +98296,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const visited = /* @__PURE__ */ new Set();
       let dirsScanned = 0;
       let truncated;
-      const record3 = (path103) => {
+      const record4 = (path103) => {
         if (repos.has(path103)) return;
         const git4 = gitCommonDir(path103);
         if (!git4) return;
@@ -98236,7 +98321,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (visited.has(path103)) continue;
         visited.add(path103);
         if ((0, import_fs41.existsSync)((0, import_path41.join)(path103, ".git"))) {
-          record3(path103);
+          record4(path103);
           continue;
         }
         if (left <= 0) continue;
@@ -98256,7 +98341,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           } catch {
             continue;
           }
-          if ((0, import_fs41.existsSync)((0, import_path41.join)(child, ".git"))) record3(child);
+          if ((0, import_fs41.existsSync)((0, import_path41.join)(child, ".git"))) record4(child);
           else if (left > 1) queue.push({ path: child, left: left - 1 });
         }
       }
@@ -98308,9 +98393,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       };
     }
-    async function resolveProject(ports, ref) {
+    async function resolveProject(ports, ref2) {
       await ports.refreshMemberMeshes?.();
-      const r = resolveAssistantProject(ref, ports.listMeshes(), ports.aliases());
+      const r = resolveAssistantProject(ref2, ports.listMeshes(), ports.aliases());
       if (!r.ok) {
         const detail = r.code === "project_not_found" ? { projects: r.projects } : { candidates: r.candidates };
         return { ok: false, result: fail4(r.code, r.code, detail) };
@@ -98336,10 +98421,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function coordinatorPorts(ports) {
       return {
         coordinators: (meshId) => ports.coordinators(meshId),
-        cliTypeFor: (meshId) => ports.cliTypeFor(meshId),
         launch: (input) => ports.execute("launch_mesh_coordinator", {
           meshId: input.meshId,
-          ...input.cliType ? { cliType: input.cliType } : {},
           extraSystemPrompt: input.extraSystemPrompt,
           managedByAssistant: input.managedByAssistant
         }),
@@ -99308,8 +99391,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.auditReplies(now);
             for (const item of this.queue) if (item.kind === "relay") for (const id4 of item.attemptIds) {
               if (!this.hasCapturedBody(id4) && !this.attemptBodyCapture.has(id4)) {
-                const ref = this.restoredAttempts.get(id4);
-                this.captureAttemptBody(id4, ref?.meshId ?? item.meshId, ref?.sessionId ?? item.coordinatorSessionId);
+                const ref2 = this.restoredAttempts.get(id4);
+                this.captureAttemptBody(id4, ref2?.meshId ?? item.meshId, ref2?.sessionId ?? item.coordinatorSessionId);
               }
             }
             this.kick();
@@ -99975,8 +100058,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           async bodiesFor(item) {
             for (const id4 of item.attemptIds) {
               if (this.hasCapturedBody(id4) || this.attemptBodyCapture.has(id4)) continue;
-              const ref = this.restoredAttempts.get(id4);
-              this.captureAttemptBody(id4, ref?.meshId ?? item.meshId, ref?.sessionId ?? item.coordinatorSessionId, false, true);
+              const ref2 = this.restoredAttempts.get(id4);
+              this.captureAttemptBody(id4, ref2?.meshId ?? item.meshId, ref2?.sessionId ?? item.coordinatorSessionId, false, true);
             }
             await Promise.all(item.attemptIds.map((id4) => this.attemptBodyCapture.get(id4)));
             return item.attemptIds.map((id4) => this.attemptBodies.get(id4) ?? null);
@@ -99991,8 +100074,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return paged ? `${base}:page:${receiptKey(bodies.map((body, index) => [reportBodyId(body ?? ""), offsets[index]]))}` : base;
           }
           async renderUnavailable(item) {
-            const ref = this.restoredAttempts.get(item.attemptIds.at(-1));
-            const session = ref?.sessionId ?? item.coordinatorSessionId;
+            const ref2 = this.restoredAttempts.get(item.attemptIds.at(-1));
+            const session = ref2?.sessionId ?? item.coordinatorSessionId;
             let cursor = null;
             try {
               cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2e3, null);
@@ -100843,7 +100926,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs10.existsSync)(cwd),
+          cwdExists: (0, import_node_fs11.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -100950,7 +101033,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process14;
-    var import_node_fs10;
+    var import_node_fs11;
     var import_node_util8;
     var execFileAsync5;
     var GIT2;
@@ -100959,7 +101042,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process14 = require("child_process");
-        import_node_fs10 = require("fs");
+        import_node_fs11 = require("fs");
         import_node_util8 = require("util");
         init_resolve_executable();
         init_logger();
@@ -100981,7 +101064,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     async function assessScope(cwd, path103, baseRef, branchRef) {
       try {
-        if (!(0, import_node_fs11.existsSync)(cwd)) return { path: path103, verdict: "unknown", error: `path does not exist: ${cwd}` };
+        if (!(0, import_node_fs12.existsSync)(cwd)) return { path: path103, verdict: "unknown", error: `path does not exist: ${cwd}` };
         const liveBaseHead = await git3(cwd, ["rev-parse", baseRef]);
         const branchHead = await git3(cwd, ["rev-parse", branchRef]);
         if (!liveBaseHead || !branchHead) {
@@ -101024,10 +101107,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const scopes2 = [];
       let touchedSubmodulePaths = [];
       const rootBaseRef = await (async () => {
-        for (const ref of [`origin/${baseBranch}`, baseBranch, "HEAD"]) {
+        for (const ref2 of [`origin/${baseBranch}`, baseBranch, "HEAD"]) {
           try {
-            await git3(repoRoot, ["rev-parse", "--verify", `${ref}^{commit}`]);
-            return ref;
+            await git3(repoRoot, ["rev-parse", "--verify", `${ref2}^{commit}`]);
+            return ref2;
           } catch {
           }
         }
@@ -101053,10 +101136,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             for (const subPath of touchedSubmodulePaths) {
               const subCwd = (0, import_node_path11.resolve)(workspace, subPath);
               const subBaseRef = await (async () => {
-                for (const ref of ["origin/main", "origin/master", "main", "master"]) {
+                for (const ref2 of ["origin/main", "origin/master", "main", "master"]) {
                   try {
-                    await git3(subCwd, ["rev-parse", "--verify", `${ref}^{commit}`]);
-                    return ref;
+                    await git3(subCwd, ["rev-parse", "--verify", `${ref2}^{commit}`]);
+                    return ref2;
                   } catch {
                   }
                 }
@@ -101072,12 +101155,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return { verdict, scopes: scopes2, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
     var import_node_path11;
-    var import_node_fs11;
+    var import_node_fs12;
     var init_mesh_refine_base_divergence = __esm2({
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
         import_node_path11 = require("path");
-        import_node_fs11 = require("fs");
+        import_node_fs12 = require("fs");
         init_mesh_refine_batch();
         init_git_executor();
       }
@@ -101356,18 +101439,18 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       selectOpenRefineDispatches: () => selectOpenRefineDispatches,
       shouldNotifyRefineCloseOut: () => shouldNotifyRefineCloseOut
     });
-    function classifyRefineDispatch(record3, opts) {
-      if (opts.isRunning(record3.nodeId)) return void 0;
-      const dispatchedAtMs = new Date(record3.timestamp).getTime();
+    function classifyRefineDispatch(record4, opts) {
+      if (opts.isRunning(record4.nodeId)) return void 0;
+      const dispatchedAtMs = new Date(record4.timestamp).getTime();
       const ageMs2 = Number.isFinite(dispatchedAtMs) ? opts.nowMs - dispatchedAtMs : void 0;
-      const base = { nodeId: record3.nodeId, jobId: record3.jobId, ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {} };
-      if (!opts.nodeExists(record3.nodeId)) {
+      const base = { nodeId: record4.nodeId, jobId: record4.jobId, ...ageMs2 !== void 0 ? { ageMs: ageMs2 } : {} };
+      if (!opts.nodeExists(record4.nodeId)) {
         return { ...base, disposition: "close_removed_node" };
       }
       if (opts.executorLiveness) {
         let liveness;
         try {
-          liveness = opts.executorLiveness(record3);
+          liveness = opts.executorLiveness(record4);
         } catch {
           liveness = "unknown";
         }
@@ -101531,15 +101614,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         args.entries
       );
       let newest = null;
-      for (const record3 of open) {
-        if (record3.nodeId !== nodeId) continue;
-        if (args.excludeJobId && record3.jobId === args.excludeJobId) continue;
-        const dispatchedAt = Date.parse(record3.timestamp);
+      for (const record4 of open) {
+        if (record4.nodeId !== nodeId) continue;
+        if (args.excludeJobId && record4.jobId === args.excludeJobId) continue;
+        const dispatchedAt = Date.parse(record4.timestamp);
         if (!Number.isFinite(dispatchedAt)) continue;
         const ageMs2 = args.nowMs - dispatchedAt;
         if (ageMs2 > freshnessMs) continue;
         if (!newest || dispatchedAt > Date.parse(newest.timestamp)) {
-          newest = { nodeId: record3.nodeId, jobId: record3.jobId, timestamp: record3.timestamp, ageMs: ageMs2 };
+          newest = { nodeId: record4.nodeId, jobId: record4.jobId, timestamp: record4.timestamp, ageMs: ageMs2 };
         }
       }
       return newest;
@@ -101561,7 +101644,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function refineWorktreeVanishedOutcome(ctx, nextStage) {
       const workspace = ctx?.node?.workspace;
       if (typeof workspace !== "string" || !workspace) return null;
-      if ((0, import_node_fs12.existsSync)(workspace)) return null;
+      if ((0, import_node_fs13.existsSync)(workspace)) return null;
       recordMeshRefineStage(ctx.refineStages, nextStage, "failed", Date.now(), {
         workspace,
         workspaceMissing: true,
@@ -101581,12 +101664,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       };
     }
-    var import_node_fs12;
+    var import_node_fs13;
     var REFINE_INFLIGHT_FRESHNESS_MS;
     var init_mesh_refine_inflight = __esm2({
       "src/mesh/mesh-refine-inflight.ts"() {
         "use strict";
-        import_node_fs12 = require("fs");
+        import_node_fs13 = require("fs");
         init_mesh_refine_zombie_sweep();
         init_mesh_refine_landing();
         init_mesh_refine_gates();
@@ -102446,7 +102529,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
-      if (!(0, import_node_fs13.existsSync)(node.workspace)) {
+      if (!(0, import_node_fs14.existsSync)(node.workspace)) {
         recordMeshRefineStage(refineStages, "resolve_refs", "failed", Date.now(), {
           workspace: node.workspace,
           workspaceMissing: true
@@ -102806,13 +102889,13 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Array.isArray(refineStages)) return false;
       return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
     }
-    var import_node_fs13;
+    var import_node_fs14;
     var init_router_refine_sync_stages = __esm2({
       "src/commands/router-refine-sync-stages.ts"() {
         "use strict";
         init_mesh_refine_gates();
         init_dist();
-        import_node_fs13 = require("fs");
+        import_node_fs14 = require("fs");
         init_mesh_refine_landing();
         init_git_locale();
         init_git_status();
@@ -103243,14 +103326,14 @@ ${e?.stderr || ""}`;
         try {
           const liveSessions = await self.deps.sessionHostControl.listSessions();
           const workspace = typeof node.workspace === "string" ? node.workspace : "";
-          refineSessionIds = liveSessions.filter((record3) => {
-            const sid = typeof record3?.sessionId === "string" ? record3.sessionId : "";
+          refineSessionIds = liveSessions.filter((record4) => {
+            const sid = typeof record4?.sessionId === "string" ? record4.sessionId : "";
             if (!sid) return false;
-            if (readStringValue(record3?.meta?.meshCoordinatorFor) === meshId) return false;
-            const boundToNode = readStringValue(record3?.meta?.meshNodeId) === nodeId;
-            const matchedByWorkspace = !!workspace && record3?.workspace === workspace;
+            if (readStringValue(record4?.meta?.meshCoordinatorFor) === meshId) return false;
+            const boundToNode = readStringValue(record4?.meta?.meshNodeId) === nodeId;
+            const matchedByWorkspace = !!workspace && record4?.workspace === workspace;
             return boundToNode || matchedByWorkspace;
-          }).map((record3) => String(record3.sessionId));
+          }).map((record4) => String(record4.sessionId));
         } catch {
           refineSessionIds = void 0;
         }
@@ -104888,11 +104971,11 @@ ${tail}` : ""
         return label3 ? { label: label3 } : null;
       }
       if (!raw || typeof raw !== "object") return null;
-      const record3 = raw;
-      const label2 = readString2(record3.label);
+      const record4 = raw;
+      const label2 = readString2(record4.label);
       if (!label2) return null;
-      const description = readString2(record3.description);
-      const preview = readString2(record3.preview);
+      const description = readString2(record4.description);
+      const preview = readString2(record4.preview);
       return {
         label: label2,
         ...description ? { description } : {},
@@ -104901,30 +104984,30 @@ ${tail}` : ""
     }
     function normalizeQuestion(raw, index) {
       if (!raw || typeof raw !== "object") return null;
-      const record3 = raw;
-      const question = readString2(record3.question);
+      const record4 = raw;
+      const question = readString2(record4.question);
       if (!question) return null;
-      const questionId = readString2(record3.questionId) || readString2(record3.id) || `q${index + 1}`;
-      const options = Array.isArray(record3.options) ? record3.options.map(normalizeOption).filter((item) => !!item) : [];
-      const header = readString2(record3.header);
+      const questionId = readString2(record4.questionId) || readString2(record4.id) || `q${index + 1}`;
+      const options = Array.isArray(record4.options) ? record4.options.map(normalizeOption).filter((item) => !!item) : [];
+      const header = readString2(record4.header);
       return {
         questionId,
         question,
         ...header ? { header } : {},
-        multiSelect: record3.multiSelect === true,
+        multiSelect: record4.multiSelect === true,
         options,
-        ...record3.allowFreeform === true ? { allowFreeform: true } : {}
+        ...record4.allowFreeform === true ? { allowFreeform: true } : {}
       };
     }
     function normalizeInteractivePrompt(raw) {
       if (!raw || typeof raw !== "object") return null;
-      const record3 = raw;
-      const promptId = readString2(record3.promptId);
-      const providerType = readString2(record3.providerType);
-      const origin = record3.origin === "mcp" || record3.origin === "agent" ? record3.origin : "cli";
-      const questions = Array.isArray(record3.questions) ? record3.questions.map(normalizeQuestion).filter((item) => !!item) : [];
+      const record4 = raw;
+      const promptId = readString2(record4.promptId);
+      const providerType = readString2(record4.providerType);
+      const origin = record4.origin === "mcp" || record4.origin === "agent" ? record4.origin : "cli";
+      const questions = Array.isArray(record4.questions) ? record4.questions.map(normalizeQuestion).filter((item) => !!item) : [];
       if (!promptId || !providerType || questions.length === 0) return null;
-      const createdAt = typeof record3.createdAt === "number" && Number.isFinite(record3.createdAt) ? record3.createdAt : Date.now();
+      const createdAt = typeof record4.createdAt === "number" && Number.isFinite(record4.createdAt) ? record4.createdAt : Date.now();
       return { promptId, origin, providerType, createdAt, questions };
     }
     function assertNativeInteractivePromptResponse(raw) {
@@ -104944,18 +105027,18 @@ ${tail}` : ""
     }
     function normalizeInteractivePromptResponse(raw) {
       if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
-      const record3 = raw;
-      if ("binding" in record3) assertNativeInteractivePromptResponse(raw);
-      const promptId = readString2(record3.promptId);
+      const record4 = raw;
+      if ("binding" in record4) assertNativeInteractivePromptResponse(raw);
+      const promptId = readString2(record4.promptId);
       if (!promptId) throw new Error("promptId must be a non-empty string");
-      if (!record3.answers || typeof record3.answers !== "object" || Array.isArray(record3.answers)) {
+      if (!record4.answers || typeof record4.answers !== "object" || Array.isArray(record4.answers)) {
         throw new Error("answers must be an object");
       }
       const answers = /* @__PURE__ */ Object.create(null);
-      for (const [questionId, answerRaw] of Object.entries(record3.answers)) {
+      for (const [questionId, answerRaw] of Object.entries(record4.answers)) {
         if (!answerRaw || typeof answerRaw !== "object" || Array.isArray(answerRaw)) continue;
         const answer = answerRaw;
-        const selectedLabels = record3.binding && Array.isArray(answer.selectedLabels) ? answer.selectedLabels.slice() : readStringArray2(answer.selectedLabels);
+        const selectedLabels = record4.binding && Array.isArray(answer.selectedLabels) ? answer.selectedLabels.slice() : readStringArray2(answer.selectedLabels);
         const freeformText = readString2(answer.freeformText);
         answers[questionId] = {
           selectedLabels,
@@ -104965,8 +105048,8 @@ ${tail}` : ""
       return {
         promptId,
         answers,
-        ...record3.binding ? { binding: record3.binding } : {},
-        ...record3.action === "dismiss" ? { action: "dismiss" } : {}
+        ...record4.binding ? { binding: record4.binding } : {},
+        ...record4.action === "dismiss" ? { action: "dismiss" } : {}
       };
     }
     function resolveInteractivePromptResponse(prompt, raw) {
@@ -104976,14 +105059,14 @@ ${tail}` : ""
         return normalizeInteractivePromptResponse(raw);
       }
       if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
-      const record3 = raw;
-      const promptId = readString2(record3.promptId);
+      const record4 = raw;
+      const promptId = readString2(record4.promptId);
       if (!promptId) throw new Error("promptId must be a non-empty string");
       if (promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
-      if (record3.answers && typeof record3.answers === "object" && !Array.isArray(record3.answers)) {
-        return normalizeInteractivePromptResponse(record3);
+      if (record4.answers && typeof record4.answers === "object" && !Array.isArray(record4.answers)) {
+        return normalizeInteractivePromptResponse(record4);
       }
-      if (!Array.isArray(record3.answers)) throw new Error("answers must be an array or a questionId-keyed object");
+      if (!Array.isArray(record4.answers)) throw new Error("answers must be an array or a questionId-keyed object");
       const resolveOneLabel = (question, sel) => {
         if (typeof sel === "number" && Number.isFinite(sel)) {
           const idx = Math.trunc(sel) - 1;
@@ -105003,7 +105086,7 @@ ${tail}` : ""
         throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
       };
       const answers = {};
-      const entries = record3.answers;
+      const entries = record4.answers;
       entries.forEach((entryRaw, index) => {
         const entry = entryRaw && typeof entryRaw === "object" && !Array.isArray(entryRaw) ? entryRaw : { select: entryRaw };
         const questionId = readString2(entry.questionId);
@@ -105406,8 +105489,8 @@ ${tail}` : ""
     }
     function interactivePromptFromClaudeAskUserQuestion(input, options) {
       if (!input || typeof input !== "object") return null;
-      const record3 = input;
-      const questions = Array.isArray(record3.questions) ? record3.questions.map(normalizeQuestion).filter((item) => !!item) : [];
+      const record4 = input;
+      const questions = Array.isArray(record4.questions) ? record4.questions.map(normalizeQuestion).filter((item) => !!item) : [];
       if (questions.length === 0) return null;
       return {
         promptId: options.promptId,
@@ -105419,20 +105502,20 @@ ${tail}` : ""
     }
     function detectClaudeAskUserQuestionPromptFromJson(value, providerType = "claude-cli") {
       if (!value || typeof value !== "object") return null;
-      const record3 = value;
+      const record4 = value;
       const blocks = [];
-      if (Array.isArray(record3.content)) blocks.push(...record3.content);
-      const message = record3.message;
+      if (Array.isArray(record4.content)) blocks.push(...record4.content);
+      const message = record4.message;
       if (message && typeof message === "object" && Array.isArray(message.content)) {
         blocks.push(...message.content);
       }
-      if (record3.type === "tool_use") blocks.push(record3);
+      if (record4.type === "tool_use") blocks.push(record4);
       for (const block2 of blocks) {
         if (!block2 || typeof block2 !== "object") continue;
         const b = block2;
         const name = readString2(b.name);
         if (b.type !== "tool_use" || name !== "AskUserQuestion") continue;
-        const id4 = readString2(b.id) || readString2(record3.id) || `ask-user-${Date.now()}`;
+        const id4 = readString2(b.id) || readString2(record4.id) || `ask-user-${Date.now()}`;
         const prompt = interactivePromptFromClaudeAskUserQuestion(b.input, {
           promptId: id4,
           providerType,
@@ -106136,8 +106219,8 @@ ${tail}` : ""
       let defaultBranch;
       try {
         const head = await runGit(repo, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd: repoRoot });
-        const ref = head.stdout.trim();
-        defaultBranch = ref.startsWith("origin/") ? ref.slice("origin/".length) : ref || void 0;
+        const ref2 = head.stdout.trim();
+        defaultBranch = ref2.startsWith("origin/") ? ref2.slice("origin/".length) : ref2 || void 0;
       } catch {
       }
       const onDefaultBranch = defaultBranch ? branch === defaultBranch : branch === "main" || branch === "master";
@@ -106572,18 +106655,18 @@ ${tail}` : ""
       let lastUsageAt = 0;
       let model;
       for (let i = 0; i < records.length; i += 1) {
-        const record3 = records[i];
-        if (record3.receivedAt > lastUsageAt) lastUsageAt = record3.receivedAt;
-        if (record3.model) model = record3.model;
-        if (record3.mode === "cumulative") {
-          const newer = latestCumulative === null || record3.receivedAt > latestCumulative.receivedAt || record3.receivedAt === latestCumulative.receivedAt && i > latestCumulativeIndex;
+        const record4 = records[i];
+        if (record4.receivedAt > lastUsageAt) lastUsageAt = record4.receivedAt;
+        if (record4.model) model = record4.model;
+        if (record4.mode === "cumulative") {
+          const newer = latestCumulative === null || record4.receivedAt > latestCumulative.receivedAt || record4.receivedAt === latestCumulative.receivedAt && i > latestCumulativeIndex;
           if (newer) {
-            latestCumulative = record3;
+            latestCumulative = record4;
             latestCumulativeIndex = i;
           }
           continue;
         }
-        addInto(deltas, record3);
+        addInto(deltas, record4);
       }
       const total = { ...ZERO };
       if (latestCumulative) replaceWith(total, latestCumulative);
@@ -107400,13 +107483,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     function summarizeMeshCommandResult(command, result) {
       if (command === "git_status") return summarizeMeshCommandGitResult(result);
-      const record3 = asRecord4(result);
+      const record4 = asRecord4(result);
       if (command === "mesh_status") {
-        const nodes = Array.isArray(record3.nodes) ? record3.nodes : [];
+        const nodes = Array.isArray(record4.nodes) ? record4.nodes : [];
         return {
-          success: record3.success,
-          meshId: record3.meshId ?? null,
-          sourceOfTruth: record3.sourceOfTruth ?? null,
+          success: record4.success,
+          meshId: record4.meshId ?? null,
+          sourceOfTruth: record4.sourceOfTruth ?? null,
           nodeCount: nodes.length,
           nodes: nodes.map((node) => ({
             nodeId: node?.nodeId ?? node?.id ?? null,
@@ -109264,12 +109347,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function str6(value) {
       return typeof value === "string" ? value.trim() : "";
     }
-    function record(value) {
+    function record2(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : void 0;
     }
     function nodesOf(mesh) {
-      const nodes = record(mesh)?.nodes;
-      return Array.isArray(nodes) ? nodes.filter((n) => !!record(n)) : [];
+      const nodes = record2(mesh)?.nodes;
+      return Array.isArray(nodes) ? nodes.filter((n) => !!record2(n)) : [];
     }
     function sameDaemon(a, b) {
       return !!a && !!b && daemonIdsEquivalent4(a, b);
@@ -109286,13 +109369,13 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return sameDaemon(meshHostDaemonId(mesh, selfDaemonId), sender);
     }
     function readCommandMeshId(args) {
-      return str6(args.meshId) || str6(record(args.meshContext)?.meshId);
+      return str6(args.meshId) || str6(record2(args.meshContext)?.meshId);
     }
     function readCommandSessionId(args) {
       return str6(args.targetSessionId) || str6(args.sessionId) || str6(args.instanceId);
     }
     function declaredMeshHost(mesh, selfDaemonId) {
-      if (!record(mesh)) return void 0;
+      if (!record2(mesh)) return void 0;
       try {
         const status = resolveMeshHostStatus(mesh, selfDaemonId ? { localDaemonId: selfDaemonId } : void 0);
         return status.hostSynthesized ? void 0 : status.hostDaemonId;
@@ -109354,7 +109437,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (hostRecord) {
         return { known: true, onRoster: false, source: "mesh_host_record", detail: `mesh ${meshId} host on record is ${hostRecord.hostDaemonId.slice(0, 24)} (${hostRecord.source || "recorded"})` };
       }
-      const inline = record(args.inlineMesh);
+      const inline = record2(args.inlineMesh);
       if (inline && nodesOf(inline).length > 0) {
         const inlineId = str6(inline.id) || str6(inline.meshId);
         if (inlineId && inlineId !== meshId) return { known: false };
@@ -109397,7 +109480,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return sessions.some(({ settings: settings2 }) => str6(settings2.meshNodeFor) === meshId && !!str6(settings2.meshCoordinatorDaemonId));
     }
     function meshContextClaimsSender(args, meshId, sender) {
-      const meshContext = record(args.meshContext);
+      const meshContext = record2(args.meshContext);
       return !!meshContext && str6(meshContext.meshId) === meshId && sameDaemon(str6(meshContext.coordinatorDaemonId), sender);
     }
     function refuse2(sender, refusal2, detail) {
@@ -109421,9 +109504,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       }
       const known = meshes.filter((m) => nodesOf(m).length > 0);
       const hit = known.find((m) => senderOnMesh(m, sender, deps.selfDaemonId));
-      if (hit) return { ok: true, sender, evidence: `local_roster:${str6(record(hit)?.id) || "?"}` };
+      if (hit) return { ok: true, sender, evidence: `local_roster:${str6(record2(hit)?.id) || "?"}` };
       const declared = meshes.find((m) => sameDaemon(declaredMeshHost(m, deps.selfDaemonId), sender));
-      if (declared) return { ok: true, sender, evidence: `local_mesh_host:${str6(record(declared)?.id) || "?"}` };
+      if (declared) return { ok: true, sender, evidence: `local_mesh_host:${str6(record2(declared)?.id) || "?"}` };
       let hostRecords = [];
       try {
         hostRecords = deps.listMeshHostRecords?.() ?? [];
@@ -109493,7 +109576,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return refuse2(sender, "mesh_sender_not_session_coordinator", anchor ? `session ${sessionId} is coordinated by ${anchor.slice(0, 20)}, and the sender is not the host of mesh ${meshId}` : `session ${sessionId} has no coordinator anchor, and the sender is not the host of mesh ${meshId}`);
     }
     async function checkSessionCoordinator(deps, sender, args) {
-      const stampClaim = str6(record(args.meshContext)?.coordinatorDaemonId);
+      const stampClaim = str6(record2(args.meshContext)?.coordinatorDaemonId);
       if (stampClaim && !sameDaemon(stampClaim, sender)) {
         return refuse2(sender, "mesh_coordinator_stamp_mismatch", `meshContext.coordinatorDaemonId ${stampClaim.slice(0, 20)} is not the sender`);
       }
@@ -109519,7 +109602,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return refuse2(sender, "mesh_session_not_mesh_owned", "the command names no session and no mesh");
     }
     async function checkMeshLaunch(deps, sender, args) {
-      const settings2 = record(args.settings) ?? {};
+      const settings2 = record2(args.settings) ?? {};
       const anchor = str6(settings2.meshCoordinatorDaemonId);
       if (!anchor) return { ok: true, sender, evidence: "authenticated_peer(no coordinator anchor)" };
       if (!sameDaemon(anchor, sender)) {
@@ -109531,7 +109614,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return verdict.ok ? { ok: true, sender, evidence: `launch_anchor:${verdict.evidence}` } : verdict;
     }
     function checkPairingMember(sender, args) {
-      const memberNode = record(args.memberNode);
+      const memberNode = record2(args.memberNode);
       const memberDaemonId = memberNode ? readMeshNodeDaemonId(memberNode) : void 0;
       if (!sameDaemon(memberDaemonId, sender)) {
         return refuse2(sender, "mesh_sender_not_join_member", memberDaemonId ? `memberNode names daemon ${memberDaemonId.slice(0, 20)}, not the sender` : "memberNode names no daemon");
@@ -109580,7 +109663,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "mesh_sender_not_join_member"
     ]);
     function isMeshSenderRefusalResult(result) {
-      const rec5 = record(result);
+      const rec5 = record2(result);
       return !!rec5 && rec5.success === false && typeof rec5.code === "string" && MESH_SENDER_REFUSALS.has(rec5.code);
     }
     init_mesh_relay_result();
@@ -110003,8 +110086,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         const meshId = readText(args?.meshId);
         const nodeId = readText(args?.nodeId);
         if (!meshId || !nodeId) return { success: false, error: "meshId and nodeId required" };
-        const record3 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-        const rostered = Array.isArray(record3?.mesh?.nodes) ? record3.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
+        const record4 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+        const rostered = Array.isArray(record4?.mesh?.nodes) ? record4.mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
         const described = readOptionalRecord2(args?.node);
         const node = rostered ?? (described && meshNodeIdMatches7(described, nodeId) ? described : void 0);
         if (!node) return { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}` };
@@ -110028,8 +110111,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         if (callerDaemonId && selfId && !daemonIdsEquivalent4(callerDaemonId, selfId)) {
           return { success: false, code: "mesh_node_route_wrong_daemon", error: `This is daemon ${selfId}, not ${callerDaemonId}` };
         }
-        const record3 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-        const roster = Array.isArray(record3?.mesh?.nodes) ? record3.mesh.nodes : [];
+        const record4 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+        const roster = Array.isArray(record4?.mesh?.nodes) ? record4.mesh.nodes : [];
         const described = Array.isArray(args?.nodes) ? args.nodes.filter((n) => !!readOptionalRecord2(n) && !!readText(n.id)) : [];
         const wanted = Array.isArray(args?.nodeIds) ? new Set(args.nodeIds.map(readText).filter(Boolean)) : null;
         return { success: true, meshId, routes: decideNodeRoutes(roster, described, {
@@ -112850,26 +112933,26 @@ ${marker2}`,
       return [...pendingDeferredRestarts.keys()].sort();
     }
     function deferredRestartInfo(key4) {
-      const record3 = pendingDeferredRestarts.get(key4);
-      if (!record3) return null;
+      const record4 = pendingDeferredRestarts.get(key4);
+      if (!record4) return null;
       return {
-        meshId: record3.meshId,
-        nodeId: record3.nodeId,
-        mode: record3.mode,
-        killSessionHost: record3.killSessionHost,
-        ...record3.upgradeOptions,
-        scheduledAt: new Date(record3.scheduledAt).toISOString(),
-        expiresAt: new Date(record3.expiresAt).toISOString(),
+        meshId: record4.meshId,
+        nodeId: record4.nodeId,
+        mode: record4.mode,
+        killSessionHost: record4.killSessionHost,
+        ...record4.upgradeOptions,
+        scheduledAt: new Date(record4.scheduledAt).toISOString(),
+        expiresAt: new Date(record4.expiresAt).toISOString(),
         runCondition: "executes automatically once no session is generating / waiting_approval / starting and no outbound coordinator message is queued"
       };
     }
     function clearPendingDeferredRestart(key4) {
-      const record3 = pendingDeferredRestarts.get(key4);
-      if (!record3) return;
-      clearInterval(record3.timer);
+      const record4 = pendingDeferredRestarts.get(key4);
+      if (!record4) return;
+      clearInterval(record4.timer);
       pendingDeferredRestarts.delete(key4);
       try {
-        clearDeferredRestartSchedule(record3.meshId, record3.nodeId);
+        clearDeferredRestartSchedule(record4.meshId, record4.nodeId);
       } catch {
       }
     }
@@ -112928,7 +113011,7 @@ ${marker2}`,
       clearPendingDeferredRestart(key4);
       const requestedTimeout = typeof args?.timeoutMs === "number" && Number.isFinite(args.timeoutMs) ? args.timeoutMs : DEFERRED_RESTART_DEFAULT_TIMEOUT_MS;
       const timeoutMs = Math.min(Math.max(requestedTimeout, DEFERRED_RESTART_POLL_MS), DEFERRED_RESTART_MAX_TIMEOUT_MS);
-      const record3 = {
+      const record4 = {
         meshId,
         nodeId,
         mode: normalizeRestartMode(args?.mode),
@@ -112940,22 +113023,22 @@ ${marker2}`,
           void deferredRestartTick(deps, key4);
         }, DEFERRED_RESTART_POLL_MS)
       };
-      record3.timer.unref?.();
-      pendingDeferredRestarts.set(key4, record3);
+      record4.timer.unref?.();
+      pendingDeferredRestarts.set(key4, record4);
       try {
         recordDeferredRestartSchedule({
-          meshId: record3.meshId,
-          nodeId: record3.nodeId,
-          mode: record3.mode,
-          killSessionHost: record3.killSessionHost,
-          ...record3.upgradeOptions,
-          scheduledAt: record3.scheduledAt,
-          expiresAt: record3.expiresAt
+          meshId: record4.meshId,
+          nodeId: record4.nodeId,
+          mode: record4.mode,
+          killSessionHost: record4.killSessionHost,
+          ...record4.upgradeOptions,
+          scheduledAt: record4.scheduledAt,
+          expiresAt: record4.expiresAt
         });
       } catch (e) {
         LOG.warn("MeshRestart", `Failed to persist deferred restart for node ${nodeId} \u2014 it will NOT survive a daemon restart: ${e?.message || String(e)}`);
       }
-      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record3.mode}${record3.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
+      LOG.info("MeshRestart", `Deferred restart scheduled for node ${nodeId} (mode=${record4.mode}${record4.upgradeOptions.allowDowngrade ? ", allowDowngrade" : ""}, expires in ${Math.round(timeoutMs / 6e4)}min)`);
       return {
         success: true,
         restarted: false,
@@ -112971,27 +113054,27 @@ ${marker2}`,
       } catch {
         return;
       }
-      const record3 = pendingDeferredRestarts.get(key4);
-      if (!record3) return;
-      if (Date.now() >= record3.expiresAt) {
-        LOG.warn("MeshRestart", `Deferred restart for node ${record3.nodeId} expired without reaching an idle point; dropping the schedule`);
+      const record4 = pendingDeferredRestarts.get(key4);
+      if (!record4) return;
+      if (Date.now() >= record4.expiresAt) {
+        LOG.warn("MeshRestart", `Deferred restart for node ${record4.nodeId} expired without reaching an idle point; dropping the schedule`);
         clearPendingDeferredRestart(key4);
         return;
       }
-      const blocking = collectBlockingSessions(deps, record3.meshId);
+      const blocking = collectBlockingSessions(deps, record4.meshId);
       if (blocking.length > 0) return;
-      LOG.info("MeshRestart", `Deferred restart for node ${record3.nodeId} executing \u2014 daemon is idle`);
+      LOG.info("MeshRestart", `Deferred restart for node ${record4.nodeId} executing \u2014 daemon is idle`);
       clearPendingDeferredRestart(key4);
       try {
         const result = await executeRestart(deps, {
-          meshId: record3.meshId,
-          nodeId: record3.nodeId,
-          mode: record3.mode,
-          killSessionHost: record3.killSessionHost,
-          ...record3.upgradeOptions
+          meshId: record4.meshId,
+          nodeId: record4.nodeId,
+          mode: record4.mode,
+          killSessionHost: record4.killSessionHost,
+          ...record4.upgradeOptions
         }, { forced: false });
         if (result?.success === false) {
-          LOG.warn("MeshRestart", `Deferred restart for node ${record3.nodeId} was refused when it fired: ${result.code || result.error || "unknown"}${result.reason ? ` \u2014 ${result.reason}` : ""}`);
+          LOG.warn("MeshRestart", `Deferred restart for node ${record4.nodeId} was refused when it fired: ${result.code || result.error || "unknown"}${result.reason ? ` \u2014 ${result.reason}` : ""}`);
         }
       } catch (e) {
         LOG.error("MeshRestart", `Deferred restart execution failed: ${e?.message || String(e)}`);
@@ -113006,40 +113089,40 @@ ${marker2}`,
         return;
       }
       const now = Date.now();
-      for (const [key4, record3] of Object.entries(persisted)) {
+      for (const [key4, record4] of Object.entries(persisted)) {
         if (pendingDeferredRestarts.has(key4)) continue;
-        if (now >= record3.expiresAt) {
-          LOG.warn("MeshRestart", `Persisted deferred restart for node ${record3.nodeId} (mesh ${record3.meshId}) expired while the daemon was down (scheduled ${new Date(record3.scheduledAt).toISOString()}, expired ${new Date(record3.expiresAt).toISOString()}); dropping it without executing`);
+        if (now >= record4.expiresAt) {
+          LOG.warn("MeshRestart", `Persisted deferred restart for node ${record4.nodeId} (mesh ${record4.meshId}) expired while the daemon was down (scheduled ${new Date(record4.scheduledAt).toISOString()}, expired ${new Date(record4.expiresAt).toISOString()}); dropping it without executing`);
           try {
-            clearDeferredRestartSchedule(record3.meshId, record3.nodeId);
+            clearDeferredRestartSchedule(record4.meshId, record4.nodeId);
           } catch {
           }
           continue;
         }
         const rearmed = {
-          meshId: record3.meshId,
-          nodeId: record3.nodeId,
-          mode: record3.mode === "restart" ? "restart" : "upgrade",
-          killSessionHost: record3.killSessionHost === true,
-          upgradeOptions: readUpgradeOptions(record3),
-          scheduledAt: record3.scheduledAt,
-          expiresAt: record3.expiresAt,
+          meshId: record4.meshId,
+          nodeId: record4.nodeId,
+          mode: record4.mode === "restart" ? "restart" : "upgrade",
+          killSessionHost: record4.killSessionHost === true,
+          upgradeOptions: readUpgradeOptions(record4),
+          scheduledAt: record4.scheduledAt,
+          expiresAt: record4.expiresAt,
           timer: setInterval(() => {
             void deferredRestartTick(deps, key4);
           }, DEFERRED_RESTART_POLL_MS)
         };
         rearmed.timer.unref?.();
         pendingDeferredRestarts.set(key4, rearmed);
-        LOG.info("MeshRestart", `Re-armed persisted deferred restart for node ${record3.nodeId} (mode=${rearmed.mode}, expires ${new Date(record3.expiresAt).toISOString()})`);
+        LOG.info("MeshRestart", `Re-armed persisted deferred restart for node ${record4.nodeId} (mode=${rearmed.mode}, expires ${new Date(record4.expiresAt).toISOString()})`);
       }
     }
     function restartWillHappen(result, args) {
       if (!result || result.success === false) return false;
       if (args?.cancelWhenIdle === true || args?.whenIdleStatus === true) return false;
-      const record3 = result;
-      if (record3.restarted === false) return false;
-      const deferred = record3.deferredRestart;
-      if (deferred && typeof deferred === "object" && record3.restarted !== true) return false;
+      const record4 = result;
+      if (record4.restarted === false) return false;
+      const deferred = record4.deferredRestart;
+      if (deferred && typeof deferred === "object" && record4.restarted !== true) return false;
       return true;
     }
     var meshRestartHandlers = {
@@ -113208,8 +113291,8 @@ ${marker2}`,
           };
           const records = await list2(), inventory = retainedRuntimeInventory(records, state2);
           if (digest(inventory) !== state2.retainedHost.sessionSetDigest) throw new Error("maintenance_retained_inventory_drift");
-          for (const record3 of records) {
-            if (record3.meta.managedBy !== host.deps.hostedRuntimeManagerTag || host.providerLoader.getMeta(record3.providerType)?.category !== "cli") throw new Error("maintenance_unknown_runtime_provider");
+          for (const record4 of records) {
+            if (record4.meta.managedBy !== host.deps.hostedRuntimeManagerTag || host.providerLoader.getMeta(record4.providerType)?.category !== "cli") throw new Error("maintenance_unknown_runtime_provider");
           }
           const coordinators = state2.meshIds.flatMap((meshId) => {
             const expected = listCoordinatorsForMesh(meshId);
@@ -115311,7 +115394,7 @@ ${marker2}`,
             return;
           }
           deps.appendHandoff(owner.meshId, TURN_EVIDENCE_HANDOFF_KIND, { text: text4, notice: envelope?.notice ?? {} }).then(
-            (ref) => runObserve({ ...withAttempt, summary: ref }, opts),
+            (ref2) => runObserve({ ...withAttempt, summary: ref2 }, opts),
             () => runObserve(withAttempt, opts)
           );
         }
@@ -115823,12 +115906,12 @@ ${marker2}`,
       if (isFiniteNumber4(message.sequence)) normalized.sequence = message.sequence;
       if (typeof message._turnKey === "string") normalized._turnKey = message._turnKey;
       if (isPlainObject3(message.toolBlockRef)) {
-        const ref = message.toolBlockRef;
-        if (isFiniteNumber4(ref.sourceMtimeMs) && isFiniteNumber4(ref.recordIndex) && isFiniteNumber4(ref.blockIndex)) {
+        const ref2 = message.toolBlockRef;
+        if (isFiniteNumber4(ref2.sourceMtimeMs) && isFiniteNumber4(ref2.recordIndex) && isFiniteNumber4(ref2.blockIndex)) {
           normalized.toolBlockRef = {
-            sourceMtimeMs: ref.sourceMtimeMs,
-            recordIndex: ref.recordIndex,
-            blockIndex: ref.blockIndex
+            sourceMtimeMs: ref2.sourceMtimeMs,
+            recordIndex: ref2.recordIndex,
+            blockIndex: ref2.blockIndex
           };
         }
       }
@@ -117027,7 +117110,7 @@ ${marker2}`,
        * previous activation governing.
        */
       activate(channel, entry, stagedObjectDir) {
-        const ref = {
+        const ref2 = {
           providerType: entry.providerType,
           providerVersion: entry.providerVersion,
           category: entry.category,
@@ -117037,17 +117120,17 @@ ${marker2}`,
         };
         const objectDir = this.putObject(stagedObjectDir, entry.bundleDigest);
         const current4 = this.getPointer(channel, entry.providerType);
-        if (current4?.active.digest === ref.digest) {
+        if (current4?.active.digest === ref2.digest) {
           return { changed: false, ref: current4.active, objectDir };
         }
         const next = {
           version: 1,
-          active: ref,
+          active: ref2,
           previous: current4?.active ?? null
         };
         this.writePointerAtomic(channel, entry.providerType, next);
         this.log(`Activated ${entry.providerType}@${entry.providerVersion} (${entry.bundleDigest.slice(0, 19)}\u2026) on channel ${channel}`);
-        return { changed: true, ref, objectDir };
+        return { changed: true, ref: ref2, objectDir };
       }
       /**
        * Roll back (channel, type) to the previously activated object. Pure
@@ -118958,17 +119041,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var fs51 = __toESM2(require("fs"));
     init_load_better_sqlite3();
     init_message_source_address();
-    function jsonPathGet(record3, expr) {
+    function jsonPathGet(record4, expr) {
       if (typeof expr !== "string") return void 0;
       if (expr.includes("||")) {
         for (const alt of expr.split("||")) {
-          const v = jsonPathGet(record3, alt.trim());
+          const v = jsonPathGet(record4, alt.trim());
           if (v != null && v !== "") return v;
         }
         return void 0;
       }
       if (!expr.startsWith("$")) return expr;
-      let cur = record3;
+      let cur = record4;
       let i = 1;
       while (i < expr.length && cur != null) {
         const ch = expr[i];
@@ -119029,13 +119112,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var DEFAULT_TOOL_RESULT_TYPES = ["tool_result", "function_call_output", "custom_tool_call_output"];
     var TOOL_CALL_SUMMARY_MAX = 240;
     var TOOL_RESULT_SUMMARY_MAX = 600;
-    function isResolvableToolBlockRef(ref) {
-      if (!ref) return false;
-      if (!(ref.sourceMtimeMs > 0)) return false;
-      if (!Number.isInteger(ref.recordIndex) || ref.recordIndex < 0) return false;
-      return Number.isInteger(ref.blockIndex) && ref.blockIndex >= -1;
+    function isResolvableToolBlockRef(ref2) {
+      if (!ref2) return false;
+      if (!(ref2.sourceMtimeMs > 0)) return false;
+      if (!Number.isInteger(ref2.recordIndex) || ref2.recordIndex < 0) return false;
+      return Number.isInteger(ref2.blockIndex) && ref2.blockIndex >= -1;
     }
-    function projectToolBlock(block2, tmap, ref) {
+    function projectToolBlock(block2, tmap, ref2) {
       if (block2 == null || typeof block2 !== "object") return null;
       const typeVal = String(jsonPathGet(block2, tmap.block_type || "$.type") ?? "");
       if (!typeVal) return null;
@@ -119046,14 +119129,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const { text: args, truncated } = oneLine(formatToolCallArgs(jsonPathGet(block2, tmap.call_args || "$.input")), TOOL_CALL_SUMMARY_MAX);
         const content = args ? `\u2197 ${name}: ${args}` : `\u2197 ${name}`;
         const msg = { role: "assistant", content, receivedAt: 0, kind: "tool", toolName: name };
-        if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
+        if (truncated && isResolvableToolBlockRef(ref2)) msg.toolBlockRef = ref2;
         return msg;
       }
       if (resultTypes.includes(typeVal)) {
         const { text: result, truncated } = oneLine(stringifyContent(jsonPathGet(block2, tmap.result_content || "$.content")), TOOL_RESULT_SUMMARY_MAX);
         if (!result) return null;
         const msg = { role: "assistant", content: `\u2198 ${result}`, receivedAt: 0, kind: "tool" };
-        if (truncated && isResolvableToolBlockRef(ref)) msg.toolBlockRef = ref;
+        if (truncated && isResolvableToolBlockRef(ref2)) msg.toolBlockRef = ref2;
         return msg;
       }
       return null;
@@ -119062,19 +119145,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function formatToolCallArgs(input) {
       if (input == null) return "";
       if (typeof input !== "object" || Array.isArray(input)) return stringifyContent(input);
-      const record3 = input;
+      const record4 = input;
       const primaryText = (value) => {
         if (typeof value === "string") return value.trim();
         if (Array.isArray(value) && value.length && value.every((v) => typeof v === "string")) return value.join(" ").trim();
         return "";
       };
-      const primaryKey = PRIMARY_TOOL_ARG_KEYS.find((key4) => primaryText(record3[key4]));
+      const primaryKey = PRIMARY_TOOL_ARG_KEYS.find((key4) => primaryText(record4[key4]));
       if (primaryKey) {
-        const primary = primaryText(record3[primaryKey]);
-        const description = typeof record3.description === "string" ? record3.description.trim() : "";
+        const primary = primaryText(record4[primaryKey]);
+        const description = typeof record4.description === "string" ? record4.description.trim() : "";
         return description ? `${primary} \u2014 ${description}` : primary;
       }
-      const pairs2 = Object.entries(record3).filter(([, value]) => value !== void 0 && value !== null && value !== "").map(([key4, value]) => `${key4}=${typeof value === "string" ? value : JSON.stringify(value)}`);
+      const pairs2 = Object.entries(record4).filter(([, value]) => value !== void 0 && value !== null && value !== "").map(([key4, value]) => `${key4}=${typeof value === "string" ? value : JSON.stringify(value)}`);
       return pairs2.join(" ");
     }
     function oneLine(s2, max) {
@@ -119089,9 +119172,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           map: r.message_map
         }));
         return {
-          pick: (record3) => {
+          pick: (record4) => {
             for (const shape of compiled) {
-              if (!shape.where || shape.where(record3)) return { map: shape.map };
+              if (!shape.where || shape.where(record4)) return { map: shape.map };
             }
             return null;
           }
@@ -119100,9 +119183,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const filter = src.message_filter ? compileWhere(src.message_filter.where) : null;
       const map2 = src.message_map;
       return {
-        pick: (record3) => {
+        pick: (record4) => {
           if (!map2) return null;
-          if (filter && !filter(record3)) return null;
+          if (filter && !filter(record4)) return null;
           return { map: map2 };
         }
       };
@@ -119113,15 +119196,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         where: r.where ? compileWhere(r.where) : null,
         map: r.usage_map
       }));
-      return (record3) => {
+      return (record4) => {
         for (const shape of compiled) {
-          if (!shape.where || shape.where(record3)) return shape.map;
+          if (!shape.where || shape.where(record4)) return shape.map;
         }
         return null;
       };
     }
-    function projectUsageRecord(record3, map2, sourceMtimeMs) {
-      const read2 = (p) => p ? jsonPathGet(record3, p) : void 0;
+    function projectUsageRecord(record4, map2, sourceMtimeMs) {
+      const read2 = (p) => p ? jsonPathGet(record4, p) : void 0;
       const input = read2(map2.input_tokens);
       const output = read2(map2.output_tokens);
       const cacheRead = read2(map2.cache_read_tokens);
@@ -119144,20 +119227,20 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         receivedAt: parsedTs == null ? sourceMtimeMs : parsedTs
       };
     }
-    function projectMessages(record3, map2, index, total, sourceMtimeMs, sourceLineage) {
-      const roleRaw = jsonPathGet(record3, map2.role);
+    function projectMessages(record4, map2, index, total, sourceMtimeMs, sourceLineage) {
+      const roleRaw = jsonPathGet(record4, map2.role);
       const role = normalizeRole(roleRaw);
       let receivedAt = sourceMtimeMs - (total - 1 - index) * 1e3;
       if (map2.timestamp_ms) {
-        const tsRaw = jsonPathGet(record3, map2.timestamp_ms);
+        const tsRaw = jsonPathGet(record4, map2.timestamp_ms);
         const parsed = parseTimestamp(tsRaw);
         if (parsed != null) receivedAt = parsed;
       }
-      const kindRaw = map2.kind ? jsonPathGet(record3, map2.kind) : void 0;
+      const kindRaw = map2.kind ? jsonPathGet(record4, map2.kind) : void 0;
       const kind = typeof kindRaw === "string" && kindRaw ? kindRaw : "standard";
       const out = [];
       if (map2.tools) {
-        const recordTool = projectToolBlock(record3, map2.tools, {
+        const recordTool = projectToolBlock(record4, map2.tools, {
           sourceMtimeMs,
           recordIndex: index,
           blockIndex: -1
@@ -119167,9 +119250,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           return out;
         }
       }
-      const workspaceRaw = map2.workspace ? jsonPathGet(record3, map2.workspace) : void 0;
+      const workspaceRaw = map2.workspace ? jsonPathGet(record4, map2.workspace) : void 0;
       const workspace = typeof workspaceRaw === "string" && workspaceRaw.trim() ? workspaceRaw.trim() : void 0;
-      const contentRaw = jsonPathGet(record3, map2.content);
+      const contentRaw = jsonPathGet(record4, map2.content);
       const content = cleanContent(stringifyContent(contentRaw), map2);
       if (content) {
         out.push(withRecordSource(
@@ -119257,7 +119340,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (ands.length > 0) ors.push(ands);
       }
-      return (record3) => ors.some((ands) => ands.every((t) => evalTerm(t, record3)));
+      return (record4) => ors.some((ands) => ands.every((t) => evalTerm(t, record4)));
     }
     function parseTerm(src) {
       let s2 = src.trim();
@@ -119287,8 +119370,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!Number.isNaN(n)) return n;
       return src;
     }
-    function evalTerm(t, record3) {
-      const lhs = jsonPathGet(record3, t.path);
+    function evalTerm(t, record4) {
+      const lhs = jsonPathGet(record4, t.path);
       const lit = t.lit;
       let result;
       switch (t.op) {
@@ -119876,9 +119959,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return out;
     }
     function readSessionMetaWorkspace(lines) {
-      for (const record3 of lines.slice(0, 5)) {
-        if (String(record3?.type ?? "") !== "session_meta") continue;
-        const cwd = typeof record3?.payload?.cwd === "string" ? record3.payload.cwd.trim() : "";
+      for (const record4 of lines.slice(0, 5)) {
+        if (String(record4?.type ?? "") !== "session_meta") continue;
+        const cwd = typeof record4?.payload?.cwd === "string" ? record4.payload.cwd.trim() : "";
         if (cwd) return cwd;
       }
       return void 0;
@@ -120075,8 +120158,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!(sourceMtimeMs > 0) || part.blockIndex < 0 || recordIndex < 0) return;
       msg.toolBlockRef = { sourceMtimeMs, recordIndex, blockIndex: part.blockIndex };
     }
-    function readClaudeToolBlockAt(record3, blockIndex) {
-      const message = record3.message && typeof record3.message === "object" ? record3.message : null;
+    function readClaudeToolBlockAt(record4, blockIndex) {
+      const message = record4.message && typeof record4.message === "object" ? record4.message : null;
       if (!message) return null;
       const content = message.content;
       if (!Array.isArray(content)) return null;
@@ -120127,12 +120210,12 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (!parsed || typeof parsed !== "object") continue;
         recordIndex++;
-        const record3 = parsed;
-        const lineSessionId = String(record3.sessionId || "").trim();
+        const record4 = parsed;
+        const lineSessionId = String(record4.sessionId || "").trim();
         if (lineSessionId && lineSessionId !== sessionId) continue;
-        const receivedAt = extractTimestampValue(record3.timestamp) || fallbackTs;
+        const receivedAt = extractTimestampValue(record4.timestamp) || fallbackTs;
         fallbackTs = receivedAt + 1;
-        const lineCwd = String(record3.cwd || "").trim();
+        const lineCwd = String(record4.cwd || "").trim();
         if (!detectedWorkspace && lineCwd) detectedWorkspace = lineCwd;
         if (records.length === 0 && detectedWorkspace) {
           records.push({
@@ -120147,8 +120230,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             _src: nativeSourceAddress(sessionId, SESSION_START_ADDRESS)
           });
         }
-        const type2 = String(record3.type || "").trim();
-        const message = record3.message && typeof record3.message === "object" ? record3.message : null;
+        const type2 = String(record4.type || "").trim();
+        const message = record4.message && typeof record4.message === "object" ? record4.message : null;
         if (!message) continue;
         const usageRecord = extractClaudeUsage(message, receivedAt);
         if (usageRecord) {
@@ -120168,7 +120251,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           part.content = cleaned.trimEnd();
           return !!part.content;
         });
-        if (type2 === "user" && record3.isMeta === true && !hadSourceNote) continue;
+        if (type2 === "user" && record4.isMeta === true && !hadSourceNote) continue;
         if (type2 === "user") {
           for (const part of userParts) {
             const msg = {
@@ -120347,9 +120430,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       return "";
     }
-    function readCodexToolBlockAt(record3) {
-      if (String(record3.type || "").trim() !== "response_item") return null;
-      const payload = record3.payload && typeof record3.payload === "object" ? record3.payload : null;
+    function readCodexToolBlockAt(record4) {
+      if (String(record4.type || "").trim() !== "response_item") return null;
+      const payload = record4.payload && typeof record4.payload === "object" ? record4.payload : null;
       if (!payload) return null;
       const payloadType = String(payload.type || "").trim();
       if (payloadType === "function_call" || payloadType === "custom_tool_call") {
@@ -120381,10 +120464,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const normalized = content.trim();
       if (!normalized) return false;
       for (let i = records.length - 1; i >= 0; i--) {
-        const record3 = records[i];
-        if (record3.kind === "session_start") continue;
-        if (record3.role === "user") return false;
-        if (record3.role === "assistant" && record3.kind === "standard" && record3.content.trim() === normalized) {
+        const record4 = records[i];
+        if (record4.kind === "session_start") continue;
+        if (record4.role === "user") return false;
+        if (record4.role === "assistant" && record4.kind === "standard" && record4.content.trim() === normalized) {
           return true;
         }
       }
@@ -120479,11 +120562,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (!parsed || typeof parsed !== "object") continue;
         recordIndex++;
-        const record3 = parsed;
-        const receivedAt = extractTimestampValue(record3.timestamp) || fallbackTs;
+        const record4 = parsed;
+        const receivedAt = extractTimestampValue(record4.timestamp) || fallbackTs;
         fallbackTs = receivedAt + 1;
-        const type2 = String(record3.type ?? "").trim();
-        const payload = record3.payload && typeof record3.payload === "object" ? record3.payload : null;
+        const type2 = String(record4.type ?? "").trim();
+        const payload = record4.payload && typeof record4.payload === "object" ? record4.payload : null;
         if (!payload) continue;
         if (type2 === "session_meta") {
           const metaId = String(payload.id ?? "").trim();
@@ -120507,7 +120590,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         const payloadType = String(payload.type ?? "").trim();
         if (type2 === "event_msg") {
-          const nativeAt = extractTimestampValue(record3.timestamp) || 0;
+          const nativeAt = extractTimestampValue(record4.timestamp) || 0;
           if (payloadType === "task_started" || payloadType === "error") provenance(payload, nativeAt);
           if (completionSignal) {
             const isComplete = payloadType === completionSignal.recordType;
@@ -121688,9 +121771,9 @@ ${output}` : "";
       const parts = [];
       for (const block2 of content) {
         if (!block2 || typeof block2 !== "object") continue;
-        const record3 = block2;
-        if (typeof record3.text === "string") parts.push(record3.text);
-        else if (record3.type === "image") parts.push("[image]");
+        const record4 = block2;
+        if (typeof record4.text === "string") parts.push(record4.text);
+        else if (record4.type === "image") parts.push("[image]");
       }
       return parts.join("\n");
     }
@@ -121716,10 +121799,10 @@ ${output}` : "";
       }
       return parts.filter(Boolean).join("\n");
     }
-    function readGrokToolBlockAt(record3) {
-      const type2 = typeof record3.type === "string" ? record3.type : "";
+    function readGrokToolBlockAt(record4) {
+      const type2 = typeof record4.type === "string" ? record4.type : "";
       if (type2 === "assistant") {
-        const toolCalls = Array.isArray(record3.tool_calls) ? record3.tool_calls : [];
+        const toolCalls = Array.isArray(record4.tool_calls) ? record4.tool_calls : [];
         if (toolCalls.length === 0) return null;
         const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
         return {
@@ -121728,27 +121811,27 @@ ${output}` : "";
         };
       }
       if (type2 === "tool_result") {
-        return { result: blocksToText(record3.content).trim() };
+        return { result: blocksToText(record4.content).trim() };
       }
       return null;
     }
     function parseGrokRecord(raw) {
       if (!raw || typeof raw !== "object") return null;
-      const record3 = raw;
-      const type2 = typeof record3.type === "string" ? record3.type : "";
+      const record4 = raw;
+      const type2 = typeof record4.type === "string" ? record4.type : "";
       if (type2 === "system") return null;
       if (type2 === "reasoning") return null;
       if (type2 === "user") {
-        if (typeof record3.synthetic_reason === "string" && record3.synthetic_reason) return null;
-        const rawText = blocksToText(record3.content);
+        if (typeof record4.synthetic_reason === "string" && record4.synthetic_reason) return null;
+        const rawText = blocksToText(record4.content);
         if (/^\s*<user_info>/.test(rawText) && !USER_QUERY_RE.test(rawText)) return null;
         const text4 = unwrapUserQuery(rawText);
         if (!text4) return null;
         return { role: "user", content: text4, kind: "standard" };
       }
       if (type2 === "assistant") {
-        const text4 = blocksToText(record3.content).trim();
-        const toolCalls = Array.isArray(record3.tool_calls) ? record3.tool_calls : [];
+        const text4 = blocksToText(record4.content).trim();
+        const toolCalls = Array.isArray(record4.tool_calls) ? record4.tool_calls : [];
         if (!text4) {
           if (toolCalls.length === 0) return null;
           const names = toolCalls.map((call) => call && typeof call === "object" ? call.name : null).filter((name) => typeof name === "string" && name.length > 0);
@@ -121761,7 +121844,7 @@ ${output}` : "";
         return { role: "assistant", content: text4, kind: "standard" };
       }
       if (type2 === "tool_result") {
-        const raw2 = blocksToText(record3.content).trim();
+        const raw2 = blocksToText(record4.content).trim();
         if (!raw2) return null;
         const { text: text4, truncated } = oneLine(raw2, TOOL_RESULT_SUMMARY_MAX);
         if (!text4) return null;
@@ -121818,15 +121901,15 @@ ${output}` : "";
       for (const line of text4.split("\n")) {
         const trimmed2 = line.trim();
         if (!trimmed2) continue;
-        let record3;
+        let record4;
         try {
-          record3 = JSON.parse(trimmed2);
+          record4 = JSON.parse(trimmed2);
         } catch {
           continue;
         }
-        if (!record3 || typeof record3 !== "object") continue;
+        if (!record4 || typeof record4 !== "object") continue;
         recordIndex++;
-        const message = parseGrokRecord(record3);
+        const message = parseGrokRecord(record4);
         if (message) parsed.push({ ...message, recordIndex });
       }
       const startMs = readSessionCreatedAtMs(sessionDir) || sourceMtimeMs;
@@ -122166,9 +122249,9 @@ ${output}` : "";
           const text4 = buffer.subarray(0, bytes).toString("utf8");
           const firstLine = text4.slice(0, text4.indexOf("\n") >= 0 ? text4.indexOf("\n") : text4.length).trim();
           if (!firstLine) return null;
-          const record3 = JSON.parse(firstLine);
-          if (record3.type !== "session_meta" || !record3.payload || typeof record3.payload !== "object") return null;
-          const payload = record3.payload;
+          const record4 = JSON.parse(firstLine);
+          if (record4.type !== "session_meta" || !record4.payload || typeof record4.payload !== "object") return null;
+          const payload = record4.payload;
           const timestampRaw = payload.timestamp;
           const timestampMs = typeof timestampRaw === "string" ? Date.parse(timestampRaw) : typeof timestampRaw === "number" ? timestampRaw < 1e12 ? timestampRaw * 1e3 : timestampRaw : NaN;
           return {
@@ -122510,19 +122593,19 @@ ${output}` : "";
       if (!match) return null;
       const [, owner, repo, rawRef] = match;
       if (!owner || !repo || !rawRef) return null;
-      const ref = decodeURIComponent(rawRef);
-      return { owner, repo, ref, pinned: SHA_RE.test(ref) };
+      const ref2 = decodeURIComponent(rawRef);
+      return { owner, repo, ref: ref2, pinned: SHA_RE.test(ref2) };
     }
-    function buildPinnedArchiveUrl(ref, commitSha) {
-      return `https://${GITHUB_HOST}/${ref.owner}/${ref.repo}/archive/${commitSha}.tar.gz`;
+    function buildPinnedArchiveUrl(ref2, commitSha) {
+      return `https://${GITHUB_HOST}/${ref2.owner}/${ref2.repo}/archive/${commitSha}.tar.gz`;
     }
-    function toApiRevision(ref) {
-      return ref.replace(/^refs\/(heads|tags)\//, "");
+    function toApiRevision(ref2) {
+      return ref2.replace(/^refs\/(heads|tags)\//, "");
     }
-    async function listCandidateCommits(ref, fetchJson, limit = MAX_HISTORY_CANDIDATES) {
-      if (ref.pinned) return [ref.ref];
-      const revision = encodeURIComponent(toApiRevision(ref.ref));
-      const url = `${GITHUB_API_ORIGIN}/repos/${ref.owner}/${ref.repo}/commits?sha=${revision}&per_page=${Math.max(1, Math.min(100, limit))}`;
+    async function listCandidateCommits(ref2, fetchJson, limit = MAX_HISTORY_CANDIDATES) {
+      if (ref2.pinned) return [ref2.ref];
+      const revision = encodeURIComponent(toApiRevision(ref2.ref));
+      const url = `${GITHUB_API_ORIGIN}/repos/${ref2.owner}/${ref2.repo}/commits?sha=${revision}&per_page=${Math.max(1, Math.min(100, limit))}`;
       let body;
       try {
         body = await fetchJson(url);
@@ -122539,12 +122622,12 @@ ${output}` : "";
       return shas;
     }
     async function resolveTransportCandidates(url, fetchJson, limit = MAX_HISTORY_CANDIDATES) {
-      const ref = parseGitHubArchiveUrl(url);
-      if (!ref) return [url];
-      if (ref.pinned) return [url];
-      const commits = await listCandidateCommits(ref, fetchJson, limit);
+      const ref2 = parseGitHubArchiveUrl(url);
+      if (!ref2) return [url];
+      if (ref2.pinned) return [url];
+      const commits = await listCandidateCommits(ref2, fetchJson, limit);
       if (commits.length === 0) return [url];
-      return commits.map((sha6) => buildPinnedArchiveUrl(ref, sha6));
+      return commits.map((sha6) => buildPinnedArchiveUrl(ref2, sha6));
     }
     var fs63 = __toESM2(require("fs"));
     var path68 = __toESM2(require("path"));
@@ -123145,8 +123228,8 @@ ${output}` : "";
           this.host.log(`\u26A0 Verified channel: ${err.code}: ${err.message}`);
         }
         let count = 0;
-        for (const { ref, objectDir } of result.activations) {
-          this.loadedDigests.add(ref.digest);
+        for (const { ref: ref2, objectDir } of result.activations) {
+          this.loadedDigests.add(ref2.digest);
           count += this.host.loadDir(objectDir);
           this.objectRoots.push(objectDir);
         }
@@ -123637,20 +123720,20 @@ ${output}` : "";
       /** Fold a sync's activations/blocks into the auto-update status and the log. */
       recordGateOutcome(report, pinsBefore, mode) {
         const at = (/* @__PURE__ */ new Date()).toISOString();
-        for (const ref of report.activated) {
-          const from = pinsBefore.get(ref.providerType)?.active.providerVersion ?? null;
+        for (const ref2 of report.activated) {
+          const from = pinsBefore.get(ref2.providerType)?.active.providerVersion ?? null;
           if (mode === "auto" && from !== null) {
-            this.autoUpdateRecords.set(ref.providerType, {
+            this.autoUpdateRecords.set(ref2.providerType, {
               state: "updated",
               from,
-              to: ref.providerVersion,
+              to: ref2.providerVersion,
               at,
-              digest: ref.digest,
-              inputsKey: this.gateInputsKey(ref.providerType)
+              digest: ref2.digest,
+              inputsKey: this.gateInputsKey(ref2.providerType)
             });
-            this.host.log(`Provider auto-update: ${ref.providerType} ${from ?? "(none)"} \u2192 ${ref.providerVersion} (${this.channel})`);
+            this.host.log(`Provider auto-update: ${ref2.providerType} ${from ?? "(none)"} \u2192 ${ref2.providerVersion} (${this.channel})`);
           } else {
-            this.autoUpdateRecords.delete(ref.providerType);
+            this.autoUpdateRecords.delete(ref2.providerType);
           }
         }
         for (const b of report.blocked) {
@@ -123705,9 +123788,9 @@ ${output}` : "";
        */
       rollbackVerifiedChannel(providerType) {
         if (!this.store) return null;
-        const ref = this.store.rollback(this.channel, providerType);
-        if (ref) this.host.reload();
-        return ref?.digest ?? null;
+        const ref2 = this.store.rollback(this.channel, providerType);
+        if (ref2) this.host.reload();
+        return ref2?.digest ?? null;
       }
       /** Remove a verified activation (e.g. the provider was uninstalled). */
       deactivateVerifiedChannel(providerType) {
@@ -125832,11 +125915,11 @@ ${output}` : "";
     init_logger();
     function nativeHistoryObservedModel(result) {
       if (!result || typeof result !== "object") return null;
-      const record3 = result;
-      const model = typeof record3.usage?.model === "string" ? record3.usage.model.trim() : "";
+      const record4 = result;
+      const model = typeof record4.usage?.model === "string" ? record4.usage.model.trim() : "";
       if (!model) return null;
-      const lastUsageAt = typeof record3.usage?.lastUsageAt === "number" && Number.isFinite(record3.usage.lastUsageAt) && record3.usage.lastUsageAt > 0 ? record3.usage.lastUsageAt : void 0;
-      const mtime = typeof record3.sourceMtimeMs === "number" && Number.isFinite(record3.sourceMtimeMs) && record3.sourceMtimeMs > 0 ? record3.sourceMtimeMs : void 0;
+      const lastUsageAt = typeof record4.usage?.lastUsageAt === "number" && Number.isFinite(record4.usage.lastUsageAt) && record4.usage.lastUsageAt > 0 ? record4.usage.lastUsageAt : void 0;
+      const mtime = typeof record4.sourceMtimeMs === "number" && Number.isFinite(record4.sourceMtimeMs) && record4.sourceMtimeMs > 0 ? record4.sourceMtimeMs : void 0;
       const at = lastUsageAt ?? mtime;
       return at === void 0 ? null : { value: model, at };
     }
@@ -129046,12 +129129,12 @@ ${output}` : "";
     }
     function stampDomScriptMessageSources(parsed, lineageSeed) {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
-      const record3 = parsed;
-      if (!Array.isArray(record3.messages)) return parsed;
-      const seed = [record3.providerSessionId, record3.id, lineageSeed].find((value) => typeof value === "string" && value.trim());
+      const record4 = parsed;
+      if (!Array.isArray(record4.messages)) return parsed;
+      const seed = [record4.providerSessionId, record4.id, lineageSeed].find((value) => typeof value === "string" && value.trim());
       if (!seed) return parsed;
       let stamped = false;
-      const messages = record3.messages.map((message) => {
+      const messages = record4.messages.map((message) => {
         if (!message || typeof message !== "object" || Array.isArray(message)) return message;
         const nativeId = message.messageId;
         const src = nativeSourceAddress(seed, keyedNativeAddress(nativeId, 0));
@@ -129059,7 +129142,7 @@ ${output}` : "";
         stamped = true;
         return { ...message, _src: src };
       });
-      return stamped ? { ...record3, messages } : parsed;
+      return stamped ? { ...record4, messages } : parsed;
     }
     function shouldPreserveReadChatPayloadField(key4) {
       return key4 === "messageSource" || key4 === "transcriptProvenance";
@@ -129084,11 +129167,11 @@ ${output}` : "";
     }
     function updateMessageSourceReturnedCount(value, returnedMessageCount) {
       if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-      const record3 = value;
-      const coverage = record3.coverage && typeof record3.coverage === "object" && !Array.isArray(record3.coverage) ? record3.coverage : void 0;
+      const record4 = value;
+      const coverage = record4.coverage && typeof record4.coverage === "object" && !Array.isArray(record4.coverage) ? record4.coverage : void 0;
       if (!coverage) return value;
       return {
-        ...record3,
+        ...record4,
         coverage: {
           ...coverage,
           returnedMessageCount
@@ -130529,13 +130612,13 @@ ${output}` : "";
         }
         return items;
       }
-      const record3 = value;
+      const record4 = value;
       const result = {};
-      const entries = Object.entries(record3).slice(0, normalizedOptions.maxObjectKeys);
+      const entries = Object.entries(record4).slice(0, normalizedOptions.maxObjectKeys);
       for (const [key4, item] of entries) {
         result[key4] = sanitizeDebugBundleValue(item, normalizedOptions, depth + 1, key4);
       }
-      const remaining = Object.keys(record3).length - entries.length;
+      const remaining = Object.keys(record4).length - entries.length;
       if (remaining > 0) result.__truncatedKeys = remaining;
       return result;
     }
@@ -130687,8 +130770,8 @@ ${output}` : "";
       const refMtimes = /* @__PURE__ */ new Map();
       let messagesWithRef = 0;
       for (const message of messages) {
-        const ref = message?.toolBlockRef;
-        const mtime = ref?.sourceMtimeMs;
+        const ref2 = message?.toolBlockRef;
+        const mtime = ref2?.sourceMtimeMs;
         if (typeof mtime !== "number" || !Number.isFinite(mtime)) continue;
         messagesWithRef += 1;
         refMtimes.set(mtime, (refMtimes.get(mtime) ?? 0) + 1);
@@ -130873,8 +130956,8 @@ ${output}` : "";
       };
     }
     init_logger();
-    function describeRef(ref) {
-      const r = ref ?? {};
+    function describeRef(ref2) {
+      const r = ref2 ?? {};
       const num2 = (v) => typeof v === "number" && Number.isFinite(v) ? String(v) : "?";
       return `mtime=${num2(r.sourceMtimeMs)} record=${num2(r.recordIndex)} block=${num2(r.blockIndex)}`;
     }
@@ -130894,26 +130977,26 @@ ${output}` : "";
       return locator && typeof locator === "object" ? locator : void 0;
     }
     function handleExpandToolBlock(h, args) {
-      const ref = args?.toolBlockRef ?? resolveToolBlockRefByMessageId(h, args);
+      const ref2 = args?.toolBlockRef ?? resolveToolBlockRefByMessageId(h, args);
       const sessionId = String(args?.targetSessionId || h.currentSession?.sessionId || "unknown-session");
-      if (!ref || typeof ref !== "object") {
+      if (!ref2 || typeof ref2 !== "object") {
         LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} reason=missing_ref`);
         return { success: false, error: "toolBlockRef or a known messageId is required" };
       }
       const adapter = getTargetedCliAdapter(h, args);
       if (!canExpand(adapter)) {
-        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref)} reason=unsupported_source (adapter cannot expand)`);
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref2)} reason=unsupported_source (adapter cannot expand)`);
         return { success: false, error: "expand_unsupported", reason: "unsupported_source" };
       }
       let result;
       try {
-        result = adapter.expandToolBlock(ref);
+        result = adapter.expandToolBlock(ref2);
       } catch (err) {
-        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref)} reason=source_unavailable (threw: ${err?.message || "unknown"})`);
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref2)} reason=source_unavailable (threw: ${err?.message || "unknown"})`);
         return { success: false, error: "expand_failed", reason: "source_unavailable" };
       }
       if (!result.ok) {
-        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref)} reason=${result.reason}`);
+        LOG.warn("Command", `[expand_tool_block] refused session=${sessionId} ${describeRef(ref2)} reason=${result.reason}`);
         return { success: false, error: "expand_failed", reason: result.reason };
       }
       return {
@@ -131774,8 +131857,8 @@ ${output}` : "";
           return;
         }
         if (part.type === "image") {
-          const ref = resolveImageRef(part, index);
-          if (ref) imageRefs.push(ref);
+          const ref2 = resolveImageRef(part, index);
+          if (ref2) imageRefs.push(ref2);
           if (part.alt?.trim()) promptParts.push(part.alt.trim());
           return;
         }
@@ -132480,11 +132563,11 @@ ${output}` : "";
       }
       return { success: false, error: `setMode '${mode}' not supported by this provider` };
     }
-    function recordRuntimeAxisChange(h, args, axis, value) {
+    function recordRuntimeAxisChange(h, args, axis2, value) {
       if (typeof value !== "string" || !value.trim()) return;
       const targetSessionId = typeof args?.targetSessionId === "string" && args.targetSessionId.trim() ? args.targetSessionId.trim() : h.currentSession?.sessionId;
       try {
-        h.ctx.sessionRegistry?.updateLaunchAxis?.(targetSessionId, axis, value);
+        h.ctx.sessionRegistry?.updateLaunchAxis?.(targetSessionId, axis2, value);
       } catch {
       }
     }
@@ -133338,11 +133421,11 @@ ${output}` : "";
         return { opened: false, visible: false, focused: false };
       }
       if (typeof payload === "object") {
-        const record3 = payload;
+        const record4 = payload;
         return {
-          opened: record3.opened === true,
-          visible: record3.visible === true || record3.opened === true || record3.focused === true,
-          focused: record3.focused === true
+          opened: record4.opened === true,
+          visible: record4.visible === true || record4.opened === true || record4.focused === true,
+          focused: record4.focused === true
         };
       }
       return { opened: false, visible: false, focused: false };
@@ -133356,8 +133439,8 @@ ${output}` : "";
         return { focused: normalized === "focused" || normalized === "visible" || normalized === "true" || normalized === "ok" || normalized === "success" };
       }
       if (typeof payload === "object") {
-        const record3 = payload;
-        return { focused: record3.focused === true || record3.visible === true || record3.success === true || record3.ok === true };
+        const record4 = payload;
+        return { focused: record4.focused === true || record4.visible === true || record4.success === true || record4.ok === true };
       }
       return { focused: false };
     }
@@ -134064,32 +134147,40 @@ ${output}` : "";
       // check them against, so any authenticated peer may send them.
       meshSender: "authenticated_peer"
     }));
+    init_cli_detector();
+    init_assistant_registry();
+    init_coordinator_registry();
+    init_dist();
+    init_validate();
+    init_ports();
     init_debug_trace();
     init_runtime_surface();
     init_command_registry();
-    function toHostedCliRuntimeDescriptor(record3) {
-      if (!record3 || typeof record3 !== "object") return null;
-      const runtimeId = typeof record3.sessionId === "string" ? record3.sessionId : "";
-      const cliType = typeof record3.providerType === "string" ? record3.providerType : "";
-      const workspace = typeof record3.workspace === "string" ? record3.workspace : "";
+    function toHostedCliRuntimeDescriptor(record4) {
+      if (!record4 || typeof record4 !== "object") return null;
+      const runtimeId = typeof record4.sessionId === "string" ? record4.sessionId : "";
+      const cliType = typeof record4.providerType === "string" ? record4.providerType : "";
+      const workspace = typeof record4.workspace === "string" ? record4.workspace : "";
       if (!runtimeId || !cliType || !workspace) return null;
       return {
         runtimeId,
-        runtimeKey: typeof record3.runtimeKey === "string" ? record3.runtimeKey : void 0,
-        displayName: typeof record3.displayName === "string" ? record3.displayName : void 0,
-        workspaceLabel: typeof record3.workspaceLabel === "string" ? record3.workspaceLabel : void 0,
-        lifecycle: typeof record3.lifecycle === "string" ? record3.lifecycle : void 0,
-        recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
+        runtimeKey: typeof record4.runtimeKey === "string" ? record4.runtimeKey : void 0,
+        displayName: typeof record4.displayName === "string" ? record4.displayName : void 0,
+        workspaceLabel: typeof record4.workspaceLabel === "string" ? record4.workspaceLabel : void 0,
+        lifecycle: typeof record4.lifecycle === "string" ? record4.lifecycle : void 0,
+        recoveryState: typeof record4.meta?.runtimeRecoveryState === "string" ? String(record4.meta.runtimeRecoveryState) : null,
         cliType,
         workspace,
-        cliArgs: Array.isArray(record3.meta?.cliArgs) ? record3.meta.cliArgs : [],
-        providerSessionId: typeof record3.meta?.providerSessionId === "string" ? String(record3.meta.providerSessionId) : void 0,
+        // Restart uses the hosted spawn argv and original role intent, never newer defaults.
+        launchRecord: record4.meta?.launchRecord,
+        cliArgs: Array.isArray(record4.meta?.cliArgs) ? record4.meta.cliArgs : [],
+        providerSessionId: typeof record4.meta?.providerSessionId === "string" ? String(record4.meta.providerSessionId) : void 0,
         // Real spawn time (PAST timestamp) of the underlying runtime — startedAt is
         // stamped on markStarted; fall back to createdAt (record creation). Threaded
         // through so an attach restores the native-history session-floor to the
         // runtime's actual birth instead of collapsing spawnedAtMs to 0 (which broke
         // the antigravity per-session birth-floor for co-located runtimes).
-        startedAtMs: typeof record3.startedAt === "number" && record3.startedAt > 0 ? record3.startedAt : typeof record3.createdAt === "number" && record3.createdAt > 0 ? record3.createdAt : void 0
+        startedAtMs: typeof record4.startedAt === "number" && record4.startedAt > 0 ? record4.startedAt : typeof record4.createdAt === "number" && record4.createdAt > 0 ? record4.createdAt : void 0
       };
     }
     function getWriteConflictOwnerClientId(error) {
@@ -134099,14 +134190,14 @@ ${output}` : "";
     }
     function summarizeSessionHostRecord(result) {
       if (!result || typeof result !== "object") return {};
-      const record3 = result;
+      const record4 = result;
       return {
-        runtimeKey: typeof record3.runtimeKey === "string" ? record3.runtimeKey : void 0,
-        lifecycle: typeof record3.lifecycle === "string" ? record3.lifecycle : void 0,
-        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record3),
-        attachedClientCount: Array.isArray(record3.attachedClients) ? record3.attachedClients.length : void 0,
-        hasWriteOwner: !!record3.writeOwner,
-        writeOwnerClientId: typeof record3.writeOwner?.clientId === "string" ? record3.writeOwner.clientId : void 0
+        runtimeKey: typeof record4.runtimeKey === "string" ? record4.runtimeKey : void 0,
+        lifecycle: typeof record4.lifecycle === "string" ? record4.lifecycle : void 0,
+        surfaceKind: (0, import_session_host_core4.getSessionHostSurfaceKind)(record4),
+        attachedClientCount: Array.isArray(record4.attachedClients) ? record4.attachedClients.length : void 0,
+        hasWriteOwner: !!record4.writeOwner,
+        writeOwnerClientId: typeof record4.writeOwner?.clientId === "string" ? record4.writeOwner.clientId : void 0
       };
     }
     function summarizeSessionHostRecords(result) {
@@ -134185,6 +134276,57 @@ ${output}` : "";
         throw error;
       }
     }
+    async function restartHostedSession(deps, args) {
+      if (!deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
+      const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
+      if (!sessionId) return { success: false, error: "sessionId required" };
+      const current4 = deps.sessionHostControl.listSessions ? (await deps.sessionHostControl.listSessions()).find((item) => item.sessionId === sessionId) : void 0;
+      if (!current4) return { success: false, code: "restart_selection_unavailable", error: "Hosted launch record unavailable; restart refused." };
+      const launch = parseSessionLaunchRecord(current4.meta?.launchRecord);
+      const settings2 = deps.instanceManager?.getInstance(sessionId)?.getState().settings;
+      const assistant = launch?.roleLaunch?.role === "assistant" || launch?.launchedBy === "assistant" || settings2?.assistant === true || current4.meta?.assistant === true || getAssistantRegistry().read()?.sessionId === sessionId;
+      const coordinator = launch?.roleLaunch?.role === "coordinator" || !!settings2?.meshCoordinatorFor || !!current4.meta?.meshCoordinatorFor || !!getCoordinatorForSession(sessionId);
+      if ((assistant || coordinator) && !launch) return {
+        success: false,
+        code: "restart_selection_unavailable",
+        error: "The role session has no recorded launch selection; restart refused."
+      };
+      if (launch && (assistant || coordinator)) {
+        const selection = launch.roleLaunch?.selection ?? {
+          provider: launch.providerType,
+          ...launch.model.requested ? { model: launch.model.requested } : {},
+          ...launch.thinkingLevel.requested ? { thinkingLevel: launch.thinkingLevel.requested } : {}
+        };
+        const detected = await detectCLI(selection.provider, deps.providerLoader);
+        if (!detected) return {
+          success: false,
+          code: "restart_selection_unavailable",
+          error: `Recorded provider '${selection.provider}' is not installed; restart refused.`
+        };
+        const valid = validateLaunchDefault(
+          assistant ? "assistant" : "coordinator",
+          selection,
+          createLaunchValidationPorts({ deps }, void 0, detected.version)
+        );
+        if (!valid.ok) return {
+          success: false,
+          code: "restart_selection_unavailable",
+          error: `Recorded provider '${launch.providerType}' cannot restart: ${valid.issue.reason}`
+        };
+      }
+      const record4 = await traceSessionHostAction("session_host_restart_session", args, async () => {
+        const nextRecord = await deps.sessionHostControl.restartSession(sessionId);
+        const hosted = toHostedCliRuntimeDescriptor(nextRecord);
+        if (hosted) {
+          await deps.cliManager.restoreHostedSessions([hosted]);
+        }
+        return nextRecord;
+      }, (result) => ({
+        ...summarizeSessionHostRecord(result),
+        restoredHostedSession: !!toHostedCliRuntimeDescriptor(result)
+      }));
+      return { success: true, record: record4 };
+    }
     var sessionHostHandlers = {
       session_host_get_diagnostics: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -134207,14 +134349,14 @@ ${output}` : "";
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
         const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
-        const record3 = await traceSessionHostAction("session_host_stop_session", args, () => ctx.deps.sessionHostControl.stopSession(sessionId), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record3 };
+        const record4 = await traceSessionHostAction("session_host_stop_session", args, () => ctx.deps.sessionHostControl.stopSession(sessionId), (result) => summarizeSessionHostRecord(result));
+        return { success: true, record: record4 };
       },
       session_host_resume_session: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
         const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
-        const record3 = await traceSessionHostAction("session_host_resume_session", args, async () => {
+        const record4 = await traceSessionHostAction("session_host_resume_session", args, async () => {
           const nextRecord = await ctx.deps.sessionHostControl.resumeSession(sessionId);
           const hosted = toHostedCliRuntimeDescriptor(nextRecord);
           if (hosted) {
@@ -134225,33 +134367,17 @@ ${output}` : "";
           ...summarizeSessionHostRecord(result),
           restoredHostedSession: !!toHostedCliRuntimeDescriptor(result)
         }));
-        return { success: true, record: record3 };
+        return { success: true, record: record4 };
       },
-      session_host_restart_session: async (ctx, args) => {
-        if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
-        const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
-        if (!sessionId) return { success: false, error: "sessionId required" };
-        const record3 = await traceSessionHostAction("session_host_restart_session", args, async () => {
-          const nextRecord = await ctx.deps.sessionHostControl.restartSession(sessionId);
-          const hosted = toHostedCliRuntimeDescriptor(nextRecord);
-          if (hosted) {
-            await ctx.deps.cliManager.restoreHostedSessions([hosted]);
-          }
-          return nextRecord;
-        }, (result) => ({
-          ...summarizeSessionHostRecord(result),
-          restoredHostedSession: !!toHostedCliRuntimeDescriptor(result)
-        }));
-        return { success: true, record: record3 };
-      },
+      session_host_restart_session: (ctx, args) => restartHostedSession(ctx.deps, args),
       session_host_send_signal: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
         const sessionId = typeof args?.sessionId === "string" ? args.sessionId : "";
         const signal = typeof args?.signal === "string" ? args.signal : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!signal) return { success: false, error: "signal required" };
-        const record3 = await traceSessionHostAction("session_host_send_signal", args, () => ctx.deps.sessionHostControl.sendSignal(sessionId, signal), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record3 };
+        const record4 = await traceSessionHostAction("session_host_send_signal", args, () => ctx.deps.sessionHostControl.sendSignal(sessionId, signal), (result) => summarizeSessionHostRecord(result));
+        return { success: true, record: record4 };
       },
       session_host_force_detach_client: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -134259,8 +134385,8 @@ ${output}` : "";
         const clientId = typeof args?.clientId === "string" ? args.clientId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!clientId) return { success: false, error: "clientId required" };
-        const record3 = await traceSessionHostAction("session_host_force_detach_client", args, () => ctx.deps.sessionHostControl.forceDetachClient(sessionId, clientId), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record3 };
+        const record4 = await traceSessionHostAction("session_host_force_detach_client", args, () => ctx.deps.sessionHostControl.forceDetachClient(sessionId, clientId), (result) => summarizeSessionHostRecord(result));
+        return { success: true, record: record4 };
       },
       session_host_prune_duplicate_sessions: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -134278,7 +134404,7 @@ ${output}` : "";
         const ownerType = args?.ownerType === "agent" ? "agent" : "user";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!clientId) return { success: false, error: "clientId required" };
-        const record3 = await traceSessionHostAction("session_host_acquire_write", args, () => ctx.deps.sessionHostControl.acquireWrite({
+        const record4 = await traceSessionHostAction("session_host_acquire_write", args, () => ctx.deps.sessionHostControl.acquireWrite({
           sessionId,
           clientId,
           ownerType,
@@ -134287,7 +134413,7 @@ ${output}` : "";
           ...summarizeSessionHostRecord(result),
           ownerType
         }));
-        return { success: true, record: record3 };
+        return { success: true, record: record4 };
       },
       session_host_release_write: async (ctx, args) => {
         if (!ctx.deps.sessionHostControl) return { success: false, error: "Session host control unavailable" };
@@ -134295,11 +134421,11 @@ ${output}` : "";
         const clientId = typeof args?.clientId === "string" ? args.clientId : "";
         if (!sessionId) return { success: false, error: "sessionId required" };
         if (!clientId) return { success: false, error: "clientId required" };
-        const record3 = await traceSessionHostAction("session_host_release_write", args, () => ctx.deps.sessionHostControl.releaseWrite({
+        const record4 = await traceSessionHostAction("session_host_release_write", args, () => ctx.deps.sessionHostControl.releaseWrite({
           sessionId,
           clientId
         }), (result) => summarizeSessionHostRecord(result));
-        return { success: true, record: record3 };
+        return { success: true, record: record4 };
       },
       /**
        * `get_runtime_snapshot`: a PTY snapshot for a CLI session, over the
@@ -135607,8 +135733,8 @@ ${output}` : "";
     };
     async function ownQueueRole(ctx, meshId) {
       try {
-        const record3 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        return record3?.mesh ? resolveMeshHostStatus(record3.mesh).role : void 0;
+        const record4 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        return record4?.mesh ? resolveMeshHostStatus(record4.mesh).role : void 0;
       } catch {
         return void 0;
       }
@@ -135728,8 +135854,8 @@ ${output}` : "";
     var DEFAULT_ACTIVE_WORK_RECORD_TAIL = 200;
     async function ownMeshRecord(ctx, meshId) {
       try {
-        const record3 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        return record3?.mesh ? record3.mesh : void 0;
+        const record4 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        return record4?.mesh ? record4.mesh : void 0;
       } catch {
         return void 0;
       }
@@ -136176,23 +136302,23 @@ ${output}` : "";
         return { success: false, error: e?.message ?? String(e) };
       }
     };
-    function toWireMission(record3) {
+    function toWireMission(record4) {
       return {
-        id: record3.id,
-        meshId: record3.meshId,
-        title: record3.title,
-        goal: record3.goal,
-        status: record3.status,
+        id: record4.id,
+        meshId: record4.meshId,
+        title: record4.title,
+        goal: record4.goal,
+        status: record4.status,
         // H2: `record.brief` is already normalized (mesh-missions.ts) — a structural
         // mirror is enough for the wire, not a re-normalize.
-        ...record3.brief ? { brief: record3.brief } : {}
+        ...record4.brief ? { brief: record4.brief } : {}
       };
     }
     var missionUpsert2 = async (_ctx, args) => {
       const req = decodeMissionUpsertRequest(args);
       if (!req) return badRequest3("mission_upsert");
       try {
-        const record3 = upsertMeshMission(req.meshId, {
+        const record4 = upsertMeshMission(req.meshId, {
           ...req.id ? { id: req.id } : {},
           title: req.title,
           ...req.goal !== void 0 ? { goal: req.goal } : {},
@@ -136202,7 +136328,7 @@ ${output}` : "";
           // upsertMeshMission's own normalizeMissionBrief call does the real work.
           ...req.brief !== void 0 ? { brief: req.brief } : {}
         });
-        const response = { mission: toWireMission(record3) };
+        const response = { mission: toWireMission(record4) };
         return { success: true, ...response };
       } catch (e) {
         return { success: false, error: e?.message ?? String(e) };
@@ -136213,8 +136339,8 @@ ${output}` : "";
       if (!req) return badRequest3("mission_query");
       try {
         if (req.id) {
-          const record3 = getMeshMission(req.meshId, req.id);
-          const response2 = { missions: record3 ? [toWireMission(record3)] : [] };
+          const record4 = getMeshMission(req.meshId, req.id);
+          const response2 = { missions: record4 ? [toWireMission(record4)] : [] };
           return { success: true, ...response2 };
         }
         const records = getMeshMissions(req.meshId, req.statuses ? [...req.statuses] : void 0);
@@ -136792,8 +136918,8 @@ ${output}` : "";
     }
     var PERSISTED_ATTEMPT_REF_META_KEY = "meshActiveAttemptRef";
     function attemptRefKey(settings2) {
-      const ref = currentMeshAttemptRef(settings2);
-      return ref ? `${ref.attemptId}#${ref.generation}` : "";
+      const ref2 = currentMeshAttemptRef(settings2);
+      return ref2 ? `${ref2.attemptId}#${ref2.generation}` : "";
     }
     function persistedAttemptRefMeta(settings2, previousKey) {
       if (attemptRefKey(settings2) === previousKey) return {};
@@ -136922,8 +137048,8 @@ ${output}` : "";
     async function ownerRosterNodeDaemonLookup(ctx, meshId) {
       let nodes = [];
       try {
-        const record3 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
-        nodes = Array.isArray(record3?.mesh?.nodes) ? record3.mesh.nodes : [];
+        const record4 = await ctx?.getMeshForCommand?.(meshId, void 0, { preferInline: true });
+        nodes = Array.isArray(record4?.mesh?.nodes) ? record4.mesh.nodes : [];
       } catch {
         nodes = [];
       }
@@ -137126,20 +137252,20 @@ ${output}` : "";
     function decodeForwardedClaim(args, allowedKeys) {
       const input = stripRouterInternalArgs(args);
       if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-      const record3 = input;
-      for (const key4 of Object.keys(record3)) if (!allowedKeys.has(key4)) return null;
-      const meshId = readNonEmpty3(record3.meshId);
-      const sessionId = readNonEmpty3(record3.sessionId);
+      const record4 = input;
+      for (const key4 of Object.keys(record4)) if (!allowedKeys.has(key4)) return null;
+      const meshId = readNonEmpty3(record4.meshId);
+      const sessionId = readNonEmpty3(record4.sessionId);
       if (!meshId || !sessionId) return null;
       for (const key4 of ["taskId", "attemptId", "nodeId"]) {
-        if (record3[key4] !== void 0 && !readNonEmpty3(record3[key4])) return null;
+        if (record4[key4] !== void 0 && !readNonEmpty3(record4[key4])) return null;
       }
-      if (record3.generation !== void 0 && (!Number.isSafeInteger(record3.generation) || record3.generation < 0)) return null;
-      const taskId = readNonEmpty3(record3.taskId);
-      const attemptId = readNonEmpty3(record3.attemptId);
+      if (record4.generation !== void 0 && (!Number.isSafeInteger(record4.generation) || record4.generation < 0)) return null;
+      const taskId = readNonEmpty3(record4.taskId);
+      const attemptId = readNonEmpty3(record4.attemptId);
       return {
-        claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {}, ...record3.generation !== void 0 ? { generation: record3.generation } : {} },
-        record: record3
+        claim: { meshId, sessionId, ...taskId ? { taskId } : {}, ...attemptId ? { attemptId } : {}, ...record4.generation !== void 0 ? { generation: record4.generation } : {} },
+        record: record4
       };
     }
     function decodeForwardedWorkerReport(args) {
@@ -137922,7 +138048,8 @@ ${output}` : "";
           cols: geometry?.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS,
           rows: geometry?.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS,
           cwd: workingDir,
-          env: env2
+          env: env2,
+          envOverrides: buildCliSpawnEnv({}, { ...baseEnv || {}, ...extraEnv || {}, TERMINAL_CWD: workingDir })
         }
       };
     }
@@ -138337,6 +138464,17 @@ ${output}` : "";
           await ctx.stopIde(targetType, true);
           const launchResult = await ctx.launchIde({ ideType: targetType, enableCdp: true, workspace: args?.workspace });
           return { success: true, restarted: true, ideType: targetType, launch: launchResult };
+        }
+        const sessionId = readStringValue(args?.targetSessionId, args?.sessionId);
+        const recorded = sessionId ? ctx.deps.sessionRegistry.get?.(sessionId)?.launch : void 0;
+        const settings2 = sessionId ? ctx.deps.instanceManager.getInstance(sessionId)?.getState().settings : void 0;
+        const role = recorded?.roleLaunch || recorded?.launchedBy === "assistant" || settings2?.assistant || settings2?.meshCoordinatorFor;
+        if (role && ctx.deps.sessionHostControl?.listSessions) {
+          const hosted = await ctx.deps.sessionHostControl.listSessions();
+          if (hosted.some((record4) => record4.sessionId === sessionId)) {
+            const result = await restartHostedSession(ctx.deps, { sessionId });
+            return { ...result, restarted: result.success === true };
+          }
         }
         return ctx.deps.cliManager.restartSession(args);
       }
@@ -140757,6 +140895,80 @@ ${output}` : "";
       // payload names on this daemon's roster (nodeId / workspace are claims).
       mesh_forward_event: { meshSender: "node_owner" }
     }, { meshSender: "authenticated_peer" });
+    var import_node_fs9 = require("fs");
+    init_mesh_config_store();
+    init_ports();
+    init_resolve();
+    function resolveRoleLaunch(ctx, role, override, projectId) {
+      const ports = getLaunchDefaultsCommandPorts(ctx);
+      const unavailable2 = (reason) => ({
+        ok: false,
+        code: "launch_default_unavailable",
+        role,
+        field: "provider",
+        reason,
+        hint: "Correct the launch defaults on the host daemon before launching."
+      });
+      if (!ports.store.withSnapshot) return unavailable2("snapshot_lock_unavailable");
+      try {
+        return ports.store.withSnapshot((stored) => {
+          if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override }, ports.validation);
+          if (projectId && !ports.projects) return unavailable2("project_storage_unavailable");
+          const resolve44 = () => {
+            let hasHostInventory = false;
+            if (projectId) {
+              try {
+                (0, import_node_fs9.statSync)(getMeshConfigPath());
+                hasHostInventory = true;
+              } catch (error) {
+                if (error.code !== "ENOENT") throw error;
+              }
+            }
+            const project = hasHostInventory ? ports.projects?.read(projectId) : void 0;
+            if (project && !project.ok && project.code !== "project_not_found") return unavailable2(project.code);
+            const state2 = project?.ok ? project.state : void 0;
+            return resolveLaunchSelection({
+              role,
+              stored,
+              override,
+              ...state2?.entry ? { hostCoordinatorLaunch: {
+                projectId: state2.projectId,
+                revision: state2.revision,
+                selection: {
+                  provider: state2.entry.provider,
+                  ...state2.entry.model !== void 0 ? { model: state2.entry.model } : {},
+                  ...state2.entry.thinkingLevel !== void 0 ? { thinkingLevel: state2.entry.thinkingLevel } : {}
+                }
+              } } : {}
+            }, ports.validation);
+          };
+          return projectId && ports.projects ? ports.projects.withWriteLock(resolve44) : resolve44();
+        });
+      } catch {
+        return unavailable2("launch_snapshot_unavailable");
+      }
+    }
+    function roleLaunchFailure(result) {
+      return {
+        ...result,
+        success: false,
+        error: `${result.role} launch ${result.field} '${result.value ?? ""}' unavailable: ${result.reason}. ${result.hint}`
+      };
+    }
+    function roleLaunchProvenance(role, result) {
+      return {
+        providerSource: result.applied.provider.source,
+        modelSource: result.applied.model.source,
+        thinkingLevelSource: result.applied.thinkingLevel.source,
+        roleLaunch: {
+          role,
+          selection: result.selection,
+          applied: result.applied,
+          ...result.defaultRef ? { defaultRef: result.defaultRef } : {},
+          documentRevision: result.documentRevision
+        }
+      };
+    }
     var import_path38 = require("path");
     var fs87 = __toESM2(require("fs"));
     var import_child_process14 = require("child_process");
@@ -140889,13 +141101,6 @@ ${output}` : "";
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         let cliType = typeof args?.cliType === "string" ? args.cliType.trim() : "";
         const extraSystemPrompt = typeof args?.extraSystemPrompt === "string" ? args.extraSystemPrompt.trim() : "";
-        const initialModel = typeof args?.initialModel === "string" && args.initialModel.trim() ? args.initialModel.trim() : null;
-        const initialThinkingLevel = typeof args?.initialThinkingLevel === "string" && args.initialThinkingLevel.trim() ? args.initialThinkingLevel.trim() : null;
-        const coordinatorLaunchProvenance = {
-          launchedBy: "mesh",
-          ...initialModel ? { modelSource: args?.modelSource === "remembered" ? "remembered" : "user" } : {},
-          ...initialThinkingLevel ? { thinkingLevelSource: args?.thinkingLevelSource === "remembered" ? "remembered" : "user" } : {}
-        };
         const autoApproveModeOverride = typeof args?.autoApproveMode === "string" && args.autoApproveMode.trim() ? args.autoApproveMode.trim() : null;
         const legacyAutoApproveOverride = typeof args?.autoApprove === "boolean" ? args.autoApprove : null;
         const assistantStamp = args?.managedByAssistant === true ? { managedByAssistant: true } : {};
@@ -141019,26 +141224,19 @@ ${output}` : "";
           }
           const effectiveMesh = applyRepoMeshConfig2(mesh, repoMeshConfigLoad.config);
           const buildEffectiveOperatingNotes = async (id4) => mergeEffectiveOperatingNotes2(repoMeshConfigLoad.config?.operatingNotes, await buildOperatingNotesBestEffort(id4));
-          if (!cliType) {
-            const resolved = await resolveProviderTypeFromPriority({
-              nodeId: String(normalizeMeshNodeId(coordinatorNode) || preferredCoordinatorNodeId || "coordinator"),
-              providerPriority: readProviderPriorityFromPolicy(coordinatorNode.policy),
-              providerLoader: ctx.deps.providerLoader,
-              onStatusChange: ctx.deps.onStatusChange
-            });
-            if (!resolved.providerType) {
-              return {
-                success: false,
-                code: "mesh_coordinator_provider_priority_unusable",
-                error: resolved.error || "No usable provider found from node providerPriority",
-                meshId,
-                cliType,
-                workspace
-              };
-            }
-            cliType = resolved.providerType;
-          }
-          cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ["cli"]) || cliType;
+          const resolved = resolveRoleLaunch(ctx, "coordinator", {
+            ...args?.cliType !== void 0 ? { provider: args.cliType } : {},
+            ...args?.initialModel !== void 0 && args.initialModel !== null ? { model: args.initialModel } : {},
+            ...args?.initialThinkingLevel !== void 0 && args.initialThinkingLevel !== null ? { thinkingLevel: args.initialThinkingLevel } : {}
+          }, meshId);
+          if (!resolved.ok) return roleLaunchFailure(resolved);
+          cliType = resolved.selection.provider;
+          const initialModel = resolved.selection.model;
+          const initialThinkingLevel = resolved.selection.thinkingLevel;
+          const coordinatorLaunchProvenance = {
+            launchedBy: "mesh",
+            ...roleLaunchProvenance("coordinator", resolved)
+          };
           const providerMeta = ctx.deps.providerLoader.resolve?.(cliType) || ctx.deps.providerLoader.getMeta(cliType);
           const coordinatorSetup = resolveMeshCoordinatorSetup({
             provider: providerMeta,
@@ -141526,7 +141724,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_routing();
     init_mesh_host_ownership();
     init_hidden_spawn();
-    var import_node_fs9 = require("fs");
+    var import_node_fs10 = require("fs");
     init_git_locale();
     var import_node_path9 = require("path");
     var PREVIEW_DEPLOY_RECORD = ".adhdev/preview-deploy.json";
@@ -141537,17 +141735,17 @@ ${ptyResult.output.slice(-2e3)}`);
     ];
     function hasDeployPreviewNpmScript(repoRoot) {
       const pkgPath = (0, import_node_path9.resolve)(repoRoot, "package.json");
-      if (!(0, import_node_fs9.existsSync)(pkgPath)) return false;
+      if (!(0, import_node_fs10.existsSync)(pkgPath)) return false;
       try {
-        const pkg = JSON.parse((0, import_node_fs9.readFileSync)(pkgPath, "utf8"));
+        const pkg = JSON.parse((0, import_node_fs10.readFileSync)(pkgPath, "utf8"));
         return typeof pkg?.scripts?.["deploy:preview"] === "string";
       } catch {
         return false;
       }
     }
     function isPreviewPipelineConfigured(repoRoot) {
-      if ((0, import_node_fs9.existsSync)((0, import_node_path9.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
-      if (PREVIEW_PIPELINE_SCRIPTS.some((rel) => (0, import_node_fs9.existsSync)((0, import_node_path9.resolve)(repoRoot, rel)))) return true;
+      if ((0, import_node_fs10.existsSync)((0, import_node_path9.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD))) return true;
+      if (PREVIEW_PIPELINE_SCRIPTS.some((rel) => (0, import_node_fs10.existsSync)((0, import_node_path9.resolve)(repoRoot, rel)))) return true;
       return hasDeployPreviewNpmScript(repoRoot);
     }
     function runGit3(repoRoot, args) {
@@ -141565,9 +141763,9 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     function readRecord3(repoRoot) {
       const path103 = (0, import_node_path9.resolve)(repoRoot, PREVIEW_DEPLOY_RECORD);
-      if (!(0, import_node_fs9.existsSync)(path103)) return null;
+      if (!(0, import_node_fs10.existsSync)(path103)) return null;
       try {
-        const parsed = JSON.parse((0, import_node_fs9.readFileSync)(path103, "utf8"));
+        const parsed = JSON.parse((0, import_node_fs10.readFileSync)(path103, "utf8"));
         return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
       } catch {
         return null;
@@ -141576,8 +141774,8 @@ ${ptyResult.output.slice(-2e3)}`);
     function normalizeCommit(value) {
       return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim()) ? value.trim() : null;
     }
-    function readTargetFreshness(record3, currentCommit) {
-      const targets = record3?.targets && typeof record3.targets === "object" && !Array.isArray(record3.targets) ? record3.targets : {};
+    function readTargetFreshness(record4, currentCommit) {
+      const targets = record4?.targets && typeof record4.targets === "object" && !Array.isArray(record4.targets) ? record4.targets : {};
       const result = {};
       for (const targetName of ["npm", "server", "web"]) {
         const targetRecord = targets[targetName] && typeof targets[targetName] === "object" && !Array.isArray(targets[targetName]) ? targets[targetName] : {};
@@ -141604,9 +141802,9 @@ ${ptyResult.output.slice(-2e3)}`);
     function buildPreviewFreshness(repoRoot) {
       if (!isPreviewPipelineConfigured(repoRoot)) return null;
       const current4 = readCurrentMainCommit(repoRoot);
-      const record3 = readRecord3(repoRoot);
-      const lastPreviewCommit = normalizeCommit(record3?.lastPreviewCommit);
-      const targets = readTargetFreshness(record3, current4.currentMainCommit);
+      const record4 = readRecord3(repoRoot);
+      const lastPreviewCommit = normalizeCommit(record4?.lastPreviewCommit);
+      const targets = readTargetFreshness(record4, current4.currentMainCommit);
       let status = "unknown";
       let nextAction = "Run npm run deploy:preview from the current main commit, then smoke preview.";
       if (lastPreviewCommit && current4.currentMainCommit) {
@@ -141621,9 +141819,9 @@ ${ptyResult.output.slice(-2e3)}`);
         currentMainCommit: current4.currentMainCommit,
         currentMainCommitSource: current4.currentMainCommitSource,
         recordPath: PREVIEW_DEPLOY_RECORD,
-        lastDeployedAt: typeof record3?.updatedAt === "string" ? record3.updatedAt : void 0,
-        lastTarget: typeof record3?.target === "string" ? record3.target : void 0,
-        previewVersion: typeof record3?.previewVersion === "string" ? record3.previewVersion : void 0,
+        lastDeployedAt: typeof record4?.updatedAt === "string" ? record4.updatedAt : void 0,
+        lastTarget: typeof record4?.target === "string" ? record4.target : void 0,
+        previewVersion: typeof record4?.previewVersion === "string" ? record4.previewVersion : void 0,
         targets,
         nextAction
       };
@@ -141947,8 +142145,8 @@ ${ptyResult.output.slice(-2e3)}`);
             }) || (typeof node.workspace === "string" ? node.workspace : "");
             status.workspace = workspace || node.workspace;
             if (matchedLiveSessionRecords.length > 0) {
-              const sessionIds = matchedLiveSessionRecords.map((record3) => typeof record3?.sessionId === "string" ? record3.sessionId : "").filter(Boolean);
-              const providerTypes = matchedLiveSessionRecords.map((record3) => readStringValue(record3?.providerType)).filter(Boolean);
+              const sessionIds = matchedLiveSessionRecords.map((record4) => typeof record4?.sessionId === "string" ? record4.sessionId : "").filter(Boolean);
+              const providerTypes = matchedLiveSessionRecords.map((record4) => readStringValue(record4?.providerType)).filter(Boolean);
               status.activeSessions = sessionIds;
               status.activeSessionDetails = matchedLiveSessionRecords.map(summarizeMeshSessionRecord);
               if (providerTypes.length > 0) {
@@ -142246,8 +142444,8 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_relay_result();
     var MESH_NODE_GIT_LOG_TIMEOUT_MS = 15e3;
     async function resolveMeshNode(ctx, meshId, nodeId) {
-      const record3 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
-      const mesh = record3?.mesh;
+      const record4 = await ctx.getMeshForCommand(meshId, void 0, { preferInline: true });
+      const mesh = record4?.mesh;
       if (!mesh) return { ok: false, result: { success: false, code: "mesh_not_found", error: "Mesh not found", accepted: false } };
       const node = Array.isArray(mesh.nodes) ? mesh.nodes.find((n) => meshNodeIdMatches7(n, nodeId)) : void 0;
       if (!node) return { ok: false, result: { success: false, code: "mesh_node_unknown", error: `Node ${nodeId} is not on mesh ${meshId}`, accepted: false } };
@@ -142947,7 +143145,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         LOG.warn("Assistant", `previous-session context unavailable for ${prevSid}: ${e?.message ?? e}`);
       }
     }
-    var launchAssistant = async (ctx, args) => {
+    var launchAssistantOnce = async (ctx, args) => {
       const registry = getAssistantRegistry();
       const entry = registry.read();
       const { getAssistantRuntime: getAssistantRuntime2 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
@@ -142956,8 +143154,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         runtime?.activate("launch");
         return { success: true, launched: false, sessionId: entry.sessionId, cliType: entry.cliType, workspace: entry.workspace };
       }
-      let cliType = str14(args?.cliType) || entry?.cliType || DEFAULT_ASSISTANT_CLI_TYPE;
-      cliType = ctx.deps.providerLoader.resolveAlias?.(cliType, ["cli"]) || cliType;
+      const resolved = resolveRoleLaunch(ctx, "assistant", {
+        ...args?.cliType !== void 0 ? { provider: args.cliType } : {},
+        ...args?.model !== void 0 ? { model: args.model } : {},
+        ...args?.thinkingLevel !== void 0 ? { thinkingLevel: args.thinkingLevel } : {}
+      });
+      if (!resolved.ok) return roleLaunchFailure(resolved);
+      const { provider: cliType, model, thinkingLevel } = resolved.selection;
+      const provenance = roleLaunchProvenance("assistant", resolved);
       const provider = ctx.deps.providerLoader.resolve?.(cliType) || ctx.deps.providerLoader.getMeta(cliType);
       const configDir = getConfigDir2();
       const workspace = assistantWorkspaceDir(configDir);
@@ -143011,8 +143215,6 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const providerLaunchArgs = provider?.meshCoordinator?.launchArgs;
       if (Array.isArray(providerLaunchArgs)) cliArgs.push(...providerLaunchArgs.filter((a) => typeof a === "string" && !!a.trim()));
       cliArgs.push(...mcp.cliArgs);
-      const model = str14(args?.model);
-      const thinkingLevel = str14(args?.thinkingLevel);
       const { scheduleInjectionCleanup: scheduleInjectionCleanup2, localSessionReadyProbe: localSessionReadyProbe2 } = await Promise.resolve().then(() => (init_coordinator_injection_cleanup(), coordinator_injection_cleanup_exports));
       let launched;
       try {
@@ -143023,8 +143225,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           env: Object.keys(launchEnv).length ? launchEnv : void 0,
           settings: assistantSessionSettings(approval.settings),
           assistantSessionKey,
-          ...model ? { initialModel: model, modelSource: "user" } : {},
-          ...thinkingLevel ? { initialThinkingLevel: thinkingLevel, thinkingLevelSource: "user" } : {},
+          ...model ? { initialModel: model } : {},
+          ...thinkingLevel ? { initialThinkingLevel: thinkingLevel } : {},
+          ...provenance,
           launchedBy: "assistant"
         }, "ipc", { inProcess: true });
       } catch (e) {
@@ -143056,7 +143259,20 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const prevSid = previous?.sessionId ?? entry?.sessionId ?? null;
       if (runtime && prevSid && prevSid !== sessionId) void queuePreviousSessionNote(ctx, runtime, prevSid, sessionId);
       LOG.info("Assistant", `Launched ${cliType} assistant ${sessionId} in ${workspace} (prompt ${prompt.length} chars${restartNote ? ", restart note queued" : ""})`);
-      return { success: true, launched: true, sessionId, cliType, workspace, promptLength: prompt.length, restartNote };
+      return { success: true, launched: true, sessionId, cliType, workspace, promptLength: prompt.length, restartNote, ...provenance };
+    };
+    var assistantStarts = /* @__PURE__ */ new WeakMap();
+    var launchAssistant = (ctx, args) => {
+      const registry = getAssistantRegistry();
+      const pending = assistantStarts.get(registry);
+      if (pending) return pending.then((result) => result.success ? { ...result, launched: false } : result);
+      const operation = launchAssistantOnce(ctx, args);
+      assistantStarts.set(registry, operation);
+      void operation.finally(() => {
+        if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry);
+      }).catch(() => {
+      });
+      return operation;
     };
     var pendingRelays = async (ctx, args) => {
       const { getAssistantRuntime: getAssistantRuntime2 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
@@ -144149,8 +144365,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           })();
           const nodeExists = (nodeId) => meshNodes.length === 0 || meshNodes.some((n) => meshNodeIdMatches7(n, nodeId));
           const openDispatches = selectOpenRefineDispatches2(entries);
-          for (const record3 of openDispatches) {
-            const decision = classifyRefineDispatch2(record3, {
+          for (const record4 of openDispatches) {
+            const decision = classifyRefineDispatch2(record4, {
               nowMs: nowMs2,
               graceMs: dispatchGraceMs,
               zombieCutoffMs,
@@ -144168,9 +144384,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             const node = sourceEntry?.payload?.refineJob;
             const coordinatorDaemonId = node?.targetCoordinatorDaemonId;
             const coordinatorSessionId = node?.targetCoordinatorSessionId;
-            const dispatchedAt = sourceEntry?.timestamp ?? record3.timestamp;
+            const dispatchedAt = sourceEntry?.timestamp ?? record4.timestamp;
             if (decision.disposition === "defer_executor_alive") {
-              const detail = evaluateRefineExecutorLiveness(record3.executor);
+              const detail = evaluateRefineExecutorLiveness(record4.executor);
               LOG.info("Mesh", `[Refinery] Deferring resume of refine job for node ${nodeId} (jobId=${jobId}) \u2014 the dispatching process is still alive (${detail.reason}); dispatched ${ageMs2}ms ago. Not resuming: a second execution of one jobId is a ghost dispatch.`);
               continue;
             }
@@ -144335,10 +144551,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { state: "unknown", error: String(e?.message || e || "listSessions failed") };
       }
       if (!Array.isArray(sessions)) return { state: "unknown", error: "session inventory was not a list" };
-      for (const record3 of sessions) {
-        if (!sessionMatchesMeshNode(self, record3, node, nodeId)) continue;
-        if ((0, import_session_host_core4.getSessionHostSurfaceKind)(record3) !== "live_runtime") continue;
-        return { state: "occupied", sessionId: String(record3?.sessionId || "") };
+      for (const record4 of sessions) {
+        if (!sessionMatchesMeshNode(self, record4, node, nodeId)) continue;
+        if ((0, import_session_host_core4.getSessionHostSurfaceKind)(record4) !== "live_runtime") continue;
+        return { state: "occupied", sessionId: String(record4?.sessionId || "") };
       }
       return { state: "idle" };
     }
@@ -144365,13 +144581,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { unpushed: false };
       }
     }
-    function sessionMatchesMeshNode(self, record3, node, nodeId, sessionIds) {
-      const sessionId = typeof record3?.sessionId === "string" ? record3.sessionId : "";
+    function sessionMatchesMeshNode(self, record4, node, nodeId, sessionIds) {
+      const sessionId = typeof record4?.sessionId === "string" ? record4.sessionId : "";
       if (!sessionId) return false;
       if (sessionIds?.size) return sessionIds.has(sessionId);
       const workspace = typeof node?.workspace === "string" ? node.workspace : "";
-      if (workspace && record3?.workspace === workspace) return true;
-      if (record3?.meta?.meshNodeId === nodeId) return true;
+      if (workspace && record4?.workspace === workspace) return true;
+      if (record4?.meta?.meshNodeId === nodeId) return true;
       return false;
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
@@ -144846,24 +145062,24 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const seen2 = /* @__PURE__ */ new Set();
       const checkedRefs = [];
       const resolvedRefCommits = [];
-      for (const ref of candidateRefs) {
-        if (!ref || seen2.has(ref)) continue;
-        seen2.add(ref);
+      for (const ref2 of candidateRefs) {
+        if (!ref2 || seen2.has(ref2)) continue;
+        seen2.add(ref2);
         let commit2 = "";
         try {
-          commit2 = await runGit4(["rev-parse", "--verify", `${ref}^{commit}`], args.repoRoot);
+          commit2 = await runGit4(["rev-parse", "--verify", `${ref2}^{commit}`], args.repoRoot);
         } catch {
           continue;
         }
-        checkedRefs.push(ref);
-        resolvedRefCommits.push({ ref, commit: commit2 });
+        checkedRefs.push(ref2);
+        resolvedRefCommits.push({ ref: ref2, commit: commit2 });
         try {
           await runGit4(["merge-base", "--is-ancestor", head, commit2], args.repoRoot);
-          return { allow: true, status: "merged_to_default_ref", source: "git_merge_base", ref };
+          return { allow: true, status: "merged_to_default_ref", source: "git_merge_base", ref: ref2 };
         } catch {
         }
       }
-      for (const { ref, commit: commit2 } of resolvedRefCommits) {
+      for (const { ref: ref2, commit: commit2 } of resolvedRefCommits) {
         let containment;
         try {
           containment = await checkWorktreeChangesPatchEquivalentInRef(args.repoRoot, commit2, head);
@@ -144871,7 +145087,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           continue;
         }
         if (containment.contained) {
-          return { allow: true, status: "patch_equivalent_to_default_ref", source: "git_patch_equivalence", ref };
+          return { allow: true, status: "patch_equivalent_to_default_ref", source: "git_patch_equivalence", ref: ref2 };
         }
       }
       return {
@@ -144880,8 +145096,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         error: checkedRefs.length ? `worktree HEAD is not contained in checked refs: ${checkedRefs.join(", ")}` : "no default/main refs were available for convergence verification"
       };
     }
-    function isCompletedHostedSession(self, record3) {
-      return record3?.lifecycle === "stopped" || record3?.lifecycle === "failed" || record3?.lifecycle === "interrupted";
+    function isCompletedHostedSession(self, record4) {
+      return record4?.lifecycle === "stopped" || record4?.lifecycle === "failed" || record4?.lifecycle === "interrupted";
     }
     async function recordIntentionalMeshSessionStop(self, args) {
       try {
@@ -144917,7 +145133,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       };
       const reclaimedOrphanSessionIds = [];
       const sessions = await self.deps.sessionHostControl.listSessions();
-      const matched = sessions.filter((record3) => self.sessionMatchesMeshNode(record3, args.node, args.nodeId, requestedSessionIds));
+      const matched = sessions.filter((record4) => self.sessionMatchesMeshNode(record4, args.node, args.nodeId, requestedSessionIds));
       const hasExplicitSessionIds = !!requestedSessionIds?.size;
       const stoppedSessionIds = [];
       const deletedSessionIds = [];
@@ -144949,18 +145165,18 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         recovery_snapshot: 0,
         inactive_record: 0
       };
-      for (const record3 of matched) {
-        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record3);
+      for (const record4 of matched) {
+        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record4);
         matchedBySurfaceKind[surfaceKind] += 1;
       }
-      for (const record3 of matched) {
-        const sessionId = String(record3.sessionId);
-        const completed = self.isCompletedHostedSession(record3);
-        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record3);
+      for (const record4 of matched) {
+        const sessionId = String(record4.sessionId);
+        const completed = self.isCompletedHostedSession(record4);
+        const surfaceKind = (0, import_session_host_core4.getSessionHostSurfaceKind)(record4);
         const liveRuntime = surfaceKind === "live_runtime";
-        const coordinatorSession = readStringValue(record3?.meta?.meshCoordinatorFor) === args.meshId;
-        const recordNodeId = readStringValue(record3?.meta?.meshNodeId);
-        const recordMeshNodeFor = readStringValue(record3?.meta?.meshNodeFor);
+        const coordinatorSession = readStringValue(record4?.meta?.meshCoordinatorFor) === args.meshId;
+        const recordNodeId = readStringValue(record4?.meta?.meshNodeId);
+        const recordMeshNodeFor = readStringValue(record4?.meta?.meshNodeFor);
         const delegateBoundToThisNode = !!recordNodeId && meshNodeIdMatches7({ nodeId: recordNodeId }, args.nodeId) && (!recordMeshNodeFor || recordMeshNodeFor === args.meshId);
         if (!hasExplicitSessionIds && coordinatorSession) {
           skippedSessionIds.push(sessionId);
@@ -145101,8 +145317,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       let changed = false;
       const nodes = snapshot.nodes.map((statusNode) => {
         const nodeId = normalizeMeshNodeId(statusNode);
-        const record3 = nodeId ? recordsById.get(nodeId) : void 0;
-        const facts = record3?.nodeFacts;
+        const record4 = nodeId ? recordsById.get(nodeId) : void 0;
+        const facts = record4?.nodeFacts;
         if (!facts || typeof facts !== "object") return statusNode;
         const recordAt = typeof facts.reportedAt === "number" ? facts.reportedAt : 0;
         const heldAt = typeof statusNode?.nodeFacts?.reportedAt === "number" ? statusNode.nodeFacts.reportedAt : 0;
@@ -145111,8 +145327,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return {
           ...statusNode,
           nodeFacts: facts,
-          ...typeof record3.reportedDaemonBuildVersion === "string" && record3.reportedDaemonBuildVersion ? { daemonBuildVersion: record3.reportedDaemonBuildVersion } : {},
-          ...record3.reportedProviderVersions && typeof record3.reportedProviderVersions === "object" ? { providerVersions: record3.reportedProviderVersions } : {}
+          ...typeof record4.reportedDaemonBuildVersion === "string" && record4.reportedDaemonBuildVersion ? { daemonBuildVersion: record4.reportedDaemonBuildVersion } : {},
+          ...record4.reportedProviderVersions && typeof record4.reportedProviderVersions === "object" ? { providerVersions: record4.reportedProviderVersions } : {}
         };
       });
       return changed ? { ...snapshot, nodes } : snapshot;
@@ -145545,9 +145761,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const result = { adopted: [], healed: [], rejected: [] };
       const reported = sanitizeMemberWorktreeNodes(input.reported);
       if (!meshId || reported.length === 0) return result;
-      const record3 = await getMeshForCommand(host, meshId, void 0, { preferInline: true });
-      if (!record3?.mesh) return result;
-      const hostStatus = resolveMeshHostStatus(record3.mesh);
+      const record4 = await getMeshForCommand(host, meshId, void 0, { preferInline: true });
+      if (!record4?.mesh) return result;
+      const hostStatus = resolveMeshHostStatus(record4.mesh);
       if (!hostStatus.canOwnCoordinator || !hostStatus.canOwnQueue) {
         result.rejected = reported.map((node) => ({ nodeId: node.id, reason: "not_mesh_host" }));
         return result;
@@ -145561,7 +145777,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (local) meshNodes.push(...local.nodes);
       } catch {
       }
-      if (record3.mesh !== cached5 && Array.isArray(record3.mesh.nodes)) meshNodes.push(...record3.mesh.nodes);
+      if (record4.mesh !== cached5 && Array.isArray(record4.mesh.nodes)) meshNodes.push(...record4.mesh.nodes);
       const plan = planMemberWorktreeAdoption({
         meshNodes,
         reported,
@@ -145877,11 +146093,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** Config self-heal (platform / nickname / versions / facts) from a member-pushed facts bundle. */
       async selfHealNodeFromFacts(meshId, nodeId, nodeFacts) {
         try {
-          const record3 = await this.getMeshForCommand(meshId, void 0, { preferInline: true });
-          const node = record3?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
-          if (!record3 || !node) return;
+          const record4 = await this.getMeshForCommand(meshId, void 0, { preferInline: true });
+          const node = record4?.mesh?.nodes?.find((n) => meshNodeIdMatches7(n, nodeId));
+          if (!record4 || !node) return;
           const reporter = recordReportedNodeFacts(node, nodeFacts);
-          if (reporter) persistNodeReporterPlatform(record3.source, record3.mesh, nodeId, reporter);
+          if (reporter) persistNodeReporterPlatform(record4.source, record4.mesh, nodeId, reporter);
         } catch {
         }
       }
@@ -146060,8 +146276,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       // cleanupLocalWorktreeNode / precheckLocalWorktreeRemovable are bound into
       // MedFamilyContext; bestEffortRemoveWorktreeDir is overridden on the instance
       // by a unit test, so callers reach these via `self.` for correct dispatch.
-      sessionMatchesMeshNode(record3, node, nodeId, sessionIds) {
-        return sessionMatchesMeshNode(this, record3, node, nodeId, sessionIds);
+      sessionMatchesMeshNode(record4, node, nodeId, sessionIds) {
+        return sessionMatchesMeshNode(this, record4, node, nodeId, sessionIds);
       }
       async bestEffortRemoveWorktreeDir(dir) {
         return bestEffortRemoveWorktreeDir(this, dir);
@@ -146075,8 +146291,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       async getWorktreeForceCleanupConvergence(args) {
         return getWorktreeForceCleanupConvergence(this, args);
       }
-      isCompletedHostedSession(record3) {
-        return isCompletedHostedSession(this, record3);
+      isCompletedHostedSession(record4) {
+        return isCompletedHostedSession(this, record4);
       }
       async recordIntentionalMeshSessionStop(args) {
         return recordIntentionalMeshSessionStop(this, args);
@@ -146522,9 +146738,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function redactHostJoinResult(hostResult) {
       if (!hostResult || typeof hostResult !== "object" || Array.isArray(hostResult)) return hostResult;
-      const record3 = hostResult;
-      if (!Object.prototype.hasOwnProperty.call(record3, "peerSecret")) return hostResult;
-      return { ...record3, peerSecret: REDACTED_PEER_SECRET };
+      const record4 = hostResult;
+      if (!Object.prototype.hasOwnProperty.call(record4, "peerSecret")) return hostResult;
+      return { ...record4, peerSecret: REDACTED_PEER_SECRET };
     }
     function readTrimmed2(value) {
       return typeof value === "string" ? value.trim() : "";
@@ -148163,13 +148379,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     async function handleAddProviderSource(self, args) {
       const url = typeof args?.url === "string" ? args.url.trim() : "";
       if (!url) return { success: false, error: "url is required" };
-      const ref = typeof args?.ref === "string" && args.ref.trim() ? args.ref.trim() : "main";
+      const ref2 = typeof args?.ref === "string" && args.ref.trim() ? args.ref.trim() : "main";
       if (url.startsWith("-")) return { success: false, error: 'url must not start with "-"' };
-      if (ref.startsWith("-")) return { success: false, error: 'ref must not start with "-"' };
+      if (ref2.startsWith("-")) return { success: false, error: 'ref must not start with "-"' };
       if (!/^(https?:\/\/|git@[a-z0-9._-]+:)[a-z0-9._@:/~\-]+$/i.test(url)) {
         return { success: false, error: "url must be https://\u2026 or git@host:\u2026 and contain only URL-safe characters" };
       }
-      if (!/^[A-Za-z0-9._/-]+$/.test(ref)) {
+      if (!/^[A-Za-z0-9._/-]+$/.test(ref2)) {
         return { success: false, error: "ref must contain only [A-Za-z0-9._/-]" };
       }
       const ext = (init_external_sources(), __toCommonJS2(external_sources_exports));
@@ -148184,7 +148400,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (file.sources.some((s2) => s2.name === requestedName)) {
         return { success: false, error: `source name "${requestedName}" is already registered` };
       }
-      if (file.sources.some((s2) => s2.url === url && s2.ref === ref)) {
+      if (file.sources.some((s2) => s2.url === url && s2.ref === ref2)) {
         return { success: false, error: `source url+ref already registered (use a different name to track another ref)` };
       }
       const sourceDir = path103.join(ext.externalRoot(), requestedName);
@@ -148192,7 +148408,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (fs112.existsSync(sourceDir)) {
         return { success: false, error: `directory already exists: ${sourceDir} (rename or remove first)` };
       }
-      const clone = hiddenSpawnSync2("git", ["clone", "--depth=1", "--branch", ref, "--", url, sourceDir], {
+      const clone = hiddenSpawnSync2("git", ["clone", "--depth=1", "--branch", ref2, "--", url, sourceDir], {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "pipe"],
         timeout: 6e4
@@ -148207,7 +148423,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const source2 = {
         name: requestedName,
         url,
-        ref,
+        ref: ref2,
         addedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       ext.saveExternalSources({ schema: 1, sources: [...file.sources, source2] });
@@ -149809,6 +150025,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     };
     init_debug_config();
     init_debug_trace();
+    init_cli_detector();
+    init_validate();
+    init_ports();
     init_cooperative_gate();
     init_config_dir();
     var fs102 = __toESM2(require("fs"));
@@ -149955,6 +150174,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.pty = factory.spawn(this.opts.binary, this.opts.args ?? [], {
           cwd: this.opts.cwd ?? process.cwd(),
           env: env2,
+          envOverrides: this.opts.envOverrides ?? (this.opts.envIsComplete ? void 0 : this.opts.env),
           cols: this.cols,
           rows: this.rows
         });
@@ -151344,9 +151564,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const key4 = typeof config.key === "string" && config.key.length > 0 ? config.key : null;
       const patternsRaw = Array.isArray(config.patterns) ? config.patterns : [];
       const patterns = patternsRaw.map((entry) => {
-        const record3 = entry && typeof entry === "object" ? entry : {};
-        const regex = typeof record3.regex === "string" ? record3.regex : "";
-        const flags = typeof record3.flags === "string" ? record3.flags : void 0;
+        const record4 = entry && typeof entry === "object" ? entry : {};
+        const regex = typeof record4.regex === "string" ? record4.regex : "";
+        const flags = typeof record4.flags === "string" ? record4.flags : void 0;
         return regex ? { regex, ...flags !== void 0 ? { flags } : {} } : null;
       }).filter((entry) => entry !== null);
       if (!key4 || patterns.length === 0) return null;
@@ -151885,6 +152105,7 @@ trust_level = "trusted"
         // plan.ptyOptions.env is already a complete, sanitized environment —
         // pass it verbatim, do not overlay process.env (see envIsComplete).
         env: plan.ptyOptions.env,
+        envOverrides: plan.ptyOptions.envOverrides,
         envIsComplete: true,
         cols,
         rows,
@@ -153531,7 +153752,7 @@ trust_level = "trusted"
       driver.dispatch({ kind: "click_control", control_id: ctl.id, payload: flat });
       return Promise.resolve({ ok: true, effects: [{ type: "sent_keys", controlId: ctl.id }] });
     }
-    function expandBuiltinReaderToolBlock(reader, input, ref) {
+    function expandBuiltinReaderToolBlock(reader, input, ref2) {
       if (reader !== "claude-cli" && reader !== "codex-cli" && reader !== "grok-cli" && reader !== "antigravity-cli") {
         return { ok: false, reason: "unsupported_source" };
       }
@@ -153545,10 +153766,10 @@ trust_level = "trusted"
       }
       const currentMtimeMs = statMtimeMs(sourcePath);
       if (!(currentMtimeMs > 0)) return { ok: false, reason: "source_unavailable" };
-      if (currentMtimeMs !== ref.sourceMtimeMs) return { ok: false, reason: "source_changed" };
+      if (currentMtimeMs !== ref2.sourceMtimeMs) return { ok: false, reason: "source_changed" };
       let block2;
       if (reader === "antigravity-cli") {
-        block2 = readAntigravityToolBlockAt(sourcePath, ref.recordIndex, ref.blockIndex);
+        block2 = readAntigravityToolBlockAt(sourcePath, ref2.recordIndex, ref2.blockIndex);
       } else {
         let records;
         try {
@@ -153556,10 +153777,10 @@ trust_level = "trusted"
         } catch {
           return { ok: false, reason: "source_unavailable" };
         }
-        if (ref.recordIndex >= records.length) return { ok: false, reason: "block_not_found" };
-        const record3 = records[ref.recordIndex];
-        if (record3 == null || typeof record3 !== "object") return { ok: false, reason: "block_not_found" };
-        block2 = readBlock(reader, record3, ref.blockIndex);
+        if (ref2.recordIndex >= records.length) return { ok: false, reason: "block_not_found" };
+        const record4 = records[ref2.recordIndex];
+        if (record4 == null || typeof record4 !== "object") return { ok: false, reason: "block_not_found" };
+        block2 = readBlock(reader, record4, ref2.blockIndex);
       }
       if (!block2) return { ok: false, reason: "not_a_tool_block" };
       if (block2.callArgs !== void 0) {
@@ -153591,18 +153812,18 @@ trust_level = "trusted"
           return [];
       }
     }
-    function readBlock(reader, record3, blockIndex) {
+    function readBlock(reader, record4, blockIndex) {
       switch (reader) {
         // claude nests tool blocks in `message.content[]`, so the ref carries a
         // real array position.
         case "claude-cli":
-          return readClaudeToolBlockAt(record3, blockIndex);
+          return readClaudeToolBlockAt(record4, blockIndex);
         // codex and grok persist each tool call/result as its own record; the
         // record IS the block, which the ref marks with blockIndex -1.
         case "codex-cli":
-          return readCodexToolBlockAt(record3);
+          return readCodexToolBlockAt(record4);
         case "grok-cli":
-          return readGrokToolBlockAt(record3);
+          return readGrokToolBlockAt(record4);
         default:
           return null;
       }
@@ -153610,14 +153831,14 @@ trust_level = "trusted"
     function flatLength(s2) {
       return s2.replace(/\s+/g, " ").trim().length;
     }
-    function isValidRef(ref) {
-      if (!ref || typeof ref !== "object") return false;
-      const r = ref;
+    function isValidRef(ref2) {
+      if (!ref2 || typeof ref2 !== "object") return false;
+      const r = ref2;
       return Number.isFinite(r.sourceMtimeMs) && Number.isInteger(r.recordIndex) && Number.isInteger(r.blockIndex) && r.recordIndex >= 0 && r.blockIndex >= -1;
     }
-    function expandToolBlock(cfg, input, ref) {
-      if (!isValidRef(ref)) return { ok: false, reason: "block_not_found" };
-      if (cfg?.reader) return expandBuiltinReaderToolBlock(cfg.reader, input, ref);
+    function expandToolBlock(cfg, input, ref2) {
+      if (!isValidRef(ref2)) return { ok: false, reason: "block_not_found" };
+      if (cfg?.reader) return expandBuiltinReaderToolBlock(cfg.reader, input, ref2);
       if (cfg?.source?.kind !== "jsonl") return { ok: false, reason: "unsupported_source" };
       const src = cfg.source;
       let resolved;
@@ -153627,7 +153848,7 @@ trust_level = "trusted"
         return { ok: false, reason: "source_unavailable" };
       }
       if (!resolved?.sourcePath) return { ok: false, reason: "source_unavailable" };
-      if (resolved.sourceMtimeMs !== ref.sourceMtimeMs) {
+      if (resolved.sourceMtimeMs !== ref2.sourceMtimeMs) {
         return { ok: false, reason: "source_changed" };
       }
       let lines;
@@ -153636,20 +153857,20 @@ trust_level = "trusted"
       } catch {
         return { ok: false, reason: "source_unavailable" };
       }
-      if (ref.recordIndex >= lines.length) return { ok: false, reason: "block_not_found" };
-      const record3 = lines[ref.recordIndex];
-      if (record3 == null || typeof record3 !== "object") return { ok: false, reason: "block_not_found" };
-      const shape = compileRecordShapes(src).pick(record3);
+      if (ref2.recordIndex >= lines.length) return { ok: false, reason: "block_not_found" };
+      const record4 = lines[ref2.recordIndex];
+      if (record4 == null || typeof record4 !== "object") return { ok: false, reason: "block_not_found" };
+      const shape = compileRecordShapes(src).pick(record4);
       const tmap = shape?.map.tools;
       if (!tmap) return { ok: false, reason: "unsupported_source" };
       let block2;
-      if (ref.blockIndex === -1) {
-        block2 = record3;
+      if (ref2.blockIndex === -1) {
+        block2 = record4;
       } else {
-        const contentRaw = jsonPathGet(record3, shape.map.content);
+        const contentRaw = jsonPathGet(record4, shape.map.content);
         if (!Array.isArray(contentRaw)) return { ok: false, reason: "block_not_found" };
-        if (ref.blockIndex >= contentRaw.length) return { ok: false, reason: "block_not_found" };
-        block2 = contentRaw[ref.blockIndex];
+        if (ref2.blockIndex >= contentRaw.length) return { ok: false, reason: "block_not_found" };
+        block2 = contentRaw[ref2.blockIndex];
       }
       if (block2 == null || typeof block2 !== "object") return { ok: false, reason: "block_not_found" };
       return readToolBlock(block2, tmap);
@@ -153767,9 +153988,9 @@ trust_level = "trusted"
       const launched = /* @__PURE__ */ new Map();
       for (const rec5 of records) {
         if (!rec5 || typeof rec5 !== "object") continue;
-        const record3 = rec5;
-        const type2 = String(record3.type ?? "").trim();
-        const message = record3.message && typeof record3.message === "object" ? record3.message : null;
+        const record4 = rec5;
+        const type2 = String(record4.type ?? "").trim();
+        const message = record4.message && typeof record4.message === "object" ? record4.message : null;
         if (!message) continue;
         const content = message.content;
         if (!Array.isArray(content)) continue;
@@ -153810,13 +154031,13 @@ trust_level = "trusted"
       for (let i = 0; i < records.length; i++) {
         const rec5 = records[i];
         if (!rec5 || typeof rec5 !== "object") continue;
-        const record3 = rec5;
-        const type2 = String(record3.type ?? "").trim();
+        const record4 = rec5;
+        const type2 = String(record4.type ?? "").trim();
         if (type2 === "turn.prompt") {
           lastPromptIdx = i;
           continue;
         }
-        const event = record3.event && typeof record3.event === "object" ? record3.event : null;
+        const event = record4.event && typeof record4.event === "object" ? record4.event : null;
         if (event) {
           const eventType = String(event.type ?? "").trim();
           if (eventType === "content.part") {
@@ -153856,7 +154077,7 @@ trust_level = "trusted"
           continue;
         }
         if (type2 === "turn.steer" || type2 === "context.append_message") {
-          for (const text4 of kimiRecordTextParts(record3)) {
+          for (const text4 of kimiRecordTextParts(record4)) {
             for (const match of text4.matchAll(/<notification\b[^>]*>/g)) {
               const attrs = parseNotificationAttrs(match[0]);
               if (attrs.get("category") !== "task") continue;
@@ -153938,7 +154159,7 @@ trust_level = "trusted"
       const match = output.match(new RegExp(`(?:^|\\n)\\s*${key4}:\\s*(\\S+)`));
       return match ? match[1].trim() : "";
     }
-    function kimiRecordTextParts(record3) {
+    function kimiRecordTextParts(record4) {
       const out = [];
       const collect = (parts) => {
         if (!Array.isArray(parts)) return;
@@ -153948,8 +154169,8 @@ trust_level = "trusted"
           if (typeof text4 === "string" && text4) out.push(text4);
         }
       };
-      collect(record3.input);
-      const message = record3.message && typeof record3.message === "object" ? record3.message : null;
+      collect(record4.input);
+      const message = record4.message && typeof record4.message === "object" ? record4.message : null;
       if (message) collect(message.content);
       return out;
     }
@@ -154448,11 +154669,11 @@ ${text4}` : text4;
       }
       if (latestCallIdx < 0 || !latestCallId) return null;
       for (let i = latestCallIdx + 1; i < records.length; i++) {
-        const record3 = records[i];
-        if (record3 && typeof record3 === "object" && String(record3.type ?? "") === "turn.prompt") {
+        const record4 = records[i];
+        if (record4 && typeof record4 === "object" && String(record4.type ?? "") === "turn.prompt") {
           return null;
         }
-        const event = loopEvent(record3);
+        const event = loopEvent(record4);
         if (!event || event.type !== "tool.result") continue;
         const resultCallId = typeof event.toolCallId === "string" ? event.toolCallId.trim() : "";
         if (resultCallId === latestCallId) return null;
@@ -154479,9 +154700,9 @@ ${text4}` : text4;
       }
       return prompt;
     }
-    function loopEvent(record3) {
-      if (!record3 || typeof record3 !== "object") return null;
-      const r = record3;
+    function loopEvent(record4) {
+      if (!record4 || typeof record4 !== "object") return null;
+      const r = record4;
       if (String(r.type ?? "") !== "context.append_loop_event") return null;
       const event = r.event;
       if (!event || typeof event !== "object") return null;
@@ -154713,14 +154934,14 @@ ${text4}` : text4;
     }
     function readClaudeToolResultIds(value) {
       if (!value || typeof value !== "object") return [];
-      const record3 = value;
+      const record4 = value;
       const blocks = [];
-      if (Array.isArray(record3.content)) blocks.push(...record3.content);
-      const message = record3.message;
+      if (Array.isArray(record4.content)) blocks.push(...record4.content);
+      const message = record4.message;
       if (message && typeof message === "object" && Array.isArray(message.content)) {
         blocks.push(...message.content);
       }
-      if (record3.type === "tool_result") blocks.push(record3);
+      if (record4.type === "tool_result") blocks.push(record4);
       const ids = [];
       for (const block2 of blocks) {
         if (!block2 || typeof block2 !== "object") continue;
@@ -154777,9 +154998,9 @@ ${text4}` : text4;
     function applyClaudeFreeformEscape(prompt) {
       for (const question of prompt.questions) question.allowFreeform = true;
     }
-    function readClaudeToolResultIds2(record3) {
-      if (!record3 || typeof record3 !== "object") return [];
-      const r = record3;
+    function readClaudeToolResultIds2(record4) {
+      if (!record4 || typeof record4 !== "object") return [];
+      const r = record4;
       const blocks = [];
       if (Array.isArray(r.content)) blocks.push(...r.content);
       const message = r.message;
@@ -154797,9 +155018,9 @@ ${text4}` : text4;
       }
       return ids;
     }
-    function readRecordTimestamp(record3) {
-      if (!record3 || typeof record3 !== "object") return 0;
-      const value = record3.timestamp;
+    function readRecordTimestamp(record4) {
+      if (!record4 || typeof record4 !== "object") return 0;
+      const value = record4.timestamp;
       if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
       if (typeof value !== "string") return 0;
       const parsed = Date.parse(value);
@@ -154861,14 +155082,14 @@ ${text4}` : text4;
         if (!history?.sourcePath) return false;
         let boundToolUseId = null;
         let resolved = false;
-        for (const record3 of readJsonlLines(history.sourcePath)) {
-          const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record3, cliType);
+        for (const record4 of readJsonlLines(history.sourcePath)) {
+          const observedPrompt = detectClaudeAskUserQuestionPromptFromJson(record4, cliType);
           if (observedPrompt && (observedPrompt.promptId === prompt.promptId || claudeAskUserQuestionPromptsMatch(prompt, observedPrompt))) {
             boundToolUseId = observedPrompt.promptId;
             resolved = false;
           }
           if (!boundToolUseId) continue;
-          if (readClaudeToolResultIds(record3).includes(boundToolUseId)) resolved = true;
+          if (readClaudeToolResultIds(record4).includes(boundToolUseId)) resolved = true;
         }
         return resolved;
       } catch {
@@ -156159,8 +156380,8 @@ ${text4}` : text4;
        * SAME inputs the routine read path uses, so an expand can never resolve to
        * a different session's file than the bubble came from.
        */
-      expandToolBlock(ref) {
-        return expandToolBlock(this.spec.native_history, this.nativeHistoryInput({ withOwner: true }), ref);
+      expandToolBlock(ref2) {
+        return expandToolBlock(this.spec.native_history, this.nativeHistoryInput({ withOwner: true }), ref2);
       }
       /**
        * TX-FSM Stage 0 (shadow): forward the daemon's normalized signal
@@ -156606,16 +156827,16 @@ ${text4}` : text4;
     };
     var import_node_crypto29 = require("crypto");
     init_dist();
-    function record2(value) {
+    function record3(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
     }
     var text3 = (value) => typeof value === "string" && !!value.trim() && value.length <= 64e3;
     var rpcKey = (id4) => `${typeof id4}:${id4}`;
     function parseAsyncQuestionReply(input) {
       if (!Array.isArray(input)) return null;
-      const content = input.filter((value) => !["skill", "mention"].includes(String(record2(value)?.type)));
+      const content = input.filter((value) => !["skill", "mention"].includes(String(record3(value)?.type)));
       if (content.length !== 1) return null;
-      const part = record2(content[0]);
+      const part = record3(content[0]);
       if (part?.type !== "text" || typeof part.text !== "string") return null;
       let replyText = part.text.trim();
       if (replyText.startsWith("# Context from my IDE setup:\n")) {
@@ -156634,7 +156855,7 @@ ${text4}` : text4;
       }
       const values = Array.isArray(replies) ? replies : [replies];
       if (!values.length || values.some((value) => {
-        const r = record2(value);
+        const r = record3(value);
         return !r || !text3(r.questionItemId) || typeof r.question !== "string" || typeof r.answer !== "string";
       })) return null;
       return values;
@@ -156661,17 +156882,17 @@ ${text4}` : text4;
       }
       capture(requestId, raw) {
         if (this.entries.size >= 32 || this.seen.size >= 4096) return false;
-        const p = record2(raw);
+        const p = record3(raw);
         if (!p || p.threadId !== this.threadId || p.turnId !== this.turnId || !text3(p.itemId) || typeof p.isBlocking !== "boolean" || !Array.isArray(p.questions) || !p.questions.length || p.questions.length > 32) return false;
         const key4 = `rpc:${rpcKey(requestId)}`;
         if (this.seen.has(key4)) return false;
         const questions = [];
         for (const value of p.questions) {
-          const q = record2(value);
+          const q = record3(value);
           if (!q || !text3(q.id) || !text3(q.question) || typeof q.header !== "string" || typeof q.isOther !== "boolean" || typeof q.isSecret !== "boolean" || !(q.options === null || Array.isArray(q.options))) return false;
           const options = [];
           for (const value2 of q.options ?? []) {
-            const option = record2(value2);
+            const option = record3(value2);
             if (!option || !text3(option.label) || typeof option.description !== "string") return false;
             options.push({ label: option.label, description: option.description });
           }
@@ -156707,7 +156928,7 @@ ${text4}` : text4;
         if (turnId !== this.turnId || this.seen.has(key4) || !Array.isArray(raw) || !raw.length || raw.length > 32) return false;
         const questions = [];
         for (const [index, value] of raw.entries()) {
-          const q = record2(value);
+          const q = record3(value);
           if (!q || !text3(q.title) || !(q.options === null || Array.isArray(q.options))) return false;
           const labels = q.options ?? [];
           if (labels.length > 32 || labels.some((label2) => !text3(label2)) || new Set(labels).size !== labels.length) return false;
@@ -156820,7 +157041,7 @@ ${text4}` : text4;
         this.questionKeys.clear();
       }
       item(threadId, turnId, value, receivedAt = Date.now()) {
-        const item = record2(value);
+        const item = record3(value);
         if (!item || typeof item.id !== "string") return;
         const key4 = JSON.stringify(["codex", threadId, turnId, item.id]);
         const prior = this.items.get(key4);
@@ -156835,7 +157056,7 @@ ${text4}` : text4;
           case "userMessage": {
             role = "user";
             content = Array.isArray(item.content) ? item.content.map((part) => {
-              const p = record2(part);
+              const p = record3(part);
               return p?.type === "text" && typeof p.text === "string" ? p.text : "";
             }).filter(Boolean).join("\n") : "";
             const replies = parseAsyncQuestionReply(item.content);
@@ -156855,7 +157076,7 @@ ${reply.answer}`).join("\n\n");
             if (item.name === "request_user_input" || item.name === "request_user_input_async") this.questionKeys.add(key4);
             kind = "tool";
             content = typeof item.output === "string" ? item.output : Array.isArray(item.output) ? item.output.map((part) => {
-              const p = record2(part);
+              const p = record3(part);
               return p?.type === "input_text" && typeof p.text === "string" ? p.text : "";
             }).filter(Boolean).join("\n") : "";
             break;
@@ -156885,13 +157106,13 @@ ${reply.answer}`).join("\n\n");
         this.item(threadId, turnId, { id: itemId, type: "agentMessage", text: String(prior?.content ?? "") + delta });
       }
       hydrate(thread) {
-        const t = record2(thread);
+        const t = record3(thread);
         if (!t || typeof t.id !== "string" || !Array.isArray(t.turns)) throw new Error("Invalid Codex history");
         for (const value of t.turns) {
-          const turn = record2(value);
+          const turn = record3(value);
           if (!turn || typeof turn.id !== "string" || !Array.isArray(turn.items)) throw new Error("Invalid Codex history turn");
           for (const item of turn.items) {
-            const key4 = JSON.stringify(["codex", t.id, turn.id, record2(item)?.id]);
+            const key4 = JSON.stringify(["codex", t.id, turn.id, record3(item)?.id]);
             if (!this.items.has(key4)) this.item(t.id, turn.id, item, typeof turn.startedAt === "number" ? turn.startedAt * 1e3 : Date.now());
           }
         }
@@ -156945,8 +157166,8 @@ ${reply.answer}`).join("\n\n");
         try {
           await this.transport.request("initialize", { clientInfo: { name: "adhdev", title: "ADHDev", version: "1" }, capabilities: { experimentalApi: true } });
           this.transport.write({ method: "initialized" });
-          const result = record2(await this.transport.request("thread/start", { cwd: this.workingDir }));
-          const thread = record2(result?.thread);
+          const result = record3(await this.transport.request("thread/start", { cwd: this.workingDir }));
+          const thread = record3(result?.thread);
           if (!thread || typeof thread.id !== "string" || !thread.id) throw new Error("Invalid Codex thread/start response");
           this.questions.threadId = thread.id;
           this.status = "idle";
@@ -156960,7 +157181,7 @@ ${reply.answer}`).join("\n\n");
         this.change?.(cause);
       }
       onMessage(message) {
-        const p = record2(message.params);
+        const p = record3(message.params);
         if (!p || this.nativeFailure) return;
         if (message.id !== void 0) {
           if (message.method === "item/tool/requestUserInput") {
@@ -156978,7 +157199,7 @@ ${reply.answer}`).join("\n\n");
         if (p.threadId !== this.questions.threadId) return;
         switch (message.method) {
           case "turn/started": {
-            const turn = record2(p.turn);
+            const turn = record3(p.turn);
             if (typeof turn?.id !== "string" || this.endedTurns.has(turn.id) || this.observedTurns.has(turn.id)) return;
             this.observedTurns.add(turn.id);
             if (turn.id !== this.questions.turnId) this.approvals.clear();
@@ -156987,7 +157208,7 @@ ${reply.answer}`).join("\n\n");
             break;
           }
           case "turn/completed": {
-            const turn = record2(p.turn);
+            const turn = record3(p.turn);
             if (typeof turn?.id !== "string") return;
             this.observedTurns.add(turn.id);
             this.endedTurns.add(turn.id);
@@ -157009,7 +157230,7 @@ ${reply.answer}`).join("\n\n");
             const timestamp2 = typeof p.startedAtMs === "number" ? p.startedAtMs : typeof p.completedAtMs === "number" ? p.completedAtMs : Date.now();
             this.history.item(this.questions.threadId, p.turnId, p.item, timestamp2);
             if (p.turnId !== this.questions.turnId) break;
-            const item = record2(p.item);
+            const item = record3(p.item);
             if (item?.type === "userMessage") this.questions.observeReply(item.content);
             if (message.method === "item/completed" && item?.type === "agentMessage" && item.delivery === "async" && typeof item.id === "string") {
               this.questions.captureAsync(item.id, p.turnId, item.questions);
@@ -157028,7 +157249,7 @@ ${reply.answer}`).join("\n\n");
             }
             break;
           case "thread/status/changed": {
-            const state2 = record2(p.status);
+            const state2 = record3(p.status);
             if (state2?.type === "systemError") {
               this.nativeFailure = true;
               this.status = "error";
@@ -157052,8 +157273,8 @@ ${reply.answer}`).join("\n\n");
         const input = [{ type: "text", text: text4, textElements: [] }];
         if (this.questions.turnId) await this.transport.request("turn/steer", { threadId: this.questions.threadId, expectedTurnId: this.questions.turnId, input });
         else {
-          const result = record2(await this.transport.request("turn/start", { threadId: this.questions.threadId, input }));
-          const turn = record2(result?.turn);
+          const result = record3(await this.transport.request("turn/start", { threadId: this.questions.threadId, input }));
+          const turn = record3(result?.turn);
           if (typeof turn?.id !== "string") throw new Error("Invalid Codex turn response");
           if (!this.observedTurns.has(turn.id)) {
             this.observedTurns.add(turn.id);
@@ -157118,7 +157339,7 @@ ${JSON.stringify(replies)}
       }
       async readHistoryPage(threadId, cursor) {
         if (!this.isReady() || threadId !== this.questions.threadId) throw new Error("Cannot switch managed Codex history to another thread");
-        const page = record2(await this.transport.request("thread/turns/list", { threadId, cursor, limit: 20, sortDirection: "asc", itemsView: "full" }));
+        const page = record3(await this.transport.request("thread/turns/list", { threadId, cursor, limit: 20, sortDirection: "asc", itemsView: "full" }));
         if (!page || !Array.isArray(page.data) || !(page.nextCursor === null || typeof page.nextCursor === "string")) throw new Error("Invalid Codex history page");
         this.history.hydrate({ id: threadId, turns: page.data });
         this.notify("fsm_state");
@@ -157400,8 +157621,8 @@ ${JSON.stringify(replies)}
     }
     function getMessageTime(message) {
       if (!message || typeof message !== "object") return 0;
-      const record3 = message;
-      const value = Number(record3.receivedAt ?? record3.timestamp ?? 0);
+      const record4 = message;
+      const value = Number(record4.receivedAt ?? record4.timestamp ?? 0);
       return Number.isFinite(value) ? value : 0;
     }
     function hasNonEmptyCliModalButtons(activeModal) {
@@ -162100,6 +162321,8 @@ ${buttons.join("\n")}`;
       if (typeof dir !== "string") return "";
       return dir.trim().replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
     }
+    init_validate();
+    init_ports();
     init_cooperative_gate();
     var os43 = __toESM2(require("os"));
     var path97 = __toESM2(require("path"));
@@ -162295,6 +162518,19 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const versionResolvedProvider = provider ? host.providerLoader.resolve(cliType, { version: cliInfo.version }) || provider : void 0;
       const modelSnapshot = readModelCache(normalizedType);
       const modelResolvedProvider = versionResolvedProvider ? { ...versionResolvedProvider, ...buildModelOverlayPatch(modelSnapshot, versionResolvedProvider) } : void 0;
+      const role = options?.launchProvenance?.roleLaunch?.role ?? options?.restartRecord?.roleLaunch?.role ?? (options?.restartRecord ? launchSettings.assistant ? "assistant" : "coordinator" : void 0);
+      if (role) {
+        const valid = validateLaunchDefault(
+          role,
+          {
+            provider: normalizedType,
+            ...initialModel ? { model: initialModel } : {},
+            ...options?.initialThinkingLevel ? { thinkingLevel: options.initialThinkingLevel } : {}
+          },
+          createLaunchValidationPorts({ deps: { providerLoader: host.providerLoader } }, void 0, cliInfo.version)
+        );
+        if (!valid.ok) throw new Error(`Role launch selection cannot be applied by ${normalizedType} at version ${cliInfo.version || "unknown"}: ${valid.issue.reason}`);
+      }
       const autoApproveLaunch = applyAutoApproveModeLaunchArgs(modelResolvedProvider, cliArgs, launchSettings);
       const launchProvider = autoApproveLaunch.provider || provider;
       const cliArgsWithAutoApprove = autoApproveLaunch.cliArgs;
@@ -162305,17 +162541,20 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       );
       const cliArgsWithModel = modelLaunchArgs ? [...modelLaunchArgs, ...cliArgsWithAutoApprove || []] : cliArgsWithAutoApprove;
       if (initialModel && !modelLaunchArgs) {
+        if (options?.launchProvenance?.roleLaunch || options?.restartRecord) throw new Error(`Role model cannot be applied by ${normalizedType} at version ${cliInfo.version || "unknown"}`);
         LOG.warn("CLI", `[${normalizedType}] initialModel='${initialModel}' requested but provider declares no modelLaunchArgs template \u2014 launching without model selection.`);
       }
       const initialThinkingLevel = options?.initialThinkingLevel;
       const thinkingLaunchArgs = expandThinkingLaunchArgs(launchProvider?.thinkingLaunchArgs, initialThinkingLevel, launchProvider?.thinkingLevelMap);
       const cliArgsWithBrain = thinkingLaunchArgs ? [...thinkingLaunchArgs, ...cliArgsWithModel || []] : cliArgsWithModel;
       if (initialThinkingLevel && !thinkingLaunchArgs) {
+        if ((options?.launchProvenance?.roleLaunch || options?.restartRecord) && !launchProvider?.controls?.some((c) => c.id === launchProvider.thinkingControlId && c.setScript)) throw new Error(`Role thinking level cannot be applied by ${normalizedType} at version ${cliInfo.version || "unknown"}`);
         LOG.warn("CLI", `[${normalizedType}] initialThinkingLevel='${initialThinkingLevel}' requested but provider declares no thinkingLaunchArgs template \u2014 launching without thinking-level selection.`);
       }
-      const sessionBinding = resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
+      const sessionBinding = options?.restartBinding ?? resolveCliSessionBinding(launchProvider, normalizedType, cliArgsWithBrain, options?.resumeSessionId);
       const resolvedCliArgs = sessionBinding.cliArgs;
-      const cliLaunchRecord = buildSessionLaunchRecord({
+      const cliLaunchRecord = options?.restartRecord ? { ...structuredClone(options.restartRecord), sessionId: key4, launchedAt: Date.now() } : buildSessionLaunchRecord({
+        roleLaunch: options?.launchProvenance?.roleLaunch,
         sessionId: key4,
         providerType: normalizedType,
         providerVersion: launchProvider?.providerVersion,
@@ -162368,7 +162607,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
             // BRAIN-ROUTING: for a provider with no thinkingLaunchArgs but a
             // runtime reasoning control (hermes), apply the level post-launch.
             // The launch-arg providers (claude/codex) already consumed it at spawn.
-            ...options?.initialThinkingLevel && !provider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {},
+            ...options?.initialThinkingLevel && !launchProvider?.thinkingLaunchArgs ? { initialThinkingLevel: options.initialThinkingLevel } : {},
             launchRecord: cliLaunchRecord,
             onProviderSessionResolved: ({ providerSessionId, providerName, providerType, workspace }) => {
               host.persistRecentActivity({
@@ -162427,6 +162666,18 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         sessionId: key4,
         title: provider?.displayName || provider?.name || normalizedType
       });
+      if (cliLaunchRecord.roleLaunch || launchSettings.assistant || launchSettings.meshCoordinatorFor) {
+        host.roleRestartInputs.set(key4, {
+          cliArgs: cliArgs ? [...cliArgs] : void 0,
+          initialModel,
+          options: {
+            ...options,
+            extraEnv: { ...options?.extraEnv },
+            settingsOverride: { ...launchSettings },
+            restartBinding: structuredClone(sessionBinding)
+          }
+        });
+      }
       return {
         runtimeSessionId: key4,
         providerSessionId: sessionBinding.providerSessionId
@@ -162539,8 +162790,8 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const declared = readLaunchProvenanceArgs(args);
       return { ...declared, launchedBy: declared.launchedBy ?? inferLaunchedBy(settings2) };
     }
-    function launchSummaryMetadata(record3) {
-      return buildLegacyModelModeSummaryMetadata({ model: record3.model.requested });
+    function launchSummaryMetadata(record4) {
+      return buildLegacyModelModeSummaryMetadata({ model: record4.model.requested });
     }
     function prepareDelegatedLaunch(host, args, cliType, dir, providerType, provLookup) {
       let settingsOverride = args?.settings && typeof args.settings === "object" ? args.settings : void 0;
@@ -162665,9 +162916,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_runtime_defaults();
     init_assistant_registry();
     init_launch_record();
-    function shouldRestoreHostedRuntime(record3, managerTag) {
+    function shouldRestoreHostedRuntime(record4, managerTag) {
       if (!managerTag) return true;
-      const managedBy = typeof record3.managedBy === "string" ? record3.managedBy.trim() : "";
+      const managedBy = typeof record4.managedBy === "string" ? record4.managedBy.trim() : "";
       if (!managedBy) return true;
       return managedBy === managerTag;
     }
@@ -162699,49 +162950,49 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         workspaceTypeCounts.set(key4, (workspaceTypeCounts.get(key4) || 0) + 1);
       }
       const rebindAdoptedSessionIds = /* @__PURE__ */ new Set();
-      for (const record3 of sessions) {
-        if (!record3?.runtimeId || !record3?.cliType || !record3?.workspace) continue;
-        if (!shouldRestoreHostedRuntime(record3, managerTag)) {
+      for (const record4 of sessions) {
+        if (!record4?.runtimeId || !record4?.cliType || !record4?.workspace) continue;
+        if (!shouldRestoreHostedRuntime(record4, managerTag)) {
           LOG.info(
             "CLI",
-            `\u21B7 Skipping hosted runtime restore owned by ${record3.managedBy}: ${record3.runtimeKey || record3.runtimeId}`
+            `\u21B7 Skipping hosted runtime restore owned by ${record4.managedBy}: ${record4.runtimeKey || record4.runtimeId}`
           );
           continue;
         }
-        if (host.adapters.has(record3.runtimeId) || instanceManager.getInstance(record3.runtimeId)) {
+        if (host.adapters.has(record4.runtimeId) || instanceManager.getInstance(record4.runtimeId)) {
           if (promoted) throw new Error("maintenance_existing_writable_binding_requires_reconciliation");
           continue;
         }
-        const normalizedType = host.providerLoader.resolveAlias(record3.cliType);
+        const normalizedType = host.providerLoader.resolveAlias(record4.cliType);
         const providerMeta = host.providerLoader.getMeta(normalizedType);
         if (!providerMeta || providerMeta.category !== "cli") continue;
         const resolvedProvider = host.providerLoader.resolve(normalizedType) || providerMeta;
         const sessionBinding = resolveCliSessionBinding(
           resolvedProvider,
           normalizedType,
-          record3.cliArgs,
-          record3.providerSessionId
+          record4.cliArgs,
+          record4.providerSessionId
         );
         const bindingKey = [
           normalizedType,
-          record3.workspace,
-          sessionBinding.providerSessionId || record3.runtimeId
+          record4.workspace,
+          sessionBinding.providerSessionId || record4.runtimeId
         ].join("::");
         if (restoredBindings.has(bindingKey)) {
           LOG.info(
             "CLI",
-            `\u21B7 Skipping duplicate hosted runtime restore: ${record3.runtimeKey || record3.runtimeId} (${normalizedType} @ ${record3.workspace}) binding=${sessionBinding.providerSessionId || "runtime"}`
+            `\u21B7 Skipping duplicate hosted runtime restore: ${record4.runtimeKey || record4.runtimeId} (${normalizedType} @ ${record4.workspace}) binding=${sessionBinding.providerSessionId || "runtime"}`
           );
           continue;
         }
-        const restoredSettings = buildRestoredSettings(host, record3, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds);
+        const restoredSettings = buildRestoredSettings(host, record4, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds);
         try {
           await host.registerCliInstance(
-            record3.runtimeId,
+            record4.runtimeId,
             normalizedType,
-            record3.cliType,
-            record3.workspace,
-            record3.cliArgs,
+            record4.cliType,
+            record4.workspace,
+            record4.cliArgs,
             resolvedProvider,
             restoredSettings,
             true,
@@ -162753,22 +163004,22 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
               // to spawnedAtMs:0 (which disabled the antigravity per-session floor
               // and let co-located workers claim the coordinator's own conversation).
               // Undefined → registerCliInstance keeps the 0 fallback.
-              attachStartedAtMs: record3.startedAtMs,
+              attachStartedAtMs: record4.startedAtMs,
               // Phase E: the provenance stored at spawn, launchedBy → 'restore'
               // with the axis sources preserved (see buildRestoredLaunchRecord).
-              launchRecord: buildRestoredLaunchRecord(record3.launchRecord, {
-                sessionId: record3.runtimeId,
+              launchRecord: buildRestoredLaunchRecord(record4.launchRecord, {
+                sessionId: record4.runtimeId,
                 providerType: normalizedType,
-                workspace: record3.workspace,
-                launchedAt: record3.startedAtMs ?? Date.now()
+                workspace: record4.workspace,
+                launchedAt: record4.startedAtMs ?? Date.now()
               })
             }
           );
           restoredBindings.add(bindingKey);
           restored += 1;
-          LOG.info("CLI", `\u267B Restored hosted runtime: ${record3.runtimeKey || record3.runtimeId} (${record3.displayName || record3.workspace})`);
+          LOG.info("CLI", `\u267B Restored hosted runtime: ${record4.runtimeKey || record4.runtimeId} (${record4.displayName || record4.workspace})`);
         } catch (error) {
-          LOG.warn("CLI", `Failed to restore hosted runtime ${record3.runtimeId}: ${error?.message || error}`);
+          LOG.warn("CLI", `Failed to restore hosted runtime ${record4.runtimeId}: ${error?.message || error}`);
           if (promoted) throw error;
         }
       }
@@ -162780,44 +163031,44 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return restored;
     }
-    function buildRestoredSettings(host, record3, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds) {
+    function buildRestoredSettings(host, record4, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds) {
       const restoredSettings = { ...host.providerLoader.getSettings(normalizedType) };
-      let coordinatorEntry = getCoordinatorForSession(record3.runtimeId);
-      if (!coordinatorEntry?.meshId && record3.workspace) {
-        const workspaceCoordinators = listCoordinatorsForWorkspace(record3.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record3.cliType));
+      let coordinatorEntry = getCoordinatorForSession(record4.runtimeId);
+      if (!coordinatorEntry?.meshId && record4.workspace) {
+        const workspaceCoordinators = listCoordinatorsForWorkspace(record4.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record4.cliType));
         if (workspaceCoordinators.length === 1) {
           const candidate = workspaceCoordinators[0];
           const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
-          const siblingCount = workspaceTypeCounts.get(`${record3.workspace}::${record3.cliType}`) || 1;
+          const siblingCount = workspaceTypeCounts.get(`${record4.workspace}::${record4.cliType}`) || 1;
           if (!coordinatorPresentById && siblingCount === 1) {
             coordinatorEntry = candidate;
             if (candidate.sessionId) rebindAdoptedSessionIds.add(candidate.sessionId);
             LOG.info(
               "CLI",
-              `\u21BB Rebound coordinator mark by workspace for ${record3.runtimeKey || record3.runtimeId} (mesh ${candidate.meshId} @ ${record3.workspace}); registry key did not match runtimeId`
+              `\u21BB Rebound coordinator mark by workspace for ${record4.runtimeKey || record4.runtimeId} (mesh ${candidate.meshId} @ ${record4.workspace}); registry key did not match runtimeId`
             );
           } else {
             LOG.info(
               "CLI",
-              `\u21B7 Skipping workspace coordinator rebind for ${record3.runtimeKey || record3.runtimeId} (${record3.cliType} @ ${record3.workspace}): ${coordinatorPresentById ? "registered coordinator is restoring under its own id \u2014 this is a delegated worker" : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
+              `\u21B7 Skipping workspace coordinator rebind for ${record4.runtimeKey || record4.runtimeId} (${record4.cliType} @ ${record4.workspace}): ${coordinatorPresentById ? "registered coordinator is restoring under its own id \u2014 this is a delegated worker" : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
             );
           }
         } else if (workspaceCoordinators.length === 0) {
           LOG.debug(
             "CLI",
-            `No registered coordinator for workspace ${record3.workspace} \u2014 workspace rebind fallback empty for ${record3.runtimeKey || record3.runtimeId} (${record3.cliType}); the session stays unmarked`
+            `No registered coordinator for workspace ${record4.workspace} \u2014 workspace rebind fallback empty for ${record4.runtimeKey || record4.runtimeId} (${record4.cliType}); the session stays unmarked`
           );
         }
       }
       if (coordinatorEntry?.meshId) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
       }
-      const recordMeshNodeFor = typeof record3.meshNodeFor === "string" && record3.meshNodeFor.trim() ? record3.meshNodeFor.trim() : "";
-      const recordMeshNodeId = typeof record3.meshNodeId === "string" && record3.meshNodeId.trim() ? record3.meshNodeId.trim() : "";
+      const recordMeshNodeFor = typeof record4.meshNodeFor === "string" && record4.meshNodeFor.trim() ? record4.meshNodeFor.trim() : "";
+      const recordMeshNodeId = typeof record4.meshNodeId === "string" && record4.meshNodeId.trim() ? record4.meshNodeId.trim() : "";
       if (recordMeshNodeFor) restoredSettings.meshNodeFor = recordMeshNodeFor;
-      const recordOwner = typeof record3.meshCoordinatorDaemonId === "string" ? record3.meshCoordinatorDaemonId.trim() : "";
+      const recordOwner = typeof record4.meshCoordinatorDaemonId === "string" ? record4.meshCoordinatorDaemonId.trim() : "";
       if (recordMeshNodeFor && recordOwner) restoredSettings.meshCoordinatorDaemonId = recordOwner;
-      const recordAttemptRef = record3.meshActiveAttemptRef;
+      const recordAttemptRef = record4.meshActiveAttemptRef;
       if (recordMeshNodeFor && recordOwner && recordAttemptRef?.attemptId) {
         restoredSettings.meshActiveAttemptId = recordAttemptRef.attemptId;
         restoredSettings.meshActiveAttemptGeneration = recordAttemptRef.generation;
@@ -162826,27 +163077,27 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         restoredSettings.meshNodeId = recordMeshNodeId;
         restoredSettings.meshLastNodeId = recordMeshNodeId;
       }
-      if (record3.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
-      if (typeof record3.autoApproveMode === "string" && record3.autoApproveMode.trim()) {
-        restoredSettings.autoApproveMode = record3.autoApproveMode.trim();
+      if (record4.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
+      if (typeof record4.autoApproveMode === "string" && record4.autoApproveMode.trim()) {
+        restoredSettings.autoApproveMode = record4.autoApproveMode.trim();
       }
-      applyAssistantRestoreMark(record3, restoredSettings);
+      applyAssistantRestoreMark(record4, restoredSettings);
       return restoredSettings;
     }
-    function applyAssistantRestoreMark(record3, restoredSettings) {
+    function applyAssistantRestoreMark(record4, restoredSettings) {
       let entry;
       try {
         entry = getAssistantRegistry().read();
       } catch {
         return;
       }
-      if (!findAssistantRestoreRecord(entry, [record3])) return;
+      if (!findAssistantRestoreRecord(entry, [record4])) return;
       restoredSettings.assistant = true;
       if (typeof restoredSettings.autoApproveMode !== "string") {
         restoredSettings.autoApprove = false;
         delete restoredSettings.autoApproveMode;
       }
-      LOG.info("CLI", `\u21BB Re-bound assistant session ${record3.runtimeId}`);
+      LOG.info("CLI", `\u21BB Re-bound assistant session ${record4.runtimeId}`);
     }
     function reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds) {
       const live = new Set(restoredRuntimeIds);
@@ -163103,6 +163354,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     var AUTO_CLEAN_DELAY_MS = 5e3;
     var DaemonCliManager = class {
       adapters = /* @__PURE__ */ new Map();
+      roleRestartInputs = /* @__PURE__ */ new Map();
       deps;
       providerLoader;
       /**
@@ -163257,6 +163509,8 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           const launchMeshCoordinatorDaemonId = typeof settings2?.meshCoordinatorDaemonId === "string" ? settings2.meshCoordinatorDaemonId.trim() : "";
           const launchAutoLaunchedForQueueTaskId = typeof settings2?.autoLaunchedForQueueTaskId === "string" ? settings2.autoLaunchedForQueueTaskId.trim() : "";
           const launchRecordMeta = {
+            ...settings2?.assistant === true ? { assistant: true } : {},
+            ...settings2?.meshCoordinatorFor ? { meshCoordinatorFor: settings2.meshCoordinatorFor } : {},
             ...launchMeshNodeId ? { meshNodeId: launchMeshNodeId } : {},
             ...launchMeshNodeFor ? { meshNodeFor: launchMeshNodeFor } : {},
             // The daemon that owns this worker's mesh work (see the descriptor field).
@@ -163360,6 +163614,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         return this.stopSessionWithMode(key4, "hard");
       }
       async stopSessionWithMode(key4, mode) {
+        this.roleRestartInputs.delete(key4);
         const adapter = this.adapters.get(key4);
         if (adapter) {
           try {
@@ -163397,6 +163652,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           else adapter.shutdown();
         }
         this.adapters.clear();
+        this.roleRestartInputs.clear();
       }
       observeHeldHostedSessions(challenge) {
         return observeHeldHostedSessions(this, challenge);
@@ -163575,11 +163831,65 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         const dir = rdir.path;
         if (!cliType) throw new Error("cliType required");
         const found = this.findAdapter(cliType, { instanceKey: args?.targetSessionId, dir });
+        if (args?.targetSessionId && !found) return {
+          success: false,
+          code: "session_not_found",
+          error: "The addressed session is not attached; use its session-host restart record."
+        };
+        const recorded = found ? this.deps.getSessionRegistry?.()?.get(found.key)?.launch : void 0;
+        const settings2 = found ? this.deps.getInstanceManager()?.getInstance(found.key)?.getState().settings : void 0;
+        const isRole = settings2?.assistant === true || recorded?.launchedBy === "assistant" || !!settings2?.meshCoordinatorFor || !!recorded?.roleLaunch;
+        if (isRole && !recorded) return {
+          success: false,
+          code: "restart_selection_unavailable",
+          error: "The role session has no recorded launch selection; restart refused."
+        };
+        const roleSelection = recorded?.roleLaunch?.selection ?? (isRole && recorded ? {
+          provider: recorded.providerType,
+          ...recorded.model.requested ? { model: recorded.model.requested } : {},
+          ...recorded.thinkingLevel.requested ? { thinkingLevel: recorded.thinkingLevel.requested } : {}
+        } : void 0);
+        if (roleSelection) {
+          const detected = await detectCLI(roleSelection.provider, this.providerLoader);
+          if (!detected) return {
+            success: false,
+            code: "restart_selection_unavailable",
+            error: `Recorded provider '${roleSelection.provider}' is not installed; restart refused.`
+          };
+          const valid = validateLaunchDefault(
+            recorded?.roleLaunch?.role ?? (settings2?.assistant ? "assistant" : "coordinator"),
+            roleSelection,
+            createLaunchValidationPorts({ deps: { providerLoader: this.providerLoader } }, void 0, detected.version)
+          );
+          if (!valid.ok) return {
+            success: false,
+            code: "restart_selection_unavailable",
+            error: `Recorded provider '${roleSelection.provider}' cannot restart: ${valid.issue.reason}`
+          };
+        }
         const prevCliArgs = found ? found.adapter.extraArgs : void 0;
+        const replay = found ? this.roleRestartInputs.get(found.key) : void 0;
+        if (isRole && !replay) return {
+          success: false,
+          code: "restart_selection_unavailable",
+          error: "The role session launch arguments are unavailable; restart refused."
+        };
         if (found) await this.stopSession(found.key);
-        await this.startSession(cliType, dir, args?.cliArgs || prevCliArgs, args?.initialModel, {
-          launchProvenance: resolveLaunchProvenance(args, void 0)
-        });
+        await this.startSession(
+          isRole ? recorded.providerType : cliType,
+          isRole ? recorded.workspace || found.adapter.workingDir || dir : dir,
+          isRole ? replay.cliArgs : args?.cliArgs || prevCliArgs,
+          isRole ? replay.initialModel : args?.initialModel,
+          {
+            ...isRole ? { ...replay.options, restartRecord: recorded, presetSessionKey: found.key } : {},
+            launchProvenance: isRole ? {
+              roleLaunch: recorded.roleLaunch,
+              launchedBy: recorded.launchedBy,
+              modelSource: recorded.model.source,
+              thinkingLevelSource: recorded.thinkingLevel.source
+            } : resolveLaunchProvenance(args, void 0)
+          }
+        );
         return { success: true, restarted: true };
       }
       agentCommand(args) {
@@ -165203,10 +165513,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * Returns false (and emits nothing) when the session is unknown or the
        * record names another session.
        */
-      setLaunchRecord(sessionId, record3, cause = "launch") {
+      setLaunchRecord(sessionId, record4, cause = "launch") {
         const target = sessionId ? this.bySessionId.get(sessionId) : void 0;
-        if (!target || record3.sessionId !== target.sessionId) return false;
-        target.launch = cloneLaunchRecord(record3);
+        if (!target || record4.sessionId !== target.sessionId) return false;
+        target.launch = cloneLaunchRecord(record4);
         this.emitLaunchUpdated(target, cause);
         return true;
       }
@@ -165215,11 +165525,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * `set_thought_level`): sets `current` and appends history. No-op when the
        * session has no launch record or the value is unchanged.
        */
-      updateLaunchAxis(sessionId, axis, value) {
+      updateLaunchAxis(sessionId, axis2, value) {
         const target = sessionId ? this.bySessionId.get(sessionId) : void 0;
         const next = typeof value === "string" ? value.trim() : "";
         if (!target?.launch || !next) return false;
-        const selection = target.launch[axis];
+        const selection = target.launch[axis2];
         if (selection.current === next) return false;
         const at = this.now();
         selection.current = next;
@@ -165233,11 +165543,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * transcript re-read of old lines cannot roll it back), and a repeat of the
        * same value only refreshes `observedAt` — no history entry, no event.
        */
-      observeLaunchAxis(sessionId, axis, value, observedAt) {
+      observeLaunchAxis(sessionId, axis2, value, observedAt) {
         const target = sessionId ? this.bySessionId.get(sessionId) : void 0;
         const next = typeof value === "string" ? value.trim() : "";
         if (!target?.launch || !next || !Number.isFinite(observedAt)) return false;
-        const selection = target.launch[axis];
+        const selection = target.launch[axis2];
         if (typeof selection.observedAt === "number" && observedAt < selection.observedAt) return false;
         if (selection.observed === next) {
           selection.observedAt = observedAt;
@@ -168563,12 +168873,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var import_session_host_core13 = require_dist();
     init_logger();
     init_resolve_executable();
-    function shouldResumeAttachedSession(record3) {
-      if (!record3) return false;
-      if (record3.lifecycle === "interrupted") return true;
-      if (record3.lifecycle !== "stopped") return false;
-      if (record3.meta?.restoredFromStorage === true) return true;
-      return typeof record3.meta?.runtimeRecoveryState === "string" && String(record3.meta.runtimeRecoveryState).trim().length > 0;
+    function shouldResumeAttachedSession(record4) {
+      if (!record4) return false;
+      if (record4.lifecycle === "interrupted") return true;
+      if (record4.lifecycle !== "stopped") return false;
+      if (record4.meta?.restoredFromStorage === true) return true;
+      return typeof record4.meta?.runtimeRecoveryState === "string" && String(record4.meta.runtimeRecoveryState).trim().length > 0;
     }
     var SessionHostRuntimeTransport = class {
       constructor(options) {
@@ -168790,7 +169100,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           await this.client.connect();
         }
         this.unsubscribe = this.client.onEvent((event) => this.handleEvent(event));
-        let record3 = null;
+        let record4 = null;
         if (this.options.attachExisting) {
           const existingRecords = await this.client.request({
             type: "list_sessions",
@@ -168821,7 +169131,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!attachResponse.success || !attachResponse.result) {
             throw new Error(attachResponse.error || `Failed to attach runtime ${this.options.runtimeId}`);
           }
-          record3 = attachResponse.result;
+          record4 = attachResponse.result;
         } else {
           assertMaintenanceAdmission();
           const createResponse = await this.client.request({
@@ -168834,7 +169144,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               launchCommand: {
                 command: this.options.command,
                 args: this.options.args,
-                env: this.options.spawnOptions.env
+                env: this.options.spawnOptions.envOverrides ?? {},
+                envMode: "launch_overrides"
               },
               cols: this.options.spawnOptions.cols,
               rows: this.options.spawnOptions.rows,
@@ -168846,10 +169157,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!createResponse.success || !createResponse.result) {
             throw new Error(createResponse.error || `Failed to create runtime ${this.options.runtimeId}`);
           }
-          record3 = createResponse.result;
+          record4 = createResponse.result;
         }
-        this.currentPid = record3.osPid || 0;
-        this.updateMetadata(record3);
+        this.currentPid = record4.osPid || 0;
+        this.updateMetadata(record4);
         const ownerResponse = await this.client.request({
           type: "acquire_write",
           payload: {
@@ -168950,26 +169261,26 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           callback(data);
         }
       }
-      updateMetadata(record3) {
+      updateMetadata(record4) {
         this.metadata = {
-          runtimeId: record3.sessionId,
-          runtimeKey: record3.runtimeKey,
-          displayName: record3.displayName,
-          workspaceLabel: record3.workspaceLabel,
-          lifecycle: typeof record3.lifecycle === "string" ? record3.lifecycle : null,
-          surfaceKind: record3.surfaceKind,
-          writeOwner: record3.writeOwner ? {
-            clientId: record3.writeOwner.clientId,
-            ownerType: record3.writeOwner.ownerType
+          runtimeId: record4.sessionId,
+          runtimeKey: record4.runtimeKey,
+          displayName: record4.displayName,
+          workspaceLabel: record4.workspaceLabel,
+          lifecycle: typeof record4.lifecycle === "string" ? record4.lifecycle : null,
+          surfaceKind: record4.surfaceKind,
+          writeOwner: record4.writeOwner ? {
+            clientId: record4.writeOwner.clientId,
+            ownerType: record4.writeOwner.ownerType
           } : null,
-          attachedClients: record3.attachedClients.map((client) => ({
+          attachedClients: record4.attachedClients.map((client) => ({
             clientId: client.clientId,
             type: client.type,
             readOnly: client.readOnly
           })),
-          restoredFromStorage: record3.meta?.restoredFromStorage === true,
-          recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
-          recoveryError: typeof record3.meta?.runtimeRecoveryError === "string" ? String(record3.meta.runtimeRecoveryError) : null
+          restoredFromStorage: record4.meta?.restoredFromStorage === true,
+          recoveryState: typeof record4.meta?.runtimeRecoveryState === "string" ? String(record4.meta.runtimeRecoveryState) : null,
+          recoveryError: typeof record4.meta?.runtimeRecoveryError === "string" ? String(record4.meta.runtimeRecoveryError) : null
         };
       }
       enqueueMutation(action2) {
@@ -169291,30 +169602,30 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!response.success || !response.result) {
           return [];
         }
-        return response.result.filter((record3) => record3.category === "cli" && ["running", "interrupted"].includes(record3.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record3) => ({
-          runtimeId: record3.sessionId,
-          runtimeKey: record3.runtimeKey,
-          displayName: record3.displayName,
-          workspaceLabel: record3.workspaceLabel,
-          lifecycle: record3.lifecycle,
-          recoveryState: typeof record3.meta?.runtimeRecoveryState === "string" ? String(record3.meta.runtimeRecoveryState) : null,
-          cliType: record3.providerType,
-          workspace: record3.workspace,
-          cliArgs: Array.isArray(record3.meta?.cliArgs) ? record3.meta.cliArgs : [],
-          providerSessionId: typeof record3.meta?.providerSessionId === "string" ? String(record3.meta.providerSessionId) : void 0,
-          managedBy: typeof record3.meta?.managedBy === "string" ? String(record3.meta.managedBy) : void 0,
+        return response.result.filter((record4) => record4.category === "cli" && ["running", "interrupted"].includes(record4.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record4) => ({
+          runtimeId: record4.sessionId,
+          runtimeKey: record4.runtimeKey,
+          displayName: record4.displayName,
+          workspaceLabel: record4.workspaceLabel,
+          lifecycle: record4.lifecycle,
+          recoveryState: typeof record4.meta?.runtimeRecoveryState === "string" ? String(record4.meta.runtimeRecoveryState) : null,
+          cliType: record4.providerType,
+          workspace: record4.workspace,
+          cliArgs: Array.isArray(record4.meta?.cliArgs) ? record4.meta.cliArgs : [],
+          providerSessionId: typeof record4.meta?.providerSessionId === "string" ? String(record4.meta.providerSessionId) : void 0,
+          managedBy: typeof record4.meta?.managedBy === "string" ? String(record4.meta.managedBy) : void 0,
           // Session-level mesh membership (rc.20 rebound relay envelope) —
           // surfaced so restoreHostedSessions can re-apply it to the rebuilt
           // instance settings. Task-level markers stay out (see the descriptor).
-          meshNodeFor: typeof record3.meta?.meshNodeFor === "string" && record3.meta.meshNodeFor.trim() ? String(record3.meta.meshNodeFor).trim() : void 0,
-          meshNodeId: typeof record3.meta?.meshNodeId === "string" && record3.meta.meshNodeId.trim() ? String(record3.meta.meshNodeId).trim() : void 0,
-          meshCoordinatorDaemonId: typeof record3.meta?.meshCoordinatorDaemonId === "string" && record3.meta.meshCoordinatorDaemonId.trim() ? String(record3.meta.meshCoordinatorDaemonId).trim() : void 0,
-          meshActiveAttemptRef: readPersistedAttemptRef(record3.meta?.meshActiveAttemptRef),
-          launchedByCoordinator: record3.meta?.launchedByCoordinator === true ? true : void 0,
-          autoApproveMode: typeof record3.meta?.autoApproveMode === "string" && record3.meta.autoApproveMode.trim() ? String(record3.meta.autoApproveMode).trim() : void 0,
+          meshNodeFor: typeof record4.meta?.meshNodeFor === "string" && record4.meta.meshNodeFor.trim() ? String(record4.meta.meshNodeFor).trim() : void 0,
+          meshNodeId: typeof record4.meta?.meshNodeId === "string" && record4.meta.meshNodeId.trim() ? String(record4.meta.meshNodeId).trim() : void 0,
+          meshCoordinatorDaemonId: typeof record4.meta?.meshCoordinatorDaemonId === "string" && record4.meta.meshCoordinatorDaemonId.trim() ? String(record4.meta.meshCoordinatorDaemonId).trim() : void 0,
+          meshActiveAttemptRef: readPersistedAttemptRef(record4.meta?.meshActiveAttemptRef),
+          launchedByCoordinator: record4.meta?.launchedByCoordinator === true ? true : void 0,
+          autoApproveMode: typeof record4.meta?.autoApproveMode === "string" && record4.meta.autoApproveMode.trim() ? String(record4.meta.autoApproveMode).trim() : void 0,
           // Phase E launch provenance written at spawn; validated on restore
           // (buildRestoredLaunchRecord), so it is passed through raw here.
-          ...record3.meta?.launchRecord !== void 0 ? { launchRecord: record3.meta.launchRecord } : {}
+          ...record4.meta?.launchRecord !== void 0 ? { launchRecord: record4.meta.launchRecord } : {}
         }));
       } finally {
         await client.close().catch(() => {
@@ -170043,10 +170354,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto15 = __toESM2(require("crypto"));
-    var import_node_fs14 = require("fs");
+    var import_node_fs15 = require("fs");
     var import_node_path12 = require("path");
     init_provider_cli_shared();
-    var import_node_fs15 = require("fs");
+    var import_node_fs16 = require("fs");
     var import_node_path13 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
@@ -171890,13 +172201,13 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         return steps;
       }
       function forward(evidence, owner, nowMs2, opts) {
-        const ref = evidence.attemptRef;
-        if (!ref) {
+        const ref2 = evidence.attemptRef;
+        if (!ref2) {
           txn(() => store2.insertEvent(evidenceRow(evidence, { verdict: "rejected", rejection: "no_attempt", fromState: null, toState: null, attempt: null, notes: ["forward_without_attempt_ref"] }, nowMs2, opts)));
           counters4.rejected++;
           return { verdict: "rejected", rejection: "no_attempt", attempt: null, effects: [] };
         }
-        const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref.attemptId, generation: ref.generation, ownerDaemonId: owner.daemonId });
+        const entry = buildForwardedEvidenceEntry(evidence, { attemptId: ref2.attemptId, generation: ref2.generation, ownerDaemonId: owner.daemonId });
         txn(() => store2.insertEvent(evidenceRow(evidence, { verdict: "forwarded", fromState: null, toState: null, attempt: null, notes: [] }, nowMs2, opts, { meshId: owner.meshId, entry })));
         counters4.forwarded++;
         if (autoFlush) afterBridgeCommit(deps.db, () => {
@@ -172042,8 +172353,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const entry = row2.payload.entry;
         const meshId = row2.meshId ?? (typeof row2.payload.meshId === "string" ? row2.payload.meshId : null);
         if (!entry || !meshId) return null;
-        const ref = row2.payload.ref;
-        return { meshId, entry, ...ref ? { ref } : {} };
+        const ref2 = row2.payload.ref;
+        return { meshId, entry, ...ref2 ? { ref: ref2 } : {} };
       }
       async function drain() {
         const report = { published: 0, failed: 0, pending: 0 };
@@ -172686,7 +172997,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return error instanceof Error ? error.message : String(error);
     }
     function toCursorEntry(meshId, topic, entry, ownWriter) {
-      const ref = Array.isArray(entry.ref) && entry.ref.length === 3 ? { topic: String(entry.ref[0]), writer: String(entry.ref[1]), seq: Number(entry.ref[2]) } : void 0;
+      const ref2 = Array.isArray(entry.ref) && entry.ref.length === 3 ? { topic: String(entry.ref[0]), writer: String(entry.ref[1]), seq: Number(entry.ref[2]) } : void 0;
       return {
         meshId,
         topic,
@@ -172694,7 +173005,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         seq: entry.seq,
         kind: entry.kind,
         payload: entry.payload,
-        ...ref ? { ref } : {},
+        ...ref2 ? { ref: ref2 } : {},
         own: entry.writer === ownWriter
       };
     }
@@ -175187,10 +175498,10 @@ ${notice.notice}${supersededHint}`;
       return components.statusInstanceId || getMachineId() || "local";
     }
     function resolveHandoffOn(rt) {
-      return (ref) => {
+      return (ref2) => {
         if (!rt) return null;
         try {
-          const entry = rt.node.node.scanEntries(ref.topic, { writer: ref.writer, fromSeq: ref.seq, toSeq: ref.seq, limit: 1 }).entries[0];
+          const entry = rt.node.node.scanEntries(ref2.topic, { writer: ref2.writer, fromSeq: ref2.seq, toSeq: ref2.seq, limit: 1 }).entries[0];
           const payload = entry?.payload;
           return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
         } catch {

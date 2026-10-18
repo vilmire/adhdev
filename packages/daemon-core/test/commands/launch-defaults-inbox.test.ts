@@ -32,6 +32,7 @@ class Providers extends ProviderRegistry {
                 systemPromptInjection: { mode: 'cli_arg', flag: '--append-system-prompt' } },
         });
     }
+    resolve(type: string) { return this.getMeta(type); }
     protected log(_message: string) {}
     protected readConfig() {
         return { machineProviders: Object.fromEntries(['claude-cli', 'codex-cli'].map(type =>

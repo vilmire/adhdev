@@ -71,7 +71,7 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
       mkdirSync(join(providerRoot, 'bin'), { recursive: true });
       writeFileSync(executable, '#!/bin/sh\nexit 0\n', 'utf-8');
       chmodSync(executable, 0o755);
-      testConfig.machineProviders[type] = { enabled: true, executable };
+      testConfig.machineProviders[type] = { enabled: true, executable, lastDetection: { ok: true, path: executable } };
       writeProvider(providerRoot, category, type, {
         type,
         name: type,
@@ -79,6 +79,7 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
         category,
         spawn: { command: `${type}-definitely-missing` },
         patterns: ['sample'],
+        meshCoordinator: { supported: true, mcpConfig: { mode: 'auto_import', path: '.mcp.json', format: 'claude_mcp_json' } },
         modelOptions: ['Opus Label', 'sonnet'],
         ...(category === 'cli'
           ? {
@@ -175,11 +176,11 @@ describe('Phase E — launch record on every cli-manager launch path', () => {
     const defaultRef = { role: 'coordinator' as const, scope: source === 'stored_default' ? 'global' as const : 'project' as const,
       revision: 3, ...(source === 'project_default' ? { projectId: 'm' } : {}) };
     const roleLaunch = { role: 'coordinator' as const, documentRevision: 5, defaultRef,
-      selection: { provider: 'sample-cli', model: 'sonnet' }, applied: {
-        provider: { value: 'sample-cli', source, defaultRef }, model: { value: 'sonnet', source, defaultRef },
+      selection: { provider: 'sample-cli', model: 'fixture-role-model' }, applied: {
+        provider: { value: 'sample-cli', source, defaultRef }, model: { value: 'fixture-role-model', source, defaultRef },
         thinkingLevel: { value: null, source: 'provider_default' as const } } };
     const result = await createManager(setupLoader()).launchCli({ cliType: 'sample-cli', dir: workingDir,
-      initialModel: 'sonnet', modelSource: source, roleLaunch, settings: { meshCoordinatorFor: 'm' } });
+      initialModel: 'fixture-role-model', modelSource: source, roleLaunch, settings: { meshCoordinatorFor: 'm' } });
     const record = registry.get(result.sessionId as string)?.launch;
     expect(record).toMatchObject({ roleLaunch, model: { source }, thinkingLevel: { source: 'provider_default' } });
     const meta = updateRuntimeMeta.mock.calls.map(row => row[0]).find(m => m.launchRecord);

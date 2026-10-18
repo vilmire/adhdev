@@ -884,7 +884,7 @@ function buildPayloadFromRecord(record) {
     providerType: record.providerType,
     category: record.category,
     workspace: record.workspace,
-    launchCommand: record.launchCommand,
+    launchCommand: { ...record.launchCommand, env: (0, import_session_host_core4.replayLaunchEnv)(record.launchCommand), envMode: "launch_overrides" },
     cols: (0, import_session_host_core4.resolveSessionHostCols)(typeof record.meta?.sessionHostCols === "number" ? record.meta.sessionHostCols : void 0),
     rows: (0, import_session_host_core4.resolveSessionHostRows)(typeof record.meta?.sessionHostRows === "number" ? record.meta.sessionHostRows : void 0),
     meta: record.meta

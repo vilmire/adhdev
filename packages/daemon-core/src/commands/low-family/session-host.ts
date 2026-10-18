@@ -1,3 +1,6 @@
+import { detectCLI } from '../../detection/cli-detector.js';
+import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
+import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import { validateLaunchDefault } from '../../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../../launch-defaults/ports.js';
@@ -168,10 +171,24 @@ export async function restartHostedSession(deps: LowFamilyContext['deps'], args:
     if (!sessionId) return { success: false, error: 'sessionId required' };
     const current = deps.sessionHostControl.listSessions
         ? (await deps.sessionHostControl.listSessions()).find(item => item.sessionId === sessionId) : undefined;
-    const launch = parseSessionLaunchRecord(current?.meta?.launchRecord);
-    if (launch?.roleLaunch) {
-        const valid = validateLaunchDefault(launch.roleLaunch.role, launch.roleLaunch.selection,
-            createLaunchValidationPorts({ deps }));
+    if (!current) return { success: false, code: 'restart_selection_unavailable', error: 'Hosted launch record unavailable; restart refused.' };
+    const launch = parseSessionLaunchRecord(current.meta?.launchRecord);
+    const settings = deps.instanceManager?.getInstance(sessionId)?.getState().settings;
+    const assistant = launch?.roleLaunch?.role === 'assistant' || launch?.launchedBy === 'assistant'
+        || settings?.assistant === true || current.meta?.assistant === true || getAssistantRegistry().read()?.sessionId === sessionId;
+    const coordinator = launch?.roleLaunch?.role === 'coordinator' || !!settings?.meshCoordinatorFor
+        || !!current.meta?.meshCoordinatorFor || !!getCoordinatorForSession(sessionId);
+    if ((assistant || coordinator) && !launch) return { success: false, code: 'restart_selection_unavailable',
+        error: 'The role session has no recorded launch selection; restart refused.' };
+    if (launch && (assistant || coordinator)) {
+        const selection = launch.roleLaunch?.selection ?? { provider: launch.providerType,
+            ...(launch.model.requested ? { model: launch.model.requested } : {}),
+            ...(launch.thinkingLevel.requested ? { thinkingLevel: launch.thinkingLevel.requested } : {}) };
+        const detected = await detectCLI(selection.provider, deps.providerLoader);
+        if (!detected) return { success: false, code: 'restart_selection_unavailable',
+            error: `Recorded provider '${selection.provider}' is not installed; restart refused.` };
+        const valid = validateLaunchDefault(assistant ? 'assistant' : 'coordinator', selection,
+            createLaunchValidationPorts({ deps }, undefined, detected.version));
         if (!valid.ok) return { success: false, code: 'restart_selection_unavailable',
             error: `Recorded provider '${launch.providerType}' cannot restart: ${valid.issue.reason}` };
     }

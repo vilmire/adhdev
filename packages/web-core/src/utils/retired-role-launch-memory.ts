@@ -1,12 +1,13 @@
 /** One-way cleanup of retired browser role defaults. Never supplies launch intent. */
 export function removeRetiredRoleLaunchMemory(): void {
     try {
-        localStorage.removeItem('adhdev_assistant_launch_choice')
+        if (localStorage.getItem('adhdev_assistant_launch_choice') !== null) localStorage.removeItem('adhdev_assistant_launch_choice')
         const key = 'adhdev.remember.new-session-mesh'
         const raw = localStorage.getItem(key)
         if (!raw) return
         const prior = JSON.parse(raw)
         if (!prior || typeof prior !== 'object' || Array.isArray(prior)) { localStorage.removeItem(key); return }
+        if (!['cliType', 'model', 'thinkingLevel'].some(field => Object.hasOwn(prior, field))) return
         delete prior.cliType
         delete prior.model
         delete prior.thinkingLevel

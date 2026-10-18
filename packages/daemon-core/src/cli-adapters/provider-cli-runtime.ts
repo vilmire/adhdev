@@ -342,6 +342,7 @@ export function resolveCliSpawnPlanFromParts(options: {
             rows: geometry?.rows ?? DEFAULT_SESSION_HOST_ROWS,
             cwd: workingDir,
             env,
+            envOverrides: buildCliSpawnEnv({}, { ...(baseEnv || {}), ...(extraEnv || {}), TERMINAL_CWD: workingDir }),
         },
     };
 }

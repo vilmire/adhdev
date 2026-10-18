@@ -1,4 +1,5 @@
 import {
+  replayLaunchEnv,
   resolveSessionHostCols,
   resolveSessionHostRows,
 } from '@adhdev/session-host-core';
@@ -104,7 +105,7 @@ export function buildPayloadFromRecord(record: SessionHostRecord): CreateSession
     providerType: record.providerType,
     category: record.category,
     workspace: record.workspace,
-    launchCommand: record.launchCommand,
+    launchCommand: { ...record.launchCommand, env: replayLaunchEnv(record.launchCommand), envMode: 'launch_overrides' },
     cols: resolveSessionHostCols(typeof record.meta?.sessionHostCols === 'number' ? record.meta.sessionHostCols as number : undefined),
     rows: resolveSessionHostRows(typeof record.meta?.sessionHostRows === 'number' ? record.meta.sessionHostRows as number : undefined),
     meta: record.meta,
