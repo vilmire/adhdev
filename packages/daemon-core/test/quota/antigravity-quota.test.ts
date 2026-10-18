@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { setDefaultProviderLoader } from '../../src/detection/cli-detector';
+import type { ProviderLoader } from '../../src/providers/provider-loader';
 import { fetchAntigravityQuota, readAntigravityKeychainMtimeMs } from '../../src/quota/fetchers/antigravity';
 import type {
     QuotaChildProcess,
@@ -93,6 +95,57 @@ const LIVE_RESPONSE = {
             ],
             displayName: 'Claude and GPT models',
             description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+        },
+    ],
+};
+
+/**
+ * Sanitized live response captured 2026-10-18 from `agy 1.4.2` (`POST /v1internal:retrieveUserQuotaSummary`
+ * with `User-Agent: antigravity/cli/1.4.2 (aidev_client; os_type=darwin; arch=arm64; auth_method=consumer)`).
+ * Both `Gemini Models` and `Claude and GPT models` are returned when the `/cli/<ver> (aidev_client; ...)`
+ * User-Agent is sent; the legacy bare `antigravity/<ver> <os>/<arch>` UA caused upstream to omit `Gemini Models`.
+ */
+const CAPTURED_1_4_2_TWO_GROUP_RESPONSE = {
+    groups: [
+        {
+            displayName: 'Gemini Models',
+            description: 'Models within this group: Gemini Flash, Gemini Pro',
+            buckets: [
+                {
+                    bucketId: 'gemini-weekly',
+                    displayName: 'Weekly Limit Remaining',
+                    window: 'weekly',
+                    remainingFraction: 0.9446893,
+                    resetTime: '2026-10-24T05:41:49Z',
+                },
+                {
+                    bucketId: 'gemini-5h',
+                    displayName: 'Five Hour Limit Remaining',
+                    window: '5h',
+                    remainingFraction: 0.89260375,
+                    resetTime: '2026-10-18T09:35:01Z',
+                },
+            ],
+        },
+        {
+            displayName: 'Claude and GPT models',
+            description: 'Models within this group: Claude Opus, Claude Sonnet, GPT-OSS',
+            buckets: [
+                {
+                    bucketId: '3p-weekly',
+                    displayName: 'Weekly Limit Remaining',
+                    window: 'weekly',
+                    remainingFraction: 0.3898976,
+                    resetTime: '2026-10-18T14:45:38Z',
+                },
+                {
+                    bucketId: '3p-5h',
+                    displayName: 'Five Hour Limit Remaining',
+                    window: '5h',
+                    remainingFraction: 1,
+                    resetTime: '2026-10-18T11:52:34Z',
+                },
+            ],
         },
     ],
 };
@@ -272,6 +325,7 @@ function deps(
 afterEach(() => {
     // Nothing global is mutated: the keychain is never written, and every
     // side effect goes through injected deps.
+    setDefaultProviderLoader(undefined);
 });
 
 describe('fetchAntigravityQuota', () => {
@@ -297,7 +351,9 @@ describe('fetchAntigravityQuota', () => {
 
         expect(quota.status).toBe('ok');
         expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
-        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(/^antigravity\/\S+ \S+\/\S+$/);
+        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(
+            /^antigravity\/cli\/\S+ \(aidev_client; os_type=\S+; arch=\S+; auth_method=consumer\)$/,
+        );
     });
 
     it('also accepts an unprefixed plain-JSON secret', async () => {
@@ -324,6 +380,81 @@ describe('fetchAntigravityQuota', () => {
         ]);
         expect(fetch.inits[0].method).toBe('POST');
         expect(fetch.inits[0].body).toBe('{}');
+    });
+
+    it('sends the agy codeassistclient User-Agent format required to receive both Gemini and Claude/GPT quota groups', async () => {
+        // Verified live 2026-10-18: bare `antigravity/<ver> <os>/<arch>` caused
+        // retrieveUserQuotaSummary to omit `Gemini Models` and return only
+        // `Claude and GPT models`. `agy`'s `codeassistclient.UserAgent` sends
+        // `antigravity/cli/<ver> (aidev_client; os_type=<os>; arch=<arch>; auth_method=consumer)`.
+        const expectedArch = process.arch === 'x64' ? 'amd64' : process.arch;
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(CAPTURED_1_4_2_TWO_GROUP_RESPONSE));
+
+        await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(fetch.calls).toEqual([
+            'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+        ]);
+        expect(fetch.inits[0]).toEqual({
+            method: 'POST',
+            headers: {
+                Authorization: 'Bearer antigravity-access-token',
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+                'User-Agent': `antigravity/cli/1.4.2 (aidev_client; os_type=darwin; arch=${expectedArch}; auth_method=consumer)`,
+            },
+            body: '{}',
+        });
+    });
+
+    it('derives the User-Agent CLI version from the daemon detected provider version, with a sane fallback', async () => {
+        const expectedArch = process.arch === 'x64' ? 'amd64' : process.arch;
+        setDefaultProviderLoader({
+            getDetectedVersion: (type: string) => (type === 'antigravity-cli' ? '1.5.0' : null),
+        } as unknown as ProviderLoader);
+
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(CAPTURED_1_4_2_TWO_GROUP_RESPONSE));
+
+        await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(fetch.inits[0].headers?.['User-Agent']).toBe(
+            `antigravity/cli/1.5.0 (aidev_client; os_type=darwin; arch=${expectedArch}; auth_method=consumer)`,
+        );
+        // Never spawns `agy --version` inside the quota fetcher — only the 2 keychain reads.
+        expect(spawn.calls).toHaveLength(2);
+    });
+
+    it('maps the captured agy 1.4.2 two-group response (Gemini Models + Claude and GPT models) with worst-group axes and group-labelled chips', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload()));
+        const fetch = stubFetch(jsonResponse(CAPTURED_1_4_2_TWO_GROUP_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('ok');
+        // Both groups and all 4 buckets are preserved with group-prefixed names.
+        expect(quota.buckets?.map((b) => b.name)).toEqual([
+            'Gemini Models · Weekly Limit Remaining',
+            'Gemini Models · Five Hour Limit Remaining',
+            'Claude and GPT models · Weekly Limit Remaining',
+            'Claude and GPT models · Five Hour Limit Remaining',
+        ]);
+        expect(quota.buckets?.[0].usedPercent).toBeCloseTo((1 - 0.9446893) * 100, 3);
+        expect(quota.buckets?.[1].usedPercent).toBeCloseTo((1 - 0.89260375) * 100, 3);
+        expect(quota.buckets?.[2].usedPercent).toBeCloseTo((1 - 0.3898976) * 100, 3);
+        expect(quota.buckets?.[3].usedPercent).toBe(0);
+
+        // Worst-group selection per axis:
+        // - Weekly: Claude/GPT (61.01% used) > Gemini (5.53% used)
+        // - Session (5h): Gemini (10.74% used) > Claude/GPT (0% used)
+        expect(quota.weekly?.windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
+        expect(quota.weekly?.usedPercent).toBeCloseTo((1 - 0.3898976) * 100, 3);
+        expect(quota.weekly?.resetsAt).toBe(Date.parse('2026-10-18T14:45:38Z'));
+
+        expect(quota.session?.windowMinutes).toBe(SESSION_WINDOW_MINUTES);
+        expect(quota.session?.usedPercent).toBeCloseTo((1 - 0.89260375) * 100, 3);
+        expect(quota.session?.resetsAt).toBe(Date.parse('2026-10-18T09:35:01Z'));
     });
 
     it('maps the live response: window LABELS onto fixed axes', async () => {
@@ -780,8 +911,11 @@ describe('fetchAntigravityQuota', () => {
         // The bearer is the CLI's OWN stored token, verbatim — not one this
         // fetcher obtained.
         expect(fetch.inits[0].headers?.Authorization).toBe('Bearer antigravity-access-token');
-        // Cloud Code 403s a Node/undici default UA on the daily host.
-        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(/^antigravity\/1\.1\.19 /);
+        // Cloud Code 403s a Node/undici default UA on the daily host, and omits
+        // the Gemini Models group unless the CLI surface UA (`antigravity/cli/...`) is sent.
+        expect(fetch.inits[0].headers?.['User-Agent']).toMatch(
+            /^antigravity\/cli\/1\.4\.2 \(aidev_client; os_type=darwin; arch=\S+; auth_method=consumer\)$/,
+        );
     });
 
     it('sends no grant/client credentials in any request body it makes', async () => {

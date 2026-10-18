@@ -187,11 +187,17 @@
  * ★User-Agent is part of the request shape, not decoration. A live POST to
  * the daily host with this fetcher's original headers (Bearer + JSON, no UA)
  * returned HTTP 403; the same token on the same host is what `agy` uses
- * successfully. Cloud Code gates client identity: CLIProxyAPI #3114 showed
- * `User-Agent: antigravity/<ver> <os>/<arch>` is what the backend treats as
- * an Antigravity client (a nodejs-client UA silently dropped paid-tier
- * fields). We send that form. Node's fetch default (`node` / undici) is
- * exactly the identity that got 403.
+ * successfully. Cloud Code gates BOTH client identity AND returned quota
+ * groups on `User-Agent`:
+ *   - Node's fetch default (`node` / undici) gets HTTP 403.
+ *   - The bare `antigravity/<ver> <os>/<arch>` form (from CLIProxyAPI #3114)
+ *     gets HTTP 200, but the server OMITS the `Gemini Models` group and
+ *     returns only `Claude and GPT models`.
+ *   - `agy`'s own `codeassistclient.UserAgent` sends
+ *     `antigravity/cli/<ver> (aidev_client; os_type=<os>; arch=<arch>; auth_method=consumer)`,
+ *     which returns BOTH `Gemini Models` (`gemini-weekly`, `gemini-5h`) and
+ *     `Claude and GPT models` (`3p-weekly`, `3p-5h`) with body `{}` (verified
+ *     live 2026-10-18 against `agy 1.4.2`).
  *
  * ★Request body MUST be `{}`. Verified live: adding `project` or `metadata`
  * makes the server answer 429/400. The `project` and `forceRefresh` fields
@@ -303,6 +309,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { isTestRuntimeEnv } from '../../config/config-dir.js';
+import { readDetectedProviderVersion } from '../../detection/cli-detector.js';
+import { VersionArchive } from '../../providers/version-archive.js';
 import {
     SESSION_WINDOW_MINUTES,
     WEEKLY_WINDOW_MINUTES,
@@ -327,27 +335,46 @@ import { quotaReadNowClause } from '../refresh-command-hint.js';
 const DEFAULT_BASE_URL = 'https://daily-cloudcode-pa.googleapis.com/v1internal';
 
 /**
- * Pinned from `agy --version` on Jupiter(linux) (2026-08-24); confirmed 1.1.19 returns 200.
- *
- * HARDCODED, deliberately. Reading it from the binary at runtime would mean
- * locating and spawning `agy`, which this fetcher must not do (PATH on win32
- * is stale; the credential-stuffing incident banned binary scans). The live
- * 403→200 split was `antigravity/` vs Node's default UA, not the patch
- * number, so a CLI upgrade that leaves this pin behind is a drift to watch,
- * not a silent 429. Update the pin when someone next confirms a new `agy
- * --version` still 200s — do not invent a version probe to "fix" it.
+ * Fallback CLI version when the daemon's provider version detector / archive has
+ * not recorded `antigravity-cli` yet. We never spawn `agy` inside the quota
+ * fetcher; instead we read the daemon's already-detected CLI version (or this
+ * fallback).
  */
-const ANTIGRAVITY_USER_AGENT_VERSION = '1.1.19';
+const DEFAULT_ANTIGRAVITY_USER_AGENT_VERSION = '1.4.2';
+const VALID_CLI_VERSION_PATTERN = /^\d+\.\d+(?:\.\d+)?(?:-[a-zA-Z0-9.]+)?$/;
+
+function resolveAntigravityCliVersion(env: NodeJS.ProcessEnv): string {
+    const candidates = [
+        env.ADHDEV_ANTIGRAVITY_CLI_VERSION?.trim(),
+        readDetectedProviderVersion('antigravity-cli'),
+        !isTestRuntimeEnv() ? new VersionArchive().getLatest('antigravity-cli') : null,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate === 'string' && VALID_CLI_VERSION_PATTERN.test(candidate.trim())) {
+            return candidate.trim();
+        }
+    }
+    return DEFAULT_ANTIGRAVITY_USER_AGENT_VERSION;
+}
 
 /**
- * Client identity Cloud Code expects. OS/arch follow the Go convention the
- * official clients send (`darwin/arm64`, `windows/amd64`), not Node's
- * `win32`/`x64`.
+ * Client identity Cloud Code expects — matches `agy`'s own
+ * `codeassistclient.UserAgent` (`fmt.Sprintf("%s/%s/%s (%s)", "antigravity",
+ * "cli", ideVersion, "aidev_client; os_type=...; arch=...; auth_method=...")`).
+ *
+ * Verified live 2026-10-18: the bare `antigravity/<ver> <os>/<arch>` UA caused
+ * `retrieveUserQuotaSummary` to omit the `Gemini Models` group and return only
+ * `Claude and GPT models`, whereas the `/cli/<ver> (aidev_client; ...)` format
+ * returns both groups with body `{}`. OS/arch follow Go's `runtime.GOOS` /
+ * `runtime.GOARCH` (`darwin`, `windows`, `linux` / `arm64`, `amd64`).
  */
-function antigravityUserAgent(): string {
-    const os = process.platform === 'win32' ? 'windows' : process.platform;
+function antigravityUserAgent(env: NodeJS.ProcessEnv, authMethod?: string | null): string {
+    const rawPlatform = env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
+    const osName = rawPlatform === 'win32' ? 'windows' : rawPlatform;
     const arch = process.arch === 'x64' ? 'amd64' : process.arch;
-    return `antigravity/${ANTIGRAVITY_USER_AGENT_VERSION} ${os}/${arch}`;
+    const version = resolveAntigravityCliVersion(env);
+    const resolvedAuthMethod = authMethod && authMethod.trim() !== '' ? authMethod.trim() : 'consumer';
+    return `antigravity/cli/${version} (aidev_client; os_type=${osName}; arch=${arch}; auth_method=${resolvedAuthMethod})`;
 }
 const REQUEST_TIMEOUT_MS = 10_000;
 /** Refuse to spend a token that expires mid-flight. */
@@ -1120,7 +1147,7 @@ async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentialsRe
                 Authorization: `Bearer ${credentials.accessToken}`,
                 'Content-Type': 'application/json',
                 Accept: 'application/json',
-                'User-Agent': antigravityUserAgent(),
+                'User-Agent': antigravityUserAgent(deps.env, credentials.authMethod),
             },
             // ★MUST stay `{}` — verified live that sending `project` or
             // `metadata` makes the server answer 429/400.

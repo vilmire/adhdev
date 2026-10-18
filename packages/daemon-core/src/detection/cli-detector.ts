@@ -286,8 +286,23 @@ let defaultProviderLoader: ProviderLoader | undefined;
  * once at boot. Without it the coordinator's self node never resolves a CLI list,
  * so its provider-version chips stay empty even though remote nodes populate.
  */
-export function setDefaultProviderLoader(providerLoader: ProviderLoader): void {
+export function setDefaultProviderLoader(providerLoader: ProviderLoader | undefined): void {
     defaultProviderLoader = providerLoader;
+}
+
+/**
+ * Observation-only read of the last detected CLI binary version for `providerId`.
+ * Checks the in-memory CLI version snapshot first, then the registered
+ * ProviderLoader's VersionArchive (`<configDir>/version-history.json`). Never
+ * spawns a child process or triggers a background refresh.
+ */
+export function readDetectedProviderVersion(providerId: string, providerLoader?: ProviderLoader): string | null {
+    const cached = cachedProviderVersions[providerId]?.trim();
+    if (cached) return cached;
+    const loader = providerLoader ?? defaultProviderLoader;
+    const archived = loader?.getDetectedVersion?.(providerId)?.trim();
+    if (archived) return archived;
+    return null;
 }
 
 function refreshProviderVersionsSnapshot(providerLoader?: ProviderLoader): Promise<void> {
