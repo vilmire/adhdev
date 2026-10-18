@@ -9,6 +9,7 @@
 
 // ─── readChat() return value ───────────────────────────
 
+import type { DriverManifest } from '../drivers/contracts.js';
 import type { SessionStatus } from '@adhdev/mesh-shared';
 import type { ProviderSummaryMetadata } from '../shared-types.js';
 import type { ModelDiscoverySpec } from '../models/types.js';
@@ -345,10 +346,11 @@ export type ResolveActionResult = ResolveActionScriptClick | ResolveActionCoordi
 
 // ─── Provider Module type ────────────────────────
 
-export type ProviderCategory = 'cli' | 'ide' | 'extension';
+// acp remains a server/channel category; it is not a daemon provider category.
+export type ProviderCategory = 'cli' | 'ide' | 'extension' | 'driver';
 
-/** Categories a user can launch a session for — webview extensions are attached, never launched. */
-export type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension'>;
+/** Session launch categories; extensions attach and drivers run through DriverService. */
+export type LaunchableProviderCategory = Exclude<ProviderCategory, 'extension' | 'driver'>;
 
 /**
  * Type of object exported by module.exports in provider.js.
@@ -479,7 +481,14 @@ export interface ProviderModule {
   extensionId?: string;
   extensionIdPattern?: RegExp;
   extensionIdPattern_flags?: string;
-  compatibility?: ProviderCompatibilityEntry[];
+  compatibility?: ProviderCompatibilityEntry[] | DriverManifest['compatibility'];
+  publisher?: string;
+  source?: DriverManifest['source'];
+  runtime?: DriverManifest['runtime'];
+  actions?: DriverManifest['actions'];
+  resources?: DriverManifest['resources'];
+  guidance?: DriverManifest['guidance'];
+  declaredAccess?: DriverManifest['declaredAccess'];
   defaultScriptDir?: string;
   /**
    * v1 declarative tui block (spinner/settledPrompt/modal/dispatchOrder/etc).

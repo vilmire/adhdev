@@ -1,0 +1,24 @@
+{
+  "$schema": "https://adhf.dev/schemas/v1/driver/provider.schema.json",
+  "type": "browser-playwright",
+  "category": "driver",
+  "name": "Browser (Playwright MCP)",
+  "providerVersion": "1.0.0",
+  "publisher": "ADHDev",
+  "compatibility": { "driverApi": "^1.0.0" },
+  "runtime": {
+    "kind": "mcp-stdio",
+    "command": "node",
+    "args": ["./bin/browser-server.js"],
+    "platforms": ["win32", "darwin", "linux"],
+    "startupTimeoutMs": 15000,
+    "idleStopMs": 600000
+  },
+  "actions": [
+    { "id": "navigate", "tool": "browser_navigate", "risk": "write", "inputSchema": "./schemas/navigate.input.json" },
+    { "id": "snapshot", "tool": "browser_snapshot", "risk": "read" }
+  ],
+  "resources": [{ "key": "profile", "lease": "session" }],
+  "guidance": "./guidance/usage.md",
+  "declaredAccess": { "network": ["*"], "filesystem": ["workspace"], "desktopControl": false }
+}

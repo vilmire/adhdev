@@ -149,7 +149,7 @@ function listUpstreamInstalledProviders(host: ProviderCatalogCommandHost): Upstr
     const installRoot = host.getUpstreamInstallRoot();
     if (!fs.existsSync(installRoot)) return [];
 
-    const CATEGORIES = ['cli', 'ide', 'extension'] as const;
+    const CATEGORIES = ['cli', 'ide', 'extension', 'driver'] as const;
     const items: UpstreamInstalledProvider[] = [];
 
     for (const category of CATEGORIES) {

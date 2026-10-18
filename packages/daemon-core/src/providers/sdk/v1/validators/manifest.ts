@@ -16,6 +16,7 @@
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import cliProviderSchema from '../schemas/cli/provider.schema.json';
+import driverProviderSchema from '../schemas/driver/provider.schema.json';
 
 export interface ManifestValidationIssue {
     /** JSON Pointer-style path into the manifest. Empty string for the root. */
@@ -35,6 +36,7 @@ export interface ManifestValidationResult {
 
 let _ajv: Ajv2020 | null = null;
 let _cliValidator: ValidateFunction | null = null;
+let _driverValidator: ValidateFunction | null = null;
 
 function getAjv(): Ajv2020 {
     if (_ajv) return _ajv;
@@ -90,6 +92,12 @@ function formatIssue(err: ErrorObject): ManifestValidationIssue {
  */
 export function validateCliProviderManifest(manifest: unknown): ManifestValidationResult {
     return runValidator(getCliValidator(), manifest);
+}
+
+// G1a intentionally supports only mcp-stdio; command arrives in G1b.
+export function validateDriverProviderManifest(manifest: unknown): ManifestValidationResult {
+    _driverValidator ??= getAjv().compile(driverProviderSchema as unknown as object);
+    return runValidator(_driverValidator, manifest);
 }
 
 function runValidator(validator: ValidateFunction, manifest: unknown): ManifestValidationResult {

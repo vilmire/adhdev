@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.adhf.dev/schemas/v1/driver/provider.schema.json",
+  "title": "Driver provider.v1.json — v1",
+  "description": "Schema for Driver provider manifests (RFC rev3 §5.1). Validates G1a mcp-stdio Driver packages; command runtime fields arrive in G1b.",
+  "type": "object",
+  "required": [
+    "type",
+    "name",
+    "category",
+    "providerVersion",
+    "runtime",
+    "actions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema URL — optional, lets editors validate the file."
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Stable identifier. Lowercase kebab-case."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short canonical name."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Optional UI label. Defaults to name."
+    },
+    "category": {
+      "const": "driver",
+      "description": "Must be \"driver\" for this schema."
+    },
+    "icon": {
+      "type": "string",
+      "maxLength": 4,
+      "description": "Single emoji or short glyph."
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Alternative identifiers."
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adhdev": {
+          "type": "string",
+          "description": "SemVer range against the ADHDev contract version."
+        }
+      },
+      "description": "Optional engine compatibility range."
+    },
+    "providerVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Provider package SemVer."
+    },
+    "minDaemonVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Optional lowest ADHDev daemon version (x.y.z) this bundle runs correctly on."
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Publisher name or identifier."
+    },
+    "status": {
+      "enum": [
+        "Stable",
+        "Beta",
+        "Experimental",
+        "Deprecated"
+      ]
+    },
+    "details": {
+      "type": "string",
+      "description": "Short blurb shown in marketplace."
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "format": "uri"
+      },
+      "description": "External links shown in the marketplace detail view.",
+      "properties": {
+        "homepage": {
+          "type": "string",
+          "format": "uri"
+        },
+        "repo": {
+          "type": "string",
+          "format": "uri"
+        },
+        "docs": {
+          "type": "string",
+          "format": "uri"
+        },
+        "install": {
+          "type": "string",
+          "format": "uri"
+        },
+        "issues": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "install": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Install hints displayed in the marketplace.",
+      "properties": {
+        "homebrew": {
+          "type": "string"
+        },
+        "npm": {
+          "type": "string"
+        },
+        "pip": {
+          "type": "string"
+        },
+        "curl": {
+          "type": "string"
+        },
+        "manual": {
+          "type": "string"
+        }
+      }
+    },
+    "disableUpstream": {
+      "type": "boolean",
+      "description": "When true, daemon does not auto-sync this provider from registry."
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Driver API compatibility range.",
+      "properties": {
+        "driverApi": {
+          "type": "string",
+          "minLength": 1,
+          "description": "SemVer range against the ADHDev driver API contract (e.g. \"^1.0.0\")."
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional code source pointer.",
+      "required": [
+        "type",
+        "repo",
+        "ref"
+      ],
+      "properties": {
+        "type": {
+          "const": "github"
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+$"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subdir": {
+          "type": "string"
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "required": [
+        "kind",
+        "command"
+      ],
+      "additionalProperties": false,
+      "description": "Driver process runtime configuration. G1a supports mcp-stdio only; command runtime arrives in G1b.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "mcp-stdio"
+          ],
+          "description": "Runtime transport kind. Only mcp-stdio is in the G1a enum."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executable command to launch for the MCP stdio server."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Argv array passed to runtime.command."
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "win32",
+              "darwin",
+              "linux"
+            ]
+          },
+          "description": "Supported OS platforms (Node.js process.platform values)."
+        },
+        "startupTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Timeout in milliseconds for MCP server startup and initialization."
+        },
+        "idleStopMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Idle timeout in milliseconds before stopping the managed MCP server."
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Actions exposed by this Driver.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "tool",
+          "risk"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "Action identifier."
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Target MCP tool name."
+          },
+          "risk": {
+            "enum": [
+              "read",
+              "write",
+              "destructive"
+            ],
+            "description": "Action risk level enforced by the daemon permission pipeline."
+          },
+          "inputSchema": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Relative path to the JSON Schema validating action arguments."
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "description": "Stateful resources requiring lease coordination.",
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "lease"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Resource key name (e.g. \"profile\")."
+          },
+          "lease": {
+            "enum": [
+              "session"
+            ],
+            "description": "Lease mode for the resource."
+          }
+        }
+      }
+    },
+    "guidance": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Relative path to the driver usage guidance markdown file."
+    },
+    "declaredAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Declared access scope (advisory declaration surfaced during approval, not OS-enforced).",
+      "properties": {
+        "network": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Declared network access targets."
+        },
+        "filesystem": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Declared filesystem access scopes (e.g. [\"workspace\"])."
+        },
+        "desktopControl": {
+          "type": "boolean",
+          "description": "Whether the driver declares desktop/GUI control."
+        }
+      }
+    }
+  }
+}

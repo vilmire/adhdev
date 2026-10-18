@@ -476,7 +476,7 @@ export class ProviderLoader extends ProviderRegistry {
         try { return fs.readdirSync(externalDir, { withFileTypes: true }); }
         catch { return [] as fs.Dirent[]; }
       })();
-      const KNOWN_CATEGORIES = new Set(['cli', 'ide', 'extension']);
+      const KNOWN_CATEGORIES = new Set(['cli', 'ide', 'extension', 'driver']);
       const looksLegacy = rootEntries.some(e => e.isDirectory() && KNOWN_CATEGORIES.has(e.name));
       if (looksLegacy) {
         // Tree shape predates per-source dirs — treat the whole thing as a
@@ -629,6 +629,12 @@ export class ProviderLoader extends ProviderRegistry {
     if (!base) return undefined;
     const providerDir = this.findProviderDirInternal(type) || undefined;
 
+    // Driver discovery/resolution is metadata-only. Never enter any legacy
+    // script, override or native-history wiring path for this category.
+    if (base.category === 'driver') {
+      return { ...structuredClone(base), ...(providerDir ? { _resolvedProviderDir: providerDir } : {}) };
+    }
+
     const currentOs = context?.os || process.platform;
     const currentVersion = context?.version ??
       this.versionArchive?.getLatest(type) ??
@@ -698,7 +704,7 @@ export class ProviderLoader extends ProviderRegistry {
       resolved._resolvedVersion = currentVersion;
 
       // --- New format: compatibility array ---
-      if (base.compatibility) {
+      if (Array.isArray(base.compatibility)) {
         let matched = false;
         for (const entry of base.compatibility) {
           if (!matchesVersion(currentVersion, entry.ideVersion)) continue;
@@ -738,7 +744,7 @@ export class ProviderLoader extends ProviderRegistry {
           }
         }
       }
-    } else if (base.compatibility && base.defaultScriptDir) {
+    } else if (Array.isArray(base.compatibility) && base.defaultScriptDir) {
       // No version detected but compatibility format → use defaultScriptDir
       if (this.applyScriptDir(resolved, type, providerDir, base.defaultScriptDir, 'defaultScriptDir:no_version')) {
         this.debugLog(`  [compatibility] ${type} no version detected → default: ${base.defaultScriptDir}`);

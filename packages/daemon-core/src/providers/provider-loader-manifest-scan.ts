@@ -170,11 +170,12 @@ export function loadProviderDir(ctx: ManifestScanContext, dir: string, excludeDi
         if (validation.errors.length > 0) {
           ctx.log(`⚠ Invalid provider at ${jsonPath}: ${validation.errors.join('; ')}`);
         } else {
+          // RFC rev3 §5.3: drivers must never execute in-process scripts.js.
           // Load scripts.js if exists (IDE/Extension)
           // Skip for compatibility-format providers — scripts loaded lazily in resolve()
           const hasCompatibility = Array.isArray(normalizedProvider.compatibility);
           const scriptsPath = path.join(d, 'scripts.js');
-          if (!hasCompatibility && fs.existsSync(scriptsPath)) {
+          if (normalizedProvider.category !== 'driver' && !hasCompatibility && fs.existsSync(scriptsPath)) {
             try {
               // Gate the IDE/extension scripts.js (legacy single-file
               // format) under the same whitelist. `d` here is the

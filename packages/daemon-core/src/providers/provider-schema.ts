@@ -1,3 +1,4 @@
+import { validateDriverProviderManifest } from './sdk/v1/validators/manifest.js';
 import type { ProviderModule } from './contracts.js';
 import type { ProviderControlDef, ProviderControlType } from './provider-control-contracts.js';
 import { deriveAutoApproveModeRisk } from './auto-approve-modes.js'
@@ -105,6 +106,12 @@ export const KNOWN_PROVIDER_FIELDS = new Set<string>([
   'source',
   'tui',
   'scriptCallBudgetMs',
+  'publisher',
+  'runtime',
+  'actions',
+  'resources',
+  'guidance',
+  'declaredAccess',
 ])
 
 const VALUE_CONTROL_TYPES = new Set<ProviderControlType>(['select', 'toggle', 'cycle', 'slider'])
@@ -128,7 +135,7 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   if (!provider.name) errors.push('Missing required field: name')
   if (!provider.category) {
     errors.push('Missing required field: category')
-  } else if (!['ide', 'extension', 'cli'].includes(String(provider.category))) {
+  } else if (!['ide', 'extension', 'cli', 'driver'].includes(String(provider.category))) {
     errors.push(`Invalid category: ${String(provider.category)}`)
   }
 
@@ -139,6 +146,15 @@ export function validateProviderDefinition(raw: unknown): ProviderValidationResu
   }
   if (provider.disableUpstream !== undefined) {
     warnings.push('disableUpstream is deprecated in provider definitions; use machine-level provider source policy instead')
+  }
+
+  if (provider.category === 'driver') {
+    // Use the same schema as registry CI, including common metadata and the
+    // compatibility object. Additional-properties validation forbids spawn,
+    // cdpPorts and scripts (and session-provider capabilities).
+    const validation = validateDriverProviderManifest(provider)
+    errors.push(...validation.issues.map(issue => `driver${issue.path}: ${issue.message}`))
+    return { errors, warnings }
   }
 
   const category = provider.category
