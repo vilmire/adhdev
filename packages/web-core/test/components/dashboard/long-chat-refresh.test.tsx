@@ -45,7 +45,6 @@ let container: HTMLDivElement
 let cleanup: (() => Promise<void>)[] = []
 beforeEach(() => {
   __resetMessageIdentityLedgersForTest()
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() })
   container = document.createElement('div')
@@ -193,7 +192,10 @@ it.each([4, 600])('keeps %i committed bubbles through send, metadata-bearing emp
   expect(observedCounts.every(n => n >= count)).toBe(true)
   unsubscribe()
   let finishOldPage!: (page: { messages: any[]; hasMore: boolean }) => void
-  const oldPage = controller.loadHistoryPage(() => new Promise(resolve => { finishOldPage = resolve }))
+  let oldPage!: Promise<boolean>
+  act(() => {
+    oldPage = controller.loadHistoryPage(() => new Promise(resolve => { finishOldPage = resolve }))
+  })
   await act(async () => { read([], { historySessionId: 'history-B', providerSessionId: 'provider-B' }); await settle() })
   expect(lastObservation?.historySessionId).toBe('history-B')
   expect(sub.view()?.historySessionId).toBe('history-B')

@@ -144,6 +144,9 @@ describe('ChatInputBar IME submit guard', () => {
       const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
       textarea.dispatchEvent(event)
     })
+    await act(async () => {
+      await Promise.resolve()
+    })
 
     expect(onSend).toHaveBeenCalledTimes(1)
   })

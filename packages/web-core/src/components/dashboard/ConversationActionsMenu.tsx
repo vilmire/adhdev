@@ -43,6 +43,7 @@ interface MenuItem {
 }
 
 const MENU_WIDTH = 220
+const useIsomorphicLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect
 
 // Re-exported for existing importers; the rule lives in conversation-mesh-role.
 export { isMeshGraphAvailableFor } from './conversation-mesh-role'
@@ -106,7 +107,7 @@ export default function ConversationActionsMenu({
         if (focusButton) buttonRef.current?.focus()
     }, [])
 
-    useLayoutEffect(() => {
+    useIsomorphicLayoutEffect(() => {
         if (!open || typeof window === 'undefined') { setPosition(null); return }
         const rect = buttonRef.current?.getBoundingClientRect()
         if (!rect) return

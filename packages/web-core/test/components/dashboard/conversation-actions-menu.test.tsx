@@ -103,7 +103,7 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
         expect(itemKeys()).toEqual(['history', 'remote', 'mute', 'info'])
     })
 
-    it('every item still reaches its action, and choosing one closes the menu', () => {
+    it('every item still reaches its action, and choosing one closes the menu', async () => {
         const onOpenHistory = vi.fn()
         const onOpenGit = vi.fn()
         const conv = conversation()
@@ -123,6 +123,7 @@ describe('ConversationActionsMenu — the pane toolbar "…" overflow', () => {
         choose('mute')
         expect(sendCommand).toHaveBeenCalledWith('machine-1', 'set_conversation_prefs', { sessionId: 'session-1', muted: true })
         choose('info')
+        await act(async () => { await Promise.resolve() })
         expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain('Session info')
     })
 

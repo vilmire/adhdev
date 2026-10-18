@@ -170,7 +170,10 @@ describe('request-generation guards', () => {
     expect(latest?.daemonLogs.map(entry => entry.message)).toEqual(['[b] B log'])
     expect(latest?.debugTrace.map(entry => entry.id)).toEqual(['trace-b'])
 
-    act(() => latest?.refresh())
+    await act(async () => {
+      latest?.refresh()
+      await flush()
+    })
     const lastBLogCall = calls.filter(call => call.machineId === 'machine-b' && call.type === 'get_logs').at(-1)
     expect(lastBLogCall?.data?.since).toBe(20)
   })

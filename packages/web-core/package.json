@@ -17,6 +17,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run",
+    "test:ci": "vitest run --reporter=dot",
     "test:responsive": "vitest run --config vitest.responsive.config.ts",
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts && vitest run --config vitest.browser-unisolated.config.ts"

@@ -23,8 +23,7 @@
  * driving the real hook observes the wiring.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { receiptAwareTransport, resetOutgoingReceiptFixture, postWriteFixtureEcho } from '../helpers/outgoing-receipt-transport'
 import { useDashboardConversationCommands } from '../../src/hooks/useDashboardConversationCommands'
@@ -150,12 +149,14 @@ describe('RESTART — the queue is restored from durable storage', () => {
     it('★ queued bodies reappear after a full unmount/remount (app restart)', async () => {
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const first = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(first, ['survive me', 'and me too'])
 
         // Closing the app tears down all React state but keeps localStorage.
         first.unmount()
 
         const afterRestart = renderHarness(vi.fn())
+        await act(async () => { await Promise.resolve() })
         expect(afterRestart.get().pendingLocalMessages.map((e: any) => e.content))
             .toEqual(['survive me', 'and me too'])
         expect(afterRestart.get().pendingLocalMessages.every((e: any) => e.queued === true)).toBe(true)
@@ -229,7 +230,9 @@ describe('CANCEL — per-item withdrawal', () => {
 
         // And a restart genuinely shows nothing.
         h.unmount()
-        expect(renderHarness(vi.fn()).get().pendingLocalMessages).toEqual([])
+        const restarted = renderHarness(vi.fn())
+        await act(async () => { await Promise.resolve() })
+        expect(restarted.get().pendingLocalMessages).toEqual([])
     })
 
     it('★ KEEPS the bubble when the daemon says the body already drained', async () => {
@@ -433,10 +436,12 @@ describe('CANCEL-INFLIGHT-LEAK — a cancel during an unresolved send still reac
         // stall every cancel for the full timeout before doing the right thing.
         const send = vi.fn().mockResolvedValue(DAEMON_QUEUED_RESULT)
         const first = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         await queueBodies(first, ['survives reload'])
         first.unmount()
 
         const reopened = renderHarness(send)
+        await act(async () => { await Promise.resolve() })
         const restored = reopened.get().pendingLocalMessages[0]
         expect(restored.settled).toBe(true)
         expect(restored.queued).toBe(true)
@@ -498,14 +503,17 @@ describe('dedupe by messageId — inFlightSendsRef keys on the exact wire id', (
         const h = renderHarness(send)
         await act(async () => { await Promise.resolve() })
 
-        const sendPromise = act(async () => {
+        let sendPromise: Promise<boolean> | undefined
+        await act(async () => {
+            sendPromise = h.get().handleSendChat('in flight')
             await Promise.resolve() // let the optimistic append flush
         })
-        act(() => { h.get().handleSendChat('in flight') })
-        await sendPromise
 
         const bubbleId = h.get().pendingLocalMessage!.id!
-        await act(async () => { resolveSend(DAEMON_QUEUED_RESULT); await Promise.resolve() })
+        await act(async () => {
+            resolveSend(DAEMON_QUEUED_RESULT)
+            await sendPromise
+        })
 
         const [, type, payload] = send.mock.calls[0]
         expect(type).toBe('send_chat')
@@ -519,17 +527,24 @@ describe('dedupe by messageId — inFlightSendsRef keys on the exact wire id', (
         const h = renderHarness(send)
         await act(async () => { await Promise.resolve() })
 
-        act(() => { h.get().handleSendChat('racing cancel') })
-        await act(async () => { await Promise.resolve() })
+        let sendPromise: Promise<boolean> | undefined
+        await act(async () => {
+            sendPromise = h.get().handleSendChat('racing cancel')
+            await Promise.resolve()
+        })
         const pendingId = h.get().pendingLocalMessage!.id!
 
         // Fire cancel before the send resolves — it must await the in-flight
         // promise keyed by this SAME id, not race ahead on a stale guess.
         send.mockResolvedValueOnce(DAEMON_CANCEL_OK)
-        const cancelPromise = act(async () => h.get().handleCancelQueued(pendingId))
-
-        await act(async () => { resolveSend(DAEMON_QUEUED_RESULT) })
-        await cancelPromise
+        let cancelPromise: Promise<boolean> | undefined
+        await act(async () => {
+            cancelPromise = h.get().handleCancelQueued(pendingId)
+            await Promise.resolve()
+            resolveSend(DAEMON_QUEUED_RESULT)
+            await sendPromise
+            await cancelPromise
+        })
 
         // The cancel command (second call) must address the same body/session —
         // confirming the settlement it awaited was keyed correctly, not a

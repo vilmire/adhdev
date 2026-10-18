@@ -48,7 +48,6 @@ let root: Root
 let container: HTMLDivElement
 beforeEach(() => {
   vi.useFakeTimers()
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   const stored = new Map<string, string>()
   vi.stubGlobal('localStorage', {

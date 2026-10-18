@@ -39,6 +39,7 @@ import { initI18n } from '../src/i18n/config'
 //
 // This pins ONLY the test-harness locale to the `en` source of truth; it does not
 // touch the production default locale.
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as { localStorage?: Partial<Storage> }).localStorage = {
     getItem: (key: string) => (key === 'lang' ? 'en' : null),
     setItem: () => {},

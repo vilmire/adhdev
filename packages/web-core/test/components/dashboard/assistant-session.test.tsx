@@ -415,6 +415,7 @@ describe('assistant in the dashboard header', () => {
             return null
         }
         render(<Probe />)
+        await act(async () => { await Promise.resolve() })
         await act(async () => { await state!.start({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' }) })
         expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
         expect(JSON.parse(store.get(ASSISTANT_LAUNCH_CHOICE_STORAGE_KEY)!)).toEqual({ machineId: 'm1', cliType: 'claude-cli', model: 'opus', thinkingLevel: 'high' })
@@ -427,6 +428,7 @@ describe('assistant in the dashboard header', () => {
         act(() => root.unmount())
         root = createRoot(container)
         render(<Probe />)
+        await act(async () => { await Promise.resolve() })
         expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
         await act(async () => { await state!.start() })
         expect(send).toHaveBeenLastCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli' })
@@ -444,6 +446,7 @@ describe('assistant in the dashboard header', () => {
             return null
         }
         render(<Probe />)
+        await act(async () => { await Promise.resolve() })
         expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'claude-cli' })
         await act(async () => { await state!.start({ machineId: 'm1', cliType: 'codex-cli' }) })
         expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', { cliType: 'codex-cli' })
@@ -456,6 +459,7 @@ describe('assistant in the dashboard header', () => {
         act(() => root.unmount())
         root = createRoot(container)
         render(<Probe />)
+        await act(async () => { await Promise.resolve() })
         expect(state!.defaultTarget).toEqual({ machineId: 'm1', cliType: 'codex-cli' })
     })
 
@@ -467,12 +471,14 @@ describe('assistant in the dashboard header', () => {
             return null
         }
         render(<Probe conversations={[conversation()]} />)
+        await act(async () => { await Promise.resolve() })
         expect(state!.visible).toBe(true)
         await act(async () => { await state!.start() })
         expect(send).toHaveBeenCalledWith('m1', 'launch_assistant', { cliType: 'claude-cli' })
         expect(state!.error).toBeNull()
 
         render(<Probe conversations={[conversation(), assistant()]} />)
+        await act(async () => { await Promise.resolve() })
         expect(state!.visible).toBe(false)
     })
 
@@ -527,6 +533,7 @@ describe('assistant in the dashboard header', () => {
             return null
         }
         render(<Probe />)
+        await act(async () => { await Promise.resolve() })
         await act(async () => { await state!.start() })
         expect(state!.error).toBe('assistant_mcp_unsupported')
     })

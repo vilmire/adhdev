@@ -30,8 +30,7 @@ beforeEach(resetOutgoingReceiptFixture)
  * the real hook can observe that. Do not reduce these to helper assertions.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
     useDashboardConversationCommands,

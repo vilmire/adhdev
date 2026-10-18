@@ -27,8 +27,7 @@
  * These drive the real hook and then read the PERSISTED store back.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { createElement } from 'react'
-import { act } from 'react-dom/test-utils'
+import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { receiptAwareTransport, resetOutgoingReceiptFixture, postWriteFixtureEcho } from '../helpers/outgoing-receipt-transport'
 import { useDashboardConversationCommands } from '../../src/hooks/useDashboardConversationCommands'

@@ -154,7 +154,8 @@ export default function LanguageSelector({ collapsed, variant = 'sidebar' }: Lan
 
     // Compute the fixed position when opening, and keep it anchored while the
     // page scrolls or resizes (the trigger rect can move under a fixed menu).
-    useLayoutEffect(() => {
+    const useIsomorphicLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect
+    useIsomorphicLayoutEffect(() => {
         if (!open) {
             setMenuStyle(null)
             return

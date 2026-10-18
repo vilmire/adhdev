@@ -41,6 +41,7 @@ import { IconInfo } from '../Icons'
 
 const VIEWPORT_MARGIN = 8
 const ANCHOR_GAP = 6
+const useIsomorphicLayoutEffect = typeof document !== 'undefined' ? useLayoutEffect : useEffect
 
 type PopoverPosition = { top: number; left: number; placement: 'below' | 'above' }
 
@@ -93,7 +94,7 @@ function usePopoverAnchor() {
         ))
     }, [])
 
-    useLayoutEffect(() => {
+    useIsomorphicLayoutEffect(() => {
         if (!open) {
             setPosition(null)
             return
