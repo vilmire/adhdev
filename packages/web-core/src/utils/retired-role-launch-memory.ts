@@ -7,7 +7,7 @@ export function removeRetiredRoleLaunchMemory(): void {
         if (!raw) return
         const prior = JSON.parse(raw)
         if (!prior || typeof prior !== 'object' || Array.isArray(prior)) { localStorage.removeItem(key); return }
-        if (!['cliType', 'model', 'thinkingLevel'].some(field => Object.hasOwn(prior, field))) return
+        if (!['cliType', 'model', 'thinkingLevel'].some(field => Object.prototype.hasOwnProperty.call(prior, field))) return
         delete prior.cliType
         delete prior.model
         delete prior.thinkingLevel
