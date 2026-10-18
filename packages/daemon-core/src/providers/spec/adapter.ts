@@ -168,6 +168,10 @@ export class TerminalAdapter {
         }
     }
 
+    getPid(): number | undefined {
+        return this.pty?.pid;
+    }
+
     resize(cols: number, rows: number): void {
         this.cols = cols; this.rows = rows;
         this.recordEvent('resize', `${cols}x${rows}`);

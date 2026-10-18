@@ -37,6 +37,7 @@ import {
     type TurnEvidence,
     type TurnEvidenceOf,
 } from '@adhdev/mesh-shared';
+import { evaluateTurnEndBackgroundWork } from './background-work-guard.js';
 import { DEFAULT_TURN_POLICY, type TurnPolicy } from './policy.js';
 import { expireHolds, reduce, type ReduceResult } from './reducer.js';
 import { TurnStore, deliveryClaimId, type TurnEventRow } from './store.js';
@@ -79,6 +80,8 @@ export interface TurnLedgerDeps {
     log?: TurnLedgerLog;
     /** Publish after every committed observe (default true). Tests turn it off to drive flushes by hand. */
     autoFlush?: boolean;
+    /** Optional session process-tree inspector so provider-side turn_end is gated on live worker background processes. */
+    inspectBackgroundProcesses?: (sessionId: string) => readonly string[] | undefined;
 }
 
 export interface ObserveOptions {
@@ -295,7 +298,57 @@ export function createTurnLedger(deps: TurnLedgerDeps): TurnLedger {
     function applyStep(evidence: TurnEvidence, attempt: TurnAttempt | null, opts: ObserveOptions, nowMs: number, nested = false): Step[] {
         const steps: Step[] = [];
         const holds = attempt ? store.activeHolds(attempt.attemptId) : [];
+        let triggerBackgroundWorkProbe = false;
+        if (
+            attempt &&
+            attempt.scope !== 'plain' &&
+            (evidence.kind === 'turn_end' || evidence.kind === 'transcript_final') &&
+            !(evidence.kind === 'turn_end' && (evidence.providerFailure || evidence.nativeOutcome === 'failed')) &&
+            !(evidence.kind === 'transcript_final' && evidence.nativeMarker?.outcome === 'failed')
+        ) {
+            const bgDecision = evaluateTurnEndBackgroundWork({
+                attempt,
+                finalSummary: opts.envelope?.finalSummary,
+                liveBackgroundProcesses: deps.inspectBackgroundProcesses?.(evidence.sessionId),
+            });
+            if (!bgDecision.complete) {
+                triggerBackgroundWorkProbe = true;
+                const base = {
+                    eventId: evidence.eventId,
+                    at: evidence.at,
+                    source: evidence.source,
+                    sessionId: evidence.sessionId,
+                    observedBy: evidence.observedBy,
+                    ...(evidence.attemptRef ? { attemptRef: evidence.attemptRef } : {}),
+                    ...(evidence.taskId ? { taskId: evidence.taskId } : {}),
+                };
+                if (attempt.state === 'finalizing') {
+                    evidence = {
+                        ...base,
+                        at: Math.max(evidence.at, (attempt.weakSince ?? 0) + 1),
+                        kind: 'turn_started',
+                        retro: true,
+                    };
+                } else {
+                    evidence = {
+                        ...base,
+                        kind: 'liveness',
+                        result: 'alive',
+                        probeStartedAtMs: evidence.at,
+                    };
+                }
+            }
+        }
         let result = reduce({ attempt, holds, evidence, policy, nowMs });
+        if (triggerBackgroundWorkProbe && attempt) {
+            result = {
+                ...result,
+                effects: [
+                    ...result.effects,
+                    { kind: 'probe', attemptId: attempt.attemptId, sessionId: attempt.sessionId },
+                ],
+            };
+        }
         const opened = !attempt && result.attempt && result.verdict === 'applied';
         // The daemon that reduces an attempt into existence owns it (the reducer
         // stamps observedBy, which for ingested evidence is the remote observer).

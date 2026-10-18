@@ -38,9 +38,10 @@
 import type { SummaryRef, TurnEvidence } from '@adhdev/mesh-shared';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { SessionLifecycleBus, Unsubscribe } from '../../sessions/lifecycle-bus.js';
+import { createBackgroundWorkMonitor, type BackgroundWorkMonitor } from './background-work-guard.js';
 import type { ObserveResult, TurnLedger, TurnLedgerLog } from './ledger.js';
 import { DEFAULT_TURN_POLICY, endProbeGraceMs, type TurnPolicy } from './policy.js';
-import { probeEvidence, type ProbeLocation, type TranscriptObservation, type TurnProbeRead, type TurnProbeReader } from './probe.js';
+import { probeEvidence, turnStartBoundary, type ProbeLocation, type TranscriptObservation, type TurnProbeRead, type TurnProbeReader } from './probe.js';
 import type { TurnStore } from './store.js';
 import { selectProbeTargets, type ProbeTarget } from './targets.js';
 import type { TurnAttempt } from './types.js';
@@ -78,6 +79,8 @@ export interface TurnSchedulerDeps {
     probe?: TurnSchedulerProbe | null;
     /** Shared raw-status/watchdog consumer; defaults to a scheduler-local monitor. */
     sessionHealth?: WorkerSessionHealthMonitor;
+    /** Guard and single-nudge / timeout monitor for workers ending a turn with background work running. */
+    backgroundWork?: BackgroundWorkMonitor;
     /** Phase 3: the host's queue claim. */
     claim?: () => Promise<void> | void;
     /**
@@ -149,6 +152,7 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
     const tickMs = deps.intervalMs ?? policy.tickMs;
     const forced = new Set<string>();
     const sessionHealth = deps.sessionHealth ?? createWorkerSessionHealthMonitor();
+    const backgroundWork = deps.backgroundWork ?? createBackgroundWorkMonitor();
     let lastPruneAt: number | null = null;
     let inFlight: Promise<TurnTickReport> | null = null;
     let again = false;
@@ -250,7 +254,34 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         // latest row so an accepted report during the await keeps its authority.
         const latest = readCurrent();
         if (!latest) return;
-        evidence = probeEvidence(latest, read, { nowMs: at, observedBy: selfDaemonId, policy, probeStartedAtMs, ...(summary ? { summary } : {}) });
+        let bgHoldTurnEnd = false;
+        if (read.presence === 'present') {
+            const boundary = turnStartBoundary(latest);
+            const finalThisTurn = t?.finalAssistantAt !== undefined && t.finalAssistantAt >= boundary;
+            try {
+                const bgOut = await backgroundWork.observe({
+                    attempt: latest,
+                    nowMs: at,
+                    status: (t?.providerObservedStatus || read.status || '').toLowerCase(),
+                    finalSummary: finalThisTurn ? t?.finalSummary : undefined,
+                    ...(finalThisTurn && t?.finalAssistantAt !== undefined ? { finalAssistantAt: t.finalAssistantAt } : {}),
+                    liveBackgroundProcesses: read.liveBackgroundProcesses,
+                });
+                bgHoldTurnEnd = bgOut.holdTurnEnd;
+            } catch (error) {
+                log.warn(`turn-scheduler: background work guard for ${latest.attemptId} failed: ${describe(error)}`);
+            }
+        }
+        const postGuardLatest = readCurrent();
+        if (!postGuardLatest) return;
+        evidence = probeEvidence(postGuardLatest, read, {
+            nowMs: at,
+            observedBy: selfDaemonId,
+            policy,
+            probeStartedAtMs,
+            ...(summary ? { summary } : {}),
+            ...(bgHoldTurnEnd ? { holdTurnEnd: true } : {}),
+        });
         if (!readCurrent()) return;
         observeAll(evidence);
         try {
@@ -303,6 +334,9 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         if (deps.probe) {
             const force = new Set(forced);
             forced.clear();
+            for (const bgAttemptId of backgroundWork.trackedAttemptIds()) {
+                force.add(bgAttemptId);
+            }
             let targets: ProbeTarget[] = [];
             try {
                 targets = selectProbeTargets({ store, selfDaemonId, nowMs: now(), policy, forced: force });

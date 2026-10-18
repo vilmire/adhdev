@@ -33,12 +33,18 @@
 import { type LivenessResult, type SummaryRef, type TurnEvidence } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../../boot/daemon-components.js';
 import {
+    extractSessionPtyPid,
+    inspectSessionProcessTree,
+    type SessionProcessTreeInspection,
+} from '../../process/session-process-tree.js';
+import {
     readTranscriptForDaemonConsumer,
     TRANSCRIPT_STATUS_PROBE_MAX_AGE_MS,
     TRANSCRIPT_TERMINAL_EVIDENCE_MAX_AGE_MS,
 } from '../transcript-daemon-consumer-read.js';
 import { mapTranscriptViewToReadChatPayload } from '../transcript-read-chat-adapter.js';
 import type { ReplicatedTranscriptViewV2 } from '../../seqscribe/transcript-keyed-codec.js';
+import { evaluateTurnEndBackgroundWork } from './background-work-guard.js';
 import type { TurnPolicy } from './policy.js';
 import type { HoldReason, TurnAttempt } from './types.js';
 
@@ -168,6 +174,8 @@ export interface TurnProbeRead {
     observedAtMs?: number;
     /** undefined = not read (not needed); null = a read was attempted and failed. */
     transcript?: TranscriptObservation | null;
+    /** Sanitized command names of live worker-started descendant processes under the session PTY. */
+    liveBackgroundProcesses?: readonly string[];
 }
 
 // ─── the pure mapping: read → evidence ────────────────────────────────────
@@ -179,6 +187,8 @@ interface ProbeEvidenceContext {
     policy: TurnPolicy;
     /** Handoff pointer for the final summary text (transcript_final only). */
     summary?: SummaryRef;
+    /** Set by the scheduler's background-work monitor while awaiting post-nudge worker results. */
+    holdTurnEnd?: boolean;
 }
 
 const BUSY_STATUSES = new Set(['generating', 'waiting_approval', 'waiting_choice', 'starting', 'thinking', 'busy']);
@@ -247,6 +257,21 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
             kind: 'turn_end', strength: 'genuine', nativeOutcome: 'failed', nativeMarker: t.nativeMarker, providerFailure: t.nativeFailure ?? 'provider_error',
             live: { modal: t.activeModal, adapterPending: false, trailingTool: false } }];
         const finalThisTurn = t.finalAssistantAt !== undefined && t.finalAssistantAt >= boundary;
+        const bgDecision = evaluateTurnEndBackgroundWork({
+            attempt,
+            finalSummary: finalThisTurn ? t.finalSummary : undefined,
+            liveBackgroundProcesses: read.liveBackgroundProcesses,
+        });
+        if (ctx.holdTurnEnd || !bgDecision.complete) {
+            if (attempt.state === 'finalizing') {
+                const resumeAt = Math.max(ctx.nowMs, (attempt.weakSince ?? 0) + 1);
+                return [
+                    { ...base, at: resumeAt, eventId: eventId('bg_work_running'), kind: 'turn_started', retro: true },
+                    liveness('alive'),
+                ];
+            }
+            return [liveness('alive')];
+        }
         if (finalThisTurn || t.nativeMarker) {
             return [{
                 ...base,
@@ -348,6 +373,8 @@ interface ComponentsProbeReaderOptions {
      * this probe tick answers `unknown`; the next one reads what was pushed.
      */
     requestHeldPush?: (attempt: TurnAttempt, daemonId: string, workspace?: string) => void;
+    /** Optional process-tree inspector override for tests. */
+    inspectProcessTree?: (rootPid: number | undefined) => SessionProcessTreeInspection;
 }
 
 type ProbeComponents = Pick<DaemonComponents,
@@ -377,6 +404,7 @@ function replicaPayload(snapshot: ReplicatedTranscriptViewV2): Record<string, un
 
 /** The production reader: registry + in-process read_chat locally; coordinator-held status + replica/P2P read remotely. */
 export function createComponentsProbeReader(components: ProbeComponents, options: ComponentsProbeReaderOptions): TurnProbeReader {
+    const inspectTree = options.inspectProcessTree ?? ((pid: number | undefined) => inspectSessionProcessTree(pid));
     const analyze = (payload: Record<string, unknown> | null, attempt: TurnAttempt): TranscriptObservation | null => {
         if (!payload || (payload as { success?: boolean }).success === false) return null;
         return options.analyzer(payload, {
@@ -385,17 +413,42 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         });
     };
 
+    function readLocalBackgroundProcesses(attempt: TurnAttempt, instanceKey: string, fallbackInstance: unknown): readonly string[] | undefined {
+        if (attempt.scope === 'plain') return undefined;
+        try {
+            const inst = fallbackInstance ?? components.instanceManager.getInstance(instanceKey);
+            const pid = extractSessionPtyPid(inst);
+            if (!pid) return undefined;
+            const tree = inspectTree(pid);
+            return tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
     async function readLocal(attempt: TurnAttempt, holds: readonly HoldReason[]): Promise<TurnProbeRead> {
         const target = components.sessionRegistry.get(attempt.sessionId);
         const instance = target ? null : components.instanceManager.getInstance(attempt.sessionId);
         if (!target && !instance) return { presence: 'absent' };
-        const status = localInstanceStatus(components, target?.instanceKey || attempt.sessionId, target?.transport ?? 'pty');
+        const instanceKey = target?.instanceKey || attempt.sessionId;
+        const status = localInstanceStatus(components, instanceKey, target?.transport ?? 'pty');
         if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };
+        const liveBackgroundProcesses = readLocalBackgroundProcesses(attempt, instanceKey, instance);
         try {
             const result = await components.commandHandler.handle('read_chat', readArgsFor(attempt));
-            return { presence: 'present', ...(status ? { status } : {}), transcript: analyze(unwrapReadChatPayload(result), attempt) };
+            return {
+                presence: 'present',
+                ...(status ? { status } : {}),
+                ...(liveBackgroundProcesses ? { liveBackgroundProcesses } : {}),
+                transcript: analyze(unwrapReadChatPayload(result), attempt),
+            };
         } catch {
-            return { presence: 'present', ...(status ? { status } : {}), transcript: null };
+            return {
+                presence: 'present',
+                ...(status ? { status } : {}),
+                ...(liveBackgroundProcesses ? { liveBackgroundProcesses } : {}),
+                transcript: null,
+            };
         }
     }
 

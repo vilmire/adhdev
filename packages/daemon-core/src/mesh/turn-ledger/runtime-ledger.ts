@@ -78,6 +78,7 @@ interface MeshRuntimeTurnLedgerOptions {
     ports?: TurnLedgerPorts;
     publisher?: TurnPublisherPort | null;
     now?: () => number;
+    inspectBackgroundProcesses?: (sessionId: string) => readonly string[] | undefined;
 }
 
 /** The daemon's ledger over mesh-runtime.db. Boot constructs ONE and passes it by value (no module slot). */
@@ -96,6 +97,7 @@ export function createMeshRuntimeTurnLedger(options: MeshRuntimeTurnLedgerOption
             ...options.ports,
         },
         ...(options.now ? { now: options.now } : {}),
+        ...(options.inspectBackgroundProcesses ? { inspectBackgroundProcesses: options.inspectBackgroundProcesses } : {}),
         log: {
             info: (m) => LOG.info('TurnLedger', m),
             warn: (m) => LOG.warn('TurnLedger', m),

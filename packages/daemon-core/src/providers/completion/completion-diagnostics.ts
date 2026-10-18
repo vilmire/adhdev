@@ -46,6 +46,10 @@ import type {
     CompletionSignalReader,
     EvidenceSource,
 } from './completion-engine.js';
+import {
+    extractSessionPtyPid,
+    inspectSessionProcessTree,
+} from '../../process/session-process-tree.js';
 
 /** The narrow surface of CliProviderInstance this cluster reads/writes. */
 export interface CompletionDiagnosticsHost {
@@ -307,7 +311,17 @@ export function buildCompletionSignalReader(
         backgroundTask: () => once('backgroundTask', () => {
             const rp = rawParsed();
             const parsed = rp.ok ? rp.value as { backgroundTaskActive?: boolean; backgroundTaskCount?: number } : undefined;
-            return { active: parsed?.backgroundTaskActive === true, count: parsed?.backgroundTaskCount };
+            if (parsed?.backgroundTaskActive === true) {
+                return { active: true, count: parsed?.backgroundTaskCount };
+            }
+            const ptyPid = extractSessionPtyPid(host.adapter);
+            if (ptyPid) {
+                const tree = inspectSessionProcessTree(ptyPid);
+                if (tree.hasLiveBackgroundProcesses) {
+                    return { active: true, count: tree.liveProcessNames.length };
+                }
+            }
+            return { active: false, count: parsed?.backgroundTaskCount };
         }),
         finalAssistantEvidence: () => once('finalAssistantEvidence', () => {
             const rp = rawParsed();

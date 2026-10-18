@@ -46,6 +46,7 @@ import { createLateBoundProbePort } from '../../mesh/turn-ledger/scheduler.js';
 import { closeInterruptedPlainAttempts, reconcileOrphanedPlainAttempts, type ReconcileOrphanedPlainAttemptsReport } from '../../mesh/turn-ledger/reconcile.js';
 import { setActiveTurnLedgerForIpc } from '../../commands/low-family/turn-ledger-ipc.js';
 import { createTurnEvidencePort } from '../../providers/turn-evidence-port.js';
+import { extractSessionPtyPid, inspectSessionProcessTree } from '../../process/session-process-tree.js';
 import type { TurnLedger } from '../../mesh/turn-ledger/ledger.js';
 import type { TurnLedgerPorts } from '../../mesh/turn-ledger/effects.js';
 import {
@@ -230,7 +231,22 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         },
         probe: (e) => lateProbe.port(e),
     };
-    const ledger = createMeshRuntimeTurnLedger({ selfDaemonId, ports });
+    const ledger = createMeshRuntimeTurnLedger({
+        selfDaemonId,
+        ports,
+        inspectBackgroundProcesses: (sessionId) => {
+            try {
+                const target = components.sessionRegistry.get(sessionId);
+                const inst = components.instanceManager.getInstance(target?.instanceKey || sessionId);
+                const pid = extractSessionPtyPid(inst);
+                if (!pid) return undefined;
+                const tree = inspectSessionProcessTree(pid);
+                return tree.liveProcessNames.length > 0 ? tree.liveProcessNames : undefined;
+            } catch {
+                return undefined;
+            }
+        },
+    });
 
     // The handoff publisher (`mesh.<id>.handoff`) is built here — before 2b —
     // because both the evidence port (a remote-owned worker's text) and the
