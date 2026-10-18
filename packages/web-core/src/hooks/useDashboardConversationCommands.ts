@@ -16,6 +16,7 @@ import {
     OUTGOING_RECEIPT_POLL_BASE_MS,
     OUTGOING_RECEIPT_POLL_MAX_AGE_MS,
     OUTGOING_RECEIPT_POLL_MAX_MS,
+    PENDING_QUEUED_MESSAGE_STALE_AFTER_MS,
     readDismissedUncertainMessageIds,
     readPendingQueuedMessages,
     writePendingQueuedMessages,
@@ -476,6 +477,13 @@ export function useDashboardConversationCommands({
             }
         }
 
+        // A body the daemon is actually holding (`queued`) legitimately waits far
+        // longer than a write acknowledgement takes, so it keeps the queue's own
+        // stale window instead of the short unconfirmed-write cap.
+        const pollMaxAgeMs = (entry: { queued?: boolean }) => entry.queued === true
+            ? PENDING_QUEUED_MESSAGE_STALE_AFTER_MS
+            : OUTGOING_RECEIPT_POLL_MAX_AGE_MS
+
         const getPollableEntries = (now: number) => {
             const dismissed = readDismissedUncertainMessageIds(now)
             return pendingLocalMessagesRef.current.filter(e =>
@@ -483,7 +491,7 @@ export function useDashboardConversationCommands({
                 && !e.sendFailed
                 && e.outgoingReceipt?.state !== 'failed'
                 && !dismissed.has(e.id)
-                && (now - Math.max(e.sentAt, mountAt) < OUTGOING_RECEIPT_POLL_MAX_AGE_MS),
+                && (now - Math.max(e.sentAt, mountAt) < pollMaxAgeMs(e)),
             )
         }
 
@@ -498,7 +506,7 @@ export function useDashboardConversationCommands({
                         && entry.outgoingReceipt?.state !== 'failed'
                         && (!entry.stale || !entry.deliveryUncertain)
                         && !dismissed.has(entry.id)
-                        && (now - Math.max(entry.sentAt, mountAt) >= OUTGOING_RECEIPT_POLL_MAX_AGE_MS)
+                        && (now - Math.max(entry.sentAt, mountAt) >= pollMaxAgeMs(entry))
                     ) {
                         changed = true
                         return { ...entry, stale: true, deliveryUncertain: true }
@@ -1057,10 +1065,10 @@ export function useDashboardConversationCommands({
         const attachments: ImageAttachment[] | undefined = target.input?.parts
             ?.filter(part => part.type === 'image' && typeof part.data === 'string' && part.data.length > 0)
             .map((part, idx) => ({
-                id: `retry-${target.id}-${idx}`,
-                dataUrl: `data:${part.mimeType || 'image/png'};base64,${part.data}`,
                 mimeType: part.mimeType || 'image/png',
+                data: part.data as string,
                 name: part.alt || `image-${idx + 1}.png`,
+                previewUrl: `data:${part.mimeType || 'image/png'};base64,${part.data}`,
             }))
         clearDismissedUncertainMessageId(target.id)
         lastSendRef.current = null
