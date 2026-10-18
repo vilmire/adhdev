@@ -40,6 +40,13 @@ import {
 export interface CliSlotRecipe {
     /** Optional model to pin on the slot. Best-effort at launch. */
     model?: string
+    /**
+     * Optional ordered candidate models to prefer when the provider's live
+     * `modelOptions` (from model discovery) is present on `DetectedCliProvider`.
+     * The first candidate present in `modelOptions` wins; falls back to `model`
+     * when `modelOptions` is absent or contains none of the candidates.
+     */
+    modelCandidates?: readonly string[]
     /** Optional thinking level, in the provider's own vocabulary. */
     thinkingLevel?: string
     /** Difficulty range this slot handles. Empty = general-purpose. */
@@ -101,10 +108,25 @@ export const CLI_SLOT_RECIPES: Readonly<Record<string, readonly CliSlotRecipe[]>
     ],
     'antigravity-cli': [
         {
-            model: 'Gemini 3.1 Pro (High)',
+            model: 'Gemini 3.8 Flash (High)',
+            modelCandidates: ['Gemini 3.8 Flash (High)', 'Gemini 4 Argon (Low)', 'Gemini 3.7 Flash (High)', 'Gemini 3.1 Pro (High)'],
             difficulty: ['easy'],
             maxParallel: 2,
             rationale: 'Cheap capacity for easy tasks.',
+        },
+        {
+            model: 'Gemini 4 Argon (Medium)',
+            modelCandidates: ['Gemini 4 Argon (Medium)', 'Gemini 3.8 Flash (High)', 'Gemini 3.7 Flash (High)', 'Gemini 3.1 Pro (High)'],
+            difficulty: ['medium'],
+            maxParallel: 2,
+            rationale: 'Balanced Argon tier for medium tasks.',
+        },
+        {
+            model: 'Gemini 4 Argon (High)',
+            modelCandidates: ['Gemini 4 Argon (High)', 'Gemini 3.8 Flash (High)', 'Gemini 3.1 Pro (High)'],
+            difficulty: ['difficult'],
+            maxParallel: 1,
+            rationale: 'Reserved for hard tasks; capped at 1 to bound cost.',
         },
     ],
     'cursor-cli': [
@@ -137,6 +159,13 @@ export interface DetectedCliProvider {
     displayName?: string
     /** Detected version, when known. Display only — never affects the mapping. */
     version?: string
+    /**
+     * Live discovered / resolved `modelOptions` for this provider on the node,
+     * when available on the status catalog. When present and non-empty, recipes
+     * prefer the first matching model from `[recipe.model, ...recipe.modelCandidates]`
+     * that exists in `modelOptions`.
+     */
+    modelOptions?: readonly string[]
 }
 
 /** One proposed slot plus why it was proposed. */
@@ -198,6 +227,36 @@ function dedupeDetected(detected: readonly DetectedCliProvider[]): DetectedCliPr
 }
 
 /**
+ * Resolve a recipe's pinned model against the provider's live `modelOptions`
+ * (populated from the daemon's model-discovery overlay when available). If
+ * `modelOptions` is absent or none of the recipe's candidates appear in it,
+ * falls back to `recipe.model`.
+ */
+function resolveRecipeModel(
+    recipe: CliSlotRecipe,
+    modelOptions: readonly string[] | undefined,
+): string | undefined {
+    if (!Array.isArray(modelOptions) || modelOptions.length === 0) {
+        return recipe.model
+    }
+    const available = new Set(
+        modelOptions
+            .filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+            .map(m => m.trim()),
+    )
+    if (available.size === 0) return recipe.model
+    const candidates = [
+        ...(recipe.model ? [recipe.model] : []),
+        ...(recipe.modelCandidates ?? []),
+    ]
+    for (const candidate of candidates) {
+        const trimmed = typeof candidate === 'string' ? candidate.trim() : ''
+        if (trimmed && available.has(trimmed)) return trimmed
+    }
+    return recipe.model
+}
+
+/**
  * Build a capability-slot proposal from a node's detected CLI providers.
  *
  * Pure and total: zero detections yields an empty proposal (never throws), which
@@ -229,7 +288,7 @@ export function buildSlotProposal(
             // a proposal can never preview a shape the write would reshape.
             const slot = normalizeNodeCapabilitySlot({
                 provider: provider.type,
-                model: recipe.model,
+                model: resolveRecipeModel(recipe, provider.modelOptions),
                 thinkingLevel: recipe.thinkingLevel,
                 difficulty: recipe.difficulty,
                 maxParallel: recipe.maxParallel,

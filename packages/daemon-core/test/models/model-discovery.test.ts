@@ -9,11 +9,12 @@
  */
 'use strict';
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { LOG } from '../../src/logging/logger.js';
 import { parseModels } from '../../src/models/parse.js';
 import {
     buildModelOverlayPatch,
@@ -22,6 +23,19 @@ import {
     newModelsVsManifest,
 } from '../../src/models/overlay.js';
 import { discoverProviderModels, classifyFailure, expandHome } from '../../src/models/discover.js';
+import { saveModelCache, loadModelCache } from '../../src/models/persist.js';
+import {
+    MODEL_DISCOVERY_TTL_MS,
+    getModelSnapshotDueReason,
+    hydrateModelCache,
+    isModelSnapshotDue,
+    readModelCache,
+    refreshDueModelDiscovery,
+    registerModelDiscoveryVersionHook,
+    resetModelCacheForTests,
+    type ModelDiscoveryTarget,
+} from '../../src/models/registry.js';
+import { VersionArchive } from '../../src/providers/version-archive.js';
 import type { ModelDiscoverySpec, ModelDiscoverySnapshot } from '../../src/models/types.js';
 
 // ─── Real captured output ──────────────────────────────────────────────────
@@ -365,5 +379,260 @@ describe('expandHome', () => {
     it('expands a leading ~ and leaves absolute paths alone', () => {
         expect(expandHome('~/.kimi-code/config.toml', '/Users/x')).toBe(path.join('/Users/x', '.kimi-code/config.toml'));
         expect(expandHome('/etc/passwd', '/Users/x')).toBe('/etc/passwd');
+    });
+});
+
+// ─── ⑥ CLI version invalidation & self-updating CLI rediscovery (2026-10-18) ──
+
+describe('CLI version invalidation & self-updating CLI rediscovery', () => {
+    const AGY_SPEC: ModelDiscoverySpec = {
+        kind: 'command',
+        argv: ['models'],
+        parse: AGY_PARSE,
+    };
+
+    const AGY_140_OUTPUT = [
+        'Fetching available models...',
+        'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+        'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+    ].join('\n');
+
+    const AGY_142_OUTPUT = [
+        'Fetching available models...',
+        'gemini-4-argon-high\tGemini 4 Argon (High)',
+        'gemini-4-argon-medium\tGemini 4 Argon (Medium)',
+        'gemini-4-argon-low\tGemini 4 Argon (Low)',
+        'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+        'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+    ].join('\n');
+
+    let tmpConfigDir: string;
+    let env: NodeJS.ProcessEnv;
+    const originalConfigDir = process.env.ADHDEV_CONFIG_DIR;
+
+    const fakeSpawnWith = (getOutput: () => string, onSpawn?: () => void) => () => {
+        onSpawn?.();
+        const out = getOutput();
+        return {
+            stdout: { on: (_e: string, cb: Function) => setImmediate(() => cb(Buffer.from(out))) },
+            stderr: { on: () => {} },
+            on: (e: string, cb: Function) => { if (e === 'exit') setImmediate(() => cb(0)); },
+            kill: () => {},
+        } as any;
+    };
+
+    beforeEach(() => {
+        tmpConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-model-version-cache-'));
+        env = { ...process.env, ADHDEV_CONFIG_DIR: tmpConfigDir };
+        process.env.ADHDEV_CONFIG_DIR = tmpConfigDir;
+        resetModelCacheForTests();
+    });
+
+    afterEach(() => {
+        resetModelCacheForTests();
+        if (originalConfigDir === undefined) {
+            delete process.env.ADHDEV_CONFIG_DIR;
+        } else {
+            process.env.ADHDEV_CONFIG_DIR = originalConfigDir;
+        }
+        try { fs.rmSync(tmpConfigDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    });
+
+    it('snapshot with a version, then a different detected version → rediscovery (reason=version_changed)', async () => {
+        const now = 1_792_297_626_253;
+        saveModelCache({
+            'antigravity-cli': {
+                provider: 'antigravity-cli',
+                status: 'ok',
+                models: parseModels(AGY_140_OUTPUT, AGY_PARSE),
+                updatedAt: now - 5_000,
+                fetchedAt: now - 5_000,
+                cliVersion: '1.4.0',
+            },
+        }, env);
+        hydrateModelCache(env);
+
+        expect(getModelSnapshotDueReason(readModelCache('antigravity-cli'), now, '1.4.2')).toBe('version_changed');
+        expect(isModelSnapshotDue(readModelCache('antigravity-cli'), now, '1.4.2')).toBe(true);
+
+        let spawns = 0;
+        const infoSpy = vi.spyOn(LOG, 'info').mockImplementation(() => {});
+        try {
+            const target: ModelDiscoveryTarget = {
+                type: 'antigravity-cli',
+                modelDiscovery: AGY_SPEC,
+                binary: '/usr/local/bin/agy',
+                cliVersion: '1.4.2',
+            };
+            const result = await refreshDueModelDiscovery(
+                [target],
+                { now: () => now, spawn: fakeSpawnWith(() => AGY_142_OUTPUT, () => { spawns += 1; }) },
+                env,
+            );
+
+            expect(result.refreshed).toEqual(['antigravity-cli']);
+            expect(spawns).toBe(1);
+            const updated = readModelCache('antigravity-cli');
+            expect(updated?.cliVersion).toBe('1.4.2');
+            expect(updated?.models.map(m => m.label)).toContain('Gemini 4 Argon (High)');
+            expect(loadModelCache(env)?.['antigravity-cli']?.cliVersion).toBe('1.4.2');
+            expect(infoSpy).toHaveBeenCalledWith(
+                'Models',
+                expect.stringContaining('[antigravity-cli] model discovery: 5 models, cliVersion=1.4.2, reason=version_changed, status=ok'),
+            );
+        } finally {
+            infoSpy.mockRestore();
+        }
+    });
+
+    it('legacy snapshot without a version → rediscovery (reason=no_version)', async () => {
+        const now = 1_792_297_626_253;
+        // Exact shape of MainPC's legacy discovery.json (no cliVersion field, well within 24h TTL).
+        saveModelCache({
+            'antigravity-cli': {
+                provider: 'antigravity-cli',
+                status: 'ok',
+                models: parseModels(AGY_140_OUTPUT, AGY_PARSE),
+                updatedAt: now - 60_000,
+                fetchedAt: now - 60_000,
+            },
+        }, env);
+        hydrateModelCache(env);
+
+        expect(getModelSnapshotDueReason(readModelCache('antigravity-cli'), now, '1.4.2')).toBe('no_version');
+        expect(isModelSnapshotDue(readModelCache('antigravity-cli'), now)).toBe(true);
+
+        let spawns = 0;
+        const infoSpy = vi.spyOn(LOG, 'info').mockImplementation(() => {});
+        try {
+            const result = await refreshDueModelDiscovery(
+                [{
+                    type: 'antigravity-cli',
+                    modelDiscovery: AGY_SPEC,
+                    binary: '/usr/local/bin/agy',
+                    cliVersion: '1.4.2',
+                }],
+                { now: () => now, spawn: fakeSpawnWith(() => AGY_142_OUTPUT, () => { spawns += 1; }) },
+                env,
+            );
+
+            expect(result.refreshed).toEqual(['antigravity-cli']);
+            expect(spawns).toBe(1);
+            const updated = readModelCache('antigravity-cli');
+            expect(updated?.cliVersion).toBe('1.4.2');
+            expect(updated?.models.map(m => m.slug)).toContain('gemini-4-argon-high');
+            expect(infoSpy).toHaveBeenCalledWith(
+                'Models',
+                expect.stringContaining('[antigravity-cli] model discovery: 5 models, cliVersion=1.4.2, reason=no_version, status=ok'),
+            );
+        } finally {
+            infoSpy.mockRestore();
+        }
+    });
+
+    it('same version within the TTL → no rediscovery', async () => {
+        const now = 1_792_297_626_253;
+        saveModelCache({
+            'antigravity-cli': {
+                provider: 'antigravity-cli',
+                status: 'ok',
+                models: parseModels(AGY_142_OUTPUT, AGY_PARSE),
+                updatedAt: now - (MODEL_DISCOVERY_TTL_MS - 60_000),
+                fetchedAt: now - (MODEL_DISCOVERY_TTL_MS - 60_000),
+                cliVersion: '1.4.2',
+            },
+        }, env);
+        hydrateModelCache(env);
+
+        expect(getModelSnapshotDueReason(readModelCache('antigravity-cli'), now, '1.4.2')).toBeNull();
+        expect(isModelSnapshotDue(readModelCache('antigravity-cli'), now, '1.4.2')).toBe(false);
+
+        let spawns = 0;
+        const result = await refreshDueModelDiscovery(
+            [{
+                type: 'antigravity-cli',
+                modelDiscovery: AGY_SPEC,
+                binary: '/usr/local/bin/agy',
+                cliVersion: '1.4.2',
+            }],
+            { now: () => now, spawn: fakeSpawnWith(() => AGY_142_OUTPUT, () => { spawns += 1; }) },
+            env,
+        );
+
+        expect(result.refreshed).toEqual([]);
+        expect(result.skipped).toEqual(['antigravity-cli']);
+        expect(spawns).toBe(0);
+    });
+
+    it('a version change detected after discovery in the same lifetime → immediate rediscovery without waiting for TTL', async () => {
+        let now = 1_792_297_626_253;
+        let currentBinaryOutput = AGY_140_OUTPUT;
+        let spawns = 0;
+
+        const archive = new VersionArchive();
+        archive.record('antigravity-cli', '1.4.0');
+
+        const deps = {
+            now: () => now,
+            spawn: fakeSpawnWith(() => currentBinaryOutput, () => { spawns += 1; }),
+        };
+
+        const unsubscribe = registerModelDiscoveryVersionHook(
+            archive,
+            (type, cliVersion) => type === 'antigravity-cli'
+                ? { type, modelDiscovery: AGY_SPEC, binary: '/usr/local/bin/agy', cliVersion }
+                : undefined,
+            deps,
+            env,
+        );
+
+        const infoSpy = vi.spyOn(LOG, 'info').mockImplementation(() => {});
+        try {
+            // 1. Boot discovery runs while agy is still v1.4.0 (no Gemini 4 Argon).
+            await refreshDueModelDiscovery(
+                [{
+                    type: 'antigravity-cli',
+                    modelDiscovery: AGY_SPEC,
+                    binary: '/usr/local/bin/agy',
+                    cliVersion: archive.getLatest('antigravity-cli'),
+                }],
+                deps,
+                env,
+            );
+            expect(spawns).toBe(1);
+            expect(readModelCache('antigravity-cli')?.cliVersion).toBe('1.4.0');
+            expect(readModelCache('antigravity-cli')?.models.map(m => m.label)).not.toContain('Gemini 4 Argon (High)');
+
+            // 2. Five seconds later in the SAME daemon lifetime, agy's self-updater
+            //    has replaced agy with v1.4.2 and Init/version detection records 1.4.2.
+            now += 5_000;
+            currentBinaryOutput = AGY_142_OUTPUT;
+            const changed = archive.record('antigravity-cli', '1.4.2');
+            expect(changed).toBe(true);
+
+            // Wait for the background hook's async discovery to complete.
+            await vi.waitFor(() => {
+                expect(readModelCache('antigravity-cli')?.cliVersion).toBe('1.4.2');
+            });
+
+            expect(spawns).toBe(2);
+            expect(readModelCache('antigravity-cli')?.models.map(m => m.label)).toContain('Gemini 4 Argon (High)');
+            expect(loadModelCache(env)?.['antigravity-cli']?.cliVersion).toBe('1.4.2');
+            expect(infoSpy).toHaveBeenCalledWith(
+                'Models',
+                expect.stringContaining('[antigravity-cli] model discovery: 2 models, cliVersion=1.4.0, reason=boot, status=ok'),
+            );
+            expect(infoSpy).toHaveBeenCalledWith(
+                'Models',
+                expect.stringContaining('[antigravity-cli] model discovery: 5 models, cliVersion=1.4.2, reason=version_changed, status=ok'),
+            );
+
+            // Recording the same version again is a no-op and does not re-spawn.
+            expect(archive.record('antigravity-cli', '1.4.2')).toBe(false);
+            expect(spawns).toBe(2);
+        } finally {
+            unsubscribe();
+            infoSpy.mockRestore();
+        }
     });
 });

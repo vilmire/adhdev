@@ -58,34 +58,62 @@ export function scheduleQuotaBootRefresh(components: MeshRuntimeStage['component
     });
 }
 
+function buildModelDiscoveryTargets(
+    components: Pick<MeshRuntimeStage['components'], 'providerLoader'>,
+) {
+    return (components.providerLoader.getAvailableProviderInfos?.() || [])
+        .filter((p: any) => p?.category === 'cli' && p?.modelDiscovery)
+        .filter((p: any) => p.enabled !== false)
+        .map((p: any) => ({
+            type: p.type,
+            modelDiscovery: p.modelDiscovery,
+            // A shell-wrapped spawn (antigravity-cli: `bash -c "… exec agy"`)
+            // must never hand the wrapper to discovery — that ran `bash models`
+            // (2026-09-25). Detection now resolves the wrapped binary, so
+            // detectedPath is the real CLI; this guard covers a stale
+            // detection recorded before that fix.
+            binary: resolveWrappedCliBinary(p.spawn?.command, p.binary) && isShellWrapperCommand(p.detectedPath)
+                ? p.binary
+                : (p.detectedPath || p.binary),
+            cliVersion: components.providerLoader.getDetectedCliVersion?.(p.type) ?? null,
+        }));
+}
+
 /**
- * Model discovery: same shape — hydrate, then refresh only TTL-expired entries.
- * Reads the public inventory, which carries the DETECTED path, so discovery
- * only ever runs a binary detection already resolved. Discovery can raise the
- * list above the signed manifest, never below it.
+ * Model discovery: same shape — hydrate, then refresh only due entries (boot,
+ * TTL expired, missing cliVersion, or changed cliVersion). Reads the public
+ * inventory, which carries the DETECTED path, so discovery only ever runs a
+ * binary detection already resolved. Discovery can raise the list above the
+ * signed manifest, never below it.
  */
 export function scheduleModelDiscovery(components: MeshRuntimeStage['components']): void {
+    // A self-updating CLI (e.g. antigravity-cli running its own background
+    // updater during `agy models`) can replace its binary seconds AFTER boot
+    // discovery finishes. When Init/version detection (`detectAllVersions` →
+    // `versionArchive.record`) observes a version change later in the same
+    // daemon lifetime, immediately re-run model discovery for that provider
+    // without waiting for the 24h TTL.
+    try {
+        components.providerLoader.getVersionArchive?.()?.onVersionChange?.((type: string, version: string) => {
+            try {
+                const target = buildModelDiscoveryTargets(components).find((t) => t.type === type);
+                if (!target || target.modelDiscovery?.kind === 'none') return;
+                void refreshDueModelDiscovery([{ ...target, cliVersion: version }]).catch(() => {
+                    /* background; manifest lists stand */
+                });
+            } catch (e: any) {
+                LOG.warn('Models', `model discovery version-change hook failed for ${type}: ${e?.message || e}`);
+            }
+        });
+    } catch { /* fail-soft */ }
+
     setImmediate(() => {
         try { hydrateModelCache(process.env); } catch { /* fail-soft */ }
         // Background work: a throw here is uncaught inside setImmediate and would
         // take the whole daemon down (observed 2026-09-25 on a standalone boot).
         try {
-        const targets = (components.providerLoader.getAvailableProviderInfos?.() || [])
-            .filter((p: any) => p?.category === 'cli' && p?.modelDiscovery)
-            .filter((p: any) => p.enabled !== false)
-            .map((p: any) => ({
-                type: p.type,
-                modelDiscovery: p.modelDiscovery,
-                // A shell-wrapped spawn (antigravity-cli: `bash -c "… exec agy"`)
-                // must never hand the wrapper to discovery — that ran `bash models`
-                // (2026-09-25). Detection now resolves the wrapped binary, so
-                // detectedPath is the real CLI; this guard covers a stale
-                // detection recorded before that fix.
-                binary: resolveWrappedCliBinary(p.spawn?.command, p.binary) && isShellWrapperCommand(p.detectedPath)
-                    ? p.binary
-                    : (p.detectedPath || p.binary),
-            }));
-        void refreshDueModelDiscovery(targets).catch(() => { /* background; manifest lists stand */ });
+            const targets = buildModelDiscoveryTargets(components);
+            void refreshDueModelDiscovery(targets).catch(() => { /* background; manifest lists stand */ });
         } catch (e: any) {
             LOG.warn('Models', `model discovery scheduling failed (manifest lists stand): ${e?.message || e}`);
         }

@@ -20,7 +20,7 @@
 import { LOG } from '../logging/logger.js';
 import { discoverProviderModels, type ModelDiscoveryDeps } from './discover.js';
 import { loadModelCache, saveModelCache } from './persist.js';
-import type { ModelDiscoverySnapshot, ModelDiscoverySpec } from './types.js';
+import type { ModelDiscoveryReason, ModelDiscoverySnapshot, ModelDiscoverySpec } from './types.js';
 import { TRANSIENT_MODEL_DISCOVERY_FAILURE_KINDS } from './types.js';
 
 /**
@@ -56,13 +56,25 @@ export interface ModelDiscoveryTarget {
     modelDiscovery?: ModelDiscoverySpec;
     /** Resolved CLI path from provider detection; absent → not installed here. */
     binary?: string | null;
+    /** Currently detected provider CLI version (from VersionArchive / detection). */
+    cliVersion?: string | null;
+}
+
+interface InFlightDiscovery {
+    cliVersion: string | undefined;
+    promise: Promise<ModelDiscoverySnapshot>;
 }
 
 /** Process-local authoritative cache. The file in persist.ts is only its serialization. */
 const cache = new Map<string, ModelDiscoverySnapshot>();
 /** In-flight discoveries, so concurrent reads coalesce to one spawn per provider. */
-const inFlight = new Map<string, Promise<ModelDiscoverySnapshot>>();
+const inFlight = new Map<string, InFlightDiscovery>();
 let hydrated = false;
+
+function normalizeCliVersion(version: string | null | undefined): string | undefined {
+    const trimmed = typeof version === 'string' ? version.trim() : '';
+    return trimmed ? trimmed : undefined;
+}
 
 /**
  * Rebuild the in-memory cache from disk. Safe to call unconditionally at boot;
@@ -76,6 +88,13 @@ export function hydrateModelCache(env: NodeJS.ProcessEnv = process.env): number 
     }
     hydrated = true;
     return cache.size;
+}
+
+/** Test-only reset for the process-local cache and hydration state. */
+export function resetModelCacheForTests(): void {
+    cache.clear();
+    inFlight.clear();
+    hydrated = false;
 }
 
 /**
@@ -102,13 +121,59 @@ function dueAfterMs(snapshot: ModelDiscoverySnapshot): number {
     return MODEL_DISCOVERY_FAILURE_RETRY_MS;
 }
 
-export function isModelSnapshotDue(snapshot: ModelDiscoverySnapshot | undefined, nowMs: number = Date.now()): boolean {
-    if (!snapshot) return true;
+/**
+ * Determine why a provider's model snapshot is due for discovery, or `null`
+ * when the cached snapshot is still fresh and valid for `currentCliVersion`.
+ *
+ * Reasons:
+ * - `'boot'`: no cached snapshot exists for this provider yet.
+ * - `'no_version'`: cached snapshot has no recorded `cliVersion` (legacy
+ *   `discovery.json` predating version-tracked caching, or an unversioned
+ *   capture after a CLI version becomes known).
+ * - `'version_changed'`: cached `snapshot.cliVersion` differs from the
+ *   currently detected `currentCliVersion`.
+ * - `'ttl'`: TTL (for `ok`) or retry backoff (for `error`/`unavailable`) has
+ *   elapsed since `snapshot.fetchedAt`.
+ */
+export function getModelSnapshotDueReason(
+    snapshot: ModelDiscoverySnapshot | undefined,
+    nowMs: number = Date.now(),
+    currentCliVersion?: string | null,
+): ModelDiscoveryReason | null {
+    if (!snapshot) return 'boot';
+    // A declared-undiscoverable provider is never due: there is nothing to retry.
+    if (snapshot.status === 'not-supported') return null;
+
+    const recordedVersion = normalizeCliVersion(snapshot.cliVersion);
+    const detectedVersion = normalizeCliVersion(currentCliVersion);
+
+    if (!recordedVersion) {
+        // Legacy snapshots (`status === 'ok'` with no recorded `cliVersion`,
+        // like MainPC's 2026-10-18 discovery.json) are always treated as stale
+        // so existing machines repair themselves on the next daemon start
+        // without manual file deletion. Non-ok snapshots with no version also
+        // invalidate as soon as a CLI version is detected.
+        if (snapshot.status === 'ok' || detectedVersion) {
+            return 'no_version';
+        }
+    } else if (detectedVersion && recordedVersion !== detectedVersion) {
+        return 'version_changed';
+    }
+
     const due = dueAfterMs(snapshot);
-    if (!Number.isFinite(due)) return false;
+    if (!Number.isFinite(due)) return null;
     // Scheduling reads `fetchedAt` (last ATTEMPT), never `updatedAt` (last
     // successful capture) — same two-clock rule as the quota cache.
-    return nowMs - (snapshot.fetchedAt || 0) >= due;
+    if (nowMs - (snapshot.fetchedAt || 0) >= due) return 'ttl';
+    return null;
+}
+
+export function isModelSnapshotDue(
+    snapshot: ModelDiscoverySnapshot | undefined,
+    nowMs: number = Date.now(),
+    currentCliVersion?: string | null,
+): boolean {
+    return getModelSnapshotDueReason(snapshot, nowMs, currentCliVersion) !== null;
 }
 
 /**
@@ -119,16 +184,40 @@ export async function refreshProviderModels(
     target: ModelDiscoveryTarget,
     deps: ModelDiscoveryDeps = {},
     env: NodeJS.ProcessEnv = process.env,
+    reason?: ModelDiscoveryReason,
 ): Promise<ModelDiscoverySnapshot> {
+    const requestedVersion = normalizeCliVersion(target.cliVersion ?? deps.cliVersion);
     const existing = inFlight.get(target.type);
-    if (existing) return existing;
+    if (existing) {
+        if (existing.cliVersion === requestedVersion || !requestedVersion) {
+            return existing.promise;
+        }
+        // An earlier discovery is in-flight for a different (older or unknown)
+        // CLI version — e.g. `agy models` triggered agy's self-updater while
+        // running, and version detection observed the new version before the
+        // old run finished. Wait for the old run to settle, then re-run if the
+        // cache still does not reflect `requestedVersion`.
+        await existing.promise.catch(() => { /* settled */ });
+        const afterExisting = cache.get(target.type);
+        const postReason = getModelSnapshotDueReason(afterExisting, deps.now?.() ?? Date.now(), requestedVersion);
+        if (!postReason) {
+            return afterExisting!;
+        }
+        return refreshProviderModels(target, deps, env, postReason);
+    }
 
-    const run = (async () => {
+    const prior = cache.get(target.type);
+    const effectiveReason: ModelDiscoveryReason =
+        reason
+        ?? getModelSnapshotDueReason(prior, deps.now?.() ?? Date.now(), requestedVersion)
+        ?? 'boot';
+
+    const promise = (async () => {
         const snapshot = await discoverProviderModels(
             target.type,
             target.modelDiscovery,
             target.binary || undefined,
-            deps,
+            requestedVersion ? { ...deps, cliVersion: requestedVersion } : deps,
         );
         // ★CARRY-FORWARD: a failed refresh must not erase a good list. Keep the
         // previous models and their original `updatedAt`, while the fresh
@@ -136,22 +225,28 @@ export async function refreshProviderModels(
         // signal" contract the quota cache applies (quota/persist.ts). Without
         // this, one offline moment would drop a discovered picker back to the
         // stale manifest until the next successful probe.
-        const prior = cache.get(target.type);
+        const currentPrior = cache.get(target.type);
         const merged: ModelDiscoverySnapshot =
-            snapshot.status !== 'ok' && prior?.status === 'ok' && prior.models.length > 0
-                ? { ...snapshot, models: prior.models, updatedAt: prior.updatedAt }
+            snapshot.status !== 'ok' && currentPrior?.status === 'ok' && currentPrior.models.length > 0
+                ? { ...snapshot, models: currentPrior.models, updatedAt: currentPrior.updatedAt }
                 : snapshot;
         cache.set(target.type, merged);
+        LOG.info(
+            'Models',
+            `[${target.type}] model discovery: ${merged.models.length} models, cliVersion=${merged.cliVersion ?? 'unknown'}, reason=${effectiveReason}, status=${merged.status}`,
+        );
         try {
             saveModelCache(readAllModelCache(), env);
         } catch { /* cache write is an optimisation, never a failure of discovery */ }
         return merged;
     })().finally(() => {
-        inFlight.delete(target.type);
+        if (inFlight.get(target.type)?.promise === promise) {
+            inFlight.delete(target.type);
+        }
     });
 
-    inFlight.set(target.type, run);
-    return run;
+    inFlight.set(target.type, { cliVersion: requestedVersion, promise });
+    return promise;
 }
 
 /**
@@ -167,8 +262,10 @@ export function readModelCacheWithRevalidate(
     env: NodeJS.ProcessEnv = process.env,
 ): ModelDiscoverySnapshot | undefined {
     const snapshot = cache.get(target.type);
-    if (isModelSnapshotDue(snapshot)) {
-        void refreshProviderModels(target, deps, env).catch(() => { /* background */ });
+    const nowMs = deps.now?.() ?? Date.now();
+    const reason = getModelSnapshotDueReason(snapshot, nowMs, target.cliVersion ?? deps.cliVersion);
+    if (reason) {
+        void refreshProviderModels(target, deps, env, reason).catch(() => { /* background */ });
     }
     return snapshot;
 }
@@ -188,9 +285,15 @@ export async function refreshDueModelDiscovery(
     const skipped: string[] = [];
     for (const target of targets) {
         if (!target?.type || !target.modelDiscovery) { skipped.push(target?.type || '(unnamed)'); continue; }
-        if (!isModelSnapshotDue(cache.get(target.type))) { skipped.push(target.type); continue; }
+        const nowMs = deps.now?.() ?? Date.now();
+        const reason = getModelSnapshotDueReason(
+            cache.get(target.type),
+            nowMs,
+            target.cliVersion ?? deps.cliVersion,
+        );
+        if (!reason) { skipped.push(target.type); continue; }
         try {
-            const snapshot = await refreshProviderModels(target, deps, env);
+            const snapshot = await refreshProviderModels(target, deps, env, reason);
             refreshed.push(target.type);
             if (snapshot.status !== 'ok' && snapshot.status !== 'not-supported') {
                 LOG.debug?.('Models', `[${target.type}] discovery ${snapshot.failureKind}: ${snapshot.error} — manifest list stands`);
@@ -202,5 +305,31 @@ export async function refreshDueModelDiscovery(
         }
     }
     return { refreshed, skipped };
+}
+
+/**
+ * Hook into provider CLI version-change detection (`VersionArchive.onVersionChange`)
+ * so a self-updating CLI that upgrades seconds after boot discovery immediately
+ * invalidates its stale snapshot and re-runs discovery in the same daemon
+ * lifetime without waiting for the 24h TTL.
+ */
+export function registerModelDiscoveryVersionHook(
+    archive: { onVersionChange?: (listener: (type: string, version: string, previousVersion: string | null) => void) => () => void } | null | undefined,
+    resolveTarget: (type: string, cliVersion: string) => ModelDiscoveryTarget | undefined,
+    deps: ModelDiscoveryDeps = {},
+    env: NodeJS.ProcessEnv = process.env,
+): () => void {
+    if (!archive || typeof archive.onVersionChange !== 'function') return () => {};
+    return archive.onVersionChange((type, version) => {
+        try {
+            const target = resolveTarget(type, version);
+            if (!target?.type || !target.modelDiscovery || target.modelDiscovery.kind === 'none') return;
+            void refreshDueModelDiscovery([{ ...target, cliVersion: version }], deps, env).catch(() => {
+                /* background; manifest lists stand */
+            });
+        } catch {
+            /* fail-soft */
+        }
+    });
 }
 

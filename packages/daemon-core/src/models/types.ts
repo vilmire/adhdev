@@ -173,6 +173,9 @@ export interface DiscoveredModel {
     label?: string;
 }
 
+/** Reason a provider's model discovery was triggered. Logged at info level for diagnostics. */
+export type ModelDiscoveryReason = 'boot' | 'ttl' | 'version_changed' | 'no_version';
+
 /**
  * A provider's discovery result as cached and reported.
  *
@@ -187,6 +190,12 @@ export interface ModelDiscoverySnapshot {
     updatedAt: number;
     /** When a refresh was last ATTEMPTED — moves even when the attempt failed. */
     fetchedAt: number;
+    /**
+     * Detected provider CLI version when this snapshot was taken (e.g. "1.4.2").
+     * Absent on legacy cache files written before CLI-version invalidation was
+     * introduced; an absent or mismatched version invalidates the snapshot.
+     */
+    cliVersion?: string;
     failureKind?: ModelDiscoveryFailureKind;
     error?: string;
     /** For `kind: 'none'`, the manifest's stated reason. */

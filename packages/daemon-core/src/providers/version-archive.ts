@@ -57,8 +57,11 @@ function getArchivePath(): string {
 }
 const MAX_ENTRIES_PER_PROVIDER = 20;
 
+export type VersionChangeListener = (type: string, version: string, previousVersion: string | null) => void;
+
 export class VersionArchive {
   private history: VersionHistory = {};
+  private listeners = new Set<VersionChangeListener>();
 
   constructor() {
     this.load();
@@ -74,16 +77,17 @@ export class VersionArchive {
     }
   }
 
-  /** Record a detected version (deduplicates same version) */
-  record(type: string, version: string): void {
+  /** Record a detected version (deduplicates same version). Returns true when recorded/changed. */
+  record(type: string, version: string): boolean {
     if (!this.history[type]) this.history[type] = [];
 
     const entries = this.history[type];
     const last = entries[entries.length - 1];
 
     // Skip if same version as last entry
-    if (last && last.version === version) return;
+    if (last && last.version === version) return false;
 
+    const previousVersion = last?.version ?? null;
     entries.push({
       version,
       detectedAt: new Date().toISOString(),
@@ -96,6 +100,23 @@ export class VersionArchive {
     }
 
     this.save();
+
+    for (const listener of this.listeners) {
+      try {
+        listener(type, version, previousVersion);
+      } catch {
+        /* listener errors must not disrupt version archiving */
+      }
+    }
+    return true;
+  }
+
+  /** Subscribe to newly recorded or changed provider versions in this archive. */
+  onVersionChange(listener: VersionChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /** Get version history for a provider */

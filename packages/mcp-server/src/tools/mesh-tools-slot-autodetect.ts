@@ -65,7 +65,17 @@ export function extractInstalledCliProviders(raw: unknown): DetectedCliProvider[
         const version = typeof entry.providerVersion === 'string' && entry.providerVersion.trim()
             ? entry.providerVersion.trim()
             : undefined;
-        out.push({ type, ...(displayName ? { displayName } : {}), ...(version ? { version } : {}) });
+        const modelOptions = Array.isArray(entry.modelOptions)
+            ? entry.modelOptions
+                .filter((m: unknown): m is string => typeof m === 'string' && m.trim().length > 0)
+                .map((m: string) => m.trim())
+            : [];
+        out.push({
+            type,
+            ...(displayName ? { displayName } : {}),
+            ...(version ? { version } : {}),
+            ...(modelOptions.length > 0 ? { modelOptions } : {}),
+        });
     }
     return out;
 }

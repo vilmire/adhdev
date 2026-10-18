@@ -24256,6 +24256,24 @@ var require_dist3 = __commonJS({
       }
       return out;
     }
+    function resolveRecipeModel2(recipe, modelOptions) {
+      if (!Array.isArray(modelOptions) || modelOptions.length === 0) {
+        return recipe.model;
+      }
+      const available = new Set(
+        modelOptions.filter((m) => typeof m === "string" && m.trim().length > 0).map((m) => m.trim())
+      );
+      if (available.size === 0) return recipe.model;
+      const candidates = [
+        ...recipe.model ? [recipe.model] : [],
+        ...recipe.modelCandidates ?? []
+      ];
+      for (const candidate of candidates) {
+        const trimmed2 = typeof candidate === "string" ? candidate.trim() : "";
+        if (trimmed2 && available.has(trimmed2)) return trimmed2;
+      }
+      return recipe.model;
+    }
     function buildSlotProposal2(detected, currentSlots = []) {
       const providers = dedupeDetected2(detected ?? []);
       const proposedSlots = [];
@@ -24271,7 +24289,7 @@ var require_dist3 = __commonJS({
         for (const recipe of recipes) {
           const slot = normalizeNodeCapabilitySlot2({
             provider: provider.type,
-            model: recipe.model,
+            model: resolveRecipeModel2(recipe, provider.modelOptions),
             thinkingLevel: recipe.thinkingLevel,
             difficulty: recipe.difficulty,
             maxParallel: recipe.maxParallel
@@ -26438,10 +26456,25 @@ ${renderWorkerProtocolFooter2(input)}`;
           ],
           "antigravity-cli": [
             {
-              model: "Gemini 3.1 Pro (High)",
+              model: "Gemini 3.8 Flash (High)",
+              modelCandidates: ["Gemini 3.8 Flash (High)", "Gemini 4 Argon (Low)", "Gemini 3.7 Flash (High)", "Gemini 3.1 Pro (High)"],
               difficulty: ["easy"],
               maxParallel: 2,
               rationale: "Cheap capacity for easy tasks."
+            },
+            {
+              model: "Gemini 4 Argon (Medium)",
+              modelCandidates: ["Gemini 4 Argon (Medium)", "Gemini 3.8 Flash (High)", "Gemini 3.7 Flash (High)", "Gemini 3.1 Pro (High)"],
+              difficulty: ["medium"],
+              maxParallel: 2,
+              rationale: "Balanced Argon tier for medium tasks."
+            },
+            {
+              model: "Gemini 4 Argon (High)",
+              modelCandidates: ["Gemini 4 Argon (High)", "Gemini 3.8 Flash (High)", "Gemini 3.1 Pro (High)"],
+              difficulty: ["difficult"],
+              maxParallel: 1,
+              rationale: "Reserved for hard tasks; capped at 1 to bound cost."
             }
           ],
           "cursor-cli": [
@@ -83606,11 +83639,13 @@ ${cleanBody}`;
       }
     });
     function resolveDeps2(overrides = {}) {
+      const cliVersion = typeof overrides.cliVersion === "string" && overrides.cliVersion.trim() ? overrides.cliVersion.trim() : void 0;
       return {
         spawn: overrides.spawn ?? ((command, args, options) => (0, import_node_child_process9.spawn)(command, args, { env: options.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })),
         readFile: overrides.readFile ?? ((filePath2) => (0, import_promises7.readFile)(filePath2, "utf-8")),
         now: overrides.now ?? (() => Date.now()),
-        env: overrides.env ?? process.env
+        env: overrides.env ?? process.env,
+        ...cliVersion ? { cliVersion } : {}
       };
     }
     function expandHome2(filePath2, homeDir2 = os28.homedir()) {
@@ -83724,25 +83759,37 @@ ${result.stderr}`, result.code);
       if (models.length === 0) return failure3(provider, "parse", `no models parsed from ${filePath2}`, now);
       return { provider, status: "ok", models, updatedAt: now, fetchedAt: now };
     }
+    function withCliVersion(snapshot, cliVersion) {
+      return cliVersion ? { ...snapshot, cliVersion } : snapshot;
+    }
     async function discoverProviderModels(provider, spec, binary2, overrides = {}) {
       const deps = resolveDeps2(overrides);
       const now = deps.now();
       if (!spec) {
-        return { provider, status: "not-supported", models: [], updatedAt: now, fetchedAt: now, reason: "provider declares no modelDiscovery block" };
+        return withCliVersion(
+          { provider, status: "not-supported", models: [], updatedAt: now, fetchedAt: now, reason: "provider declares no modelDiscovery block" },
+          deps.cliVersion
+        );
       }
       if (spec.kind === "none") {
-        return { provider, status: "not-supported", models: [], updatedAt: now, fetchedAt: now, reason: spec.reason };
+        return withCliVersion(
+          { provider, status: "not-supported", models: [], updatedAt: now, fetchedAt: now, reason: spec.reason },
+          deps.cliVersion
+        );
       }
       if (spec.kind === "file") {
-        return discoverByFile(provider, spec, deps);
+        return withCliVersion(await discoverByFile(provider, spec, deps), deps.cliVersion);
       }
       if (!binary2) {
-        return failure3(provider, "cli-unavailable", "provider binary not detected on this machine", now);
+        return withCliVersion(
+          failure3(provider, "cli-unavailable", "provider binary not detected on this machine", now),
+          deps.cliVersion
+        );
       }
       try {
-        return await discoverByCommand(provider, binary2, spec, deps);
+        return withCliVersion(await discoverByCommand(provider, binary2, spec, deps), deps.cliVersion);
       } catch (e) {
-        return failure3(provider, "unknown", String(e?.message || e), deps.now());
+        return withCliVersion(failure3(provider, "unknown", String(e?.message || e), deps.now()), deps.cliVersion);
       }
     }
     var import_node_child_process9;
@@ -83842,6 +83889,10 @@ ${result.stderr}`, result.code);
         ]);
       }
     });
+    function normalizeCliVersion(version2) {
+      const trimmed2 = typeof version2 === "string" ? version2.trim() : "";
+      return trimmed2 ? trimmed2 : void 0;
+    }
     function hydrateModelCache(env2 = process.env) {
       const stored = loadModelCache(env2);
       if (stored) {
@@ -83864,35 +83915,67 @@ ${result.stderr}`, result.code);
       }
       return MODEL_DISCOVERY_FAILURE_RETRY_MS;
     }
-    function isModelSnapshotDue(snapshot, nowMs2 = Date.now()) {
-      if (!snapshot) return true;
+    function getModelSnapshotDueReason(snapshot, nowMs2 = Date.now(), currentCliVersion) {
+      if (!snapshot) return "boot";
+      if (snapshot.status === "not-supported") return null;
+      const recordedVersion = normalizeCliVersion(snapshot.cliVersion);
+      const detectedVersion = normalizeCliVersion(currentCliVersion);
+      if (!recordedVersion) {
+        if (snapshot.status === "ok" || detectedVersion) {
+          return "no_version";
+        }
+      } else if (detectedVersion && recordedVersion !== detectedVersion) {
+        return "version_changed";
+      }
       const due = dueAfterMs(snapshot);
-      if (!Number.isFinite(due)) return false;
-      return nowMs2 - (snapshot.fetchedAt || 0) >= due;
+      if (!Number.isFinite(due)) return null;
+      if (nowMs2 - (snapshot.fetchedAt || 0) >= due) return "ttl";
+      return null;
     }
-    async function refreshProviderModels(target, deps = {}, env2 = process.env) {
+    async function refreshProviderModels(target, deps = {}, env2 = process.env, reason) {
+      const requestedVersion = normalizeCliVersion(target.cliVersion ?? deps.cliVersion);
       const existing = inFlight2.get(target.type);
-      if (existing) return existing;
-      const run3 = (async () => {
+      if (existing) {
+        if (existing.cliVersion === requestedVersion || !requestedVersion) {
+          return existing.promise;
+        }
+        await existing.promise.catch(() => {
+        });
+        const afterExisting = cache2.get(target.type);
+        const postReason = getModelSnapshotDueReason(afterExisting, deps.now?.() ?? Date.now(), requestedVersion);
+        if (!postReason) {
+          return afterExisting;
+        }
+        return refreshProviderModels(target, deps, env2, postReason);
+      }
+      const prior = cache2.get(target.type);
+      const effectiveReason = reason ?? getModelSnapshotDueReason(prior, deps.now?.() ?? Date.now(), requestedVersion) ?? "boot";
+      const promise = (async () => {
         const snapshot = await discoverProviderModels(
           target.type,
           target.modelDiscovery,
           target.binary || void 0,
-          deps
+          requestedVersion ? { ...deps, cliVersion: requestedVersion } : deps
         );
-        const prior = cache2.get(target.type);
-        const merged = snapshot.status !== "ok" && prior?.status === "ok" && prior.models.length > 0 ? { ...snapshot, models: prior.models, updatedAt: prior.updatedAt } : snapshot;
+        const currentPrior = cache2.get(target.type);
+        const merged = snapshot.status !== "ok" && currentPrior?.status === "ok" && currentPrior.models.length > 0 ? { ...snapshot, models: currentPrior.models, updatedAt: currentPrior.updatedAt } : snapshot;
         cache2.set(target.type, merged);
+        LOG.info(
+          "Models",
+          `[${target.type}] model discovery: ${merged.models.length} models, cliVersion=${merged.cliVersion ?? "unknown"}, reason=${effectiveReason}, status=${merged.status}`
+        );
         try {
           saveModelCache(readAllModelCache(), env2);
         } catch {
         }
         return merged;
       })().finally(() => {
-        inFlight2.delete(target.type);
+        if (inFlight2.get(target.type)?.promise === promise) {
+          inFlight2.delete(target.type);
+        }
       });
-      inFlight2.set(target.type, run3);
-      return run3;
+      inFlight2.set(target.type, { cliVersion: requestedVersion, promise });
+      return promise;
     }
     async function refreshDueModelDiscovery(targets, deps = {}, env2 = process.env) {
       if (!hydrated2) hydrateModelCache(env2);
@@ -83903,12 +83986,18 @@ ${result.stderr}`, result.code);
           skipped.push(target?.type || "(unnamed)");
           continue;
         }
-        if (!isModelSnapshotDue(cache2.get(target.type))) {
+        const nowMs2 = deps.now?.() ?? Date.now();
+        const reason = getModelSnapshotDueReason(
+          cache2.get(target.type),
+          nowMs2,
+          target.cliVersion ?? deps.cliVersion
+        );
+        if (!reason) {
           skipped.push(target.type);
           continue;
         }
         try {
-          const snapshot = await refreshProviderModels(target, deps, env2);
+          const snapshot = await refreshProviderModels(target, deps, env2, reason);
           refreshed.push(target.type);
           if (snapshot.status !== "ok" && snapshot.status !== "not-supported") {
             LOG.debug?.("Models", `[${target.type}] discovery ${snapshot.failureKind}: ${snapshot.error} \u2014 manifest list stands`);
@@ -122010,6 +122099,14 @@ ${output}` : "";
       /** Inject VersionArchive so resolve() can auto-detect installed versions */
       setVersionArchive(archive) {
         this.versionArchive = archive;
+      }
+      /** Underlying VersionArchive instance, or null when none has been attached. */
+      getVersionArchive() {
+        return this.versionArchive;
+      }
+      /** Latest detected CLI version for a provider type, or null when unknown. */
+      getDetectedCliVersion(type2) {
+        return this.versionArchive?.getLatest(type2) ?? null;
       }
       /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
       channel;
@@ -162710,6 +162807,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     var MAX_ENTRIES_PER_PROVIDER = 20;
     var VersionArchive = class {
       history = {};
+      listeners = /* @__PURE__ */ new Set();
       constructor() {
         this.load();
       }
@@ -162722,12 +162820,13 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           this.history = {};
         }
       }
-      /** Record a detected version (deduplicates same version) */
+      /** Record a detected version (deduplicates same version). Returns true when recorded/changed. */
       record(type2, version2) {
         if (!this.history[type2]) this.history[type2] = [];
         const entries = this.history[type2];
         const last = entries[entries.length - 1];
-        if (last && last.version === version2) return;
+        if (last && last.version === version2) return false;
+        const previousVersion = last?.version ?? null;
         entries.push({
           version: version2,
           detectedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -162737,6 +162836,20 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           this.history[type2] = entries.slice(-MAX_ENTRIES_PER_PROVIDER);
         }
         this.save();
+        for (const listener of this.listeners) {
+          try {
+            listener(type2, version2, previousVersion);
+          } catch {
+          }
+        }
+        return true;
+      }
+      /** Subscribe to newly recorded or changed provider versions in this archive. */
+      onVersionChange(listener) {
+        this.listeners.add(listener);
+        return () => {
+          this.listeners.delete(listener);
+        };
       }
       /** Get version history for a provider */
       getHistory(type2) {
@@ -173439,23 +173552,40 @@ ${notice.notice}${supersededHint}`;
         refreshQuotaCacheOnBoot(isQuotaProviderEnabled);
       });
     }
+    function buildModelDiscoveryTargets(components) {
+      return (components.providerLoader.getAvailableProviderInfos?.() || []).filter((p) => p?.category === "cli" && p?.modelDiscovery).filter((p) => p.enabled !== false).map((p) => ({
+        type: p.type,
+        modelDiscovery: p.modelDiscovery,
+        // A shell-wrapped spawn (antigravity-cli: `bash -c "… exec agy"`)
+        // must never hand the wrapper to discovery — that ran `bash models`
+        // (2026-09-25). Detection now resolves the wrapped binary, so
+        // detectedPath is the real CLI; this guard covers a stale
+        // detection recorded before that fix.
+        binary: resolveWrappedCliBinary(p.spawn?.command, p.binary) && isShellWrapperCommand(p.detectedPath) ? p.binary : p.detectedPath || p.binary,
+        cliVersion: components.providerLoader.getDetectedCliVersion?.(p.type) ?? null
+      }));
+    }
     function scheduleModelDiscovery(components) {
+      try {
+        components.providerLoader.getVersionArchive?.()?.onVersionChange?.((type2, version2) => {
+          try {
+            const target = buildModelDiscoveryTargets(components).find((t) => t.type === type2);
+            if (!target || target.modelDiscovery?.kind === "none") return;
+            void refreshDueModelDiscovery([{ ...target, cliVersion: version2 }]).catch(() => {
+            });
+          } catch (e) {
+            LOG.warn("Models", `model discovery version-change hook failed for ${type2}: ${e?.message || e}`);
+          }
+        });
+      } catch {
+      }
       setImmediate(() => {
         try {
           hydrateModelCache(process.env);
         } catch {
         }
         try {
-          const targets = (components.providerLoader.getAvailableProviderInfos?.() || []).filter((p) => p?.category === "cli" && p?.modelDiscovery).filter((p) => p.enabled !== false).map((p) => ({
-            type: p.type,
-            modelDiscovery: p.modelDiscovery,
-            // A shell-wrapped spawn (antigravity-cli: `bash -c "… exec agy"`)
-            // must never hand the wrapper to discovery — that ran `bash models`
-            // (2026-09-25). Detection now resolves the wrapped binary, so
-            // detectedPath is the real CLI; this guard covers a stale
-            // detection recorded before that fix.
-            binary: resolveWrappedCliBinary(p.spawn?.command, p.binary) && isShellWrapperCommand(p.detectedPath) ? p.binary : p.detectedPath || p.binary
-          }));
+          const targets = buildModelDiscoveryTargets(components);
           void refreshDueModelDiscovery(targets).catch(() => {
           });
         } catch (e) {
@@ -175116,10 +175246,25 @@ var CLI_SLOT_RECIPES = Object.freeze({
   ],
   "antigravity-cli": [
     {
-      model: "Gemini 3.1 Pro (High)",
+      model: "Gemini 3.8 Flash (High)",
+      modelCandidates: ["Gemini 3.8 Flash (High)", "Gemini 4 Argon (Low)", "Gemini 3.7 Flash (High)", "Gemini 3.1 Pro (High)"],
       difficulty: ["easy"],
       maxParallel: 2,
       rationale: "Cheap capacity for easy tasks."
+    },
+    {
+      model: "Gemini 4 Argon (Medium)",
+      modelCandidates: ["Gemini 4 Argon (Medium)", "Gemini 3.8 Flash (High)", "Gemini 3.7 Flash (High)", "Gemini 3.1 Pro (High)"],
+      difficulty: ["medium"],
+      maxParallel: 2,
+      rationale: "Balanced Argon tier for medium tasks."
+    },
+    {
+      model: "Gemini 4 Argon (High)",
+      modelCandidates: ["Gemini 4 Argon (High)", "Gemini 3.8 Flash (High)", "Gemini 3.1 Pro (High)"],
+      difficulty: ["difficult"],
+      maxParallel: 1,
+      rationale: "Reserved for hard tasks; capped at 1 to bound cost."
     }
   ],
   "cursor-cli": [
@@ -175158,6 +175303,24 @@ function dedupeDetected(detected) {
   }
   return out;
 }
+function resolveRecipeModel(recipe, modelOptions) {
+  if (!Array.isArray(modelOptions) || modelOptions.length === 0) {
+    return recipe.model;
+  }
+  const available = new Set(
+    modelOptions.filter((m) => typeof m === "string" && m.trim().length > 0).map((m) => m.trim())
+  );
+  if (available.size === 0) return recipe.model;
+  const candidates = [
+    ...recipe.model ? [recipe.model] : [],
+    ...recipe.modelCandidates ?? []
+  ];
+  for (const candidate of candidates) {
+    const trimmed = typeof candidate === "string" ? candidate.trim() : "";
+    if (trimmed && available.has(trimmed)) return trimmed;
+  }
+  return recipe.model;
+}
 function buildSlotProposal(detected, currentSlots = []) {
   const providers = dedupeDetected(detected ?? []);
   const proposedSlots = [];
@@ -175173,7 +175336,7 @@ function buildSlotProposal(detected, currentSlots = []) {
     for (const recipe of recipes) {
       const slot = normalizeNodeCapabilitySlot({
         provider: provider.type,
-        model: recipe.model,
+        model: resolveRecipeModel(recipe, provider.modelOptions),
         thinkingLevel: recipe.thinkingLevel,
         difficulty: recipe.difficulty,
         maxParallel: recipe.maxParallel
@@ -183108,7 +183271,13 @@ function extractInstalledCliProviders(raw) {
     if (!type2) continue;
     const displayName = typeof entry.displayName === "string" && entry.displayName.trim() ? entry.displayName.trim() : typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : void 0;
     const version = typeof entry.providerVersion === "string" && entry.providerVersion.trim() ? entry.providerVersion.trim() : void 0;
-    out.push({ type: type2, ...displayName ? { displayName } : {}, ...version ? { version } : {} });
+    const modelOptions = Array.isArray(entry.modelOptions) ? entry.modelOptions.filter((m) => typeof m === "string" && m.trim().length > 0).map((m) => m.trim()) : [];
+    out.push({
+      type: type2,
+      ...displayName ? { displayName } : {},
+      ...version ? { version } : {},
+      ...modelOptions.length > 0 ? { modelOptions } : {}
+    });
   }
   return out;
 }

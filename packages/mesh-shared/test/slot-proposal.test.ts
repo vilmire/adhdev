@@ -22,7 +22,14 @@ describe('buildSlotProposal — mapping table → slots', () => {
             },
             { type: 'kimi', expect: [{ provider: 'kimi', model: 'kimi-code/k3', difficulty: ['medium', 'difficult'], maxParallel: 2 }] },
             { type: 'codex-cli', expect: [{ provider: 'codex-cli', difficulty: ['medium', 'difficult', 'freeform'], maxParallel: 2 }] },
-            { type: 'antigravity-cli', expect: [{ provider: 'antigravity-cli', model: 'Gemini 3.1 Pro (High)', difficulty: ['easy'], maxParallel: 2 }] },
+            {
+                type: 'antigravity-cli',
+                expect: [
+                    { provider: 'antigravity-cli', model: 'Gemini 3.8 Flash (High)', difficulty: ['easy'], maxParallel: 2 },
+                    { provider: 'antigravity-cli', model: 'Gemini 4 Argon (Medium)', difficulty: ['medium'], maxParallel: 2 },
+                    { provider: 'antigravity-cli', model: 'Gemini 4 Argon (High)', difficulty: ['difficult'], maxParallel: 1 },
+                ],
+            },
             { type: 'cursor-cli', expect: [{ provider: 'cursor-cli', model: 'auto', difficulty: ['easy'], maxParallel: 1 }] },
         ]
 
@@ -31,6 +38,42 @@ describe('buildSlotProposal — mapping table → slots', () => {
             expect(proposedSlots, c.type).toHaveLength(c.expect.length)
             c.expect.forEach((want, i) => expect(proposedSlots[i], `${c.type}[${i}]`).toMatchObject(want))
         }
+    })
+
+    it('prefers live discovery modelOptions over static primary recipe model when the primary is absent', () => {
+        // Pre-1.4.2 discovery snapshot lacking Gemini 4 Argon falls back to the
+        // best available model in the live discovery list instead of proposing
+        // an unavailable model label.
+        const preArgon = buildSlotProposal([
+            {
+                type: 'antigravity-cli',
+                modelOptions: ['Gemini 3.8 Flash (High)', 'Claude Sonnet 4.6 (Thinking)'],
+            },
+        ])
+        expect(preArgon.proposedSlots.map(s => ({ difficulty: s.difficulty, model: s.model }))).toEqual([
+            { difficulty: ['easy'], model: 'Gemini 3.8 Flash (High)' },
+            { difficulty: ['medium'], model: 'Gemini 3.8 Flash (High)' },
+            { difficulty: ['difficult'], model: 'Gemini 3.8 Flash (High)' },
+        ])
+
+        // v1.4.2+ discovery snapshot with Gemini 4 Argon selects the current
+        // Argon High / Argon Medium / 3.8 Flash High labels.
+        const withArgon = buildSlotProposal([
+            {
+                type: 'antigravity-cli',
+                modelOptions: [
+                    'Gemini 4 Argon (High)',
+                    'Gemini 4 Argon (Medium)',
+                    'Gemini 4 Argon (Low)',
+                    'Gemini 3.8 Flash (High)',
+                ],
+            },
+        ])
+        expect(withArgon.proposedSlots.map(s => ({ difficulty: s.difficulty, model: s.model }))).toEqual([
+            { difficulty: ['easy'], model: 'Gemini 3.8 Flash (High)' },
+            { difficulty: ['medium'], model: 'Gemini 4 Argon (Medium)' },
+            { difficulty: ['difficult'], model: 'Gemini 4 Argon (High)' },
+        ])
     })
 
     it('gives claude-cli two slots — a wide sonnet slot and a capped opus slot', () => {

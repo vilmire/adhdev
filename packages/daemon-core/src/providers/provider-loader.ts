@@ -85,6 +85,16 @@ export class ProviderLoader extends ProviderRegistry {
     this.versionArchive = archive;
   }
 
+  /** Underlying VersionArchive instance, or null when none has been attached. */
+  getVersionArchive(): VersionArchive | null {
+    return this.versionArchive;
+  }
+
+  /** Latest detected CLI version for a provider type, or null when unknown. */
+  getDetectedCliVersion(type: string): string | null {
+    return this.versionArchive?.getLatest(type) ?? null;
+  }
+
 
   /** Resolved provider channel (explicit config/env wins; otherwise derived from the daemon release channel; absent/ambiguous → 'stable'). */
   readonly channel: ProviderChannel;

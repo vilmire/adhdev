@@ -59,15 +59,25 @@ export interface ModelDiscoveryDeps {
     readFile?: (filePath: string) => Promise<string>;
     now?: () => number;
     env?: NodeJS.ProcessEnv;
+    /** Detected provider CLI version at discovery time, recorded on the snapshot. */
+    cliVersion?: string | null;
 }
 
-function resolveDeps(overrides: ModelDiscoveryDeps = {}): Required<ModelDiscoveryDeps> {
+type ResolvedModelDiscoveryDeps = Required<Omit<ModelDiscoveryDeps, 'cliVersion'>> & {
+    cliVersion?: string;
+};
+
+function resolveDeps(overrides: ModelDiscoveryDeps = {}): ResolvedModelDiscoveryDeps {
+    const cliVersion = typeof overrides.cliVersion === 'string' && overrides.cliVersion.trim()
+        ? overrides.cliVersion.trim()
+        : undefined;
     return {
         spawn: overrides.spawn ?? ((command, args, options) =>
             spawn(command, args, { env: options.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }) as any),
         readFile: overrides.readFile ?? ((filePath) => fsReadFile(filePath, 'utf-8')),
         now: overrides.now ?? (() => Date.now()),
         env: overrides.env ?? process.env,
+        ...(cliVersion ? { cliVersion } : {}),
     };
 }
 
@@ -127,7 +137,7 @@ async function discoverByCommand(
     provider: string,
     binary: string,
     spec: Extract<ModelDiscoverySpec, { kind: 'command' }>,
-    deps: Required<ModelDiscoveryDeps>,
+    deps: ResolvedModelDiscoveryDeps,
 ): Promise<ModelDiscoverySnapshot> {
     const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
     const started = deps.now();
@@ -145,7 +155,7 @@ async function discoverByCommand(
             resolve(value);
         };
 
-        let child: ReturnType<Required<ModelDiscoveryDeps>['spawn']>;
+        let child: ReturnType<ResolvedModelDiscoveryDeps['spawn']>;
         try {
             child = deps.spawn(binary, spec.argv, { env: deps.env });
         } catch (e: any) {
@@ -207,7 +217,7 @@ async function discoverByCommand(
 async function discoverByFile(
     provider: string,
     spec: Extract<ModelDiscoverySpec, { kind: 'file' }>,
-    deps: Required<ModelDiscoveryDeps>,
+    deps: ResolvedModelDiscoveryDeps,
 ): Promise<ModelDiscoverySnapshot> {
     const filePath = expandHome(spec.path);
     let raw: string;
@@ -227,6 +237,10 @@ async function discoverByFile(
     return { provider, status: 'ok', models, updatedAt: now, fetchedAt: now };
 }
 
+function withCliVersion(snapshot: ModelDiscoverySnapshot, cliVersion: string | undefined): ModelDiscoverySnapshot {
+    return cliVersion ? { ...snapshot, cliVersion } : snapshot;
+}
+
 /**
  * Discover one provider's models.
  *
@@ -244,26 +258,35 @@ export async function discoverProviderModels(
     const now = deps.now();
 
     if (!spec) {
-        return { provider, status: 'not-supported', models: [], updatedAt: now, fetchedAt: now, reason: 'provider declares no modelDiscovery block' };
+        return withCliVersion(
+            { provider, status: 'not-supported', models: [], updatedAt: now, fetchedAt: now, reason: 'provider declares no modelDiscovery block' },
+            deps.cliVersion,
+        );
     }
     if (spec.kind === 'none') {
         // ★Declared-undiscoverable is NOT a failure: it is a fact the badge
         // renders as "cannot verify". Distinguishing it from silence is the
         // whole reason `kind: 'none'` is written down rather than omitted.
-        return { provider, status: 'not-supported', models: [], updatedAt: now, fetchedAt: now, reason: spec.reason };
+        return withCliVersion(
+            { provider, status: 'not-supported', models: [], updatedAt: now, fetchedAt: now, reason: spec.reason },
+            deps.cliVersion,
+        );
     }
     if (spec.kind === 'file') {
-        return discoverByFile(provider, spec, deps);
+        return withCliVersion(await discoverByFile(provider, spec, deps), deps.cliVersion);
     }
     if (!binary) {
-        return failure(provider, 'cli-unavailable', 'provider binary not detected on this machine', now);
+        return withCliVersion(
+            failure(provider, 'cli-unavailable', 'provider binary not detected on this machine', now),
+            deps.cliVersion,
+        );
     }
     try {
-        return await discoverByCommand(provider, binary, spec, deps);
+        return withCliVersion(await discoverByCommand(provider, binary, spec, deps), deps.cliVersion);
     } catch (e: any) {
         // Belt-and-braces: discovery must never reject, or one bad provider
         // takes down the whole refresh pass.
-        return failure(provider, 'unknown', String(e?.message || e), deps.now());
+        return withCliVersion(failure(provider, 'unknown', String(e?.message || e), deps.now()), deps.cliVersion);
     }
 }
 
