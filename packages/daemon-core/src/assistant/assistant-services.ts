@@ -11,6 +11,8 @@ import { getConfigDir } from '../config/config.js';
 import { AssistantMemoryStore } from './memory/memory-store.js';
 import { AssistantSkillStore } from './skills/skill-store.js';
 import { defaultHermesHome } from './skills/hermes-import.js';
+import { DriverActivationStore } from '../drivers/activation-store.js';
+import { AssistantDriverStaging } from './driver-staging.js';
 import { AssistantNoteStaging } from './note-staging.js';
 import { AssistantLaunchDefaultStaging } from './launch-default-staging.js';
 import { AssistantInputLog } from './assistant-input-log.js';
@@ -40,6 +42,8 @@ export interface AssistantServices {
     memory: AssistantMemoryStore;
     skills: AssistantSkillStore;
     notes: AssistantNoteStaging;
+    driverStaging?: AssistantDriverStaging;
+    driverActivations?: DriverActivationStore;
     /** Same staged Inbox directory; optional only for older injected services. */
     launchDefaults?: AssistantLaunchDefaultStaging;
     inputLog: AssistantInputLog;
@@ -87,6 +91,8 @@ export function createAssistantServices(opts: CreateAssistantServicesOptions = {
         memory: new AssistantMemoryStore({ configDir, now: opts.now }),
         skills: new AssistantSkillStore({ configDir, now: opts.now }),
         notes: new AssistantNoteStaging({ configDir, now: opts.now }),
+        driverStaging: new AssistantDriverStaging({ configDir, now: opts.now }),
+        driverActivations: new DriverActivationStore({ configDir, now: opts.now }),
         launchDefaults: new AssistantLaunchDefaultStaging({ configDir, now: opts.now }),
         inputLog: new AssistantInputLog(),
         operatingNotes: opts.operatingNotes ?? defaultOperatingNotes,

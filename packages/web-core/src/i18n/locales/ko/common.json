@@ -1683,12 +1683,25 @@
         "failed": "처리 안 됨: {{code}}",
         "noText": "(내용 없음)",
         "protectedSkill": "직접 쓴 스킬을 고침",
+        "driverActivation": {
+            "advisory": "선언된 접근 권한 · OS 수준 강제 아님",
+            "trust": "신뢰 수준",
+            "digest": "트리 다이제스트",
+            "command": "명령 및 인자",
+            "risk": "위험 등급",
+            "low": "낮음",
+            "elevated": "높음",
+            "network": "네트워크",
+            "filesystem": "파일 시스템",
+            "desktopControl": "데스크톱 제어"
+        },
         "kind": {
             "memory": "기억",
             "user": "사용자",
             "skill": "스킬",
             "note": "노트",
-            "launchDefault": "실행 기본값"
+            "launchDefault": "실행 기본값",
+            "driver_activation": "드라이버 활성화"
         },
         "action": {
             "add": "추가",
@@ -1700,14 +1713,16 @@
             "record": "기록",
             "forget": "지움",
             "set": "설정",
-            "clear": "해제"
+            "clear": "해제",
+            "activate": "활성화"
         },
         "origin": {
             "relay": "릴레이 뒤",
             "review": "리뷰",
             "review_tainted": "신뢰할 수 없는 입력 뒤 리뷰",
             "human": "직접 입력",
-            "owner": "직접 입력"
+            "owner": "직접 입력",
+            "driver": "설치된 드라이버"
         },
         "role": {
             "assistant": "어시스턴트",

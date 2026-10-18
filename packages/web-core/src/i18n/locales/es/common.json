@@ -1686,12 +1686,25 @@
         "failed": "No hecho: {{code}}",
         "noText": "(sin texto)",
         "protectedSkill": "cambia una habilidad que escribiste",
+        "driverActivation": {
+            "advisory": "Acceso declarado · no se aplica a nivel del sistema operativo",
+            "trust": "Confianza",
+            "digest": "Resumen del árbol",
+            "command": "Comando y argumentos",
+            "risk": "Nivel de riesgo",
+            "low": "Bajo",
+            "elevated": "Elevado",
+            "network": "Red",
+            "filesystem": "Sistema de archivos",
+            "desktopControl": "Control del escritorio"
+        },
         "kind": {
             "memory": "Memoria",
             "user": "Usuario",
             "skill": "Habilidad",
             "note": "Nota",
-            "launchDefault": "Inicio predeterminado"
+            "launchDefault": "Inicio predeterminado",
+            "driver_activation": "Activación del controlador"
         },
         "action": {
             "add": "Añadir",
@@ -1703,14 +1716,16 @@
             "record": "Registrar",
             "forget": "Olvidar",
             "set": "Establecer",
-            "clear": "Borrar"
+            "clear": "Borrar",
+            "activate": "Activar"
         },
         "origin": {
             "relay": "De un relevo",
             "review": "De una revisión",
             "review_tainted": "De una revisión tras entrada no fiable",
             "human": "Tuyo",
-            "owner": "Tuyo"
+            "owner": "Tuyo",
+            "driver": "Controlador instalado"
         },
         "role": {
             "assistant": "Asistente",

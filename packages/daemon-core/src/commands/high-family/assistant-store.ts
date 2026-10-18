@@ -43,6 +43,7 @@ import type { MemoryOperation, MemoryTarget } from '../../assistant/memory/memor
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import type { SkillManageOp } from '../../assistant/skills/skill-store.js';
 import { createLaunchDefaultsHandlers } from './launch-defaults.js';
+import { readInstalledDriver } from '../../drivers/installed-driver.js';
 import { getLaunchDefaultsCommandPorts } from '../../launch-defaults/ports.js';
 
 /** The command sources an assistant tool reaches the daemon over (MCP IPC / standalone HTTP). */
@@ -312,7 +313,8 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const action = str(args?.action) || 'resolve';
         if (action === 'list') {
             return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
-                launchDefaults: svc.launchDefaults?.list() ?? [], memoryStatus: svc.memory.status() };
+                launchDefaults: svc.launchDefaults?.list() ?? [], driverActivations: svc.driverStaging?.list() ?? [],
+                memoryStatus: svc.memory.status() };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);
@@ -435,6 +437,11 @@ async function resolveStagedOne(ctx: HighFamilyContext, svc: AssistantServices, 
                 ...(proposal.project ? { project: proposal.project } : {}), ...proposal.selection,
             });
         });
+    }
+    if (id.startsWith('driver-activation-')) {
+        if (!svc.driverStaging || !svc.driverActivations) return { success: false, code: 'staging_unavailable' };
+        return svc.driverStaging.resolve(id, decision, svc.driverActivations,
+            type => readInstalledDriver(ctx.deps.providerLoader, type));
     }
     if (id.startsWith('mem-')) {
         const reviewTurnId = decision === 'apply' ? svc.memory.listStaged().find((r) => r.id === id)?.reviewTurnId : undefined;

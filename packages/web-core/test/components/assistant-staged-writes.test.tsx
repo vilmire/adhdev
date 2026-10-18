@@ -53,7 +53,27 @@ function launchDefaultsAnswer() {
     }
 }
 
+const DRIVER_ID = 'driver-activation-1792324800000-abc123'
+function driverActivationAnswer() {
+    return { success: true, memory: [], skills: [], notes: [], driverActivations: [{
+        kind: 'driver_activation', id: DRIVER_ID, createdAt: '2026-10-18T12:00:00.000Z', origin: 'driver',
+        type: 'computer-use', treeDigest: 'sha256:' + 'a'.repeat(64), trust: 'external-js',
+        runtime: { kind: 'mcp-stdio', command: 'node', args: ['server.js'] },
+        declaredAccess: { network: ['example.com'], filesystem: ['/tmp'], desktopControl: true },
+        riskClass: 'elevated', reasons: ['Desktop control is declared', 'Filesystem access outside workspace: /tmp'],
+    }] }
+}
+
 describe('assistant-staged model', () => {
+    it('parses driver activation consent separately and drops malformed access declarations', () => {
+        const answer = driverActivationAnswer()
+        expect(parseStagedList({ success: true, result: answer })![0]).toMatchObject({
+            kind: 'driver_activation', target: 'computer-use', action: 'activate',
+            driverActivation: { riskClass: 'elevated', declaredAccess: { desktopControl: true } },
+        })
+        expect(parseStagedList({ success: true, driverActivations: [{ ...answer.driverActivations[0], declaredAccess: { network: '*' } }] })).toEqual([])
+    })
+
     it('parses all three stores (and the cloud wrapper) into display items, oldest first', () => {
         const items = parseStagedList({ success: true, result: listAnswer() })!
         expect(items.map(i => i.id)).toEqual(['mem-1', 'mem-2', 'skl-1', 'note-1'])
@@ -228,6 +248,28 @@ describe('AssistantStagedWrites', () => {
         await click(row.querySelector('[data-staged-action="apply"]'))
         expect(send).toHaveBeenCalledWith('daemon-1', 'assistant_staged_resolve', { id: LDF, decision: 'apply' })
         expect(container.querySelector(`[data-staged-item="${LDF}"]`)).toBeNull()
+    })
+
+    it('shows driver access, risk and the OS advisory, and approves only its Inbox id', async () => {
+        const answer = driverActivationAnswer()
+        const send = vi.fn(async (_d: string, _t: string, payload?: Payload) => {
+            if (payload?.action === 'list') return answer
+            return { success: true, result: 'applied' }
+        })
+        await mount(send)
+        await click(container.querySelector('.assistant-staged-badge'))
+        const row = container.querySelector(`[data-staged-item="${DRIVER_ID}"]`)!
+        const body = row.querySelector('[data-driver-activation]')!
+        expect(body.textContent).toContain('Declared access · not enforced at OS level')
+        expect(body.textContent).toContain('external-js')
+        expect(body.textContent).toContain('["node","server.js"]')
+        expect(body.textContent).toContain('Elevated')
+        expect(body.textContent).toContain('example.com')
+        expect(body.textContent).toContain('/tmp')
+        expect(body.textContent).toContain('Desktop control: true')
+        expect(body.innerHTML).toMatchSnapshot()
+        await click(row.querySelector('[data-staged-action="apply"]'))
+        expect(send).toHaveBeenCalledWith('daemon-1', 'assistant_staged_resolve', { id: DRIVER_ID, decision: 'apply' })
     })
 
     it('refreshes when the assistant turn commits (busy → idle), not on every render', async () => {

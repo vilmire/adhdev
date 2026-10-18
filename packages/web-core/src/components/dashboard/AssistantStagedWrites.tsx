@@ -22,8 +22,8 @@ import { useAssistantStagedWrites, type AssistantStagedWritesState } from '../..
 
 type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<any>
 
-const KNOWN_ORIGINS = new Set(['relay', 'review', 'review_tainted', 'human', 'owner'])
-const KNOWN_ACTIONS = new Set(['add', 'replace', 'remove', 'create', 'patch', 'archive', 'record', 'forget', 'set', 'clear'])
+const KNOWN_ORIGINS = new Set(['relay', 'review', 'review_tainted', 'human', 'owner', 'driver'])
+const KNOWN_ACTIONS = new Set(['add', 'replace', 'remove', 'create', 'patch', 'archive', 'record', 'forget', 'set', 'clear', 'activate'])
 
 export interface AssistantStagedWritesProps {
     daemonId: string | null | undefined
@@ -267,6 +267,7 @@ function StagedItemRow({ item, state }: { item: AssistantStagedItem; state: Assi
 function StagedBody({ item }: { item: AssistantStagedItem }) {
     const { t } = useTranslation('common')
     const pre = 'max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-bg-secondary px-2 py-1 font-mono text-[11px] leading-snug'
+    if (item.kind === 'driver_activation') return <DriverActivationBody item={item} />
     if (item.diff) {
         return (
             <div className={pre}>
@@ -278,6 +279,31 @@ function StagedBody({ item }: { item: AssistantStagedItem }) {
     if (item.text) return <div className={cn(pre, 'text-text-primary')}>{item.text}</div>
     if (item.action === 'archive') return null
     return <div className="italic text-text-muted">{t('assistantStaged.noText')}</div>
+}
+
+/** Driver consent is displayed separately from memory/skill text diffs. */
+function DriverActivationBody({ item }: { item: AssistantStagedItem }) {
+    const { t } = useTranslation('common')
+    const driver = item.driverActivation
+    if (!driver) return null
+    const rows: Array<[string, string]> = [
+        ['trust', driver.trust],
+        ['digest', driver.treeDigest],
+        ['command', JSON.stringify([driver.runtime.command, ...(driver.runtime.args ?? [])])],
+        ['risk', t(`assistantStaged.driverActivation.${driver.riskClass}`)],
+        ['network', JSON.stringify(driver.declaredAccess.network ?? [])],
+        ['filesystem', JSON.stringify(driver.declaredAccess.filesystem ?? [])],
+        ['desktopControl', String(driver.declaredAccess.desktopControl ?? false)],
+    ]
+    return (
+        <div className="rounded bg-bg-secondary px-2 py-1" data-driver-activation>
+            <div className="font-medium" data-driver-access-advisory>{t('assistantStaged.driverActivation.advisory')}</div>
+            <dl className="break-words">
+                {rows.map(([key, value]) => <div key={key}><dt className="inline font-medium">{t(`assistantStaged.driverActivation.${key}`)}: </dt><dd className="inline">{value}</dd></div>)}
+            </dl>
+            {driver.reasons.length > 0 && <ul className="list-inside list-disc">{driver.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
+        </div>
+    )
 }
 
 function prefixLines(prefix: string, text: string): string {

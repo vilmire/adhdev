@@ -1683,12 +1683,25 @@
         "failed": "未完成：{{code}}",
         "noText": "（无文本）",
         "protectedSkill": "修改你编写的技能",
+        "driverActivation": {
+            "advisory": "声明的访问权限 · 不在操作系统级别强制执行",
+            "trust": "信任级别",
+            "digest": "文件树摘要",
+            "command": "命令和参数",
+            "risk": "风险等级",
+            "low": "低",
+            "elevated": "高",
+            "network": "网络",
+            "filesystem": "文件系统",
+            "desktopControl": "桌面控制"
+        },
         "kind": {
             "memory": "记忆",
             "user": "用户",
             "skill": "技能",
             "note": "笔记",
-            "launchDefault": "启动默认值"
+            "launchDefault": "启动默认值",
+            "driver_activation": "驱动程序激活"
         },
         "action": {
             "add": "添加",
@@ -1700,14 +1713,16 @@
             "record": "记录",
             "forget": "移除",
             "set": "设置",
-            "clear": "清除"
+            "clear": "清除",
+            "activate": "激活"
         },
         "origin": {
             "relay": "来自中继",
             "review": "来自回顾",
             "review_tainted": "来自不可信输入后的回顾",
             "human": "来自你",
-            "owner": "来自你"
+            "owner": "来自你",
+            "driver": "已安装的驱动程序"
         },
         "role": {
             "assistant": "助手",

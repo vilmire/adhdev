@@ -1683,12 +1683,25 @@
         "failed": "Not done: {{code}}",
         "noText": "(no text)",
         "protectedSkill": "changes a skill you wrote",
+        "driverActivation": {
+            "advisory": "Declared access · not enforced at OS level",
+            "trust": "Trust",
+            "digest": "Tree digest",
+            "command": "Command and arguments",
+            "risk": "Risk class",
+            "low": "Low",
+            "elevated": "Elevated",
+            "network": "Network",
+            "filesystem": "Filesystem",
+            "desktopControl": "Desktop control"
+        },
         "kind": {
             "memory": "Memory",
             "user": "User",
             "skill": "Skill",
             "note": "Note",
-            "launchDefault": "Launch default"
+            "launchDefault": "Launch default",
+            "driver_activation": "Driver activation"
         },
         "action": {
             "add": "Add",
@@ -1700,14 +1713,16 @@
             "record": "Record",
             "forget": "Forget",
             "set": "Set",
-            "clear": "Clear"
+            "clear": "Clear",
+            "activate": "Activate"
         },
         "origin": {
             "relay": "From a relay",
             "review": "From a review",
             "review_tainted": "From a review after untrusted input",
             "human": "From you",
-            "owner": "From you"
+            "owner": "From you",
+            "driver": "Installed driver"
         },
         "role": {
             "assistant": "Assistant",

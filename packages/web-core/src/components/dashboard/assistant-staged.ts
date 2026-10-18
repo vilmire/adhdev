@@ -20,7 +20,7 @@ export const ASSISTANT_MEMORY_LIMITS_COMMAND = 'assistant_memory_limits' as cons
 
 /** What the write changes: the assistant's own memory, the person's profile, a skill, a project note,
  * or this machine's launch default for a role (assistant / coordinator). */
-export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault'
+export type AssistantStagedKind = 'memory' | 'user' | 'skill' | 'note' | 'launchDefault' | 'driver_activation'
 export type AssistantStagedLaunchRole = 'assistant' | 'coordinator'
 export type AssistantStagedDecision = 'apply' | 'discard'
 
@@ -47,6 +47,15 @@ export interface AssistantMemoryStatus {
     user: AssistantMemoryTargetStatus
 }
 
+export interface DriverActivationPreview {
+    treeDigest: string
+    trust: string
+    runtime: { kind: 'mcp-stdio'; command: string; args?: string[] }
+    riskClass: 'low' | 'elevated'
+    reasons: string[]
+    declaredAccess: { network?: string[]; filesystem?: string[]; desktopControl?: boolean }
+}
+
 export interface AssistantStagedItem {
     id: string
     kind: AssistantStagedKind
@@ -68,6 +77,7 @@ export interface AssistantStagedItem {
     detail?: string
     /** Launch default only — the role whose next-launch default the proposal sets or clears. */
     role?: AssistantStagedLaunchRole
+    driverActivation?: DriverActivationPreview
 }
 
 export interface AssistantStagedGroup {
@@ -184,6 +194,24 @@ function launchDefaultItem(r: Record<string, any>): AssistantStagedItem | null {
     return item
 }
 
+function driverActivationItem(r: Record<string, any>): AssistantStagedItem | null {
+    const runtime = rec(r.runtime)
+    const access = rec(r.declaredAccess)
+    if (r.kind !== 'driver_activation' || !s(r.type) || !s(r.treeDigest) || !s(r.trust)
+        || runtime?.kind !== 'mcp-stdio' || !s(runtime.command) || !access
+        || !['low', 'elevated'].includes(r.riskClass)
+        || !Array.isArray(r.reasons) || r.reasons.some((v: unknown) => typeof v !== 'string')) return null
+    for (const field of ['network', 'filesystem']) {
+        if (access[field] !== undefined && (!Array.isArray(access[field]) || access[field].some((v: unknown) => typeof v !== 'string'))) return null
+    }
+    if (access.desktopControl !== undefined && typeof access.desktopControl !== 'boolean') return null
+    if (runtime.args !== undefined && (!Array.isArray(runtime.args) || runtime.args.some((v: unknown) => typeof v !== 'string'))) return null
+    const item = base(r, 'driver_activation', 'activate', r.type)
+    if (item) item.driverActivation = { treeDigest: r.treeDigest, trust: r.trust, runtime,
+        riskClass: r.riskClass, reasons: r.reasons, declaredAccess: access } as DriverActivationPreview
+    return item
+}
+
 /**
  * The list answer → items, oldest first. Returns null when the answer is not
  * a list at all (older daemon without the verb, refusal, transport error) so
@@ -192,7 +220,7 @@ function launchDefaultItem(r: Record<string, any>): AssistantStagedItem | null {
 export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     const r = unwrapStagedAnswer(raw)
     if (!r || r.success === false) return null
-    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults)) return null
+    if (!Array.isArray(r.memory) && !Array.isArray(r.skills) && !Array.isArray(r.notes) && !Array.isArray(r.launchDefaults) && !Array.isArray(r.driverActivations)) return null
     const out: AssistantStagedItem[] = []
     const take = (list: unknown, fn: (x: Record<string, any>) => AssistantStagedItem | null) => {
         if (!Array.isArray(list)) return
@@ -206,6 +234,7 @@ export function parseStagedList(raw: unknown): AssistantStagedItem[] | null {
     take(r.skills, skillItem)
     take(r.notes, noteItem)
     take(r.launchDefaults, launchDefaultItem)
+    take(r.driverActivations, driverActivationItem)
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
 }
 

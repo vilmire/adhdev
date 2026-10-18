@@ -1683,12 +1683,25 @@
         "failed": "未処理: {{code}}",
         "noText": "(テキストなし)",
         "protectedSkill": "あなたが書いたスキルを変更",
+        "driverActivation": {
+            "advisory": "アクセス宣言 · OSレベルでは強制されません",
+            "trust": "信頼レベル",
+            "digest": "ツリーダイジェスト",
+            "command": "コマンドと引数",
+            "risk": "リスク区分",
+            "low": "低",
+            "elevated": "高",
+            "network": "ネットワーク",
+            "filesystem": "ファイルシステム",
+            "desktopControl": "デスクトップ操作"
+        },
         "kind": {
             "memory": "メモリ",
             "user": "ユーザー",
             "skill": "スキル",
             "note": "ノート",
-            "launchDefault": "起動デフォルト"
+            "launchDefault": "起動デフォルト",
+            "driver_activation": "ドライバーの有効化"
         },
         "action": {
             "add": "追加",
@@ -1700,14 +1713,16 @@
             "record": "記録",
             "forget": "削除",
             "set": "設定",
-            "clear": "解除"
+            "clear": "解除",
+            "activate": "有効化"
         },
         "origin": {
             "relay": "リレー後",
             "review": "レビュー",
             "review_tainted": "信頼できない入力後のレビュー",
             "human": "あなた",
-            "owner": "あなた"
+            "owner": "あなた",
+            "driver": "インストール済みドライバー"
         },
         "role": {
             "assistant": "アシスタント",
