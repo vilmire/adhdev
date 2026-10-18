@@ -300,6 +300,8 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             logFd = fs.openSync(path.join(logDir, 'session-host.log'), 'a');
             stdio = ['ignore', logFd, logFd];
         }
+        // The host owns IPC/snapshots: keep it normal priority. Only its agent
+        // PTY children are lowered in session-host-daemon/runtime.ts.
         const child = spawn(nodeExecutable, [entry], {
             detached: true,
             stdio,

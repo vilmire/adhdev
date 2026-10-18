@@ -8,6 +8,7 @@ import {
   ensureNodePtySpawnHelperPermissions,
   resolveSessionHostCols,
   resolveSessionHostRows,
+  spawnCliChild,
 } from '@adhdev/session-host-core';
 
 type TerminalMirrorHandle = {
@@ -351,13 +352,13 @@ export class PtySessionRuntime {
       }
     }
 
-    this.ptyProcess = pty.spawn(command, args, {
+    this.ptyProcess = spawnCliChild(() => pty.spawn(command, args, {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,
       cwd,
       env,
-    });
+    }), env);
     this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,

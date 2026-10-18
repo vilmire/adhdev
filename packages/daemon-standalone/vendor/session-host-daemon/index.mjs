@@ -75,7 +75,8 @@ import {
   sanitizeSpawnEnv,
   ensureNodePtySpawnHelperPermissions,
   resolveSessionHostCols,
-  resolveSessionHostRows
+  resolveSessionHostRows,
+  spawnCliChild
 } from "@adhdev/session-host-core";
 var terminalMirrorFactory;
 var terminalMirrorWarning = null;
@@ -294,13 +295,13 @@ var PtySessionRuntime = class {
         cwd = os.homedir();
       }
     }
-    this.ptyProcess = pty.spawn(command, args, {
+    this.ptyProcess = spawnCliChild(() => pty.spawn(command, args, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
       cwd,
       env
-    });
+    }), env);
     this.screenMirror = getTerminalMirrorFactory()({
       cols: this.cols,
       rows: this.rows,

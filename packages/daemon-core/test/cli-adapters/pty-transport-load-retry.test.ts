@@ -12,7 +12,9 @@ import { NodePtyTransportFactory, __setNodePtyLoaderForTests } from '../../src/c
  * inject a stub loader via the test-only __setNodePtyLoaderForTests seam.
  */
 describe('pty-transport loadNodePty retry semantics', () => {
+    beforeEach(() => vi.stubEnv('ADHDEV_CLI_CHILD_NICE', '0')); // Stub PIDs must never reach the OS.
     afterEach(() => {
+        vi.unstubAllEnvs();
         __setNodePtyLoaderForTests(null);
     });
 

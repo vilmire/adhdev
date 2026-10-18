@@ -1,6 +1,8 @@
 import { assertMaintenanceAdmission, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
 import * as os from 'os';
 import type { SessionTermination } from '@adhdev/session-host-core';
+import { spawnCliChild } from '@adhdev/session-host-core';
+import { LOG } from '../logging/logger.js';
 import { ensureNodePtySpawnHelperPermissions } from './spawn-env.js';
 import { resolveWin32Executable } from './resolve-executable.js';
 
@@ -166,13 +168,13 @@ export class NodePtyTransportFactory implements PtyTransportFactory {
       }
     }
     assertMaintenanceAdmission();
-    const handle = withMaintenanceEffect(() => pty.spawn(resolveWin32Executable(command), args, {
+    const handle = withMaintenanceEffect(() => spawnCliChild(() => pty.spawn(resolveWin32Executable(command), args, {
       name: 'xterm-256color',
       cols: options.cols,
       rows: options.rows,
       cwd,
       env: options.env,
-    }));
+    }), options.env, (message) => LOG.info('CliPriority', message)));
     return new NodePtyRuntimeTransport(handle);
   }
 }

@@ -2862,6 +2862,9 @@ var require_dist = __commonJS({
     var __toCommonJS2 = (mod) => __copyProps2(__defProp2({}, "__esModule", { value: true }), mod);
     var index_exports2 = {};
     __export2(index_exports2, {
+      CLI_CHILD_NICE_ENV: () => CLI_CHILD_NICE_ENV,
+      CLI_CHILD_NICE_INCREMENT: () => CLI_CHILD_NICE_INCREMENT,
+      CLI_CHILD_SCHEDULING_ENV: () => CLI_CHILD_SCHEDULING_ENV,
       DEFAULT_CONFIG_DIR_NAME: () => DEFAULT_CONFIG_DIR_NAME,
       DEFAULT_SESSION_HOST_COLS: () => DEFAULT_SESSION_HOST_COLS,
       DEFAULT_SESSION_HOST_ROWS: () => DEFAULT_SESSION_HOST_ROWS,
@@ -2875,6 +2878,7 @@ var require_dist = __commonJS({
       buildRuntimeKey: () => buildRuntimeKey,
       canonicalizeInstancePath: () => canonicalizeInstancePath,
       classifyTermination: () => classifyTermination,
+      createCliChildPriorityPolicy: () => createCliChildPriorityPolicy,
       createLineParser: () => createLineParser,
       createResponseEnvelope: () => createResponseEnvelope,
       createSessionHostControlPlane: () => createSessionHostControlPlane,
@@ -2884,6 +2888,7 @@ var require_dist = __commonJS({
       getSessionHostRecoveryLabel: () => getSessionHostRecoveryLabel2,
       getSessionHostSurfaceKind: () => getSessionHostSurfaceKind2,
       getWorkspaceLabel: () => getWorkspaceLabel,
+      hiddenSpawnProcess: () => hiddenSpawn,
       isDefaultInstanceConfigDir: () => isDefaultInstanceConfigDir,
       isSessionHostLiveRuntime: () => isSessionHostLiveRuntime2,
       isSessionHostRecoverySnapshot: () => isSessionHostRecoverySnapshot2,
@@ -2897,6 +2902,7 @@ var require_dist = __commonJS({
       resolveSessionHostIpcKey: () => resolveSessionHostIpcKey,
       resolveSessionHostRows: () => resolveSessionHostRows,
       sanitizeSpawnEnv: () => sanitizeSpawnEnv,
+      spawnCliChild: () => spawnCliChild,
       writeEnvelope: () => writeEnvelope
     });
     module2.exports = __toCommonJS2(index_exports2);
@@ -2956,6 +2962,56 @@ var require_dist = __commonJS({
       if (input.requestedStop) termination.requestedStop = input.requestedStop;
       return termination;
     }
+    var os4 = __toESM2(require("os"));
+    var import_node_child_process2 = require("child_process");
+    function hiddenSpawn(command, args = [], options = {}) {
+      return (0, import_node_child_process2.spawn)(command, args, { windowsHide: true, ...options });
+    }
+    var CLI_CHILD_NICE_INCREMENT = 10;
+    var CLI_CHILD_NICE_ENV = "ADHDEV_CLI_CHILD_NICE";
+    var CLI_CHILD_SCHEDULING_ENV = "ADHDEV_CLI_CHILD_SCHEDULING";
+    function setDarwinBackground(pid, onFailure) {
+      const task = hiddenSpawn("/usr/sbin/taskpolicy", ["-b", "-p", String(pid)], { stdio: "ignore" });
+      task.once("error", onFailure);
+      task.once("exit", (code, signal) => {
+        if (code !== 0) onFailure(new Error(`taskpolicy exited with ${signal ?? code}`));
+      });
+    }
+    function createCliChildPriorityPolicy(deps = {
+      platform: process.platform,
+      getPriority: os4.getPriority,
+      setPriority: os4.setPriority,
+      setDarwinBackground
+    }) {
+      let failureLogged = false;
+      return function spawnCliChild2(spawnChild, env2 = process.env, logInfo = console.info) {
+        const child = spawnChild();
+        const pid = child.pid;
+        if (env2[CLI_CHILD_NICE_ENV] === "0" || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return child;
+        const onFailure = (error) => {
+          if (!failureLogged) {
+            failureLogged = true;
+            const detail = error instanceof Error ? error.message : String(error);
+            logInfo(`[cli-child-priority] Could not apply CLI child scheduling (pid ${pid}); continuing: ${detail}`);
+          }
+        };
+        try {
+          const priority = deps.platform === "win32" ? os4.constants.priority.PRIORITY_BELOW_NORMAL : Math.min(19, deps.getPriority(pid) + CLI_CHILD_NICE_INCREMENT);
+          deps.setPriority(pid, priority);
+        } catch (error) {
+          onFailure(error);
+        }
+        if (deps.platform === "darwin" && env2[CLI_CHILD_SCHEDULING_ENV] === "darwin-bg") {
+          try {
+            deps.setDarwinBackground?.(pid, onFailure);
+          } catch (error) {
+            onFailure(error);
+          }
+        }
+        return child;
+      };
+    }
+    var spawnCliChild = createCliChildPriorityPolicy();
     var DEFAULT_SESSION_RING_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
     var SessionRingBuffer = class {
       maxBytes;
@@ -3508,7 +3564,7 @@ var require_dist = __commonJS({
         return { ...meta };
       }
     }
-    var os4 = __toESM2(require("os"));
+    var os22 = __toESM2(require("os"));
     var path22 = __toESM2(require("path"));
     var net = __toESM2(require("net"));
     var import_string_decoder = require("string_decoder");
@@ -3527,7 +3583,7 @@ var require_dist = __commonJS({
       }
       return {
         kind: "unix",
-        path: path22.join(os4.tmpdir(), `${appName}-session-host${suffix}.sock`)
+        path: path22.join(os22.tmpdir(), `${appName}-session-host${suffix}.sock`)
       };
     }
     function serializeEnvelope(envelope) {
@@ -3747,10 +3803,10 @@ var require_dist = __commonJS({
     }
     var crypto2 = __toESM2(require("crypto"));
     var fs3 = __toESM2(require("fs"));
-    var os22 = __toESM2(require("os"));
+    var os32 = __toESM2(require("os"));
     var path32 = __toESM2(require("path"));
     var DEFAULT_CONFIG_DIR_NAME = ".adhdev";
-    function resolveInstanceConfigDir(env2 = process.env, homeDir = os22.homedir()) {
+    function resolveInstanceConfigDir(env2 = process.env, homeDir = os32.homedir()) {
       const override = typeof env2.ADHDEV_CONFIG_DIR === "string" ? env2.ADHDEV_CONFIG_DIR.trim() : "";
       return override || path32.join(homeDir, DEFAULT_CONFIG_DIR_NAME);
     }
@@ -3775,15 +3831,15 @@ var require_dist = __commonJS({
       const real = realpathLongestExistingPrefix(resolved).replace(/[\\/]+$/, "");
       return platform2 === "win32" ? real.toLowerCase() : real;
     }
-    function isDefaultInstanceConfigDir(configDir, homeDir = os22.homedir(), platform2 = process.platform) {
+    function isDefaultInstanceConfigDir(configDir, homeDir = os32.homedir(), platform2 = process.platform) {
       return canonicalizeInstancePath(configDir, platform2) === canonicalizeInstancePath(path32.join(homeDir, DEFAULT_CONFIG_DIR_NAME), platform2);
     }
-    function resolveSessionHostIpcKey(configDir, homeDir = os22.homedir(), platform2 = process.platform) {
+    function resolveSessionHostIpcKey(configDir, homeDir = os32.homedir(), platform2 = process.platform) {
       if (isDefaultInstanceConfigDir(configDir, homeDir, platform2)) return "";
       const canonical = canonicalizeInstancePath(configDir, platform2);
       return crypto2.createHash("sha256").update(canonical, "utf8").digest("hex").slice(0, 12);
     }
-    var os32 = __toESM2(require("os"));
+    var os42 = __toESM2(require("os"));
     var path4 = __toESM2(require("path"));
     function sanitizeSpawnEnv(baseEnv, overrides) {
       const env2 = {};
@@ -3825,11 +3881,11 @@ var require_dist = __commonJS({
       }
     }
     function ensureNodePtySpawnHelperPermissions(logFn) {
-      if (os32.platform() === "win32") return;
+      if (os42.platform() === "win32") return;
       try {
         const fs22 = require("fs");
         const ptyDir = path4.resolve(path4.dirname(require.resolve("node-pty")), "..");
-        const platformArch = `${os32.platform()}-${os32.arch()}`;
+        const platformArch = `${os42.platform()}-${os42.arch()}`;
         const helper = path4.join(ptyDir, "prebuilds", platformArch, "spawn-helper");
         if (fs22.existsSync(helper)) {
           const stat = fs22.statSync(helper);
@@ -60458,16 +60514,16 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const startedAt = Date.now();
         state2.lastCommand = command.displayCommand;
         const resolvedCommand = resolveWin32Executable(command.command);
-        const spawn10 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
+        const spawn9 = buildWin32ExecFileSpawn(resolvedCommand, command.args);
         try {
-          const result = await execFileAsync6(spawn10.file, spawn10.args, {
+          const result = await execFileAsync6(spawn9.file, spawn9.args, {
             cwd,
             encoding: "utf8",
             timeout: command.timeoutMs || DEFAULT_TIMEOUT_MS2,
             maxBuffer: command.outputLimitBytes || DEFAULT_OUTPUT_LIMIT_BYTES,
             env: { ...process.env, CI: process.env.CI || "1", ...command.env || {} },
             windowsHide: true,
-            ...spawn10.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+            ...spawn9.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
           });
           state2.commandsRun?.push({
             command: command.command,
@@ -81256,10 +81312,18 @@ ${cleanBody}`;
       hiddenExecFileSync: () => hiddenExecFileSync,
       hiddenExecSync: () => hiddenExecSync,
       hiddenSpawn: () => hiddenSpawn,
+      hiddenSpawnCli: () => hiddenSpawnCli,
       hiddenSpawnSync: () => hiddenSpawnSync
     });
     function hiddenSpawn(command, args = [], options = {}) {
-      return (0, import_node_child_process7.spawn)(command, args, { windowsHide: true, ...options });
+      return (0, import_session_host_core6.hiddenSpawnProcess)(command, args, options);
+    }
+    function hiddenSpawnCli(command, args = [], options = {}) {
+      return (0, import_session_host_core6.spawnCliChild)(
+        () => hiddenSpawn(command, args, options),
+        options.env ?? process.env,
+        (message) => LOG.info("CliPriority", message)
+      );
     }
     function hiddenSpawnSync(command, args = [], options = {}) {
       return (0, import_node_child_process7.spawnSync)(command, args, { windowsHide: true, ...options });
@@ -81282,11 +81346,14 @@ ${cleanBody}`;
     }
     var import_node_child_process7;
     var import_node_util5;
+    var import_session_host_core6;
     var init_hidden_spawn = __esm2({
       "src/process/hidden-spawn.ts"() {
         "use strict";
         import_node_child_process7 = require("child_process");
         import_node_util5 = require("util");
+        import_session_host_core6 = require_dist();
+        init_logger();
         hiddenExec[import_node_util5.promisify.custom] = (command, options) => {
           return (0, import_node_util5.promisify)(import_node_child_process7.exec)(command, { windowsHide: true, ...options });
         };
@@ -90610,15 +90677,15 @@ ${asText(streams.stderr)}
       return commandsToRun;
     }
     async function execRefineCommand(execFileAsync6, candidate, cwd, resolvedCommand) {
-      const spawn10 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
-      return execFileAsync6(spawn10.file, spawn10.args, {
+      const spawn9 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
+      return execFileAsync6(spawn9.file, spawn9.args, {
         cwd,
         encoding: "utf8",
         windowsHide: true,
         timeout: candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...candidate.env || {} },
-        ...spawn10.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+        ...spawn9.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       });
     }
     function refineExecFailureExtras(error) {
@@ -101427,6 +101494,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os33;
+    var import_session_host_core10;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -101436,6 +101504,8 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os33 = __toESM2(require("os"));
+        import_session_host_core10 = require_dist();
+        init_logger();
         init_spawn_env();
         init_resolve_executable();
         requireNodePty = () => require("node-pty");
@@ -101482,13 +101552,13 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const handle = withMaintenanceEffect(() => pty.spawn(resolveWin32Executable(command), args, {
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core10.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
               cwd,
               env: options.env
-            }));
+            }), options.env, (message) => LOG.info("CliPriority", message)));
             return new NodePtyRuntimeTransport(handle);
           }
         };
@@ -108576,7 +108646,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         log?.(`Failed to remove inactive prefix ${target}: ${error?.message || String(error)}`);
       }
     }
-    var import_session_host_core6 = require_dist();
+    var import_session_host_core7 = require_dist();
     init_config();
     init_logger();
     init_track_identity();
@@ -109261,7 +109331,7 @@ ${marker2}`,
       assertWorkerBridgeLifecycleAdmission("helper_npm");
       return execNpmCommandSync(...args);
     };
-    var spawn4 = ((...args) => {
+    var spawn3 = ((...args) => {
       assertWorkerBridgeLifecycleAdmission("helper_spawn");
       return (0, import_child_process12.spawn)(...args);
     });
@@ -109770,7 +109840,7 @@ ${marker2}`,
       const root = payload.configDir || getConfigDir2();
       const operationId = process.platform === "win32" ? void 0 : beginLifecycleSource("helper", { targetVersion: payload.targetVersion, packageName: payload.packageName, parentPid: payload.parentPid }, root);
       const env2 = buildUpgradeHelperChildEnv({ ...payload, ...operationId ? { maintenanceOperationId: operationId } : {} });
-      const child = spawn4(process.execPath, process.argv.slice(1), {
+      const child = spawn3(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
@@ -109986,7 +110056,7 @@ ${marker2}`,
         appendUpgradeLog(`Restarting daemon with args: ${restartArgv.join(" ")}`);
         const { fd: outFd, close: closeOutFd } = openCaptureLogFd();
         try {
-          const child = spawn4(process.execPath, restartArgv, {
+          const child = spawn3(process.execPath, restartArgv, {
             detached: true,
             stdio: ["ignore", outFd, outFd],
             windowsHide: true,
@@ -110020,7 +110090,7 @@ ${marker2}`,
         const payload = JSON.parse(raw);
         targetVersion = typeof payload?.targetVersion === "string" ? payload.targetVersion : null;
         const envConfigDir = (process.env.ADHDEV_CONFIG_DIR || "").trim();
-        if (payload.configDir && envConfigDir && (0, import_session_host_core6.canonicalizeInstancePath)(payload.configDir) !== (0, import_session_host_core6.canonicalizeInstancePath)(envConfigDir)) {
+        if (payload.configDir && envConfigDir && (0, import_session_host_core7.canonicalizeInstancePath)(payload.configDir) !== (0, import_session_host_core7.canonicalizeInstancePath)(envConfigDir)) {
           throw new Error(
             `Upgrade helper instance conflict: payload configDir "${payload.configDir}" vs ADHDEV_CONFIG_DIR "${envConfigDir}" \u2014 refusing to run across instances`
           );
@@ -110655,7 +110725,7 @@ ${marker2}`,
     var path44 = __toESM2(require("path"));
     init_config();
     var import_node_crypto8 = require("crypto");
-    var import_session_host_core7 = require_dist();
+    var import_session_host_core8 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
@@ -110724,7 +110794,7 @@ ${marker2}`,
         if (!registry || !host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
         const endpoint = await host.deps.verifiedRetainedEndpoint();
         if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
-        const client = new import_session_host_core7.SessionHostClient({ endpoint });
+        const client = new import_session_host_core8.SessionHostClient({ endpoint });
         try {
           await client.connect();
           const list2 = async () => {
@@ -110838,7 +110908,7 @@ ${marker2}`,
       if (!host.deps.verifiedRetainedEndpoint) throw new Error("maintenance_verified_endpoint_required");
       const endpoint = await host.deps.verifiedRetainedEndpoint();
       if (endpoint.path !== state2.retainedHost.endpoint) throw new Error("maintenance_retained_endpoint_drift");
-      const client = new import_session_host_core7.SessionHostClient({ endpoint });
+      const client = new import_session_host_core8.SessionHostClient({ endpoint });
       try {
         await client.connect();
         const reply = await client.request({ type: "list_sessions", payload: {} });
@@ -110858,7 +110928,7 @@ ${marker2}`,
       if (!state2 || !p || p.epoch !== state2.epoch || p.bootNonce !== MAINTENANCE_BOOT_NONCE || p.receipt !== receipt || !p.observation || !host.deps.verifiedRetainedEndpoint) throw Error("maintenance_prepared_observation_lost");
       const endpoint = await host.deps.verifiedRetainedEndpoint();
       if (endpoint.path !== state2.retainedHost.endpoint) throw Error("maintenance_retained_endpoint_drift");
-      const client = new import_session_host_core7.SessionHostClient({ endpoint });
+      const client = new import_session_host_core8.SessionHostClient({ endpoint });
       try {
         await client.connect();
         const reply = await client.request({ type: "list_sessions", payload: {} });
@@ -115100,9 +115170,9 @@ ${marker2}`,
       const typedProvider = provider;
       const controls = Array.isArray(provider.controls) ? provider.controls : [];
       if (category === "cli") {
-        const spawn10 = provider.spawn;
-        const command = spawn10 && typeof spawn10 === "object" ? spawn10.command : void 0;
-        if (!spawn10 || typeof spawn10 !== "object") {
+        const spawn9 = provider.spawn;
+        const command = spawn9 && typeof spawn9 === "object" ? spawn9.command : void 0;
+        if (!spawn9 || typeof spawn9 !== "object") {
           errors.push(`${String(category).toUpperCase()}/CLI providers must have spawn config`);
         } else if (typeof command !== "string" || !command.trim()) {
           errors.push("spawn.command is required");
@@ -135300,7 +135370,7 @@ ${output}` : "";
     var os322 = __toESM2(require("os"));
     var path80 = __toESM2(require("path"));
     init_logger();
-    var import_session_host_core8 = require_dist();
+    var import_session_host_core9 = require_dist();
     init_provider_cli_shared();
     function isFlagToken(arg) {
       return typeof arg === "string" && arg.startsWith("-") && arg !== "-" && arg !== "--";
@@ -135412,8 +135482,8 @@ ${output}` : "";
         isWin,
         useShell,
         ptyOptions: {
-          cols: geometry?.cols ?? import_session_host_core8.DEFAULT_SESSION_HOST_COLS,
-          rows: geometry?.rows ?? import_session_host_core8.DEFAULT_SESSION_HOST_ROWS,
+          cols: geometry?.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS,
+          rows: geometry?.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS,
           cwd: workingDir,
           env: env2
         }
@@ -147394,7 +147464,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os39 = __toESM2(require("os"));
     var path89 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core9 = require_dist();
+    var import_session_host_core11 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -147415,8 +147485,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers) {
         this.opts = opts;
         this.handlers = handlers;
-        this.cols = opts.cols ?? import_session_host_core9.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core9.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core11.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core11.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -148672,7 +148742,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core10 = require_dist();
+    var import_session_host_core12 = require_dist();
     var fs95 = __toESM2(require("fs"));
     var path88 = __toESM2(require("path"));
     var fs91 = __toESM2(require("fs"));
@@ -149141,8 +149211,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core10.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core10.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core12.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core12.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -165404,16 +165474,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           this.json(res, 404, { error: `Provider not found: ${type2}` });
           return;
         }
-        const spawn10 = provider.spawn;
-        if (!spawn10) {
+        const spawn9 = provider.spawn;
+        if (!spawn9) {
           this.json(res, 400, { error: `Provider ${type2} has no spawn config` });
           return;
         }
         const { spawn: spawnFn } = await import("child_process");
         const start = Date.now();
         try {
-          const child = spawnFn(spawn10.command, [...spawn10.args || []], {
-            shell: spawn10.shell ?? false,
+          const child = spawnFn(spawn9.command, [...spawn9.args || []], {
+            shell: spawn9.shell ?? false,
             windowsHide: true,
             timeout: 5e3,
             stdio: ["pipe", "pipe", "pipe"]
@@ -165446,7 +165516,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: true,
-            command: `${spawn10.command} ${(spawn10.args || []).join(" ")}`,
+            command: `${spawn9.command} ${(spawn9.args || []).join(" ")}`,
             elapsed,
             stdout: stdout.trim(),
             stderr: stderr.trim(),
@@ -165456,7 +165526,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const elapsed = Date.now() - start;
           this.json(res, 200, {
             success: false,
-            command: `${spawn10.command} ${(spawn10.args || []).join(" ")}`,
+            command: `${spawn9.command} ${(spawn9.args || []).join(" ")}`,
             elapsed,
             error: e.message
           });
@@ -166052,7 +166122,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core11 = require_dist();
+    var import_session_host_core13 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record3) {
@@ -166065,7 +166135,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core11.SessionHostClient({
+        this.client = new import_session_host_core13.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -166514,7 +166584,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
     var import_crypto36 = require("crypto");
-    var import_session_host_core12 = require_dist();
+    var import_session_host_core14 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -166612,7 +166682,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto36.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core12.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core14.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -166706,7 +166776,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await attachment.close();
       }
     }
-    var import_session_host_core13 = require_dist();
+    var import_session_host_core15 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -166744,7 +166814,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function canConnect(endpoint, requiredRequestTypes = []) {
-      const client = new import_session_host_core13.SessionHostClient({ endpoint });
+      const client = new import_session_host_core15.SessionHostClient({ endpoint });
       try {
         await client.connect();
         await assertRequiredRequestTypes(client, requiredRequestTypes);
@@ -166766,7 +166836,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
     async function ensureSessionHostReady(options) {
-      const endpoint = options.endpoint || (0, import_session_host_core13.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint = options.endpoint || (0, import_session_host_core15.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const requiredRequestTypes = options.requiredRequestTypes || [];
       if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
       options.spawnHost();
@@ -166774,7 +166844,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return endpoint;
     }
     async function listHostedCliRuntimes(endpoint) {
-      const client = new import_session_host_core13.SessionHostClient({ endpoint });
+      const client = new import_session_host_core15.SessionHostClient({ endpoint });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -166819,7 +166889,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs109 = __toESM2(require("fs"));
     var os44 = __toESM2(require("os"));
     var path101 = __toESM2(require("path"));
-    var import_session_host_core14 = require_dist();
+    var import_session_host_core16 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -166829,9 +166899,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => true);
       let unverifiedStopPid = null;
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core14.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core16.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core14.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core16.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         return env2;
@@ -167007,7 +167077,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch {
           return;
         }
-        const client = new import_session_host_core14.SessionHostClient({ endpoint: getEndpoint() });
+        const client = new import_session_host_core16.SessionHostClient({ endpoint: getEndpoint() });
         let reported;
         try {
           await client.connect();
@@ -167043,7 +167113,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core14.SessionHostClient({ endpoint });
+          const client = new import_session_host_core16.SessionHostClient({ endpoint });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -174577,13 +174647,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core15 = require_dist();
+    var import_session_host_core17 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core15.SessionHostClient({ endpoint });
-        this.plane = (0, import_session_host_core15.createSessionHostControlPlane)({
+        this.client = new import_session_host_core17.SessionHostClient({ endpoint });
+        this.plane = (0, import_session_host_core17.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }

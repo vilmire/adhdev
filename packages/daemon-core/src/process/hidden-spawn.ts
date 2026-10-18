@@ -45,7 +45,6 @@ import {
     execFile,
     execFileSync,
     execSync,
-    spawn,
     spawnSync,
     type ChildProcess,
     type ChildProcessWithoutNullStreams,
@@ -66,6 +65,8 @@ import {
     type SpawnSyncReturns,
 } from 'node:child_process';
 import { promisify } from 'node:util';
+import { hiddenSpawnProcess, spawnCliChild } from '@adhdev/session-host-core';
+import { LOG } from '../logging/logger.js';
 
 /** `spawn` with the win32 console window hidden by default. */
 export function hiddenSpawn(
@@ -73,7 +74,17 @@ export function hiddenSpawn(
     args: readonly string[] = [],
     options: SpawnOptions = {},
 ): ChildProcess {
-    return spawn(command, args as string[], { windowsHide: true, ...options });
+    return hiddenSpawnProcess(command, args, options);
+}
+
+/** Agent workloads only; generic helpers and control-plane processes stay normal. */
+export function hiddenSpawnCli(
+    command: string,
+    args: readonly string[] = [],
+    options: SpawnOptions = {},
+): ChildProcess {
+    return spawnCliChild(() => hiddenSpawn(command, args, options), options.env ?? process.env,
+        (message) => LOG.info('CliPriority', message));
 }
 
 /**
