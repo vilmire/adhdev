@@ -169,7 +169,7 @@ export default function DashboardMobileMachineScreen({
             <div className={`flex items-center justify-between gap-3 ${headerPaddingClass} border-b border-border-subtle/70 bg-bg-primary backdrop-blur-md`}>
                 <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <button
-                        className="w-[34px] h-[34px] rounded-full border border-border-default bg-surface-primary/70 text-text-secondary shrink-0 inline-flex items-center justify-center hover:bg-surface-primary transition-colors"
+                        className="mobile-room-back shrink-0 inline-flex items-center justify-center"
                         onClick={onBack}
                         type="button"
                         aria-label={t('common.back')}

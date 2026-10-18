@@ -184,12 +184,27 @@ describe('ChatMessageList — kind:tool default-transcript render', () => {
     expect(html).not.toContain('class="tool-label">Tool<')
   })
 
-  it('falls back to the generic "Tool" header when meta.label is absent', () => {
+  it('labels an unnamed `↘` result row "Result" and drops the arrow', () => {
     const html = renderMessages([
       {
         role: 'assistant',
         kind: 'tool',
         content: '↘ ran the thing',
+        receivedAt: 1,
+        sequence: 0,
+      } as ChatMessage,
+    ])
+
+    expect(html).toContain('class="tool-label">Result<')
+    expect(html).not.toContain('↘')
+  })
+
+  it('falls back to the generic "Tool" header when nothing names the row', () => {
+    const html = renderMessages([
+      {
+        role: 'assistant',
+        kind: 'tool',
+        content: 'ran the thing',
         receivedAt: 1,
         sequence: 0,
       } as ChatMessage,

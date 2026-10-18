@@ -954,7 +954,7 @@ export default function DashboardNewSessionDialog({
                         </div>
                         <button
                             type="button"
-                            className="inline-flex items-center justify-center w-8 h-8 rounded-full border border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-colors shrink-0"
+                            className="w-8 h-8 inline-flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] transition-colors shrink-0"
                             onClick={onClose}
                             aria-label={t('newSession.close')}
                         >

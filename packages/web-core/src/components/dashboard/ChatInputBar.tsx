@@ -288,7 +288,7 @@ const ChatInputBar = memo(function ChatInputBar({
                         aria-label={areControlsVisible ? t('chatInput.hideControls') : t('chatInput.showControls')}
                         aria-pressed={areControlsVisible}
                         title={areControlsVisible ? t('chatInput.hideControls') : t('chatInput.showControls')}
-                        className="h-10 w-7 shrink-0 rounded-full border border-border-subtle bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-[var(--surface-tertiary)] transition-colors flex items-center justify-center"
+                        className="h-10 w-8 shrink-0 rounded-lg text-text-muted hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] transition-colors flex items-center justify-center"
                     >
                         <svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor" aria-hidden="true">
                             <circle cx="6" cy="3" r="1.2" />
@@ -317,7 +317,7 @@ const ChatInputBar = memo(function ChatInputBar({
                             onClick={() => fileInputRef.current?.click()}
                             disabled={attachments.length >= MAX_ATTACHMENTS}
                             title={attachments.length >= MAX_ATTACHMENTS ? `Max ${MAX_ATTACHMENTS} images` : t('chatInput.attachImage')}
-                            className="h-10 w-8 shrink-0 rounded-full border border-border-subtle bg-bg-secondary text-text-muted hover:text-text-primary hover:bg-[var(--surface-tertiary)] transition-colors flex items-center justify-center disabled:opacity-40"
+                            className="h-10 w-8 shrink-0 rounded-lg text-text-muted hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] transition-colors flex items-center justify-center disabled:opacity-40"
                             aria-label={t('chatInput.attachImage')}
                         >
                             {/* Paperclip icon */}

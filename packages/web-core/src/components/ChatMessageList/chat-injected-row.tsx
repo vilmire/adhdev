@@ -15,6 +15,7 @@ import { ChatMarkdownBody } from './chat-row-content';
 import { Collapsible, RowMeta } from './chat-row-shell';
 import type { ChatRowModel } from './chat-row-model';
 import type { InjectedSegment } from './injected-text';
+import { summarizeNotice } from './notice-summary';
 
 const CARD_COLLAPSE = { mode: 'local', threshold: 0, previewChars: 0 } as const;
 
@@ -51,11 +52,12 @@ function NoticeChip({ segment, timestamp }: { segment: InjectedSegment; timestam
         ? segment.project || ''
         : segment.source === 'review' ? t('chat.reviewLabel') : t('chat.daemonNoticeLabel');
     const Icon = segment.source === 'review' ? IconBook : IconBell;
+    const summary = summarizeNotice(segment);
     return (
         <div className="chat-notice-chip" data-injected-source={segment.source} title={segment.body}>
             <span className="chat-row-icon" aria-hidden="true"><Icon size={11} /></span>
             <span className="chat-notice-chip-label">{label}</span>
-            <span className="chat-notice-chip-text">{segment.preview}</span>
+            <span className="chat-notice-chip-text">{summary ? t(summary.key, summary.values) : segment.preview}</span>
             <RowMeta className="chat-bubble-header-end" copyText={segment.body || null} timestamp={timestamp} />
         </div>
     );

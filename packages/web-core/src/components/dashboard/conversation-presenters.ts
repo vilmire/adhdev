@@ -1,4 +1,6 @@
 import { formatIdeType } from '../../utils/daemon-utils'
+import { i18next } from '../../i18n/config'
+import { isAssistantConversation } from './assistant-session'
 import type { ActiveConversation } from './types'
 import { isMeshGraphAvailableFor } from './conversation-mesh-role'
 import { getConversationViewStates } from './DashboardMobileChatShared'
@@ -12,7 +14,13 @@ import {
     type ConversationPreviewSnapshot,
 } from './conversation-selectors'
 
+/**
+ * The assistant is "비서" / "Assistant" in the user's language everywhere it is
+ * named (inbox entry, room header, tab, input placeholder); the stored
+ * `displayPrimary` stays the language-neutral brand label it is matched by.
+ */
 export function getConversationTitle(conversation: ActiveConversation): string {
+    if (isAssistantConversation(conversation)) return i18next.t('dashboard.assistant.label', { ns: 'common' })
     return getConversationDisplayLabel(conversation)
 }
 

@@ -141,8 +141,8 @@ export default function NodeSlotEditor({ slots, availableProviders, saving, onSa
                     <div className="flex items-center gap-1.5 mb-2">
                         <span className="text-2xs font-semibold text-text-muted">#{i + 1}</span>
                         <div className="ml-auto flex items-center gap-1">
-                            <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border-subtle text-text-muted hover:text-text-primary disabled:opacity-40" disabled={i === 0} onClick={() => move(i, -1)} title={t('mesh.slotEditor.moveUp')}>↑</button>
-                            <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-border-subtle text-text-muted hover:text-text-primary disabled:opacity-40" disabled={i === drafts.length - 1} onClick={() => move(i, 1)} title={t('mesh.slotEditor.moveDown')}>↓</button>
+                            <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] disabled:opacity-40" disabled={i === 0} onClick={() => move(i, -1)} title={t('mesh.slotEditor.moveUp')}>↑</button>
+                            <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-muted hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] disabled:opacity-40" disabled={i === drafts.length - 1} onClick={() => move(i, 1)} title={t('mesh.slotEditor.moveDown')}>↓</button>
                             <button type="button" className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-status-error/30 text-status-error hover:bg-status-error/10" onClick={() => remove(i)} aria-label={t('mesh.slotEditor.removeSlot')}>
                                 <IconX size={12} />
                             </button>

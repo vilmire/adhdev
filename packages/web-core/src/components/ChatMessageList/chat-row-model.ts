@@ -51,7 +51,7 @@ export type RowBody =
 export type RowCollapse =
     | { mode: 'none' }
     | { mode: 'local'; threshold: number; previewChars: number }
-    | { mode: 'remote'; address: ToolExpandAddress };
+    | { mode: 'remote'; address: ToolExpandAddress; previewChars?: number };
 
 export interface RowStatus {
     /** The optimistic bubble the daemon accepted but has not yet written. */
@@ -101,7 +101,42 @@ export const SYSTEM_ROW_COLLAPSE = { mode: 'local', threshold: 100, previewChars
 // (`TOOL_RESULT_SUMMARY_MAX` in daemon-core native-history-tool-blocks.ts).
 export const TOOL_ROW_COLLAPSE = { mode: 'local', threshold: 600, previewChars: 599 } as const;
 
+// A tool RESULT is the call's output, usually a JSON blob; one short line says
+// enough to recognise it, the rest is one tap away.
+export const TOOL_RESULT_ROW_COLLAPSE = { mode: 'local', threshold: 160, previewChars: 140 } as const;
+
 const ACTIVITY_KINDS = new Set(['thought', 'tool', 'terminal']);
+
+/**
+ * MCP tools arrive as `mcp__<server>__<tool>`; the server prefix is plumbing.
+ */
+export function humanizeToolName(name: string): string {
+    const trimmed = name.trim();
+    const match = /^mcp__.+?__(.+)$/.exec(trimmed);
+    return match ? match[1] : trimmed;
+}
+
+interface ToolText {
+    /** Call: the tool name from the `↗ name:` line, humanized. */
+    name: string;
+    /** `↘ …` result line. */
+    isResult: boolean;
+    /** The text without the arrow and, for a call, without the repeated name. */
+    body: string;
+}
+
+/**
+ * Spec-history tool rows are `↗ {name}: {args}` / `↘ {result}`
+ * (daemon-core native-history-tool-blocks.ts). The header already shows the
+ * name, so the body keeps only what is new.
+ */
+export function presentToolText(text: string): ToolText {
+    const call = /^\s*↗\s*([^\s:]+)(?::\s*([\s\S]*))?$/.exec(text);
+    if (call) return { name: humanizeToolName(call[1]), isResult: false, body: (call[2] ?? '').trim() };
+    const result = /^\s*↘\s*([\s\S]*)$/.exec(text);
+    if (result) return { name: '', isResult: true, body: result[1].trim() };
+    return { name: '', isResult: false, body: text };
+}
 
 function readMeta(message: ChatMessage): Record<string, unknown> {
     const meta = message.meta;
@@ -131,7 +166,11 @@ function resolveLabel(kind: ChatRowKind, message: ChatMessage, meta: Record<stri
         case 'assistant': return labelOr(message.senderName || ctx.agentName || '', 'chat.agent');
         // Header label: the daemon derives meta.label from the reader's toolName
         // when it resolved one (chat-commands-read-native-normalize.ts).
-        case 'tool': return labelOr(metaLabel(meta) || (typeof message.toolName === 'string' ? message.toolName : ''), 'chat.tool');
+        case 'tool': {
+            const presented = presentToolText(stringifyTextContent(message.content, { joiner: '\n' }));
+            const named = humanizeToolName(metaLabel(meta) || (typeof message.toolName === 'string' ? message.toolName : '') || presented.name);
+            return labelOr(named, presented.isResult ? 'chat.toolResult' : 'chat.tool');
+        }
         case 'thought': return labelOr(metaLabel(meta), 'chat.thought');
         case 'terminal': return labelOr(metaLabel(meta), 'chat.ranCommand');
         case 'activity': return labelOr(metaLabel(meta).trim(), activityLabelKey);
@@ -171,9 +210,12 @@ function resolveCollapse(kind: ChatRowKind, message: ChatMessage, text: string, 
     if (kind === 'tool') {
         // (TOOL-EXPAND) The parser stamps a ref only on bubbles it truncated, so
         // the affordance appears exactly where there is more text to fetch.
+        const isResult = presentToolText(text).isResult;
         const address = getToolExpandAddress(message);
-        if (address) return { mode: 'remote', address };
-        return text.length > TOOL_ROW_COLLAPSE.threshold ? TOOL_ROW_COLLAPSE : { mode: 'none' };
+        // A truncated result still folds to the short preview until fetched.
+        if (address) return isResult ? { mode: 'remote', address, previewChars: TOOL_RESULT_ROW_COLLAPSE.previewChars } : { mode: 'remote', address };
+        const rule = isResult ? TOOL_RESULT_ROW_COLLAPSE : TOOL_ROW_COLLAPSE;
+        return text.length > rule.threshold ? rule : { mode: 'none' };
     }
     if (kind === 'system') return text.length > SYSTEM_ROW_COLLAPSE.threshold ? SYSTEM_ROW_COLLAPSE : { mode: 'none' };
     return { mode: 'none' };
@@ -192,7 +234,8 @@ function collapseSignature(collapse: RowCollapse): string {
     if (collapse.mode === 'local') return `local:${collapse.threshold}:${collapse.previewChars}`;
     if (collapse.mode === 'remote') {
         const a = collapse.address;
-        return 'messageId' in a ? `remote:mid:${a.messageId}` : `remote:ref:${a.toolBlockRef.recordIndex}:${a.toolBlockRef.blockIndex}:${a.toolBlockRef.sourceMtimeMs}`;
+        const where = 'messageId' in a ? `mid:${a.messageId}` : `ref:${a.toolBlockRef.recordIndex}:${a.toolBlockRef.blockIndex}:${a.toolBlockRef.sourceMtimeMs}`;
+        return `remote:${where}:${collapse.previewChars ?? ''}`;
     }
     return 'none';
 }
@@ -262,7 +305,7 @@ function computeChatRow(message: ChatMessage, ctx: ResolveChatRowContext): ChatR
         icon: resolveIcon(kind, meta),
         timestamp: receivedAt || null,
         copyText: text ? text : null,
-        body: resolveBody(kind, text, parts, meta),
+        body: resolveBody(kind, kind === 'tool' && !parts ? presentToolText(text).body : text, parts, meta),
         collapse: resolveCollapse(kind, message, text, !!parts),
         ...(injected ? { injected } : {}),
         ...(kind === 'user' ? { status: resolveStatus(meta) } : {}),

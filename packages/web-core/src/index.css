@@ -2711,20 +2711,6 @@
         min-width: 0;
     }
 
-    .conversation-meta-chips.is-mobile-header {
-        flex-wrap: nowrap;
-        max-width: 100%;
-        overflow-x: auto;
-        overflow-y: hidden;
-        padding-bottom: 1px;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-    }
-
-    .conversation-meta-chips.is-mobile-header::-webkit-scrollbar {
-        display: none;
-    }
-
     .conversation-meta-chip {
         display: inline-flex;
         align-items: center;
@@ -2743,18 +2729,6 @@
     }
 
     .conversation-meta-chip span {
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .conversation-meta-chips.is-mobile-header .conversation-meta-chip {
-        flex: 0 1 auto;
-        min-width: 0;
-        max-width: 100%;
-    }
-
-    .conversation-meta-chips.is-mobile-header .conversation-meta-chip span {
-        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
     }
@@ -2810,11 +2784,7 @@
     .dashboard-header-actions-group {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        padding: 3px;
-        border-radius: 10px;
-        background: color-mix(in srgb, var(--surface-primary) 60%, var(--bg-secondary) 40%);
-        border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
+        gap: 2px;
     }
 
     .dashboard-header-inbox {
@@ -3349,6 +3319,55 @@
     .btn-sm {
         padding: 6px 14px;
         font-size: 13px;
+    }
+
+    /* Toolbar buttons (2026-10-18 UI review): an icon (or a short label) with no
+       box. A soft fill appears only on hover / press / open, so a row of them
+       reads as one calm toolbar instead of a strip of grey boxes. */
+    .btn-icon,
+    .btn-quiet {
+        position: relative;
+        justify-content: center;
+        background: transparent;
+        border-color: transparent;
+        color: var(--text-secondary);
+        transition: background-color 120ms ease, color 120ms ease;
+    }
+
+    .btn-icon {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        gap: 0;
+        border-radius: 8px;
+    }
+
+    .btn-quiet {
+        height: 32px;
+        padding: 0 10px;
+        gap: 6px;
+        border-radius: 8px;
+        font-size: 13px;
+    }
+
+    .btn-icon:hover,
+    .btn-quiet:hover,
+    .btn-icon[aria-expanded="true"],
+    .btn-quiet[aria-expanded="true"] {
+        background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+        border-color: transparent;
+        color: var(--text-primary);
+    }
+
+    .btn-icon.is-danger:hover {
+        background: color-mix(in srgb, var(--status-error, #ef4444) 12%, transparent);
+        color: var(--status-error, #ef4444);
+    }
+
+    .btn-icon:focus-visible,
+    .btn-quiet:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
+        outline-offset: 1px;
     }
 
     .btn-ghost {
@@ -4654,26 +4673,39 @@
     }
 }
 
-/* Mobile Assistant policy lives in the room header. Reserve transcript
-   space for folding instead of floating its target over messages/history. */
+/* Mobile assistant: the same small pills as desktop, grouped at the right,
+   but in a thin row of their own instead of floating over the transcript, so an
+   open panel pushes the chat down rather than covering messages/history. */
 @media (max-width: 767px) {
     .assistant-chat-activity-bar {
         position: static;
         flex-shrink: 0;
-        min-height: 56px;
-        padding: 6px 12px;
-        gap: 8px;
+        justify-content: flex-end;
+        padding: 6px 12px 2px;
+        gap: 6px;
     }
+
+    .assistant-chat-activity-bar > .assistant-session-controls { margin-left: 0; }
+    /* The desktop rule reserves 40px for pills floating over the transcript;
+       here the row is in flow, so the transcript keeps its normal top gap. */
+    .assistant-chat-activity-bar + * .chat-container { padding-top: 8px; }
 
     .assistant-chat-activity-bar .chat-activity-toggle,
     .assistant-session-controls .chat-activity-toggle {
-        min-height: 44px;
-        padding: 8px 10px;
+        min-height: 30px;
+        padding: 4px 10px;
+        font-size: 11px;
     }
 
-    .assistant-session-controls .assistant-execution-toggle {
-        border-radius: 8px;
-        color: var(--text-secondary);
+
+    /* The assistant's controls share the activity row with the tool-steps
+       toggle (one row instead of two). An open panel wraps that row and takes
+       its full width, so it pushes the chat down instead of covering it. */
+    .assistant-chat-activity-bar:has([role="dialog"]) { flex-wrap: wrap; justify-content: flex-start; }
+    .assistant-chat-activity-bar .assistant-session-controls:has([role="dialog"]) {
+        width: 100%;
+        flex-wrap: wrap;
+        margin-left: 0;
     }
 
     /* Open panels occupy header space too; they must not cover a message
@@ -4681,7 +4713,7 @@
     .mobile-room-header-row:has([role="dialog"]) { flex-wrap: wrap; }
     .mobile-room-header-actions:has([role="dialog"]) { width: 100%; }
     .mobile-room-header-actions > .contents { display: contents; }
-    .mobile-room-header-actions button { min-width: 44px; min-height: 44px; }
+
 
     .assistant-session-controls :has(> [role="dialog"]) {
         flex-basis: 100%;
@@ -4710,4 +4742,52 @@
         min-height: 44px;
         min-width: 44px;
     }
+}
+
+/* Mobile room header: plain icon buttons, no boxes (2026-10-18 review — the
+   bordered grey boxes and an always-red stop button read as unfinished).
+   Three classes deep so it also outranks the light-theme .btn-secondary rule. */
+.mobile-room-header-row .mobile-room-header-actions .btn,
+.mobile-room-header-row .mobile-room-header-actions button {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    border-color: transparent;
+    border-radius: 10px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-secondary);
+    transition: background-color 120ms ease, color 120ms ease;
+}
+.mobile-room-header-row .mobile-room-header-actions .btn:hover,
+.mobile-room-header-row .mobile-room-header-actions .btn:active,
+.mobile-room-header-row .mobile-room-header-actions button[aria-expanded="true"] {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+    color: var(--text-primary);
+}
+.mobile-room-header-row .mobile-room-header-actions .btn.is-danger:hover,
+.mobile-room-header-row .mobile-room-header-actions .btn.is-danger:active {
+    background: color-mix(in srgb, var(--status-error, #ef4444) 12%, transparent);
+    color: var(--status-error, #ef4444);
+}
+.mobile-room-back {
+    width: 36px;
+    height: 36px;
+    margin-left: -8px;
+    border-radius: 10px;
+    color: var(--text-primary);
+    transition: background-color 120ms ease;
+}
+.mobile-room-back:hover,
+.mobile-room-back:active {
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+.mobile-room-header-row .mobile-room-header-actions .btn svg {
+    width: 18px;
+    height: 18px;
 }

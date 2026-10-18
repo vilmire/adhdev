@@ -15,7 +15,13 @@
  *                                                   assistant/assistant-relay-format.ts
  *  - `[project <slug>] …`                           same file, one-line signals
  *  - `[ADHDev review] …`                            assistant/assistant-review.ts
- *  - `[ADHDev restart] …` / `[ADHDev first run] …`  daemon notices to the assistant
+ *  - `[ADHDev <words>] …`                          any other daemon notice to the
+ *                                                   assistant (restart, first run,
+ *                                                   relay gap, report references, …)
+ *
+ * Claude Code records a long pasted input inside a `<pasted_content id="…">`
+ * envelope. The daemon's deliveries are long, so the envelope is unwrapped
+ * before the first line is read (`unwrapPastedEnvelope`).
  *
  * One delivered input can combine several of these: the relay joins every ready
  * part with a blank line (`parts.join('\n\n')`), so a single user turn may hold
@@ -34,6 +40,8 @@ export interface InjectedSegment {
     outcome?: string;
     /** Relay: the thread closed with this relay (`[idle]` marker). */
     idle?: boolean;
+    /** Notice: the header words, e.g. `relay gap` for `[ADHDev relay gap]`. */
+    noticeKind?: string;
     /** One-line summary shown while collapsed / in a chip. */
     preview: string;
     /** Display body — the envelope lines (header, disclaimer, markers, close) removed. */
@@ -67,10 +75,27 @@ const INJECTED_HEADERS: readonly HeaderRule[] = [
     { source: 'relay', re: RELAY_HEADER_RE },
     { source: 'signal', re: /^\s*\[project ([^\]\s]+)\]\s+(.*)$/ },
     { source: 'review', re: /^\s*\[ADHDev review\]\s+(.*)$/ },
-    { source: 'notice', re: /^\s*\[ADHDev (?:restart|first run)\]\s+(.*)$/ },
+    // Any other `[ADHDev <lowercase words>]` header. The relay header carries
+    // ` · ` and never matches this character class; review is matched above.
+    { source: 'notice', re: /^\s*\[ADHDev ([a-z][a-z ]*)\]\s+(.*)$/ },
 ];
 
 const PREVIEW_MAX_CHARS = 160;
+
+const PASTED_OPEN_RE = /^\s*<pasted_content(?:\s+id="[^"]*")?\s*>\s*$/;
+const PASTED_CLOSE_RE = /^\s*<\/pasted_content(?:\s+id="[^"]*")?\s*>\s*$/;
+
+/**
+ * Drop the `<pasted_content>` envelope lines Claude Code wraps around a pasted
+ * input. Only a text that OPENS with the envelope is touched; anything else is
+ * returned unchanged.
+ */
+export function unwrapPastedEnvelope(text: string): string {
+    const lines = text.replace(/\r\n?/g, '\n').split('\n');
+    const first = lines.findIndex((line) => line.trim());
+    if (first < 0 || !PASTED_OPEN_RE.test(lines[first])) return text;
+    return lines.filter((line) => !PASTED_OPEN_RE.test(line) && !PASTED_CLOSE_RE.test(line)).join('\n');
+}
 
 export function isMeshInjectedSystemText(text: string): boolean {
     return SYSTEM_RE.test(text);
@@ -150,13 +175,15 @@ export function parseInjectedDelivery(text: string): InjectedSegment[] {
             segments.push(buildRelaySegment(header.match[1], header.match[2], inner));
             continue;
         }
-        const chip: string[] = [header.match[header.rule.source === 'signal' ? 2 : 1] ?? ''];
+        const bodyGroup = header.rule.source === 'signal' || header.rule.source === 'notice' ? 2 : 1;
+        const chip: string[] = [header.match[bodyGroup] ?? ''];
         i++;
         while (i < lines.length && lines[i].trim() && !matchHeader(lines[i])) chip.push(lines[i++]);
         const body = chip.join('\n').trim();
         segments.push({
             source: header.rule.source,
             ...(header.rule.source === 'signal' ? { project: header.match[1] } : {}),
+            ...(header.rule.source === 'notice' ? { noticeKind: header.match[1] } : {}),
             preview: clip(firstNonEmptyLine(body)),
             body,
         });
@@ -170,8 +197,9 @@ export function parseInjectedDelivery(text: string): InjectedSegment[] {
  * first line decides; a message that merely mentions a marker later on is the
  * owner's own words and stays a user bubble.
  */
-export function detectInjectedText(text: string): InjectedDetection | null {
-    if (!text) return null;
+export function detectInjectedText(raw: string): InjectedDetection | null {
+    if (!raw) return null;
+    const text = unwrapPastedEnvelope(raw);
     if (SYSTEM_RE.test(text)) {
         return { source: 'system', segments: [{ source: 'system', preview: clip(firstNonEmptyLine(text)), body: text }] };
     }

@@ -125,15 +125,28 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
         finally { if (currentScope.current === requestScope && actionSequence.current === seq) setBusy(false) }
     }
     const buttonClass = 'rounded border border-border-default px-3 py-2 text-left disabled:opacity-50'
+    // The switch (executionEnabled) and whether this assistant can act at all
+    // (executionAvailable: only a verified, tool-restricted Claude Code
+    // assistant) are different facts. "On" is shown only when both hold, so the
+    // button never says on while the panel says it cannot act.
+    const stateKey = !view ? 'assistantExecution.unavailable'
+        : !view.executionEnabled ? 'assistantExecution.off'
+        : view.executionAvailable ? 'assistantExecution.on' : 'assistantExecution.unsupported'
+    const summaryKey = !view ? 'assistantExecution.stateUnavailable'
+        : !view.executionEnabled ? 'assistantExecution.summaryOff'
+        : view.executionAvailable ? 'assistantExecution.summaryOn' : 'assistantExecution.summaryUnsupported'
+    // Hide the request form only once the daemon has said this assistant cannot
+    // act; while an answer is loading it stays (disabled) so a refresh does not flicker.
+    const cannotAct = !!view && !view.executionAvailable
     return <div className="assistant-execution-controls relative text-xs">
-        <button type="button" className="chat-activity-toggle assistant-execution-toggle" aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(!open); if (!open) void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(view ? view.executionEnabled ? 'assistantExecution.on' : 'assistantExecution.off' : 'assistantExecution.unavailable') })}</button>
+        <button type="button" className="chat-activity-toggle assistant-execution-toggle" aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpen(!open); if (!open) void refresh() }}>{t('assistantExecution.toggleLabel', { state: t(stateKey) })}</button>
         {open && <div role="dialog" aria-label={t('assistantExecution.controlsLabel')} className="assistant-execution-panel pointer-events-auto absolute right-0 z-20 w-96 max-w-[90vw] max-h-[70vh] overflow-y-auto rounded border border-border-default bg-bg-card p-3 shadow-xl space-y-3">
-            <p>{view ? t(view.executionAvailable ? 'assistantExecution.available' : 'assistantExecution.closed') : t('assistantExecution.stateUnavailable')}</p>
-            <p>{t('assistantExecution.limitations')}</p>
+            <p>{t(summaryKey)}</p>
             <div className="flex flex-wrap gap-2">
                 <button type="button" className={buttonClass} disabled={!view || busy} onClick={() => void toggle()}>{t(view?.executionEnabled ? 'assistantExecution.turnOff' : 'assistantExecution.turnOn')}</button>
-                <button type="button" className={buttonClass} disabled={busy} onClick={() => void refresh()}>{t('assistantExecution.refreshPermissions')}</button>
+                {!cannotAct && <button type="button" className={buttonClass} disabled={busy} onClick={() => void refresh()}>{t('assistantExecution.refreshPermissions')}</button>}
             </div>
+            {!cannotAct && <>
             <p className="font-semibold">{t('assistantExecution.currentPermission')}</p>
             {requests.size === 0 && <p>{t('assistantExecution.noRequests')}</p>}
             {[...requests.values()].map(request => <fieldset key={request.key} className="min-w-0 space-y-2 rounded border border-border-default p-3" disabled={!view?.executionAvailable || busy}>
@@ -152,7 +165,8 @@ export default function AssistantExecutionControls({ daemonId, sessionId, status
             </fieldset>)}
             {selection && approvalButtonTone(selection.choice.button.toLowerCase()) === 'always' && <p>{t('approval.alwaysAllowWarning')}</p>}
             <button type="button" className={buttonClass} disabled={!view?.executionAvailable || !selection || busy} onClick={() => void direct()}>{t('assistantExecution.sendDirection')}</button>
-            <p>{t('assistantExecution.chatInstructions')}</p>
+            {requests.size > 0 && <p>{t('assistantExecution.chatInstructions')}</p>}
+            </>}
             {notice && <p role="status">{notice}</p>}
         </div>}
     </div>

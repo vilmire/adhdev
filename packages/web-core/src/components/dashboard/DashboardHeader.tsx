@@ -431,11 +431,11 @@ export default function DashboardHeader({
                                 <button
                                     type="button"
                                     onClick={onOpenNewSession}
-                                    className="btn btn-secondary btn-sm ml-2"
+                                    className="btn btn-icon ml-1"
                                     title={`${t('paneGroup.newSession')}${actionShortcuts?.openNewSession ? ` (${actionShortcuts.openNewSession})` : ''}`}
                                     aria-label={t('paneGroup.newSession')}
                                 >
-                                    <IconPlus size={14} />
+                                    <IconPlus size={16} />
                                 </button>
                             )}
                             {onStartAssistant && (
@@ -457,7 +457,7 @@ export default function DashboardHeader({
                     <button
                         type="button"
                         onClick={onOpenDashboardGuide}
-                        className="btn btn-secondary btn-sm hidden md:inline-flex items-center gap-1.5 dashboard-header-guide-button"
+                        className="btn btn-quiet hidden md:inline-flex items-center dashboard-header-guide-button"
                         title={t('dashboard.header.guide')}
                         aria-label={t('dashboard.header.guideOpen')}
                     >
@@ -481,16 +481,12 @@ export default function DashboardHeader({
                             <button
                                 type="button"
                                 onClick={() => onStopCli(activeConv)}
-                                className="btn btn-secondary btn-sm"
+                                className="btn btn-icon is-danger"
                                 title={t('dashboard.header.stopCliProcess')}
                                 aria-label={t('dashboard.header.stopCliProcess')}
                                 data-testid="dashboard-pane-stop"
-                                style={{
-                                    color: 'var(--status-error, #ef4444)',
-                                    borderColor: 'color-mix(in srgb, var(--status-error, #ef4444) 25%, transparent)',
-                                }}
                             >
-                                <IconX size={14} />
+                                <IconX size={16} />
                             </button>
                         )}
                         <ConversationMeshGraphButton
@@ -503,7 +499,7 @@ export default function DashboardHeader({
                             onOpenHistory={onOpenHistory}
                             onOpenRemote={onOpenRemote ? () => onOpenRemote() : undefined}
                             onOpenGit={onOpenGitDialog}
-                            iconSize={14}
+                            iconSize={16}
                         />
                     </div>
                 )}
@@ -538,7 +534,7 @@ export default function DashboardHeader({
                         <button
                             type="button"
                             onClick={() => onHiddenOpenChange(!hiddenOpen)}
-                            className="btn btn-secondary btn-sm dashboard-header-hidden-button"
+                            className="btn btn-icon dashboard-header-hidden-button"
                             title={`${t('dashboard.hidden.title')}${actionShortcuts?.toggleHiddenTabs ? ` (${actionShortcuts.toggleHiddenTabs})` : ''}. ${t('dashboard.hidden.dragHint')}`}
                         >
                             <IconEyeOff size={16} />
@@ -625,7 +621,7 @@ export default function DashboardHeader({
                     <button
                         type="button"
                         onClick={() => onInboxOpenChange(!inboxOpen)}
-                        className="btn btn-secondary btn-sm dashboard-header-inbox-button"
+                        className="btn btn-icon dashboard-header-inbox-button"
                         title={t('dashboard.header.activityInbox')}
                     >
                         <IconBell size={16} />

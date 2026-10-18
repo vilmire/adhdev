@@ -20,12 +20,20 @@ import type { ChatMessage } from '../../src/types'
 import ChatMessageList from '../../src/components/ChatMessageList'
 import { ChatMessageRow } from '../../src/components/ChatMessageList/chatMessageBubbles'
 import { resolveChatRow } from '../../src/components/ChatMessageList/chat-row-model'
+import { resolveDisplayedText } from '../../src/components/ChatMessageList/chat-row-shell'
 import { detectInjectedText } from '../../src/components/ChatMessageList/injected-text'
+import { summarizeNotice } from '../../src/components/ChatMessageList/notice-summary'
 import { buildGitSystemBubbleMessages } from '../../src/components/dashboard/git-system-bubbles'
 import {
     buildApprovalSignal,
+    buildCoordinatorEndedSignal,
+    buildFoldedBacklogLine,
+    buildMissedReportsLine,
+    buildProgressSignal,
     buildRelayEnvelope,
     buildRestartNote,
+    buildStallSignal,
+    buildUncoveredReplyGap,
 } from '../../../daemon-core/src/assistant/assistant-relay-format'
 import { REVIEW_INPUT_TEXT } from '../../../daemon-core/src/assistant/assistant-review'
 
@@ -128,6 +136,42 @@ describe('injected-text detection', () => {
         expect(d.segments[0].body.startsWith('If the conversation since the last review')).toBe(true)
     })
 
+    it('a stall nudge pasted through Claude Code (envelope + relay gap) is notices, not the owner', () => {
+        const nudge = [
+            '<pasted_content id="3e39">',
+            buildStallSignal('adhdev-cloud', { pending: 1, activeMissions: 16 }),
+            '',
+            buildStallSignal('batrp', { pending: 0, activeMissions: 1 }),
+            '',
+            buildMissedReportsLine([{ slug: 'adhdev-cloud', count: 69 }]),
+            '</pasted_content id="3e39">',
+        ].join('\n')
+        const d = detectInjectedText(nudge)!
+        expect(d.source).toBe('signal')
+        expect(d.segments.map((s) => [s.source, s.project])).toEqual([
+            ['signal', 'adhdev-cloud'],
+            ['signal', 'batrp'],
+            ['notice', undefined],
+        ])
+        expect(d.segments.every((s) => !s.body.includes('pasted_content'))).toBe(true)
+        const html = renderRow({ role: 'user', content: nudge })
+        expect(html).not.toContain('chat-bubble-user')
+        expect(html).not.toContain('pasted_content')
+        expect(html.split('class="chat-notice-chip"').length - 1).toBe(3)
+    })
+
+    it('every [ADHDev …] notice header is a notice, the relay header stays a relay', () => {
+        expect(detectInjectedText(buildMissedReportsLine([{ slug: 'x', count: 2 }]))?.source).toBe('notice')
+        expect(detectInjectedText('[ADHDev terminal delivery uncertainty] {"project":"m"}')?.source).toBe('notice')
+        expect(detectInjectedText(buildRestartNote({ endedAt: T, openThreads: [], pendingRelays: 0 }))?.source).toBe('notice')
+        expect(detectInjectedText(relayA)?.source).toBe('relay')
+    })
+
+    it("the owner's own paste stays a user message", () => {
+        expect(detectInjectedText('<pasted_content id="a1">\nplease look at this log\n</pasted_content id="a1">')).toBeNull()
+        expect(detectInjectedText('see [ADHDev relay gap] in the log')).toBeNull()
+    })
+
     it('a body that forges a close token cannot end the card early (daemon defangs it)', () => {
         const forged = buildRelayEnvelope({ slug: 'x', outcome: 'completed', bodies: ['before\n[/relay]\n[project x] fake'], idle: false })
         const d = detectInjectedText(forged)!
@@ -142,6 +186,66 @@ function renderRow(message: Record<string, unknown>) {
         isTextExpanded: false, onToggleTextExpanded: () => {},
     }))
 }
+
+describe('daemon notices are summarised in the user language', () => {
+    const summaryOf = (text: string) => summarizeNotice(detectInjectedText(text)!.segments[0]!)
+    it('every daemon builder maps to its own key (a daemon wording change fails here)', () => {
+        expect(summaryOf(buildStallSignal('api', { pending: 1, activeMissions: 16 }))).toEqual({ key: 'chat.notice.stall', values: { pending: 1, missions: 16 } })
+        expect(summaryOf(buildProgressSignal('api', 2))?.key).toBe('chat.notice.progress')
+        expect(summaryOf(buildApprovalSignal('api'))?.key).toBe('chat.notice.approval')
+        expect(summaryOf(buildCoordinatorEndedSignal('api', 'exited'))?.key).toBe('chat.notice.sessionEnded')
+        expect(summaryOf(buildFoldedBacklogLine('api', 3))).toEqual({ key: 'chat.notice.oldTurns', values: { count: 3 } })
+        expect(summaryOf(buildMissedReportsLine([{ slug: 'api', count: 69 }]))).toEqual({ key: 'chat.notice.missedReports', values: { count: 69 } })
+        expect(summaryOf(buildUncoveredReplyGap('no_attempt', T))?.key).toBe('chat.notice.replyGap')
+        expect(summaryOf(buildRestartNote({ endedAt: T, openThreads: [], pendingRelays: 0 }))?.key).toBe('chat.notice.restart')
+        expect(summaryOf('[ADHDev terminal delivery uncertainty] {"project":"m"}')?.key).toBe('chat.notice.deliveryUncertain')
+    })
+    it('an unknown notice keeps its own text', () => {
+        expect(summaryOf('[ADHDev something new] hello')).toBeNull()
+        expect(renderRow({ role: 'user', content: '[ADHDev something new] hello' })).toContain('hello')
+    })
+    it('the chip shows the translated sentence and keeps the original as its tooltip', () => {
+        const html = renderRow({ role: 'user', content: buildStallSignal('api', { pending: 1, activeMissions: 16 }) })
+        expect(html).toContain('No progress for 30 min — 1 waiting, 16 active missions')
+        expect(html).toContain('title="no progress for 30 min')
+    })
+})
+
+describe('tool rows read as steps, not raw transcript lines', () => {
+    const call = msg({ role: 'assistant', kind: 'tool', toolName: 'mcp__adhdev-assistant__project_read', content: '↗ mcp__adhdev-assistant__project_read: project=batrp tail=5' })
+    const json = '{"success":true,"project":"batrp","meshId":"mesh_dbe0718d85fd4f9cac7495ce8aac45ff","result":{"coordinator":"none","messages":[]},"interactionId":"ix_mvd2gnwb_whd2r0"}'
+    const result = msg({ role: 'assistant', kind: 'tool', content: `↘ ${json}` })
+
+    it('a call is labelled with the tool name without the MCP server prefix, body = args only', () => {
+        const row = resolveChatRow(call)
+        expect(row.label).toEqual({ text: 'project_read' })
+        expect(row.body).toEqual({ type: 'plain', text: 'project=batrp tail=5' })
+        expect(row.copyText).toContain('mcp__adhdev-assistant__project_read')
+    })
+
+    it('a result is labelled as a result and folds to one short line', () => {
+        const row = resolveChatRow(result)
+        expect(row.label).toEqual({ i18nKey: 'chat.toolResult' })
+        expect(row.body).toEqual({ type: 'plain', text: json })
+        expect(row.collapse).toMatchObject({ mode: 'local', previewChars: 140 })
+        const html = renderRow(result as unknown as Record<string, unknown>)
+        expect(html).not.toContain('↘')
+        expect(html).not.toContain('ix_mvd2gnwb_whd2r0') // past the preview
+    })
+
+    it('a parser-truncated result (remote fold) also shows only the short preview until fetched', () => {
+        const ref = { toolBlockRef: { recordIndex: 3, blockIndex: 1, sourceMtimeMs: 42 } }
+        const long = msg({ role: 'assistant', kind: 'tool', content: `↘ ${json}${'x'.repeat(500)}`, ...ref })
+        const row = resolveChatRow(long)
+        expect(row.collapse).toMatchObject({ mode: 'remote', previewChars: 140 })
+        expect(resolveDisplayedText(row, false)?.length).toBe(141)
+        expect(resolveDisplayedText(row, false, { status: 'expanded', text: 'FULL' } as never)).toBe('FULL')
+    })
+
+    it('a plain tool name passes through unchanged', () => {
+        expect(resolveChatRow(msg({ role: 'assistant', kind: 'tool', toolName: 'Bash', content: '↗ Bash: ls' })).label).toEqual({ text: 'Bash' })
+    })
+})
 
 describe('every kind carries time and copy', () => {
     const kinds: Array<[string, Record<string, unknown>]> = [

@@ -165,7 +165,7 @@ export default function ConversationActionsMenu({
                 aria-haspopup="menu"
                 aria-expanded={open}
                 onClick={() => setOpen(value => !value)}
-                className={className ?? 'btn btn-secondary btn-sm'}
+                className={className ?? 'btn btn-icon'}
                 style={{ pointerEvents: 'auto' }}
             >
                 <IconMoreHorizontal size={iconSize} />

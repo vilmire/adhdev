@@ -6,8 +6,10 @@
 //   - a pinned "Start assistant" entry while none exists, reusing the desktop
 //     split button (same `useStartAssistant` state: default target + picker);
 //   - the room renders through the shared PaneGroupContent/ChatPane (relay
-//     cards, review chips, tool steps hidden by default — all ChatPane's), with
-//     the "N pending" staged-writes pill moved into the room header.
+//     cards, review chips, tool steps hidden by default — all ChatPane's). The
+//     assistant controls ("assistant work" toggle, "N pending" pill) sit in
+//     ChatPane's activity row next to the tool-steps toggle, as on desktop — one
+//     row instead of a second header row (2026-10-18 mobile review).
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -254,22 +256,19 @@ describe('mobile chat room — assistant', () => {
 
     const stagedItem = { kind: 'memory', id: 'mem-1', createdAt: 0, origin: 'relay', action: 'add', target: 'memory', text: 'x' }
 
-    it('renders the assistant through the shared pane, with the staged pill in the header', () => {
+    it('renders the assistant through the shared pane, which also owns the assistant controls', () => {
         stagedState.items = [stagedItem, { ...stagedItem, id: 'mem-2' }]
         render(assistantConv())
         const header = container.firstElementChild as HTMLElement
         expect(header.contains(container.querySelector('[data-testid="pane-group-content"]'))).toBe(false)
         expect(header.querySelector('[data-assistant-role="assistant"]')).not.toBeNull()
         expect(header.textContent).toContain('Assistant')
-        const pill = header.querySelector('[data-assistant-staged-count]')
-        expect(pill?.getAttribute('data-assistant-staged-count')).toBe('2')
-        expect(pill?.textContent).toContain('2 pending')
-        // The shared pane renders the transcript (relay cards, review chips,
-        // tool-step default) — only its own copy of the pill is turned off.
+        // No second copy in the header: the pane's activity row draws them.
+        expect(header.querySelector('[data-assistant-staged-count]')).toBeNull()
+        expect(header.querySelector('.assistant-execution-toggle')).toBeNull()
         expect(paneGroupContentProps.at(-1)?.activeConv).toMatchObject({ tabKey: 'tab-assistant', assistant: true })
-        expect(paneGroupContentProps.at(-1)?.showAssistantStagedWrites).toBe(false)
-        expect(paneGroupContentProps.at(-1)?.showAssistantExecutionControls).toBe(false)
-        expect(container.querySelectorAll('[data-assistant-staged-count]')).toHaveLength(1)
+        expect(paneGroupContentProps.at(-1)?.showAssistantStagedWrites).not.toBe(false)
+        expect(paneGroupContentProps.at(-1)?.showAssistantExecutionControls).not.toBe(false)
     })
 
     it('a non-assistant room gets no staged pill', () => {

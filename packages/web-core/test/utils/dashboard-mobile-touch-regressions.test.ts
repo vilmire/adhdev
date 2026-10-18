@@ -12,21 +12,16 @@ describe('dashboard mobile/touch regressions', () => {
     expect(source).not.toContain('window.scrollTo(0, 0)')
   })
 
-  it('keeps mobile chat header metadata scrollable with bounded chip text', () => {
-    const css = readSource('index.css')
+  it('shows the mobile chat header metadata as the desktop tab line, truncated once', () => {
     const roomSource = readSource('components/dashboard/DashboardMobileChatRoom.tsx')
 
     expect(roomSource).toContain('className="min-w-0 flex-1 flex flex-col gap-0.5"')
     expect(roomSource).toContain('className="min-w-0 max-w-full text-xs text-text-secondary"')
-    expect(css).toContain('.conversation-meta-chips.is-mobile-header {')
-    expect(css).toContain('overflow-x: auto;')
-    expect(css).toContain('-webkit-overflow-scrolling: touch;')
-    expect(css).toContain('.conversation-meta-chips.is-mobile-header::-webkit-scrollbar')
-    expect(css).toContain('.conversation-meta-chips.is-mobile-header .conversation-meta-chip span {')
-    const chipText = css.match(/\.conversation-meta-chips\.is-mobile-header \.conversation-meta-chip span \{([^}]+)\}/)?.[1]
-    expect(chipText).toContain('min-width: 0;')
-    expect(chipText).toContain('overflow: hidden;')
-    expect(chipText).toContain('text-overflow: ellipsis;')
+    // Same text as the desktop tab (getConversationTabMetaText), one line with a
+    // single ellipsis — per-item pills each truncated to "Cla…" / "vil…".
+    expect(roomSource).toContain('getConversationTabMetaText(selectedConversation)')
+    expect(roomSource).toContain('className="mobile-room-header-meta block truncate"')
+    expect(roomSource).not.toContain('ConversationMetaChips')
   })
 
   it('keeps mobile inbox reconnect empty-state copy compact and single-owned', () => {

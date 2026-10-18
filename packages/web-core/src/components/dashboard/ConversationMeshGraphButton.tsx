@@ -44,7 +44,7 @@ export default function ConversationMeshGraphButton({
             // Warm the lazily loaded graph chunk on intent.
             onPointerEnter={() => { void preloadDashboardMeshGraphDialog() }}
             onFocus={() => { void preloadDashboardMeshGraphDialog() }}
-            className={cn('btn btn-secondary btn-sm dashboard-header-mesh-button inline-flex items-center gap-1.5', className)}
+            className={cn('btn btn-quiet dashboard-header-mesh-button inline-flex items-center', className)}
             title={label}
             aria-label={label}
         >

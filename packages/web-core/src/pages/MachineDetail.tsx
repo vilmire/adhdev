@@ -506,7 +506,7 @@ export default function MachineDetail({ onNicknameSynced }: MachineDetailProps =
             <div className="flex flex-col w-full bg-bg-surface px-4 md:px-8 pt-6 pb-0 shrink-0 border-b border-border-subtle">
                 <div className="flex items-center justify-between w-full">
                     <div className="flex items-center gap-3 w-full min-w-0">
-                        <button onClick={handleBack} className="flex items-center justify-center w-8 h-8 rounded-full bg-bg-glass hover:bg-bg-glass-hover text-text-muted hover:text-text-primary transition-colors shrink-0">
+                        <button onClick={handleBack} className="w-8 h-8 -ml-1 inline-flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] transition-colors shrink-0">
                             ←
                         </button>
                         <div className="flex flex-col min-w-0">

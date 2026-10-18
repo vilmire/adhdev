@@ -77,16 +77,21 @@ it('retains the exact rejection and owner execution toggle contracts', async () 
     })
     await open(send); await click('Turn assistant actions off')
     expect(send).toHaveBeenCalledWith('daemon', 'assistant_execution_settings', { enabled: false })
-    expect(container.querySelector('fieldset')?.disabled).toBe(true)
+    // Off: no request form at all, so nothing can be consented to.
+    expect(container.querySelector('fieldset')).toBeNull()
+    expect(container.textContent).toContain('Off. Turn it on')
     await click('Turn assistant actions on'); await choose('No'); await click('Send response to assistant')
     expect(send).toHaveBeenCalledWith('daemon', 'send_chat', expect.objectContaining({ assistantOwnerAction: expect.objectContaining({ action: 'reject', button: 'No' }) }))
 })
 it('never enables consent when execution is unavailable even with live roster evidence', async () => {
     const send = vi.fn(async () => state({ executionAvailable: false, restriction: 'prompt_only' }))
-    await open(send)
-    expect(container.textContent).toContain('cannot act on permission requests right now')
-    expect(container.querySelector('fieldset')?.disabled).toBe(true)
-    expect(sendButton().disabled).toBe(true)
+    await render(send); await click('Assistant actions: not supported')
+    // Switched on but this assistant cannot act: the button and the panel say
+    // so, and no request form or send button is offered at all.
+    expect(container.textContent).toContain('Assistant actions: not supported')
+    expect(container.textContent).toContain('On, but this assistant cannot use it')
+    expect(container.querySelector('fieldset')).toBeNull()
+    expect([...container.querySelectorAll('button')].some((b) => b.textContent === 'Send response to assistant')).toBe(false)
     expect(container.textContent).not.toContain('prompt_only')
 })
 it('excludes unavailable, status-only, setup/trust, resolved, mismatched and missing resources', async () => {

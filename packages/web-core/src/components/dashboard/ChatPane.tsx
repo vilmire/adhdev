@@ -1,4 +1,5 @@
 import AssistantExecutionControls from './AssistantExecutionControls';
+import { getConversationTitle } from './conversation-presenters';
 
 /**
  * ChatPane — Chat view for IDE and CLI chat-mode sessions.
@@ -32,7 +33,6 @@ import {
 import {
     getConversationControlsContext,
     getConversationDaemonRouteId,
-    getConversationDisplayLabel,
     getConversationProviderLabel,
     getCoordinatorRoutingHint,
 } from './conversation-selectors';
@@ -377,7 +377,8 @@ export default function ChatPane({
         setVisibleLiveCount(getRememberedVisibleLiveCount(tabKey, defaultVisibleLiveMessages));
     }, [defaultVisibleLiveMessages, tabKey]);
     const hiddenLiveCount = Math.max(0, liveMessages.length - visibleLiveCount);
-    const panelLabel = getConversationDisplayLabel(activeConv)
+    // getConversationTitle names the assistant in the user's language (input placeholder, panel buttons).
+    const panelLabel = getConversationTitle(activeConv)
     const daemonId = getConversationDaemonRouteId(activeConv);
     const canOpenPanel = shouldShowOpenPanelAction(activeConv)
     // A session parked for owner attention (e.g. Grok's consent prompt) is answered
@@ -730,7 +731,7 @@ export default function ChatPane({
                 {/* Only present while this machine is parked. Mute and Session
                     info moved into the pane toolbar's "…" menu
                     (ConversationActionsMenu) so this row stays a single control. */}
-                <div className="ml-auto flex items-center gap-1">
+                <div className={`ml-auto flex items-center gap-1${isAssistantPane ? ' assistant-session-controls' : ''}`}>
                     {/* Assistant pane only: writes held for the owner's approval
                         (hidden while none are held). */}
                     {isAssistantPane && showAssistantExecutionControls && <AssistantExecutionControls daemonId={daemonId} sessionId={activeConv.sessionId} status={activeConv.status} sendCommand={sendCommand} />}
@@ -751,7 +752,8 @@ export default function ChatPane({
             <ChatMessageList
                 messages={allMessages}
                 actionLogs={visibleActionLogs}
-                agentName={getConversationProviderLabel(activeConv) || panelLabel || 'Agent'}
+                // The assistant speaks as "비서" / "Assistant"; which CLI runs it is in the header chip.
+                agentName={isAssistantPane ? t('dashboard.assistant.label') : (getConversationProviderLabel(activeConv) || panelLabel || 'Agent')}
                 userName={userName}
                 isCliMode={controlsContext.isCli}
                 isWorking={firstViewState.showWorkingIndicator}

@@ -135,6 +135,7 @@ export function resolveDisplayedText(model: ChatRowModel, expanded: boolean, rem
     const full = remoteState?.status === 'expanded' && remoteState.text !== undefined ? remoteState.text : model.body.text;
     const c = model.collapse;
     if (c.mode === 'local' && !expanded && full.length > c.threshold) return `${full.slice(0, c.previewChars)}…`;
+    if (c.mode === 'remote' && c.previewChars && !expanded && full.length > c.previewChars) return `${full.slice(0, c.previewChars)}…`;
     return full;
 }
 

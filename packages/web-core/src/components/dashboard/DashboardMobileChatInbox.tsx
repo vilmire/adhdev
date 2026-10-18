@@ -184,10 +184,10 @@ function MobileInboxRowMenu({
         <div ref={rootRef} className="relative">
             <button
                 type="button"
-                className={`mobile-inbox-row-menu-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                className={`mobile-inbox-row-menu-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
                     isMuted
-                        ? 'border-amber-500/60 bg-amber-500/15 text-amber-500'
-                        : 'border-border-subtle bg-bg-primary/70 text-text-muted hover:border-border-default hover:text-text-primary'
+                        ? 'bg-amber-500/15 text-amber-500'
+                        : 'text-text-muted hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)]'
                 }`}
                 onClick={(event) => {
                     event.preventDefault()
@@ -319,7 +319,7 @@ function DashboardMobileChatItem({
                     {meshGraphAvailable && onOpenMeshGraph && (
                         <button
                             type="button"
-                            className="mobile-inbox-mesh-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:color-mix(in_srgb,var(--mesh-coordinator)_34%,transparent)] bg-bg-primary/70 text-[color:var(--mesh-coordinator)] transition-colors hover:bg-[color:color-mix(in_srgb,var(--mesh-coordinator)_10%,transparent)]"
+                            className="mobile-inbox-mesh-button inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[color:var(--mesh-coordinator)] transition-colors hover:bg-[color:color-mix(in_srgb,var(--mesh-coordinator)_10%,transparent)]"
                             onClick={(event) => {
                                 event.preventDefault()
                                 event.stopPropagation()
@@ -573,7 +573,7 @@ export default function DashboardMobileChatInbox({
                                 <span>{noticeCount}</span>
                             </div>
                         )}
-                        <button onClick={onOpenSettings} className="w-8 h-8 flex items-center justify-center rounded-full border border-border-subtle bg-bg-secondary/70 text-text-secondary hover:text-text-primary hover:border-border-default transition-colors">
+                        <button onClick={onOpenSettings} className="w-9 h-9 -mr-1.5 inline-flex items-center justify-center rounded-lg text-text-secondary hover:text-text-primary hover:bg-[color-mix(in_srgb,var(--text-primary)_8%,transparent)] transition-colors shrink-0">
                             <IconSettings size={18} />
                         </button>
                     </div>
