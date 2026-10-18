@@ -1,0 +1,12 @@
+● Running command
+  $ sleep 6 && echo BG_DONE
+
+• Background started.
+  Running npm run test:scripts 2>&1 | tee /tmp/g1a1-test-scripts.log in the
+  background (task-98). Waiting for it to complete.
+
+• The background command finished with exit code 0.
+────────────────────────────────────────────────────────────────────────────────
+> 
+────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                          Gemini 4 Argon · medium

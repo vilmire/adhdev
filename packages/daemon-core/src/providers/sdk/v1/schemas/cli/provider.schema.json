@@ -163,6 +163,14 @@
       "type": "string",
       "description": "Command the daemon runs to probe installed version. Example: \"my-cli --version\"."
     },
+    "testedVersions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "CLI versions verified by the provider maintainer."
+    },
     "spawn": {
       "type": "object",
       "required": [

@@ -38,12 +38,12 @@ describe('expandModelLaunchArgs (brain-routing model axis)', () => {
         'maps the real Antigravity display label to the slug measured from agy models', () => {
             const provider = JSON.parse(readFileSync(ANTIGRAVITY_MANIFEST, 'utf8'));
             const modelsOutput = readFileSync(ANTIGRAVITY_MODELS, 'utf8');
-            expect(modelsOutput).toContain('gemini-3.7-flash-high     Gemini 3.7 Flash (High)');
+            expect(modelsOutput).toContain('gemini-4-argon-high       Gemini 4 Argon (High)');
             expect(expandModelLaunchArgs(
                 provider.modelLaunchArgs,
-                'Gemini 3.7 Flash (High)',
+                'Gemini 4 Argon (High)',
                 provider.modelLaunchValueMap,
-            )).toEqual(['--model', 'gemini-3.7-flash-high']);
+            )).toEqual(['--model', 'gemini-4-argon-high']);
         },
     );
 });

@@ -1,0 +1,13 @@
+● Running command
+  $ sleep 6 && echo BG_DONE
+
+  Allow calling this tool?
+  ❯ 1. Yes, allow once
+    2. Yes, allow always
+    3. No, cancel
+────────────────────────────────────────────────────────────────────────────────
+> 
+────────────────────────────────────────────────────────────────────────────────
+  ● [15:59:54] npm run test:scripts 2>&1 | tee /tmp/g1a1-test-scripts... running
+────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                     Gemini 4 Argon · medium · 1 task(s) · /tasks

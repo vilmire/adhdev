@@ -1,0 +1,31 @@
+╭───────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.162.1)                    │
+│                                               │
+│ model:     GPT-6.1-Sol   /model to change     │
+│ directory: /tmp/adhdev-capture-codex/ws       │
+╰───────────────────────────────────────────────╯
+
+› Run exec_command with cmd "sleep 8 && echo BG_DONE" and yield_time_ms=500 so it stays running in the
+  background, then immediately reply "Background started." and end your turn without polling.
+
+
+• I’ll start the background command now.
+
+• Background started.
+
+  Worked for 9s • 5:10 PM
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol default · /tmp/adhdev-capture-codex/ws · Start background terminal
+  ? for shortcuts                                                          ⚠ 1 warning · f2 to view

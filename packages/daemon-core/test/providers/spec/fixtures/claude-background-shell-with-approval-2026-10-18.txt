@@ -1,0 +1,21 @@
+ ▐▛███▜▌   Claude Code v2.1.302
+▝▜█████▛▘  Opus 4.6 with medium effort · Claude Max
+  ▘▘ ▝▝    /tmp/adhdev-capture-claude/ws
+
+⏺ Bash(sleep 8 && echo BG_DONE)
+  ⎿  Running in the background (↓ to manage)
+
+✻ Crunched for 3s · done 5:09 PM · 1 shell still running
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   rm -f /tmp/adhdev-capture-claude/ws/out.tmp
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No, and tell Claude what to do differently (esc)
+
+ Esc to cancel · Tab to amend
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on · 1 shell · ↓ to manage

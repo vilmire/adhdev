@@ -1,0 +1,18 @@
+ ▐▛███▜▌   Claude Code v2.1.302
+▝▜█████▛▘  Opus 4.6 with medium effort · Claude Max
+  ▘▘ ▝▝    /tmp/adhdev-capture-claude/ws
+
+❯ Run the Bash tool with command "sleep 8 && echo BG_DONE" and run_in_background
+  set to true, then immediately reply "Background started." and end your turn without waiting.
+
+⏺ Bash(sleep 8 && echo BG_DONE)
+  ⎿  Running in the background (↓ to manage)
+
+⏺ Background started.
+
+✻ Crunched for 3s · done 5:09 PM · 1 shell still running
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents · ↓ to manage               ◐ medium · /effort

@@ -1,0 +1,19 @@
+╭───────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.162.1)                    │
+│                                               │
+│ model:     GPT-6.1-Sol   /model to change     │
+│ directory: /tmp/adhdev-capture-codex/ws       │
+╰───────────────────────────────────────────────╯
+
+• Background started.
+
+  1 background terminal running · /ps to view · /stop to close
+
+  Would you like to run the following command?
+
+  $ rm -f /tmp/adhdev-capture-codex/ws/out.tmp
+
+  › 1. Yes, proceed (y)
+    2. No, and tell Codex what to do differently (esc)
+
+  enter to submit | esc to cancel

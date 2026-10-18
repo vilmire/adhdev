@@ -1816,3 +1816,90 @@ describe('claude-cli v4 FSM — approval→idle after the modal is resolved (FSM
         expect(ev.fired?.to).not.toBe('idle');
     });
 });
+
+// ── BACKGROUND-SHELL-GENERATING (2026-10-18) ─────────────────────────────────
+// Live captures from Claude Code v2.1.302 when a Bash tool is run in the
+// background (`run_in_background: true`) and the model ends its turn while the
+// background shell continues executing.
+// Live markers while running:
+//   - completion line: `✻ Crunched for 3s · done 5:09 PM · 1 shell still running`
+//   - footer status:   `  ⏵⏵ bypass permissions on · 1 shell · ← for agents · ↓ to manage`
+// Both disappear in-place when the background shell finishes, while the body
+// line `  ⎿  Running in the background (↓ to manage)` remains in scrollback forever
+// and therefore MUST NOT be matched.
+describe('claude-cli v4 FSM — background shell keeps session generating (busy)', () => {
+    const spec = loadSpec();
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const readFixture = (name: string) =>
+        fs.readFileSync(path.join(here, 'fixtures', name), 'utf8').replace(/\n$/, '');
+
+    const bgRunningScreen = readFixture('claude-background-shell-running-2026-10-18.txt');
+    const bgFinishedScreen = readFixture('claude-background-shell-finished-2026-10-18.txt');
+    const bgWithApprovalScreen = readFixture('claude-background-shell-with-approval-2026-10-18.txt');
+
+    it('marker present → idle transitions to busy (generating) and busy→idle / busy→idle-quiet are vetoed', () => {
+        const lines = strip(bgRunningScreen);
+        const fromIdle = evaluateFsm(spec, 'idle', bgRunningScreen, { row: lines.length - 3, col: 2 }, undefined, clk(10000, 0));
+        expect(fromIdle.fired?.to).toBe('busy');
+
+        // Even after 30s of stillness, neither busy→idle (8s) nor busy→idle-quiet (12s) may fire.
+        const stayBusy = evaluateFsm(spec, 'busy', bgRunningScreen, { row: lines.length - 3, col: 2 }, undefined, clk(30000, 0));
+        expect(stayBusy.fired).toBeNull();
+    });
+
+    it('either background shell marker alone (completion summary or footer status bar) keeps session busy', () => {
+        const Dline = '─'.repeat(64);
+        const completionLineOnly = [
+            '▗ ▗   ▖ ▖  Claude Code v2.1.302',
+            '  ▘▘ ▝▝    /tmp/adhdev-capture-claude',
+            '',
+            '⏺ Started background shell.',
+            '',
+            '✻ Crunched for 3s · done 5:09 PM · 1 shell still running',
+            '',
+            Dline, '❯ ', Dline,
+            '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+        ].join('\n');
+        expect(evaluateFsm(spec, 'idle', completionLineOnly, { row: 7, col: 2 }, undefined, clk(10000, 0)).fired?.to).toBe('busy');
+        expect(evaluateFsm(spec, 'busy', completionLineOnly, { row: 7, col: 2 }, undefined, clk(30000, 0)).fired).toBeNull();
+
+        const footerBarOnly = [
+            '▗ ▗   ▖ ▖  Claude Code v2.1.302',
+            '  ▘▘ ▝▝    /tmp/adhdev-capture-claude',
+            '',
+            '⏺ Started background shell.',
+            '',
+            '✻ Crunched for 3s',
+            '',
+            Dline, '❯ ', Dline,
+            '  ⏵⏵ bypass permissions on · 2 shells · ↓ to manage',
+        ].join('\n');
+        expect(evaluateFsm(spec, 'idle', footerBarOnly, { row: 7, col: 2 }, undefined, clk(10000, 0)).fired?.to).toBe('busy');
+        expect(evaluateFsm(spec, 'busy', footerBarOnly, { row: 7, col: 2 }, undefined, clk(30000, 0)).fired).toBeNull();
+    });
+
+    it('marker gone (job finished) → busy transitions to idle despite `Running in the background` in scrollback', () => {
+        const lines = strip(bgFinishedScreen);
+        expect(bgFinishedScreen).toContain('Running in the background (↓ to manage)');
+        const ev = evaluateFsm(spec, 'busy', bgFinishedScreen, { row: lines.length - 3, col: 2 }, undefined, clk(30000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('normal idle screen → stays idle (no false positive)', () => {
+        const lines = strip(bgFinishedScreen);
+        const ev = evaluateFsm(spec, 'idle', bgFinishedScreen, { row: lines.length - 3, col: 2 }, undefined, clk(30000, 0));
+        expect(ev.fired).toBeNull();
+    });
+
+    it('screen with approval plus background shell → approval wins', () => {
+        const lines = strip(bgWithApprovalScreen);
+        for (const from of ['idle', 'busy']) {
+            const ev = evaluateFsm(spec, from, bgWithApprovalScreen, { row: lines.length - 1, col: 2 }, undefined, clk(10000, 0));
+            expect(ev.fired?.to).toBe('approval');
+        }
+        // While the approval modal is still up, approval remains sticky even with a running background shell.
+        const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row: lines.length - 1, col: 2 }, undefined, clk(20000, 0));
+        expect(hold.fired).toBeNull();
+    });
+});
+

@@ -516,3 +516,70 @@ describe('antigravity-cli v4 FSM — busy→idle bounded fallback (repaint wedge
         expect(JSON.stringify(busyToIdle.when)).not.toContain('signal');
     });
 });
+
+// ── BACKGROUND-TASK-GENERATING (2026-10-18) ──────────────────────────────────
+// Live captures from agy 1.4.2 when the CLI launches a background command and
+// ends its turn while the background command continues running.
+// Markers:
+//   - body drawer row: `  ● [hh:mm:ss] <cmd> running`
+//   - footer counter:  `? for shortcuts  Gemini 4 Argon · medium · 1 task(s) · /tasks`
+// Both disappear once the background command completes.
+describe('antigravity-cli v4 FSM — background command keeps session generating (busy)', () => {
+    const spec = loadSpec();
+    const bgRunningScreen = readScreenFixture('antigravity-background-task-running-2026-10-18.txt');
+    const bgFinishedScreen = readScreenFixture('antigravity-background-task-finished-2026-10-18.txt');
+    const bgWithApprovalScreen = readScreenFixture('antigravity-background-task-with-approval-2026-10-18.txt');
+
+    it('marker present → idle transitions to busy (generating) and busy→idle is vetoed across all arms', () => {
+        const fromIdle = evaluateFsm(spec, 'idle', bgRunningScreen, { row: 33, col: 2 }, undefined, clk(20000, 15000));
+        expect(fromIdle.fired?.to).toBe('busy');
+
+        // Even after 95s of complete screen stillness, busy→idle (all 3 arms) and
+        // busy→approval-timeout must NOT fire while the background task is running.
+        const stayBusy = evaluateFsm(spec, 'busy', bgRunningScreen, { row: 33, col: 2 }, undefined, clk(95000, 0));
+        expect(stayBusy.fired).toBeNull();
+    });
+
+    it('either background marker alone (body drawer row or footer task counter) keeps session busy', () => {
+        const footerOnly = makeScreen(
+            ['  Waiting for background command to finish.'],
+            '? for shortcuts                     Gemini 4 Argon · medium · 2 task(s) · /tasks',
+        );
+        expect(evaluateFsm(spec, 'idle', footerOnly, { row: 39, col: 2 }, undefined, clk(20000, 15000)).fired?.to).toBe('busy');
+        expect(evaluateFsm(spec, 'busy', footerOnly, { row: 39, col: 2 }, undefined, clk(95000, 0)).fired).toBeNull();
+
+        const bodyOnly = makeScreen(
+            [
+                '  Waiting for background command to finish.',
+                '────────────────────────────────────────',
+                '  ● [15:59:54] npm run test:scripts 2>&1 | tee /tmp/g1a1-test-scripts... running',
+            ],
+            '? for shortcuts                                      Gemini 4 Argon · medium',
+        );
+        expect(evaluateFsm(spec, 'idle', bodyOnly, { row: 39, col: 2 }, undefined, clk(20000, 15000)).fired?.to).toBe('busy');
+        expect(evaluateFsm(spec, 'busy', bodyOnly, { row: 39, col: 2 }, undefined, clk(61000, 0, [[4, 60500], [-1, 60900]])).fired).toBeNull();
+    });
+
+    it('marker gone (job finished) → busy transitions to idle', () => {
+        const ev = evaluateFsm(spec, 'busy', bgFinishedScreen, { row: 36, col: 2 }, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('normal idle screen → stays idle (no false positive)', () => {
+        const ev1 = evaluateFsm(spec, 'idle', bgFinishedScreen, { row: 36, col: 2 }, undefined, clk(20000, 0));
+        expect(ev1.fired).toBeNull();
+        const ev2 = evaluateFsm(spec, 'idle', idleScreen, { row: 39, col: 4 }, undefined, clk(20000, 0));
+        expect(ev2.fired).toBeNull();
+    });
+
+    it('screen with approval plus background task → approval wins', () => {
+        for (const from of ['idle', 'busy']) {
+            const ev = evaluateFsm(spec, from, bgWithApprovalScreen, { row: 35, col: 2 }, undefined, clk(20000, 0));
+            expect(ev.fired?.to).toBe('approval');
+        }
+        // And while the approval modal remains open, approval stays sticky (does not flip back to busy).
+        const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row: 35, col: 2 }, undefined, clk(20000, 0));
+        expect(hold.fired).toBeNull();
+    });
+});
+

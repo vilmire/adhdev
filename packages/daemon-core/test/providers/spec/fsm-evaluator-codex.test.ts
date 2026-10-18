@@ -562,3 +562,57 @@ describe('codex-cli v4 FSM — busy→idle bounded fallback (repaint wedge)', ()
         expect(JSON.stringify(busyToIdle.when)).not.toContain('final_assistant_present');
     });
 });
+
+// ── BACKGROUND-TERMINAL-GENERATING (2026-10-18) ──────────────────────────────
+// Live captures from OpenAI Codex v0.162.1 when a background command is left
+// running and the turn ends.
+// Live marker while running:
+//   `  1 background terminal running · /ps to view · /stop to close`
+// The row is erased completely once the background terminal finishes.
+describe('codex-cli v4 FSM — background terminal keeps session generating (busy)', () => {
+    const spec = loadSpec();
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const readFixture = (name: string) =>
+        fs.readFileSync(path.join(here, 'fixtures', name), 'utf8').replace(/\n$/, '');
+
+    const bgRunningScreen = readFixture('codex-background-terminal-running-2026-10-18.txt');
+    const bgFinishedScreen = readFixture('codex-background-terminal-finished-2026-10-18.txt');
+    const bgWithApprovalScreen = readFixture('codex-background-terminal-with-approval-2026-10-18.txt');
+
+    it('marker present → idle transitions to busy (generating) and busy→idle is vetoed across both arms', () => {
+        const row = bgRunningScreen.split('\n').length - 1;
+        const fromIdle = evaluateFsm(spec, 'idle', bgRunningScreen, { row, col: 2 }, undefined, clk(10000, 5000));
+        expect(fromIdle.fired?.to).toBe('busy');
+
+        // Even after 35s (past both the 1.5s strict arm and the 30s fallback arm), busy→idle is vetoed.
+        const stayBusy = evaluateFsm(spec, 'busy', bgRunningScreen, { row, col: 2 }, undefined, clk(35000, 0));
+        expect(stayBusy.fired).toBeNull();
+    });
+
+    it('marker gone (job finished) → busy transitions to idle', () => {
+        const row = bgFinishedScreen.split('\n').length - 1;
+        const ev = evaluateFsm(spec, 'busy', bgFinishedScreen, { row, col: 2 }, undefined, clk(5000, 0));
+        expect(ev.fired?.to).toBe('idle');
+    });
+
+    it('normal idle screen → stays idle (no false positive)', () => {
+        const row = bgFinishedScreen.split('\n').length - 1;
+        const ev1 = evaluateFsm(spec, 'idle', bgFinishedScreen, { row, col: 2 }, undefined, clk(10000, 0));
+        expect(ev1.fired).toBeNull();
+        const row2 = composerReadyScreen.split('\n').length - 1;
+        const ev2 = evaluateFsm(spec, 'idle', composerReadyScreen, { row: row2, col: 2 }, undefined, clk(10000, 0));
+        expect(ev2.fired).toBeNull();
+    });
+
+    it('screen with approval plus background terminal → approval wins', () => {
+        const row = bgWithApprovalScreen.split('\n').length - 1;
+        for (const from of ['idle', 'busy']) {
+            const ev = evaluateFsm(spec, from, bgWithApprovalScreen, { row, col: 2 }, undefined, clk(10000, 0));
+            expect(ev.fired?.to).toBe('approval');
+        }
+        // And while the approval modal remains open, approval stays sticky (does not flip back to busy).
+        const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row, col: 2 }, undefined, clk(10000, 0));
+        expect(hold.fired).toBeNull();
+    });
+});
+
