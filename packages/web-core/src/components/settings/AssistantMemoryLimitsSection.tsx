@@ -225,7 +225,7 @@ export function AssistantMemoryLimitsSection({
                                         onChange(e.target.value)
                                     }}
                                 />
-                                <span className="text-[11px] text-text-muted">
+                                <span className="text-2xs text-text-muted">
                                     {t('assistantMemoryLimits.boundsHint', {
                                         default: target.defaultBudget.toLocaleString(),
                                         min: target.min.toLocaleString(),
