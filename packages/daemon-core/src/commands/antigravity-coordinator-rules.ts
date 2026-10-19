@@ -131,13 +131,8 @@ export function stripSentinelBlockPreservingSurroundingBytes(
     }
 
     // Legacy fallback when no separator provenance was recorded:
-    // Only strip the standard `\n\n` separator that the daemon appends before the
-    // wrapper block when appending to the end of an existing file (`after === ''`).
-    // Never delete uncertain user bytes when content exists after the block or
-    // when `before` does not end with `\n\n`.
-    if (before.length > 0 && after.length === 0 && before.endsWith('\n\n')) {
-        return before.slice(0, -2);
-    }
+    // Strip only the sentinel block itself and preserve all surrounding bytes
+    // verbatim (including trailing LF/CRLF bytes before a wrapper at EOF).
     return before + after;
 }
 

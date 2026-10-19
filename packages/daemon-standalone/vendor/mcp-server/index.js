@@ -65863,9 +65863,6 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         }
         return before + after;
       }
-      if (before.length > 0 && after.length === 0 && before.endsWith("\n\n")) {
-        return before.slice(0, -2);
-      }
       return before + after;
     }
     function getOrCreateTargetState(resolvedTarget) {

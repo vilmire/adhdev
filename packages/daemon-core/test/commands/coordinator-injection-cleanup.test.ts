@@ -1379,4 +1379,116 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       rmSync(homeReload, { recursive: true, force: true })
     }
   })
+
+  it('R2-legacy-EOF: preserves all uncertain user LF/CRLF bytes when separator provenance is absent (both direct helper and real d33b7ad parent-created registry reload) while retaining recorded-provenance stripping', async () => {
+    const { execFileSync } = await import('node:child_process')
+    const { stripSentinelBlockPreservingSurroundingBytes } = await import(
+      '../../src/commands/antigravity-coordinator-rules.js'
+    )
+    const sentinels = coordinatorWrapperSentinels(ANTIGRAVITY_WRAPPER)
+    const renderedBlock = ANTIGRAVITY_WRAPPER.replace('{prompt}', 'COORD')
+
+    // 1. Direct helper with absent provenance: preserves trailing LF and CRLF before an EOF wrapper
+    const legacyLfPrefix = '# Legacy user\n\n'
+    expect(stripSentinelBlockPreservingSurroundingBytes(legacyLfPrefix + renderedBlock, sentinels)).toBe(legacyLfPrefix)
+    const legacyCrlfPrefix = '# Legacy user\r\n\r\n'
+    const legacySuffix = '\n\nUser suffix'
+    expect(stripSentinelBlockPreservingSurroundingBytes(legacyCrlfPrefix + renderedBlock + legacySuffix, sentinels)).toBe(
+      legacyCrlfPrefix + legacySuffix,
+    )
+
+    // 2. Recorded-provenance controls remain exact
+    expect(
+      stripSentinelBlockPreservingSurroundingBytes('# Existing user\n' + '\n\n' + renderedBlock, sentinels, {
+        leading: '\n\n',
+        trailing: '',
+        createdFile: false,
+      }),
+    ).toBe('# Existing user\n')
+    expect(
+      stripSentinelBlockPreservingSurroundingBytes(legacyLfPrefix + renderedBlock, sentinels, {
+        leading: '',
+        trailing: '',
+        createdFile: true,
+      }),
+    ).toBe(legacyLfPrefix)
+
+    // 3. Real immutable d33b7ad parent writer/registry naturally lacking separators ->
+    // user prepends `# Legacy user\n\n` -> current load/ensure fast-path/unregister preserves `# Legacy user\n\n`
+    const ossRepoRoot = path.resolve(__dirname, '..', '..', '..', '..')
+    const parentSnapshotRoot = tempWorkspace('adhdev-agy-d33b7ad-parent-')
+    const ws = tempWorkspace('adhdev-agy-r2-legacy-eof-ws-')
+    const home = tempWorkspace('adhdev-agy-r2-legacy-eof-home-')
+    let oldRegistryMod: any
+    try {
+      const archive = execFileSync(
+        'git',
+        ['archive', 'd33b7ad15eda0341f74d50c9e8f9ec467151e16e', 'packages/daemon-core/src'],
+        { cwd: ossRepoRoot, maxBuffer: 32 * 1024 * 1024 },
+      )
+      execFileSync('tar', ['-x', '-C', parentSnapshotRoot], { input: archive, maxBuffer: 32 * 1024 * 1024 })
+      fs.symlinkSync(join(ossRepoRoot, '..', 'node_modules'), join(parentSnapshotRoot, 'node_modules'))
+
+      vi.resetModules()
+      const oldMeshMod = await import(
+        join(parentSnapshotRoot, 'packages/daemon-core/src/commands/mesh-coordinator.ts')
+      )
+      oldRegistryMod = await import(
+        join(parentSnapshotRoot, 'packages/daemon-core/src/mesh/coordinator-registry.ts')
+      )
+
+      const target = join(ws, 'AGENTS.md')
+      const prompt = 'LEGACY_HEAD\n' + 'Coordinator rule.\n'.repeat(2_000) + 'LEGACY_TAIL'
+      const effect = oldMeshMod.applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: home }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      oldRegistryMod.registerMeshCoordinator({
+        meshId: 'legacy-from-parent',
+        sessionId: 'legacy-from-parent',
+        workspace: ws,
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        startedAt: Date.now(),
+        injection: {
+          mode: 'context_file',
+          target: 'AGENTS.md',
+          contextFile: {
+            path: effect.contextFilePath,
+            owned: false,
+            open: effect.contextFileSentinels.open,
+            close: effect.contextFileSentinels.close,
+            additionalOwnedFiles: effect.additionalOwnedFiles,
+            homeDir: effect.contextFileHomeDir,
+            retainForSessionLifetime: true,
+          },
+        },
+      })
+
+      const stored = JSON.parse(
+        readFileSync(join(process.env.ADHDEV_CONFIG_DIR!, 'daemon/mesh-coordinators.json'), 'utf-8'),
+      )
+      expect(stored.find((e: any) => e.sessionId === 'legacy-from-parent').injection.contextFile.separators).toBeUndefined()
+
+      writeFileSync(target, legacyLfPrefix + readFileSync(target, 'utf-8'), 'utf-8')
+
+      vi.resetModules()
+      const currentRegistry = await import('../../src/mesh/coordinator-registry.js')
+      currentRegistry.loadMeshCoordinatorRegistry()
+      const currentMesh = await import('../../src/commands/mesh-coordinator.js')
+      expect(
+        currentMesh.ensureCoordinatorContextFileMaterialized(
+          currentRegistry.getCoordinatorForSession('legacy-from-parent'),
+        ),
+      ).toBe(false)
+      currentRegistry.unregisterMeshCoordinator('legacy-from-parent')
+      expect(readFileSync(target, 'utf-8')).toBe(legacyLfPrefix)
+    } finally {
+      try { oldRegistryMod?.unregisterMeshCoordinator('legacy-from-parent') } catch { /* ignore */ }
+      rmSync(parentSnapshotRoot, { recursive: true, force: true })
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
 })
