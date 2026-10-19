@@ -200,7 +200,7 @@ describe('DashboardNewSessionDialog', () => {
   it('passes the selected auto-approve settings into onLaunchMeshCoordinator', () => {
     const source = readDialogSource()
 
-    const meshLaunchCallMatch = source.match(/onLaunchMeshCoordinator\(selectedMachine\.id, selectedMeshId, selectedTarget, \{[^}]*settings: launchAutoApproveSettings,[^}]*\}\)/)
+    const meshLaunchCallMatch = source.match(/onLaunchMeshCoordinator\(selectedMachine\.id, selectedMeshId, (?:selectedTarget === '__daemon_default__' \? '' : )?selectedTarget, \{[^}]*settings: launchAutoApproveSettings,[^}]*\}\)/)
     expect(meshLaunchCallMatch).not.toBeNull()
   })
 
