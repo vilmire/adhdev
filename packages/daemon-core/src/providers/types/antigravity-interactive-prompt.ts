@@ -40,11 +40,11 @@ export interface ParsedAntigravityChoiceScreen {
 const HEADER_TITLE_RE = /^\s*Question\s*$/;
 const HEADER_DIVIDER_RE = /^\s*─{10,}\s*$/;
 const QUESTION_HEADER_RE = /^\s*Question\s+(\d+)\/(\d+):\s+(.+?)\s*$/;
-const OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX])\]\s+)?(.+?)\s*$/;
+const OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX✓✔])\]\s+)?(.+?)\s*$/;
 const WRITE_IN_LABEL_RE = /^(?:Write-in\.\.\.|.+\(Write-in\))$/i;
-const OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*•.*•\s*<esc> Skip\s*$/;
+const OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*[•·].*[•·]\s*(?:<esc>|esc)\s+Skip\s*$/;
 const WRITE_IN_PROMPT_RE = /^\s*Your answer:\s*$/;
-const WRITE_IN_NAV_HINTS_RE = /^\s*Enter Submit.*•\s*<esc> Back\s*$/;
+const WRITE_IN_NAV_HINTS_RE = /^\s*[Ee]nter Submit.*[•·]\s*(?:<esc>|esc)\s+Back\s*$/;
 const POST_MODAL_VETO_RE =
   /^\s*(?:─{10,}|[╭╰┌└│]|>\s+Type your message)|[\u2800-\u28ff]\s+(?:Generating|Running|Thinking)/;
 
@@ -71,7 +71,7 @@ export function parseAntigravityChoiceScreen(
   const cleaned = stripAnsi(rawSectionText).replace(/\r\n/g, '\n');
   const lines = cleaned.split('\n');
 
-  // Find the last valid `Question` + `─{10,}` + `Question M/N: ...` header triple.
+  // Find the last valid `Question` + `─{10,}` + (optional blank line) + `Question M/N: ...` header.
   let headerIdx = -1;
   let currentIndex = 0;
   let totalQuestions = 0;
@@ -81,7 +81,11 @@ export function parseAntigravityChoiceScreen(
   for (let i = 0; i + 2 < lines.length; i++) {
     if (!HEADER_TITLE_RE.test(lines[i]!)) continue;
     if (!HEADER_DIVIDER_RE.test(lines[i + 1]!)) continue;
-    const qMatch = QUESTION_HEADER_RE.exec(lines[i + 2]!);
+    let qLineIdx = i + 2;
+    if (lines[qLineIdx]!.trim() === '' && i + 3 < lines.length) {
+      qLineIdx = i + 3;
+    }
+    const qMatch = QUESTION_HEADER_RE.exec(lines[qLineIdx]!);
     if (!qMatch) continue;
     const m = Number.parseInt(qMatch[1]!, 10);
     const n = Number.parseInt(qMatch[2]!, 10);
@@ -89,7 +93,7 @@ export function parseAntigravityChoiceScreen(
     headerIdx = i;
     currentIndex = m;
     totalQuestions = n;
-    questionHeaderLineIdx = i + 2;
+    questionHeaderLineIdx = qLineIdx;
     questionFirstLine = qMatch[3]!.trim();
   }
 
@@ -213,7 +217,7 @@ export function parseAntigravityChoiceScreen(
   const options: ParsedAntigravityChoiceOption[] = realRows.map((row) => ({
     index: row.index,
     label: row.labelParts.join(' '),
-    checked: row.checkbox !== null && row.checkbox.toLowerCase() === 'x',
+    checked: row.checkbox !== null && row.checkbox.trim().length > 0,
   }));
 
   const questionText = questionLines.join(' ');
@@ -372,13 +376,77 @@ function resolveSelectedOptionRows(
  * - Freeform / Write-in (`K+1`): selects row `K+1` (via digit `<=9` or arrows + `\r` for `>9`),
  *   types the freeform text, and sends `\r` (which calls `advanceOrSubmit`).
  */
+export interface AntigravityQuestionKeystrokeOptions {
+  currentCursorRow?: number;
+  writingIn?: boolean;
+  /**
+   * 1-based option row numbers (1..K) currently checked (`[x]`) on the live TUI screen.
+   * When omitted in options mode (`writingIn !== true`), defaults to `[]` (no options pre-checked).
+   * When omitted in write-in mode (`writingIn === true`) on a multi-select question, refuses
+   * because the `Your answer:` sub-view hides the option checkboxes.
+   */
+  currentlyCheckedRows?: ReadonlyArray<number>;
+}
+
+function computeMultiSelectToggleRows(
+  realOptionCount: number,
+  desiredRows: ReadonlyArray<number>,
+  currentlyCheckedRows: ReadonlyArray<number>,
+): number[] {
+  const desiredSet = new Set(desiredRows);
+  const checkedSet = new Set<number>();
+  for (const row of currentlyCheckedRows) {
+    if (!Number.isInteger(row) || row < 1 || row > realOptionCount) {
+      throw new Error(`Invalid checked option row ${row} (expected 1..${realOptionCount})`);
+    }
+    checkedSet.add(row);
+  }
+  const toggleRows: number[] = [];
+  for (let row = 1; row <= realOptionCount; row++) {
+    if (checkedSet.has(row) !== desiredSet.has(row)) {
+      toggleRows.push(row);
+    }
+  }
+  return toggleRows;
+}
+
+function appendMultiSelectToggleKeys(
+  toggleRows: ReadonlyArray<number>,
+  initialCursorRow: number,
+): { keys: string; cursorRow: number } {
+  let keys = '';
+  let cursorRow = initialCursorRow;
+  for (const targetRow of toggleRows) {
+    if (targetRow <= 9) {
+      keys += String(targetRow);
+      cursorRow = targetRow;
+    } else {
+      keys += moveAntigravityCursor(cursorRow, targetRow);
+      keys += ' ';
+      cursorRow = targetRow;
+    }
+  }
+  return { keys, cursorRow };
+}
+
+/**
+ * Build exact PTY keystrokes for a single Antigravity (`agy` 1.4.2) `AskQuestion` item.
+ *
+ * Verified against `AskQuestionModel.Update` in the `agy` 1.4.2 binary:
+ * - Single-select option `1..9`: digit key `'1'..'9'` selects and auto-advances immediately (no `\r`).
+ * - Single-select option `>9`: arrow keys from `currentCursorRow` to `targetRow`, then `\r`.
+ * - Multi-select options: reconciles the live checked set against desired labels using the
+ *   symmetric difference (`checked !== desired`); digit `'1'..'9'` moves cursor & toggles,
+ *   `>9` uses arrow keys from tracked cursor row + `' '` (Space) to toggle, then `\r` submits
+ *   (NO `\t` Tab). If all desired options are already checked and no unwanted options are checked,
+ *   sends only `\r`.
+ * - Freeform / Write-in (`K+1`): selects row `K+1` (via digit `<=9` or arrows + `\r` for `>9`),
+ *   types the freeform text, and sends `\r` (which calls `advanceOrSubmit`).
+ */
 export function buildAntigravityQuestionKeystrokes(
   question: InteractiveQuestion,
   answer: InteractiveAnswer,
-  options?: {
-    currentCursorRow?: number;
-    writingIn?: boolean;
-  },
+  options?: AntigravityQuestionKeystrokeOptions,
 ): string {
   const realOptionCount = question.options.length;
   if (realOptionCount < 1) {
@@ -392,6 +460,12 @@ export function buildAntigravityQuestionKeystrokes(
       : 1;
   const freeform = answer.freeformText?.trim() ?? '';
 
+  if (question.multiSelect && options?.writingIn && options.currentlyCheckedRows === undefined) {
+    throw new Error(
+      `Cannot reconcile multi-select checkboxes for ${question.questionId} while the native Write-in editor is already open`,
+    );
+  }
+
   if (freeform.length > 0) {
     if (question.allowFreeform === false) {
       throw new Error(`Freeform write-in is not supported for ${question.questionId}`);
@@ -402,27 +476,53 @@ export function buildAntigravityQuestionKeystrokes(
       );
     }
 
+    if (!question.multiSelect) {
+      if (options?.writingIn) {
+        return `${freeform}\r`;
+      }
+      let keys = '';
+      if (writeInRow <= 9) {
+        keys += String(writeInRow);
+      } else {
+        keys += moveAntigravityCursor(cursorRow, writeInRow);
+        keys += '\r';
+      }
+      keys += `${freeform}\r`;
+      return keys;
+    }
+
+    // Multi-select with freeform write-in: reconcile regular option checkboxes first.
+    const desiredRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+    const toggleRows = computeMultiSelectToggleRows(
+      realOptionCount,
+      desiredRows,
+      options?.currentlyCheckedRows ?? [],
+    );
+
     if (options?.writingIn) {
-      return `${freeform}\r`;
+      if (toggleRows.length === 0) {
+        return `${freeform}\r`;
+      }
+      // Exit write-in sub-view (`<esc> Back`) to reconcile checkboxes, then re-open Write-in.
+      let keys = '\x1b';
+      const toggled = appendMultiSelectToggleKeys(toggleRows, writeInRow);
+      keys += toggled.keys;
+      cursorRow = toggled.cursorRow;
+      if (writeInRow <= 9) {
+        keys += String(writeInRow);
+      } else {
+        keys += moveAntigravityCursor(cursorRow, writeInRow);
+        keys += '\r';
+      }
+      keys += `${freeform}\r`;
+      return keys;
     }
 
     let keys = '';
-    // If multi-select also has regular options checked alongside write-in, toggle them first.
-    if (question.multiSelect && answer.selectedLabels.length > 0) {
-      const selectedRows = resolveSelectedOptionRows(question, answer.selectedLabels);
-      for (const targetRow of selectedRows) {
-        if (targetRow <= 9) {
-          keys += String(targetRow);
-          cursorRow = targetRow;
-        } else {
-          keys += moveAntigravityCursor(cursorRow, targetRow);
-          keys += ' ';
-          cursorRow = targetRow;
-        }
-      }
-    }
+    const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+    keys += toggled.keys;
+    cursorRow = toggled.cursorRow;
 
-    // Open the K+1 Write-in editor.
     if (writeInRow <= 9) {
       keys += String(writeInRow);
     } else {
@@ -455,19 +555,13 @@ export function buildAntigravityQuestionKeystrokes(
   }
 
   if (question.multiSelect) {
-    let keys = prefix;
-    for (const targetRow of selectedRows) {
-      if (targetRow <= 9) {
-        keys += String(targetRow);
-        cursorRow = targetRow;
-      } else {
-        keys += moveAntigravityCursor(cursorRow, targetRow);
-        keys += ' ';
-        cursorRow = targetRow;
-      }
-    }
-    keys += '\r';
-    return keys;
+    const toggleRows = computeMultiSelectToggleRows(
+      realOptionCount,
+      selectedRows,
+      options?.currentlyCheckedRows ?? [],
+    );
+    const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+    return `${prefix}${toggled.keys}\r`;
   }
 
   // Single-select
@@ -514,6 +608,7 @@ export function buildAntigravityInteractiveTuiAnswerSteps(
     startQuestionIndex?: number;
     currentCursorRow?: number;
     writingIn?: boolean;
+    currentlyCheckedRows?: ReadonlyArray<number>;
   },
 ): string[] {
   if (response.promptId !== prompt.promptId) {
@@ -544,7 +639,11 @@ export function buildAntigravityInteractiveTuiAnswerSteps(
       question,
       answer,
       i === startIdx
-        ? { currentCursorRow: options?.currentCursorRow, writingIn: options?.writingIn }
+        ? {
+            currentCursorRow: options?.currentCursorRow,
+            writingIn: options?.writingIn,
+            currentlyCheckedRows: options?.currentlyCheckedRows,
+          }
         : { currentCursorRow: 1, writingIn: false },
     );
     steps.push(keys);

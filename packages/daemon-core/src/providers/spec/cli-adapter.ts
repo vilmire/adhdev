@@ -136,6 +136,7 @@ export class SpecCliAdapter implements CliAdapter {
     private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
     private claudeTuiPromptCaptureInFlight = false;
     private antigravityAnswerInFlight = false;
+    private antigravityConsumedPromptIds = new Set<string>();
     /**
      * OWNER-INPUT-WINS latch for the claude TUI capture pass. The multi-question
      * capture injects Tab/Shift-Tab into the PTY to snapshot pages 2..N — the
@@ -1207,6 +1208,7 @@ export class SpecCliAdapter implements CliAdapter {
             set interactivePromptLostAt(v) { self.interactivePromptLostAt = v; },
             get antigravityAnswerInFlight() { return self.antigravityAnswerInFlight; },
             set antigravityAnswerInFlight(v) { self.antigravityAnswerInFlight = v; },
+            get consumedPromptIds() { return (self.antigravityConsumedPromptIds ??= new Set<string>()); },
             isAntigravityTuiScheme: () => self.interactivePromptScheme() === 'antigravity_tui',
             notifyChange: (cause) => self.notifyChange(cause),
             readNativePendingAskQuestion: () => detectAntigravityNativePendingQuestion(

@@ -825,4 +825,3 @@ export function extractPendingAskQuestionFromStepPayload(payload: Buffer | null 
 
   return null;
 }
-

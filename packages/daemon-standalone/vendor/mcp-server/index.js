@@ -106777,11 +106777,11 @@ ${tail}` : ""
     var HEADER_TITLE_RE = /^\s*Question\s*$/;
     var HEADER_DIVIDER_RE = /^\s*─{10,}\s*$/;
     var QUESTION_HEADER_RE = /^\s*Question\s+(\d+)\/(\d+):\s+(.+?)\s*$/;
-    var OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX])\]\s+)?(.+?)\s*$/;
+    var OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX✓✔])\]\s+)?(.+?)\s*$/;
     var WRITE_IN_LABEL_RE = /^(?:Write-in\.\.\.|.+\(Write-in\))$/i;
-    var OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*•.*•\s*<esc> Skip\s*$/;
+    var OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*[•·].*[•·]\s*(?:<esc>|esc)\s+Skip\s*$/;
     var WRITE_IN_PROMPT_RE = /^\s*Your answer:\s*$/;
-    var WRITE_IN_NAV_HINTS_RE = /^\s*Enter Submit.*•\s*<esc> Back\s*$/;
+    var WRITE_IN_NAV_HINTS_RE = /^\s*[Ee]nter Submit.*[•·]\s*(?:<esc>|esc)\s+Back\s*$/;
     var POST_MODAL_VETO_RE = /^\s*(?:─{10,}|[╭╰┌└│]|>\s+Type your message)|[\u2800-\u28ff]\s+(?:Generating|Running|Thinking)/;
     function stripAnsi(text4) {
       return text4.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
@@ -106801,7 +106801,11 @@ ${tail}` : ""
       for (let i = 0; i + 2 < lines.length; i++) {
         if (!HEADER_TITLE_RE.test(lines[i])) continue;
         if (!HEADER_DIVIDER_RE.test(lines[i + 1])) continue;
-        const qMatch = QUESTION_HEADER_RE.exec(lines[i + 2]);
+        let qLineIdx = i + 2;
+        if (lines[qLineIdx].trim() === "" && i + 3 < lines.length) {
+          qLineIdx = i + 3;
+        }
+        const qMatch = QUESTION_HEADER_RE.exec(lines[qLineIdx]);
         if (!qMatch) continue;
         const m = Number.parseInt(qMatch[1], 10);
         const n = Number.parseInt(qMatch[2], 10);
@@ -106809,7 +106813,7 @@ ${tail}` : ""
         headerIdx = i;
         currentIndex = m;
         totalQuestions = n;
-        questionHeaderLineIdx = i + 2;
+        questionHeaderLineIdx = qLineIdx;
         questionFirstLine = qMatch[3].trim();
       }
       if (headerIdx < 0 || questionHeaderLineIdx < 0) return null;
@@ -106907,7 +106911,7 @@ ${tail}` : ""
       const options = realRows.map((row2) => ({
         index: row2.index,
         label: row2.labelParts.join(" "),
-        checked: row2.checkbox !== null && row2.checkbox.toLowerCase() === "x"
+        checked: row2.checkbox !== null && row2.checkbox.trim().length > 0
       }));
       const questionText = questionLines.join(" ");
       const optionSig = options.map((o) => `${o.index}:${o.label}`).join("|");
@@ -107006,6 +107010,38 @@ ${tail}` : ""
       }
       return rows;
     }
+    function computeMultiSelectToggleRows(realOptionCount, desiredRows, currentlyCheckedRows) {
+      const desiredSet = new Set(desiredRows);
+      const checkedSet = /* @__PURE__ */ new Set();
+      for (const row2 of currentlyCheckedRows) {
+        if (!Number.isInteger(row2) || row2 < 1 || row2 > realOptionCount) {
+          throw new Error(`Invalid checked option row ${row2} (expected 1..${realOptionCount})`);
+        }
+        checkedSet.add(row2);
+      }
+      const toggleRows = [];
+      for (let row2 = 1; row2 <= realOptionCount; row2++) {
+        if (checkedSet.has(row2) !== desiredSet.has(row2)) {
+          toggleRows.push(row2);
+        }
+      }
+      return toggleRows;
+    }
+    function appendMultiSelectToggleKeys(toggleRows, initialCursorRow) {
+      let keys = "";
+      let cursorRow = initialCursorRow;
+      for (const targetRow of toggleRows) {
+        if (targetRow <= 9) {
+          keys += String(targetRow);
+          cursorRow = targetRow;
+        } else {
+          keys += moveAntigravityCursor(cursorRow, targetRow);
+          keys += " ";
+          cursorRow = targetRow;
+        }
+      }
+      return { keys, cursorRow };
+    }
     function buildAntigravityQuestionKeystrokes(question, answer, options) {
       const realOptionCount = question.options.length;
       if (realOptionCount < 1) {
@@ -107014,6 +107050,11 @@ ${tail}` : ""
       const writeInRow = realOptionCount + 1;
       let cursorRow = options?.currentCursorRow && options.currentCursorRow >= 1 ? options.currentCursorRow : 1;
       const freeform = answer.freeformText?.trim() ?? "";
+      if (question.multiSelect && options?.writingIn && options.currentlyCheckedRows === void 0) {
+        throw new Error(
+          `Cannot reconcile multi-select checkboxes for ${question.questionId} while the native Write-in editor is already open`
+        );
+      }
       if (freeform.length > 0) {
         if (question.allowFreeform === false) {
           throw new Error(`Freeform write-in is not supported for ${question.questionId}`);
@@ -107023,23 +107064,47 @@ ${tail}` : ""
             `Single-select question ${question.questionId} cannot combine option selection with freeform write-in`
           );
         }
+        if (!question.multiSelect) {
+          if (options?.writingIn) {
+            return `${freeform}\r`;
+          }
+          let keys2 = "";
+          if (writeInRow <= 9) {
+            keys2 += String(writeInRow);
+          } else {
+            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
+            keys2 += "\r";
+          }
+          keys2 += `${freeform}\r`;
+          return keys2;
+        }
+        const desiredRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+        const toggleRows = computeMultiSelectToggleRows(
+          realOptionCount,
+          desiredRows,
+          options?.currentlyCheckedRows ?? []
+        );
         if (options?.writingIn) {
-          return `${freeform}\r`;
+          if (toggleRows.length === 0) {
+            return `${freeform}\r`;
+          }
+          let keys2 = "\x1B";
+          const toggled2 = appendMultiSelectToggleKeys(toggleRows, writeInRow);
+          keys2 += toggled2.keys;
+          cursorRow = toggled2.cursorRow;
+          if (writeInRow <= 9) {
+            keys2 += String(writeInRow);
+          } else {
+            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
+            keys2 += "\r";
+          }
+          keys2 += `${freeform}\r`;
+          return keys2;
         }
         let keys = "";
-        if (question.multiSelect && answer.selectedLabels.length > 0) {
-          const selectedRows2 = resolveSelectedOptionRows(question, answer.selectedLabels);
-          for (const targetRow2 of selectedRows2) {
-            if (targetRow2 <= 9) {
-              keys += String(targetRow2);
-              cursorRow = targetRow2;
-            } else {
-              keys += moveAntigravityCursor(cursorRow, targetRow2);
-              keys += " ";
-              cursorRow = targetRow2;
-            }
-          }
-        }
+        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+        keys += toggled.keys;
+        cursorRow = toggled.cursorRow;
         if (writeInRow <= 9) {
           keys += String(writeInRow);
         } else {
@@ -107067,19 +107132,13 @@ ${tail}` : ""
         cursorRow = writeInRow;
       }
       if (question.multiSelect) {
-        let keys = prefix;
-        for (const targetRow2 of selectedRows) {
-          if (targetRow2 <= 9) {
-            keys += String(targetRow2);
-            cursorRow = targetRow2;
-          } else {
-            keys += moveAntigravityCursor(cursorRow, targetRow2);
-            keys += " ";
-            cursorRow = targetRow2;
-          }
-        }
-        keys += "\r";
-        return keys;
+        const toggleRows = computeMultiSelectToggleRows(
+          realOptionCount,
+          selectedRows,
+          options?.currentlyCheckedRows ?? []
+        );
+        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+        return `${prefix}${toggled.keys}\r`;
       }
       const targetRow = selectedRows[0];
       if (targetRow <= 9) {
@@ -157760,6 +157819,26 @@ ${text4}` : text4;
     var INTERACTIVE_PROMPT_LOST_GRACE_MS2 = 1500;
     var CAROUSEL_STEP_POLL_INTERVAL_MS = 50;
     var CAROUSEL_STEP_SETTLE_TIMEOUT_MS = 600;
+    var fallbackConsumedPromptsByHost = /* @__PURE__ */ new WeakMap();
+    function getConsumedPromptSet(host) {
+      if (host.consumedPromptIds instanceof Set) {
+        return host.consumedPromptIds;
+      }
+      let set2 = fallbackConsumedPromptsByHost.get(host);
+      if (!set2) {
+        set2 = /* @__PURE__ */ new Set();
+        fallbackConsumedPromptsByHost.set(host, set2);
+      }
+      return set2;
+    }
+    function isAntigravityPromptConsumed(host, promptId) {
+      if (!promptId) return false;
+      return getConsumedPromptSet(host).has(promptId);
+    }
+    function markAntigravityPromptConsumed(host, promptId) {
+      if (!promptId) return;
+      getConsumedPromptSet(host).add(promptId);
+    }
     function formatAntigravityPromptId(pending) {
       return `agy-ask:${pending.conversationId}:${pending.stepIdx}:${pending.callId || "0"}`;
     }
@@ -157827,12 +157906,13 @@ ${text4}` : text4;
       }
       const screen = readActiveAntigravityChoiceScreen(host, options.screenText);
       const nativePending = screen ? host.readNativePendingAskQuestion() : null;
-      const nextPrompt = screen && nativePending ? buildAntigravityInteractivePrompt({
+      const candidatePrompt = screen && nativePending ? buildAntigravityInteractivePrompt({
         screen,
         nativePending,
         providerType: host.cliType,
         createdAt: host.activeInteractivePrompt?.createdAt
       }) : null;
+      const nextPrompt = candidatePrompt && !isAntigravityPromptConsumed(host, candidatePrompt.promptId) ? candidatePrompt : null;
       if (nextPrompt) {
         host.interactivePromptLostAt = null;
         const prevPromptId = host.activeInteractivePrompt?.promptId ?? null;
@@ -157844,6 +157924,13 @@ ${text4}` : text4;
         return;
       }
       if (!host.activeInteractivePrompt) return;
+      if (isAntigravityPromptConsumed(host, host.activeInteractivePrompt.promptId)) {
+        host.activeInteractivePrompt = null;
+        host.interactivePromptTransport = null;
+        host.interactivePromptLostAt = null;
+        host.notifyChange("prompt_cleared");
+        return;
+      }
       const latestPending = host.readNativePendingAskQuestion();
       const nativeStillMatchesHeld = latestPending !== null && formatAntigravityPromptId(latestPending) === host.activeInteractivePrompt.promptId;
       const leftWaitingChoice = host.latestState !== null && host.latestState.status !== "waiting_choice";
@@ -157866,29 +157953,35 @@ ${text4}` : text4;
       host.interactivePromptLostAt = null;
       host.notifyChange("prompt_cleared");
     }
-    async function waitForNextAntigravityCarouselPage(host, expectedPromptId, expectedQuestionIndex1Based, initialFingerprint) {
+    function assertChoiceModalStillActiveForStep(host, expectedPromptId, expectedQuestionIndex1Based) {
+      if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust" || host.latestModal?.kind === "approval" || host.latestModal?.kind === "confirm") {
+        throw new Error(
+          "Antigravity permission/trust modal preempted the choice carousel during answer submission."
+        );
+      }
+      if (host.latestState && host.latestState.status !== "waiting_choice") {
+        throw new Error(
+          `Antigravity session left waiting_choice (status=${host.latestState.status}) before question ${expectedQuestionIndex1Based} could be answered.`
+        );
+      }
+      const nativePending = host.readNativePendingAskQuestion();
+      if (!nativePending || formatAntigravityPromptId(nativePending) !== expectedPromptId) {
+        throw new Error(
+          `Antigravity native AskQuestion step resolved or changed before question ${expectedQuestionIndex1Based} could be answered.`
+        );
+      }
+      return nativePending;
+    }
+    async function waitForNextAntigravityCarouselPage(host, expectedPromptId, expectedQuestionIndex1Based) {
       const deadline = Date.now() + CAROUSEL_STEP_SETTLE_TIMEOUT_MS;
-      let lastScreen = null;
       while (Date.now() <= deadline) {
-        if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust") {
-          throw new Error(
-            "Antigravity permission/trust modal preempted the choice carousel during answer submission."
-          );
-        }
-        if (host.latestState && host.latestState.status !== "waiting_choice") {
-          throw new Error(
-            `Antigravity session left waiting_choice (status=${host.latestState.status}) before question ${expectedQuestionIndex1Based} could be answered.`
-          );
-        }
-        const nativePending = host.readNativePendingAskQuestion();
-        if (!nativePending || formatAntigravityPromptId(nativePending) !== expectedPromptId) {
-          throw new Error(
-            `Antigravity native AskQuestion step resolved or changed before question ${expectedQuestionIndex1Based} could be answered.`
-          );
-        }
+        const nativePending = assertChoiceModalStillActiveForStep(
+          host,
+          expectedPromptId,
+          expectedQuestionIndex1Based
+        );
         const screen = readActiveAntigravityChoiceScreen(host);
         if (screen) {
-          lastScreen = screen;
           if (screen.currentIndex === expectedQuestionIndex1Based) {
             if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
               throw new Error(
@@ -157905,20 +157998,55 @@ ${text4}` : text4;
         }
         await new Promise((resolve47) => setTimeout(resolve47, CAROUSEL_STEP_POLL_INTERVAL_MS));
       }
-      if (lastScreen && lastScreen.fingerprint === initialFingerprint && host.latestState?.status === "waiting_choice") {
-        const nativePending = host.readNativePendingAskQuestion();
-        if (nativePending && formatAntigravityPromptId(nativePending) === expectedPromptId) {
-          return {
-            ...lastScreen,
-            currentIndex: expectedQuestionIndex1Based,
-            currentCursorRow: 1,
-            writingIn: false
-          };
+      throw new Error(
+        `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}; partial/unconfirmed carousel advancement \u2014 stopped remaining keystrokes.`
+      );
+    }
+    async function waitForAntigravityWriteInExit(host, expectedPromptId, expectedQuestionIndex1Based) {
+      const deadline = Date.now() + CAROUSEL_STEP_SETTLE_TIMEOUT_MS;
+      while (Date.now() <= deadline) {
+        const nativePending = assertChoiceModalStillActiveForStep(
+          host,
+          expectedPromptId,
+          expectedQuestionIndex1Based
+        );
+        const screen = readActiveAntigravityChoiceScreen(host);
+        if (screen) {
+          if (screen.currentIndex !== expectedQuestionIndex1Based) {
+            throw new Error(
+              `Antigravity choice carousel moved to Question ${screen.currentIndex}/${screen.totalQuestions} while exiting Write-in on Question ${expectedQuestionIndex1Based}.`
+            );
+          }
+          if (!screen.writingIn) {
+            if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
+              throw new Error(
+                `Antigravity choice screen at Question ${screen.currentIndex}/${screen.totalQuestions} no longer matches bound native step after exiting Write-in.`
+              );
+            }
+            return screen;
+          }
         }
+        await new Promise((resolve47) => setTimeout(resolve47, CAROUSEL_STEP_POLL_INTERVAL_MS));
       }
       throw new Error(
-        `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}.`
+        `Timed out waiting for Antigravity Write-in editor to return to options on Question ${expectedQuestionIndex1Based}; stopped remaining keystrokes.`
       );
+    }
+    function extractScreenKeystrokeOptions(screen) {
+      return {
+        currentCursorRow: screen.currentCursorRow,
+        writingIn: screen.writingIn,
+        currentlyCheckedRows: screen.writingIn ? void 0 : screen.options.filter((opt) => opt.checked).map((opt) => opt.index)
+      };
+    }
+    function clearHeldPromptOnHost(host) {
+      const hadPrompt = host.activeInteractivePrompt !== null;
+      host.activeInteractivePrompt = null;
+      host.interactivePromptTransport = null;
+      host.interactivePromptLostAt = null;
+      if (hadPrompt) {
+        host.notifyChange("prompt_cleared");
+      }
     }
     async function answerAntigravityInteractivePrompt(host, prompt, response) {
       if (host.antigravityAnswerInFlight) {
@@ -157926,26 +158054,29 @@ ${text4}` : text4;
           "Another interactive prompt response is already in flight for this Antigravity session."
         );
       }
-      if (!host.activeInteractivePrompt || host.activeInteractivePrompt.promptId !== prompt.promptId) {
+      if (!response || !response.promptId) {
+        throw new Error("Interactive prompt response is missing promptId");
+      }
+      if (isAntigravityPromptConsumed(host, response.promptId) || prompt?.promptId && isAntigravityPromptConsumed(host, prompt.promptId)) {
+        clearHeldPromptOnHost(host);
+        throw new Error(
+          "Interactive prompt response was already submitted for this native AskQuestion step."
+        );
+      }
+      if (!prompt || !host.activeInteractivePrompt || host.activeInteractivePrompt.promptId !== prompt.promptId) {
         throw new Error("Interactive prompt response does not match active prompt");
       }
       if (response.promptId !== prompt.promptId) {
         throw new Error("Interactive prompt response does not match active prompt");
       }
       if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust" || host.latestModal?.kind === "approval" || host.latestModal?.kind === "confirm") {
-        host.activeInteractivePrompt = null;
-        host.interactivePromptTransport = null;
-        host.interactivePromptLostAt = null;
-        host.notifyChange("prompt_cleared");
+        clearHeldPromptOnHost(host);
         throw new Error(
           "Cannot answer Antigravity choice question while a permission/trust approval modal is active."
         );
       }
       if (host.latestState && host.latestState.status !== "waiting_choice") {
-        host.activeInteractivePrompt = null;
-        host.interactivePromptTransport = null;
-        host.interactivePromptLostAt = null;
-        host.notifyChange("prompt_cleared");
+        clearHeldPromptOnHost(host);
         throw new Error(
           `Antigravity session is no longer waiting for a choice answer (status=${host.latestState.status}).`
         );
@@ -157953,21 +158084,17 @@ ${text4}` : text4;
       const initialScreen = readActiveAntigravityChoiceScreen(host);
       const initialNative = host.readNativePendingAskQuestion();
       if (!initialScreen || !initialNative || formatAntigravityPromptId(initialNative) !== prompt.promptId || !doesAntigravityScreenMatchNativeStep(initialScreen, initialNative)) {
-        host.activeInteractivePrompt = null;
-        host.interactivePromptTransport = null;
-        host.interactivePromptLostAt = null;
-        host.notifyChange("prompt_cleared");
+        clearHeldPromptOnHost(host);
         throw new Error(
           "Antigravity choice prompt is no longer active or no longer matches the bound native step."
         );
       }
       if (response.action === "dismiss") {
         host.antigravityAnswerInFlight = true;
+        markAntigravityPromptConsumed(host, prompt.promptId);
+        clearHeldPromptOnHost(host);
         try {
           let currentScreen = initialScreen;
-          if (currentScreen.writingIn) {
-            host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
-          }
           const startQuestionIndex = currentScreen.currentIndex;
           const totalQuestions = currentScreen.totalQuestions;
           for (let qNum = startQuestionIndex; qNum <= totalQuestions; qNum++) {
@@ -157975,19 +158102,19 @@ ${text4}` : text4;
               currentScreen = await waitForNextAntigravityCarouselPage(
                 host,
                 prompt.promptId,
-                qNum,
-                currentScreen.fingerprint
+                qNum
               );
-              if (currentScreen.writingIn) {
-                host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
-              }
+            }
+            if (currentScreen.writingIn) {
+              host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
+              currentScreen = await waitForAntigravityWriteInExit(
+                host,
+                prompt.promptId,
+                qNum
+              );
             }
             host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
           }
-          host.activeInteractivePrompt = null;
-          host.interactivePromptTransport = null;
-          host.interactivePromptLostAt = null;
-          host.notifyChange("prompt_cleared");
         } finally {
           host.antigravityAnswerInFlight = false;
         }
@@ -158008,14 +158135,13 @@ ${text4}` : text4;
         const stepKeys = buildAntigravityQuestionKeystrokes(
           question,
           answer,
-          i === 0 ? {
-            currentCursorRow: initialScreen.currentCursorRow,
-            writingIn: initialScreen.writingIn
-          } : { currentCursorRow: 1, writingIn: false }
+          i === 0 ? extractScreenKeystrokeOptions(initialScreen) : { currentCursorRow: 1, writingIn: false, currentlyCheckedRows: [] }
         );
         prevalidatedSteps.push(stepKeys);
       }
       host.antigravityAnswerInFlight = true;
+      markAntigravityPromptConsumed(host, prompt.promptId);
+      clearHeldPromptOnHost(host);
       try {
         let activeScreen = initialScreen;
         for (let i = 0; i < prompt.questions.length; i++) {
@@ -158023,22 +158149,18 @@ ${text4}` : text4;
             activeScreen = await waitForNextAntigravityCarouselPage(
               host,
               prompt.promptId,
-              i + 1,
-              activeScreen.fingerprint
+              i + 1
             );
           }
           const question = prompt.questions[i];
           const answer = response.answers[question.questionId];
-          const keys = i === 0 ? prevalidatedSteps[0] : buildAntigravityQuestionKeystrokes(question, answer, {
-            currentCursorRow: activeScreen.currentCursorRow,
-            writingIn: activeScreen.writingIn
-          });
+          const keys = i === 0 ? prevalidatedSteps[0] : buildAntigravityQuestionKeystrokes(
+            question,
+            answer,
+            extractScreenKeystrokeOptions(activeScreen)
+          );
           host.driver.dispatch({ kind: "pty_write", data: keys });
         }
-        host.activeInteractivePrompt = null;
-        host.interactivePromptTransport = null;
-        host.interactivePromptLostAt = null;
-        host.notifyChange("prompt_cleared");
       } finally {
         host.antigravityAnswerInFlight = false;
       }
@@ -158420,6 +158542,7 @@ ${text4}` : text4;
       interactivePromptTransport = null;
       claudeTuiPromptCaptureInFlight = false;
       antigravityAnswerInFlight = false;
+      antigravityConsumedPromptIds = /* @__PURE__ */ new Set();
       /**
        * OWNER-INPUT-WINS latch for the claude TUI capture pass. The multi-question
        * capture injects Tab/Shift-Tab into the PTY to snapshot pages 2..N — the
@@ -159371,6 +159494,9 @@ ${text4}` : text4;
           },
           set antigravityAnswerInFlight(v) {
             self.antigravityAnswerInFlight = v;
+          },
+          get consumedPromptIds() {
+            return self.antigravityConsumedPromptIds ??= /* @__PURE__ */ new Set();
           },
           isAntigravityTuiScheme: () => self.interactivePromptScheme() === "antigravity_tui",
           notifyChange: (cause) => self.notifyChange(cause),

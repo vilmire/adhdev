@@ -633,6 +633,26 @@ describe('antigravity-cli v4 FSM — choice questions (ask_question)', () => {
         '  ? for shortcuts                                      Gemini 4 Argon · medium',
     );
 
+    const liveAgy142ChoiceScreen = makeScreen(
+        [
+            '  ? Which checks?',
+            '  ? Which runtime?',
+            '',
+            '  Question',
+            '  ────────────────────────────────────────────────────────────────────────',
+            '',
+            '  Question 1/2: Which checks?',
+            '',
+            '    1. [x] Typecheck',
+            '  > 2. [x] UnitTest',
+            '    3. [ ] Lint',
+            '    4. Write-in...',
+            '',
+            '  ↑/↓ Navigate · → Next · space Toggle · enter Submit · esc Skip',
+        ],
+        'esc to cancel                                          Gemini 4 Argon · medium',
+    );
+
     it('declares interactive_prompts.scheme = antigravity_tui and choice state with waiting_choice', () => {
         expect(spec.interactive_prompts?.scheme).toBe('antigravity_tui');
         const choiceState = spec.states.find(s => s.id === 'choice');
@@ -641,10 +661,11 @@ describe('antigravity-cli v4 FSM — choice questions (ask_question)', () => {
         expect(choiceState?.modal_kind).toBe('choice');
     });
 
-    it('transitions from busy or idle to choice on single-select, multi-select, and write-in screens', () => {
-        for (const screen of [singleChoiceScreen, multiChoiceScreen, writeInChoiceScreen]) {
+    it('transitions from busy or idle to choice on single-select, multi-select, write-in, and live agy 1.4.2 screens', () => {
+        for (const screen of [singleChoiceScreen, multiChoiceScreen, writeInChoiceScreen, liveAgy142ChoiceScreen]) {
             expect(evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('choice');
             expect(evaluateFsm(spec, 'idle', screen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('choice');
+            expect(evaluateFsm(spec, 'choice', screen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired).toBeNull();
         }
     });
 
@@ -733,5 +754,3 @@ describe('antigravity-cli v4 FSM — choice questions (ask_question)', () => {
         expect(evaluateFsm(spec, 'choice', doneScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('idle');
     });
 });
-
-

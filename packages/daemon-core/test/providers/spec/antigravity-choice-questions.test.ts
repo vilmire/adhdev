@@ -833,4 +833,251 @@ describe('SpecCliAdapter Antigravity choice-question binding & response safety',
     // Only Q1's key ('1') was sent; Q2's keys ('1\r') were NOT injected into the approval modal!
     expect(writes).toEqual(['1']);
   });
+
+  it('F1: rejects when carousel screen fails to advance to Question 2/2 after timeout and never dispatches Question 2 keys', async () => {
+    writeBoundWaitingDb(convUuid, AGY_STATUS_WAITING);
+    const { adapter, writes } = createHarness({
+      screenText: carouselQ1Screen,
+      providerSessionId: convUuid,
+    });
+
+    const prompt = adapter.getStatus().activeInteractivePrompt!;
+    expect(prompt).not.toBeNull();
+
+    // Screen remains stuck on Question 1/2 even after Q1 keystrokes are written.
+    await expect(
+      adapter.setInteractivePromptResponse({
+        promptId: prompt.promptId,
+        answers: {
+          q1: { selectedLabels: ['PostgreSQL'] },
+          q2: { selectedLabels: ['WAL mode'] },
+        },
+      }),
+    ).rejects.toThrow(/Timed out waiting for Antigravity choice carousel to advance to Question 2/);
+
+    // Only Q1 ('1') was dispatched; Q2 was stopped.
+    expect(writes).toEqual(['1']);
+    expect(adapter.activeInteractivePrompt).toBeNull();
+
+    // Even if getStatus() refreshes while screen and DB remain unchanged, the consumed
+    // promptId must not re-arm or allow a replay.
+    expect(adapter.getStatus().activeInteractivePrompt).toBeNull();
+  });
+
+  it('F1 (dismiss): enforces observation fences across carousel skip and write-in exit', async () => {
+    writeBoundWaitingDb(convUuid, AGY_STATUS_WAITING);
+    const { adapter, writes } = createHarness({
+      screenText: carouselQ1Screen,
+      providerSessionId: convUuid,
+    });
+
+    const prompt = adapter.getStatus().activeInteractivePrompt!;
+    // Screen stays stuck on Question 1/2 when dismiss is requested -> sends only first Esc and rejects
+    await expect(
+      adapter.setInteractivePromptResponse({
+        promptId: prompt.promptId,
+        action: 'dismiss',
+        answers: {},
+      }),
+    ).rejects.toThrow(/Timed out waiting for Antigravity choice carousel to advance to Question 2/);
+    expect(writes).toEqual(['\x1b']);
+  });
+
+  it('F2: reconciles live pre-checked checkboxes (wanted, unwanted, mixed, multi+write-in, >9 cursor, and live Q2 carousel edits)', async () => {
+    const multiQ = {
+      questionId: 'qMulti',
+      question: 'Select checks:',
+      multiSelect: true,
+      allowFreeform: true,
+      options: [{ label: 'Alpha' }, { label: 'Beta' }, { label: 'Gamma' }],
+    };
+
+    // 1. Pre-checked wanted ('Alpha' already [x]) -> only '\r' (does NOT toggle Alpha off)
+    expect(
+      buildAntigravityQuestionKeystrokes(
+        multiQ,
+        { selectedLabels: ['Alpha'] },
+        { currentlyCheckedRows: [1] },
+      ),
+    ).toBe('\r');
+
+    // 2. Pre-checked unwanted ('Alpha' [x], user wants 'Beta') -> '12\r'
+    expect(
+      buildAntigravityQuestionKeystrokes(
+        multiQ,
+        { selectedLabels: ['Beta'] },
+        { currentlyCheckedRows: [1] },
+      ),
+    ).toBe('12\r');
+
+    // 3. Mixed pre-checked ('Alpha' [x], 'Beta' [x], user wants 'Alpha' & 'Gamma') -> '23\r'
+    expect(
+      buildAntigravityQuestionKeystrokes(
+        multiQ,
+        { selectedLabels: ['Alpha', 'Gamma'] },
+        { currentlyCheckedRows: [1, 2] },
+      ),
+    ).toBe('23\r');
+
+    // 4. Multi-select + Write-in with 'Alpha' already [x] and user wants 'Alpha' + freeform -> '4Custom\r'
+    expect(
+      buildAntigravityQuestionKeystrokes(
+        multiQ,
+        { selectedLabels: ['Alpha'], freeformText: 'Custom' },
+        { currentlyCheckedRows: [1] },
+      ),
+    ).toBe('4Custom\r');
+
+    // 5. >9 options with pre-checked row 2 (unwanted) and row 11 (already wanted), user wants row 10 & row 11
+    const twelveOptions = Array.from({ length: 12 }, (_, idx) => ({
+      label: `Option ${idx + 1}`,
+    }));
+    const largeMultiQ = {
+      questionId: 'qLargeMulti',
+      question: 'Pick multiple from 12:',
+      multiSelect: true,
+      allowFreeform: true,
+      options: twelveOptions,
+    };
+    expect(
+      buildAntigravityQuestionKeystrokes(
+        largeMultiQ,
+        { selectedLabels: ['Option 10', 'Option 11'] },
+        { currentCursorRow: 4, currentlyCheckedRows: [2, 11] },
+      ),
+    ).toBe(`2${'\x1b[B'.repeat(8)} \r`);
+
+    // 6. Refuses safely when multi-select is in writingIn mode and checkbox state is unobservable
+    expect(() =>
+      buildAntigravityQuestionKeystrokes(
+        multiQ,
+        { selectedLabels: ['Alpha'] },
+        { writingIn: true },
+      ),
+    ).toThrow(/Cannot reconcile multi-select checkboxes/);
+
+    // 7. Adapter end-to-end carousel where Question 2/2 arrives with 'WAL mode' already [x]
+    writeBoundWaitingDb(convUuid, AGY_STATUS_WAITING);
+    const q2PrecheckedScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '  Question 2/2: Which features should be enabled?',
+      '    1. [x] WAL mode',
+      '  > 2. [ ] Foreign keys',
+      '    3. Write-in...',
+      '',
+      '  ↑/↓ Navigate • space Toggle • Enter Submit • <esc> Skip',
+    ].join('\n');
+
+    const { adapter, writes, setScreen } = createHarness({
+      screenText: carouselQ1Screen,
+      providerSessionId: convUuid,
+    });
+    const prompt = adapter.getStatus().activeInteractivePrompt!;
+    adapter.driver.dispatch = (cmd) => {
+      if (cmd.kind === 'pty_write') {
+        writes.push(cmd.data);
+        if (writes.length === 1) {
+          setScreen(q2PrecheckedScreen);
+        }
+      }
+    };
+
+    await adapter.setInteractivePromptResponse({
+      promptId: prompt.promptId,
+      answers: {
+        q1: { selectedLabels: ['PostgreSQL'] },
+        q2: { selectedLabels: ['WAL mode'] },
+      },
+    });
+    // Q1 -> '1'; Q2 ('WAL mode' already [x]) -> '\r'
+    expect(writes).toEqual(['1', '\r']);
+  });
+
+  it('F3: prevents consumed native (conversationId, stepIdx, callId) tuple from re-arming across status refresh while allowing a new stepIdx/callId episode', async () => {
+    writeBoundWaitingDb(convUuid, AGY_STATUS_WAITING);
+    const singleScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '  Question 1/1: Which database engine should we use?',
+      '  > 1. PostgreSQL',
+      '    2. SQLite',
+      '    3. Write-in...',
+      '',
+      '  ↑/↓ Navigate • Enter Select • <esc> Skip',
+    ].join('\n');
+
+    const singleDbPath = path.join(
+      tmpHome,
+      '.gemini',
+      'antigravity-cli',
+      'conversations',
+      `${convUuid}.db`,
+    );
+    const step7Payload = buildStepPayloadWithField154({
+      callId: 'call-single-7',
+      toolName: 'ask_question',
+      questions: [
+        {
+          questionText: 'Which database engine should we use?',
+          options: [{ label: 'PostgreSQL' }, { label: 'SQLite' }],
+          isMultiSelect: false,
+        },
+      ],
+    });
+    createConversationDb(singleDbPath, [
+      { idx: 1, step_type: 14, status: 3, step_payload: Buffer.from([0x08, 0x01]) },
+      { idx: 7, step_type: AGY_STEP_TYPE_ASK_QUESTION, status: AGY_STATUS_WAITING, step_payload: step7Payload },
+    ]);
+
+    const { adapter, writes } = createHarness({
+      screenText: singleScreen,
+      providerSessionId: convUuid,
+    });
+
+    const firstPrompt = adapter.getStatus().activeInteractivePrompt!;
+    expect(firstPrompt?.promptId).toBe(`agy-ask:${convUuid}:7:call-single-7`);
+
+    const response = {
+      promptId: firstPrompt.promptId,
+      answers: { q1: { selectedLabels: ['PostgreSQL'] } },
+    };
+    await adapter.setInteractivePromptResponse(response);
+    expect(writes).toEqual(['1']);
+
+    // Status refresh before native repaint / DB settlement must NOT recapture the consumed step
+    expect(adapter.getStatus().activeInteractivePrompt).toBeNull();
+
+    // Replaying the same response must reject and write nothing
+    await expect(adapter.setInteractivePromptResponse(response)).rejects.toThrow(
+      /already submitted|does not match active prompt/i,
+    );
+    expect(writes).toEqual(['1']);
+
+    // A new AskQuestion episode at stepIdx 11 in the same conversation captures and answers normally
+    const step11Payload = buildStepPayloadWithField154({
+      callId: 'call-single-11',
+      toolName: 'ask_question',
+      questions: [
+        {
+          questionText: 'Which database engine should we use?',
+          options: [{ label: 'PostgreSQL' }, { label: 'SQLite' }],
+          isMultiSelect: false,
+        },
+      ],
+    });
+    createConversationDb(singleDbPath, [
+      { idx: 1, step_type: 14, status: 3, step_payload: Buffer.from([0x08, 0x01]) },
+      { idx: 7, step_type: AGY_STEP_TYPE_ASK_QUESTION, status: 3, step_payload: step7Payload },
+      { idx: 11, step_type: AGY_STEP_TYPE_ASK_QUESTION, status: AGY_STATUS_WAITING, step_payload: step11Payload },
+    ]);
+
+    const secondPrompt = adapter.getStatus().activeInteractivePrompt!;
+    expect(secondPrompt?.promptId).toBe(`agy-ask:${convUuid}:11:call-single-11`);
+    await adapter.setInteractivePromptResponse({
+      promptId: secondPrompt.promptId,
+      answers: { q1: { selectedLabels: ['SQLite'] } },
+    });
+    expect(writes).toEqual(['1', '2']);
+  });
 });

@@ -1038,6 +1038,7 @@ export function detectClaudeAskUserQuestionPromptFromJson(value: unknown, provid
 }
 
 export {
+  type AntigravityQuestionKeystrokeOptions,
   type ParsedAntigravityChoiceOption,
   type ParsedAntigravityChoiceScreen,
   normalizeAntigravityPromptText,
@@ -1048,4 +1049,3 @@ export {
   buildAntigravityCancelKeystrokes,
   buildAntigravityInteractiveTuiAnswerSteps,
 } from './antigravity-interactive-prompt.js';
-

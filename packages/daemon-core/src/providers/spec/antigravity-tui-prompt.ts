@@ -37,9 +37,40 @@ export interface AntigravityTuiPromptHost {
   interactivePromptTransport: 'stream-json' | 'tui' | null;
   interactivePromptLostAt: number | null;
   antigravityAnswerInFlight: boolean;
+  consumedPromptIds?: Set<string>;
   isAntigravityTuiScheme(): boolean;
   notifyChange(cause: AdapterChangeCause): void;
   readNativePendingAskQuestion(): AntigravityPendingAskQuestion | null;
+}
+
+const fallbackConsumedPromptsByHost = new WeakMap<object, Set<string>>();
+
+function getConsumedPromptSet(host: AntigravityTuiPromptHost): Set<string> {
+  if (host.consumedPromptIds instanceof Set) {
+    return host.consumedPromptIds;
+  }
+  let set = fallbackConsumedPromptsByHost.get(host);
+  if (!set) {
+    set = new Set<string>();
+    fallbackConsumedPromptsByHost.set(host, set);
+  }
+  return set;
+}
+
+export function isAntigravityPromptConsumed(
+  host: AntigravityTuiPromptHost,
+  promptId: string | null | undefined,
+): boolean {
+  if (!promptId) return false;
+  return getConsumedPromptSet(host).has(promptId);
+}
+
+function markAntigravityPromptConsumed(
+  host: AntigravityTuiPromptHost,
+  promptId: string,
+): void {
+  if (!promptId) return;
+  getConsumedPromptSet(host).add(promptId);
 }
 
 export function formatAntigravityPromptId(pending: AntigravityPendingAskQuestion): string {
@@ -173,7 +204,7 @@ export function refreshAntigravityTuiPrompt(
 
   const screen = readActiveAntigravityChoiceScreen(host, options.screenText);
   const nativePending = screen ? host.readNativePendingAskQuestion() : null;
-  const nextPrompt =
+  const candidatePrompt =
     screen && nativePending
       ? buildAntigravityInteractivePrompt({
           screen,
@@ -181,6 +212,13 @@ export function refreshAntigravityTuiPrompt(
           providerType: host.cliType,
           createdAt: host.activeInteractivePrompt?.createdAt,
         })
+      : null;
+  // Never re-arm a native (conversationId, stepIdx, callId) prompt tuple that
+  // has already been answered/dismissed while the TUI or SQLite row is still
+  // settling. A new AskQuestion episode receives a new stepIdx/callId and is not blocked.
+  const nextPrompt =
+    candidatePrompt && !isAntigravityPromptConsumed(host, candidatePrompt.promptId)
+      ? candidatePrompt
       : null;
 
   if (nextPrompt) {
@@ -195,6 +233,14 @@ export function refreshAntigravityTuiPrompt(
   }
 
   if (!host.activeInteractivePrompt) return;
+
+  if (isAntigravityPromptConsumed(host, host.activeInteractivePrompt.promptId)) {
+    host.activeInteractivePrompt = null;
+    host.interactivePromptTransport = null;
+    host.interactivePromptLostAt = null;
+    host.notifyChange('prompt_cleared');
+    return;
+  }
 
   // If the FSM left `waiting_choice` (e.g. transitioned to `busy` or `idle`), or the
   // native pending step settled/changed in SQLite, clear immediately without grace.
@@ -227,44 +273,53 @@ export function refreshAntigravityTuiPrompt(
   host.notifyChange('prompt_cleared');
 }
 
+function assertChoiceModalStillActiveForStep(
+  host: AntigravityTuiPromptHost,
+  expectedPromptId: string,
+  expectedQuestionIndex1Based: number,
+): AntigravityPendingAskQuestion {
+  if (
+    host.latestState?.status === 'approval' ||
+    host.latestState?.id === 'approval' ||
+    host.latestState?.id === 'trust' ||
+    host.latestModal?.kind === 'approval' ||
+    host.latestModal?.kind === 'confirm'
+  ) {
+    throw new Error(
+      'Antigravity permission/trust modal preempted the choice carousel during answer submission.',
+    );
+  }
+  if (host.latestState && host.latestState.status !== 'waiting_choice') {
+    throw new Error(
+      `Antigravity session left waiting_choice (status=${host.latestState.status}) before question ${expectedQuestionIndex1Based} could be answered.`,
+    );
+  }
+
+  const nativePending = host.readNativePendingAskQuestion();
+  if (!nativePending || formatAntigravityPromptId(nativePending) !== expectedPromptId) {
+    throw new Error(
+      `Antigravity native AskQuestion step resolved or changed before question ${expectedQuestionIndex1Based} could be answered.`,
+    );
+  }
+  return nativePending;
+}
+
 async function waitForNextAntigravityCarouselPage(
   host: AntigravityTuiPromptHost,
   expectedPromptId: string,
   expectedQuestionIndex1Based: number,
-  initialFingerprint: string,
 ): Promise<ParsedAntigravityChoiceScreen> {
   const deadline = Date.now() + CAROUSEL_STEP_SETTLE_TIMEOUT_MS;
-  let lastScreen: ParsedAntigravityChoiceScreen | null = null;
 
   while (Date.now() <= deadline) {
-    if (
-      host.latestState?.status === 'approval' ||
-      host.latestState?.id === 'approval' ||
-      host.latestState?.id === 'trust'
-    ) {
-      throw new Error(
-        'Antigravity permission/trust modal preempted the choice carousel during answer submission.',
-      );
-    }
-    if (
-      host.latestState &&
-      host.latestState.status !== 'waiting_choice'
-    ) {
-      throw new Error(
-        `Antigravity session left waiting_choice (status=${host.latestState.status}) before question ${expectedQuestionIndex1Based} could be answered.`,
-      );
-    }
-
-    const nativePending = host.readNativePendingAskQuestion();
-    if (!nativePending || formatAntigravityPromptId(nativePending) !== expectedPromptId) {
-      throw new Error(
-        `Antigravity native AskQuestion step resolved or changed before question ${expectedQuestionIndex1Based} could be answered.`,
-      );
-    }
+    const nativePending = assertChoiceModalStillActiveForStep(
+      host,
+      expectedPromptId,
+      expectedQuestionIndex1Based,
+    );
 
     const screen = readActiveAntigravityChoiceScreen(host);
     if (screen) {
-      lastScreen = screen;
       if (screen.currentIndex === expectedQuestionIndex1Based) {
         if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
           throw new Error(
@@ -283,39 +338,84 @@ async function waitForNextAntigravityCarouselPage(
     await new Promise((resolve) => setTimeout(resolve, CAROUSEL_STEP_POLL_INTERVAL_MS));
   }
 
-  // Support synchronous/static test doubles whose snapshot() returns a fixed frame
-  // while still verifying that the bound native step and waiting_choice state held.
-  if (
-    lastScreen &&
-    lastScreen.fingerprint === initialFingerprint &&
-    host.latestState?.status === 'waiting_choice'
-  ) {
-    const nativePending = host.readNativePendingAskQuestion();
-    if (nativePending && formatAntigravityPromptId(nativePending) === expectedPromptId) {
-      return {
-        ...lastScreen,
-        currentIndex: expectedQuestionIndex1Based,
-        currentCursorRow: 1,
-        writingIn: false,
-      };
+  throw new Error(
+    `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}; partial/unconfirmed carousel advancement — stopped remaining keystrokes.`,
+  );
+}
+
+async function waitForAntigravityWriteInExit(
+  host: AntigravityTuiPromptHost,
+  expectedPromptId: string,
+  expectedQuestionIndex1Based: number,
+): Promise<ParsedAntigravityChoiceScreen> {
+  const deadline = Date.now() + CAROUSEL_STEP_SETTLE_TIMEOUT_MS;
+
+  while (Date.now() <= deadline) {
+    const nativePending = assertChoiceModalStillActiveForStep(
+      host,
+      expectedPromptId,
+      expectedQuestionIndex1Based,
+    );
+
+    const screen = readActiveAntigravityChoiceScreen(host);
+    if (screen) {
+      if (screen.currentIndex !== expectedQuestionIndex1Based) {
+        throw new Error(
+          `Antigravity choice carousel moved to Question ${screen.currentIndex}/${screen.totalQuestions} while exiting Write-in on Question ${expectedQuestionIndex1Based}.`,
+        );
+      }
+      if (!screen.writingIn) {
+        if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
+          throw new Error(
+            `Antigravity choice screen at Question ${screen.currentIndex}/${screen.totalQuestions} no longer matches bound native step after exiting Write-in.`,
+          );
+        }
+        return screen;
+      }
     }
+
+    await new Promise((resolve) => setTimeout(resolve, CAROUSEL_STEP_POLL_INTERVAL_MS));
   }
 
   throw new Error(
-    `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}.`,
+    `Timed out waiting for Antigravity Write-in editor to return to options on Question ${expectedQuestionIndex1Based}; stopped remaining keystrokes.`,
   );
+}
+
+function extractScreenKeystrokeOptions(screen: ParsedAntigravityChoiceScreen): {
+  currentCursorRow: number;
+  writingIn: boolean;
+  currentlyCheckedRows?: number[];
+} {
+  return {
+    currentCursorRow: screen.currentCursorRow,
+    writingIn: screen.writingIn,
+    currentlyCheckedRows: screen.writingIn
+      ? undefined
+      : screen.options.filter((opt) => opt.checked).map((opt) => opt.index),
+  };
+}
+
+function clearHeldPromptOnHost(host: AntigravityTuiPromptHost): void {
+  const hadPrompt = host.activeInteractivePrompt !== null;
+  host.activeInteractivePrompt = null;
+  host.interactivePromptTransport = null;
+  host.interactivePromptLostAt = null;
+  if (hadPrompt) {
+    host.notifyChange('prompt_cleared');
+  }
 }
 
 /**
  * Validate and inject an `InteractivePromptResponse` (answer or `action: 'dismiss'`)
  * into the bound Antigravity PTY session.
  *
- * Refuses stale, duplicate, wrong-session, busy, permission-preempted, or
+ * Refuses stale, duplicate/consumed, wrong-session, busy, permission-preempted, or
  * manually-advanced prompts before writing any bytes to the PTY.
  */
 export async function answerAntigravityInteractivePrompt(
   host: AntigravityTuiPromptHost,
-  prompt: InteractivePrompt,
+  prompt: InteractivePrompt | null | undefined,
   response: InteractivePromptResponse,
 ): Promise<void> {
   if (host.antigravityAnswerInFlight) {
@@ -323,7 +423,19 @@ export async function answerAntigravityInteractivePrompt(
       'Another interactive prompt response is already in flight for this Antigravity session.',
     );
   }
-  if (!host.activeInteractivePrompt || host.activeInteractivePrompt.promptId !== prompt.promptId) {
+  if (!response || !response.promptId) {
+    throw new Error('Interactive prompt response is missing promptId');
+  }
+  if (
+    isAntigravityPromptConsumed(host, response.promptId) ||
+    (prompt?.promptId && isAntigravityPromptConsumed(host, prompt.promptId))
+  ) {
+    clearHeldPromptOnHost(host);
+    throw new Error(
+      'Interactive prompt response was already submitted for this native AskQuestion step.',
+    );
+  }
+  if (!prompt || !host.activeInteractivePrompt || host.activeInteractivePrompt.promptId !== prompt.promptId) {
     throw new Error('Interactive prompt response does not match active prompt');
   }
   if (response.promptId !== prompt.promptId) {
@@ -336,19 +448,13 @@ export async function answerAntigravityInteractivePrompt(
     host.latestModal?.kind === 'approval' ||
     host.latestModal?.kind === 'confirm'
   ) {
-    host.activeInteractivePrompt = null;
-    host.interactivePromptTransport = null;
-    host.interactivePromptLostAt = null;
-    host.notifyChange('prompt_cleared');
+    clearHeldPromptOnHost(host);
     throw new Error(
       'Cannot answer Antigravity choice question while a permission/trust approval modal is active.',
     );
   }
   if (host.latestState && host.latestState.status !== 'waiting_choice') {
-    host.activeInteractivePrompt = null;
-    host.interactivePromptTransport = null;
-    host.interactivePromptLostAt = null;
-    host.notifyChange('prompt_cleared');
+    clearHeldPromptOnHost(host);
     throw new Error(
       `Antigravity session is no longer waiting for a choice answer (status=${host.latestState.status}).`,
     );
@@ -362,10 +468,7 @@ export async function answerAntigravityInteractivePrompt(
     formatAntigravityPromptId(initialNative) !== prompt.promptId ||
     !doesAntigravityScreenMatchNativeStep(initialScreen, initialNative)
   ) {
-    host.activeInteractivePrompt = null;
-    host.interactivePromptTransport = null;
-    host.interactivePromptLostAt = null;
-    host.notifyChange('prompt_cleared');
+    clearHeldPromptOnHost(host);
     throw new Error(
       'Antigravity choice prompt is no longer active or no longer matches the bound native step.',
     );
@@ -373,11 +476,10 @@ export async function answerAntigravityInteractivePrompt(
 
   if (response.action === 'dismiss') {
     host.antigravityAnswerInFlight = true;
+    markAntigravityPromptConsumed(host, prompt.promptId);
+    clearHeldPromptOnHost(host);
     try {
       let currentScreen: ParsedAntigravityChoiceScreen = initialScreen;
-      if (currentScreen.writingIn) {
-        host.driver.dispatch({ kind: 'pty_write', data: '\x1b' });
-      }
       const startQuestionIndex = currentScreen.currentIndex;
       const totalQuestions = currentScreen.totalQuestions;
       for (let qNum = startQuestionIndex; qNum <= totalQuestions; qNum++) {
@@ -386,18 +488,18 @@ export async function answerAntigravityInteractivePrompt(
             host,
             prompt.promptId,
             qNum,
-            currentScreen.fingerprint,
           );
-          if (currentScreen.writingIn) {
-            host.driver.dispatch({ kind: 'pty_write', data: '\x1b' });
-          }
+        }
+        if (currentScreen.writingIn) {
+          host.driver.dispatch({ kind: 'pty_write', data: '\x1b' });
+          currentScreen = await waitForAntigravityWriteInExit(
+            host,
+            prompt.promptId,
+            qNum,
+          );
         }
         host.driver.dispatch({ kind: 'pty_write', data: '\x1b' });
       }
-      host.activeInteractivePrompt = null;
-      host.interactivePromptTransport = null;
-      host.interactivePromptLostAt = null;
-      host.notifyChange('prompt_cleared');
     } finally {
       host.antigravityAnswerInFlight = false;
     }
@@ -405,8 +507,7 @@ export async function answerAntigravityInteractivePrompt(
   }
 
   // For full-prompt answers, refuse if the user already manually advanced the
-  // carousel in the terminal past Question 1 (or opened the write-in editor on a
-  // multi-question prompt), preventing Q1's keystrokes from landing on Q2+.
+  // carousel in the terminal past Question 1, preventing Q1's keystrokes from landing on Q2+.
   if (initialScreen.currentIndex !== 1) {
     throw new Error(
       `Antigravity choice carousel was manually advanced in the terminal to Question ${initialScreen.currentIndex}/${initialScreen.totalQuestions}; refusing to inject answer sequence starting from Question 1.`,
@@ -425,16 +526,15 @@ export async function answerAntigravityInteractivePrompt(
       question,
       answer,
       i === 0
-        ? {
-            currentCursorRow: initialScreen.currentCursorRow,
-            writingIn: initialScreen.writingIn,
-          }
-        : { currentCursorRow: 1, writingIn: false },
+        ? extractScreenKeystrokeOptions(initialScreen)
+        : { currentCursorRow: 1, writingIn: false, currentlyCheckedRows: [] },
     );
     prevalidatedSteps.push(stepKeys);
   }
 
   host.antigravityAnswerInFlight = true;
+  markAntigravityPromptConsumed(host, prompt.promptId);
+  clearHeldPromptOnHost(host);
   try {
     let activeScreen = initialScreen;
     for (let i = 0; i < prompt.questions.length; i++) {
@@ -443,7 +543,6 @@ export async function answerAntigravityInteractivePrompt(
           host,
           prompt.promptId,
           i + 1,
-          activeScreen.fingerprint,
         );
       }
       const question = prompt.questions[i]!;
@@ -451,16 +550,13 @@ export async function answerAntigravityInteractivePrompt(
       const keys =
         i === 0
           ? prevalidatedSteps[0]!
-          : buildAntigravityQuestionKeystrokes(question, answer, {
-              currentCursorRow: activeScreen.currentCursorRow,
-              writingIn: activeScreen.writingIn,
-            });
+          : buildAntigravityQuestionKeystrokes(
+              question,
+              answer,
+              extractScreenKeystrokeOptions(activeScreen),
+            );
       host.driver.dispatch({ kind: 'pty_write', data: keys });
     }
-    host.activeInteractivePrompt = null;
-    host.interactivePromptTransport = null;
-    host.interactivePromptLostAt = null;
-    host.notifyChange('prompt_cleared');
   } finally {
     host.antigravityAnswerInFlight = false;
   }
