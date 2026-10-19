@@ -1001,8 +1001,16 @@ export type { LifecycleTraceLog } from './sessions/lifecycle-trace.js';
 export {
   readMeshDirectDispatchFlag,
   withMeshDirectDispatch,
-  markTrustedOwnerIngress,
+  issueTrustedOwnerIngressProof,
+  isValidTrustedOwnerIngressProof,
+  attachTrustedOwnerIngressProof,
+  readTrustedOwnerIngressProof,
+  preserveTrustedOwnerTransportProof,
   isTrustedOwnerIngress,
+} from './commands/command-args.js';
+export type {
+  TrustedOwnerIngressProof,
+  TrustedOwnerIngressProofInput,
 } from './commands/command-args.js';
 // Assistant input attribution for PTY input that skips the router (cloud P2P
 // `pty_input` frame): the host reports the transport's own source.

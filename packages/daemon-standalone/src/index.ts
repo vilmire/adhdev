@@ -57,6 +57,8 @@ import {
   MESH_RPC_WS_PATH,
   MESH_SEQSCRIBE_WS_PATH,
   StandaloneMeshSeqscribe,
+  attachTrustedOwnerIngressProof,
+  issueTrustedOwnerIngressProof,
   type DaemonHostRuntime,
   type DaemonRuntime,
   type DevServer,
@@ -65,6 +67,7 @@ import {
   type SessionHostHandle,
   type SubscribeRequest,
   type TopicUpdateEnvelope,
+  type TrustedOwnerIngressProof,
   type UnsubscribeRequest,
 } from '@adhdev/daemon-core';
 import {
@@ -210,7 +213,7 @@ class StandaloneServer {
   private readonly http = new StandaloneHttpApi({
     isReady: () => !!this.host,
     getStatus: () => buildStandaloneStatusResponse(this.host!.buildSnapshot('full')),
-    executeCommand: (type, payload, source) => this.executeCommand(type, payload, source),
+    executeCommand: (type, payload, source, opts) => this.executeCommand(type, payload, source, opts),
     rawTerminalService: () => this.rawTerminalService(),
     interactivePromptService: () => createRouterInteractivePromptService(this.host!),
     isCliSession: (sessionId) => this.host?.isCliSession(sessionId) ?? false,
@@ -418,11 +421,13 @@ class StandaloneServer {
         },
       });
       switch (route.kind) {
-        case 'dashboard':
+        case 'dashboard': {
+          const ownerGuard = this.http.captureOwnerAuthGuard(req, req.url || '/');
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
-            this.handleWsConnection(ws, this.http.isOwnerRequestAuthenticated(req, req.url || '/') ? 'standalone' : 'ipc');
+            this.handleWsConnection(ws, ownerGuard ? 'standalone' : 'ipc', ownerGuard ?? undefined);
           });
           return;
+        }
         case 'seqscribe':
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
             this.handleSeqscribeLaneConnection(ws);
@@ -561,7 +566,7 @@ class StandaloneServer {
 
   // ─── WebSocket Handler ───
 
-  private handleWsConnection(ws: WebSocket, source: 'standalone' | 'ipc'): void {
+  private handleWsConnection(ws: WebSocket, source: 'standalone' | 'ipc', isOwnerAuthorized?: () => boolean): void {
     // Max client limit to prevent connection storms
     const MAX_WS_CLIENTS = 10;
     if (this.clients.size >= MAX_WS_CLIENTS) {
@@ -604,7 +609,14 @@ class StandaloneServer {
             : (msg as any);
           const { type, payload } = normalizeCommandEnvelope(envelope);
           const requestId = msg.requestId;
-          const result = await this.executeCommand(type, payload || {}, source);
+          const liveOwnerAuthorized = source === 'standalone'
+            && typeof isOwnerAuthorized === 'function'
+            && Boolean(isOwnerAuthorized());
+          const effectiveSource: 'standalone' | 'ipc' = liveOwnerAuthorized ? 'standalone' : 'ipc';
+          const result = await this.executeCommand(type, payload || {}, effectiveSource, {
+            ownerVerified: liveOwnerAuthorized,
+            verifyCurrentOwner: liveOwnerAuthorized ? isOwnerAuthorized : undefined,
+          });
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
         }
       } catch (e: any) {
@@ -703,7 +715,16 @@ class StandaloneServer {
    * Interaction id, invalidation and the metadata push all ride the host
    * runtime / router now (`command_executed` → `buildTransport().onCommandExecuted`).
    */
-  private async executeCommand(type: string, args: any, source: 'standalone' | 'ipc'): Promise<any> {
+  private async executeCommand(
+    type: string,
+    args: any,
+    source: 'standalone' | 'ipc',
+    opts?: {
+      ownerVerified?: boolean;
+      ownerProof?: TrustedOwnerIngressProof | null;
+      verifyCurrentOwner?: () => boolean;
+    },
+  ): Promise<any> {
     if (!this.host) {
       return { success: false, error: 'Components not initialized' };
     }
@@ -711,7 +732,22 @@ class StandaloneServer {
       return { success: false, error: 'command type required' };
     }
     if (type === MESH_RELAY_COMMAND) return this.relayMeshCommand(args, source);
-    return this.host.execute(type, args, source);
+    const isOwner = source === 'standalone' && opts?.ownerVerified === true;
+    const ownerProof = isOwner
+      ? (opts?.ownerProof ?? issueTrustedOwnerIngressProof({
+          source: 'standalone',
+          ownerVerified: true,
+          verifyCurrent: opts?.verifyCurrentOwner,
+        }))
+      : null;
+    if (ownerProof && args && typeof args === 'object') {
+      attachTrustedOwnerIngressProof(args as Record<string, unknown>, ownerProof);
+    }
+    return this.host.execute(type, args, source, {
+      ownerVerified: isOwner,
+      ownerProof,
+      verifyCurrentOwner: opts?.verifyCurrentOwner,
+    });
   }
 
   /**

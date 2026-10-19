@@ -17,9 +17,12 @@ import {
   ADHDEV_INTERNAL_AUTH_HEADER,
   ADHDEV_WORKER_CREDENTIAL_HEADER,
   MESH_JOIN_HTTP_PATH,
+  attachTrustedOwnerIngressProof,
+  issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
   isWorkerMcpDaemonVerb,
   type StatusResponse,
+  type TrustedOwnerIngressProof,
 } from '@adhdev/daemon-core';
 import type { SessionHostClient, SessionHostEvent } from '@adhdev/session-host-core';
 import {
@@ -65,7 +68,16 @@ export interface StandaloneHttpDeps {
   isReady(): boolean;
   getStatus(): StatusResponse;
   /** Source is derived here from credentials, never from the command envelope. */
-  executeCommand(type: string, payload: Record<string, unknown>, source: 'standalone' | 'ipc'): Promise<any>;
+  executeCommand(
+    type: string,
+    payload: Record<string, unknown>,
+    source: 'standalone' | 'ipc',
+    opts?: {
+      ownerVerified?: boolean;
+      ownerProof?: TrustedOwnerIngressProof | null;
+      verifyCurrentOwner?: () => boolean;
+    },
+  ): Promise<any>;
   rawTerminalService(): RawTerminalHttpService;
   interactivePromptService(): InteractivePromptHttpService;
   isCliSession(sessionId: string): boolean;
@@ -77,6 +89,8 @@ export interface StandaloneHttpDeps {
    * token). Default: daemon-core `isLiveWorkerMcpCredential`.
    */
   verifyWorkerCredential?(credential: string): boolean;
+  /** Optional hook notified when owner auth epoch changes (logout, password change/clear). */
+  onAuthEpochChanged?(): void;
 }
 
 /**
@@ -184,6 +198,18 @@ export class StandaloneHttpApi {
   configureAuth(token: string | null): void {
     this.authToken = token;
     this.passwordConfig = loadStandalonePasswordConfig(this.passwordConfigPath);
+    this.bumpAuthEpoch();
+  }
+
+  private authEpoch = 0;
+
+  getAuthEpoch(): number {
+    return this.authEpoch;
+  }
+
+  bumpAuthEpoch(): void {
+    this.authEpoch += 1;
+    this.deps.onAuthEpochChanged?.();
   }
 
   hasPasswordAuth(): boolean {
@@ -244,6 +270,30 @@ export class StandaloneHttpApi {
 
   isOwnerRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean {
     return this.hasAnyAuth() && !this.resolveInternalAuthScope(req) && this.isRequestAuthenticated(req, rawUrl);
+  }
+
+  /**
+   * Capture a per-request / per-WS-upgrade owner authority guard bound to the
+   * current credential state (token, password hash/salt, session cookie, and
+   * auth epoch). Re-evaluated on every command so logout, password change/clear,
+   * or token removal immediately invalidates owner authority.
+   */
+  captureOwnerAuthGuard(req: IncomingMessage, rawUrl: string = req.url || '/'): (() => boolean) | null {
+    if (!this.isOwnerRequestAuthenticated(req, rawUrl)) return null;
+    const capturedEpoch = this.authEpoch;
+    const capturedToken = this.authToken;
+    const capturedPasswordHash = this.passwordConfig?.passwordHash ?? null;
+    const capturedPasswordSalt = this.passwordConfig?.passwordSalt ?? null;
+    const capturedSessionId = this.getRequestSessionId(req);
+    return () => {
+      if (this.authEpoch !== capturedEpoch) return false;
+      if (!this.isOwnerRequestAuthenticated(req, rawUrl)) return false;
+      if (this.authToken !== capturedToken) return false;
+      if ((this.passwordConfig?.passwordHash ?? null) !== capturedPasswordHash) return false;
+      if ((this.passwordConfig?.passwordSalt ?? null) !== capturedPasswordSalt) return false;
+      if (capturedPasswordHash && (!capturedSessionId || !this.authSessions.has(capturedSessionId))) return false;
+      return true;
+    };
   }
 
   private getRequestSessionId(req: IncomingMessage): string | null {
@@ -384,6 +434,7 @@ export class StandaloneHttpApi {
         }
         this.authSessions.clear();
         const sessionId = this.authSessions.create();
+        this.bumpAuthEpoch();
         res.setHeader('Set-Cookie', buildSessionCookie(sessionId, this.getCookieSecureFlag(req)));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ...this.buildAuthStatus(req, url), authenticated: true }));
@@ -396,6 +447,7 @@ export class StandaloneHttpApi {
 
     if (parsedUrl.pathname === '/auth/logout' && method === 'POST') {
       this.authSessions.revoke(this.getRequestSessionId(req));
+      this.bumpAuthEpoch();
       res.setHeader('Set-Cookie', buildClearedSessionCookie(this.getCookieSecureFlag(req)));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true }));
@@ -429,6 +481,7 @@ export class StandaloneHttpApi {
           clearStandalonePasswordConfig(this.passwordConfigPath);
           this.passwordConfig = null;
           this.authSessions.clear();
+          this.bumpAuthEpoch();
           res.setHeader('Set-Cookie', buildClearedSessionCookie(this.getCookieSecureFlag(req)));
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ success: true, ...this.buildAuthStatus(req, url), authenticated: !this.hasAnyAuth() }));
@@ -446,6 +499,7 @@ export class StandaloneHttpApi {
         this.passwordConfig = nextConfig;
         this.authSessions.clear();
         const sessionId = this.authSessions.create();
+        this.bumpAuthEpoch();
         res.setHeader('Set-Cookie', buildSessionCookie(sessionId, this.getCookieSecureFlag(req)));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, ...this.buildAuthStatus(req, url), authenticated: true }));
@@ -796,7 +850,29 @@ export class StandaloneHttpApi {
             res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: `Command ${type} is not available to a worker MCP credential.` }));
             return;
           }
-          const result = await this.deps.executeCommand(type, payload || {}, this.isOwnerRequestAuthenticated(req, url) ? 'standalone' : 'ipc');
+          const commandPayload = (payload && typeof payload === 'object' ? { ...payload } : {}) as Record<string, unknown>;
+          const ownerGuard = this.captureOwnerAuthGuard(req, url);
+          const isOwner = Boolean(ownerGuard && ownerGuard());
+          const ownerProof = isOwner && ownerGuard
+            ? issueTrustedOwnerIngressProof({
+                source: 'standalone',
+                ownerVerified: true,
+                verifyCurrent: ownerGuard,
+              })
+            : null;
+          if (ownerProof) {
+            attachTrustedOwnerIngressProof(commandPayload, ownerProof);
+          }
+          const result = await this.deps.executeCommand(
+            type,
+            commandPayload,
+            isOwner ? 'standalone' : 'ipc',
+            {
+              ownerVerified: isOwner,
+              ownerProof,
+              verifyCurrentOwner: ownerGuard ?? undefined,
+            },
+          );
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
         } catch (e: any) {
