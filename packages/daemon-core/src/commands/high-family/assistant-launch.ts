@@ -56,7 +56,8 @@ import { getAssistantProjectPorts } from '../../assistant/assistant-project-port
 import { projectSlugs } from '../../assistant/assistant-projects.js';
 import { isUnmanagedRepoIdentity, meshHostLabel } from '../../assistant/project-views.js';
 import {
-    assistantSessionSettings, assistantWorkspaceDir, planAssistantMcp,
+    ASSISTANT_CODEX_MCP_CONFIG_FORMAT,
+    assistantSessionSettings, assistantWorkspaceDir, mergeAssistantCodexMcpConfigToml, planAssistantMcp,
     resolveAssistantApprovalSettings, type AssistantMcpConfigWrite,
 } from '../../assistant/assistant-launch-plan.js';
 
@@ -73,6 +74,13 @@ function fail(code: string, error: string = code, extra: Record<string, unknown>
 
 /** Merge the assistant server into the (daemon-owned) MCP config file. */
 function writeAssistantMcpConfig(w: AssistantMcpConfigWrite): void {
+    if (w.format === ASSISTANT_CODEX_MCP_CONFIG_FORMAT) {
+        mkdirSync(dirname(w.path), { recursive: true });
+        const before = existsSync(w.path) ? readFileSync(w.path, 'utf-8') : '';
+        const next = mergeAssistantCodexMcpConfigToml(before, w.serverName, w.server);
+        if (next !== before) writeFileSync(w.path, next, { encoding: 'utf-8', mode: 0o600 });
+        return;
+    }
     if (!isSupportedMeshCoordinatorConfigFormat(w.format)) throw new Error(`unsupported MCP config format: ${w.format}`);
     mkdirSync(dirname(w.path), { recursive: true });
     const before = existsSync(w.path) ? readFileSync(w.path, 'utf-8') : '';

@@ -10,12 +10,15 @@ import { findWorkerPrivateHomeSpec } from '../../src/mesh/worker-home-specs.js';
 import { resolveAdhdevMcpServerLaunch, resolveMeshCoordinatorSetup, type MeshCoordinatorSetup } from '../../src/commands/mesh-coordinator.js';
 import {
     ASSISTANT_CLAUDE_BUILTIN_TOOLS,
+    ASSISTANT_CODEX_MCP_CONFIG_FORMAT,
     ASSISTANT_MCP_SERVER_NAME,
     assistantClaudeMcpConfigPath,
+    assistantCodexMcpConfigPath,
     assistantPrivateHomeDir,
     assistantSessionSettings,
     assistantWorkspaceDir,
     buildAssistantClaudeArgs,
+    mergeAssistantCodexMcpConfigToml,
     planAssistantMcp,
     resolveAssistantApprovalSettings,
 } from '../../src/assistant/assistant-launch-plan.js';
@@ -95,15 +98,41 @@ describe('planAssistantMcp', () => {
         expect(plan.ok && plan.launchEnv).toBeUndefined();
     });
 
-    it('codex-cli: -c overrides, never the global `codex mcp add`', () => {
+    it('codex-cli: project-local <workspace>/.codex/config.toml write + -c overrides, never the global `codex mcp add`', () => {
         const setup: MeshCoordinatorSetup = { kind: 'cli_command', serverName: 'adhdev-mesh', command: 'codex mcp add adhdev-mesh -- adhdev mcp', requiresRestart: true, instructions: 'x', mcpServer: server };
         const plan = planAssistantMcp({ cliType: 'codex-cli', setup, workspace: WS, configDir: CFG });
         expect(plan.ok && plan.cliArgs).toEqual([
             '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.command="adhdev"`,
             '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.args=${JSON.stringify(server.args)}`,
         ]);
-        expect(plan.ok && plan.configWrite).toBeNull();
+        expect(plan.ok && plan.configWrite).toEqual({
+            path: assistantCodexMcpConfigPath(WS),
+            format: ASSISTANT_CODEX_MCP_CONFIG_FORMAT,
+            serverName: ASSISTANT_MCP_SERVER_NAME,
+            server,
+        });
         expect(planAssistantMcp({ cliType: 'gemini-cli', setup, workspace: WS, configDir: CFG })).toMatchObject({ ok: false, code: 'assistant_mcp_setup_unsupported' });
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: writes [mcp_servers.adhdev-assistant] and preserves Codex-persisted [mcp_servers.adhdev-assistant.tools.*] across relaunches', () => {
+        const initial = mergeAssistantCodexMcpConfigToml('', ASSISTANT_MCP_SERVER_NAME, {
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-1' },
+        });
+        expect(initial).toContain('[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]');
+        expect(initial).toContain('[mcp_servers.adhdev-assistant.env]\nADHDEV_ASSISTANT_SESSION_ID = "sid-1"');
+        expect(initial).not.toContain('approval_mode');
+
+        // Simulate Codex persisting "3. Always allow" on tool `project_send` via ConfigEditsBuilder.
+        const afterOwnerAlwaysAllow = `${initial}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`;
+        const relaunched = mergeAssistantCodexMcpConfigToml(afterOwnerAlwaysAllow, ASSISTANT_MCP_SERVER_NAME, {
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-2' },
+        });
+        expect(relaunched).toContain('ADHDEV_ASSISTANT_SESSION_ID = "sid-2"');
+        expect(relaunched).not.toContain('sid-1');
+        expect(relaunched).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
+        expect(relaunched).not.toContain('project_other');
     });
 
     it('auto-import providers write inside the assistant workspace; a global config path is refused', () => {

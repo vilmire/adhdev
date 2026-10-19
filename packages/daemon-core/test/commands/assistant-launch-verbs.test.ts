@@ -138,7 +138,7 @@ describe('launch_assistant', () => {
         expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'claude-cli', mcpConfigPath: cfgPath });
     });
 
-    it('codex-cli: the session id rides a -c mcp_servers.*.env override matching assistantSessionKey', async () => {
+    it('codex-cli: writes <workspace>/.codex/config.toml + -c override with assistantSessionKey and preserves persisted tool approval_mode across relaunches', async () => {
         const codex: any = {
             type: 'codex-cli',
             meshCoordinator: {
@@ -153,6 +153,29 @@ describe('launch_assistant', () => {
         expect(r).toMatchObject({ success: true, cliType: 'codex-cli' });
         const [launch] = launchCalls();
         expect(launch.cliArgs).toContain(`mcp_servers.adhdev-assistant.env.ADHDEV_ASSISTANT_SESSION_ID="${launch.assistantSessionKey}"`);
+        const cfgPath = join(dir, 'assistant', '.codex', 'config.toml');
+        expect(existsSync(cfgPath)).toBe(true);
+        const firstToml = readFileSync(cfgPath, 'utf-8');
+        expect(firstToml).toContain('[mcp_servers.adhdev-assistant]');
+        expect(firstToml).toContain(`ADHDEV_ASSISTANT_SESSION_ID = "${launch.assistantSessionKey}"`);
+        expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'codex-cli', mcpConfigPath: cfgPath });
+
+        // Simulate Codex writing persistent consent ("3. Always allow") for `project_send` into <workspace>/.codex/config.toml.
+        writeFileSync(
+            cfgPath,
+            `${firstToml}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`,
+            { encoding: 'utf-8', mode: 0o600 },
+        );
+
+        // Relaunch after the first session ends: new assistantSessionKey is written while preserving tools.project_send approval_mode.
+        const r2: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(r2).toMatchObject({ success: true, launched: true, sessionId: 'asst-2', cliType: 'codex-cli' });
+        const secondLaunch = launchCalls()[1];
+        expect(secondLaunch.assistantSessionKey).not.toBe(launch.assistantSessionKey);
+        const secondToml = readFileSync(cfgPath, 'utf-8');
+        expect(secondToml).toContain(`ADHDEV_ASSISTANT_SESSION_ID = "${secondLaunch.assistantSessionKey}"`);
+        expect(secondToml).not.toContain(launch.assistantSessionKey);
+        expect(secondToml).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
     });
 
     it('antigravity-cli: private HOME at <configDir>/assistant-home, MCP config + session env inside it, real ~/.gemini untouched', async () => {

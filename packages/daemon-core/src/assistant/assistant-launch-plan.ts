@@ -15,7 +15,9 @@
  *     available tools from the built-in set", so MCP tools stay available; the
  *     `=` form keeps the variadic flag from swallowing later args.
  *   - codex-cli (`cli_command` registration): never `codex mcp add` (that
- *     writes the user's global codex config) — `-c mcp_servers.*` overrides.
+ *     writes the user's global codex config) — writes `<workspace>/.codex/config.toml`
+ *     (preserving Codex-persisted `[mcp_servers.adhdev-assistant.tools.*]` consent
+ *     across launches) plus `-c mcp_servers.*` overrides.
  *   - other auto-import providers: the config is written inside the assistant
  *     workspace (not a repo, so nothing tracked gets dirty).
  *   - an auto-import provider whose config is a global `~/…` file (antigravity:
@@ -54,6 +56,7 @@ import type { ProviderModule } from '../providers/contracts.js';
 import type { ProviderAssistantEligibility } from '../shared-types.js';
 
 export const ASSISTANT_MCP_SERVER_NAME = 'adhdev-assistant';
+export const ASSISTANT_CODEX_MCP_CONFIG_FORMAT = 'codex_toml';
 /**
  * Env every claude-cli assistant launch carries. Claude Code's auto memory
  * (`~/.claude/projects/<p>/memory/`) is on by default for local sessions and
@@ -73,6 +76,10 @@ export function assistantWorkspaceDir(configDir: string): string {
 
 export function assistantClaudeMcpConfigPath(configDir: string): string {
     return join(configDir, 'mcp-configs', 'assistant.json');
+}
+
+export function assistantCodexMcpConfigPath(workspace: string): string {
+    return join(workspace, '.codex', 'config.toml');
 }
 
 /**
@@ -173,6 +180,95 @@ export function buildAssistantCodexOverrideArgs(serverName: string, server: Assi
     return args;
 }
 
+function formatTomlSegment(segment: string): string {
+    return /^[A-Za-z0-9_-]+$/.test(segment) ? segment : JSON.stringify(segment);
+}
+
+/**
+ * Merge `[mcp_servers.<serverName>]` and `[mcp_servers.<serverName>.env]` into
+ * `<workspace>/.codex/config.toml` while preserving any `[mcp_servers.<serverName>.tools.*]`
+ * tables (where Codex's `ConfigEditsBuilder` persists owner-selected "Always allow"
+ * `approval_mode = "approve"`) and any other tables/keys already present.
+ */
+export function mergeAssistantCodexMcpConfigToml(
+    existingToml: string,
+    serverName: string,
+    server: AssistantMcpServerLaunch,
+): string {
+    const seg = formatTomlSegment(serverName);
+    const quotedSeg = JSON.stringify(serverName);
+    const serverHeaders = new Set([
+        `[mcp_servers.${seg}]`,
+        `[mcp_servers.${quotedSeg}]`,
+    ]);
+    const envHeaders = new Set([
+        `[mcp_servers.${seg}.env]`,
+        `[mcp_servers.${quotedSeg}.env]`,
+    ]);
+
+    const preambleLines: string[] = [];
+    const keptSections: string[] = [];
+    const extraServerLines: string[] = [];
+
+    let currentHeader: string | null = null;
+    let currentLines: string[] = [];
+
+    const flushSection = () => {
+        if (currentHeader === null) return;
+        if (serverHeaders.has(currentHeader)) {
+            for (const line of currentLines.slice(1)) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                if (/^(?:command|args|env)\s*=/.test(trimmed)) continue;
+                extraServerLines.push(line.replace(/\r?\n$/, ''));
+            }
+            return;
+        }
+        if (envHeaders.has(currentHeader)) {
+            return;
+        }
+        const block = currentLines.join('').trim();
+        if (block) keptSections.push(block);
+    };
+
+    for (const rawLine of existingToml.split(/^/m)) {
+        const headerMatch = rawLine.match(/^\s*(\[\[?[A-Za-z0-9_."'\s-]+?\]\]?)\s*(?:#.*)?$/);
+        if (headerMatch) {
+            flushSection();
+            currentHeader = headerMatch[1].replace(/\s+/g, '');
+            currentLines = [rawLine];
+        } else if (currentHeader === null) {
+            preambleLines.push(rawLine);
+        } else {
+            currentLines.push(rawLine);
+        }
+    }
+    flushSection();
+
+    const serverSectionLines = [
+        `[mcp_servers.${seg}]`,
+        `command = ${JSON.stringify(server.command)}`,
+        `args = ${JSON.stringify(server.args)}`,
+        ...extraServerLines,
+    ];
+    const blocks: string[] = [];
+    const preamble = preambleLines.join('').trim();
+    if (preamble) blocks.push(preamble);
+    blocks.push(serverSectionLines.join('\n'));
+
+    const envEntries = Object.entries(server.env ?? {}).filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+    if (envEntries.length > 0) {
+        const envLines = [
+            `[mcp_servers.${seg}.env]`,
+            ...envEntries.map(([k, v]) => `${k} = ${JSON.stringify(v)}`),
+        ];
+        blocks.push(envLines.join('\n'));
+    }
+
+    blocks.push(...keptSections);
+    return `${blocks.join('\n\n')}\n`;
+}
+
 /** The assistant MCP server launch with its session id in the entry's own env (absent id → unchanged). */
 export function withAssistantSessionEnv(
     server: { command: string; args: string[]; env?: Record<string, string> },
@@ -237,10 +333,11 @@ export function planAssistantMcp(input: {
             };
         }
         const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
+        const path = assistantCodexMcpConfigPath(workspace);
         return {
             ok: true,
             cliArgs: buildAssistantCodexOverrideArgs(serverName, codexServer),
-            configWrite: null,
+            configWrite: { path, format: ASSISTANT_CODEX_MCP_CONFIG_FORMAT, serverName, server: codexServer },
             mcpServer: codexServer,
             toolRestriction: 'prompt_only',
         };

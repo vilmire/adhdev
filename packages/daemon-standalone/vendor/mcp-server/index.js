@@ -79952,6 +79952,9 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     function assistantClaudeMcpConfigPath(configDir) {
       return (0, import_path16.join)(configDir, "mcp-configs", "assistant.json");
     }
+    function assistantCodexMcpConfigPath(workspace) {
+      return (0, import_path16.join)(workspace, ".codex", "config.toml");
+    }
     function assistantPrivateHomeDir(configDir, cliType) {
       return (0, import_path16.join)(configDir, "assistant-home", cliType);
     }
@@ -79981,6 +79984,77 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         args.push("-c", `mcp_servers.${serverName}.env.${key4}=${JSON.stringify(value)}`);
       }
       return args;
+    }
+    function formatTomlSegment(segment) {
+      return /^[A-Za-z0-9_-]+$/.test(segment) ? segment : JSON.stringify(segment);
+    }
+    function mergeAssistantCodexMcpConfigToml(existingToml, serverName, server) {
+      const seg = formatTomlSegment(serverName);
+      const quotedSeg = JSON.stringify(serverName);
+      const serverHeaders = /* @__PURE__ */ new Set([
+        `[mcp_servers.${seg}]`,
+        `[mcp_servers.${quotedSeg}]`
+      ]);
+      const envHeaders = /* @__PURE__ */ new Set([
+        `[mcp_servers.${seg}.env]`,
+        `[mcp_servers.${quotedSeg}.env]`
+      ]);
+      const preambleLines = [];
+      const keptSections = [];
+      const extraServerLines = [];
+      let currentHeader = null;
+      let currentLines = [];
+      const flushSection = () => {
+        if (currentHeader === null) return;
+        if (serverHeaders.has(currentHeader)) {
+          for (const line of currentLines.slice(1)) {
+            const trimmed2 = line.trim();
+            if (!trimmed2) continue;
+            if (/^(?:command|args|env)\s*=/.test(trimmed2)) continue;
+            extraServerLines.push(line.replace(/\r?\n$/, ""));
+          }
+          return;
+        }
+        if (envHeaders.has(currentHeader)) {
+          return;
+        }
+        const block2 = currentLines.join("").trim();
+        if (block2) keptSections.push(block2);
+      };
+      for (const rawLine of existingToml.split(/^/m)) {
+        const headerMatch = rawLine.match(/^\s*(\[\[?[A-Za-z0-9_."'\s-]+?\]\]?)\s*(?:#.*)?$/);
+        if (headerMatch) {
+          flushSection();
+          currentHeader = headerMatch[1].replace(/\s+/g, "");
+          currentLines = [rawLine];
+        } else if (currentHeader === null) {
+          preambleLines.push(rawLine);
+        } else {
+          currentLines.push(rawLine);
+        }
+      }
+      flushSection();
+      const serverSectionLines = [
+        `[mcp_servers.${seg}]`,
+        `command = ${JSON.stringify(server.command)}`,
+        `args = ${JSON.stringify(server.args)}`,
+        ...extraServerLines
+      ];
+      const blocks = [];
+      const preamble = preambleLines.join("").trim();
+      if (preamble) blocks.push(preamble);
+      blocks.push(serverSectionLines.join("\n"));
+      const envEntries = Object.entries(server.env ?? {}).filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+      if (envEntries.length > 0) {
+        const envLines = [
+          `[mcp_servers.${seg}.env]`,
+          ...envEntries.map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
+        ];
+        blocks.push(envLines.join("\n"));
+      }
+      blocks.push(...keptSections);
+      return `${blocks.join("\n\n")}
+`;
     }
     function withAssistantSessionEnv(server, sessionId) {
       const id4 = typeof sessionId === "string" ? sessionId.trim() : "";
@@ -80013,10 +80087,11 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
           };
         }
         const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
+        const path103 = assistantCodexMcpConfigPath(workspace);
         return {
           ok: true,
           cliArgs: buildAssistantCodexOverrideArgs(serverName, codexServer),
-          configWrite: null,
+          configWrite: { path: path103, format: ASSISTANT_CODEX_MCP_CONFIG_FORMAT, serverName, server: codexServer },
           mcpServer: codexServer,
           toolRestriction: "prompt_only"
         };
@@ -80091,6 +80166,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
     }
     var import_path16;
     var ASSISTANT_MCP_SERVER_NAME;
+    var ASSISTANT_CODEX_MCP_CONFIG_FORMAT;
     var ASSISTANT_CLAUDE_LAUNCH_ENV;
     var ASSISTANT_CLAUDE_BUILTIN_TOOLS;
     var init_assistant_launch_plan = __esm2({
@@ -80103,6 +80179,7 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         init_worker_home_specs();
         init_worker_mcp_config();
         ASSISTANT_MCP_SERVER_NAME = "adhdev-assistant";
+        ASSISTANT_CODEX_MCP_CONFIG_FORMAT = "codex_toml";
         ASSISTANT_CLAUDE_LAUNCH_ENV = { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
         ASSISTANT_CLAUDE_BUILTIN_TOOLS = "Read,WebSearch,WebFetch";
       }
@@ -144892,6 +144969,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return { success: false, code, error, ...extra };
     }
     function writeAssistantMcpConfig(w) {
+      if (w.format === ASSISTANT_CODEX_MCP_CONFIG_FORMAT) {
+        (0, import_fs44.mkdirSync)((0, import_path43.dirname)(w.path), { recursive: true });
+        const before2 = (0, import_fs44.existsSync)(w.path) ? (0, import_fs44.readFileSync)(w.path, "utf-8") : "";
+        const next2 = mergeAssistantCodexMcpConfigToml(before2, w.serverName, w.server);
+        if (next2 !== before2) (0, import_fs44.writeFileSync)(w.path, next2, { encoding: "utf-8", mode: 384 });
+        return;
+      }
       if (!isSupportedMeshCoordinatorConfigFormat(w.format)) throw new Error(`unsupported MCP config format: ${w.format}`);
       (0, import_fs44.mkdirSync)((0, import_path43.dirname)(w.path), { recursive: true });
       const before = (0, import_fs44.existsSync)(w.path) ? (0, import_fs44.readFileSync)(w.path, "utf-8") : "";
