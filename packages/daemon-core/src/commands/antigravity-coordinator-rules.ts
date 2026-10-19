@@ -130,30 +130,15 @@ export function stripSentinelBlockPreservingSurroundingBytes(
         return before + after;
     }
 
-    if (before.length > 0 && after.length === 0) {
-        if (before.endsWith('\n\n')) return before.slice(0, -2);
-        if (before.endsWith('\r\n\r\n')) return before.slice(0, -4);
-        if (before.endsWith('\n')) return before.slice(0, -1);
-        return before;
+    // Legacy fallback when no separator provenance was recorded:
+    // Only strip the standard `\n\n` separator that the daemon appends before the
+    // wrapper block when appending to the end of an existing file (`after === ''`).
+    // Never delete uncertain user bytes when content exists after the block or
+    // when `before` does not end with `\n\n`.
+    if (before.length > 0 && after.length === 0 && before.endsWith('\n\n')) {
+        return before.slice(0, -2);
     }
-    if (before.length > 0 && (after === '\n' || after === '\r\n')) {
-        const trimmedBefore = before.endsWith('\n\n')
-            ? before.slice(0, -2)
-            : before.endsWith('\r\n\r\n')
-              ? before.slice(0, -4)
-              : before;
-        return trimmedBefore.endsWith('\n') ? trimmedBefore : trimmedBefore + after;
-    }
-    if (before.length > 0 && after.length > 0) {
-        const trimmedBefore = before.endsWith('\n\n')
-            ? before.slice(0, -2)
-            : before;
-        return trimmedBefore + after;
-    }
-    if (before.length === 0 && after.length > 0) {
-        return after.replace(/^(?:\r?\n){1,2}/, '');
-    }
-    return '';
+    return before + after;
 }
 
 /** Hard per-file UTF-8 byte cap in Antigravity CLI 1.4.2 (`rules.go:537`). */
@@ -194,6 +179,7 @@ export interface AntigravityInjectionOwnershipRecord {
 interface TargetContextFileState {
     records: AntigravityInjectionOwnershipRecord[];
     wrapperSeparators?: RecordedWrapperSeparators;
+    deferredDepartingFiles?: Set<string>;
 }
 
 interface SynchronousWriteRollbackSnapshot {
@@ -238,6 +224,13 @@ export function recordContextFileWrapperSeparators(
 ): void {
     const state = getOrCreateTargetState(resolve(targetPath));
     state.wrapperSeparators = { leading, trailing, createdFile };
+}
+
+export function getRecordedWrapperSeparators(
+    targetPath: string,
+): RecordedWrapperSeparators | undefined {
+    const state = _stateByTarget.get(resolve(targetPath));
+    return state?.wrapperSeparators ? { ...state.wrapperSeparators } : undefined;
 }
 
 export function computeAntigravityCoordinatorScope(workspace: string, systemPrompt?: string): string {
@@ -508,13 +501,19 @@ function collectActiveRecordFiles(resolvedTarget: string): Set<string> {
  * Restore an active ownership record's chunk files and replace only the sentinel
  * wrapper block in `AGENTS.md` in-place, preserving any concurrent user edits
  * outside the sentinels.
+ *
+ * Returns `true` when all chunk files and `record.targetPath` were updated on
+ * disk, or `false` if any write failed.
  */
-function restoreActiveOwnershipRecordInPlace(record: AntigravityInjectionOwnershipRecord): void {
+function restoreActiveOwnershipRecordInPlace(record: AntigravityInjectionOwnershipRecord): boolean {
     for (const [filePath, content] of record.chunkContents.entries()) {
         try {
             mkdirSync(dirname(filePath), { recursive: true });
             writeFileSync(filePath, content, 'utf-8');
-        } catch { /* best-effort */ }
+        } catch (error: any) {
+            LOG.warn('MeshCoordinator', `Could not restore companion file ${filePath}: ${error?.message || error}`);
+            return false;
+        }
     }
 
     const resolvedTarget = resolve(record.targetPath);
@@ -539,7 +538,10 @@ function restoreActiveOwnershipRecordInPlace(record: AntigravityInjectionOwnersh
             writeFileSync(record.targetPath, record.renderedWrapperBlock, 'utf-8');
             state.wrapperSeparators = { leading: '', trailing: '', createdFile: true };
         }
-    } catch { /* best-effort */ }
+    } catch (error: any) {
+        LOG.warn('MeshCoordinator', `Could not repoint ${record.targetPath}: ${error?.message || error}`);
+        return false;
+    }
 
     _companionFilesByContextPath.set(resolvedTarget, {
         workspace: record.workspace,
@@ -547,6 +549,7 @@ function restoreActiveOwnershipRecordInPlace(record: AntigravityInjectionOwnersh
         scope: record.scope,
         files: [...record.writtenFiles],
     });
+    return true;
 }
 
 function deleteUnsharedRecordFiles(
@@ -618,44 +621,70 @@ export interface SurvivingCoordinatorDescriptor {
     owned?: boolean;
     additionalOwnedFiles?: readonly string[];
     homeDir?: string;
+    separators?: RecordedWrapperSeparators;
+}
+
+function extractScopeFromOwnedPaths(paths: readonly string[] | undefined): string | undefined {
+    if (!paths?.length) return undefined;
+    const marker = join('.gemini', 'config', 'adhdev-mesh-coordinator');
+    for (const f of paths) {
+        const idx = f.indexOf(marker);
+        if (idx >= 0) {
+            const after = f.slice(idx + marker.length + 1);
+            const seg = after.split(/[\\/]/)[0];
+            if (seg) return seg;
+        }
+    }
+    return undefined;
 }
 
 /**
  * Repoint the shared `AGENTS.md` wrapper to the newest surviving owner (registered
  * or provisional) BEFORE deleting a departing coordinator's companion chunk files.
- * Returns `true` if a surviving owner (registered or provisional) remains active.
+ *
+ * Returns:
+ *   - `'repointed'`: a surviving owner remains active, `AGENTS.md` was verified to
+ *     point to the survivor, and unshared departing files were deleted.
+ *   - `'repoint_failed'`: a surviving owner remains active, but rewriting `AGENTS.md`
+ *     failed (e.g. read-only file); departing files are retained on disk and recorded
+ *     in `state.deferredDepartingFiles` for idempotent retry.
+ *   - `false`: no surviving owner remains active; caller should strip the wrapper.
  */
 export function repointAntigravityContextFileOnCoordinatorExit(
     departing: SurvivingCoordinatorDescriptor,
     survivingRegistered: readonly SurvivingCoordinatorDescriptor[],
-): boolean {
+): 'repointed' | 'repoint_failed' | false {
     const resolvedTarget = resolve(departing.targetPath);
-    const state = _stateByTarget.get(resolvedTarget);
-    const departingScope = departing.systemPrompt
-        ? computeAntigravityCoordinatorScope(departing.workspace, departing.systemPrompt)
-        : undefined;
+    const state = getOrCreateTargetState(resolvedTarget);
+    const departingScope =
+        departing.systemPrompt && departing.workspace
+            ? computeAntigravityCoordinatorScope(departing.workspace, departing.systemPrompt)
+            : extractScopeFromOwnedPaths(departing.additionalOwnedFiles);
 
-    if (state) {
-        const survivingIds = new Set(survivingRegistered.map((s) => s.sessionId));
-        let marked = false;
+    const departingFiles = new Set<string>(departing.additionalOwnedFiles ?? []);
+
+    const survivingIds = new Set(survivingRegistered.map((s) => s.sessionId));
+    let marked = false;
+    for (let i = state.records.length - 1; i >= 0; i--) {
+        const rec = state.records[i]!;
+        if (rec.status === 'failed' || rec.status === 'terminated') continue;
+        if (rec.sessionId === departing.sessionId) {
+            rec.status = 'terminated';
+            for (const f of rec.writtenFiles) departingFiles.add(f);
+            marked = true;
+        } else if (rec.status === 'registered' && rec.sessionId && !survivingIds.has(rec.sessionId)) {
+            rec.status = 'terminated';
+            for (const f of rec.writtenFiles) departingFiles.add(f);
+        }
+    }
+    if (!marked && departingScope) {
         for (let i = state.records.length - 1; i >= 0; i--) {
             const rec = state.records[i]!;
             if (rec.status === 'failed' || rec.status === 'terminated') continue;
-            if (rec.sessionId === departing.sessionId) {
+            if (!rec.sessionId && rec.scope === departingScope) {
                 rec.status = 'terminated';
-                marked = true;
-            } else if (rec.status === 'registered' && rec.sessionId && !survivingIds.has(rec.sessionId)) {
-                rec.status = 'terminated';
-            }
-        }
-        if (!marked && departingScope) {
-            for (let i = state.records.length - 1; i >= 0; i--) {
-                const rec = state.records[i]!;
-                if (rec.status === 'failed' || rec.status === 'terminated') continue;
-                if (!rec.sessionId && rec.scope === departingScope) {
-                    rec.status = 'terminated';
-                    break;
-                }
+                for (const f of rec.writtenFiles) departingFiles.add(f);
+                break;
             }
         }
     }
@@ -669,17 +698,26 @@ export function repointAntigravityContextFileOnCoordinatorExit(
     // 1. Repoint/materialize the newest surviving owner BEFORE deleting departing files.
     const newestRecord = activeRecords[activeRecords.length - 1];
     const newestRegistered = survivingRegistered[survivingRegistered.length - 1];
+    const survivorScope =
+        newestRecord?.scope
+        ?? (newestRegistered?.systemPrompt && newestRegistered.workspace
+            ? computeAntigravityCoordinatorScope(newestRegistered.workspace, newestRegistered.systemPrompt)
+            : extractScopeFromOwnedPaths(newestRegistered?.additionalOwnedFiles));
 
+    let repointWriteSucceeded = false;
     if (newestRecord) {
-        restoreActiveOwnershipRecordInPlace(newestRecord);
+        repointWriteSucceeded = restoreActiveOwnershipRecordInPlace(newestRecord);
     } else if (newestRegistered?.systemPrompt && newestRegistered.workspace) {
+        if (newestRegistered.separators && !state.wrapperSeparators) {
+            state.wrapperSeparators = { ...newestRegistered.separators };
+        }
         const open = newestRegistered.openSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.open;
         const close = newestRegistered.closeSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close;
         const wrapper = `${open}\n{prompt}\n${close}`;
         const effectiveHome =
             newestRegistered.homeDir?.trim()
             || extractAntigravityCoordinatorHomeFromPaths(newestRegistered.additionalOwnedFiles);
-        writeAntigravityCoordinatorContextFiles({
+        const effect = writeAntigravityCoordinatorContextFiles({
             systemPrompt: newestRegistered.systemPrompt,
             target: newestRegistered.targetPath,
             wrapper,
@@ -692,25 +730,70 @@ export function repointAntigravityContextFileOnCoordinatorExit(
                 cliType: newestRegistered.cliType || 'antigravity-cli',
             },
         });
-        markAntigravityCoordinatorRegistered({
-            sessionId: newestRegistered.sessionId,
-            workspace: newestRegistered.workspace,
-            systemPrompt: newestRegistered.systemPrompt,
-            targetPath: newestRegistered.targetPath,
-        });
+        repointWriteSucceeded = Boolean(effect.contextFilePath && !effect.error);
+        if (repointWriteSucceeded) {
+            markAntigravityCoordinatorRegistered({
+                sessionId: newestRegistered.sessionId,
+                workspace: newestRegistered.workspace,
+                systemPrompt: newestRegistered.systemPrompt,
+                targetPath: newestRegistered.targetPath,
+            });
+        }
+    } else {
+        repointWriteSucceeded = existsSync(departing.targetPath);
     }
 
-    // 2. Delete only the departing coordinator's unshared companion files.
+    let stillReferencesDepartingScope = false;
+    if (departingScope && departingScope !== survivorScope) {
+        try {
+            if (existsSync(departing.targetPath)) {
+                const currentOnDisk = readFileSync(departing.targetPath, 'utf-8');
+                stillReferencesDepartingScope = currentOnDisk.includes(departingScope);
+            }
+        } catch {
+            stillReferencesDepartingScope = true;
+        }
+    }
+
+    if (!repointWriteSucceeded || stillReferencesDepartingScope) {
+        if (!state.deferredDepartingFiles) {
+            state.deferredDepartingFiles = new Set<string>();
+        }
+        for (const f of departingFiles) {
+            state.deferredDepartingFiles.add(f);
+        }
+        LOG.warn(
+            'MeshCoordinator',
+            `Could not repoint ${departing.targetPath} to surviving coordinator; retaining departing companion files until repoint succeeds (${departing.sessionId})`,
+        );
+        return 'repoint_failed';
+    }
+
+    // 2. Delete only the departing coordinator's unshared companion files (plus any
+    // previously deferred departing files now that AGENTS.md has been repointed).
     const protectedFiles = collectActiveRecordFiles(resolvedTarget);
     for (const survivor of survivingRegistered) {
         for (const f of survivor.additionalOwnedFiles ?? []) {
             protectedFiles.add(f);
         }
     }
-    if (departing.additionalOwnedFiles?.length) {
-        cleanupAntigravityCompanionFiles(departing.targetPath, departing.additionalOwnedFiles, protectedFiles);
+    const filesToClean = new Set<string>(departingFiles);
+    if (state.deferredDepartingFiles) {
+        for (const f of state.deferredDepartingFiles) {
+            filesToClean.add(f);
+        }
     }
-    return true;
+    if (filesToClean.size > 0) {
+        cleanupAntigravityCompanionFiles(departing.targetPath, [...filesToClean], protectedFiles);
+    }
+    if (state.deferredDepartingFiles) {
+        for (const f of filesToClean) {
+            if (!protectedFiles.has(f) && !existsSync(f)) {
+                state.deferredDepartingFiles.delete(f);
+            }
+        }
+    }
+    return 'repointed';
 }
 
 /**
@@ -876,11 +959,21 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
         }
 
         const state = getOrCreateTargetState(resolvedTarget);
-        if (!hadCoordinatorBlockBefore || !state.wrapperSeparators) {
+        if (!hadCoordinatorBlockBefore) {
             state.wrapperSeparators = {
                 leading: targetContentBefore === null ? '' : '\n\n',
                 trailing: '',
                 createdFile: targetContentBefore === null,
+            };
+        } else if (!state.wrapperSeparators && targetContentBefore !== null) {
+            const matchBefore = wrapperBlockPattern(sentinels).exec(targetContentBefore);
+            const prefixBefore = matchBefore && matchBefore.index !== undefined
+                ? targetContentBefore.slice(0, matchBefore.index)
+                : '';
+            state.wrapperSeparators = {
+                leading: prefixBefore === '' ? '' : prefixBefore.endsWith('\n\n') ? '\n\n' : '',
+                trailing: '',
+                createdFile: prefixBefore === '' && matchBefore?.[0].length === targetContentBefore.length,
             };
         }
 
@@ -900,6 +993,17 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
         };
         state.records.push(record);
 
+        if (state.deferredDepartingFiles && state.deferredDepartingFiles.size > 0) {
+            const protectedFiles = collectActiveRecordFiles(resolvedTarget);
+            const deferred = [...state.deferredDepartingFiles];
+            cleanupAntigravityCompanionFiles(target, deferred, protectedFiles);
+            for (const f of deferred) {
+                if (!protectedFiles.has(f) && !existsSync(f)) {
+                    state.deferredDepartingFiles.delete(f);
+                }
+            }
+        }
+
         _companionFilesByContextPath.set(resolvedTarget, {
             workspace: ctx.workspace,
             homeDir,
@@ -914,6 +1018,7 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
             additionalOwnedFiles,
             retainContextFileForSessionLifetime: true,
             contextFileHomeDir: homeDir,
+            ...(state.wrapperSeparators ? { contextFileSeparators: { ...state.wrapperSeparators } } : {}),
         };
         _recordByEffect.set(effect, record);
 
@@ -1060,53 +1165,83 @@ export function cleanupAntigravityCompanionFiles(
 /**
  * Strip the daemon's wrapper block from a context_file we previously wrote,
  * along with any companion rule/include files. Preserves user content byte-for-byte.
+ *
+ * Returns `true` when `filePath` was stripped/unlinked (or did not exist) and
+ * companion files were cleaned up, or `false` if modifying `filePath` failed
+ * (in which case referenced companion files are retained on disk).
  */
 export function stripCoordinatorWrapperFile(
     filePath: string,
     owned = false,
     sentinels: CoordinatorWrapperSentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS,
     additionalOwnedFiles?: readonly string[],
-): void {
+    explicitSeparators?: RecordedWrapperSeparators,
+): boolean {
+    const resolvedTarget = resolve(filePath);
+    const state = _stateByTarget.get(resolvedTarget);
+    const recordedSeparators = explicitSeparators ?? state?.wrapperSeparators;
+
     try {
-        const resolvedTarget = resolve(filePath);
-        const state = _stateByTarget.get(resolvedTarget);
+        if (existsSync(filePath)) {
+            if (owned && !sentinels.open) {
+                unlinkSync(filePath);
+            } else if (sentinels.open) {
+                const existing = readFileSync(filePath, 'utf-8');
+                if (!existing.includes(sentinels.open)) {
+                    if (owned && !existing.trim()) {
+                        unlinkSync(filePath);
+                    }
+                } else {
+                    const remaining = stripSentinelBlockPreservingSurroundingBytes(
+                        existing,
+                        sentinels,
+                        recordedSeparators,
+                    );
+                    if (remaining !== existing) {
+                        if (!remaining.trim()) {
+                            unlinkSync(filePath);
+                        } else {
+                            writeFileSync(filePath, remaining, 'utf-8');
+                        }
+                    }
+                }
+            }
+        }
+    } catch (error: any) {
+        if (additionalOwnedFiles?.length) {
+            const targetState = getOrCreateTargetState(resolvedTarget);
+            if (!targetState.deferredDepartingFiles) {
+                targetState.deferredDepartingFiles = new Set<string>();
+            }
+            for (const f of additionalOwnedFiles) {
+                targetState.deferredDepartingFiles.add(f);
+            }
+        }
+        LOG.warn('MeshCoordinator', `Could not strip coordinator wrapper from ${filePath}: ${error?.message || error}`);
+        return false;
+    }
+
+    try {
         if (state) {
             for (const rec of state.records) {
                 if (rec.status === 'provisional' || rec.status === 'registered') {
                     rec.status = 'terminated';
                 }
             }
-        }
-        const recordedSeparators = state?.wrapperSeparators;
-        if (state) {
             state.wrapperSeparators = undefined;
         }
-
-        cleanupAntigravityCompanionFiles(filePath, additionalOwnedFiles);
-        if (!existsSync(filePath)) return;
-        if (owned && !sentinels.open) {
-            try { unlinkSync(filePath); } catch { /* best-effort */ }
-            return;
-        }
-        if (!sentinels.open) return;
-        const existing = readFileSync(filePath, 'utf-8');
-        if (!existing.includes(sentinels.open)) {
-            if (owned && !existing.trim()) {
-                try { unlinkSync(filePath); } catch { /* best-effort */ }
+        const combinedFiles = new Set<string>(additionalOwnedFiles ?? []);
+        if (state?.deferredDepartingFiles) {
+            for (const f of state.deferredDepartingFiles) {
+                combinedFiles.add(f);
             }
-            return;
+            state.deferredDepartingFiles.clear();
         }
-        const remaining = stripSentinelBlockPreservingSurroundingBytes(
-            existing,
-            sentinels,
-            recordedSeparators,
+        cleanupAntigravityCompanionFiles(
+            filePath,
+            combinedFiles.size > 0 ? [...combinedFiles] : undefined,
         );
-        if (remaining === existing) return;
-        if (!remaining.trim()) {
-            try { unlinkSync(filePath); } catch { /* best-effort */ }
-        } else {
-            writeFileSync(filePath, remaining, 'utf-8');
-        }
     } catch { /* best-effort */ }
+    return true;
 }
 

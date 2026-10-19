@@ -12,9 +12,12 @@ import { join, resolve } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { getDaemonDataDir } from '../config/config.js';
 import {
+    getRecordedWrapperSeparators,
     markAntigravityCoordinatorRegistered,
+    recordContextFileWrapperSeparators,
     repointAntigravityContextFileOnCoordinatorExit,
     stripCoordinatorWrapperFile,
+    type RecordedWrapperSeparators,
     type SurvivingCoordinatorDescriptor,
 } from '../commands/antigravity-coordinator-rules.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
@@ -50,6 +53,7 @@ export interface CoordinatorRegistryEntry {
             additionalOwnedFiles?: string[];
             retainForSessionLifetime?: boolean;
             homeDir?: string;
+            separators?: RecordedWrapperSeparators;
         };
     };
     /** Path of the MCP config file the daemon wrote for this session. */
@@ -57,9 +61,20 @@ export interface CoordinatorRegistryEntry {
 }
 
 const _registry = new Map<string, CoordinatorRegistryEntry>();
+const _pendingFailedCleanupBySessionId = new Map<string, CoordinatorRegistryEntry>();
 
 function getRegistryPath(): string {
     return join(getDaemonDataDir(), 'mesh-coordinators.json');
+}
+
+function isValidRecordedSeparators(sep: unknown): sep is RecordedWrapperSeparators {
+    return Boolean(
+        sep
+        && typeof sep === 'object'
+        && typeof (sep as RecordedWrapperSeparators).leading === 'string'
+        && typeof (sep as RecordedWrapperSeparators).trailing === 'string'
+        && typeof (sep as RecordedWrapperSeparators).createdFile === 'boolean',
+    );
 }
 
 /** Load persisted coordinator registry from disk into in-memory map. Called once on daemon boot. */
@@ -72,7 +87,18 @@ export function loadMeshCoordinatorRegistry(): void {
         _registry.clear();
         for (const entry of raw) {
             if (typeof entry?.sessionId === 'string' && typeof entry?.meshId === 'string') {
-                _registry.set(entry.sessionId, entry as CoordinatorRegistryEntry);
+                const typedEntry = entry as CoordinatorRegistryEntry;
+                _registry.set(typedEntry.sessionId, typedEntry);
+                const targetPath = resolveEntryContextFilePath(typedEntry);
+                const sep = typedEntry.injection?.contextFile?.separators;
+                if (targetPath && isValidRecordedSeparators(sep)) {
+                    recordContextFileWrapperSeparators(
+                        targetPath,
+                        sep.leading,
+                        sep.trailing,
+                        sep.createdFile,
+                    );
+                }
             }
         }
     } catch { /* ignore corrupt file */ }
@@ -101,9 +127,26 @@ function resolveEntryContextFilePath(entry: CoordinatorRegistryEntry): string {
 
 /** Register a coordinator session. Persists to disk immediately. */
 export function registerMeshCoordinator(entry: CoordinatorRegistryEntry): void {
+    _pendingFailedCleanupBySessionId.delete(entry.sessionId);
+    const targetPath = resolveEntryContextFilePath(entry);
+    if (targetPath) {
+        const existingSep = entry.injection?.contextFile?.separators;
+        if (isValidRecordedSeparators(existingSep)) {
+            recordContextFileWrapperSeparators(
+                targetPath,
+                existingSep.leading,
+                existingSep.trailing,
+                existingSep.createdFile,
+            );
+        } else {
+            const inMemorySep = getRecordedWrapperSeparators(targetPath);
+            if (inMemorySep && entry.injection?.contextFile) {
+                entry.injection.contextFile.separators = inMemorySep;
+            }
+        }
+    }
     _registry.set(entry.sessionId, entry);
     saveRegistry();
-    const targetPath = resolveEntryContextFilePath(entry);
     if (targetPath && entry.workspace) {
         markAntigravityCoordinatorRegistered({
             sessionId: entry.sessionId,
@@ -141,35 +184,55 @@ function toSurvivorDescriptor(entry: CoordinatorRegistryEntry, targetPath: strin
         owned: recorded?.owned ?? entry.injection?.owned,
         additionalOwnedFiles: recorded?.additionalOwnedFiles,
         homeDir: recorded?.homeDir,
+        separators: isValidRecordedSeparators(recorded?.separators) ? recorded.separators : undefined,
     };
 }
 
-function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): void {
+function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): boolean {
     const targetPath = resolveEntryContextFilePath(entry);
-    if (!targetPath) return;
+    if (!targetPath) return true;
     const recorded = entry.injection?.contextFile;
+    const recordedSeparators = isValidRecordedSeparators(recorded?.separators)
+        ? recorded.separators
+        : undefined;
+    if (recordedSeparators && !getRecordedWrapperSeparators(targetPath)) {
+        recordContextFileWrapperSeparators(
+            targetPath,
+            recordedSeparators.leading,
+            recordedSeparators.trailing,
+            recordedSeparators.createdFile,
+        );
+    }
     const liveCoordinators = findLiveCoordinatorsForContextFile(targetPath);
     const survivingDescriptors = liveCoordinators.map((c) => toSurvivorDescriptor(c, resolveEntryContextFilePath(c) || targetPath));
     try {
-        if (repointAntigravityContextFileOnCoordinatorExit(toSurvivorDescriptor(entry, targetPath), survivingDescriptors)) {
-            return;
+        const repointResult = repointAntigravityContextFileOnCoordinatorExit(
+            toSurvivorDescriptor(entry, targetPath),
+            survivingDescriptors,
+        );
+        if (repointResult) {
+            return repointResult === 'repointed';
         }
     } catch { /* best-effort */ }
     if (recorded && typeof recorded.path === 'string' && recorded.path) {
         try {
-            stripCoordinatorWrapperFile(
+            return stripCoordinatorWrapperFile(
                 recorded.path,
                 recorded.owned === true,
                 typeof recorded.open === 'string' ? { open: recorded.open, close: typeof recorded.close === 'string' ? recorded.close : '' } : undefined,
                 Array.isArray(recorded.additionalOwnedFiles) ? recorded.additionalOwnedFiles : undefined,
+                recordedSeparators,
             );
-        } catch { /* best-effort cleanup; never throw out of unregister */ }
-        return;
+        } catch {
+            return false;
+        }
     }
     const owned = entry.injection?.owned === true;
     try {
-        stripCoordinatorWrapperFile(targetPath, owned);
-    } catch { /* best-effort cleanup; never throw out of unregister */ }
+        return stripCoordinatorWrapperFile(targetPath, owned, undefined, undefined, recordedSeparators);
+    } catch {
+        return false;
+    }
 }
 
 /** Remove a coordinator session by sessionId. Persists to disk.
@@ -192,10 +255,22 @@ function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): vo
  */
 export function unregisterMeshCoordinator(sessionId: string): void {
     const entry = _registry.get(sessionId);
-    if (!_registry.delete(sessionId)) return;
-    saveRegistry();
-    if (!entry) return;
-    cleanupCoordinatorEntryContextFile(entry);
+    if (_registry.delete(sessionId)) {
+        saveRegistry();
+        if (!entry) return;
+        if (!cleanupCoordinatorEntryContextFile(entry)) {
+            _pendingFailedCleanupBySessionId.set(sessionId, entry);
+        } else {
+            _pendingFailedCleanupBySessionId.delete(sessionId);
+        }
+        return;
+    }
+    const pendingEntry = _pendingFailedCleanupBySessionId.get(sessionId);
+    if (pendingEntry) {
+        if (cleanupCoordinatorEntryContextFile(pendingEntry)) {
+            _pendingFailedCleanupBySessionId.delete(sessionId);
+        }
+    }
 }
 
 /**
@@ -248,7 +323,18 @@ export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>): 
     if (pruned.length > 0) {
         saveRegistry();
         for (const entry of pruned) {
-            cleanupCoordinatorEntryContextFile(entry);
+            if (!cleanupCoordinatorEntryContextFile(entry)) {
+                _pendingFailedCleanupBySessionId.set(entry.sessionId, entry);
+            } else {
+                _pendingFailedCleanupBySessionId.delete(entry.sessionId);
+            }
+        }
+    }
+    for (const [pendingSessionId, pendingEntry] of [..._pendingFailedCleanupBySessionId.entries()]) {
+        if (liveSessionIds.has(pendingSessionId)) continue;
+        if (pruned.some((p) => p.sessionId === pendingSessionId)) continue;
+        if (cleanupCoordinatorEntryContextFile(pendingEntry)) {
+            _pendingFailedCleanupBySessionId.delete(pendingSessionId);
         }
     }
     return pruned;

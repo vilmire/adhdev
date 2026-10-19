@@ -65863,24 +65863,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         }
         return before + after;
       }
-      if (before.length > 0 && after.length === 0) {
-        if (before.endsWith("\n\n")) return before.slice(0, -2);
-        if (before.endsWith("\r\n\r\n")) return before.slice(0, -4);
-        if (before.endsWith("\n")) return before.slice(0, -1);
-        return before;
+      if (before.length > 0 && after.length === 0 && before.endsWith("\n\n")) {
+        return before.slice(0, -2);
       }
-      if (before.length > 0 && (after === "\n" || after === "\r\n")) {
-        const trimmedBefore = before.endsWith("\n\n") ? before.slice(0, -2) : before.endsWith("\r\n\r\n") ? before.slice(0, -4) : before;
-        return trimmedBefore.endsWith("\n") ? trimmedBefore : trimmedBefore + after;
-      }
-      if (before.length > 0 && after.length > 0) {
-        const trimmedBefore = before.endsWith("\n\n") ? before.slice(0, -2) : before;
-        return trimmedBefore + after;
-      }
-      if (before.length === 0 && after.length > 0) {
-        return after.replace(/^(?:\r?\n){1,2}/, "");
-      }
-      return "";
+      return before + after;
     }
     function getOrCreateTargetState(resolvedTarget) {
       let state2 = _stateByTarget.get(resolvedTarget);
@@ -65893,6 +65879,10 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
     function recordContextFileWrapperSeparators(targetPath, leading, trailing, createdFile) {
       const state2 = getOrCreateTargetState((0, import_path14.resolve)(targetPath));
       state2.wrapperSeparators = { leading, trailing, createdFile };
+    }
+    function getRecordedWrapperSeparators(targetPath) {
+      const state2 = _stateByTarget.get((0, import_path14.resolve)(targetPath));
+      return state2?.wrapperSeparators ? { ...state2.wrapperSeparators } : void 0;
     }
     function computeAntigravityCoordinatorScope(workspace, systemPrompt) {
       const hash3 = (0, import_crypto17.createHash)("sha256").update((0, import_path14.resolve)(workspace));
@@ -66116,7 +66106,9 @@ ${renderedWrapperBlock}`;
         try {
           (0, import_fs20.mkdirSync)((0, import_path14.dirname)(filePath2), { recursive: true });
           (0, import_fs20.writeFileSync)(filePath2, content, "utf-8");
-        } catch {
+        } catch (error) {
+          LOG.warn("MeshCoordinator", `Could not restore companion file ${filePath2}: ${error?.message || error}`);
+          return false;
         }
       }
       const resolvedTarget = (0, import_path14.resolve)(record4.targetPath);
@@ -66143,7 +66135,9 @@ ${record4.renderedWrapperBlock}`, "utf-8");
           (0, import_fs20.writeFileSync)(record4.targetPath, record4.renderedWrapperBlock, "utf-8");
           state2.wrapperSeparators = { leading: "", trailing: "", createdFile: true };
         }
-      } catch {
+      } catch (error) {
+        LOG.warn("MeshCoordinator", `Could not repoint ${record4.targetPath}: ${error?.message || error}`);
+        return false;
       }
       _companionFilesByContextPath.set(resolvedTarget, {
         workspace: record4.workspace,
@@ -66151,6 +66145,7 @@ ${record4.renderedWrapperBlock}`, "utf-8");
         scope: record4.scope,
         files: [...record4.writtenFiles]
       });
+      return true;
     }
     function deleteUnsharedRecordFiles(record4, protectedFiles) {
       for (const filePath2 of record4.writtenFiles) {
@@ -66192,31 +66187,46 @@ ${record4.renderedWrapperBlock}`, "utf-8");
         }
       }
     }
+    function extractScopeFromOwnedPaths(paths) {
+      if (!paths?.length) return void 0;
+      const marker2 = (0, import_path14.join)(".gemini", "config", "adhdev-mesh-coordinator");
+      for (const f of paths) {
+        const idx = f.indexOf(marker2);
+        if (idx >= 0) {
+          const after = f.slice(idx + marker2.length + 1);
+          const seg = after.split(/[\\/]/)[0];
+          if (seg) return seg;
+        }
+      }
+      return void 0;
+    }
     function repointAntigravityContextFileOnCoordinatorExit(departing, survivingRegistered) {
       const resolvedTarget = (0, import_path14.resolve)(departing.targetPath);
-      const state2 = _stateByTarget.get(resolvedTarget);
-      const departingScope = departing.systemPrompt ? computeAntigravityCoordinatorScope(departing.workspace, departing.systemPrompt) : void 0;
-      if (state2) {
-        const survivingIds = new Set(survivingRegistered.map((s2) => s2.sessionId));
-        let marked = false;
+      const state2 = getOrCreateTargetState(resolvedTarget);
+      const departingScope = departing.systemPrompt && departing.workspace ? computeAntigravityCoordinatorScope(departing.workspace, departing.systemPrompt) : extractScopeFromOwnedPaths(departing.additionalOwnedFiles);
+      const departingFiles = new Set(departing.additionalOwnedFiles ?? []);
+      const survivingIds = new Set(survivingRegistered.map((s2) => s2.sessionId));
+      let marked = false;
+      for (let i = state2.records.length - 1; i >= 0; i--) {
+        const rec5 = state2.records[i];
+        if (rec5.status === "failed" || rec5.status === "terminated") continue;
+        if (rec5.sessionId === departing.sessionId) {
+          rec5.status = "terminated";
+          for (const f of rec5.writtenFiles) departingFiles.add(f);
+          marked = true;
+        } else if (rec5.status === "registered" && rec5.sessionId && !survivingIds.has(rec5.sessionId)) {
+          rec5.status = "terminated";
+          for (const f of rec5.writtenFiles) departingFiles.add(f);
+        }
+      }
+      if (!marked && departingScope) {
         for (let i = state2.records.length - 1; i >= 0; i--) {
           const rec5 = state2.records[i];
           if (rec5.status === "failed" || rec5.status === "terminated") continue;
-          if (rec5.sessionId === departing.sessionId) {
+          if (!rec5.sessionId && rec5.scope === departingScope) {
             rec5.status = "terminated";
-            marked = true;
-          } else if (rec5.status === "registered" && rec5.sessionId && !survivingIds.has(rec5.sessionId)) {
-            rec5.status = "terminated";
-          }
-        }
-        if (!marked && departingScope) {
-          for (let i = state2.records.length - 1; i >= 0; i--) {
-            const rec5 = state2.records[i];
-            if (rec5.status === "failed" || rec5.status === "terminated") continue;
-            if (!rec5.sessionId && rec5.scope === departingScope) {
-              rec5.status = "terminated";
-              break;
-            }
+            for (const f of rec5.writtenFiles) departingFiles.add(f);
+            break;
           }
         }
       }
@@ -66227,16 +66237,21 @@ ${record4.renderedWrapperBlock}`, "utf-8");
       }
       const newestRecord = activeRecords[activeRecords.length - 1];
       const newestRegistered = survivingRegistered[survivingRegistered.length - 1];
+      const survivorScope = newestRecord?.scope ?? (newestRegistered?.systemPrompt && newestRegistered.workspace ? computeAntigravityCoordinatorScope(newestRegistered.workspace, newestRegistered.systemPrompt) : extractScopeFromOwnedPaths(newestRegistered?.additionalOwnedFiles));
+      let repointWriteSucceeded = false;
       if (newestRecord) {
-        restoreActiveOwnershipRecordInPlace(newestRecord);
+        repointWriteSucceeded = restoreActiveOwnershipRecordInPlace(newestRecord);
       } else if (newestRegistered?.systemPrompt && newestRegistered.workspace) {
+        if (newestRegistered.separators && !state2.wrapperSeparators) {
+          state2.wrapperSeparators = { ...newestRegistered.separators };
+        }
         const open = newestRegistered.openSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.open;
         const close2 = newestRegistered.closeSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close;
         const wrapper = `${open}
 {prompt}
 ${close2}`;
         const effectiveHome = newestRegistered.homeDir?.trim() || extractAntigravityCoordinatorHomeFromPaths(newestRegistered.additionalOwnedFiles);
-        writeAntigravityCoordinatorContextFiles({
+        const effect = writeAntigravityCoordinatorContextFiles({
           systemPrompt: newestRegistered.systemPrompt,
           target: newestRegistered.targetPath,
           wrapper,
@@ -66249,12 +66264,41 @@ ${close2}`;
             cliType: newestRegistered.cliType || "antigravity-cli"
           }
         });
-        markAntigravityCoordinatorRegistered({
-          sessionId: newestRegistered.sessionId,
-          workspace: newestRegistered.workspace,
-          systemPrompt: newestRegistered.systemPrompt,
-          targetPath: newestRegistered.targetPath
-        });
+        repointWriteSucceeded = Boolean(effect.contextFilePath && !effect.error);
+        if (repointWriteSucceeded) {
+          markAntigravityCoordinatorRegistered({
+            sessionId: newestRegistered.sessionId,
+            workspace: newestRegistered.workspace,
+            systemPrompt: newestRegistered.systemPrompt,
+            targetPath: newestRegistered.targetPath
+          });
+        }
+      } else {
+        repointWriteSucceeded = (0, import_fs20.existsSync)(departing.targetPath);
+      }
+      let stillReferencesDepartingScope = false;
+      if (departingScope && departingScope !== survivorScope) {
+        try {
+          if ((0, import_fs20.existsSync)(departing.targetPath)) {
+            const currentOnDisk = (0, import_fs20.readFileSync)(departing.targetPath, "utf-8");
+            stillReferencesDepartingScope = currentOnDisk.includes(departingScope);
+          }
+        } catch {
+          stillReferencesDepartingScope = true;
+        }
+      }
+      if (!repointWriteSucceeded || stillReferencesDepartingScope) {
+        if (!state2.deferredDepartingFiles) {
+          state2.deferredDepartingFiles = /* @__PURE__ */ new Set();
+        }
+        for (const f of departingFiles) {
+          state2.deferredDepartingFiles.add(f);
+        }
+        LOG.warn(
+          "MeshCoordinator",
+          `Could not repoint ${departing.targetPath} to surviving coordinator; retaining departing companion files until repoint succeeds (${departing.sessionId})`
+        );
+        return "repoint_failed";
       }
       const protectedFiles = collectActiveRecordFiles(resolvedTarget);
       for (const survivor of survivingRegistered) {
@@ -66262,10 +66306,23 @@ ${close2}`;
           protectedFiles.add(f);
         }
       }
-      if (departing.additionalOwnedFiles?.length) {
-        cleanupAntigravityCompanionFiles(departing.targetPath, departing.additionalOwnedFiles, protectedFiles);
+      const filesToClean = new Set(departingFiles);
+      if (state2.deferredDepartingFiles) {
+        for (const f of state2.deferredDepartingFiles) {
+          filesToClean.add(f);
+        }
       }
-      return true;
+      if (filesToClean.size > 0) {
+        cleanupAntigravityCompanionFiles(departing.targetPath, [...filesToClean], protectedFiles);
+      }
+      if (state2.deferredDepartingFiles) {
+        for (const f of filesToClean) {
+          if (!protectedFiles.has(f) && !(0, import_fs20.existsSync)(f)) {
+            state2.deferredDepartingFiles.delete(f);
+          }
+        }
+      }
+      return "repointed";
     }
     function writeAntigravityCoordinatorContextFiles(opts) {
       const { systemPrompt, target, wrapper, sentinels, ownedDeclared, ctx } = opts;
@@ -66393,11 +66450,19 @@ ${includeRefs[0]}`;
           ensureLocalGitExclude(ctx.workspace, target);
         }
         const state2 = getOrCreateTargetState(resolvedTarget);
-        if (!hadCoordinatorBlockBefore || !state2.wrapperSeparators) {
+        if (!hadCoordinatorBlockBefore) {
           state2.wrapperSeparators = {
             leading: targetContentBefore === null ? "" : "\n\n",
             trailing: "",
             createdFile: targetContentBefore === null
+          };
+        } else if (!state2.wrapperSeparators && targetContentBefore !== null) {
+          const matchBefore = wrapperBlockPattern(sentinels).exec(targetContentBefore);
+          const prefixBefore = matchBefore && matchBefore.index !== void 0 ? targetContentBefore.slice(0, matchBefore.index) : "";
+          state2.wrapperSeparators = {
+            leading: prefixBefore === "" ? "" : prefixBefore.endsWith("\n\n") ? "\n\n" : "",
+            trailing: "",
+            createdFile: prefixBefore === "" && matchBefore?.[0].length === targetContentBefore.length
           };
         }
         const record4 = {
@@ -66415,6 +66480,16 @@ ${includeRefs[0]}`;
           status: "provisional"
         };
         state2.records.push(record4);
+        if (state2.deferredDepartingFiles && state2.deferredDepartingFiles.size > 0) {
+          const protectedFiles = collectActiveRecordFiles(resolvedTarget);
+          const deferred = [...state2.deferredDepartingFiles];
+          cleanupAntigravityCompanionFiles(target, deferred, protectedFiles);
+          for (const f of deferred) {
+            if (!protectedFiles.has(f) && !(0, import_fs20.existsSync)(f)) {
+              state2.deferredDepartingFiles.delete(f);
+            }
+          }
+        }
         _companionFilesByContextPath.set(resolvedTarget, {
           workspace: ctx.workspace,
           homeDir: homeDir2,
@@ -66427,7 +66502,8 @@ ${includeRefs[0]}`;
           contextFileSentinels: sentinels,
           additionalOwnedFiles,
           retainContextFileForSessionLifetime: true,
-          contextFileHomeDir: homeDir2
+          contextFileHomeDir: homeDir2,
+          ...state2.wrapperSeparators ? { contextFileSeparators: { ...state2.wrapperSeparators } } : {}
         };
         _recordByEffect.set(effect, record4);
         LOG.info(
@@ -66533,57 +66609,72 @@ ${includeRefs[0]}`;
       removeDirIfEmpty(rulesDir);
       removeDirIfEmpty((0, import_path14.join)(workspace, ".agents"));
     }
-    function stripCoordinatorWrapperFile(filePath2, owned = false, sentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS, additionalOwnedFiles) {
+    function stripCoordinatorWrapperFile(filePath2, owned = false, sentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS, additionalOwnedFiles, explicitSeparators) {
+      const resolvedTarget = (0, import_path14.resolve)(filePath2);
+      const state2 = _stateByTarget.get(resolvedTarget);
+      const recordedSeparators = explicitSeparators ?? state2?.wrapperSeparators;
       try {
-        const resolvedTarget = (0, import_path14.resolve)(filePath2);
-        const state2 = _stateByTarget.get(resolvedTarget);
+        if ((0, import_fs20.existsSync)(filePath2)) {
+          if (owned && !sentinels.open) {
+            (0, import_fs20.unlinkSync)(filePath2);
+          } else if (sentinels.open) {
+            const existing = (0, import_fs20.readFileSync)(filePath2, "utf-8");
+            if (!existing.includes(sentinels.open)) {
+              if (owned && !existing.trim()) {
+                (0, import_fs20.unlinkSync)(filePath2);
+              }
+            } else {
+              const remaining = stripSentinelBlockPreservingSurroundingBytes(
+                existing,
+                sentinels,
+                recordedSeparators
+              );
+              if (remaining !== existing) {
+                if (!remaining.trim()) {
+                  (0, import_fs20.unlinkSync)(filePath2);
+                } else {
+                  (0, import_fs20.writeFileSync)(filePath2, remaining, "utf-8");
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (additionalOwnedFiles?.length) {
+          const targetState = getOrCreateTargetState(resolvedTarget);
+          if (!targetState.deferredDepartingFiles) {
+            targetState.deferredDepartingFiles = /* @__PURE__ */ new Set();
+          }
+          for (const f of additionalOwnedFiles) {
+            targetState.deferredDepartingFiles.add(f);
+          }
+        }
+        LOG.warn("MeshCoordinator", `Could not strip coordinator wrapper from ${filePath2}: ${error?.message || error}`);
+        return false;
+      }
+      try {
         if (state2) {
           for (const rec5 of state2.records) {
             if (rec5.status === "provisional" || rec5.status === "registered") {
               rec5.status = "terminated";
             }
           }
-        }
-        const recordedSeparators = state2?.wrapperSeparators;
-        if (state2) {
           state2.wrapperSeparators = void 0;
         }
-        cleanupAntigravityCompanionFiles(filePath2, additionalOwnedFiles);
-        if (!(0, import_fs20.existsSync)(filePath2)) return;
-        if (owned && !sentinels.open) {
-          try {
-            (0, import_fs20.unlinkSync)(filePath2);
-          } catch {
+        const combinedFiles = new Set(additionalOwnedFiles ?? []);
+        if (state2?.deferredDepartingFiles) {
+          for (const f of state2.deferredDepartingFiles) {
+            combinedFiles.add(f);
           }
-          return;
+          state2.deferredDepartingFiles.clear();
         }
-        if (!sentinels.open) return;
-        const existing = (0, import_fs20.readFileSync)(filePath2, "utf-8");
-        if (!existing.includes(sentinels.open)) {
-          if (owned && !existing.trim()) {
-            try {
-              (0, import_fs20.unlinkSync)(filePath2);
-            } catch {
-            }
-          }
-          return;
-        }
-        const remaining = stripSentinelBlockPreservingSurroundingBytes(
-          existing,
-          sentinels,
-          recordedSeparators
+        cleanupAntigravityCompanionFiles(
+          filePath2,
+          combinedFiles.size > 0 ? [...combinedFiles] : void 0
         );
-        if (remaining === existing) return;
-        if (!remaining.trim()) {
-          try {
-            (0, import_fs20.unlinkSync)(filePath2);
-          } catch {
-          }
-        } else {
-          (0, import_fs20.writeFileSync)(filePath2, remaining, "utf-8");
-        }
       } catch {
       }
+      return true;
     }
     var import_crypto17;
     var import_fs20;
@@ -66636,6 +66727,11 @@ ${includeRefs[0]}`;
     function getRegistryPath() {
       return (0, import_path15.join)(getDaemonDataDir(), "mesh-coordinators.json");
     }
+    function isValidRecordedSeparators(sep19) {
+      return Boolean(
+        sep19 && typeof sep19 === "object" && typeof sep19.leading === "string" && typeof sep19.trailing === "string" && typeof sep19.createdFile === "boolean"
+      );
+    }
     function loadMeshCoordinatorRegistry() {
       const path103 = getRegistryPath();
       if (!(0, import_fs21.existsSync)(path103)) return;
@@ -66645,7 +66741,18 @@ ${includeRefs[0]}`;
         _registry.clear();
         for (const entry of raw) {
           if (typeof entry?.sessionId === "string" && typeof entry?.meshId === "string") {
-            _registry.set(entry.sessionId, entry);
+            const typedEntry = entry;
+            _registry.set(typedEntry.sessionId, typedEntry);
+            const targetPath = resolveEntryContextFilePath(typedEntry);
+            const sep19 = typedEntry.injection?.contextFile?.separators;
+            if (targetPath && isValidRecordedSeparators(sep19)) {
+              recordContextFileWrapperSeparators(
+                targetPath,
+                sep19.leading,
+                sep19.trailing,
+                sep19.createdFile
+              );
+            }
           }
         }
       } catch {
@@ -66670,9 +66777,26 @@ ${includeRefs[0]}`;
       return `${workspace.replace(/\/$/, "")}/${target}`;
     }
     function registerMeshCoordinator(entry) {
+      _pendingFailedCleanupBySessionId.delete(entry.sessionId);
+      const targetPath = resolveEntryContextFilePath(entry);
+      if (targetPath) {
+        const existingSep = entry.injection?.contextFile?.separators;
+        if (isValidRecordedSeparators(existingSep)) {
+          recordContextFileWrapperSeparators(
+            targetPath,
+            existingSep.leading,
+            existingSep.trailing,
+            existingSep.createdFile
+          );
+        } else {
+          const inMemorySep = getRecordedWrapperSeparators(targetPath);
+          if (inMemorySep && entry.injection?.contextFile) {
+            entry.injection.contextFile.separators = inMemorySep;
+          }
+        }
+      }
       _registry.set(entry.sessionId, entry);
       saveRegistry();
-      const targetPath = resolveEntryContextFilePath(entry);
       if (targetPath && entry.workspace) {
         markAntigravityCoordinatorRegistered({
           sessionId: entry.sessionId,
@@ -66707,45 +66831,73 @@ ${includeRefs[0]}`;
         closeSentinel: recorded?.close,
         owned: recorded?.owned ?? entry.injection?.owned,
         additionalOwnedFiles: recorded?.additionalOwnedFiles,
-        homeDir: recorded?.homeDir
+        homeDir: recorded?.homeDir,
+        separators: isValidRecordedSeparators(recorded?.separators) ? recorded.separators : void 0
       };
     }
     function cleanupCoordinatorEntryContextFile(entry) {
       const targetPath = resolveEntryContextFilePath(entry);
-      if (!targetPath) return;
+      if (!targetPath) return true;
       const recorded = entry.injection?.contextFile;
+      const recordedSeparators = isValidRecordedSeparators(recorded?.separators) ? recorded.separators : void 0;
+      if (recordedSeparators && !getRecordedWrapperSeparators(targetPath)) {
+        recordContextFileWrapperSeparators(
+          targetPath,
+          recordedSeparators.leading,
+          recordedSeparators.trailing,
+          recordedSeparators.createdFile
+        );
+      }
       const liveCoordinators = findLiveCoordinatorsForContextFile(targetPath);
       const survivingDescriptors = liveCoordinators.map((c) => toSurvivorDescriptor(c, resolveEntryContextFilePath(c) || targetPath));
       try {
-        if (repointAntigravityContextFileOnCoordinatorExit(toSurvivorDescriptor(entry, targetPath), survivingDescriptors)) {
-          return;
+        const repointResult = repointAntigravityContextFileOnCoordinatorExit(
+          toSurvivorDescriptor(entry, targetPath),
+          survivingDescriptors
+        );
+        if (repointResult) {
+          return repointResult === "repointed";
         }
       } catch {
       }
       if (recorded && typeof recorded.path === "string" && recorded.path) {
         try {
-          stripCoordinatorWrapperFile(
+          return stripCoordinatorWrapperFile(
             recorded.path,
             recorded.owned === true,
             typeof recorded.open === "string" ? { open: recorded.open, close: typeof recorded.close === "string" ? recorded.close : "" } : void 0,
-            Array.isArray(recorded.additionalOwnedFiles) ? recorded.additionalOwnedFiles : void 0
+            Array.isArray(recorded.additionalOwnedFiles) ? recorded.additionalOwnedFiles : void 0,
+            recordedSeparators
           );
         } catch {
+          return false;
         }
-        return;
       }
       const owned = entry.injection?.owned === true;
       try {
-        stripCoordinatorWrapperFile(targetPath, owned);
+        return stripCoordinatorWrapperFile(targetPath, owned, void 0, void 0, recordedSeparators);
       } catch {
+        return false;
       }
     }
     function unregisterMeshCoordinator(sessionId) {
       const entry = _registry.get(sessionId);
-      if (!_registry.delete(sessionId)) return;
-      saveRegistry();
-      if (!entry) return;
-      cleanupCoordinatorEntryContextFile(entry);
+      if (_registry.delete(sessionId)) {
+        saveRegistry();
+        if (!entry) return;
+        if (!cleanupCoordinatorEntryContextFile(entry)) {
+          _pendingFailedCleanupBySessionId.set(sessionId, entry);
+        } else {
+          _pendingFailedCleanupBySessionId.delete(sessionId);
+        }
+        return;
+      }
+      const pendingEntry = _pendingFailedCleanupBySessionId.get(sessionId);
+      if (pendingEntry) {
+        if (cleanupCoordinatorEntryContextFile(pendingEntry)) {
+          _pendingFailedCleanupBySessionId.delete(sessionId);
+        }
+      }
     }
     function subscribeCoordinatorRegistryRemoval(bus) {
       return bus.on("terminated", (event) => {
@@ -66766,7 +66918,18 @@ ${includeRefs[0]}`;
       if (pruned.length > 0) {
         saveRegistry();
         for (const entry of pruned) {
-          cleanupCoordinatorEntryContextFile(entry);
+          if (!cleanupCoordinatorEntryContextFile(entry)) {
+            _pendingFailedCleanupBySessionId.set(entry.sessionId, entry);
+          } else {
+            _pendingFailedCleanupBySessionId.delete(entry.sessionId);
+          }
+        }
+      }
+      for (const [pendingSessionId, pendingEntry] of [..._pendingFailedCleanupBySessionId.entries()]) {
+        if (liveSessionIds.has(pendingSessionId)) continue;
+        if (pruned.some((p) => p.sessionId === pendingSessionId)) continue;
+        if (cleanupCoordinatorEntryContextFile(pendingEntry)) {
+          _pendingFailedCleanupBySessionId.delete(pendingSessionId);
         }
       }
       return pruned;
@@ -66780,6 +66943,7 @@ ${includeRefs[0]}`;
     var import_path15;
     var import_fs21;
     var _registry;
+    var _pendingFailedCleanupBySessionId;
     var init_coordinator_registry = __esm2({
       "src/mesh/coordinator-registry.ts"() {
         "use strict";
@@ -66788,6 +66952,7 @@ ${includeRefs[0]}`;
         init_config();
         init_antigravity_coordinator_rules();
         _registry = /* @__PURE__ */ new Map();
+        _pendingFailedCleanupBySessionId = /* @__PURE__ */ new Map();
       }
     });
     function extractJsonObjectFromSummary(summary) {
@@ -80628,7 +80793,13 @@ ${rendered}`, "utf-8");
               recordContextFileWrapperSeparators(target, "", "", true);
             }
             LOG.info("MeshCoordinator", `Wrote coordinator prompt to ${target} (${ctx.cliType})`);
-            return { contextFilePath: target, contextFileOwned: owned, contextFileSentinels: sentinels };
+            const recordedSep = getRecordedWrapperSeparators(target);
+            return {
+              contextFilePath: target,
+              contextFileOwned: owned,
+              contextFileSentinels: sentinels,
+              ...recordedSep ? { contextFileSeparators: recordedSep } : {}
+            };
           } catch (error) {
             LOG.warn("MeshCoordinator", `Could not write ${target}: ${error?.message || error}`);
             return {};
@@ -80650,6 +80821,15 @@ ${rendered}`, "utf-8");
       const wrapper = `${openSentinel}
 {prompt}
 ${closeSentinel}`;
+      const existingSeparators = entry.injection?.contextFile?.separators;
+      if (existingSeparators && typeof existingSeparators.leading === "string" && typeof existingSeparators.trailing === "string" && typeof existingSeparators.createdFile === "boolean") {
+        recordContextFileWrapperSeparators(
+          targetPath,
+          existingSeparators.leading,
+          existingSeparators.trailing,
+          existingSeparators.createdFile
+        );
+      }
       const expectedScope = computeAntigravityCoordinatorScope(entry.workspace, entry.systemPrompt);
       const recordedExtras = entry.injection?.contextFile?.additionalOwnedFiles ?? [];
       let targetHasBlock = false;
@@ -80692,6 +80872,7 @@ ${closeSentinel}`;
         }
       );
       if (!effect.contextFilePath) return false;
+      const settledSeparators = existingSeparators ?? effect.contextFileSeparators;
       entry.injection = {
         mode: "context_file",
         target: entry.injection?.target || "AGENTS.md",
@@ -80705,7 +80886,8 @@ ${closeSentinel}`;
           } : {},
           ...effect.additionalOwnedFiles?.length ? { additionalOwnedFiles: effect.additionalOwnedFiles } : {},
           ...effect.retainContextFileForSessionLifetime ? { retainForSessionLifetime: true } : {},
-          ...effect.contextFileHomeDir ? { homeDir: effect.contextFileHomeDir } : {}
+          ...effect.contextFileHomeDir ? { homeDir: effect.contextFileHomeDir } : {},
+          ...settledSeparators ? { separators: settledSeparators } : {}
         }
       };
       registerMeshCoordinator(entry);

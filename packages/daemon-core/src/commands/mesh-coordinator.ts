@@ -13,6 +13,7 @@ import {
   computeAntigravityCoordinatorScope,
   coordinatorWrapperSentinels,
   extractAntigravityCoordinatorHomeFromPaths,
+  getRecordedWrapperSeparators,
   LEGACY_COORDINATOR_WRAPPER_SENTINELS,
   recordContextFileWrapperSeparators,
   removeWrapperBlock,
@@ -20,6 +21,7 @@ import {
   wrapperBlockPattern,
   writeAntigravityCoordinatorContextFiles,
   type CoordinatorWrapperSentinels,
+  type RecordedWrapperSeparators,
 } from './antigravity-coordinator-rules.js';
 
 export {
@@ -476,6 +478,8 @@ export interface CoordinatorInjectionEffect {
   retainContextFileForSessionLifetime?: boolean
   /** Effective HOME directory used for `~/` include resolution in `contextFilePath`. */
   contextFileHomeDir?: string
+  /** Exact separator strings inserted by the writer when injecting the wrapper block. */
+  contextFileSeparators?: RecordedWrapperSeparators
   /** Absolute path of the daemon-owned temp agent file. Only set for
    *  agent_file injection. The CLI reads it once at startup, so the launch
    *  path schedules a delete after the spawn settles; leftovers in the temp
@@ -688,7 +692,13 @@ function applyInjectionRule(
           recordContextFileWrapperSeparators(target, '', '', true)
         }
         LOG.info('MeshCoordinator', `Wrote coordinator prompt to ${target} (${ctx.cliType})`)
-        return { contextFilePath: target, contextFileOwned: owned, contextFileSentinels: sentinels }
+        const recordedSep = getRecordedWrapperSeparators(target)
+        return {
+          contextFilePath: target,
+          contextFileOwned: owned,
+          contextFileSentinels: sentinels,
+          ...(recordedSep ? { contextFileSeparators: recordedSep } : {}),
+        }
       } catch (error: any) {
         LOG.warn('MeshCoordinator', `Could not write ${target}: ${error?.message || error}`)
         return {}
@@ -721,6 +731,20 @@ export function ensureCoordinatorContextFileMaterialized(
   const openSentinel = entry.injection?.contextFile?.open || LEGACY_COORDINATOR_WRAPPER_SENTINELS.open
   const closeSentinel = entry.injection?.contextFile?.close || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close
   const wrapper = `${openSentinel}\n{prompt}\n${closeSentinel}`
+  const existingSeparators = entry.injection?.contextFile?.separators
+  if (
+    existingSeparators
+    && typeof existingSeparators.leading === 'string'
+    && typeof existingSeparators.trailing === 'string'
+    && typeof existingSeparators.createdFile === 'boolean'
+  ) {
+    recordContextFileWrapperSeparators(
+      targetPath,
+      existingSeparators.leading,
+      existingSeparators.trailing,
+      existingSeparators.createdFile,
+    )
+  }
 
   const expectedScope = computeAntigravityCoordinatorScope(entry.workspace, entry.systemPrompt)
   const recordedExtras = entry.injection?.contextFile?.additionalOwnedFiles ?? []
@@ -773,6 +797,7 @@ export function ensureCoordinatorContextFileMaterialized(
   )
   if (!effect.contextFilePath) return false
 
+  const settledSeparators = existingSeparators ?? effect.contextFileSeparators
   entry.injection = {
     mode: 'context_file',
     target: entry.injection?.target || 'AGENTS.md',
@@ -787,6 +812,7 @@ export function ensureCoordinatorContextFileMaterialized(
       ...(effect.additionalOwnedFiles?.length ? { additionalOwnedFiles: effect.additionalOwnedFiles } : {}),
       ...(effect.retainContextFileForSessionLifetime ? { retainForSessionLifetime: true } : {}),
       ...(effect.contextFileHomeDir ? { homeDir: effect.contextFileHomeDir } : {}),
+      ...(settledSeparators ? { separators: settledSeparators } : {}),
     },
   }
   registerMeshCoordinator(entry)

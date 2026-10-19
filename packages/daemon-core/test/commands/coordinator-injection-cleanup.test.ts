@@ -1256,5 +1256,127 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       rmSync(home6, { recursive: true, force: true })
     }
   })
-})
 
+  it('R1 & R2: retains departing chunks when read-only AGENTS.md blocks survivor repointing (with idempotent retry on unregister/prune) and persists wrapper separator provenance across registry reload', async () => {
+    const {
+      registerMeshCoordinator,
+      unregisterMeshCoordinator,
+      pruneDeadMeshCoordinators,
+    } = await import('../../src/mesh/coordinator-registry.js')
+    const { computeAntigravityCoordinatorScope } = await import('../../src/commands/antigravity-coordinator-rules.js')
+
+    const makePrompt = (tag: string) =>
+      `${tag}_HEAD\n` + 'Coordinator rule.\n'.repeat(2_000) + `${tag}_TAIL`
+
+    const inject = (ws: string, home: string, prompt: string) =>
+      applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: home }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+
+    const makeEntry = (id: string, ws: string, prompt: string, e: any) => ({
+      meshId: id,
+      sessionId: id,
+      workspace: ws,
+      cliType: 'antigravity-cli',
+      systemPrompt: prompt,
+      startedAt: Date.now(),
+      injection: {
+        mode: 'context_file',
+        target: 'AGENTS.md',
+        contextFile: {
+          path: e.contextFilePath!,
+          owned: false,
+          open: e.contextFileSentinels?.open,
+          close: e.contextFileSentinels?.close,
+          additionalOwnedFiles: e.additionalOwnedFiles,
+          homeDir: e.contextFileHomeDir,
+          retainForSessionLifetime: true,
+        },
+      },
+    })
+
+    // R1 (unregister & prune): read-only AGENTS.md blocks repointing to survivor A ->
+    // departing B's referenced chunks MUST be retained while AGENTS.md still references B,
+    // and cleaned up on idempotent retry once AGENTS.md becomes writable.
+    if (process.getuid?.() !== 0) {
+      for (const mode of ['unregister', 'prune'] as const) {
+        const ws = tempWorkspace(`adhdev-agy-r1-${mode}-ws-`)
+        const home = tempWorkspace(`adhdev-agy-r1-${mode}-home-`)
+        const target = join(ws, 'AGENTS.md')
+        try {
+          const pa = makePrompt('A')
+          const pb = makePrompt('B')
+          const scopeA = computeAntigravityCoordinatorScope(ws, pa)
+          const scopeB = computeAntigravityCoordinatorScope(ws, pb)
+          const a = inject(ws, home, pa)
+          registerMeshCoordinator(makeEntry(`r1-${mode}-A`, ws, pa, a))
+          const b = inject(ws, home, pb)
+          registerMeshCoordinator(makeEntry(`r1-${mode}-B`, ws, pb, b))
+
+          fs.chmodSync(target, 0o444)
+          if (mode === 'prune') {
+            pruneDeadMeshCoordinators(new Set([`r1-${mode}-A`]))
+          } else {
+            unregisterMeshCoordinator(`r1-${mode}-B`)
+          }
+
+          // Because AGENTS.md was read-only, repointing failed and AGENTS.md still references scopeB;
+          // all 3 of B's chunk files must remain on disk so AGENTS.md has no dangling includes.
+          expect(readFileSync(target, 'utf-8')).toContain(scopeB)
+          expect(b.additionalOwnedFiles!.filter(existsSync).length).toBe(3)
+
+          // Restore write permission and retry unregister/prune idempotently:
+          fs.chmodSync(target, 0o644)
+          if (mode === 'prune') {
+            pruneDeadMeshCoordinators(new Set([`r1-${mode}-A`]))
+          } else {
+            unregisterMeshCoordinator(`r1-${mode}-B`)
+          }
+
+          expect(readFileSync(target, 'utf-8')).toContain(scopeA)
+          expect(readFileSync(target, 'utf-8')).not.toContain(scopeB)
+          expect(b.additionalOwnedFiles!.filter(existsSync).length).toBe(0)
+          expect(a.additionalOwnedFiles!.filter(existsSync).length).toBe(3)
+        } finally {
+          try { fs.chmodSync(target, 0o644) } catch { /* ignore */ }
+          unregisterMeshCoordinator(`r1-${mode}-B`)
+          unregisterMeshCoordinator(`r1-${mode}-A`)
+          rmSync(ws, { recursive: true, force: true })
+          rmSync(home, { recursive: true, force: true })
+        }
+      }
+    }
+
+    // R2: persisted registry reload preserves daemon-created LF separators and concurrent user edits
+    const wsReload = tempWorkspace('adhdev-agy-r2-ws-')
+    const homeReload = tempWorkspace('adhdev-agy-r2-home-')
+    try {
+      const target = join(wsReload, 'AGENTS.md')
+      const pa = makePrompt('RELOAD')
+      const a = inject(wsReload, homeReload, pa)
+      registerMeshCoordinator(makeEntry('r2-reload-A', wsReload, pa, a))
+
+      const prefix = '# Concurrent user\n\n'
+      const suffix = '\nUser suffix'
+      writeFileSync(target, prefix + readFileSync(target, 'utf-8') + suffix, 'utf-8')
+
+      vi.resetModules()
+      const freshRegistry = await import('../../src/mesh/coordinator-registry.js')
+      freshRegistry.loadMeshCoordinatorRegistry()
+      const freshMesh = await import('../../src/commands/mesh-coordinator.js')
+      const restoredEntry = freshRegistry.getCoordinatorForSession('r2-reload-A')
+      expect(restoredEntry).toBeTruthy()
+      const rematerialized = freshMesh.ensureCoordinatorContextFileMaterialized(restoredEntry)
+      expect(rematerialized).toBe(false)
+
+      freshRegistry.unregisterMeshCoordinator('r2-reload-A')
+      expect(readFileSync(target, 'utf-8')).toBe(prefix + suffix)
+    } finally {
+      unregisterMeshCoordinator('r2-reload-A')
+      rmSync(wsReload, { recursive: true, force: true })
+      rmSync(homeReload, { recursive: true, force: true })
+    }
+  })
+})
