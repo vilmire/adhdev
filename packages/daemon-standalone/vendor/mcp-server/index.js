@@ -28343,11 +28343,22 @@ ${renderWorkerProtocolFooter2(input)}`;
           cwd: normalizedWorkspace
         });
       }
-      return {
+      const identity2 = {
         workspace: normalizedWorkspace,
         repoRoot,
         isGitRepo: true
       };
+      try {
+        const [canonicalRepoRoot, canonicalWorkspace] = await Promise.all([
+          (0, import_promises.realpath)(repoRoot),
+          (0, import_promises.realpath)(normalizedWorkspace)
+        ]);
+        if (isPathInside(canonicalRepoRoot, canonicalWorkspace)) {
+          resolvedRepoCache.set(identity2, { canonicalRepoRoot, canonicalWorkspace });
+        }
+      } catch {
+      }
+      return identity2;
     }
     async function runGit(repoOrWorkspace, argv, options = {}) {
       validateGitArgv(argv);
@@ -28358,14 +28369,46 @@ ${renderWorkerProtocolFooter2(input)}`;
           cwd: repo.workspace
         });
       }
-      const cwd = options.cwd ? await validateWorkspace(options.cwd) : await validateWorkspace(repo.workspace);
-      const canonicalRepoRoot = await (0, import_promises.realpath)(repo.repoRoot);
-      const canonicalCwd = await (0, import_promises.realpath)(cwd);
-      if (!isPathInside(canonicalRepoRoot, canonicalCwd)) {
-        throw new GitCommandError("path_outside_repo", "Git cwd is outside the repository root", {
-          argv,
-          cwd
-        });
+      let cachedPaths = resolvedRepoCache.get(repo);
+      if (!cachedPaths) {
+        const validatedWorkspace = await validateWorkspace(repo.workspace);
+        const [canonicalRepoRoot, canonicalWorkspace] = await Promise.all([
+          (0, import_promises.realpath)(repo.repoRoot),
+          (0, import_promises.realpath)(validatedWorkspace)
+        ]);
+        if (isPathInside(canonicalRepoRoot, canonicalWorkspace)) {
+          cachedPaths = { canonicalRepoRoot, canonicalWorkspace };
+          resolvedRepoCache.set(repo, cachedPaths);
+        }
+      }
+      let cwd;
+      if (!options.cwd || path3.resolve(options.cwd) === repo.workspace) {
+        if (!cachedPaths) {
+          const validatedWorkspace = await validateWorkspace(repo.workspace);
+          const [canonicalRepoRoot, canonicalCwd] = await Promise.all([
+            (0, import_promises.realpath)(repo.repoRoot),
+            (0, import_promises.realpath)(validatedWorkspace)
+          ]);
+          if (!isPathInside(canonicalRepoRoot, canonicalCwd)) {
+            throw new GitCommandError("path_outside_repo", "Git cwd is outside the repository root", {
+              argv,
+              cwd: validatedWorkspace
+            });
+          }
+          cwd = validatedWorkspace;
+        } else {
+          cwd = repo.workspace;
+        }
+      } else {
+        cwd = await validateWorkspace(options.cwd);
+        const canonicalRepoRoot = cachedPaths ? cachedPaths.canonicalRepoRoot : await (0, import_promises.realpath)(repo.repoRoot);
+        const canonicalCwd = await (0, import_promises.realpath)(cwd);
+        if (!isPathInside(canonicalRepoRoot, canonicalCwd)) {
+          throw new GitCommandError("path_outside_repo", "Git cwd is outside the repository root", {
+            argv,
+            cwd
+          });
+        }
       }
       return execGitRaw(cwd, argv, options);
     }
@@ -28504,6 +28547,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var DEFAULT_MAX_BUFFER;
     var GIT_STATUS_TIMEOUT_MS;
     var GitCommandError;
+    var resolvedRepoCache;
     var init_git_executor = __esm2({
       "src/git/git-executor.ts"() {
         "use strict";
@@ -28540,6 +28584,7 @@ ${renderWorkerProtocolFooter2(input)}`;
             this.cwd = details.cwd;
           }
         };
+        resolvedRepoCache = /* @__PURE__ */ new WeakMap();
       }
     });
     function readInjected(value) {
@@ -28804,7 +28849,8 @@ ${renderWorkerProtocolFooter2(input)}`;
     function statusCacheKey(workspace, options) {
       const includeSubmodules = options.includeSubmodules !== false;
       const refreshUpstream = options.refreshUpstream === true;
-      return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}`;
+      const ignoreKey = options.submoduleIgnorePaths && options.submoduleIgnorePaths.length > 0 ? `\0ign=${[...options.submoduleIgnorePaths].sort().join(",")}` : "";
+      return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
     }
     function isTransientGitFailure(error) {
       return error.reason === "timeout" || error.reason === "git_command_failed";
@@ -28819,47 +28865,63 @@ ${renderWorkerProtocolFooter2(input)}`;
         if (cached5 && lastCheckedAt - cached5.cachedAt < GIT_STATUS_CACHE_TTL_MS) {
           return cached5.status;
         }
+        const inFlight4 = inFlightStatusReads.get(cacheKey);
+        if (inFlight4) {
+          return inFlight4;
+        }
+      }
+      const runPromise = (async () => {
+        try {
+          const repo = await resolveGitRepository(workspace, effectiveOptions);
+          const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
+          const completedAt = Math.max(lastCheckedAt, Date.now());
+          lastKnownGoodStatus.set(cacheKey, { status, cachedAt: completedAt });
+          return status;
+        } catch (error) {
+          const gitError = error instanceof GitCommandError ? error : new GitCommandError("git_command_failed", "Failed to read Git status", { cause: error });
+          if (isTransientGitFailure(gitError)) {
+            const cached5 = lastKnownGoodStatus.get(cacheKey)?.status;
+            if (cached5) {
+              return {
+                ...cached5,
+                lastCheckedAt,
+                upstreamStatus: "unavailable",
+                error: gitError.stderr || gitError.message,
+                reason: gitError.reason
+              };
+            }
+          }
+          return emptyStatus(workspace, lastCheckedAt, gitError);
+        }
+      })();
+      if (!inFlightStatusReads.has(cacheKey)) {
+        inFlightStatusReads.set(cacheKey, runPromise);
       }
       try {
-        const repo = await resolveGitRepository(workspace, effectiveOptions);
-        const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
-        lastKnownGoodStatus.set(cacheKey, { status, cachedAt: lastCheckedAt });
-        return status;
-      } catch (error) {
-        const gitError = error instanceof GitCommandError ? error : new GitCommandError("git_command_failed", "Failed to read Git status", { cause: error });
-        if (isTransientGitFailure(gitError)) {
-          const cached5 = lastKnownGoodStatus.get(cacheKey)?.status;
-          if (cached5) {
-            return {
-              ...cached5,
-              lastCheckedAt,
-              upstreamStatus: "unavailable",
-              error: gitError.stderr || gitError.message,
-              reason: gitError.reason
-            };
-          }
+        return await runPromise;
+      } finally {
+        if (inFlightStatusReads.get(cacheKey) === runPromise) {
+          inFlightStatusReads.delete(cacheKey);
         }
-        return emptyStatus(workspace, lastCheckedAt, gitError);
       }
     }
     async function collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, options) {
       let parsed = await readPorcelainStatus(repo, options);
       let upstreamProbe = getInitialUpstreamProbe(parsed);
-      if (options.refreshUpstream) {
+      const upstreamRefreshPromise = options.refreshUpstream ? (async () => {
         upstreamProbe = await refreshTrackedUpstream(repo, parsed, options);
         if (upstreamProbe.upstreamStatus === "fresh" && upstreamProbe.didFetch) {
           parsed = await readPorcelainStatus(repo, options);
         }
-      }
-      const head = await readHead(repo, options);
-      const stashCount = await readStashCount(repo, options);
-      let submodules;
-      let submoduleHeadOids = /* @__PURE__ */ new Map();
-      if (includeSubmodules) {
-        const subResult = await getSubmoduleStatuses(repo, options);
-        submodules = subResult.submodules;
-        submoduleHeadOids = subResult.headOidByPath;
-      }
+      })() : Promise.resolve();
+      const [_, head, stashCount, subResult] = await Promise.all([
+        upstreamRefreshPromise,
+        readHead(repo, options),
+        readStashCount(repo, options),
+        includeSubmodules ? getSubmoduleStatuses(repo, options) : Promise.resolve(void 0)
+      ]);
+      const submodules = subResult?.submodules;
+      const submoduleHeadOids = subResult?.headOidByPath ?? /* @__PURE__ */ new Map();
       const submoduleDirty = (submodules || []).some((submodule) => submodule.dirty || submodule.outOfSync || !!submodule.error);
       const dirty = parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0 || parsed.conflictFiles.length > 0 || stashCount > 0 || submoduleDirty;
       const daemonBuildBehind = await detectDaemonBuildBehind(repo, submodules, options, {
@@ -28941,9 +29003,9 @@ ${renderWorkerProtocolFooter2(input)}`;
       const allBenign = ambiguousNonPackageFiles.length === 0 && affectedPackages.every((p) => policy.webOnlyPackages.has(p) && !policy.daemonRuntimePackages.has(p));
       return { isDaemonAffecting: !allBenign, affectedPackages, ambiguousNonPackageFiles };
     }
-    async function classifyDaemonBuildChange(repoPath, buildCommit, options, policy) {
+    async function classifyDaemonBuildChange(repo, buildCommit, options, policy) {
       try {
-        const diff = await runGit(repoPath, ["diff", "--name-only", `${buildCommit}..HEAD`], options);
+        const diff = await runGit(repo, ["diff", "--name-only", `${buildCommit}..HEAD`], options);
         const files = diff.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
         const { isDaemonAffecting, affectedPackages } = classifyChangedFileList(files, policy);
         return { isDaemonAffecting, affectedPackages, changeArea: deriveChangeArea(isDaemonAffecting, affectedPackages) };
@@ -28955,7 +29017,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       const repo = await resolveGitRepository(repoPath, options);
       const { config } = resolveChangeImpactConfigForRepo(repo.repoRoot, options);
       const policy = resolveChangeImpactPolicy(config);
-      const diff = await runGit(repoPath, ["diff", "--name-only", `${fromRef}..${toRef}`], options);
+      const diff = await runGit(repo, ["diff", "--name-only", `${fromRef}..${toRef}`], options);
       const files = diff.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
       const rootVerdict = classifyChangedFileList(files, policy);
       return refineVerdictThroughSubmodules(repoPath, fromRef, toRef, options, policy, rootVerdict);
@@ -29013,7 +29075,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       };
     }
     async function listSubmodulePaths(repoPath, options) {
-      const res = await runGit(repoPath, ["config", "-f", ".gitmodules", "--get-regexp", "path"], options);
+      const scopeRepo = { workspace: repoPath, repoRoot: repoPath, isGitRepo: true };
+      const res = await runGit(scopeRepo, ["config", "-f", ".gitmodules", "--get-regexp", "path"], options);
       const paths = /* @__PURE__ */ new Set();
       for (const line of res.stdout.split("\n")) {
         const trimmed2 = line.trim();
@@ -29026,7 +29089,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return paths;
     }
     async function resolveSubmoduleGitlinkRange(repoPath, fromRef, toRef, subPath, options) {
-      const res = await runGit(repoPath, ["diff", `${fromRef}..${toRef}`, "--", subPath], options);
+      const scopeRepo = { workspace: repoPath, repoRoot: repoPath, isGitRepo: true };
+      const res = await runGit(scopeRepo, ["diff", `${fromRef}..${toRef}`, "--", subPath], options);
       let from = "";
       let to = "";
       for (const line of res.stdout.split("\n")) {
@@ -29076,6 +29140,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
       }
       for (const { scope, repoPath, knownHeadOid } of scopes2) {
+        const scopeRepo = { workspace: repoPath, repoRoot: repoPath, isGitRepo: true };
         try {
           let head = knownHeadOid;
           const ancestryKey = head ? `${repoPath}::${build.commit}::${head}` : null;
@@ -29087,9 +29152,9 @@ ${renderWorkerProtocolFooter2(input)}`;
                 buildBehindAncestryCache.set(ancestryKey, false);
                 continue;
               }
-              await runGit(repoPath, ["cat-file", "-e", `${build.commit}^{commit}`], options);
+              await runGit(scopeRepo, ["cat-file", "-e", `${build.commit}^{commit}`], options);
               try {
-                await runGit(repoPath, ["merge-base", "--is-ancestor", build.commit, "HEAD"], options);
+                await runGit(scopeRepo, ["merge-base", "--is-ancestor", build.commit, "HEAD"], options);
               } catch {
                 buildBehindAncestryCache.set(ancestryKey, false);
                 continue;
@@ -29097,18 +29162,18 @@ ${renderWorkerProtocolFooter2(input)}`;
               buildBehindAncestryCache.set(ancestryKey, true);
             }
           } else {
-            await runGit(repoPath, ["cat-file", "-e", `${build.commit}^{commit}`], options);
-            const headResult = await runGit(repoPath, ["rev-parse", "HEAD"], options);
+            await runGit(scopeRepo, ["cat-file", "-e", `${build.commit}^{commit}`], options);
+            const headResult = await runGit(scopeRepo, ["rev-parse", "HEAD"], options);
             head = headResult.stdout.trim();
             if (!head || head === build.commit) continue;
-            await runGit(repoPath, ["merge-base", "--is-ancestor", build.commit, "HEAD"], options);
+            await runGit(scopeRepo, ["merge-base", "--is-ancestor", build.commit, "HEAD"], options);
             buildBehindAncestryCache.set(`${repoPath}::${build.commit}::${head}`, true);
           }
           const evalKey = `${repoPath}\0${build.commit}\0${head}\0${configKey}`;
           if (!head) continue;
           let evaluated = changeImpactEvalCache.get(evalKey);
           if (!evaluated) {
-            evaluated = await classifyDaemonBuildChange(repoPath, build.commit, options, policy);
+            evaluated = await classifyDaemonBuildChange(scopeRepo, build.commit, options, policy);
             changeImpactEvalCache.set(evalKey, evaluated);
           }
           const { isDaemonAffecting, affectedPackages } = evaluated;
@@ -29163,26 +29228,53 @@ ${renderWorkerProtocolFooter2(input)}`;
           upstreamFetchError: `Unable to resolve remote for upstream '${parsed.upstream}'`
         };
       }
+      const fetchKey = `${repo.workspace}\0${remoteName}`;
+      if (!options.forceFresh) {
+        const existingFetch = inFlightUpstreamFetches.get(fetchKey);
+        if (existingFetch) {
+          return existingFetch;
+        }
+      }
+      const fetchTimeoutMs = options.timeoutMs !== void 0 ? Math.min(options.timeoutMs, GIT_UPSTREAM_FETCH_TIMEOUT_MS) : GIT_UPSTREAM_FETCH_TIMEOUT_MS;
+      const fetchOptions = { ...options, timeoutMs: fetchTimeoutMs };
+      const fetchPromise = (async () => {
+        try {
+          await runGit(repo, ["fetch", "--quiet", "--prune", "--no-tags", remoteName], fetchOptions);
+          const fetchedAt = Date.now();
+          upstreamFetchedAt.set(repo.workspace, fetchedAt);
+          return {
+            upstreamStatus: "fresh",
+            upstreamFetchedAt: fetchedAt,
+            didFetch: true
+          };
+        } catch (error) {
+          return {
+            upstreamStatus: "stale",
+            upstreamFetchError: formatGitError(error)
+          };
+        }
+      })();
+      if (!inFlightUpstreamFetches.has(fetchKey)) {
+        inFlightUpstreamFetches.set(fetchKey, fetchPromise);
+      }
       try {
-        await runGit(repo, ["fetch", "--quiet", "--prune", "--no-tags", remoteName], options);
-        const fetchedAt = Date.now();
-        upstreamFetchedAt.set(repo.workspace, fetchedAt);
-        return {
-          upstreamStatus: "fresh",
-          upstreamFetchedAt: fetchedAt,
-          didFetch: true
-        };
-      } catch (error) {
-        return {
-          upstreamStatus: "stale",
-          upstreamFetchError: formatGitError(error)
-        };
+        return await fetchPromise;
+      } finally {
+        if (inFlightUpstreamFetches.get(fetchKey) === fetchPromise) {
+          inFlightUpstreamFetches.delete(fetchKey);
+        }
       }
     }
     async function readBranchRemote(repo, branch, options) {
+      const remoteKey = `${repo.workspace}\0${branch}`;
+      if (!options.forceFresh && branchRemoteCache.has(remoteKey)) {
+        return branchRemoteCache.get(remoteKey) ?? null;
+      }
       try {
         const result = await runGit(repo, ["config", "--get", `branch.${branch}.remote`], options);
-        return result.stdout.trim() || null;
+        const remote = result.stdout.trim() || null;
+        branchRemoteCache.set(remoteKey, remote);
+        return remote;
       } catch {
         return null;
       }
@@ -29323,30 +29415,35 @@ ${renderWorkerProtocolFooter2(input)}`;
         const paths = await readSubmodulePaths(repo, options);
         const ignoreSet = new Set(options.submoduleIgnorePaths || []);
         const visiblePaths = paths.filter((path103) => !ignoreSet.has(path103));
-        const expectedByPath = await readGitlinkExpectedShas(repo, visiblePaths, options);
+        const [expectedByPath, worktrees] = await Promise.all([
+          readGitlinkExpectedShas(repo, visiblePaths, options),
+          Promise.all(
+            visiblePaths.map(async (path103) => {
+              const repoPath = repo.repoRoot + "/" + path103;
+              const worktree = await readSubmoduleWorktreeStatus(repo, repoPath, options);
+              return { path: path103, repoPath, worktree };
+            })
+          )
+        ]);
         const lastCheckedAt = Date.now();
         const headOidByPath = /* @__PURE__ */ new Map();
-        const submodules = await Promise.all(
-          visiblePaths.map(async (path103) => {
-            const repoPath = repo.repoRoot + "/" + path103;
-            const expected = expectedByPath.get(path103) ?? null;
-            const worktree = await readSubmoduleWorktreeStatus(repo, repoPath, options);
-            const actual = worktree.headOid;
-            if (actual) headOidByPath.set(path103, actual);
-            const outOfSync = actual === null ? true : expected !== null && expected !== actual;
-            return {
-              path: path103,
-              // Prefer the recorded gitlink SHA (matches the legacy column); fall back
-              // to the checked-out SHA so the field is never empty when both are known.
-              commit: expected ?? actual ?? "",
-              repoPath,
-              dirty: worktree.dirty,
-              outOfSync,
-              lastCheckedAt,
-              ...worktree.error ? { error: worktree.error } : {}
-            };
-          })
-        );
+        const submodules = worktrees.map(({ path: path103, repoPath, worktree }) => {
+          const expected = expectedByPath.get(path103) ?? null;
+          const actual = worktree.headOid;
+          if (actual) headOidByPath.set(path103, actual);
+          const outOfSync = actual === null ? true : expected !== null && expected !== actual;
+          return {
+            path: path103,
+            // Prefer the recorded gitlink SHA (matches the legacy column); fall back
+            // to the checked-out SHA so the field is never empty when both are known.
+            commit: expected ?? actual ?? "",
+            repoPath,
+            dirty: worktree.dirty,
+            outOfSync,
+            lastCheckedAt,
+            ...worktree.error ? { error: worktree.error } : {}
+          };
+        });
         return { submodules, headOidByPath };
       } catch {
         return { submodules: [], headOidByPath: /* @__PURE__ */ new Map() };
@@ -29402,10 +29499,14 @@ ${renderWorkerProtocolFooter2(input)}`;
     var import_node_path;
     var GIT_STATUS_CACHE_TTL_MS;
     var lastKnownGoodStatus;
+    var inFlightStatusReads;
+    var inFlightUpstreamFetches;
+    var branchRemoteCache;
     var changeImpactEvalCache;
     var changeImpactConfigCache;
     var buildBehindAncestryCache;
     var GIT_FETCH_THROTTLE_MS;
+    var GIT_UPSTREAM_FETCH_TIMEOUT_MS;
     var upstreamFetchedAt;
     var DEFAULT_DAEMON_RUNTIME_PACKAGES;
     var DEFAULT_WEB_ONLY_PACKAGES;
@@ -29419,10 +29520,14 @@ ${renderWorkerProtocolFooter2(input)}`;
         init_change_impact_config();
         GIT_STATUS_CACHE_TTL_MS = 1500;
         lastKnownGoodStatus = /* @__PURE__ */ new Map();
+        inFlightStatusReads = /* @__PURE__ */ new Map();
+        inFlightUpstreamFetches = /* @__PURE__ */ new Map();
+        branchRemoteCache = /* @__PURE__ */ new Map();
         changeImpactEvalCache = /* @__PURE__ */ new Map();
         changeImpactConfigCache = /* @__PURE__ */ new Map();
         buildBehindAncestryCache = /* @__PURE__ */ new Map();
         GIT_FETCH_THROTTLE_MS = 3e4;
+        GIT_UPSTREAM_FETCH_TIMEOUT_MS = 1e4;
         upstreamFetchedAt = /* @__PURE__ */ new Map();
         DEFAULT_DAEMON_RUNTIME_PACKAGES = [
           "daemon-core",
@@ -82580,7 +82685,7 @@ ${cleanBody}`;
       return {
         ...typeof value.code === "string" ? { code: value.code } : {},
         ...typeof value.reason === "string" ? { reason: value.reason } : {},
-        ...value.transport === "p2p" || value.transport === "unknown" ? { transport: value.transport } : {},
+        ...value.transport === "p2p" || value.transport === "local_ipc" || value.transport === "unknown" ? { transport: value.transport } : {},
         ...typeof value.recoverable === "boolean" ? { recoverable: value.recoverable } : {},
         ...typeof value.retryRecommended === "boolean" ? { retryRecommended: value.retryRecommended } : {},
         ...typeof value.nextAction === "string" ? { nextAction: value.nextAction } : {},
@@ -82605,6 +82710,8 @@ ${cleanBody}`;
           return "daemon_mesh_target_offline";
         case "p2p_unavailable":
           return "daemon_mesh_p2p_transport_unavailable";
+        case "ipc_command_timeout":
+          return "local_daemon_ipc_timeout";
         case "mesh_logic_or_provider_failure":
           return "mesh_logic_or_provider_failure";
       }
@@ -82612,6 +82719,17 @@ ${cleanBody}`;
     function classifyP2pRelayFailure3(error, _context = {}) {
       const message = messageFromError(error);
       const structured = readStructuredFailure(error);
+      if (structured.code === "ipc_command_timeout" || structured.transport === "local_ipc") {
+        return {
+          code: "ipc_command_timeout",
+          reason: structured.reason || reasonForCode("ipc_command_timeout"),
+          transport: "local_ipc",
+          recoverable: structured.recoverable ?? true,
+          retryRecommended: structured.retryRecommended ?? true,
+          nextAction: structured.nextAction || LOCAL_IPC_TIMEOUT_NEXT_ACTION,
+          noFallbackReason: structured.noFallbackReason || LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON
+        };
+      }
       if (structured.code && structured.code !== "mesh_logic_or_provider_failure" && structured.transport === "p2p") {
         return {
           code: structured.code,
@@ -82625,6 +82743,9 @@ ${cleanBody}`;
       }
       const hasP2pSignal = /p2p|peer|datachannel|node-datachannel|webrtc|ice|mesh_relay_command|daemon_mesh_p2p_transport/i.test(message);
       const hasFailureSignal = /unavailable|missing|failed|failure|timeout|timed out|not connected|closed|disconnected|offline|no route|route unavailable|cannot send|cannot establish/i.test(message);
+      const isLocalIpcTimeout = Boolean(
+        error && typeof error === "object" && error.ipcTimeout === true
+      ) || /daemon ipc\b.*timed out/i.test(message);
       if (/requires targetdaemonid and command|providerpriority|no inference provider|permission denied|read-only|not a member/i.test(message)) {
         return {
           code: "mesh_logic_or_provider_failure",
@@ -82634,6 +82755,17 @@ ${cleanBody}`;
           retryRecommended: false,
           nextAction: NON_P2P_NEXT_ACTION,
           noFallbackReason: NO_FALLBACK_REASON
+        };
+      }
+      if (isLocalIpcTimeout && !hasP2pSignal) {
+        return {
+          code: "ipc_command_timeout",
+          reason: "local_daemon_ipc_timeout",
+          transport: "local_ipc",
+          recoverable: true,
+          retryRecommended: true,
+          nextAction: LOCAL_IPC_TIMEOUT_NEXT_ACTION,
+          noFallbackReason: LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON
         };
       }
       let code = null;
@@ -82679,7 +82811,8 @@ ${cleanBody}`;
       };
     }
     function isP2pRelayTransportFailure3(error) {
-      return classifyP2pRelayFailure3(error).recoverable === true;
+      const classification = classifyP2pRelayFailure3(error);
+      return classification.recoverable === true && classification.transport === "p2p";
     }
     function buildP2pRelayFailurePayload2(error, context2 = {}) {
       const classification = classifyP2pRelayFailure3(error, context2);
@@ -82698,6 +82831,8 @@ ${cleanBody}`;
     }
     var NO_FALLBACK_REASON;
     var P2P_NEXT_ACTION;
+    var LOCAL_IPC_TIMEOUT_NEXT_ACTION;
+    var LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON;
     var NON_P2P_NEXT_ACTION;
     var P2pRelayFailureError;
     var init_p2p_relay_failure = __esm2({
@@ -82705,6 +82840,8 @@ ${cleanBody}`;
         "use strict";
         NO_FALLBACK_REASON = "This mesh operation needs a live peer-to-peer connection to the node, which is not open right now. This is often transient \u2014 the peer may be connecting, slow via TURN relay, or briefly offline. Wait a moment and retry, or re-establish the node's connection. Mesh commands use P2P only by design \u2014 there is no cloud/WS relay fallback.";
         P2P_NEXT_ACTION = "The peer connection is recoverable. Wait a moment for the connection to establish (especially over TURN relay), then retry. If the node remains unreachable, check that the target daemon is running and online, then re-establish its connection.";
+        LOCAL_IPC_TIMEOUT_NEXT_ACTION = "The local daemon IPC command timed out while the daemon was busy or completing a heavy background operation. The node is local (not offline or P2P-disconnected), and the underlying operation may still complete in the background. Wait a moment and retry if needed.";
+        LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON = "This operation timed out waiting for a local daemon IPC response on the same machine. Do not treat this timeout as a P2P disconnection, an offline node, or a dirty working tree.";
         NON_P2P_NEXT_ACTION = "Inspect the provider/command error and fix the underlying logic or configuration before retrying.";
         P2pRelayFailureError = class extends Error {
           code;
@@ -82728,7 +82865,7 @@ ${cleanBody}`;
               ...context2.code ? { code: context2.code } : {},
               ...context2.recoverable !== void 0 ? { recoverable: context2.recoverable } : {},
               ...context2.retryRecommended !== void 0 ? { retryRecommended: context2.retryRecommended } : {},
-              transport: context2.code ? "p2p" : void 0,
+              transport: context2.code === "ipc_command_timeout" ? "local_ipc" : context2.code ? "p2p" : void 0,
               meshCode: context2.meshCode,
               connectionState: context2.connectionState,
               nextRetryAt: context2.nextRetryAt,
@@ -107683,7 +107820,11 @@ ${tail}` : ""
     });
     function createDefaultGitCommandServices(overrides) {
       return {
-        getStatus: ({ workspace, refreshUpstream }) => getGitRepoStatus(workspace, { refreshUpstream }),
+        getStatus: ({ workspace, refreshUpstream, includeSubmodules, submoduleIgnorePaths }) => getGitRepoStatus(workspace, {
+          refreshUpstream,
+          ...includeSubmodules !== void 0 ? { includeSubmodules } : {},
+          ...submoduleIgnorePaths !== void 0 ? { submoduleIgnorePaths } : {}
+        }),
         getDiffSummary: ({ workspace, base }) => getGitDiffSummary(workspace, base ? { baseRef: base } : {}),
         getDiffFile: ({ workspace, path: filePath2, base }) => getGitFileDiff(workspace, filePath2, base ? { baseRef: base } : {}),
         createSnapshot: ({ workspace, reason, sessionId, turnId }) => defaultSnapshotStore.create({
@@ -181134,6 +181275,11 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   git_diff_summary: 45e3,
   fast_forward_mesh_node: 12e4,
   mesh_status: 12e4,
+  // mesh_status_view is the daemon-side handler that mesh_status delegates to; it
+  // fans out local + remote node git_status probes (up to 45s) and session-host
+  // reconcile reads, so it needs the same 120s outer budget as mesh_status instead
+  // of falling through to the 15s default.
+  mesh_status_view: 12e4,
   // Heavy repo-mutating worktree ops (relay budgets: clone 90s, remove 60s). A local
   // clone synchronously creates a worktree (~30s) plus a bounded setup-wait (~14s);
   // 120s leaves headroom and matches the relay-wrapped remote path.
@@ -181215,6 +181361,7 @@ var IPC_PROBE_RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
   "get_status_metadata",
   "get_mesh",
   "mesh_status",
+  "mesh_status_view",
   "git_status",
   "git_diff_summary",
   "git_log",
@@ -181229,7 +181376,19 @@ var IPC_PROBE_RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
   // can never double-execute an effect — same safety bar as the entries above.
   "plan_mesh_onboarding",
   "get_runtime_snapshot",
-  "session_host_get_diagnostics"
+  "session_host_get_diagnostics",
+  // Pure read-only SQLite / mesh routing queries (mesh-ipc-handlers.ts):
+  // side-effect-free SELECTs and dry-run routing evaluations that can stall behind
+  // an event-loop spike or connection rotation and are safe to retry once.
+  "ledger_query",
+  "mission_list_query",
+  "mission_query",
+  "queue_query",
+  "active_work_query",
+  "recovery_context_query",
+  "task_stats_query",
+  "mesh_node_route",
+  "mesh_dispatch_route"
 ]);
 var IPC_PROBE_RETRY_MAX_ENV = "ADHDEV_IPC_PROBE_RETRY_MAX";
 var IPC_PROBE_RETRY_BACKOFF_MS_ENV = "ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS";
@@ -181273,6 +181432,7 @@ function pruneTimedOutRequests(now) {
 }
 var POOL_IDLE_EVICT_MS = 5 * 6e4;
 var POOL_MAX_AGE_MS = 10 * 6e4;
+var POOL_MAX_AGE_IDLE_GRACE_MS = 3e4;
 var connectionPool = /* @__PURE__ */ new Map();
 function buildRequestId() {
   return `mcp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -181291,7 +181451,7 @@ function getOrCreateConnection(WebSocketCtor, url) {
     const now2 = Date.now();
     const isAlive = readyState === WS_CONNECTING || readyState === WS_OPEN;
     const isIdle = now2 - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
-    const isTooOld = now2 - existing.createdAt > POOL_MAX_AGE_MS && existing.pending.size === 0;
+    const isTooOld = now2 - existing.createdAt > POOL_MAX_AGE_MS && existing.pending.size === 0 && now2 - existing.lastUsedAt > POOL_MAX_AGE_IDLE_GRACE_MS;
     if (isAlive && !isIdle && !isTooOld) {
       return existing;
     }
@@ -181463,6 +181623,10 @@ var IpcTransport = class {
       const timer = setTimeout(() => {
         const pendingCountBeforeRemoval = conn.pending.size;
         conn.pending.delete(requestId);
+        const queueIdx = conn.commandQueue.findIndex((item) => item.requestId === requestId);
+        if (queueIdx !== -1) {
+          conn.commandQueue.splice(queueIdx, 1);
+        }
         const elapsedMs = Date.now() - sentAt;
         const error = new Error(`Daemon IPC ${diagnosticParts.join(" ")} timed out after ${Math.round(timeoutMs / 1e3)}s (requestId=${requestId})`);
         error.ipcTimeout = true;
@@ -182457,7 +182621,7 @@ function classifyMeshLaunchFailure(error) {
   const message = error instanceof Error ? error.message : String(error || "launch failed");
   const lower = message.toLowerCase();
   const p2pClassification = (0, import_daemon_core5.classifyP2pRelayFailure)(error, { command: "launch_cli" });
-  if (p2pClassification.recoverable) {
+  if (p2pClassification.recoverable && p2pClassification.transport === "p2p") {
     return p2pClassification;
   }
   if (lower.includes("cannot connect to daemon ipc") || lower.includes("daemon ipc command")) {
