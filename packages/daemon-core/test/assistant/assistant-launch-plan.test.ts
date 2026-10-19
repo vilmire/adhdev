@@ -22,6 +22,7 @@ import {
     planAssistantMcp,
     resolveAssistantApprovalSettings,
 } from '../../src/assistant/assistant-launch-plan.js';
+import { isTomlDateTimeValue, parseTomlDocument } from '../../src/assistant/assistant-codex-toml.js';
 import { ASSISTANT_TOOLS } from '@adhdev/mesh-shared';
 
 const CFG = '/tmp/adhdev-cfg';
@@ -442,6 +443,196 @@ describe('planAssistantMcp', () => {
         expect(() => mergeAssistantCodexMcpConfigToml(foreignNodeBinaryToml, ASSISTANT_MCP_SERVER_NAME, managedVendorServer)).toThrow(
             /assistant_codex_config_foreign_server/,
         );
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: enforces verbatim command and entrypoint identity without trimming surrounding whitespace (P1 75c5c695)', () => {
+        const consentBlock = '\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n';
+        const managedVendorServer = {
+            command: '/opt/node/bin/node',
+            args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'local', '--assistant', '--port', '19223'],
+        };
+
+        const whitespaceAliasedConfigs = [
+            // Trailing space on Node executable command path (/opt/node/bin/node<space> != /opt/node/bin/node)
+            [
+                '[mcp_servers.adhdev-assistant]',
+                'command = "/opt/node/bin/node "',
+                'args = ["/opt/adhdev/vendor/mcp-server/index.js", "--mode", "local", "--assistant", "--port", "19223"]',
+                consentBlock,
+            ].join('\n'),
+            // Leading space on Node executable command path
+            [
+                '[mcp_servers.adhdev-assistant]',
+                'command = " /opt/node/bin/node"',
+                'args = ["/opt/adhdev/vendor/mcp-server/index.js", "--mode", "local", "--assistant", "--port", "19223"]',
+                consentBlock,
+            ].join('\n'),
+            // Trailing space on MCP script entrypoint path (.../index.js<space> != .../index.js)
+            [
+                '[mcp_servers.adhdev-assistant]',
+                'command = "/opt/node/bin/node"',
+                'args = ["/opt/adhdev/vendor/mcp-server/index.js ", "--mode", "local", "--assistant", "--port", "19223"]',
+                consentBlock,
+            ].join('\n'),
+            // Leading space on MCP script entrypoint path
+            [
+                '[mcp_servers.adhdev-assistant]',
+                'command = "/opt/node/bin/node"',
+                'args = [" /opt/adhdev/vendor/mcp-server/index.js", "--mode", "local", "--assistant", "--port", "19223"]',
+                consentBlock,
+            ].join('\n'),
+            // Whitespace-padded adhdev CLI binary
+            [
+                '[mcp_servers.adhdev-assistant]',
+                'command = "adhdev "',
+                'args = ["mcp", "--mode", "ipc", "--assistant"]',
+                consentBlock,
+            ].join('\n'),
+            // Whitespace-padded ADHDEV_DAEMON_URL
+            [
+                '[mcp_servers.adhdev-assistant]',
+                'command = "/opt/node/bin/node"',
+                'args = ["/opt/adhdev/vendor/mcp-server/index.js", "--mode", "local", "--assistant", "--port", "19223"]',
+                '[mcp_servers.adhdev-assistant.env]',
+                'ADHDEV_DAEMON_URL = "http://127.0.0.1:19223 "',
+                consentBlock,
+            ].join('\n'),
+        ];
+
+        for (const aliased of whitespaceAliasedConfigs) {
+            expect(() => mergeAssistantCodexMcpConfigToml(aliased, ASSISTANT_MCP_SERVER_NAME, managedVendorServer)).toThrow(
+                /assistant_codex_config_foreign_server/,
+            );
+            expect(() => mergeAssistantCodexMcpConfigToml(aliased, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(
+                /assistant_codex_config_foreign_server/,
+            );
+        }
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: appends managed server to nonempty configs without existing adhdev-assistant entry and stays no-op on relaunch (P2 75c5c695)', () => {
+        const nonemptyConfigsWithoutAssistant = [
+            // Comments-only config
+            '# keep this comment\n',
+            // Top-level model/settings config
+            'model = "gpt-6.1-sol"\napproval_policy = "on-request"\n',
+            // Unrelated standard [mcp_servers.other] section
+            '[mcp_servers.other]\ncommand = "npx"\nargs = ["-y", "other-mcp"]\n',
+            // Quoted unrelated server header + unrelated settings
+            '# header comment\nmodel = "gpt-5.4"\n\n[mcp_servers."quoted-other"]\ncommand = "npx"\nargs = ["-y", "quoted-mcp"]\n',
+            // Explicit [mcp_servers] parent table with inline table child
+            '[mcp_servers]\nother = { command = "npx", args = ["-y", "inline-other"] }\n',
+            // Dotted keys under [mcp_servers] parent table
+            '[mcp_servers]\nother.command = "npx"\nother.args = ["-y", "dotted-other"]\n',
+            // Top-level dotted mcp_servers.other.* keys
+            'mcp_servers.other.command = "npx"\nmcp_servers.other.args = ["-y", "top-dotted-other"]\n',
+            // Empty [mcp_servers] table header
+            '[mcp_servers]\n',
+        ];
+
+        for (const existing of nonemptyConfigsWithoutAssistant) {
+            const beforeDoc = parseTomlDocument(existing);
+            const appended = mergeAssistantCodexMcpConfigToml(existing, ASSISTANT_MCP_SERVER_NAME, {
+                ...server,
+                env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-initial' },
+            });
+            // Original prefix bytes must remain 100% intact.
+            expect(appended.startsWith(existing)).toBe(true);
+            expect(appended).toContain('[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\n');
+            expect(appended).not.toContain('sid-initial');
+
+            const afterDoc = parseTomlDocument(appended);
+            for (const [k, v] of Object.entries(beforeDoc.root)) {
+                if (k !== 'mcp_servers') {
+                    expect(afterDoc.root[k]).toEqual(v);
+                } else {
+                    for (const [sk, sv] of Object.entries(v as Record<string, any>)) {
+                        expect(afterDoc.root.mcp_servers[sk]).toEqual(sv);
+                    }
+                }
+            }
+
+            // Repeat relaunch with rotated session ID is a strict no-op (exact string identity).
+            const relaunched = mergeAssistantCodexMcpConfigToml(appended, ASSISTANT_MCP_SERVER_NAME, {
+                ...server,
+                env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-rotated-2' },
+            });
+            expect(relaunched).toBe(appended);
+
+            // Simulate native Codex saving "3. Always allow" on project_send, then relaunching again.
+            const withNativeConsent = `${appended}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`;
+            const afterConsentRelaunch = mergeAssistantCodexMcpConfigToml(withNativeConsent, ASSISTANT_MCP_SERVER_NAME, {
+                ...server,
+                env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-rotated-3' },
+            });
+            expect(afterConsentRelaunch).toBe(withNativeConsent);
+            expect(afterConsentRelaunch.startsWith(existing)).toBe(true);
+        }
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: uses unforgeable internal datetime branding so legitimate __tomlType/raw keys never collide (P2 75c5c695)', () => {
+        // Direct check: plain object with __tomlType and raw is NOT a TomlDateTimeValue
+        expect(isTomlDateTimeValue({ __tomlType: 'local-date', raw: '2026-01-01' })).toBe(false);
+        expect(isTomlDateTimeValue({ __tomlType: 'offset-date-time', raw: '1979-05-27T07:32:00Z' })).toBe(false);
+        const parsedRealDate = parseTomlDocument('d = 2026-01-01\n').root.d;
+        expect(isTomlDateTimeValue(parsedRealDate)).toBe(true);
+
+        const configWithLegitimateTomlTypeKeys = [
+            '[other]',
+            '__tomlType = "user-value"',
+            'foo = "bar"',
+            '',
+            '[other_matching_tag]',
+            '__tomlType = "offset-date-time"',
+            'raw = "1979-05-27T07:32:00Z"',
+            'extra = "still-a-table"',
+            '[other_matching_tag.nested]',
+            '__tomlType = "local-date"',
+            'ok = true',
+            '',
+            '[inline_holder]',
+            'meta = { __tomlType = "local-time", raw = "23:59:59", count = 1 }',
+            '',
+            '[[aot_items]]',
+            '__tomlType = "local-date-time"',
+            'raw = "2026-01-01T00:00:00"',
+            '[aot_items.sub]',
+            '__tomlType = "offset-date-time"',
+            'enabled = true',
+            '',
+            '[mcp_servers.adhdev-assistant]',
+            'command = "adhdev"',
+            'args = ["mcp","--mode","ipc","--assistant"]',
+            '',
+            '[mcp_servers.adhdev-assistant.env]',
+            '__tomlType = "offset-date-time"',
+            'raw = "2026-01-01"',
+            'ADHDEV_ASSISTANT_SESSION_ID = "stale-sid"',
+            '',
+            '[mcp_servers.adhdev-assistant.tools.project_send]',
+            'approval_mode = "approve"',
+            '',
+        ].join('\n');
+
+        const merged = mergeAssistantCodexMcpConfigToml(configWithLegitimateTomlTypeKeys, ASSISTANT_MCP_SERVER_NAME, {
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'fresh-sid' },
+        });
+        expect(merged).toContain('[other]\n__tomlType = "user-value"\nfoo = "bar"');
+        expect(merged).toContain('[other_matching_tag.nested]\n__tomlType = "local-date"\nok = true');
+        expect(merged).toContain('meta = { __tomlType = "local-time", raw = "23:59:59", count = 1 }');
+        expect(merged).toContain('[mcp_servers.adhdev-assistant.env]\n__tomlType = "offset-date-time"\nraw = "2026-01-01"');
+        expect(merged).not.toContain('stale-sid');
+        expect(merged).not.toContain('fresh-sid');
+        expect(merged).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
+
+        // Actual TOML date literal inside [mcp_servers.adhdev-assistant.env] is still rejected:
+        expect(() =>
+            mergeAssistantCodexMcpConfigToml(
+                '[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\n[mcp_servers.adhdev-assistant.env]\n__tomlType = 2026-01-01\n',
+                ASSISTANT_MCP_SERVER_NAME,
+                server,
+            ),
+        ).toThrow(/assistant_codex_config_invalid_toml/);
     });
 
     it('auto-import providers write inside the assistant workspace; a global config path is refused', () => {

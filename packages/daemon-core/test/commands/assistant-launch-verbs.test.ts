@@ -399,6 +399,87 @@ describe('launch_assistant', () => {
         expect(readdirSync(dotCodex).filter((f) => f.includes('.tmp-'))).toHaveLength(0);
     });
 
+    it('codex-cli: appends to existing nonempty custom config (with __tomlType keys), stays no-op on relaunch, and fails closed without changing disk on whitespace-aliased command (75c5c695)', async () => {
+        const codex: any = {
+            type: 'codex-cli',
+            meshCoordinator: {
+                supported: true,
+                mcpConfig: {
+                    mode: 'manual',
+                    serverName: 'adhdev-mesh',
+                    requiresRestart: true,
+                    instructions: 'codex mcp add',
+                    template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}',
+                },
+            },
+        };
+        const c = ctx();
+        c.deps.providerLoader = loader(codex);
+
+        const ws = join(dir, 'assistant');
+        const dotCodex = join(ws, '.codex');
+        mkdirSync(dotCodex, { recursive: true, mode: 0o700 });
+        const cfgPath = join(dotCodex, 'config.toml');
+
+        // 1. Existing nonempty user config without adhdev-assistant (comments, model setting, unrelated server, __tomlType keys)
+        const existingCustom = [
+            '# keep this comment',
+            'model = "gpt-6.1-sol"',
+            '',
+            '[other]',
+            '__tomlType = "offset-date-time"',
+            'raw = "1979-05-27T07:32:00Z"',
+            'foo = "bar"',
+            '',
+            '[mcp_servers.other]',
+            'command = "npx"',
+            'args = ["-y", "other-mcp"]',
+            '',
+        ].join('\n');
+        writeFileSync(cfgPath, existingCustom, { mode: 0o600 });
+
+        const firstLaunch: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(firstLaunch).toMatchObject({ success: true, launched: true });
+        const afterAppend = readFileSync(cfgPath, 'utf-8');
+        expect(afterAppend.startsWith(existingCustom)).toBe(true);
+        expect(afterAppend).toContain('[mcp_servers.adhdev-assistant]');
+        expect(afterAppend).toContain('[other]\n__tomlType = "offset-date-time"\nraw = "1979-05-27T07:32:00Z"\nfoo = "bar"');
+        const inoAfterAppend = statSync(cfgPath).ino;
+
+        // 2. Relaunch after native approval is a strict disk no-op (inode unchanged, prefix + consent preserved)
+        const withConsent = `${afterAppend}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`;
+        writeFileSync(cfgPath, withConsent, { mode: 0o600 });
+        const inoWithConsent = statSync(cfgPath).ino;
+        const secondLaunch: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(secondLaunch).toMatchObject({ success: true, launched: true });
+        expect(statSync(cfgPath).ino).toBe(inoWithConsent);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(withConsent);
+        expect(inoAfterAppend).toBeGreaterThan(0);
+
+        // 3. Whitespace-aliased command in config.toml fails closed before changing a single byte on disk or launching
+        const whitespaceAliased = [
+            '[mcp_servers.adhdev-assistant]',
+            'command = "adhdev "',
+            'args = ["mcp","--mode","ipc","--assistant","--port","19223"]',
+            '',
+            '[mcp_servers.adhdev-assistant.tools.project_send]',
+            'approval_mode = "approve"',
+            '',
+        ].join('\n');
+        writeFileSync(cfgPath, whitespaceAliased, { mode: 0o600 });
+        const inoAliased = statSync(cfgPath).ino;
+        const launchesBeforeRefusal = launchCalls().length;
+        const refused: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(refused).toMatchObject({
+            success: false,
+            code: 'assistant_config_write_failed',
+            error: expect.stringMatching(/assistant_codex_config_foreign_server/),
+        });
+        expect(launchCalls()).toHaveLength(launchesBeforeRefusal);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(whitespaceAliased);
+        expect(statSync(cfgPath).ino).toBe(inoAliased);
+    });
+
     it('antigravity-cli: private HOME at <configDir>/assistant-home, MCP config + session env inside it, real ~/.gemini untouched', async () => {
         // A temp HOME stands in for the person's real one (os.homedir() follows $HOME on POSIX).
         const fakeHome = join(dir, 'real-home');

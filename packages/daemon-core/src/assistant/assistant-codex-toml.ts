@@ -21,19 +21,26 @@ export interface AssistantCodexMcpServerSpec {
     env?: Record<string, string>;
 }
 
-export interface TomlDateTimeValue {
-    readonly __tomlType: 'offset-date-time' | 'local-date-time' | 'local-date' | 'local-time';
+export type TomlDateTimeKind = 'offset-date-time' | 'local-date-time' | 'local-date' | 'local-time';
+
+const TOML_DATETIME_BRAND = Symbol('TomlDateTime');
+const tomlDateTimeInstances = new WeakSet<object>();
+
+export class TomlDateTimeValue {
+    readonly [TOML_DATETIME_BRAND] = true;
+    readonly __tomlType: TomlDateTimeKind;
     readonly raw: string;
+
+    constructor(kind: TomlDateTimeKind, raw: string) {
+        this.__tomlType = kind;
+        this.raw = raw;
+        tomlDateTimeInstances.add(this);
+        Object.freeze(this);
+    }
 }
 
 export function isTomlDateTimeValue(value: unknown): value is TomlDateTimeValue {
-    return (
-        typeof value === 'object'
-        && value !== null
-        && !Array.isArray(value)
-        && '__tomlType' in value
-        && typeof (value as TomlDateTimeValue).__tomlType === 'string'
-    );
+    return typeof value === 'object' && value !== null && tomlDateTimeInstances.has(value);
 }
 
 interface TomlAssignmentSpan {
@@ -206,7 +213,7 @@ function parseTomlDateOrTime(rawToken: string): TomlDateTimeValue | null {
             if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
                 throw invalidToml(`invalid local time ${JSON.stringify(rawToken)}`);
             }
-            return { __tomlType: 'local-time', raw: rawToken };
+            return new TomlDateTimeValue('local-time', rawToken);
         }
     }
 
@@ -220,7 +227,7 @@ function parseTomlDateOrTime(rawToken: string): TomlDateTimeValue | null {
         if (month < 1 || month > 12 || day < 1 || day > maxDay) {
             throw invalidToml(`invalid calendar date in ${JSON.stringify(rawToken)}`);
         }
-        if (dtMatch[4] === undefined) return { __tomlType: 'local-date', raw: rawToken };
+        if (dtMatch[4] === undefined) return new TomlDateTimeValue('local-date', rawToken);
         const hour = Number(dtMatch[4]);
         const minute = Number(dtMatch[5]);
         const second = Number(dtMatch[6]);
@@ -233,10 +240,10 @@ function parseTomlDateOrTime(rawToken: string): TomlDateTimeValue | null {
             if (offsetHour < 0 || offsetHour > 23 || offsetMinute < 0 || offsetMinute > 59) {
                 throw invalidToml(`invalid timezone offset in ${JSON.stringify(rawToken)}`);
             }
-            return { __tomlType: 'offset-date-time', raw: rawToken };
+            return new TomlDateTimeValue('offset-date-time', rawToken);
         }
-        if (dtMatch[8] !== undefined) return { __tomlType: 'offset-date-time', raw: rawToken };
-        return { __tomlType: 'local-date-time', raw: rawToken };
+        if (dtMatch[8] !== undefined) return new TomlDateTimeValue('offset-date-time', rawToken);
+        return new TomlDateTimeValue('local-date-time', rawToken);
     }
 
     return null;
@@ -793,14 +800,20 @@ export function parseManagedAssistantServerIdentity(
             return { ok: false, reason: `non-stdio MCP transport key "${key}" is not a managed assistant server` };
         }
     }
-    if (typeof entry.command !== 'string' || !entry.command.trim()) {
-        return { ok: false, reason: 'missing or non-string MCP server command (orphan or non-stdio entry)' };
+    if (
+        typeof entry.command !== 'string'
+        || entry.command.length === 0
+        || entry.command.trim() !== entry.command
+        || entry.command.endsWith('/')
+        || entry.command.endsWith('\\')
+    ) {
+        return { ok: false, reason: 'missing, non-string, or whitespace/slash-padded MCP server command (orphan or non-stdio entry)' };
     }
     if (!Array.isArray(entry.args) || !entry.args.every((a) => typeof a === 'string')) {
         return { ok: false, reason: 'missing or non-string-array MCP server args' };
     }
 
-    const command = entry.command.trim();
+    const command = entry.command;
     const args: string[] = entry.args;
     const cmdBase = basename(command.replace(/\\/g, '/')).replace(/\.(?:exe|cmd|bat)$/i, '');
 
@@ -820,7 +833,10 @@ export function parseManagedAssistantServerIdentity(
         entrypoint = command;
         restArgs = args;
     } else if ((cmdBase === 'node' || cmdBase === 'nodejs') && args.length >= 1 && !args[0].startsWith('-')) {
-        const script = args[0].trim();
+        const script = args[0];
+        if (!script || script.trim() !== script || script.endsWith('/') || script.endsWith('\\')) {
+            return { ok: false, reason: `invalid or whitespace-padded node entrypoint "${script}"` };
+        }
         if (!/(?:^|[\\/])(?:mcp-server|adhdev-mcp|fixture-mcp-server)/i.test(script)) {
             return { ok: false, reason: `unrecognized node entrypoint "${script}"` };
         }
@@ -833,12 +849,14 @@ export function parseManagedAssistantServerIdentity(
     }
 
     let hasAssistant = false;
+    let hasAuthFile = false;
     let mode: 'ipc' | 'local' | null = null;
     let port: number | null = null;
 
     for (let i = 0; i < restArgs.length; i++) {
         const arg = restArgs[i];
         if (arg === '--assistant') {
+            if (hasAssistant) return { ok: false, reason: 'duplicate --assistant flag' };
             hasAssistant = true;
             continue;
         }
@@ -860,7 +878,10 @@ export function parseManagedAssistantServerIdentity(
         }
         if (arg === '--daemon-auth-file') {
             const val = restArgs[++i];
-            if (!val || !val.trim()) return { ok: false, reason: 'missing value for --daemon-auth-file' };
+            if (!val || val.trim() !== val || hasAuthFile) {
+                return { ok: false, reason: 'missing, whitespace-padded, or duplicate value for --daemon-auth-file' };
+            }
+            hasAuthFile = true;
             continue;
         }
         return { ok: false, reason: `unrecognized or non-assistant MCP server argument "${arg}"` };
@@ -871,9 +892,14 @@ export function parseManagedAssistantServerIdentity(
     }
 
     const env = isPlainTable(entry.env) ? entry.env : undefined;
-    const daemonUrl = typeof env?.ADHDEV_DAEMON_URL === 'string' && env.ADHDEV_DAEMON_URL.trim()
-        ? env.ADHDEV_DAEMON_URL.trim()
-        : null;
+    let daemonUrl: string | null = null;
+    if (env && 'ADHDEV_DAEMON_URL' in env) {
+        const rawUrl = env.ADHDEV_DAEMON_URL;
+        if (typeof rawUrl !== 'string' || !rawUrl || rawUrl.trim() !== rawUrl) {
+            return { ok: false, reason: 'invalid or whitespace-padded ADHDEV_DAEMON_URL in MCP server env' };
+        }
+        daemonUrl = rawUrl;
+    }
 
     return { ok: true, value: { kind, track, command, entrypoint, mode, port, daemonUrl } };
 }
@@ -903,7 +929,13 @@ export function assertCompatibleAssistantServerIdentity(
 
     const a = existingIdentity.value;
     const b = desiredIdentity.value;
-    if (a.kind !== b.kind || a.track !== b.track || a.command !== b.command || a.entrypoint !== b.entrypoint) {
+    if (
+        existingEntry.command !== desiredServer.command
+        || a.kind !== b.kind
+        || a.track !== b.track
+        || a.command !== b.command
+        || a.entrypoint !== b.entrypoint
+    ) {
         throw foreignServerError(
             `existing server command/entrypoint (${a.kind}:${a.command}:${a.entrypoint}) does not match target (${b.kind}:${b.command}:${b.entrypoint})`,
         );
@@ -981,25 +1013,29 @@ function applyTextEdits(source: string, edits: TextEdit[]): string {
 }
 
 function stripManagedFieldsForTreeComparison(root: Record<string, any>, serverName: string): Record<string, any> {
-    const clone: Record<string, any> = {};
+    const clone = createTable();
     for (const [k, v] of Object.entries(root)) {
         if (k !== 'mcp_servers' || !isPlainTable(v)) {
             clone[k] = v;
             continue;
         }
-        const serversClone: Record<string, any> = {};
+        const serversClone = createTable();
         for (const [sk, sv] of Object.entries(v)) {
             if (sk !== serverName || !isPlainTable(sv)) {
                 serversClone[sk] = sv;
                 continue;
             }
-            const managedClone: Record<string, any> = {};
+            const managedClone = createTable();
             for (const [mk, mv] of Object.entries(sv)) {
                 if (mk !== 'command' && mk !== 'args' && mk !== 'env') managedClone[mk] = mv;
             }
-            serversClone[sk] = managedClone;
+            if (Object.keys(managedClone).length > 0) {
+                serversClone[sk] = managedClone;
+            }
         }
-        clone[k] = serversClone;
+        if (Object.keys(serversClone).length > 0) {
+            clone[k] = serversClone;
+        }
     }
     return clone;
 }
@@ -1043,6 +1079,15 @@ export function mergeAssistantCodexMcpConfigToml(
             : `${eol}${eol}`;
         const appended = `${existingToml}${sep}${suffix}${eol}`;
         const verifiedAppended = parseTomlDocument(appended);
+        const appendedServer = verifiedAppended.root.mcp_servers?.[serverName];
+        if (
+            !isPlainTable(appendedServer)
+            || appendedServer.command !== stableServer.command
+            || !sameStringArray(appendedServer.args, stableServer.args)
+            || !sameEnvRecord(appendedServer.env, Object.fromEntries(staticEnvEntries))
+        ) {
+            throw invalidToml('post-append TOML verification failed for managed server block');
+        }
         if (!isDeepStrictEqual(stripManagedFieldsForTreeComparison(doc.root, serverName), stripManagedFieldsForTreeComparison(verifiedAppended.root, serverName))) {
             throw invalidToml('post-append TOML verification detected unrelated AST change');
         }
