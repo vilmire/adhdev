@@ -812,7 +812,14 @@ export class DaemonCliManager {
         const replay = found ? this.roleRestartInputs.get(found.key) : undefined;
         if (isRole && !replay) return { success: false, code: 'restart_selection_unavailable',
             error: 'The role session launch arguments are unavailable; restart refused.' };
+        const { getCoordinatorForSession, registerMeshCoordinator } = await import('../mesh/coordinator-registry.js');
+        const savedCoordinatorEntry = found ? getCoordinatorForSession(found.key) : undefined;
         if (found) await this.stopSession(found.key);
+        if (savedCoordinatorEntry) {
+            registerMeshCoordinator(savedCoordinatorEntry);
+            const { ensureCoordinatorContextFileMaterialized } = await import('./mesh-coordinator.js');
+            ensureCoordinatorContextFileMaterialized(savedCoordinatorEntry, replay?.options?.extraEnv);
+        }
         await this.startSession(isRole ? recorded!.providerType : cliType,
             isRole ? recorded!.workspace || found!.adapter.workingDir || dir : dir,
             isRole ? replay!.cliArgs : args?.cliArgs || prevCliArgs,

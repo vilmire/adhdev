@@ -31,7 +31,10 @@ export const INJECTION_CLEANUP_MIN_SETTLE_MS = 5_000;
 export const INJECTION_CLEANUP_MAX_WAIT_MS = 60_000;
 const INJECTION_CLEANUP_POLL_MS = 250;
 
-type InjectionFiles = Pick<CoordinatorInjectionEffect, 'contextFilePath' | 'contextFileOwned' | 'contextFileSentinels' | 'agentFilePath'>;
+type InjectionFiles = Pick<
+    CoordinatorInjectionEffect,
+    'contextFilePath' | 'contextFileOwned' | 'contextFileSentinels' | 'additionalOwnedFiles' | 'retainContextFileForSessionLifetime' | 'agentFilePath'
+>;
 
 export interface InjectionCleanupOptions {
     /** False when the launch failed or threw — remove at once. */
@@ -52,7 +55,12 @@ export function hasInjectionFiles(effect: InjectionFiles | null | undefined): bo
 /** Remove the files an injection wrote, now. Idempotent and best-effort. */
 export function removeInjectionFiles(effect: InjectionFiles, reason: string, label: string): void {
     if (effect.contextFilePath) {
-        stripCoordinatorWrapperFile(effect.contextFilePath, effect.contextFileOwned === true, effect.contextFileSentinels);
+        stripCoordinatorWrapperFile(
+            effect.contextFilePath,
+            effect.contextFileOwned === true,
+            effect.contextFileSentinels,
+            effect.additionalOwnedFiles,
+        );
         LOG.info('MeshCoordinator', `Stripped wrapper from ${effect.contextFilePath} (${label}, ${reason})`);
     }
     if (effect.agentFilePath) cleanupCoordinatorAgentFile(effect.agentFilePath);
@@ -67,6 +75,14 @@ export function scheduleInjectionCleanup(effect: InjectionFiles | null | undefin
     if (!opts.launched) {
         removeInjectionFiles(effect, 'launch failed', opts.label);
         return Promise.resolve();
+    }
+    if (effect.retainContextFileForSessionLifetime && effect.contextFilePath) {
+        LOG.info(
+            'MeshCoordinator',
+            `Retaining ${effect.contextFilePath} for session lifetime (${opts.label}; per-turn rule loader)`,
+        );
+        if (!effect.agentFilePath) return Promise.resolve();
+        effect = { agentFilePath: effect.agentFilePath };
     }
     const minSettleMs = opts.minSettleMs ?? INJECTION_CLEANUP_MIN_SETTLE_MS;
     const maxWaitMs = Math.max(minSettleMs, opts.maxWaitMs ?? INJECTION_CLEANUP_MAX_WAIT_MS);

@@ -1,13 +1,31 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { DEFAULT_SESSION_HOST_COLS, DEFAULT_SESSION_HOST_ROWS } from '@adhdev/session-host-core'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { LOG } from '../logging/logger.js'
 import { IDENTITY } from '../track-identity.js'
 import { ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV, ADHDEV_DAEMON_AUTH_FILE_FLAG } from '../standalone-mcp-auth.js'
 import { inspectEmbeddedPath, type EmbeddedPathHealth, type EmbeddedPathState } from '../config/embedded-path-health.js'
+import { registerMeshCoordinator, type CoordinatorRegistryEntry } from '../mesh/coordinator-registry.js'
 import type { ProviderModule } from '../providers/contracts.js';
 import type { MeshCoordinatorMcpConfigFormat, MeshCoordinatorSystemPromptInjection } from '../providers/mesh-coordinator-contracts.js';
+import {
+  coordinatorWrapperSentinels,
+  LEGACY_COORDINATOR_WRAPPER_SENTINELS,
+  removeWrapperBlock,
+  stripCoordinatorWrapperFile,
+  wrapperBlockPattern,
+  writeAntigravityCoordinatorContextFiles,
+  type CoordinatorWrapperSentinels,
+} from './antigravity-coordinator-rules.js';
+
+export {
+  coordinatorWrapperSentinels,
+  LEGACY_COORDINATOR_WRAPPER_SENTINELS,
+  stripCoordinatorWrapperFile,
+  type CoordinatorWrapperSentinels,
+};
+
 
 export interface MeshCoordinatorMcpServerLaunch {
   command: string
@@ -445,6 +463,14 @@ export interface CoordinatorInjectionEffect {
    *  legacy `<!-- adhdev-mesh-coordinator-prompt -->` pair would otherwise
    *  leave its block on disk forever. */
   contextFileSentinels?: CoordinatorWrapperSentinels
+  /** Companion rule/include files written alongside `contextFilePath` (e.g.
+   *  `antigravity-cli` split chunk files and `.agents/rules/*.md` pointers).
+   *  Cleaned up whenever `contextFilePath` is stripped. */
+  additionalOwnedFiles?: string[]
+  /** True when the CLI re-reads `contextFilePath` on every user turn (e.g.
+   *  `antigravity-cli`), so startup-idle readiness must NOT strip the file;
+   *  cleanup is deferred to failed launch, coordinator unregister, or dead-entry prune. */
+  retainContextFileForSessionLifetime?: boolean
   /** Absolute path of the daemon-owned temp agent file. Only set for
    *  agent_file injection. The CLI reads it once at startup, so the launch
    *  path schedules a delete after the spawn settles; leftovers in the temp
@@ -620,6 +646,16 @@ function applyInjectionRule(
       // placeholder line of the wrapper; this keeps relaunches idempotent
       // without forcing spec authors to declare an explicit marker.
       const sentinels = coordinatorWrapperSentinels(wrapper)
+      if (ctx.cliType === 'antigravity-cli') {
+        return writeAntigravityCoordinatorContextFiles({
+          systemPrompt,
+          target,
+          wrapper,
+          sentinels,
+          ownedDeclared: injection.owned === true,
+          ctx,
+        })
+      }
       // `owned` lets cleanup DELETE the whole file, which is only safe when the
       // daemon created it. A file already at that path holding anything other
       // than a previous launch's block (user rules, another tool's file) is not
@@ -658,99 +694,68 @@ function applyInjectionRule(
   }
 }
 
-/** The opening / closing marker pair a context_file wrapper writes around the prompt. */
-export interface CoordinatorWrapperSentinels {
-  /** Text before `{prompt}` (trimmed). Empty when the wrapper has none — then the block cannot be located again. */
-  open: string
-  /** Text after `{prompt}` (trimmed). Empty ⇒ the block runs to end of file. */
-  close: string
-}
-
 /**
- * The legacy pair every built-in provider wrapper uses. Only a FALLBACK for a
- * strip that has no record of the wrapper it wrote (a registry entry persisted
- * by an older daemon) — a live launch always passes the provider's own pair.
+ * Ensure a registered coordinator's per-turn `context_file` and companion include
+ * files are materialized on disk. Used on daemon session restore (`restoreHostedSessions`)
+ * and session restart (`restartSession`) so a running or restarted `antigravity-cli`
+ * coordinator never loses its instructions if the wrapper was previously stripped.
  */
-export const LEGACY_COORDINATOR_WRAPPER_SENTINELS: CoordinatorWrapperSentinels = {
-  open: '<!-- adhdev-mesh-coordinator-prompt -->',
-  close: '<!-- /adhdev-mesh-coordinator-prompt -->',
-}
+export function ensureCoordinatorContextFileMaterialized(
+  entry: CoordinatorRegistryEntry | undefined,
+  launchEnv?: Record<string, string>,
+): boolean {
+  if (!entry?.systemPrompt || !entry.workspace) return false
+  const isAntigravity = entry.cliType === 'antigravity-cli'
+  const retainLifetime = entry.injection?.contextFile?.retainForSessionLifetime === true || isAntigravity
+  if (!retainLifetime && entry.injection?.mode !== 'context_file') return false
 
-/** Derive the sentinels from a provider-declared wrapper exactly as the writer does. */
-export function coordinatorWrapperSentinels(wrapper: string | undefined): CoordinatorWrapperSentinels {
-  const w = wrapper && wrapper.includes('{prompt}') ? wrapper : '{prompt}'
-  const [before, after] = w.split('{prompt}')
-  return { open: (before ?? '').trim(), close: (after ?? '').trim() }
-}
+  const targetRelOrAbs = entry.injection?.contextFile?.path || entry.injection?.target || 'AGENTS.md'
+  const targetPath = resolve(entry.workspace, targetRelOrAbs)
+  const openSentinel = entry.injection?.contextFile?.open || LEGACY_COORDINATOR_WRAPPER_SENTINELS.open
+  const closeSentinel = entry.injection?.contextFile?.close || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close
+  const wrapper = `${openSentinel}\n{prompt}\n${closeSentinel}`
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
+  const recordedExtras = entry.injection?.contextFile?.additionalOwnedFiles ?? []
+  const targetHasBlock = existsSync(targetPath) && readFileSync(targetPath, 'utf-8').includes(openSentinel)
+  const allExtrasExist = recordedExtras.length > 0 && recordedExtras.every((p) => existsSync(p))
+  if (targetHasBlock && allExtrasExist) {
+    return false
+  }
 
-/** Matches one written block (open … close, or open … EOF when there is no close). */
-function wrapperBlockPattern(sentinels: CoordinatorWrapperSentinels): RegExp {
-  const open = escapeRegExp(sentinels.open)
-  return sentinels.close
-    ? new RegExp(`${open}[\\s\\S]*?${escapeRegExp(sentinels.close)}`, 'g')
-    : new RegExp(`${open}[\\s\\S]*$`, 'g')
-}
+  const effect = applyMeshCoordinatorSystemPromptInjection(
+    entry.systemPrompt,
+    {
+      mode: 'context_file',
+      path: entry.injection?.target || 'AGENTS.md',
+      owned: entry.injection?.owned === true,
+      wrapper,
+    },
+    {
+      cliArgs: [],
+      launchEnv: launchEnv ?? {},
+      workspace: entry.workspace,
+      cliType: entry.cliType || 'antigravity-cli',
+    },
+  )
+  if (!effect.contextFilePath) return false
 
-/** `text` with every block between the sentinels removed (unchanged when there is no opening sentinel). */
-function removeWrapperBlock(text: string, sentinels: CoordinatorWrapperSentinels): string {
-  if (!sentinels.open) return text
-  return text.replace(wrapperBlockPattern(sentinels), '')
-}
-
-/**
- * Strip the daemon's wrapper block from a context_file we previously wrote.
- *
- * Used in two places:
- *   1. Inject-then-remove (R48): once the launched CLI has read the file (see
- *      coordinator-injection-cleanup.ts — after the session is ready, or at
- *      once when the launch failed). Removing it from disk at that point
- *      doesn't affect the running coordinator but keeps worker sessions (or
- *      fresh non-coordinator launches) in the same workspace from picking up
- *      our wrapper.
- *   2. R47 unregister fallback: if the cleanup never ran (process crash,
- *      kill -9), coordinator-registry.unregisterMeshCoordinator runs the
- *      same logic when its entry is dropped.
- *
- * `sentinels` are the provider-declared pair the block was written with
- * (CoordinatorInjectionEffect.contextFileSentinels); omitted ⇒ the legacy pair.
- * `owned` deletes the whole file — the writer only reports it when the daemon
- * created the file (a pre-existing file is downgraded to a sentinel strip).
- *
- * Idempotent: missing file is fine, missing sentinels are fine, returns
- * silently. Leaves user-authored content outside the sentinels intact.
- * Deletes the file outright if our wrapper was the only content.
- */
-export function stripCoordinatorWrapperFile(
-  filePath: string,
-  owned = false,
-  sentinels: CoordinatorWrapperSentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS,
-): void {
-  try {
-    if (!existsSync(filePath)) return
-    // Daemon-owned whole file (dedicated name, e.g. cursor's rules .mdc) —
-    // delete outright instead of stripping sentinels out of user content.
-    if (owned) {
-      try { unlinkSync(filePath) } catch { /* best-effort */ }
-      return
-    }
-    if (!sentinels.open) return
-    const existing = readFileSync(filePath, 'utf-8')
-    if (!existing.includes(sentinels.open)) return
-    const stripped = removeWrapperBlock(existing, sentinels)
-    if (stripped === existing) return
-    const remaining = stripped
-      .replace(/^\s*\n+/, '')
-      .replace(/\n+\s*$/, '')
-    if (!remaining.trim()) {
-      try { unlinkSync(filePath) } catch { /* best-effort */ }
-    } else {
-      writeFileSync(filePath, remaining + '\n', 'utf-8')
-    }
-  } catch { /* best-effort */ }
+  entry.injection = {
+    mode: 'context_file',
+    target: entry.injection?.target || 'AGENTS.md',
+    ...(entry.injection?.owned !== undefined ? { owned: entry.injection.owned } : {}),
+    contextFile: {
+      path: effect.contextFilePath,
+      owned: effect.contextFileOwned === true,
+      ...(effect.contextFileSentinels ? {
+        open: effect.contextFileSentinels.open,
+        close: effect.contextFileSentinels.close,
+      } : {}),
+      ...(effect.additionalOwnedFiles?.length ? { additionalOwnedFiles: effect.additionalOwnedFiles } : {}),
+      ...(effect.retainContextFileForSessionLifetime ? { retainForSessionLifetime: true } : {}),
+    },
+  }
+  registerMeshCoordinator(entry)
+  return true
 }
 
 /**

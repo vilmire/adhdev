@@ -11,6 +11,7 @@
 import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { getDaemonDataDir } from '../config/config.js';
+import { stripCoordinatorWrapperFile } from '../commands/antigravity-coordinator-rules.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 
 export interface CoordinatorRegistryEntry {
@@ -36,7 +37,14 @@ export interface CoordinatorRegistryEntry {
         /** The context file the launch actually wrote (declared rule OR its oversize
          *  fallback), the ownership the writer settled on, and the provider's wrapper
          *  sentinels. Preferred over mode/target/owned by the unregister fallback. */
-        contextFile?: { path: string; owned: boolean; open?: string; close?: string };
+        contextFile?: {
+            path: string;
+            owned: boolean;
+            open?: string;
+            close?: string;
+            additionalOwnedFiles?: string[];
+            retainForSessionLifetime?: boolean;
+        };
     };
     /** Path of the MCP config file the daemon wrote for this session. */
     mcpConfigPath?: string;
@@ -80,6 +88,48 @@ export function registerMeshCoordinator(entry: CoordinatorRegistryEntry): void {
     saveRegistry();
 }
 
+function resolveEntryContextFilePath(entry: CoordinatorRegistryEntry): string {
+    const recordedPath = entry.injection?.contextFile?.path;
+    if (typeof recordedPath === 'string' && recordedPath) return recordedPath;
+    const workspace = entry.workspace;
+    const target = entry.injection?.mode === 'context_file' && typeof entry.injection.target === 'string'
+        ? entry.injection.target
+        : '';
+    if (!workspace || !target) return '';
+    return `${workspace.replace(/\/$/, '')}/${target}`;
+}
+
+function isContextFileStillOwnedByLiveCoordinator(targetPath: string): boolean {
+    if (!targetPath) return false;
+    for (const remaining of _registry.values()) {
+        if (resolveEntryContextFilePath(remaining) === targetPath) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): void {
+    const targetPath = resolveEntryContextFilePath(entry);
+    if (!targetPath || isContextFileStillOwnedByLiveCoordinator(targetPath)) return;
+    const recorded = entry.injection?.contextFile;
+    if (recorded && typeof recorded.path === 'string' && recorded.path) {
+        try {
+            stripCoordinatorWrapperFile(
+                recorded.path,
+                recorded.owned === true,
+                typeof recorded.open === 'string' ? { open: recorded.open, close: typeof recorded.close === 'string' ? recorded.close : '' } : undefined,
+                Array.isArray(recorded.additionalOwnedFiles) ? recorded.additionalOwnedFiles : undefined,
+            );
+        } catch { /* best-effort cleanup; never throw out of unregister */ }
+        return;
+    }
+    const owned = entry.injection?.owned === true;
+    try {
+        stripCoordinatorWrapperFile(targetPath, owned);
+    } catch { /* best-effort cleanup; never throw out of unregister */ }
+}
+
 /** Remove a coordinator session by sessionId. Persists to disk.
  *
  * Also best-effort strips any context_file wrapper block we wrote into
@@ -103,35 +153,7 @@ export function unregisterMeshCoordinator(sessionId: string): void {
     if (!_registry.delete(sessionId)) return;
     saveRegistry();
     if (!entry) return;
-    const recorded = entry.injection?.contextFile;
-    if (recorded && typeof recorded.path === 'string' && recorded.path) {
-        try {
-            // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const { stripCoordinatorWrapperFile } = require('../commands/mesh-coordinator.js');
-            stripCoordinatorWrapperFile(
-                recorded.path,
-                recorded.owned === true,
-                typeof recorded.open === 'string' ? { open: recorded.open, close: typeof recorded.close === 'string' ? recorded.close : '' } : undefined,
-            );
-        } catch { /* best-effort cleanup; never throw out of unregister */ }
-        return;
-    }
-    // Entry persisted by an older daemon: only the declared rule is known.
-    const workspace = entry.workspace;
-    const owned = entry.injection?.owned === true;
-    const target = entry.injection?.mode === 'context_file' && typeof entry.injection.target === 'string'
-        ? entry.injection.target
-        : '';
-    if (!workspace || !target) return;
-    // injection.target is workspace-relative (AGENTS.md / GEMINI.md); we don't
-    // resolve absolute paths here because we never wrote one — applyMesh-
-    // CoordinatorSystemPromptInjection joins via path.join(workspace, …).
-    const filePath = `${workspace.replace(/\/$/, '')}/${target}`;
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { stripCoordinatorWrapperFile } = require('../commands/mesh-coordinator.js');
-        stripCoordinatorWrapperFile(filePath, owned);
-    } catch { /* best-effort cleanup; never throw out of unregister */ }
+    cleanupCoordinatorEntryContextFile(entry);
 }
 
 /**
@@ -181,7 +203,12 @@ export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>): 
         _registry.delete(entry.sessionId);
         pruned.push(entry);
     }
-    if (pruned.length > 0) saveRegistry();
+    if (pruned.length > 0) {
+        saveRegistry();
+        for (const entry of pruned) {
+            cleanupCoordinatorEntryContextFile(entry);
+        }
+    }
     return pruned;
 }
 

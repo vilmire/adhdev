@@ -311,3 +311,343 @@ describe('meshCoordinator.disallowedTools (route, do not implement)', () => {
     expect(decl.tools.some((t: string) => t.startsWith('mcp__'))).toBe(false)
   })
 })
+
+/**
+ * Simulate Antigravity CLI 1.4.2's `parseRuleFile` + `resolveFileIncludes`
+ * (`rules.go:528-545, 643-693`):
+ *   1. Expand `@[label](path)` references (`~/` -> `homeDir`, relative -> `workspaceRoot`),
+ *      trimming included file whitespace and stripping leading `--- ... ---` YAML
+ *      frontmatter if the included file starts with `---`.
+ *   2. Cap the resulting rule file at 24,000 UTF-8 bytes (`0x5dc0`).
+ */
+function simulateAntigravityParseRuleFile(
+  ruleFilePath: string,
+  workspaceRoot: string,
+  homeDir: string,
+): { expanded: string; byteLength: number; truncated: boolean } {
+  const raw = readFileSync(ruleFilePath, 'utf-8')
+  const expanded = raw.replace(/@\[([^\]]*)\]\(([^)]+)\)/g, (fullMatch, _label: string, rawTarget: string) => {
+    const trimmedTarget = rawTarget.trim()
+    const resolvedTarget = trimmedTarget.startsWith('~/')
+      ? join(homeDir, trimmedTarget.slice(2))
+      : path.isAbsolute(trimmedTarget)
+        ? trimmedTarget
+        : join(workspaceRoot, trimmedTarget)
+    if (!existsSync(resolvedTarget)) return fullMatch
+    let included = readFileSync(resolvedTarget, 'utf-8').trim()
+    if (included.startsWith('---')) {
+      const endIdx = included.indexOf('\n---', 3)
+      if (endIdx !== -1) {
+        included = included.slice(endIdx + 4).trim()
+      }
+    }
+    return included
+  })
+  const buf = Buffer.from(expanded, 'utf-8')
+  const truncated = buf.byteLength > 24_000
+  return {
+    expanded: truncated ? buf.subarray(0, 24_000).toString('utf-8') : expanded,
+    byteLength: buf.byteLength,
+    truncated,
+  }
+}
+
+function collectAntigravityLoadedRules(workspace: string, homeDir: string): {
+  files: Array<{ path: string; expanded: string; byteLength: number; truncated: boolean }>
+  combined: string
+} {
+  const rulePaths: string[] = []
+  const agentsPath = join(workspace, 'AGENTS.md')
+  if (existsSync(agentsPath)) rulePaths.push(agentsPath)
+  const rulesDir = join(workspace, '.agents', 'rules')
+  if (existsSync(rulesDir)) {
+    for (const entry of fs.readdirSync(rulesDir).sort()) {
+      if (entry.endsWith('.md')) rulePaths.push(join(rulesDir, entry))
+    }
+  }
+  const files = rulePaths.map((p) => ({
+    path: p,
+    ...simulateAntigravityParseRuleFile(p, workspace, homeDir),
+  }))
+  return {
+    files,
+    combined: files.map((f) => f.expanded).join('\n\n'),
+  }
+}
+
+const ANTIGRAVITY_WRAPPER = '<!-- adhdev-mesh-coordinator-prompt -->\n{prompt}\n<!-- /adhdev-mesh-coordinator-prompt -->'
+
+describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB split/include delivery', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('retains antigravity-cli context_file across startup idle, Turn 1, and Turn 2+, while failed launches strip at once', async () => {
+    vi.useFakeTimers()
+    const ws = tempWorkspace('adhdev-agy-lifetime-')
+    const coordHome = tempWorkspace('adhdev-agy-home-')
+    try {
+      const prompt = 'COORD_HEAD_MARKER\n' + 'Section line with coordinator rules.\n'.repeat(950) + 'COORD_TAIL_BEYOND_24KB_MARKER'
+      expect(Buffer.byteLength(prompt, 'utf-8')).toBeGreaterThan(34_000)
+
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      expect(effect.retainContextFileForSessionLifetime).toBe(true)
+      expect(effect.contextFilePath).toBe(join(ws, 'AGENTS.md'))
+      expect(effect.additionalOwnedFiles?.length).toBeGreaterThan(0)
+
+      // Startup idle arrives at ~17s, well before Turn 1 at ~2m44s:
+      // scheduleInjectionCleanup with launched:true MUST NOT strip the rules.
+      const done = scheduleInjectionCleanup(effect, {
+        launched: true,
+        isReady: () => true,
+        label: 'coordinator cli_command',
+        pollMs: 100,
+        maxWaitMs: 60_000,
+      })
+      await vi.advanceTimersByTimeAsync(180_000)
+      await done
+
+      // Turn 1 & Turn 2+: rules remain on disk and expand completely without truncation.
+      const turn1 = collectAntigravityLoadedRules(ws, coordHome)
+      expect(turn1.files.length).toBeGreaterThanOrEqual(2)
+      for (const file of turn1.files) {
+        expect(file.truncated).toBe(false)
+        expect(file.byteLength).toBeLessThanOrEqual(24_000)
+      }
+      expect(turn1.combined).toContain('COORD_HEAD_MARKER')
+      expect(turn1.combined).toContain('COORD_TAIL_BEYOND_24KB_MARKER')
+
+      // Failed launch: strips AGENTS.md and all companion files immediately.
+      await scheduleInjectionCleanup(effect, { launched: false, label: 'coordinator cli_command' })
+      expect(existsSync(join(ws, 'AGENTS.md'))).toBe(false)
+      for (const extra of effect.additionalOwnedFiles ?? []) {
+        expect(existsSync(extra)).toBe(false)
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('delivers the full >35KB coordinator prompt (including --- horizontal rules and multi-byte UTF-8) within the 24,000-byte per-file cap and isolates base-node workers', async () => {
+    const { buildCoordinatorSystemPrompt } = await import('../../src/mesh/coordinator-prompt.js')
+    const ws = tempWorkspace('adhdev-agy-split-')
+    const coordHome = tempWorkspace('adhdev-agy-coord-home-')
+    const workerHome = tempWorkspace('adhdev-agy-worker-home-')
+    try {
+      const userRules = '# Project Rules\n\n- Keep USER_ORIGINAL_RULE_441 intact.\n- Respect existing edits.\n'
+      writeFileSync(join(ws, 'AGENTS.md'), userRules, 'utf-8')
+
+      const basePrompt = buildCoordinatorSystemPrompt({
+        mesh: {
+          id: 'mesh_prefex',
+          name: 'MoltBook Prefex',
+          repoIdentity: 'github.com/acme/prefex',
+          nodes: [{ id: 'node_1', workspace: ws, daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        } as any,
+        userInstruction: '---\n### Tail Rule (Beyond 24KB)\nAlways preserve UTF-8 symbols (한글/日本語/🚀) and COORD_FINAL_TAIL_TOKEN_999.',
+      })
+      expect(Buffer.byteLength(basePrompt, 'utf-8')).toBeGreaterThan(35_000)
+
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        basePrompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      expect(effect.contextFileOwned).toBe(false)
+
+      // 1. Coordinator view (coordHome): sees user rules + 100% of >35KB prompt, zero files > 24,000 bytes.
+      const coordLoaded = collectAntigravityLoadedRules(ws, coordHome)
+      for (const file of coordLoaded.files) {
+        expect(file.truncated).toBe(false)
+        expect(file.byteLength).toBeLessThanOrEqual(24_000)
+      }
+      expect(coordLoaded.combined).toContain('USER_ORIGINAL_RULE_441')
+      expect(coordLoaded.combined).toContain('Repo Mesh Coordinator')
+      expect(coordLoaded.combined).toContain('### Tail Rule (Beyond 24KB)')
+      expect(coordLoaded.combined).toContain('COORD_FINAL_TAIL_TOKEN_999')
+
+      // 2. Base-node delegated worker view (workerHome in same workspace):
+      // sees user rules in AGENTS.md, but zero coordinator prompt instructions.
+      const workerLoaded = collectAntigravityLoadedRules(ws, workerHome)
+      expect(workerLoaded.combined).toContain('USER_ORIGINAL_RULE_441')
+      expect(workerLoaded.combined).not.toContain('Repo Mesh Coordinator')
+      expect(workerLoaded.combined).not.toContain('COORD_FINAL_TAIL_TOKEN_999')
+
+      // 3. Cleanup restores user AGENTS.md byte-for-byte and removes all companion files.
+      stripCoordinatorWrapperFile(effect.contextFilePath!, effect.contextFileOwned === true, effect.contextFileSentinels)
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe(userRules)
+      for (const extra of effect.additionalOwnedFiles ?? []) {
+        expect(existsSync(extra)).toBe(false)
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+      rmSync(workerHome, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves a large existing user AGENTS.md (~21KB) under the 24,000-byte cap by routing all coordinator parts to companion rules', () => {
+    const ws = tempWorkspace('adhdev-agy-large-user-')
+    const coordHome = tempWorkspace('adhdev-agy-large-home-')
+    try {
+      const largeUserRules = '# Large User AGENTS.md\n' + 'User rule line that must never be truncated.\n'.repeat(460)
+      expect(Buffer.byteLength(largeUserRules, 'utf-8')).toBeGreaterThan(20_500)
+      expect(Buffer.byteLength(largeUserRules, 'utf-8')).toBeLessThan(22_500)
+      writeFileSync(join(ws, 'AGENTS.md'), largeUserRules, 'utf-8')
+
+      const prompt = 'COORD_LARGE_USER_HEAD\n' + 'Coordinator instruction line.\n'.repeat(1_100) + 'COORD_LARGE_USER_TAIL'
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+
+      const loaded = collectAntigravityLoadedRules(ws, coordHome)
+      for (const file of loaded.files) {
+        expect(file.truncated).toBe(false)
+        expect(file.byteLength).toBeLessThanOrEqual(24_000)
+      }
+      expect(loaded.combined).toContain('Large User AGENTS.md')
+      expect(loaded.combined).toContain('COORD_LARGE_USER_HEAD')
+      expect(loaded.combined).toContain('COORD_LARGE_USER_TAIL')
+
+      stripCoordinatorWrapperFile(effect.contextFilePath!, effect.contextFileOwned === true, effect.contextFileSentinels)
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe(largeUserRules)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('cleans up antigravity-cli context_file and companion files on unregisterMeshCoordinator and pruneDeadMeshCoordinators while respecting surviving same-workspace coordinators', async () => {
+    const {
+      registerMeshCoordinator,
+      unregisterMeshCoordinator,
+      pruneDeadMeshCoordinators,
+    } = await import('../../src/mesh/coordinator-registry.js')
+    const ws = tempWorkspace('adhdev-agy-reg-')
+    const coordHome = tempWorkspace('adhdev-agy-reg-home-')
+    try {
+      const prompt = 'COORD_REG_HEAD\n' + 'Rule line.\n'.repeat(2_200) + 'COORD_REG_TAIL'
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      const contextFileRecord = {
+        path: effect.contextFilePath!,
+        owned: effect.contextFileOwned === true,
+        open: effect.contextFileSentinels?.open,
+        close: effect.contextFileSentinels?.close,
+        additionalOwnedFiles: effect.additionalOwnedFiles,
+        retainForSessionLifetime: effect.retainContextFileForSessionLifetime,
+      }
+      registerMeshCoordinator({
+        meshId: 'mesh-reg-1',
+        sessionId: 'coord-sess-1',
+        workspace: ws,
+        startedAt: Date.now() - 10_000,
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        injection: { mode: 'context_file', target: 'AGENTS.md', contextFile: contextFileRecord },
+      })
+      registerMeshCoordinator({
+        meshId: 'mesh-reg-1',
+        sessionId: 'coord-sess-2',
+        workspace: ws,
+        startedAt: Date.now(),
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        injection: { mode: 'context_file', target: 'AGENTS.md', contextFile: contextFileRecord },
+      })
+
+      // Unregistering the older coordinator must NOT strip files still owned by coord-sess-2.
+      unregisterMeshCoordinator('coord-sess-1')
+      expect(existsSync(join(ws, 'AGENTS.md'))).toBe(true)
+      for (const extra of effect.additionalOwnedFiles ?? []) {
+        expect(existsSync(extra)).toBe(true)
+      }
+
+      // Boot-time prune of dead coord-sess-2 strips AGENTS.md and all companion files.
+      const pruned = pruneDeadMeshCoordinators(new Set(['unrelated-live-session']))
+      expect(pruned.map((p) => p.sessionId)).toContain('coord-sess-2')
+      expect(existsSync(join(ws, 'AGENTS.md'))).toBe(false)
+      for (const extra of effect.additionalOwnedFiles ?? []) {
+        expect(existsSync(extra)).toBe(false)
+      }
+    } finally {
+      unregisterMeshCoordinator('coord-sess-1')
+      unregisterMeshCoordinator('coord-sess-2')
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('re-materializes missing antigravity-cli context_file and companion rules on coordinator restore/restart from registry systemPrompt', async () => {
+    const {
+      registerMeshCoordinator,
+      unregisterMeshCoordinator,
+      getCoordinatorForSession,
+    } = await import('../../src/mesh/coordinator-registry.js')
+    const meshCoordMod: any = await import('../../src/commands/mesh-coordinator.js')
+    const ws = tempWorkspace('adhdev-agy-restore-')
+    const coordHome = tempWorkspace('adhdev-agy-restore-home-')
+    try {
+      const userRules = '# User Rules\nKeep USER_RESTORE_RULE_777.\n'
+      writeFileSync(join(ws, 'AGENTS.md'), userRules, 'utf-8')
+      const prompt = 'COORD_RESTORE_HEAD\n' + 'Coordinator restore line.\n'.repeat(1_100) + 'COORD_RESTORE_TAIL_BEYOND_24KB'
+
+      // Simulate a coordinator entry persisted in mesh-coordinators.json whose
+      // AGENTS.md wrapper block was previously stripped (e.g. pre-rc24 startup strip
+      // or stopSession during restartSession).
+      registerMeshCoordinator({
+        meshId: 'mesh-restore-1',
+        sessionId: 'coord-restore-sess',
+        workspace: ws,
+        startedAt: Date.now() - 60_000,
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        injection: {
+          mode: 'context_file',
+          target: 'AGENTS.md',
+          owned: false,
+        },
+      })
+
+      expect(typeof meshCoordMod.ensureCoordinatorContextFileMaterialized).toBe('function')
+      const rematerialized = meshCoordMod.ensureCoordinatorContextFileMaterialized(
+        getCoordinatorForSession('coord-restore-sess')!,
+        { HOME: coordHome },
+      )
+      expect(rematerialized).toBe(true)
+
+      const updatedEntry = getCoordinatorForSession('coord-restore-sess')
+      expect(updatedEntry?.injection?.contextFile?.retainForSessionLifetime).toBe(true)
+      expect(updatedEntry?.injection?.contextFile?.additionalOwnedFiles?.length).toBeGreaterThan(0)
+
+      const loaded = collectAntigravityLoadedRules(ws, coordHome)
+      for (const file of loaded.files) {
+        expect(file.truncated).toBe(false)
+        expect(file.byteLength).toBeLessThanOrEqual(24_000)
+      }
+      expect(loaded.combined).toContain('USER_RESTORE_RULE_777')
+      expect(loaded.combined).toContain('COORD_RESTORE_HEAD')
+      expect(loaded.combined).toContain('COORD_RESTORE_TAIL_BEYOND_24KB')
+
+      // Unregister cleans up the re-materialized files and restores user AGENTS.md.
+      unregisterMeshCoordinator('coord-restore-sess')
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe(userRules)
+    } finally {
+      unregisterMeshCoordinator('coord-restore-sess')
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+})
+
+

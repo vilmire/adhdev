@@ -17,6 +17,7 @@ import { findAssistantRestoreRecord, getAssistantRegistry } from '../assistant/a
 import { buildRestoredLaunchRecord } from '../sessions/launch-record.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 import { resolveCliSessionBinding } from './cli-session-binding.js';
+import { ensureCoordinatorContextFileMaterialized } from './mesh-coordinator.js';
 import type { DaemonCliManager, HostedCliRuntimeDescriptor } from './cli-manager.js';
 
 /** The DaemonCliManager members these functions read or call (compiler-checked; no cast). */
@@ -250,6 +251,11 @@ function buildRestoredSettings(
     }
     if (coordinatorEntry?.meshId) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
+        if (normalizedType === 'antigravity-cli' || coordinatorEntry.cliType === 'antigravity-cli') {
+            try {
+                ensureCoordinatorContextFileMaterialized(coordinatorEntry);
+            } catch { /* best-effort */ }
+        }
     }
     // RESTART-REBOUND RELAY ENVELOPE (rc.20): re-apply the session-level mesh
     // membership the launch/dispatch path persisted into the session-host

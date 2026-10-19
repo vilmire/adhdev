@@ -159,13 +159,24 @@ export function buildCodexMcpServerOverrideArgs(
  * sentinels — so the registry's unregister fallback strips exactly that block
  * and never deletes a pre-existing file the writer refused to own.
  */
-function contextFileRegistryRecord(effect: import('../mesh-coordinator.js').CoordinatorInjectionEffect | undefined): { contextFile?: { path: string; owned: boolean; open?: string; close?: string } } {
+function contextFileRegistryRecord(effect: import('../mesh-coordinator.js').CoordinatorInjectionEffect | undefined): {
+    contextFile?: {
+        path: string;
+        owned: boolean;
+        open?: string;
+        close?: string;
+        additionalOwnedFiles?: string[];
+        retainForSessionLifetime?: boolean;
+    };
+} {
     if (!effect?.contextFilePath) return {};
     return {
         contextFile: {
             path: effect.contextFilePath,
             owned: effect.contextFileOwned === true,
             ...(effect.contextFileSentinels ? { open: effect.contextFileSentinels.open, close: effect.contextFileSentinels.close } : {}),
+            ...(effect.additionalOwnedFiles?.length ? { additionalOwnedFiles: effect.additionalOwnedFiles } : {}),
+            ...(effect.retainContextFileForSessionLifetime ? { retainForSessionLifetime: true } : {}),
         },
     };
 }
