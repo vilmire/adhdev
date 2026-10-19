@@ -14,6 +14,7 @@ import {
   parsePsCpuTime,
   parsePsElapsed,
   parseWin32ProcessOutput,
+  sanitizeProcessCommandName,
   type ProcessNodeInfo,
 } from '../../src/process/session-process-tree.js';
 
@@ -488,5 +489,48 @@ describe('snapshot pairs for CPU growth', () => {
     await source.snapshot();
     for (let i = 0; i < 28; i += 1) { clock += 500; source.peek(); }
     expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('7b & 7c: provider lazy sidecars (codex-code-mode-host) and macOS MAXCOMLEN truncated comm', () => {
+  it('7b: codex-code-mode-host (and other provider sidecars) spawned after delivery are ignored, while a real sleep child is held', () => {
+    const deliveredAt = T;
+    const codexWithLazyHelperOnly: ProcessNodeInfo[] = [
+      { pid: 100, ppid: 1, comm: '-zsh', args: '-zsh', startedAtMs: T - 30_000 },
+      { pid: 101, ppid: 100, comm: 'node', args: 'node /usr/local/lib/node_modules/@openai/codex/bin/codex.js', startedAtMs: T - 29_000 },
+      { pid: 102, ppid: 101, comm: 'codex', args: '/usr/local/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex', startedAtMs: T - 29_000 },
+      // Lazy helper spawned by @openai/codex on the first tool call (after deliveredAt):
+      { pid: 110, ppid: 102, comm: 'codex-code-mode-', args: '/usr/local/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex-code-mode-host', startedAtMs: T + 5_000 },
+      { pid: 111, ppid: 102, comm: 'codex-voice-hos', args: '/usr/local/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex-voice-host', startedAtMs: T + 5_000 },
+      { pid: 112, ppid: 102, comm: 'node', args: 'node /usr/local/bin/adhdev mcp --mode ipc --worker', startedAtMs: T + 5_000 },
+    ];
+    expect(names(codexWithLazyHelperOnly, { startedAfterMs: deliveredAt })).toEqual([]);
+
+    const codexWithHelperAndSleep: ProcessNodeInfo[] = [
+      ...codexWithLazyHelperOnly,
+      { pid: 120, ppid: 102, comm: 'sleep', args: 'sleep 150', startedAtMs: T + 6_000 },
+    ];
+    expect(names(codexWithHelperAndSleep, { startedAfterMs: deliveredAt })).toEqual(['sleep']);
+  });
+
+  it('7c: macOS 16-char MAXCOMLEN truncated comm prefers argv[0] from args without leaking arguments', () => {
+    // Prompt regression case: truncated comm with args `/Users/x/.nvm/versions/node/v22/bin/node script.js` → "node"
+    expect(sanitizeProcessCommandName('/Users/x/.nvm/ve', '/Users/x/.nvm/versions/node/v22/bin/node script.js')).toBe('node');
+    // Live standalone case: comm `/Users/vilmire/.` (basename ".") with full node/codex args → "node", never "."
+    expect(sanitizeProcessCommandName('/Users/vilmire/.', '/Users/vilmire/.nvm/versions/node/v22.17.0/bin/node /repo/script.js --secret=123')).toBe('node');
+    // Truncated binary name in comm with full binary name in args:
+    expect(sanitizeProcessCommandName('codex-code-mode-', '/opt/codex/bin/codex-code-mode-host --token=secret')).toBe('codex-code-mode-host');
+    // Bare "." without args falls back to "unknown", never "."
+    expect(sanitizeProcessCommandName('/Users/vilmire/.')).toBe('unknown');
+
+    // Full tree inspection when macOS ps -o comm= truncates paths to `/Users/vilmire/.`:
+    const macTruncatedTable: ProcessNodeInfo[] = [
+      { pid: 100, ppid: 1, comm: '-zsh', args: '-zsh' },
+      { pid: 101, ppid: 100, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/bin/node /Users/vilmire/.nvm/versions/node/v22/lib/node_modules/@openai/codex/bin/codex.js' },
+      { pid: 102, ppid: 101, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex' },
+      { pid: 103, ppid: 102, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex-code-mode-host' },
+      { pid: 110, ppid: 102, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/bin/node script.js --secret=xyz' },
+    ];
+    expect(names(macTruncatedTable)).toEqual(['node']);
   });
 });

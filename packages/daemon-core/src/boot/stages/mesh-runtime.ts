@@ -166,6 +166,53 @@ function resolveHandoffOn(rt: SeqscribeRuntime | null): HandoffResolver {
     };
 }
 
+export function createRuntimeBackgroundWorkMonitor(
+    components: Pick<DaemonComponents, 'cliManager' | 'commandHandler' | 'sessionRegistry'>,
+): BackgroundWorkMonitor {
+    return createBackgroundWorkMonitor({
+        // `components.cliManager` is read at call time: the monitor is built here,
+        // before every component exists, and only nudges once a worker has ended a turn.
+        nudgeWorker: async (sessionId, text, meta) => {
+            const target = components.sessionRegistry?.get(sessionId);
+            const resolvedSessionId = target?.adapterKey || target?.instanceKey || sessionId;
+            const inputPort = components.cliManager?.input;
+            if (inputPort) {
+                let out = await inputPort.submit({
+                    messageId: meta.messageId,
+                    sessionId: resolvedSessionId,
+                    origin: 'mesh',
+                    policy: { mode: 'queue' },
+                    input: { parts: [{ type: 'text', text }], textFallback: text },
+                    createdAt: Date.now(),
+                });
+                if (out.kind === 'refused' && out.reason === 'no_target' && resolvedSessionId !== sessionId) {
+                    out = await inputPort.submit({
+                        messageId: meta.messageId,
+                        sessionId,
+                        origin: 'mesh',
+                        policy: { mode: 'queue' },
+                        input: { parts: [{ type: 'text', text }], textFallback: text },
+                        createdAt: Date.now(),
+                    });
+                }
+                if (out.kind === 'delivered' || out.kind === 'queued' || out.kind === 'duplicate') {
+                    return true;
+                }
+            }
+            if (components.commandHandler) {
+                await components.commandHandler.handle('send_chat', {
+                    sessionId: resolvedSessionId,
+                    messageId: meta.messageId,
+                    text,
+                    origin: 'mesh',
+                });
+                return true;
+            }
+            return false;
+        },
+    });
+}
+
 /**
  * Turn-ledger cut-over (steps 1–5 of the file header). Exported for the boot
  * tests; `bootMeshRuntime` is the production caller.
@@ -239,33 +286,7 @@ export function wireTurnLedger(components: DaemonComponents, opts: { runMigratio
         },
         probe: (e) => lateProbe.port(e),
     };
-    const backgroundWork = createBackgroundWorkMonitor({
-        // `components.cliManager` is read at call time: the monitor is built here,
-        // before every component exists, and only nudges once a worker has ended a turn.
-        nudgeWorker: async (sessionId, text, meta) => {
-            const inputPort = components.cliManager?.input;
-            if (inputPort) {
-                const out = await inputPort.submit({
-                    messageId: meta.messageId,
-                    sessionId,
-                    origin: 'mesh',
-                    policy: { mode: 'queue' },
-                    input: { parts: [{ type: 'text', text }], textFallback: text },
-                    createdAt: Date.now(),
-                });
-                if (out.kind === 'delivered' || out.kind === 'queued' || out.kind === 'duplicate') {
-                    return true;
-                }
-            }
-            await components.commandHandler?.handle('send_message', {
-                sessionId,
-                targetSessionId: sessionId,
-                message: text,
-                messageId: meta.messageId,
-            });
-            return true;
-        },
-    });
+    const backgroundWork = createRuntimeBackgroundWorkMonitor(components);
     const ledger = createMeshRuntimeTurnLedger({
         selfDaemonId,
         ports,

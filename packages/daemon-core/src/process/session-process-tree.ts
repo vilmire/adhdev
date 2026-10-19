@@ -80,8 +80,8 @@ export const SESSION_PROCESS_EXCLUSIONS: readonly ProcessTreeExclusionRule[] = [
   {
     id: 'cli_internal_sidecar_and_watcher',
     reason:
-      'Runtime/OS sidecars (`watchman`, `fseventsd`, `caffeinate`, `conpty_console_list_agent`, `OpenConsole.exe`, `conhost.exe`, `esbuild --service`, `crashpad_handler`) are persistent terminal/filesystem/telemetry daemons owned by the host or CLI runtime, not turn-scoped worker tasks.',
-    examples: ['conhost.exe', 'OpenConsole.exe', 'esbuild --service', 'watchman', 'crashpad_handler'],
+      'Runtime/OS sidecars (`codex-code-mode-host`, `watchman`, `fseventsd`, `caffeinate`, `conpty_console_list_agent`, `OpenConsole.exe`, `conhost.exe`, `esbuild --service`, `crashpad_handler`) are persistent terminal/filesystem/telemetry/tool-host daemons owned by the host or CLI runtime, not turn-scoped worker tasks.',
+    examples: ['codex-code-mode-host', 'conhost.exe', 'OpenConsole.exe', 'esbuild --service', 'watchman', 'crashpad_handler'],
   },
   {
     id: 'self_inspection_probe',
@@ -102,6 +102,7 @@ const PROVIDER_CLI_BINARIES = new Set([
   'antigravity-cli',
   'opencode',
   'cursor-agent',
+  'cursor-agent-sea',
   'qwen',
   'droid',
   'hermes',
@@ -175,6 +176,14 @@ const LANGUAGE_SERVER_NAMES = new Set([
 ]);
 
 const CLI_SIDECAR_NAMES = new Set([
+  'codex-code-mode-host',
+  'codex-voice-host',
+  'codex-linux-sandbox',
+  'cursor-agent-worker-sea',
+  'cursor-askpass',
+  'cursorsandbox',
+  'crepectl',
+  'claude-askpass',
   'watchman',
   'fseventsd',
   'caffeinate',
@@ -206,35 +215,64 @@ const MAX_HARNESS_DEPTH = 3;
  */
 export const BASELINE_START_TOLERANCE_MS = 1_500;
 
-/**
- * Strip paths, leading login-shell dashes (`-zsh`), and all command-line arguments
- * so only the bare executable/command name is returned (never leaking secrets in args).
- */
-export function sanitizeProcessCommandName(comm?: string | null, args?: string | null): string {
-  const raw = (comm && comm.trim()) || (args && args.trim()) || '';
-  if (!raw) return 'unknown';
+/** POSIX `ps -o comm=` truncates at 15 chars (Linux TASK_COMM_LEN-1) or 16 chars (macOS MAXCOMLEN). */
+const POSIX_COMM_TRUNCATION_LEN = 15;
 
-  let execToken = raw;
-  if (raw.startsWith('"')) {
-    const endQuote = raw.indexOf('"', 1);
-    execToken = endQuote > 1 ? raw.slice(1, endQuote) : raw.slice(1);
-  } else if (raw.startsWith("'")) {
-    const endQuote = raw.indexOf("'", 1);
-    execToken = endQuote > 1 ? raw.slice(1, endQuote) : raw.slice(1);
-  } else {
-    const winExeMatch = /^([a-zA-Z]:[\\/][^\r\n]*?\.(?:exe|cmd|bat|ps1|com))(?:\s|$)/i.exec(raw);
-    if (winExeMatch) {
-      execToken = winExeMatch[1]!;
-    } else {
-      execToken = raw.split(/\s+/)[0] ?? '';
-    }
+function extractExecToken(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('"')) {
+    const endQuote = trimmed.indexOf('"', 1);
+    return endQuote > 1 ? trimmed.slice(1, endQuote) : trimmed.slice(1);
   }
+  if (trimmed.startsWith("'")) {
+    const endQuote = trimmed.indexOf("'", 1);
+    return endQuote > 1 ? trimmed.slice(1, endQuote) : trimmed.slice(1);
+  }
+  const winExeMatch = /^([a-zA-Z]:[\\/][^\r\n]*?\.(?:exe|cmd|bat|ps1|com))(?:\s|$)/i.exec(trimmed);
+  if (winExeMatch) {
+    return winExeMatch[1]!;
+  }
+  return trimmed.split(/\s+/)[0] ?? '';
+}
 
+function cleanExecBasename(execToken: string): string {
   const unquoted = execToken.replace(/^['"]+|['"]+$/g, '');
   const normalizedSlashes = unquoted.replace(/\\/g, '/');
   const base = path.posix.basename(normalizedSlashes).replace(/^-+/, '');
   const cleaned = base.replace(/[^a-zA-Z0-9._+@/-]/g, '');
-  return cleaned || 'unknown';
+  if (cleaned === '.' || cleaned === '..') return '';
+  return cleaned;
+}
+
+/**
+ * Strip paths, leading login-shell dashes (`-zsh`), and all command-line arguments
+ * so only the bare executable/command name is returned (never leaking secrets in args).
+ * When `comm` is truncated or a path prefix (e.g. macOS 16-char MAXCOMLEN `"/Users/vilmire/."`),
+ * prefer the executable token from `args` (`argv[0]`).
+ */
+export function sanitizeProcessCommandName(comm?: string | null, args?: string | null): string {
+  const commToken = extractExecToken(comm ?? '');
+  const argsToken = extractExecToken(args ?? '');
+  const commName = cleanExecBasename(commToken);
+  const argsName = cleanExecBasename(argsToken);
+
+  if (argsName && !argsToken.startsWith('-')) {
+    const normComm = commToken.replace(/^['"]+|['"]+$/g, '').replace(/\\/g, '/');
+    const normArgs = argsToken.replace(/^['"]+|['"]+$/g, '').replace(/\\/g, '/');
+    const commTruncatedOrPathPrefix =
+      !commName ||
+      commName.startsWith('.') ||
+      normComm.endsWith('/') ||
+      (normComm.length > 0 && normArgs.startsWith(normComm) && normArgs.length > normComm.length) ||
+      (commName.length > 0 && argsName.toLowerCase().startsWith(commName.toLowerCase()) && argsName.length > commName.length) ||
+      (normComm.includes('/') && normComm.length >= POSIX_COMM_TRUNCATION_LEN && commName !== argsName);
+    if (commTruncatedOrPathPrefix) {
+      return argsName;
+    }
+  }
+
+  return commName || argsName || 'unknown';
 }
 
 const EXEC_EXTENSIONS = /\.(exe|cmd|bat|ps1|sh|js|mjs|cjs|ts|mts|py)$/i;
@@ -376,6 +414,10 @@ function isMcpServerIdentity(id: ProcessIdentity): boolean {
     // `@scope/mcp-server`, `@scope/foo-mcp`: judge the unscoped package name.
     if (name.startsWith('@') && MCP_NAME.test(name.slice(name.indexOf('/') + 1))) return true;
   }
+  // `adhdev mcp …` or `node …/bin/adhdev mcp …` (worker-scoped MCP server subcommand).
+  if ((id.exec === 'adhdev' || id.script === 'adhdev') && id.argv.some((tok, idx) => idx > 0 && tok.toLowerCase() === 'mcp' && normalizeExecName(id.argv[idx - 1]!) === 'adhdev')) {
+    return true;
+  }
   // The bundled adhdev server is started as `node …/mcp-server/(dist/)index.js`.
   return id.script !== null && MCP_ENTRY_BASENAMES.has(id.script)
     && id.scriptDirs.some((dir) => MCP_ENTRY_DIRS.has(dir));
@@ -386,7 +428,7 @@ function isLanguageServerIdentity(id: ProcessIdentity): boolean {
 }
 
 function isCliSidecarIdentity(id: ProcessIdentity): boolean {
-  if (CLI_SIDECAR_NAMES.has(id.exec)) return true;
+  if (CLI_SIDECAR_NAMES.has(id.exec) || (id.script !== null && CLI_SIDECAR_NAMES.has(id.script))) return true;
   if (id.exec === 'esbuild' && id.argv.some((tok) => tok === '--ping' || tok.startsWith('--service'))) return true;
   return id.argv.includes('--type=crashpad-handler');
 }

@@ -446,7 +446,7 @@ export function createBackgroundWorkMonitor(
 
       // Case 2: No live background processes remain (either child exited after (a),
       // or turn ended with waiting text (b) and child had already exited).
-      if (entry.nudgedAt === undefined && entry.timeoutNotifiedAt === undefined) {
+      if (entry.nudgedAt === undefined) {
         entry.nudgedAt = nowMs;
         entry.resolution =
           entry.initialReason === 'pending_background_work_text'

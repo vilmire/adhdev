@@ -1043,4 +1043,100 @@ describe('release rule: real activity never releases on a clock; only idle-but-a
     expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
     expect(fx.nudges).toHaveLength(1);
   });
+
+  it('(R8 / 7d) background work that runs >120 s (emits 2-min notice) and then exits nudges once and releases within nudgeGraceMs, never holding until the 90-min ceiling', async () => {
+    const fx = createFakeWorkerFixture({
+      taskId: 'exit-after-notice-1',
+      sessionId: 'sess-exit-after-notice-1',
+      ptyPid: 18_000,
+      timeoutMs: 120_000,
+      nudgeGraceMs: 60_000,
+    });
+    const sleepTable: ProcessNodeInfo[] = [
+      { pid: 18_000, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 18_001, ppid: 18_000, comm: 'codex', args: 'codex' },
+      { pid: 18_010, ppid: 18_001, comm: 'sleep', args: 'sleep 150', cpuTimeMs: 100 },
+    ];
+    idleWorkerWith(sleepTable, fx);
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+    expect(fx.coordinatorNotices).toHaveLength(0);
+    expect(fx.nudges).toHaveLength(0);
+
+    // 125 s elapsed (> 120 s timeout): 2-minute coordinator notice fires while sleep is still alive.
+    fx.advance(125_000);
+    await fx.scheduler.tick();
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.coordinatorNotices[0]!.text).toContain('background work still running (live processes: sleep)');
+    expect(fx.nudges).toHaveLength(0);
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+
+    // At 150 s, `sleep 150` exits: worker is nudged once even though timeoutNotifiedAt is already set.
+    fx.advance(25_000);
+    fx.setWorkerState({ processTable: sleepTable.slice(0, 2) });
+    await fx.scheduler.tick();
+    expect(fx.nudges).toHaveLength(1);
+    expect(fx.nudges[0]).toMatchObject({
+      sessionId: 'sess-exit-after-notice-1',
+      text: BACKGROUND_WORK_FINISHED_NUDGE_MESSAGE,
+    });
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(false);
+
+    // After nudgeGraceMs (60 s) without worker output, hold is released (no second notice) and turn completes.
+    fx.advance(61_000);
+    await fx.scheduler.tick();
+    expect(fx.backgroundWork.isReleased(fx.attemptId, 0)).toBe(true);
+    expect(fx.coordinatorNotices).toHaveLength(1);
+    expect(fx.nudges).toHaveLength(1);
+
+    for (let i = 0; i < 12 && fx.queueStatus() === 'assigned'; i += 1) {
+      fx.advance(5_000);
+      fx.scheduler.requestProbe(fx.attemptId);
+      await fx.scheduler.tick();
+    }
+    expect(fx.store.getAttempt(fx.attemptId)!.terminal).toMatchObject({
+      outcome: 'completed',
+      reason: 'weak_end_confirmed',
+    });
+    expect(fx.queueStatus()).toBe('completed');
+  });
+
+  it('(R9 / 7d) background work that runs >120 s, exits, and receives a new worker summary after the nudge releases immediately without waiting for nudgeGraceMs', async () => {
+    const fx = createFakeWorkerFixture({
+      taskId: 'exit-after-notice-reply',
+      sessionId: 'sess-exit-after-notice-reply',
+      ptyPid: 19_000,
+      timeoutMs: 120_000,
+      nudgeGraceMs: 60_000,
+    });
+    const sleepTable: ProcessNodeInfo[] = [
+      { pid: 19_000, ppid: 1, comm: 'zsh', args: 'zsh' },
+      { pid: 19_001, ppid: 19_000, comm: 'codex', args: 'codex' },
+      { pid: 19_010, ppid: 19_001, comm: 'sleep', args: 'sleep 150' },
+    ];
+    idleWorkerWith(sleepTable, fx);
+    fx.scheduler.requestProbe(fx.attemptId);
+    await fx.scheduler.tick();
+
+    fx.advance(125_000);
+    await fx.scheduler.tick();
+    expect(fx.coordinatorNotices).toHaveLength(1);
+
+    fx.advance(25_000);
+    fx.setWorkerState({ processTable: sleepTable.slice(0, 2) });
+    await fx.scheduler.tick();
+    expect(fx.nudges).toHaveLength(1);
+
+    // Worker writes a new real summary 5 s after the nudge (< 60 s nudgeGraceMs):
+    fx.advance(5_000);
+    fx.setWorkerState({
+      status: 'idle',
+      messages: [
+        { role: 'assistant', content: 'Background sleep 150 finished; all checks done.', timestamp: new Date(fx.now).toISOString() },
+      ],
+      processTable: sleepTable.slice(0, 2),
+    });
+    await fx.scheduler.tick();
+    expect(fx.backgroundWork.trackedAttemptIds()).toEqual([]);
+  });
 });

@@ -36,13 +36,12 @@ import { getMeshWithCache } from '../../mesh/mesh-queue-assignment.js';
 import { startContinuousAutoFastForwardScheduler } from '../../mesh/mesh-auto-fast-forward.js';
 import { claimPendingQueues, startMeshHousekeeping } from '../../mesh/mesh-housekeeping-tick.js';
 import { resolveTurnPolicy } from '../../mesh/turn-ledger/policy.js';
-import { createBackgroundWorkMonitor } from '../../mesh/turn-ledger/background-work-guard.js';
 import { createComponentsProbeReader, type TranscriptAnalyzer, type TranscriptObservation } from '../../mesh/turn-ledger/probe.js';
 import { resolveProbeLocation } from '../../mesh/turn-ledger/targets.js';
 import { readLiveHeldRuntime } from '../../mesh/mesh-node-git-refresher.js';
 import { workerSessionHealthFor } from '../../mesh/turn-ledger/worker-session-health.js';
 import { createTurnScheduler, startTurnScheduler } from '../../mesh/turn-ledger/scheduler.js';
-import { closeInterruptedPlainAttemptsOnBoot, reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
+import { closeInterruptedPlainAttemptsOnBoot, createRuntimeBackgroundWorkMonitor, reconcileOrphanedPlainAttemptsOnBoot } from './mesh-runtime.js';
 
 /**
  * Quota: hydrate the last persisted snapshots, THEN the one-shot boot refresh.
@@ -211,7 +210,7 @@ export function startTurnLoops(components: TurnWiredComponents, env: NodeJS.Proc
             sessionHealth: workerSessionHealthFor(components),
             // The SAME monitor the ledger's evidence gate consults (wireTurnLedger),
             // so a release decided here also stands the ledger gate down.
-            backgroundWork: components.meshTurn?.backgroundWork ?? createBackgroundWorkMonitor(),
+            backgroundWork: components.meshTurn?.backgroundWork ?? createRuntimeBackgroundWorkMonitor(components),
             probe: {
                 reader,
                 locate: (attempt) => resolveProbeLocation({

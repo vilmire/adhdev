@@ -193,4 +193,72 @@ describe('wireTurnLedger — S7 wiring', () => {
             wiring.dispose();
         }
     });
+
+    it('7a: production backgroundWork monitor has nudgeWorker wired to cliManager.input.submit (resolving sessionRegistry adapterKey)', async () => {
+        const submitted: any[] = [];
+        const { components } = fakeComponents({ worker_inst: { meshNodeFor: 'm1', meshActiveTaskId: 't1' } });
+        components.sessionRegistry = {
+            get: (id: string) => (id === 'sess_worker_1' ? { adapterKey: 'adapter_worker_1', instanceKey: 'worker_inst' } : undefined),
+        };
+        components.cliManager = {
+            input: {
+                submit: vi.fn(async (req: any) => {
+                    submitted.push(req);
+                    return { kind: 'delivered' };
+                }),
+            },
+        };
+        const wiring = wireTurnLedger(components, { runMigration: false });
+        try {
+            const attempt: any = {
+                attemptId: 'att_bg_1',
+                generation: 0,
+                scope: 'mesh',
+                state: 'generating',
+                terminal: null,
+                sessionId: 'sess_worker_1',
+                meshId: 'm1',
+                nodeId: 'n1',
+                taskId: 't1',
+                coordinator: { daemonId: 'daemon_wiring', sessionId: 'sess_coord_1' },
+                ownerDaemonId: 'daemon_wiring',
+                workerDaemonId: 'daemon_wiring',
+                startedAt: 1_000,
+                updatedAt: 1_000,
+                lastLiveness: null,
+                data: {},
+            };
+            // First observation with a live background child holds the turn:
+            const held = await wiring.backgroundWork.observe({
+                attempt,
+                nowMs: 2_000,
+                status: 'idle',
+                liveBackgroundProcesses: ['sleep'],
+                processesKnown: true,
+            });
+            expect(held.holdTurnEnd).toBe(true);
+            expect(held.nudgedWorker).toBe(false);
+            expect(submitted).toHaveLength(0);
+
+            // Second observation after the background child exits sends the nudge via cliManager.input.submit:
+            const exited = await wiring.backgroundWork.observe({
+                attempt,
+                nowMs: 5_000,
+                status: 'idle',
+                liveBackgroundProcesses: [],
+                processesKnown: true,
+            });
+            expect(exited.holdTurnEnd).toBe(true);
+            expect(exited.nudgedWorker).toBe(true);
+            expect(submitted).toHaveLength(1);
+            expect(submitted[0]).toMatchObject({
+                messageId: 'bg-nudge:att_bg_1:g0',
+                sessionId: 'adapter_worker_1',
+                origin: 'mesh',
+                policy: { mode: 'queue' },
+            });
+        } finally {
+            wiring.dispose();
+        }
+    });
 });
