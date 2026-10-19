@@ -117,6 +117,7 @@ export function classifyRefineTerminal(result: Record<string, unknown>): RefineT
             : refineCode === 'validation_failed' || refineCode === 'validation_dependencies_missing'
                 || refineCode === 'missing_dependencies' || refineCode === 'dependency_bootstrap_failed'
                 || refineCode === 'spawn_resolution_failed' || refineCode === 'validation_unavailable'
+                || refineCode === 'validation_timeout'
                 // An output-budget kill is a validation-stage failure like the rest;
                 // without it here it fell through to the 'merge_failed' fallback and
                 // coordinators saw a merge failure for a command that never finished.

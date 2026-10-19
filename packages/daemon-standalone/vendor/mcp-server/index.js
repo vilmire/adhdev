@@ -93218,8 +93218,9 @@ ${mergeTreeErr?.stderr || ""}`;
     });
     function classifyValidationFailure(error, stderr, spawnResolutionFailed) {
       const outputLimitExceeded = error?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" || /maxBuffer length exceeded/i.test(String(error?.message || ""));
-      const missingDependencyFailure = !spawnResolutionFailed && !outputLimitExceeded && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
-      return { outputLimitExceeded, missingDependencyFailure };
+      const timedOut = !spawnResolutionFailed && !outputLimitExceeded && (error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || "")));
+      const missingDependencyFailure = !spawnResolutionFailed && !outputLimitExceeded && !timedOut && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
+      return { outputLimitExceeded, missingDependencyFailure, timedOut };
     }
     function writeValidationFailureLog(workspace, index, candidate, streams, now = () => /* @__PURE__ */ new Date()) {
       try {
@@ -93414,23 +93415,71 @@ ${asText(streams.stderr)}
       }
       return commandsToRun;
     }
-    async function execRefineCommand(execFileAsync6, candidate, cwd, resolvedCommand) {
+    async function execRefineCommand(execFileFn, candidate, cwd, resolvedCommand) {
       const spawn9 = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
-      return execFileAsync6(spawn9.file, spawn9.args, {
+      const idleTimeoutMs = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
+      const execOptions = {
         cwd,
         encoding: "utf8",
         windowsHide: true,
-        timeout: candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS,
+        timeout: 0,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...candidate.env || {} },
         ...spawn9.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
+      };
+      return new Promise((resolve47, reject) => {
+        let timer;
+        let idleTimedOut = false;
+        let childRef;
+        const resetTimer = () => {
+          if (timer) clearTimeout(timer);
+          if (idleTimeoutMs > 0) {
+            timer = setTimeout(() => {
+              idleTimedOut = true;
+              try {
+                childRef?.kill?.("SIGTERM");
+              } catch {
+              }
+            }, idleTimeoutMs);
+          }
+        };
+        const child = execFileFn(spawn9.file, spawn9.args, execOptions, (error, stdout, stderr) => {
+          if (timer) clearTimeout(timer);
+          if (error || idleTimedOut) {
+            const err = error || new Error(`TIMEOUT: validation command exceeded ${idleTimeoutMs}ms without output`);
+            err.stdout = err.stdout ?? stdout;
+            err.stderr = err.stderr ?? stderr;
+            if (idleTimedOut) {
+              err.killed = true;
+              err.timedOut = true;
+              err.code = err.code ?? "ETIMEDOUT";
+              if (!/timed out|TIMEOUT/i.test(String(err.message || ""))) {
+                err.message = `TIMEOUT: validation command timed out after ${idleTimeoutMs}ms without output (${err.message || "killed"})`;
+              }
+            }
+            reject(err);
+            return;
+          }
+          resolve47({ stdout, stderr });
+        });
+        execOptions.timeout = idleTimeoutMs;
+        childRef = child;
+        if (child && (child.stdout || child.stderr)) {
+          resetTimer();
+          child.stdout?.on?.("data", resetTimer);
+          child.stderr?.on?.("data", resetTimer);
+        } else if (timer) {
+          clearTimeout(timer);
+        }
       });
     }
     function refineExecFailureExtras(error) {
+      const timedOut = error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || ""));
       return {
         exitCode: typeof error?.code === "number" ? error.code : null,
         signal: typeof error?.signal === "string" ? error.signal : null,
-        timedOut: error?.killed === true || /timed out/i.test(String(error?.message || ""))
+        timedOut,
+        ...timedOut ? { status: "TIMEOUT" } : {}
       };
     }
     async function runRefineWorktreeBootstrap(mesh, workspace, selection, summary, opts) {
@@ -93504,7 +93553,7 @@ ${asText(streams.stderr)}
     function recordRefineCommandFailure(summary, workspace, candidate, cwd, startedAt, resolvedCommand, error, opts) {
       const spawnResolutionFailed = isSpawnResolutionError(error);
       const stderr = truncateValidationOutput(error?.stderr || error?.message);
-      const { outputLimitExceeded, missingDependencyFailure } = classifyValidationFailure(error, stderr, spawnResolutionFailed);
+      const { outputLimitExceeded, missingDependencyFailure, timedOut } = classifyValidationFailure(error, stderr, spawnResolutionFailed);
       const failureLogPath = writeValidationFailureLog(
         workspace,
         summary.commandsRun.length,
@@ -93514,7 +93563,7 @@ ${asText(streams.stderr)}
       summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, error, false, {
         ...refineExecFailureExtras(error),
         ...failureLogPath ? { failureLogPath } : {},
-        ...spawnResolutionFailed ? { failureKind: "spawn_resolution_failed", resolvedCommand } : outputLimitExceeded ? { failureKind: "output_limit_exceeded" } : missingDependencyFailure ? { failureKind: "missing_dependencies" } : {}
+        ...spawnResolutionFailed ? { failureKind: "spawn_resolution_failed", resolvedCommand } : outputLimitExceeded ? { failureKind: "output_limit_exceeded" } : timedOut ? { failureKind: "validation_timeout", failureCode: "validation_timeout" } : missingDependencyFailure ? { failureKind: "missing_dependencies" } : {}
       }));
       reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, false);
       summary.status = "failed";
@@ -93535,6 +93584,9 @@ ${asText(streams.stderr)}
       } else if (outputLimitExceeded) {
         summary.failureKind = "output_limit_exceeded";
         summary.failureCode = "output_limit_exceeded";
+      } else if (timedOut) {
+        summary.failureKind = "validation_timeout";
+        summary.failureCode = "validation_timeout";
       } else if (missingDependencyFailure) {
         summary.failureKind = "missing_dependencies";
         summary.failureCode = "missing_dependencies";
@@ -93542,8 +93594,7 @@ ${asText(streams.stderr)}
     }
     async function runMeshRefineValidationGate(mesh, workspace, opts) {
       const { execFile: execFile9 } = await import("child_process");
-      const { promisify: promisify11 } = await import("util");
-      const execFileAsync6 = promisify11(execFile9);
+      const execFileAsync6 = (file, args, options, callback) => execFile9(file, args, Object.assign(options, { windowsHide: true }), callback);
       const selection = resolveMeshRefineValidationPlan(mesh, workspace, opts?.configBaseRefs?.length ? { baseRefs: opts.configBaseRefs } : void 0);
       const summary = {
         status: "skipped",
@@ -103037,7 +103088,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const refineCode = typeof result.code === "string" ? result.code : "";
       const landing = extractRefineMergeLanding(result);
       const isPostMergeWarning = result.success !== true && landing.merged && landing.pushed;
-      const kind = result.success === true ? "completed" : isPostMergeWarning ? "completed_with_warnings" : refineCode === "blocked_review" || refineCode === "worktree_missing" || refineCode === "worktree_dirty" || refineCode === "rebase_precondition_failed" || refineCode === "rebase_failed" || refineCode === "branch_worktree_dirty" ? "blocked_review" : refineCode === "validation_failed" || refineCode === "validation_dependencies_missing" || refineCode === "missing_dependencies" || refineCode === "dependency_bootstrap_failed" || refineCode === "spawn_resolution_failed" || refineCode === "validation_unavailable" || refineCode === "output_limit_exceeded" ? "validation_failed" : refineCode === "submodule_reachability_failed" ? "submodule_reachability_failed" : refineCode === "merge_failed" || refineCode === "patch_equivalence_failed" || refineCode === "needs_rebase" || refineCode === "needs_rebase_with_conflicts" ? "merge_failed" : refineCode === "cleanup_failed" ? "cleanup_failed" : "merge_failed";
+      const kind = result.success === true ? "completed" : isPostMergeWarning ? "completed_with_warnings" : refineCode === "blocked_review" || refineCode === "worktree_missing" || refineCode === "worktree_dirty" || refineCode === "rebase_precondition_failed" || refineCode === "rebase_failed" || refineCode === "branch_worktree_dirty" ? "blocked_review" : refineCode === "validation_failed" || refineCode === "validation_dependencies_missing" || refineCode === "missing_dependencies" || refineCode === "dependency_bootstrap_failed" || refineCode === "spawn_resolution_failed" || refineCode === "validation_unavailable" || refineCode === "validation_timeout" || refineCode === "output_limit_exceeded" ? "validation_failed" : refineCode === "submodule_reachability_failed" ? "submodule_reachability_failed" : refineCode === "merge_failed" || refineCode === "patch_equivalence_failed" || refineCode === "needs_rebase" || refineCode === "needs_rebase_with_conflicts" ? "merge_failed" : refineCode === "cleanup_failed" ? "cleanup_failed" : "merge_failed";
       const clean2 = kind === "completed";
       return { kind, landing, isPostMergeWarning, converged: clean2 || isPostMergeWarning, clean: clean2 };
     }
@@ -105112,7 +105163,7 @@ ${e?.stderr || ""}`;
       if (validationSummary.status === "failed") {
         const firstFailedCmd = Array.isArray(validationSummary.commandsRun) ? validationSummary.commandsRun.find((c) => c.passed === false) : void 0;
         const buildValidationFailedError = () => {
-          const base = validationSummary.failureCode === "missing_dependencies" ? "Refinery validation dependencies are missing for a change-affected package; merge/refine was not attempted. To make this self-service, either (1) configure .adhdev/worktree_bootstrap.json (or validation.bootstrapCommands in .adhdev/refine.json) so Refinery installs deps before validation, or (2) converge the branch via the documented manual fast-forward-only bypass (rebase onto the fetched base, verify strict ancestry, then push ff-only) instead of the refine gate." : validationSummary.failureCode === "dependency_bootstrap_failed" ? "Refinery dependency/bootstrap command failed; merge/refine was not attempted." : validationSummary.failureCode === "spawn_resolution_failed" ? validationSummary.spawnResolutionError || "Refinery validation command could not be spawned (executable not found); merge/refine was not attempted." : validationSummary.failureCode === "output_limit_exceeded" ? "Refinery validation command exceeded the output buffer and was KILLED mid-run, so its own exit status is unknown \u2014 the tests may well have been passing. This is an output-VOLUME problem, not a missing dependency and not a real test failure. Fix by reducing what the command prints (quiet the noisiest logs at their source, or pick a less verbose reporter), or raise outputLimitBytes for that command in .adhdev/refine.json." : "Refinery validation gate failed; merge/refine was not attempted.";
+          const base = validationSummary.failureCode === "missing_dependencies" ? "Refinery validation dependencies are missing for a change-affected package; merge/refine was not attempted. To make this self-service, either (1) configure .adhdev/worktree_bootstrap.json (or validation.bootstrapCommands in .adhdev/refine.json) so Refinery installs deps before validation, or (2) converge the branch via the documented manual fast-forward-only bypass (rebase onto the fetched base, verify strict ancestry, then push ff-only) instead of the refine gate." : validationSummary.failureCode === "dependency_bootstrap_failed" ? "Refinery dependency/bootstrap command failed; merge/refine was not attempted." : validationSummary.failureCode === "spawn_resolution_failed" ? validationSummary.spawnResolutionError || "Refinery validation command could not be spawned (executable not found); merge/refine was not attempted." : validationSummary.failureCode === "output_limit_exceeded" ? "Refinery validation command exceeded the output buffer and was KILLED mid-run, so its own exit status is unknown \u2014 the tests may well have been passing. This is an output-VOLUME problem, not a missing dependency and not a real test failure. Fix by reducing what the command prints (quiet the noisiest logs at their source, or pick a less verbose reporter), or raise outputLimitBytes for that command in .adhdev/refine.json." : validationSummary.failureCode === "validation_timeout" ? "TIMEOUT: Refinery validation command timed out after producing no output within its timeoutMs inactivity window and was terminated; merge/refine was not attempted." : "Refinery validation gate failed; merge/refine was not attempted.";
           if (!firstFailedCmd) return base;
           const cmdName = typeof firstFailedCmd.displayCommand === "string" ? firstFailedCmd.displayCommand : typeof firstFailedCmd.command === "string" ? [firstFailedCmd.command, ...Array.isArray(firstFailedCmd.args) ? firstFailedCmd.args : []].join(" ").trim() : typeof firstFailedCmd.cmd === "string" ? firstFailedCmd.cmd : "";
           const rawOutput = [firstFailedCmd.stdout, firstFailedCmd.stderr, firstFailedCmd.output].filter((s2) => typeof s2 === "string" && s2.length > 0).join("\n");

@@ -250,7 +250,9 @@ export async function refineValidationStage(self: DaemonCommandRouter, ctx: Refi
                                         + 'This is an output-VOLUME problem, not a missing dependency and not a real test failure. '
                                         + 'Fix by reducing what the command prints (quiet the noisiest logs at their source, or pick a less verbose reporter), '
                                         + 'or raise outputLimitBytes for that command in .adhdev/refine.json.'
-                                    : 'Refinery validation gate failed; merge/refine was not attempted.';
+                                    : validationSummary.failureCode === 'validation_timeout'
+                                        ? 'TIMEOUT: Refinery validation command timed out after producing no output within its timeoutMs inactivity window and was terminated; merge/refine was not attempted.'
+                                        : 'Refinery validation gate failed; merge/refine was not attempted.';
                     if (!firstFailedCmd) return base;
                     const cmdName = typeof firstFailedCmd.displayCommand === 'string' ? firstFailedCmd.displayCommand
                         : typeof firstFailedCmd.command === 'string'

@@ -313,16 +313,20 @@ const REFINE_VALIDATION_OUTPUT_LIMIT_BYTES = 128 * 1024;
  * dependency heuristic, never the reverse.
  */
 export function classifyValidationFailure(
-    error: { code?: unknown; message?: unknown } | null | undefined,
+    error: { code?: unknown; message?: unknown; killed?: unknown; timedOut?: unknown } | null | undefined,
     stderr: string,
     spawnResolutionFailed: boolean,
-): { outputLimitExceeded: boolean; missingDependencyFailure: boolean } {
+): { outputLimitExceeded: boolean; missingDependencyFailure: boolean; timedOut: boolean } {
     const outputLimitExceeded = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
         || /maxBuffer length exceeded/i.test(String(error?.message || ''));
+    const timedOut = !spawnResolutionFailed
+        && !outputLimitExceeded
+        && (error?.timedOut === true || error?.code === 'ETIMEDOUT' || error?.killed === true || /timed out/i.test(String(error?.message || '')));
     const missingDependencyFailure = !spawnResolutionFailed
         && !outputLimitExceeded
+        && !timedOut
         && /Cannot find module|MODULE_NOT_FOUND|node_modules|command not found|not found/i.test(stderr);
-    return { outputLimitExceeded, missingDependencyFailure };
+    return { outputLimitExceeded, missingDependencyFailure, timedOut };
 }
 
 // REFINE-LOG-PRESERVATION. The summary above is a payload budget, not a
@@ -596,7 +600,12 @@ export function buildRefineVendorDriftHint(params: {
 }
 
 type RefineValidationSelection = ReturnType<typeof resolveMeshRefineValidationPlan>;
-type RefineGateExecFile = (file: string, args: string[], options: Record<string, unknown>) => Promise<{ stdout?: string; stderr?: string }>;
+type RefineGateExecFile = (
+    file: string,
+    args: string[],
+    options: Record<string, unknown>,
+    callback: (error: any, stdout: string, stderr: string) => void,
+) => any;
 
 interface MeshRefineValidationGateOptions {
     /** M2-2: persisted node bootstrap state for staleness evaluation. */
@@ -772,24 +781,69 @@ function selectRefineCommandsToRun(
  * same helper the PTY path uses, and a .cmd/.bat shim is wrapped in cmd.exe /c
  * (no-ops off win32 / for a real .exe).
  */
-async function execRefineCommand(execFileAsync: RefineGateExecFile, candidate: MeshRefineValidationCommand, cwd: string, resolvedCommand: string) {
+async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: MeshRefineValidationCommand, cwd: string, resolvedCommand: string): Promise<{ stdout?: string; stderr?: string }> {
     const spawn = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
-    return execFileAsync(spawn.file, spawn.args, {
+    const idleTimeoutMs = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
+    const execOptions: Record<string, unknown> = {
         cwd,
         encoding: 'utf8',
         windowsHide: true,
-        timeout: candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS,
+        timeout: 0,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
         ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    };
+    return new Promise((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let idleTimedOut = false;
+        let childRef: any;
+        const resetTimer = () => {
+            if (timer) clearTimeout(timer);
+            if (idleTimeoutMs > 0) {
+                timer = setTimeout(() => {
+                    idleTimedOut = true;
+                    try { childRef?.kill?.('SIGTERM'); } catch { /* ignore */ }
+                }, idleTimeoutMs);
+            }
+        };
+        const child = execFileFn(spawn.file, spawn.args, execOptions, (error: any, stdout: string, stderr: string) => {
+            if (timer) clearTimeout(timer);
+            if (error || idleTimedOut) {
+                const err: any = error || new Error(`TIMEOUT: validation command exceeded ${idleTimeoutMs}ms without output`);
+                err.stdout = err.stdout ?? stdout;
+                err.stderr = err.stderr ?? stderr;
+                if (idleTimedOut) {
+                    err.killed = true;
+                    err.timedOut = true;
+                    err.code = err.code ?? 'ETIMEDOUT';
+                    if (!/timed out|TIMEOUT/i.test(String(err.message || ''))) {
+                        err.message = `TIMEOUT: validation command timed out after ${idleTimeoutMs}ms without output (${err.message || 'killed'})`;
+                    }
+                }
+                reject(err);
+                return;
+            }
+            resolve({ stdout, stderr });
+        });
+        execOptions.timeout = idleTimeoutMs;
+        childRef = child;
+        if (child && (child.stdout || child.stderr)) {
+            resetTimer();
+            child.stdout?.on?.('data', resetTimer);
+            child.stderr?.on?.('data', resetTimer);
+        } else if (timer) {
+            clearTimeout(timer);
+        }
     });
 }
 
 function refineExecFailureExtras(error: any) {
+    const timedOut = error?.timedOut === true || error?.code === 'ETIMEDOUT' || error?.killed === true || /timed out/i.test(String(error?.message || ''));
     return {
         exitCode: typeof error?.code === 'number' ? error.code : null,
         signal: typeof error?.signal === 'string' ? error.signal : null,
-        timedOut: error?.killed === true || /timed out/i.test(String(error?.message || '')),
+        timedOut,
+        ...(timedOut ? { status: 'TIMEOUT' } : {}),
     };
 }
 
@@ -899,7 +953,7 @@ function recordRefineCommandFailure(
     // coordinator surfaces the real cause (win32 .cmd resolution).
     const spawnResolutionFailed = isSpawnResolutionError(error);
     const stderr = truncateValidationOutput(error?.stderr || error?.message);
-    const { outputLimitExceeded, missingDependencyFailure } =
+    const { outputLimitExceeded, missingDependencyFailure, timedOut } =
         classifyValidationFailure(error, stderr, spawnResolutionFailed);
     // REFINE-LOG-PRESERVATION: keep the UNtruncated streams on disk before
     // the record below reduces them to the head+tail summary, and hand the
@@ -916,6 +970,7 @@ function recordRefineCommandFailure(
         ...(spawnResolutionFailed
             ? { failureKind: 'spawn_resolution_failed', resolvedCommand }
             : outputLimitExceeded ? { failureKind: 'output_limit_exceeded' }
+            : timedOut ? { failureKind: 'validation_timeout', failureCode: 'validation_timeout' }
             : missingDependencyFailure ? { failureKind: 'missing_dependencies' } : {}),
     }));
     reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, false);
@@ -943,6 +998,9 @@ function recordRefineCommandFailure(
     } else if (outputLimitExceeded) {
         summary.failureKind = 'output_limit_exceeded';
         summary.failureCode = 'output_limit_exceeded';
+    } else if (timedOut) {
+        summary.failureKind = 'validation_timeout';
+        summary.failureCode = 'validation_timeout';
     } else if (missingDependencyFailure) {
         summary.failureKind = 'missing_dependencies';
         summary.failureCode = 'missing_dependencies';
@@ -955,8 +1013,8 @@ export async function runMeshRefineValidationGate(
     opts?: MeshRefineValidationGateOptions,
 ): Promise<MeshRefineValidationSummary> {
     const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const execFileAsync = promisify(execFile) as unknown as RefineGateExecFile;
+    const execFileAsync: RefineGateExecFile = (file, args, options, callback) =>
+        execFile(file, args, Object.assign(options, { windowsHide: true }), callback);
     const selection = resolveMeshRefineValidationPlan(mesh, workspace, opts?.configBaseRefs?.length ? { baseRefs: opts.configBaseRefs } : undefined);
     const summary: MeshRefineValidationSummary = {
         status: 'skipped',
