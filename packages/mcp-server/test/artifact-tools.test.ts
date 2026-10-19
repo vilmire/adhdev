@@ -256,6 +256,21 @@ test('coordinator artifact_list resolves authorized session/mesh scope and rejec
   assert.equal(foreignOut.success, false);
   assert.equal(foreignOut.code, 'artifact_session_mismatch');
   assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+
+  // 4) Empty coordinator/mesh session scope must fail closed before reaching transport
+  const emptyCtx: MeshContext = {
+    transport,
+    mesh: { id: 'foreign-mesh', nodes: [] } as any,
+  };
+  const emptyScopeOut = JSON.parse(await callCoordinatorArtifactList(emptyCtx, { session_id: 'victim' }));
+  assert.equal(emptyScopeOut.success, false);
+  assert.equal(emptyScopeOut.code, 'artifact_session_mismatch');
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
+
+  const missingMeshOut = JSON.parse(await callCoordinatorArtifactList({ transport, coordinatorSessionId: 'sess_coord_main' } as any, {}));
+  assert.equal(missingMeshOut.success, false);
+  assert.equal(missingMeshOut.code, 'artifact_session_mismatch');
+  assert.equal(calls.filter((c) => c.verb === 'artifact_list').length, 2);
 });
 
 test('standard mode artifact_register and artifact_list use transport.command and strip forged fields', async () => {

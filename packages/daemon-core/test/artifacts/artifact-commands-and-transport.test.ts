@@ -2,6 +2,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:fs', async (importOriginal) => {
+    const real: any = await importOriginal();
+    return {
+        ...real,
+        realpathSync: vi.fn(real.realpathSync),
+    };
+});
 import {
     ArtifactStore,
     MAX_ARTIFACTS_PER_SESSION,
@@ -102,6 +110,12 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
         __resetWorkerTaskTokensForTest();
         __resetWorkerSessionBindsForTest();
         __resetTranscriptProjectionForTests();
+        configureTranscriptProjection({
+            daemonId: () => 'test-daemon',
+            writerId: () => 'test-writer',
+            epoch: 'test-epoch',
+            appendChatFrame: async () => {},
+        });
 
         meshStore = MeshRuntimeStore.getInstance();
         artifactStore = new ArtifactStore(meshStore.db);
@@ -347,6 +361,15 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 createdAt: nowIso,
                 updatedAt: nowIso,
             } as any);
+            seedMeshAttempt({
+                meshId,
+                taskId,
+                sessionId: workerSessionId,
+                nodeId,
+                attemptId: 'attempt-worker-101',
+                attemptNo: 0,
+                stage: 'generating',
+            });
 
             const bind = mintWorkerSessionBind({
                 meshId,
@@ -359,6 +382,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 taskId,
                 sessionId: workerSessionId,
                 nodeId,
+                attemptId: 'attempt-worker-101',
             });
 
             // Verify 3-arg resolveWorkerIdentity(store, bind, token) directly
@@ -443,11 +467,21 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 createdAt: nowIso,
                 updatedAt: nowIso,
             } as any);
+            seedMeshAttempt({
+                meshId,
+                taskId: 'task-mismatch-ws',
+                sessionId: mismatchSessionId,
+                nodeId: 'node-2',
+                attemptId: 'attempt-mismatch-ws',
+                attemptNo: 0,
+                stage: 'generating',
+            });
             const mismatchToken = mintWorkerTaskToken({
                 meshId,
                 taskId: 'task-mismatch-ws',
                 sessionId: mismatchSessionId,
                 nodeId: 'node-2',
+                attemptId: 'attempt-mismatch-ws',
             });
             const wsMismatchRes = await artifactHandlers.artifact_register(ctx, {
                 token: mismatchToken.token,
@@ -1341,6 +1375,261 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             } finally {
                 __resetTranscriptProjectionForTests();
             }
+        });
+
+        it('F2 delta: does not rebaseline root between store verification and the guarded reader when realpathSync races', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'LOCAL-ARTIFACT-CONTENT-TEST-MARKER', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+            const artifactId = artifactStore.register({
+                sessionId: 'victim',
+                workspaceRoot: workspaceA,
+                path: 'private.md',
+            }).record.artifactId;
+
+            const real: any = await vi.importActual('node:fs');
+            const pinned = real.realpathSync(workspaceA);
+            const outside = path.join(tempRoot, 'outside-race');
+            fs.mkdirSync(outside, { recursive: true });
+            fs.writeFileSync(path.join(outside, 'private.md'), 'OUTSIDE-RACE-MARKER', 'utf8');
+
+            let count = 0;
+            let swapped = false;
+            vi.mocked(fs.realpathSync).mockImplementation(((target: any, ...args: any[]) => {
+                const result = real.realpathSync(target, ...args);
+                if ((String(target) === workspaceA || String(target) === pinned) && ++count === 2) {
+                    fs.renameSync(workspaceA, path.join(tempRoot, 'old-workspace-a'));
+                    fs.symlinkSync(outside, workspaceA, 'dir');
+                    swapped = true;
+                }
+                return result;
+            }) as any);
+
+            try {
+                const result = await router.execute('artifact_fetch', { sessionId: 'victim', artifactId }, 'p2p');
+                expect(swapped).toBe(true);
+                expect(result.success).toBe(false);
+                expect(result.code).toBe('path_outside_workspace');
+            } finally {
+                vi.mocked(fs.realpathSync).mockImplementation(real.realpathSync);
+            }
+        });
+
+        it('F3 delta: refuses a token naming an absent queue assignment and absent attempt', async () => {
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const router = new DaemonCommandRouter(deps);
+            const missingToken = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'missing-task',
+                sessionId: 'worker',
+                attemptId: 'missing-attempt',
+            });
+            expect(meshStore.findAssignedBySession('mesh', 'worker')).toBeNull();
+            expect(meshStore.turnStore().getAttempt('missing-attempt')).toBeNull();
+            const res = await router.execute('artifact_list', { token: missingToken.token }, 'ipc');
+            expect(res.success).toBe(false);
+        });
+
+        it('F3 delta: refuses an assigned token or bind with no corresponding real ledger attempt', async () => {
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const router = new DaemonCommandRouter(deps);
+            const now = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'task',
+                meshId: 'mesh',
+                message: 'fixture',
+                status: 'assigned',
+                assignedSessionId: 'worker',
+                workspace: workspaceA,
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+            const token = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'absent-attempt',
+            });
+            const bind = mintWorkerSessionBind({ meshId: 'mesh', sessionId: 'worker' });
+            for (const credential of [{ token: token.token }, { bind: bind.bind }]) {
+                const res = await router.execute('artifact_list', credential, 'ipc');
+                expect(res.success).toBe(false);
+            }
+        });
+
+        it('F3 delta: refuses a current real attempt whose queue assignment no longer exists', async () => {
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const router = new DaemonCommandRouter(deps);
+            seedMeshAttempt({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'attempt-current',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const token = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'attempt-current',
+            });
+            const res = await router.execute('artifact_list', { token: token.token }, 'ipc');
+            expect(res.success).toBe(false);
+        });
+
+        it('F3 delta: rejects a terminal real attempt for all aliases with stale_attempt', async () => {
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'WORKER-CONTENT', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+            const now = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'task',
+                meshId: 'mesh',
+                message: 'fixture',
+                status: 'assigned',
+                assignedSessionId: 'worker',
+                workspace: workspaceA,
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+            seedMeshAttempt({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'terminal',
+                attemptNo: 0,
+                stage: 'completed',
+            });
+            const termToken = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'terminal',
+            });
+            const termBind = mintWorkerSessionBind({ meshId: 'mesh', sessionId: 'worker' });
+            const ownedId = artifactStore.register({
+                sessionId: 'worker',
+                workspaceRoot: workspaceA,
+                path: 'private.md',
+            }).record.artifactId;
+            for (const credential of [{ token: termToken.token }, { bind: termBind.bind }]) {
+                for (const cmd of allAliases) {
+                    const result = await router.execute(
+                        cmd,
+                        { ...credential, path: 'private.md', artifactId: ownedId },
+                        'ipc',
+                    );
+                    expect(result.success).toBe(false);
+                    expect(result.code).toBe('stale_attempt');
+                }
+            }
+        });
+
+        it('F3 delta: refuses task assignment to a different session even with a nonterminal token attempt', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const router = new DaemonCommandRouter(deps);
+            const now = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'task',
+                meshId: 'mesh',
+                message: 'fixture',
+                status: 'assigned',
+                assignedSessionId: 'victim',
+                workspace: workspaceA,
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+            seedMeshAttempt({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'current',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const crossSessToken = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'current',
+            });
+            const res = await router.execute('artifact_list', { token: crossSessToken.token }, 'ipc');
+            expect(res.success).toBe(false);
+            expect(res.code).toBe('artifact_session_mismatch');
+        });
+
+        it('F5 delta: reports unpublished (artifact_publication_failed) when the projection service is unavailable', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'SECRET', 'utf8');
+            const preId = artifactStore.register({
+                sessionId: 'victim',
+                workspaceRoot: workspaceA,
+                path: 'private.md',
+            }).record.artifactId;
+
+            configureTranscriptProjection(null);
+            const router = new DaemonCommandRouter(deps);
+            const result = await router.execute(
+                'artifact_register',
+                { sessionId: 'victim', path: 'private.md' },
+                'ipc',
+            );
+            expect(result.registered).toBe(true);
+            expect(result.artifactId).toBe(preId);
+            expect(result.success).toBe(false);
+            expect(result.code).toBe('artifact_publication_failed');
+            expect(result.published).toBe(false);
+            expect(result.messageKey).toBeUndefined();
         });
     });
 });

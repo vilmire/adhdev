@@ -50,6 +50,12 @@ export interface ResolveArtifactFileOptions {
     declaredKind?: ArtifactKind;
     declaredMime?: string;
     title?: string;
+    /**
+     * When provided (e.g. from persisted `session_artifacts.workspace_root`),
+     * `readVerifiedArtifactFile` refuses to re-baseline if `realpathSync(workspaceRoot)`
+     * resolves to any directory other than this exact canonical path.
+     */
+    pinnedCanonicalWorkspaceRoot?: string;
     _testHooks?: ArtifactTestRaceHooks;
 }
 
@@ -450,7 +456,18 @@ export function readVerifiedArtifactFile(
     declaredKindOrOptions?: ArtifactKind | ResolveArtifactFileOptions,
 ): VerifiedArtifactFileRead {
     const options = normalizeOptions(declaredKindOrOptions);
+    const expectedPinnedRoot =
+        typeof options.pinnedCanonicalWorkspaceRoot === 'string' &&
+        options.pinnedCanonicalWorkspaceRoot.trim().length > 0
+            ? path.resolve(options.pinnedCanonicalWorkspaceRoot)
+            : null;
     const { realWorkspaceRoot, resolvedWorkspaceInput } = resolveCanonicalWorkspaceRoot(workspaceRoot);
+    if (expectedPinnedRoot !== null && realWorkspaceRoot !== expectedPinnedRoot) {
+        throw new ArtifactGuardError(
+            'path_outside_workspace',
+            'Canonical workspace root changed from pinned workspace root before read (path_outside_workspace)',
+        );
+    }
     const { candidatePath, lexicalRel } = resolveCandidateWithinWorkspace(
         realWorkspaceRoot,
         resolvedWorkspaceInput,
@@ -472,7 +489,11 @@ export function readVerifiedArtifactFile(
             'Canonical workspace root is inaccessible (invalid_workspace_root)',
         );
     }
-    if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory()) {
+    if (
+        rootLstat.isSymbolicLink() ||
+        !rootLstat.isDirectory() ||
+        (expectedPinnedRoot !== null && realWorkspaceRoot !== expectedPinnedRoot)
+    ) {
         throw new ArtifactGuardError(
             'path_outside_workspace',
             'Canonical workspace root is not a regular directory (path_outside_workspace)',

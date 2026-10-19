@@ -240,10 +240,19 @@ export class ArtifactStore {
         const declaredKind = input.declaredKind ?? input.kind;
         const declaredMime = input.declaredMime ?? input.mime;
 
+        const prePriorRootRow = this.db
+            .prepare<{ workspace_root: string }>(
+                `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`,
+            )
+            .get(sessionId);
+
         const resolved = resolveArtifactFile(input.workspaceRoot, rawPath, {
             declaredKind,
             declaredMime,
             title: input.title,
+            pinnedCanonicalWorkspaceRoot: prePriorRootRow
+                ? path.resolve(prePriorRootRow.workspace_root)
+                : undefined,
             _testHooks: input._testHooks,
         });
 
@@ -596,6 +605,7 @@ export class ArtifactStore {
             declaredKind: record.kind,
             declaredMime: record.mime,
             title: record.title,
+            pinnedCanonicalWorkspaceRoot: pinnedCanonicalRoot,
             _testHooks: options?._testHooks,
         });
 

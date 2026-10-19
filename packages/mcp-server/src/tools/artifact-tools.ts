@@ -218,19 +218,44 @@ export async function callCoordinatorArtifactList(
 
     const requestedSessionId = trimString(args.session_id);
     const coordSessionId = trimString(ctx.coordinatorSessionId);
+    const meshId = trimString(ctx.mesh?.id);
     const authorizedSessions = collectMeshAuthorizedSessionIds(ctx);
 
-    let resolvedSessionId = requestedSessionId || coordSessionId;
-    if (!resolvedSessionId && authorizedSessions.size > 0) {
-        resolvedSessionId = [...authorizedSessions][0];
+    if (!meshId || authorizedSessions.size === 0) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: 'Coordinator has no authorized session/project scope for artifact_list (artifact_session_mismatch)',
+            },
+            null,
+            2,
+        );
     }
 
-    if (requestedSessionId && authorizedSessions.size > 0 && !authorizedSessions.has(requestedSessionId)) {
+    if (requestedSessionId && !authorizedSessions.has(requestedSessionId)) {
         return JSON.stringify(
             {
                 success: false,
                 code: 'artifact_session_mismatch',
                 error: `Session "${requestedSessionId}" is outside the coordinator's authorized session/project scope (artifact_session_mismatch)`,
+            },
+            null,
+            2,
+        );
+    }
+
+    let resolvedSessionId = requestedSessionId || coordSessionId;
+    if (!resolvedSessionId) {
+        resolvedSessionId = [...authorizedSessions][0];
+    }
+
+    if (!resolvedSessionId || !authorizedSessions.has(resolvedSessionId)) {
+        return JSON.stringify(
+            {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: 'Target session is outside the coordinator authorized session scope (artifact_session_mismatch)',
             },
             null,
             2,
@@ -243,11 +268,11 @@ export async function callCoordinatorArtifactList(
             : undefined;
 
     const result = await ctx.transport.command('artifact_list', {
-        ...(resolvedSessionId ? { sessionId: resolvedSessionId } : {}),
-        ...(coordSessionId && (!resolvedSessionId || resolvedSessionId === coordSessionId)
+        sessionId: resolvedSessionId,
+        ...(coordSessionId && resolvedSessionId === coordSessionId
             ? { callerSessionId: coordSessionId }
             : {}),
-        ...(ctx.mesh?.id ? { meshId: ctx.mesh.id } : {}),
+        meshId,
         ...(limit !== undefined ? { limit } : {}),
     });
     return JSON.stringify(result, null, 2);
