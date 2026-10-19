@@ -22,7 +22,11 @@
 
 import { LOG } from '../logging/logger.js';
 import { findLiveCoordinatorsForContextFile } from '../mesh/coordinator-registry.js';
-import { rollbackOverlappingFailedContextFileInjection } from './antigravity-coordinator-rules.js';
+import {
+    hasActiveAntigravityOwnershipRecord,
+    rollbackOverlappingFailedContextFileInjection,
+    type SurvivingCoordinatorDescriptor,
+} from './antigravity-coordinator-rules.js';
 import {
     cleanupCoordinatorAgentFile,
     ensureCoordinatorContextFileMaterialized,
@@ -77,16 +81,29 @@ export function scheduleInjectionCleanup(effect: InjectionFiles | null | undefin
     if (!effect || !hasInjectionFiles(effect)) return Promise.resolve();
     if (!opts.launched) {
         if (effect.contextFilePath) {
-            const liveOwners = findLiveCoordinatorsForContextFile(effect.contextFilePath);
-            if (rollbackOverlappingFailedContextFileInjection(effect, liveOwners.length > 0)) {
+            const contextFilePath = effect.contextFilePath;
+            const liveOwners = findLiveCoordinatorsForContextFile(contextFilePath);
+            const liveDescriptors: SurvivingCoordinatorDescriptor[] = liveOwners.map((entry) => ({
+                sessionId: entry.sessionId,
+                workspace: entry.workspace ?? '',
+                cliType: entry.cliType,
+                systemPrompt: entry.systemPrompt,
+                targetPath: contextFilePath,
+                openSentinel: entry.injection?.contextFile?.open,
+                closeSentinel: entry.injection?.contextFile?.close,
+                owned: entry.injection?.contextFile?.owned ?? entry.injection?.owned,
+                additionalOwnedFiles: entry.injection?.contextFile?.additionalOwnedFiles,
+                homeDir: entry.injection?.contextFile?.homeDir,
+            }));
+            if (rollbackOverlappingFailedContextFileInjection(effect, liveOwners.length > 0, liveDescriptors)) {
                 const activeOwner = liveOwners[liveOwners.length - 1];
-                if (activeOwner) {
+                if (activeOwner && !hasActiveAntigravityOwnershipRecord(contextFilePath)) {
                     ensureCoordinatorContextFileMaterialized(activeOwner);
                 }
                 if (effect.agentFilePath) cleanupCoordinatorAgentFile(effect.agentFilePath);
                 LOG.info(
                     'MeshCoordinator',
-                    `Preserved active coordinator rules at ${effect.contextFilePath} after overlapping launch failed (${opts.label})`,
+                    `Preserved active coordinator rules at ${contextFilePath} after overlapping launch failed (${opts.label})`,
                 );
                 return Promise.resolve();
             }

@@ -65846,13 +65846,23 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       if (!sentinels.open) return text4;
       return text4.replace(wrapperBlockPattern(sentinels), "");
     }
-    function stripSentinelBlockPreservingSurroundingBytes(text4, sentinels) {
+    function stripSentinelBlockPreservingSurroundingBytes(text4, sentinels, recordedSeparators) {
       if (!sentinels.open) return text4;
       const pattern = wrapperBlockPattern(sentinels);
       const match = pattern.exec(text4);
       if (!match || match.index === void 0) return text4;
-      const before = text4.slice(0, match.index);
-      const after = text4.slice(match.index + match[0].length);
+      let before = text4.slice(0, match.index);
+      let after = text4.slice(match.index + match[0].length);
+      if (recordedSeparators) {
+        const { leading, trailing } = recordedSeparators;
+        if (leading && before.endsWith(leading)) {
+          before = before.slice(0, -leading.length);
+        }
+        if (trailing && after.startsWith(trailing)) {
+          after = after.slice(trailing.length);
+        }
+        return before + after;
+      }
       if (before.length > 0 && after.length === 0) {
         if (before.endsWith("\n\n")) return before.slice(0, -2);
         if (before.endsWith("\r\n\r\n")) return before.slice(0, -4);
@@ -65864,13 +65874,25 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         return trimmedBefore.endsWith("\n") ? trimmedBefore : trimmedBefore + after;
       }
       if (before.length > 0 && after.length > 0) {
-        const trimmedBefore = before.endsWith("\n\n") ? before.slice(0, -2) : before.endsWith("\r\n\r\n") ? before.slice(0, -4) : before;
+        const trimmedBefore = before.endsWith("\n\n") ? before.slice(0, -2) : before;
         return trimmedBefore + after;
       }
       if (before.length === 0 && after.length > 0) {
         return after.replace(/^(?:\r?\n){1,2}/, "");
       }
       return "";
+    }
+    function getOrCreateTargetState(resolvedTarget) {
+      let state2 = _stateByTarget.get(resolvedTarget);
+      if (!state2) {
+        state2 = { records: [] };
+        _stateByTarget.set(resolvedTarget, state2);
+      }
+      return state2;
+    }
+    function recordContextFileWrapperSeparators(targetPath, leading, trailing, createdFile) {
+      const state2 = getOrCreateTargetState((0, import_path14.resolve)(targetPath));
+      state2.wrapperSeparators = { leading, trailing, createdFile };
     }
     function computeAntigravityCoordinatorScope(workspace, systemPrompt) {
       const hash3 = (0, import_crypto17.createHash)("sha256").update((0, import_path14.resolve)(workspace));
@@ -66043,7 +66065,7 @@ ${renderedWrapperBlock}`;
       } catch {
       }
     }
-    function restorePreWriteSnapshot(snapshot) {
+    function restoreSynchronousWriteFailure(snapshot) {
       for (const written of snapshot.writtenFiles) {
         if (!snapshot.previousScopedFiles.has(written)) {
           try {
@@ -66074,17 +66096,176 @@ ${renderedWrapperBlock}`;
       const rulesDir = (0, import_path14.join)(snapshot.workspace, ".agents", "rules");
       removeDirIfEmpty(rulesDir);
       removeDirIfEmpty((0, import_path14.join)(snapshot.workspace, ".agents"));
-      const resolvedTarget = (0, import_path14.resolve)(snapshot.targetPath);
-      if (snapshot.priorTrackedCompanion) {
-        _companionFilesByContextPath.set(resolvedTarget, snapshot.priorTrackedCompanion);
-      } else {
-        _companionFilesByContextPath.delete(resolvedTarget);
+    }
+    function getActiveRecordsForTarget(resolvedTarget) {
+      const state2 = _stateByTarget.get(resolvedTarget);
+      if (!state2) return [];
+      return state2.records.filter((r) => r.status === "provisional" || r.status === "registered");
+    }
+    function collectActiveRecordFiles(resolvedTarget) {
+      const protectedFiles = /* @__PURE__ */ new Set();
+      for (const record4 of getActiveRecordsForTarget(resolvedTarget)) {
+        for (const f of record4.writtenFiles) {
+          protectedFiles.add(f);
+        }
       }
-      if (snapshot.priorUnsettledEffect) {
-        _latestUnsettledEffectByTarget.set(resolvedTarget, snapshot.priorUnsettledEffect);
-      } else {
-        _latestUnsettledEffectByTarget.delete(resolvedTarget);
+      return protectedFiles;
+    }
+    function restoreActiveOwnershipRecordInPlace(record4) {
+      for (const [filePath2, content] of record4.chunkContents.entries()) {
+        try {
+          (0, import_fs20.mkdirSync)((0, import_path14.dirname)(filePath2), { recursive: true });
+          (0, import_fs20.writeFileSync)(filePath2, content, "utf-8");
+        } catch {
+        }
       }
+      const resolvedTarget = (0, import_path14.resolve)(record4.targetPath);
+      const state2 = getOrCreateTargetState(resolvedTarget);
+      try {
+        (0, import_fs20.mkdirSync)((0, import_path14.dirname)(record4.targetPath), { recursive: true });
+        if ((0, import_fs20.existsSync)(record4.targetPath)) {
+          const current4 = (0, import_fs20.readFileSync)(record4.targetPath, "utf-8");
+          if (record4.sentinels.open && current4.includes(record4.sentinels.open)) {
+            const updated = current4.replace(
+              wrapperBlockPattern(record4.sentinels),
+              () => record4.renderedWrapperBlock
+            );
+            if (updated !== current4) {
+              (0, import_fs20.writeFileSync)(record4.targetPath, updated, "utf-8");
+            }
+          } else {
+            (0, import_fs20.writeFileSync)(record4.targetPath, `${current4}
+
+${record4.renderedWrapperBlock}`, "utf-8");
+            state2.wrapperSeparators = { leading: "\n\n", trailing: "", createdFile: false };
+          }
+        } else {
+          (0, import_fs20.writeFileSync)(record4.targetPath, record4.renderedWrapperBlock, "utf-8");
+          state2.wrapperSeparators = { leading: "", trailing: "", createdFile: true };
+        }
+      } catch {
+      }
+      _companionFilesByContextPath.set(resolvedTarget, {
+        workspace: record4.workspace,
+        homeDir: record4.homeDir,
+        scope: record4.scope,
+        files: [...record4.writtenFiles]
+      });
+    }
+    function deleteUnsharedRecordFiles(record4, protectedFiles) {
+      for (const filePath2 of record4.writtenFiles) {
+        if (protectedFiles.has(filePath2)) continue;
+        try {
+          if ((0, import_fs20.existsSync)(filePath2)) (0, import_fs20.unlinkSync)(filePath2);
+        } catch {
+        }
+      }
+      const baseCoordConfigDir = (0, import_path14.join)(record4.homeDir, ".gemini", "config", "adhdev-mesh-coordinator");
+      removeDirIfEmpty((0, import_path14.join)(baseCoordConfigDir, record4.scope));
+      removeDirIfEmpty(baseCoordConfigDir);
+      const rulesDir = (0, import_path14.join)(record4.workspace, ".agents", "rules");
+      removeDirIfEmpty(rulesDir);
+      removeDirIfEmpty((0, import_path14.join)(record4.workspace, ".agents"));
+    }
+    function hasActiveAntigravityOwnershipRecord(targetPath) {
+      return getActiveRecordsForTarget((0, import_path14.resolve)(targetPath)).length > 0;
+    }
+    function markAntigravityCoordinatorRegistered(opts) {
+      if (!opts.targetPath) return;
+      const resolvedTarget = (0, import_path14.resolve)(opts.targetPath);
+      const state2 = _stateByTarget.get(resolvedTarget);
+      if (!state2) return;
+      const expectedScope = opts.systemPrompt ? computeAntigravityCoordinatorScope(opts.workspace, opts.systemPrompt) : void 0;
+      for (let i = state2.records.length - 1; i >= 0; i--) {
+        const rec5 = state2.records[i];
+        if (rec5.status === "failed" || rec5.status === "terminated") continue;
+        if (rec5.sessionId && rec5.sessionId !== opts.sessionId) continue;
+        if (expectedScope && rec5.scope === expectedScope) {
+          rec5.status = "registered";
+          rec5.sessionId = opts.sessionId;
+          return;
+        }
+        if (opts.additionalOwnedFiles?.length && opts.additionalOwnedFiles.every((f) => rec5.writtenFiles.includes(f))) {
+          rec5.status = "registered";
+          rec5.sessionId = opts.sessionId;
+          return;
+        }
+      }
+    }
+    function repointAntigravityContextFileOnCoordinatorExit(departing, survivingRegistered) {
+      const resolvedTarget = (0, import_path14.resolve)(departing.targetPath);
+      const state2 = _stateByTarget.get(resolvedTarget);
+      const departingScope = departing.systemPrompt ? computeAntigravityCoordinatorScope(departing.workspace, departing.systemPrompt) : void 0;
+      if (state2) {
+        const survivingIds = new Set(survivingRegistered.map((s2) => s2.sessionId));
+        let marked = false;
+        for (let i = state2.records.length - 1; i >= 0; i--) {
+          const rec5 = state2.records[i];
+          if (rec5.status === "failed" || rec5.status === "terminated") continue;
+          if (rec5.sessionId === departing.sessionId) {
+            rec5.status = "terminated";
+            marked = true;
+          } else if (rec5.status === "registered" && rec5.sessionId && !survivingIds.has(rec5.sessionId)) {
+            rec5.status = "terminated";
+          }
+        }
+        if (!marked && departingScope) {
+          for (let i = state2.records.length - 1; i >= 0; i--) {
+            const rec5 = state2.records[i];
+            if (rec5.status === "failed" || rec5.status === "terminated") continue;
+            if (!rec5.sessionId && rec5.scope === departingScope) {
+              rec5.status = "terminated";
+              break;
+            }
+          }
+        }
+      }
+      const activeRecords = getActiveRecordsForTarget(resolvedTarget);
+      const hasSurvivingOwner = activeRecords.length > 0 || survivingRegistered.length > 0;
+      if (!hasSurvivingOwner) {
+        return false;
+      }
+      const newestRecord = activeRecords[activeRecords.length - 1];
+      const newestRegistered = survivingRegistered[survivingRegistered.length - 1];
+      if (newestRecord) {
+        restoreActiveOwnershipRecordInPlace(newestRecord);
+      } else if (newestRegistered?.systemPrompt && newestRegistered.workspace) {
+        const open = newestRegistered.openSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.open;
+        const close2 = newestRegistered.closeSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close;
+        const wrapper = `${open}
+{prompt}
+${close2}`;
+        const effectiveHome = newestRegistered.homeDir?.trim() || extractAntigravityCoordinatorHomeFromPaths(newestRegistered.additionalOwnedFiles);
+        writeAntigravityCoordinatorContextFiles({
+          systemPrompt: newestRegistered.systemPrompt,
+          target: newestRegistered.targetPath,
+          wrapper,
+          sentinels: { open, close: close2 },
+          ownedDeclared: newestRegistered.owned === true,
+          ctx: {
+            cliArgs: [],
+            launchEnv: effectiveHome ? { HOME: effectiveHome } : {},
+            workspace: newestRegistered.workspace,
+            cliType: newestRegistered.cliType || "antigravity-cli"
+          }
+        });
+        markAntigravityCoordinatorRegistered({
+          sessionId: newestRegistered.sessionId,
+          workspace: newestRegistered.workspace,
+          systemPrompt: newestRegistered.systemPrompt,
+          targetPath: newestRegistered.targetPath
+        });
+      }
+      const protectedFiles = collectActiveRecordFiles(resolvedTarget);
+      for (const survivor of survivingRegistered) {
+        for (const f of survivor.additionalOwnedFiles ?? []) {
+          protectedFiles.add(f);
+        }
+      }
+      if (departing.additionalOwnedFiles?.length) {
+        cleanupAntigravityCompanionFiles(departing.targetPath, departing.additionalOwnedFiles, protectedFiles);
+      }
+      return true;
     }
     function writeAntigravityCoordinatorContextFiles(opts) {
       const { systemPrompt, target, wrapper, sentinels, ownedDeclared, ctx } = opts;
@@ -66109,22 +66290,16 @@ ${renderedWrapperBlock}`;
         targetContentBefore !== null && sentinels.open && targetContentBefore.includes(sentinels.open)
       );
       const previousScopedFiles = snapshotExistingScopedFiles(ctx.workspace, homeDir2, scope);
-      const priorUnsettledRef = _latestUnsettledEffectByTarget.get(resolvedTarget);
-      const priorTrackedCompanion = _companionFilesByContextPath.get(resolvedTarget);
       const writtenFiles = [];
-      const snapshot = {
+      const chunkContents = /* @__PURE__ */ new Map();
+      const syncRollbackSnapshot = {
         targetPath: target,
         workspace: ctx.workspace,
         homeDir: homeDir2,
         scope,
-        targetExistedBefore,
         targetContentBefore,
-        hadCoordinatorBlockBefore,
-        sentinels,
         previousScopedFiles,
-        writtenFiles,
-        priorUnsettledEffect: hadCoordinatorBlockBefore ? priorUnsettledRef : void 0,
-        priorTrackedCompanion
+        writtenFiles
       };
       let owned = ownedDeclared;
       try {
@@ -66174,6 +66349,7 @@ ${renderedWrapperBlock}`;
           (0, import_fs20.writeFileSync)(chunkPath, wrappedChunk, { encoding: "utf-8", mode: 384 });
           writtenFiles.push(chunkPath);
           additionalOwnedFiles.push(chunkPath);
+          chunkContents.set(chunkPath, wrappedChunk);
           includeRefs.push(
             `@[adhdev-mesh-coordinator-prompt-part-${partNum}](~/.gemini/config/adhdev-mesh-coordinator/${scope}/part-${padded}.md)`
           );
@@ -66209,12 +66385,36 @@ ${includeRefs[0]}`;
             (0, import_fs20.writeFileSync)(companionPath, companionBody, "utf-8");
             writtenFiles.push(companionPath);
             additionalOwnedFiles.push(companionPath);
+            chunkContents.set(companionPath, companionBody);
             if (hasGitDir) ensureLocalGitExclude(ctx.workspace, companionPath);
           }
         }
         if (hasGitDir && targetContentBefore === null) {
           ensureLocalGitExclude(ctx.workspace, target);
         }
+        const state2 = getOrCreateTargetState(resolvedTarget);
+        if (!hadCoordinatorBlockBefore || !state2.wrapperSeparators) {
+          state2.wrapperSeparators = {
+            leading: targetContentBefore === null ? "" : "\n\n",
+            trailing: "",
+            createdFile: targetContentBefore === null
+          };
+        }
+        const record4 = {
+          generation: ++_nextGeneration,
+          targetPath: target,
+          workspace: ctx.workspace,
+          homeDir: homeDir2,
+          scope,
+          systemPrompt,
+          wrapper,
+          sentinels,
+          renderedWrapperBlock: renderedAgentsBlock,
+          writtenFiles: [...additionalOwnedFiles],
+          chunkContents,
+          status: "provisional"
+        };
+        state2.records.push(record4);
         _companionFilesByContextPath.set(resolvedTarget, {
           workspace: ctx.workspace,
           homeDir: homeDir2,
@@ -66229,15 +66429,14 @@ ${includeRefs[0]}`;
           retainContextFileForSessionLifetime: true,
           contextFileHomeDir: homeDir2
         };
-        _preWriteSnapshots.set(effect, snapshot);
-        _latestUnsettledEffectByTarget.set(resolvedTarget, new WeakRef(effect));
+        _recordByEffect.set(effect, record4);
         LOG.info(
           "MeshCoordinator",
           `Wrote antigravity-cli coordinator prompt to ${target} (${totalParts} part(s), inlineFirst=${inlineFirstPartInAgentsMd})`
         );
         return effect;
       } catch (error) {
-        restorePreWriteSnapshot(snapshot);
+        restoreSynchronousWriteFailure(syncRollbackSnapshot);
         const message = `Could not write ${target}: ${error?.message || error}`;
         LOG.warn("MeshCoordinator", message);
         return {
@@ -66246,31 +66445,58 @@ ${includeRefs[0]}`;
         };
       }
     }
-    function rollbackOverlappingFailedContextFileInjection(effect, hasRegisteredLiveOwner) {
-      const snapshot = _preWriteSnapshots.get(effect);
-      if (!snapshot) {
+    function rollbackOverlappingFailedContextFileInjection(effect, hasRegisteredLiveOwner, liveRegisteredOwners) {
+      const failedRecord = _recordByEffect.get(effect);
+      if (!failedRecord) {
         return hasRegisteredLiveOwner;
       }
-      _preWriteSnapshots.delete(effect);
-      const hasProvisionalOwner = Boolean(
-        snapshot.hadCoordinatorBlockBefore && snapshot.priorUnsettledEffect?.deref()
-      );
-      if (!hasRegisteredLiveOwner && !hasProvisionalOwner) {
+      failedRecord.status = "failed";
+      const resolvedTarget = (0, import_path14.resolve)(failedRecord.targetPath);
+      const state2 = _stateByTarget.get(resolvedTarget);
+      if (state2 && liveRegisteredOwners) {
+        const liveIds = new Set(liveRegisteredOwners.map((o) => o.sessionId));
+        for (const rec5 of state2.records) {
+          if (rec5.status === "registered" && rec5.sessionId && !liveIds.has(rec5.sessionId)) {
+            rec5.status = "terminated";
+          }
+        }
+      }
+      const activeRecords = getActiveRecordsForTarget(resolvedTarget);
+      const protectedFiles = collectActiveRecordFiles(resolvedTarget);
+      for (const owner of liveRegisteredOwners ?? []) {
+        for (const f of owner.additionalOwnedFiles ?? []) {
+          protectedFiles.add(f);
+        }
+      }
+      deleteUnsharedRecordFiles(failedRecord, protectedFiles);
+      if (activeRecords.length === 0 && !hasRegisteredLiveOwner) {
         return false;
       }
-      restorePreWriteSnapshot(snapshot);
+      const newestActiveRecord = activeRecords[activeRecords.length - 1];
+      if (newestActiveRecord) {
+        restoreActiveOwnershipRecordInPlace(newestActiveRecord);
+      }
       return true;
     }
     function cleanupAntigravityCompanionFiles(contextFilePath, explicitAdditionalFiles, protectedFiles) {
       const resolvedTarget = (0, import_path14.resolve)(contextFilePath);
       const tracked = _companionFilesByContextPath.get(resolvedTarget);
-      _companionFilesByContextPath.delete(resolvedTarget);
-      const filesToDelete = new Set(explicitAdditionalFiles ?? []);
-      if (tracked) {
+      const activeProtected = collectActiveRecordFiles(resolvedTarget);
+      const effectiveProtected = new Set(protectedFiles ?? []);
+      for (const f of activeProtected) {
+        effectiveProtected.add(f);
+      }
+      const filesToDelete = /* @__PURE__ */ new Set();
+      if (explicitAdditionalFiles && explicitAdditionalFiles.length > 0) {
+        for (const f of explicitAdditionalFiles) filesToDelete.add(f);
+      } else if (tracked) {
         for (const f of tracked.files) filesToDelete.add(f);
       }
+      if (effectiveProtected.size === 0) {
+        _companionFilesByContextPath.delete(resolvedTarget);
+      }
       for (const filePath2 of filesToDelete) {
-        if (protectedFiles?.has(filePath2)) continue;
+        if (effectiveProtected.has(filePath2)) continue;
         try {
           if ((0, import_fs20.existsSync)(filePath2)) (0, import_fs20.unlinkSync)(filePath2);
         } catch {
@@ -66278,7 +66504,9 @@ ${includeRefs[0]}`;
       }
       const workspace = tracked?.workspace ?? (0, import_path14.dirname)(resolvedTarget);
       const candidateScopes = /* @__PURE__ */ new Set();
-      if (tracked?.scope) candidateScopes.add(tracked.scope);
+      if (!explicitAdditionalFiles?.length && tracked?.scope) {
+        candidateScopes.add(tracked.scope);
+      }
       const candidateHomes = /* @__PURE__ */ new Set([os18.homedir()]);
       if (tracked?.homeDir) candidateHomes.add(tracked.homeDir);
       const marker2 = (0, import_path14.join)(".gemini", "config", "adhdev-mesh-coordinator");
@@ -66294,7 +66522,7 @@ ${includeRefs[0]}`;
       for (const homeDir2 of candidateHomes) {
         const baseCoordConfigDir = (0, import_path14.join)(homeDir2, ".gemini", "config", "adhdev-mesh-coordinator");
         for (const scope of candidateScopes) {
-          if (!protectedFiles || protectedFiles.size === 0) {
+          if (effectiveProtected.size === 0) {
             cleanupStaleScopedFiles(workspace, homeDir2, scope);
           }
           removeDirIfEmpty((0, import_path14.join)(baseCoordConfigDir, scope));
@@ -66308,10 +66536,21 @@ ${includeRefs[0]}`;
     function stripCoordinatorWrapperFile(filePath2, owned = false, sentinels = LEGACY_COORDINATOR_WRAPPER_SENTINELS, additionalOwnedFiles) {
       try {
         const resolvedTarget = (0, import_path14.resolve)(filePath2);
-        _latestUnsettledEffectByTarget.delete(resolvedTarget);
+        const state2 = _stateByTarget.get(resolvedTarget);
+        if (state2) {
+          for (const rec5 of state2.records) {
+            if (rec5.status === "provisional" || rec5.status === "registered") {
+              rec5.status = "terminated";
+            }
+          }
+        }
+        const recordedSeparators = state2?.wrapperSeparators;
+        if (state2) {
+          state2.wrapperSeparators = void 0;
+        }
         cleanupAntigravityCompanionFiles(filePath2, additionalOwnedFiles);
         if (!(0, import_fs20.existsSync)(filePath2)) return;
-        if (owned) {
+        if (owned && !sentinels.open) {
           try {
             (0, import_fs20.unlinkSync)(filePath2);
           } catch {
@@ -66320,8 +66559,20 @@ ${includeRefs[0]}`;
         }
         if (!sentinels.open) return;
         const existing = (0, import_fs20.readFileSync)(filePath2, "utf-8");
-        if (!existing.includes(sentinels.open)) return;
-        const remaining = stripSentinelBlockPreservingSurroundingBytes(existing, sentinels);
+        if (!existing.includes(sentinels.open)) {
+          if (owned && !existing.trim()) {
+            try {
+              (0, import_fs20.unlinkSync)(filePath2);
+            } catch {
+            }
+          }
+          return;
+        }
+        const remaining = stripSentinelBlockPreservingSurroundingBytes(
+          existing,
+          sentinels,
+          recordedSeparators
+        );
         if (remaining === existing) return;
         if (!remaining.trim()) {
           try {
@@ -66343,9 +66594,10 @@ ${includeRefs[0]}`;
     var ANTIGRAVITY_SAFE_EXPANDED_FILE_BYTES;
     var ANTIGRAVITY_COMPANION_CHUNK_MAX_BYTES;
     var ANTIGRAVITY_MIN_INLINE_PART_BYTES;
+    var _nextGeneration;
     var _companionFilesByContextPath;
-    var _preWriteSnapshots;
-    var _latestUnsettledEffectByTarget;
+    var _stateByTarget;
+    var _recordByEffect;
     var init_antigravity_coordinator_rules = __esm2({
       "src/commands/antigravity-coordinator-rules.ts"() {
         "use strict";
@@ -66363,9 +66615,10 @@ ${includeRefs[0]}`;
         ANTIGRAVITY_SAFE_EXPANDED_FILE_BYTES = 23e3;
         ANTIGRAVITY_COMPANION_CHUNK_MAX_BYTES = 22e3;
         ANTIGRAVITY_MIN_INLINE_PART_BYTES = 4e3;
+        _nextGeneration = 0;
         _companionFilesByContextPath = /* @__PURE__ */ new Map();
-        _preWriteSnapshots = /* @__PURE__ */ new WeakMap();
-        _latestUnsettledEffectByTarget = /* @__PURE__ */ new Map();
+        _stateByTarget = /* @__PURE__ */ new Map();
+        _recordByEffect = /* @__PURE__ */ new WeakMap();
       }
     });
     var coordinator_registry_exports = {};
@@ -66408,10 +66661,6 @@ ${includeRefs[0]}`;
       } catch {
       }
     }
-    function registerMeshCoordinator(entry) {
-      _registry.set(entry.sessionId, entry);
-      saveRegistry();
-    }
     function resolveEntryContextFilePath(entry) {
       const recordedPath = entry.injection?.contextFile?.path;
       if (typeof recordedPath === "string" && recordedPath) return recordedPath;
@@ -66419,6 +66668,20 @@ ${includeRefs[0]}`;
       const target = entry.injection?.mode === "context_file" && typeof entry.injection.target === "string" ? entry.injection.target : "";
       if (!workspace || !target) return "";
       return `${workspace.replace(/\/$/, "")}/${target}`;
+    }
+    function registerMeshCoordinator(entry) {
+      _registry.set(entry.sessionId, entry);
+      saveRegistry();
+      const targetPath = resolveEntryContextFilePath(entry);
+      if (targetPath && entry.workspace) {
+        markAntigravityCoordinatorRegistered({
+          sessionId: entry.sessionId,
+          workspace: entry.workspace,
+          systemPrompt: entry.systemPrompt,
+          targetPath,
+          additionalOwnedFiles: entry.injection?.contextFile?.additionalOwnedFiles
+        });
+      }
     }
     function findLiveCoordinatorsForContextFile(targetPath) {
       if (!targetPath) return [];
@@ -66432,31 +66695,32 @@ ${includeRefs[0]}`;
       }
       return matches;
     }
-    function isContextFileStillOwnedByLiveCoordinator(targetPath) {
-      return findLiveCoordinatorsForContextFile(targetPath).length > 0;
-    }
-    function collectLiveAdditionalOwnedFiles() {
-      const protectedFiles = /* @__PURE__ */ new Set();
-      for (const remaining of _registry.values()) {
-        for (const f of remaining.injection?.contextFile?.additionalOwnedFiles ?? []) {
-          protectedFiles.add(f);
-        }
-      }
-      return protectedFiles;
+    function toSurvivorDescriptor(entry, targetPath) {
+      const recorded = entry.injection?.contextFile;
+      return {
+        sessionId: entry.sessionId,
+        workspace: entry.workspace ?? "",
+        cliType: entry.cliType,
+        systemPrompt: entry.systemPrompt,
+        targetPath,
+        openSentinel: recorded?.open,
+        closeSentinel: recorded?.close,
+        owned: recorded?.owned ?? entry.injection?.owned,
+        additionalOwnedFiles: recorded?.additionalOwnedFiles,
+        homeDir: recorded?.homeDir
+      };
     }
     function cleanupCoordinatorEntryContextFile(entry) {
       const targetPath = resolveEntryContextFilePath(entry);
       if (!targetPath) return;
       const recorded = entry.injection?.contextFile;
-      if (isContextFileStillOwnedByLiveCoordinator(targetPath)) {
-        if (recorded && Array.isArray(recorded.additionalOwnedFiles) && recorded.additionalOwnedFiles.length > 0) {
-          const protectedFiles = collectLiveAdditionalOwnedFiles();
-          try {
-            cleanupAntigravityCompanionFiles(targetPath, recorded.additionalOwnedFiles, protectedFiles);
-          } catch {
-          }
+      const liveCoordinators = findLiveCoordinatorsForContextFile(targetPath);
+      const survivingDescriptors = liveCoordinators.map((c) => toSurvivorDescriptor(c, resolveEntryContextFilePath(c) || targetPath));
+      try {
+        if (repointAntigravityContextFileOnCoordinatorExit(toSurvivorDescriptor(entry, targetPath), survivingDescriptors)) {
+          return;
         }
-        return;
+      } catch {
       }
       if (recorded && typeof recorded.path === "string" && recorded.path) {
         try {
@@ -80357,9 +80621,11 @@ ${systemPrompt}`;
                 (0, import_node_fs4.writeFileSync)(target, `${existing}
 
 ${rendered}`, "utf-8");
+                recordContextFileWrapperSeparators(target, "\n\n", "", false);
               }
             } else {
               (0, import_node_fs4.writeFileSync)(target, rendered, "utf-8");
+              recordContextFileWrapperSeparators(target, "", "", true);
             }
             LOG.info("MeshCoordinator", `Wrote coordinator prompt to ${target} (${ctx.cliType})`);
             return { contextFilePath: target, contextFileOwned: owned, contextFileSentinels: sentinels };
@@ -80384,8 +80650,23 @@ ${rendered}`, "utf-8");
       const wrapper = `${openSentinel}
 {prompt}
 ${closeSentinel}`;
+      const expectedScope = computeAntigravityCoordinatorScope(entry.workspace, entry.systemPrompt);
       const recordedExtras = entry.injection?.contextFile?.additionalOwnedFiles ?? [];
-      const targetHasBlock = (0, import_node_fs4.existsSync)(targetPath) && (0, import_node_fs4.readFileSync)(targetPath, "utf-8").includes(openSentinel);
+      let targetHasBlock = false;
+      if ((0, import_node_fs4.existsSync)(targetPath)) {
+        const content = (0, import_node_fs4.readFileSync)(targetPath, "utf-8");
+        const match = wrapperBlockPattern({ open: openSentinel, close: closeSentinel }).exec(content);
+        if (match) {
+          const block2 = match[0];
+          const referencesAnyScope = block2.includes(".gemini/config/adhdev-mesh-coordinator/");
+          const expectsInlinePart1 = recordedExtras.some((p) => p.endsWith("/part-01.md") || p.endsWith("\\part-01.md")) && !recordedExtras.some((p) => p.includes(`adhdev-mesh-coordinator-${expectedScope}-part-01.md`));
+          if (referencesAnyScope || expectsInlinePart1) {
+            targetHasBlock = block2.includes(expectedScope);
+          } else {
+            targetHasBlock = true;
+          }
+        }
+      }
       const allExtrasExist = recordedExtras.length > 0 && recordedExtras.every((p) => (0, import_node_fs4.existsSync)(p));
       if (targetHasBlock && allExtrasExist) {
         return false;
@@ -94951,16 +95232,29 @@ ${asText(streams.stderr)}
       if (!effect || !hasInjectionFiles(effect)) return Promise.resolve();
       if (!opts.launched) {
         if (effect.contextFilePath) {
-          const liveOwners = findLiveCoordinatorsForContextFile(effect.contextFilePath);
-          if (rollbackOverlappingFailedContextFileInjection(effect, liveOwners.length > 0)) {
+          const contextFilePath = effect.contextFilePath;
+          const liveOwners = findLiveCoordinatorsForContextFile(contextFilePath);
+          const liveDescriptors = liveOwners.map((entry) => ({
+            sessionId: entry.sessionId,
+            workspace: entry.workspace ?? "",
+            cliType: entry.cliType,
+            systemPrompt: entry.systemPrompt,
+            targetPath: contextFilePath,
+            openSentinel: entry.injection?.contextFile?.open,
+            closeSentinel: entry.injection?.contextFile?.close,
+            owned: entry.injection?.contextFile?.owned ?? entry.injection?.owned,
+            additionalOwnedFiles: entry.injection?.contextFile?.additionalOwnedFiles,
+            homeDir: entry.injection?.contextFile?.homeDir
+          }));
+          if (rollbackOverlappingFailedContextFileInjection(effect, liveOwners.length > 0, liveDescriptors)) {
             const activeOwner = liveOwners[liveOwners.length - 1];
-            if (activeOwner) {
+            if (activeOwner && !hasActiveAntigravityOwnershipRecord(contextFilePath)) {
               ensureCoordinatorContextFileMaterialized(activeOwner);
             }
             if (effect.agentFilePath) cleanupCoordinatorAgentFile(effect.agentFilePath);
             LOG.info(
               "MeshCoordinator",
-              `Preserved active coordinator rules at ${effect.contextFilePath} after overlapping launch failed (${opts.label})`
+              `Preserved active coordinator rules at ${contextFilePath} after overlapping launch failed (${opts.label})`
             );
             return Promise.resolve();
           }

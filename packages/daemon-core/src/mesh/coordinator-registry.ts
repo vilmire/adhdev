@@ -12,8 +12,10 @@ import { join, resolve } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { getDaemonDataDir } from '../config/config.js';
 import {
-    cleanupAntigravityCompanionFiles,
+    markAntigravityCoordinatorRegistered,
+    repointAntigravityContextFileOnCoordinatorExit,
     stripCoordinatorWrapperFile,
+    type SurvivingCoordinatorDescriptor,
 } from '../commands/antigravity-coordinator-rules.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 
@@ -86,12 +88,6 @@ function saveRegistry(): void {
     } catch { /* best-effort */ }
 }
 
-/** Register a coordinator session. Persists to disk immediately. */
-export function registerMeshCoordinator(entry: CoordinatorRegistryEntry): void {
-    _registry.set(entry.sessionId, entry);
-    saveRegistry();
-}
-
 function resolveEntryContextFilePath(entry: CoordinatorRegistryEntry): string {
     const recordedPath = entry.injection?.contextFile?.path;
     if (typeof recordedPath === 'string' && recordedPath) return recordedPath;
@@ -101,6 +97,22 @@ function resolveEntryContextFilePath(entry: CoordinatorRegistryEntry): string {
         : '';
     if (!workspace || !target) return '';
     return `${workspace.replace(/\/$/, '')}/${target}`;
+}
+
+/** Register a coordinator session. Persists to disk immediately. */
+export function registerMeshCoordinator(entry: CoordinatorRegistryEntry): void {
+    _registry.set(entry.sessionId, entry);
+    saveRegistry();
+    const targetPath = resolveEntryContextFilePath(entry);
+    if (targetPath && entry.workspace) {
+        markAntigravityCoordinatorRegistered({
+            sessionId: entry.sessionId,
+            workspace: entry.workspace,
+            systemPrompt: entry.systemPrompt,
+            targetPath,
+            additionalOwnedFiles: entry.injection?.contextFile?.additionalOwnedFiles,
+        });
+    }
 }
 
 export function findLiveCoordinatorsForContextFile(targetPath: string): CoordinatorRegistryEntry[] {
@@ -116,33 +128,33 @@ export function findLiveCoordinatorsForContextFile(targetPath: string): Coordina
     return matches;
 }
 
-function isContextFileStillOwnedByLiveCoordinator(targetPath: string): boolean {
-    return findLiveCoordinatorsForContextFile(targetPath).length > 0;
-}
-
-function collectLiveAdditionalOwnedFiles(): Set<string> {
-    const protectedFiles = new Set<string>();
-    for (const remaining of _registry.values()) {
-        for (const f of remaining.injection?.contextFile?.additionalOwnedFiles ?? []) {
-            protectedFiles.add(f);
-        }
-    }
-    return protectedFiles;
+function toSurvivorDescriptor(entry: CoordinatorRegistryEntry, targetPath: string): SurvivingCoordinatorDescriptor {
+    const recorded = entry.injection?.contextFile;
+    return {
+        sessionId: entry.sessionId,
+        workspace: entry.workspace ?? '',
+        cliType: entry.cliType,
+        systemPrompt: entry.systemPrompt,
+        targetPath,
+        openSentinel: recorded?.open,
+        closeSentinel: recorded?.close,
+        owned: recorded?.owned ?? entry.injection?.owned,
+        additionalOwnedFiles: recorded?.additionalOwnedFiles,
+        homeDir: recorded?.homeDir,
+    };
 }
 
 function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): void {
     const targetPath = resolveEntryContextFilePath(entry);
     if (!targetPath) return;
     const recorded = entry.injection?.contextFile;
-    if (isContextFileStillOwnedByLiveCoordinator(targetPath)) {
-        if (recorded && Array.isArray(recorded.additionalOwnedFiles) && recorded.additionalOwnedFiles.length > 0) {
-            const protectedFiles = collectLiveAdditionalOwnedFiles();
-            try {
-                cleanupAntigravityCompanionFiles(targetPath, recorded.additionalOwnedFiles, protectedFiles);
-            } catch { /* best-effort */ }
+    const liveCoordinators = findLiveCoordinatorsForContextFile(targetPath);
+    const survivingDescriptors = liveCoordinators.map((c) => toSurvivorDescriptor(c, resolveEntryContextFilePath(c) || targetPath));
+    try {
+        if (repointAntigravityContextFileOnCoordinatorExit(toSurvivorDescriptor(entry, targetPath), survivingDescriptors)) {
+            return;
         }
-        return;
-    }
+    } catch { /* best-effort */ }
     if (recorded && typeof recorded.path === 'string' && recorded.path) {
         try {
             stripCoordinatorWrapperFile(

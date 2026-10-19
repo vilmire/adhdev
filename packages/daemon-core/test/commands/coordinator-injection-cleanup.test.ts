@@ -1099,5 +1099,162 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       if (workerHome) rmSync(workerHome, { recursive: true, force: true })
     }
   })
+
+  it('D1-D4: handles out-of-order provisional/registered overlap failures, repoints survivor on latest termination, and preserves concurrent user edits and CRLF blank lines', async () => {
+    const { registerMeshCoordinator, unregisterMeshCoordinator } = await import(
+      '../../src/mesh/coordinator-registry.js'
+    )
+    const makePrompt = (token: string) => `${token}_HEAD\n` + 'Coordinator rule.\n'.repeat(2_000) + `${token}_TAIL`
+    const inject = (ws: string, home: string, prompt: string) =>
+      applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: home }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+    const reg = (id: string, ws: string, prompt: string, e: any) =>
+      registerMeshCoordinator({
+        meshId: id,
+        sessionId: id,
+        workspace: ws,
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        startedAt: Date.now(),
+        injection: {
+          mode: 'context_file',
+          target: 'AGENTS.md',
+          contextFile: {
+            path: e.contextFilePath,
+            owned: false,
+            open: e.contextFileSentinels.open,
+            close: e.contextFileSentinels.close,
+            additionalOwnedFiles: e.additionalOwnedFiles,
+            homeDir: e.contextFileHomeDir,
+            retainForSessionLifetime: true,
+          },
+        },
+      })
+
+    // D1a: preserves newer provisional B when earlier provisional A fails first
+    const ws1 = tempWorkspace('adhdev-agy-d1a-ws-')
+    const home1 = tempWorkspace('adhdev-agy-d1a-home-')
+    try {
+      const a = inject(ws1, home1, makePrompt('A'))
+      const b = inject(ws1, home1, makePrompt('B'))
+      await scheduleInjectionCleanup(a, { launched: false, label: 'A failed before B resolves' })
+      const view = collectAntigravityLoadedRules(ws1, home1).combined
+      expect(view).toContain('B_HEAD')
+      expect(view).toContain('B_TAIL')
+      await scheduleInjectionCleanup(b, { launched: false, label: 'B dispose' })
+      expect(existsSync(join(ws1, 'AGENTS.md'))).toBe(false)
+    } finally {
+      rmSync(ws1, { recursive: true, force: true })
+      rmSync(home1, { recursive: true, force: true })
+    }
+
+    // D1b: does not resurrect both-failed provisional injections
+    const ws2 = tempWorkspace('adhdev-agy-d1b-ws-')
+    const home2 = tempWorkspace('adhdev-agy-d1b-home-')
+    try {
+      writeFileSync(join(ws2, 'AGENTS.md'), 'User only', 'utf-8')
+      const a = inject(ws2, home2, makePrompt('A'))
+      const b = inject(ws2, home2, makePrompt('B'))
+      await scheduleInjectionCleanup(a, { launched: false, label: 'A fail first' })
+      await scheduleInjectionCleanup(b, { launched: false, label: 'B fail second' })
+      expect(readFileSync(join(ws2, 'AGENTS.md'), 'utf-8')).toBe('User only')
+    } finally {
+      rmSync(ws2, { recursive: true, force: true })
+      rmSync(home2, { recursive: true, force: true })
+    }
+
+    // D1c: preserves newer registered C when older pending B fails after C succeeds
+    const ws3 = tempWorkspace('adhdev-agy-d1c-ws-')
+    const home3 = tempWorkspace('adhdev-agy-d1c-home-')
+    try {
+      const pa = makePrompt('A')
+      const pb = makePrompt('B')
+      const pc = makePrompt('C')
+      const a = inject(ws3, home3, pa)
+      reg('delta-A', ws3, pa, a)
+      const b = inject(ws3, home3, pb)
+      const c = inject(ws3, home3, pc)
+      reg('delta-C', ws3, pc, c)
+      await scheduleInjectionCleanup(b, { launched: false, label: 'B fail after C success' })
+      const view = collectAntigravityLoadedRules(ws3, home3).combined
+      expect(view).toContain('C_HEAD')
+      expect(view).toContain('C_TAIL')
+      expect(view).not.toContain('A_HEAD')
+    } finally {
+      unregisterMeshCoordinator('delta-C')
+      unregisterMeshCoordinator('delta-A')
+      rmSync(ws3, { recursive: true, force: true })
+      rmSync(home3, { recursive: true, force: true })
+    }
+
+    // D2: repoints AGENTS to surviving A when latest registered B terminates
+    const ws4 = tempWorkspace('adhdev-agy-d2-ws-')
+    const home4 = tempWorkspace('adhdev-agy-d2-home-')
+    try {
+      const pa = makePrompt('A')
+      const pb = makePrompt('B')
+      const a = inject(ws4, home4, pa)
+      reg('terminate-A', ws4, pa, a)
+      const b = inject(ws4, home4, pb)
+      reg('terminate-B', ws4, pb, b)
+      unregisterMeshCoordinator('terminate-B')
+      const view = collectAntigravityLoadedRules(ws4, home4).combined
+      expect(view).toContain('A_HEAD')
+      expect(view).toContain('A_TAIL')
+      expect(b.additionalOwnedFiles!.filter(existsSync).length).toBe(0)
+      expect(a.additionalOwnedFiles!.filter(existsSync).length).toBe(3)
+    } finally {
+      unregisterMeshCoordinator('terminate-A')
+      rmSync(ws4, { recursive: true, force: true })
+      rmSync(home4, { recursive: true, force: true })
+    }
+
+    // D3: preserves concurrent user edits when failed overlap rolls back
+    const ws5 = tempWorkspace('adhdev-agy-d3-ws-')
+    const home5 = tempWorkspace('adhdev-agy-d3-home-')
+    try {
+      const target = join(ws5, 'AGENTS.md')
+      writeFileSync(target, 'Original user\r\n', 'utf-8')
+      const pa = makePrompt('A')
+      const a = inject(ws5, home5, pa)
+      reg('edit-A', ws5, pa, a)
+      const b = inject(ws5, home5, makePrompt('B'))
+      writeFileSync(
+        target,
+        readFileSync(target, 'utf-8').replace('Original user', 'Edited user') + '\r\nUSER_CONCURRENT_SUFFIX',
+        'utf-8',
+      )
+      await scheduleInjectionCleanup(b, { launched: false, label: 'B failure after user edits' })
+      const current = readFileSync(target, 'utf-8')
+      expect(current).toContain('Edited user')
+      expect(current).toContain('USER_CONCURRENT_SUFFIX')
+      const view = collectAntigravityLoadedRules(ws5, home5).combined
+      expect(view).toContain('A_HEAD')
+      expect(view).toContain('A_TAIL')
+    } finally {
+      unregisterMeshCoordinator('edit-A')
+      rmSync(ws5, { recursive: true, force: true })
+      rmSync(home5, { recursive: true, force: true })
+    }
+
+    // D4: preserves user-added surrounding newlines when daemon originally created AGENTS
+    const ws6 = tempWorkspace('adhdev-agy-d4-ws-')
+    const home6 = tempWorkspace('adhdev-agy-d4-home-')
+    try {
+      const e = inject(ws6, home6, 'PROMPT')
+      const target = join(ws6, 'AGENTS.md')
+      const prefix = '# User prepended\r\n\r\n'
+      const suffix = '\r\nUser appended'
+      writeFileSync(target, prefix + readFileSync(target, 'utf-8') + suffix, 'utf-8')
+      stripCoordinatorWrapperFile(e.contextFilePath!, false, e.contextFileSentinels, e.additionalOwnedFiles)
+      expect(readFileSync(target, 'utf-8')).toBe(prefix + suffix)
+    } finally {
+      rmSync(ws6, { recursive: true, force: true })
+      rmSync(home6, { recursive: true, force: true })
+    }
+  })
 })
 

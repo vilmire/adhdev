@@ -10,9 +10,11 @@ import { registerMeshCoordinator, type CoordinatorRegistryEntry } from '../mesh/
 import type { ProviderModule } from '../providers/contracts.js';
 import type { MeshCoordinatorMcpConfigFormat, MeshCoordinatorSystemPromptInjection } from '../providers/mesh-coordinator-contracts.js';
 import {
+  computeAntigravityCoordinatorScope,
   coordinatorWrapperSentinels,
   extractAntigravityCoordinatorHomeFromPaths,
   LEGACY_COORDINATOR_WRAPPER_SENTINELS,
+  recordContextFileWrapperSeparators,
   removeWrapperBlock,
   stripCoordinatorWrapperFile,
   wrapperBlockPattern,
@@ -679,9 +681,11 @@ function applyInjectionRule(
             writeFileSync(target, existing.replace(wrapperBlockPattern(sentinels), () => rendered), 'utf-8')
           } else {
             writeFileSync(target, `${existing}\n\n${rendered}`, 'utf-8')
+            recordContextFileWrapperSeparators(target, '\n\n', '', false)
           }
         } else {
           writeFileSync(target, rendered, 'utf-8')
+          recordContextFileWrapperSeparators(target, '', '', true)
         }
         LOG.info('MeshCoordinator', `Wrote coordinator prompt to ${target} (${ctx.cliType})`)
         return { contextFilePath: target, contextFileOwned: owned, contextFileSentinels: sentinels }
@@ -718,8 +722,25 @@ export function ensureCoordinatorContextFileMaterialized(
   const closeSentinel = entry.injection?.contextFile?.close || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close
   const wrapper = `${openSentinel}\n{prompt}\n${closeSentinel}`
 
+  const expectedScope = computeAntigravityCoordinatorScope(entry.workspace, entry.systemPrompt)
   const recordedExtras = entry.injection?.contextFile?.additionalOwnedFiles ?? []
-  const targetHasBlock = existsSync(targetPath) && readFileSync(targetPath, 'utf-8').includes(openSentinel)
+  let targetHasBlock = false
+  if (existsSync(targetPath)) {
+    const content = readFileSync(targetPath, 'utf-8')
+    const match = wrapperBlockPattern({ open: openSentinel, close: closeSentinel }).exec(content)
+    if (match) {
+      const block = match[0]
+      const referencesAnyScope = block.includes('.gemini/config/adhdev-mesh-coordinator/')
+      const expectsInlinePart1 =
+        recordedExtras.some((p) => p.endsWith('/part-01.md') || p.endsWith('\\part-01.md'))
+        && !recordedExtras.some((p) => p.includes(`adhdev-mesh-coordinator-${expectedScope}-part-01.md`))
+      if (referencesAnyScope || expectsInlinePart1) {
+        targetHasBlock = block.includes(expectedScope)
+      } else {
+        targetHasBlock = true
+      }
+    }
+  }
   const allExtrasExist = recordedExtras.length > 0 && recordedExtras.every((p) => existsSync(p))
   if (targetHasBlock && allExtrasExist) {
     return false

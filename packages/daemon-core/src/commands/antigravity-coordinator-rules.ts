@@ -95,6 +95,12 @@ export function removeWrapperBlock(text: string, sentinels: CoordinatorWrapperSe
     return text.replace(wrapperBlockPattern(sentinels), '');
 }
 
+export interface RecordedWrapperSeparators {
+    leading: string;
+    trailing: string;
+    createdFile: boolean;
+}
+
 /**
  * Remove the sentinel wrapper block while preserving surrounding user content
  * byte-for-byte (including files without a trailing newline, files with leading
@@ -104,13 +110,25 @@ export function removeWrapperBlock(text: string, sentinels: CoordinatorWrapperSe
 export function stripSentinelBlockPreservingSurroundingBytes(
     text: string,
     sentinels: CoordinatorWrapperSentinels,
+    recordedSeparators?: RecordedWrapperSeparators,
 ): string {
     if (!sentinels.open) return text;
     const pattern = wrapperBlockPattern(sentinels);
     const match = pattern.exec(text);
     if (!match || match.index === undefined) return text;
-    const before = text.slice(0, match.index);
-    const after = text.slice(match.index + match[0].length);
+    let before = text.slice(0, match.index);
+    let after = text.slice(match.index + match[0].length);
+
+    if (recordedSeparators) {
+        const { leading, trailing } = recordedSeparators;
+        if (leading && before.endsWith(leading)) {
+            before = before.slice(0, -leading.length);
+        }
+        if (trailing && after.startsWith(trailing)) {
+            after = after.slice(trailing.length);
+        }
+        return before + after;
+    }
 
     if (before.length > 0 && after.length === 0) {
         if (before.endsWith('\n\n')) return before.slice(0, -2);
@@ -129,9 +147,7 @@ export function stripSentinelBlockPreservingSurroundingBytes(
     if (before.length > 0 && after.length > 0) {
         const trimmedBefore = before.endsWith('\n\n')
             ? before.slice(0, -2)
-            : before.endsWith('\r\n\r\n')
-              ? before.slice(0, -4)
-              : before;
+            : before;
         return trimmedBefore + after;
     }
     if (before.length === 0 && after.length > 0) {
@@ -159,20 +175,38 @@ interface TrackedCompanionState {
     files: string[];
 }
 
-interface InjectionPreWriteSnapshot {
+export interface AntigravityInjectionOwnershipRecord {
+    generation: number;
     targetPath: string;
     workspace: string;
     homeDir: string;
     scope: string;
-    targetExistedBefore: boolean;
-    targetContentBefore: string | null;
-    hadCoordinatorBlockBefore: boolean;
+    systemPrompt: string;
+    wrapper: string;
     sentinels: CoordinatorWrapperSentinels;
+    renderedWrapperBlock: string;
+    writtenFiles: string[];
+    chunkContents: Map<string, string>;
+    status: 'provisional' | 'registered' | 'failed' | 'terminated';
+    sessionId?: string;
+}
+
+interface TargetContextFileState {
+    records: AntigravityInjectionOwnershipRecord[];
+    wrapperSeparators?: RecordedWrapperSeparators;
+}
+
+interface SynchronousWriteRollbackSnapshot {
+    targetPath: string;
+    workspace: string;
+    homeDir: string;
+    scope: string;
+    targetContentBefore: string | null;
     previousScopedFiles: Map<string, string>;
     writtenFiles: string[];
-    priorUnsettledEffect?: WeakRef<object>;
-    priorTrackedCompanion?: TrackedCompanionState;
 }
+
+let _nextGeneration = 0;
 
 /**
  * In-memory index mapping `resolve(contextFilePath)` -> companion files written by
@@ -181,11 +215,30 @@ interface InjectionPreWriteSnapshot {
  */
 const _companionFilesByContextPath = new Map<string, TrackedCompanionState>();
 
-/** Pre-write snapshots keyed by returned `CoordinatorInjectionEffect` object. */
-const _preWriteSnapshots = new WeakMap<object, InjectionPreWriteSnapshot>();
+/** Per-target-file ownership records and wrapper separator metadata. */
+const _stateByTarget = new Map<string, TargetContextFileState>();
 
-/** Latest unsettled `CoordinatorInjectionEffect` per `resolve(contextFilePath)`. */
-const _latestUnsettledEffectByTarget = new Map<string, WeakRef<object>>();
+/** Ownership record keyed by returned `CoordinatorInjectionEffect` object. */
+const _recordByEffect = new WeakMap<object, AntigravityInjectionOwnershipRecord>();
+
+function getOrCreateTargetState(resolvedTarget: string): TargetContextFileState {
+    let state = _stateByTarget.get(resolvedTarget);
+    if (!state) {
+        state = { records: [] };
+        _stateByTarget.set(resolvedTarget, state);
+    }
+    return state;
+}
+
+export function recordContextFileWrapperSeparators(
+    targetPath: string,
+    leading: string,
+    trailing: string,
+    createdFile: boolean,
+): void {
+    const state = getOrCreateTargetState(resolve(targetPath));
+    state.wrapperSeparators = { leading, trailing, createdFile };
+}
 
 export function computeAntigravityCoordinatorScope(workspace: string, systemPrompt?: string): string {
     const hash = createHash('sha256').update(resolve(workspace));
@@ -404,7 +457,7 @@ function removeDirIfEmpty(dirPath: string): void {
     } catch { /* best-effort */ }
 }
 
-function restorePreWriteSnapshot(snapshot: InjectionPreWriteSnapshot): void {
+function restoreSynchronousWriteFailure(snapshot: SynchronousWriteRollbackSnapshot): void {
     for (const written of snapshot.writtenFiles) {
         if (!snapshot.previousScopedFiles.has(written)) {
             try {
@@ -433,18 +486,231 @@ function restorePreWriteSnapshot(snapshot: InjectionPreWriteSnapshot): void {
     const rulesDir = join(snapshot.workspace, '.agents', 'rules');
     removeDirIfEmpty(rulesDir);
     removeDirIfEmpty(join(snapshot.workspace, '.agents'));
+}
 
-    const resolvedTarget = resolve(snapshot.targetPath);
-    if (snapshot.priorTrackedCompanion) {
-        _companionFilesByContextPath.set(resolvedTarget, snapshot.priorTrackedCompanion);
-    } else {
-        _companionFilesByContextPath.delete(resolvedTarget);
+function getActiveRecordsForTarget(resolvedTarget: string): AntigravityInjectionOwnershipRecord[] {
+    const state = _stateByTarget.get(resolvedTarget);
+    if (!state) return [];
+    return state.records.filter((r) => r.status === 'provisional' || r.status === 'registered');
+}
+
+function collectActiveRecordFiles(resolvedTarget: string): Set<string> {
+    const protectedFiles = new Set<string>();
+    for (const record of getActiveRecordsForTarget(resolvedTarget)) {
+        for (const f of record.writtenFiles) {
+            protectedFiles.add(f);
+        }
     }
-    if (snapshot.priorUnsettledEffect) {
-        _latestUnsettledEffectByTarget.set(resolvedTarget, snapshot.priorUnsettledEffect);
-    } else {
-        _latestUnsettledEffectByTarget.delete(resolvedTarget);
+    return protectedFiles;
+}
+
+/**
+ * Restore an active ownership record's chunk files and replace only the sentinel
+ * wrapper block in `AGENTS.md` in-place, preserving any concurrent user edits
+ * outside the sentinels.
+ */
+function restoreActiveOwnershipRecordInPlace(record: AntigravityInjectionOwnershipRecord): void {
+    for (const [filePath, content] of record.chunkContents.entries()) {
+        try {
+            mkdirSync(dirname(filePath), { recursive: true });
+            writeFileSync(filePath, content, 'utf-8');
+        } catch { /* best-effort */ }
     }
+
+    const resolvedTarget = resolve(record.targetPath);
+    const state = getOrCreateTargetState(resolvedTarget);
+    try {
+        mkdirSync(dirname(record.targetPath), { recursive: true });
+        if (existsSync(record.targetPath)) {
+            const current = readFileSync(record.targetPath, 'utf-8');
+            if (record.sentinels.open && current.includes(record.sentinels.open)) {
+                const updated = current.replace(
+                    wrapperBlockPattern(record.sentinels),
+                    () => record.renderedWrapperBlock,
+                );
+                if (updated !== current) {
+                    writeFileSync(record.targetPath, updated, 'utf-8');
+                }
+            } else {
+                writeFileSync(record.targetPath, `${current}\n\n${record.renderedWrapperBlock}`, 'utf-8');
+                state.wrapperSeparators = { leading: '\n\n', trailing: '', createdFile: false };
+            }
+        } else {
+            writeFileSync(record.targetPath, record.renderedWrapperBlock, 'utf-8');
+            state.wrapperSeparators = { leading: '', trailing: '', createdFile: true };
+        }
+    } catch { /* best-effort */ }
+
+    _companionFilesByContextPath.set(resolvedTarget, {
+        workspace: record.workspace,
+        homeDir: record.homeDir,
+        scope: record.scope,
+        files: [...record.writtenFiles],
+    });
+}
+
+function deleteUnsharedRecordFiles(
+    record: AntigravityInjectionOwnershipRecord,
+    protectedFiles: ReadonlySet<string>,
+): void {
+    for (const filePath of record.writtenFiles) {
+        if (protectedFiles.has(filePath)) continue;
+        try {
+            if (existsSync(filePath)) unlinkSync(filePath);
+        } catch { /* best-effort */ }
+    }
+    const baseCoordConfigDir = join(record.homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator');
+    removeDirIfEmpty(join(baseCoordConfigDir, record.scope));
+    removeDirIfEmpty(baseCoordConfigDir);
+    const rulesDir = join(record.workspace, '.agents', 'rules');
+    removeDirIfEmpty(rulesDir);
+    removeDirIfEmpty(join(record.workspace, '.agents'));
+}
+
+export function hasActiveAntigravityOwnershipRecord(targetPath: string): boolean {
+    return getActiveRecordsForTarget(resolve(targetPath)).length > 0;
+}
+
+export function markAntigravityCoordinatorRegistered(opts: {
+    sessionId: string;
+    workspace: string;
+    systemPrompt?: string;
+    targetPath?: string;
+    additionalOwnedFiles?: readonly string[];
+}): void {
+    if (!opts.targetPath) return;
+    const resolvedTarget = resolve(opts.targetPath);
+    const state = _stateByTarget.get(resolvedTarget);
+    if (!state) return;
+
+    const expectedScope = opts.systemPrompt
+        ? computeAntigravityCoordinatorScope(opts.workspace, opts.systemPrompt)
+        : undefined;
+
+    for (let i = state.records.length - 1; i >= 0; i--) {
+        const rec = state.records[i]!;
+        if (rec.status === 'failed' || rec.status === 'terminated') continue;
+        if (rec.sessionId && rec.sessionId !== opts.sessionId) continue;
+        if (expectedScope && rec.scope === expectedScope) {
+            rec.status = 'registered';
+            rec.sessionId = opts.sessionId;
+            return;
+        }
+        if (
+            opts.additionalOwnedFiles?.length
+            && opts.additionalOwnedFiles.every((f) => rec.writtenFiles.includes(f))
+        ) {
+            rec.status = 'registered';
+            rec.sessionId = opts.sessionId;
+            return;
+        }
+    }
+}
+
+export interface SurvivingCoordinatorDescriptor {
+    sessionId: string;
+    workspace: string;
+    cliType?: string;
+    systemPrompt?: string;
+    targetPath: string;
+    openSentinel?: string;
+    closeSentinel?: string;
+    owned?: boolean;
+    additionalOwnedFiles?: readonly string[];
+    homeDir?: string;
+}
+
+/**
+ * Repoint the shared `AGENTS.md` wrapper to the newest surviving owner (registered
+ * or provisional) BEFORE deleting a departing coordinator's companion chunk files.
+ * Returns `true` if a surviving owner (registered or provisional) remains active.
+ */
+export function repointAntigravityContextFileOnCoordinatorExit(
+    departing: SurvivingCoordinatorDescriptor,
+    survivingRegistered: readonly SurvivingCoordinatorDescriptor[],
+): boolean {
+    const resolvedTarget = resolve(departing.targetPath);
+    const state = _stateByTarget.get(resolvedTarget);
+    const departingScope = departing.systemPrompt
+        ? computeAntigravityCoordinatorScope(departing.workspace, departing.systemPrompt)
+        : undefined;
+
+    if (state) {
+        const survivingIds = new Set(survivingRegistered.map((s) => s.sessionId));
+        let marked = false;
+        for (let i = state.records.length - 1; i >= 0; i--) {
+            const rec = state.records[i]!;
+            if (rec.status === 'failed' || rec.status === 'terminated') continue;
+            if (rec.sessionId === departing.sessionId) {
+                rec.status = 'terminated';
+                marked = true;
+            } else if (rec.status === 'registered' && rec.sessionId && !survivingIds.has(rec.sessionId)) {
+                rec.status = 'terminated';
+            }
+        }
+        if (!marked && departingScope) {
+            for (let i = state.records.length - 1; i >= 0; i--) {
+                const rec = state.records[i]!;
+                if (rec.status === 'failed' || rec.status === 'terminated') continue;
+                if (!rec.sessionId && rec.scope === departingScope) {
+                    rec.status = 'terminated';
+                    break;
+                }
+            }
+        }
+    }
+
+    const activeRecords = getActiveRecordsForTarget(resolvedTarget);
+    const hasSurvivingOwner = activeRecords.length > 0 || survivingRegistered.length > 0;
+    if (!hasSurvivingOwner) {
+        return false;
+    }
+
+    // 1. Repoint/materialize the newest surviving owner BEFORE deleting departing files.
+    const newestRecord = activeRecords[activeRecords.length - 1];
+    const newestRegistered = survivingRegistered[survivingRegistered.length - 1];
+
+    if (newestRecord) {
+        restoreActiveOwnershipRecordInPlace(newestRecord);
+    } else if (newestRegistered?.systemPrompt && newestRegistered.workspace) {
+        const open = newestRegistered.openSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.open;
+        const close = newestRegistered.closeSentinel || LEGACY_COORDINATOR_WRAPPER_SENTINELS.close;
+        const wrapper = `${open}\n{prompt}\n${close}`;
+        const effectiveHome =
+            newestRegistered.homeDir?.trim()
+            || extractAntigravityCoordinatorHomeFromPaths(newestRegistered.additionalOwnedFiles);
+        writeAntigravityCoordinatorContextFiles({
+            systemPrompt: newestRegistered.systemPrompt,
+            target: newestRegistered.targetPath,
+            wrapper,
+            sentinels: { open, close },
+            ownedDeclared: newestRegistered.owned === true,
+            ctx: {
+                cliArgs: [],
+                launchEnv: effectiveHome ? { HOME: effectiveHome } : {},
+                workspace: newestRegistered.workspace,
+                cliType: newestRegistered.cliType || 'antigravity-cli',
+            },
+        });
+        markAntigravityCoordinatorRegistered({
+            sessionId: newestRegistered.sessionId,
+            workspace: newestRegistered.workspace,
+            systemPrompt: newestRegistered.systemPrompt,
+            targetPath: newestRegistered.targetPath,
+        });
+    }
+
+    // 2. Delete only the departing coordinator's unshared companion files.
+    const protectedFiles = collectActiveRecordFiles(resolvedTarget);
+    for (const survivor of survivingRegistered) {
+        for (const f of survivor.additionalOwnedFiles ?? []) {
+            protectedFiles.add(f);
+        }
+    }
+    if (departing.additionalOwnedFiles?.length) {
+        cleanupAntigravityCompanionFiles(departing.targetPath, departing.additionalOwnedFiles, protectedFiles);
+    }
+    return true;
 }
 
 /**
@@ -493,23 +759,17 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
         targetContentBefore !== null && sentinels.open && targetContentBefore.includes(sentinels.open),
     );
     const previousScopedFiles = snapshotExistingScopedFiles(ctx.workspace, homeDir, scope);
-    const priorUnsettledRef = _latestUnsettledEffectByTarget.get(resolvedTarget);
-    const priorTrackedCompanion = _companionFilesByContextPath.get(resolvedTarget);
     const writtenFiles: string[] = [];
+    const chunkContents = new Map<string, string>();
 
-    const snapshot: InjectionPreWriteSnapshot = {
+    const syncRollbackSnapshot: SynchronousWriteRollbackSnapshot = {
         targetPath: target,
         workspace: ctx.workspace,
         homeDir,
         scope,
-        targetExistedBefore,
         targetContentBefore,
-        hadCoordinatorBlockBefore,
-        sentinels,
         previousScopedFiles,
         writtenFiles,
-        priorUnsettledEffect: hadCoordinatorBlockBefore ? priorUnsettledRef : undefined,
-        priorTrackedCompanion,
     };
 
     let owned = ownedDeclared;
@@ -571,6 +831,7 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
             writeFileSync(chunkPath, wrappedChunk, { encoding: 'utf-8', mode: 0o600 });
             writtenFiles.push(chunkPath);
             additionalOwnedFiles.push(chunkPath);
+            chunkContents.set(chunkPath, wrappedChunk);
             includeRefs.push(
                 `@[adhdev-mesh-coordinator-prompt-part-${partNum}](~/.gemini/config/adhdev-mesh-coordinator/${scope}/part-${padded}.md)`,
             );
@@ -606,12 +867,38 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
                 writeFileSync(companionPath, companionBody, 'utf-8');
                 writtenFiles.push(companionPath);
                 additionalOwnedFiles.push(companionPath);
+                chunkContents.set(companionPath, companionBody);
                 if (hasGitDir) ensureLocalGitExclude(ctx.workspace, companionPath);
             }
         }
         if (hasGitDir && targetContentBefore === null) {
             ensureLocalGitExclude(ctx.workspace, target);
         }
+
+        const state = getOrCreateTargetState(resolvedTarget);
+        if (!hadCoordinatorBlockBefore || !state.wrapperSeparators) {
+            state.wrapperSeparators = {
+                leading: targetContentBefore === null ? '' : '\n\n',
+                trailing: '',
+                createdFile: targetContentBefore === null,
+            };
+        }
+
+        const record: AntigravityInjectionOwnershipRecord = {
+            generation: ++_nextGeneration,
+            targetPath: target,
+            workspace: ctx.workspace,
+            homeDir,
+            scope,
+            systemPrompt,
+            wrapper,
+            sentinels,
+            renderedWrapperBlock: renderedAgentsBlock,
+            writtenFiles: [...additionalOwnedFiles],
+            chunkContents,
+            status: 'provisional',
+        };
+        state.records.push(record);
 
         _companionFilesByContextPath.set(resolvedTarget, {
             workspace: ctx.workspace,
@@ -628,8 +915,7 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
             retainContextFileForSessionLifetime: true,
             contextFileHomeDir: homeDir,
         };
-        _preWriteSnapshots.set(effect, snapshot);
-        _latestUnsettledEffectByTarget.set(resolvedTarget, new WeakRef(effect));
+        _recordByEffect.set(effect, record);
 
         LOG.info(
             'MeshCoordinator',
@@ -637,7 +923,7 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
         );
         return effect;
     } catch (error: any) {
-        restorePreWriteSnapshot(snapshot);
+        restoreSynchronousWriteFailure(syncRollbackSnapshot);
         const message = `Could not write ${target}: ${error?.message || error}`;
         LOG.warn('MeshCoordinator', message);
         return {
@@ -649,8 +935,8 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
 
 /**
  * Roll back a failed launch's `CoordinatorInjectionEffect` when another active
- * coordinator (registered in `coordinator-registry` OR an earlier unsettled
- * provisional injection) already owns `effect.contextFilePath`.
+ * coordinator (registered in `coordinator-registry` OR an active unsettled
+ * provisional injection) still owns `effect.contextFilePath`.
  *
  * Returns `true` if an overlapping active owner was preserved and restored
  * (so the caller MUST NOT strip `effect.contextFilePath`), or `false` if no
@@ -659,19 +945,44 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
 export function rollbackOverlappingFailedContextFileInjection(
     effect: object,
     hasRegisteredLiveOwner: boolean,
+    liveRegisteredOwners?: readonly SurvivingCoordinatorDescriptor[],
 ): boolean {
-    const snapshot = _preWriteSnapshots.get(effect);
-    if (!snapshot) {
+    const failedRecord = _recordByEffect.get(effect);
+    if (!failedRecord) {
         return hasRegisteredLiveOwner;
     }
-    _preWriteSnapshots.delete(effect);
-    const hasProvisionalOwner = Boolean(
-        snapshot.hadCoordinatorBlockBefore && snapshot.priorUnsettledEffect?.deref(),
-    );
-    if (!hasRegisteredLiveOwner && !hasProvisionalOwner) {
+    failedRecord.status = 'failed';
+
+    const resolvedTarget = resolve(failedRecord.targetPath);
+    const state = _stateByTarget.get(resolvedTarget);
+    if (state && liveRegisteredOwners) {
+        const liveIds = new Set(liveRegisteredOwners.map((o) => o.sessionId));
+        for (const rec of state.records) {
+            if (rec.status === 'registered' && rec.sessionId && !liveIds.has(rec.sessionId)) {
+                rec.status = 'terminated';
+            }
+        }
+    }
+
+    const activeRecords = getActiveRecordsForTarget(resolvedTarget);
+    const protectedFiles = collectActiveRecordFiles(resolvedTarget);
+    for (const owner of liveRegisteredOwners ?? []) {
+        for (const f of owner.additionalOwnedFiles ?? []) {
+            protectedFiles.add(f);
+        }
+    }
+
+    // Always clean up the failed record's own unshared files.
+    deleteUnsharedRecordFiles(failedRecord, protectedFiles);
+
+    if (activeRecords.length === 0 && !hasRegisteredLiveOwner) {
         return false;
     }
-    restorePreWriteSnapshot(snapshot);
+
+    const newestActiveRecord = activeRecords[activeRecords.length - 1];
+    if (newestActiveRecord) {
+        restoreActiveOwnershipRecordInPlace(newestActiveRecord);
+    }
     return true;
 }
 
@@ -686,15 +997,26 @@ export function cleanupAntigravityCompanionFiles(
 ): void {
     const resolvedTarget = resolve(contextFilePath);
     const tracked = _companionFilesByContextPath.get(resolvedTarget);
-    _companionFilesByContextPath.delete(resolvedTarget);
 
-    const filesToDelete = new Set<string>(explicitAdditionalFiles ?? []);
-    if (tracked) {
+    const activeProtected = collectActiveRecordFiles(resolvedTarget);
+    const effectiveProtected = new Set<string>(protectedFiles ?? []);
+    for (const f of activeProtected) {
+        effectiveProtected.add(f);
+    }
+
+    const filesToDelete = new Set<string>();
+    if (explicitAdditionalFiles && explicitAdditionalFiles.length > 0) {
+        for (const f of explicitAdditionalFiles) filesToDelete.add(f);
+    } else if (tracked) {
         for (const f of tracked.files) filesToDelete.add(f);
     }
 
+    if (effectiveProtected.size === 0) {
+        _companionFilesByContextPath.delete(resolvedTarget);
+    }
+
     for (const filePath of filesToDelete) {
-        if (protectedFiles?.has(filePath)) continue;
+        if (effectiveProtected.has(filePath)) continue;
         try {
             if (existsSync(filePath)) unlinkSync(filePath);
         } catch { /* best-effort */ }
@@ -702,7 +1024,9 @@ export function cleanupAntigravityCompanionFiles(
 
     const workspace = tracked?.workspace ?? dirname(resolvedTarget);
     const candidateScopes = new Set<string>();
-    if (tracked?.scope) candidateScopes.add(tracked.scope);
+    if (!explicitAdditionalFiles?.length && tracked?.scope) {
+        candidateScopes.add(tracked.scope);
+    }
     const candidateHomes = new Set<string>([os.homedir()]);
     if (tracked?.homeDir) candidateHomes.add(tracked.homeDir);
 
@@ -720,7 +1044,7 @@ export function cleanupAntigravityCompanionFiles(
     for (const homeDir of candidateHomes) {
         const baseCoordConfigDir = join(homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator');
         for (const scope of candidateScopes) {
-            if (!protectedFiles || protectedFiles.size === 0) {
+            if (effectiveProtected.size === 0) {
                 cleanupStaleScopedFiles(workspace, homeDir, scope);
             }
             removeDirIfEmpty(join(baseCoordConfigDir, scope));
@@ -745,17 +1069,38 @@ export function stripCoordinatorWrapperFile(
 ): void {
     try {
         const resolvedTarget = resolve(filePath);
-        _latestUnsettledEffectByTarget.delete(resolvedTarget);
+        const state = _stateByTarget.get(resolvedTarget);
+        if (state) {
+            for (const rec of state.records) {
+                if (rec.status === 'provisional' || rec.status === 'registered') {
+                    rec.status = 'terminated';
+                }
+            }
+        }
+        const recordedSeparators = state?.wrapperSeparators;
+        if (state) {
+            state.wrapperSeparators = undefined;
+        }
+
         cleanupAntigravityCompanionFiles(filePath, additionalOwnedFiles);
         if (!existsSync(filePath)) return;
-        if (owned) {
+        if (owned && !sentinels.open) {
             try { unlinkSync(filePath); } catch { /* best-effort */ }
             return;
         }
         if (!sentinels.open) return;
         const existing = readFileSync(filePath, 'utf-8');
-        if (!existing.includes(sentinels.open)) return;
-        const remaining = stripSentinelBlockPreservingSurroundingBytes(existing, sentinels);
+        if (!existing.includes(sentinels.open)) {
+            if (owned && !existing.trim()) {
+                try { unlinkSync(filePath); } catch { /* best-effort */ }
+            }
+            return;
+        }
+        const remaining = stripSentinelBlockPreservingSurroundingBytes(
+            existing,
+            sentinels,
+            recordedSeparators,
+        );
         if (remaining === existing) return;
         if (!remaining.trim()) {
             try { unlinkSync(filePath); } catch { /* best-effort */ }
@@ -764,3 +1109,4 @@ export function stripCoordinatorWrapperFile(
         }
     } catch { /* best-effort */ }
 }
+
