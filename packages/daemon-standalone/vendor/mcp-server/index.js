@@ -78337,6 +78337,8 @@ ${continuationNotice}` } : task,
             if (decision.complete) {
               return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
             }
+            const baselineMs = backgroundWorkBaselineMs(attempt);
+            const turnEndedAt = typeof finalAssistantAt === "number" && Number.isFinite(finalAssistantAt) && finalAssistantAt >= baselineMs && finalAssistantAt <= nowMs2 ? finalAssistantAt : nowMs2;
             entry = {
               attemptId: attempt.attemptId,
               generation: attempt.generation,
@@ -78348,7 +78350,7 @@ ${continuationNotice}` } : task,
                 daemonId: attempt.coordinator.daemonId,
                 sessionId: attempt.coordinator.sessionId
               },
-              firstObservedAt: nowMs2,
+              firstObservedAt: turnEndedAt,
               lastActivityAt: nowMs2,
               ...typeof input.outputAtMs === "number" && Number.isFinite(input.outputAtMs) ? { lastOutputSeenAt: input.outputAtMs } : {},
               initialReason: decision.reason,
@@ -78651,8 +78653,11 @@ ${continuationNotice}` } : task,
         if (!target && !instance) return { presence: "absent" };
         const instanceKey = target?.instanceKey || attempt.sessionId;
         const status = localInstanceStatus(components, instanceKey, target?.transport ?? "pty");
-        if (!wantsTranscript(attempt, holds, status)) return { presence: "present", ...status ? { status } : {} };
         const background = await readLocalBackgroundProcesses(attempt, instanceKey, instance);
+        const hasLiveBackgroundProcesses = (background.liveBackgroundProcesses?.length ?? 0) > 0;
+        if (!hasLiveBackgroundProcesses && !wantsTranscript(attempt, holds, status)) {
+          return { presence: "present", ...status ? { status } : {} };
+        }
         const ptyOutputAt = attempt.scope === "plain" ? void 0 : readLocalPtyOutputAt(instanceKey, instance);
         try {
           const result = await components.commandHandler.handle("read_chat", readArgsFor(attempt));
@@ -174335,6 +174340,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_active_ledger();
     init_mesh_operating_notes();
     init_dist();
+    init_session_process_tree();
     init_background_work_guard();
     init_policy();
     init_probe();
@@ -174535,13 +174541,16 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (read2.presence === "present") {
           const boundary = turnStartBoundary(latest);
           const finalThisTurn = t?.finalAssistantAt !== void 0 && t.finalAssistantAt >= boundary;
+          const nativeTurnCompleted = t?.nativeMarker?.outcome === "completed" && (t.nativeMarker.receivedAt === void 0 || t.nativeMarker.receivedAt >= boundary) && (t?.trailingActivity ?? 0) === 0 && !t?.activeModal;
+          const pendingTextTurnEnded = finalThisTurn && (t?.trailingActivity ?? 0) === 0 && !t?.activeModal && isPendingBackgroundWorkSummary(t?.finalSummary);
+          const turnEndedAt = finalThisTurn ? t?.finalAssistantAt : nativeTurnCompleted ? t?.nativeMarker?.receivedAt : void 0;
           try {
             const bgOut = await backgroundWork.observe({
               attempt: latest,
               nowMs: at,
-              status: (t?.providerObservedStatus || read2.status || "").toLowerCase(),
+              status: nativeTurnCompleted || pendingTextTurnEnded ? "idle" : (t?.providerObservedStatus || read2.status || "").toLowerCase(),
               finalSummary: finalThisTurn ? t?.finalSummary : void 0,
-              ...finalThisTurn && t?.finalAssistantAt !== void 0 ? { finalAssistantAt: t.finalAssistantAt } : {},
+              ...turnEndedAt !== void 0 ? { finalAssistantAt: turnEndedAt } : {},
               liveBackgroundProcesses: read2.liveBackgroundProcesses,
               ...read2.backgroundProcessesKnown !== void 0 ? { processesKnown: read2.backgroundProcessesKnown } : {},
               ...read2.backgroundCpuActivity ? { cpuActivity: read2.backgroundCpuActivity } : {},
