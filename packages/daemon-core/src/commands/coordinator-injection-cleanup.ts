@@ -21,8 +21,11 @@
  */
 
 import { LOG } from '../logging/logger.js';
+import { findLiveCoordinatorsForContextFile } from '../mesh/coordinator-registry.js';
+import { rollbackOverlappingFailedContextFileInjection } from './antigravity-coordinator-rules.js';
 import {
     cleanupCoordinatorAgentFile,
+    ensureCoordinatorContextFileMaterialized,
     stripCoordinatorWrapperFile,
     type CoordinatorInjectionEffect,
 } from './mesh-coordinator.js';
@@ -33,7 +36,7 @@ const INJECTION_CLEANUP_POLL_MS = 250;
 
 type InjectionFiles = Pick<
     CoordinatorInjectionEffect,
-    'contextFilePath' | 'contextFileOwned' | 'contextFileSentinels' | 'additionalOwnedFiles' | 'retainContextFileForSessionLifetime' | 'agentFilePath'
+    'contextFilePath' | 'contextFileOwned' | 'contextFileSentinels' | 'additionalOwnedFiles' | 'retainContextFileForSessionLifetime' | 'contextFileHomeDir' | 'agentFilePath'
 >;
 
 export interface InjectionCleanupOptions {
@@ -73,6 +76,21 @@ export function removeInjectionFiles(effect: InjectionFiles, reason: string, lab
 export function scheduleInjectionCleanup(effect: InjectionFiles | null | undefined, opts: InjectionCleanupOptions): Promise<void> {
     if (!effect || !hasInjectionFiles(effect)) return Promise.resolve();
     if (!opts.launched) {
+        if (effect.contextFilePath) {
+            const liveOwners = findLiveCoordinatorsForContextFile(effect.contextFilePath);
+            if (rollbackOverlappingFailedContextFileInjection(effect, liveOwners.length > 0)) {
+                const activeOwner = liveOwners[liveOwners.length - 1];
+                if (activeOwner) {
+                    ensureCoordinatorContextFileMaterialized(activeOwner);
+                }
+                if (effect.agentFilePath) cleanupCoordinatorAgentFile(effect.agentFilePath);
+                LOG.info(
+                    'MeshCoordinator',
+                    `Preserved active coordinator rules at ${effect.contextFilePath} after overlapping launch failed (${opts.label})`,
+                );
+                return Promise.resolve();
+            }
+        }
         removeInjectionFiles(effect, 'launch failed', opts.label);
         return Promise.resolve();
     }

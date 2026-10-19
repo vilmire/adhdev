@@ -167,6 +167,7 @@ function contextFileRegistryRecord(effect: import('../mesh-coordinator.js').Coor
         close?: string;
         additionalOwnedFiles?: string[];
         retainForSessionLifetime?: boolean;
+        homeDir?: string;
     };
 } {
     if (!effect?.contextFilePath) return {};
@@ -177,6 +178,7 @@ function contextFileRegistryRecord(effect: import('../mesh-coordinator.js').Coor
             ...(effect.contextFileSentinels ? { open: effect.contextFileSentinels.open, close: effect.contextFileSentinels.close } : {}),
             ...(effect.additionalOwnedFiles?.length ? { additionalOwnedFiles: effect.additionalOwnedFiles } : {}),
             ...(effect.retainContextFileForSessionLifetime ? { retainForSessionLifetime: true } : {}),
+            ...(effect.contextFileHomeDir ? { homeDir: effect.contextFileHomeDir } : {}),
         },
     };
 }

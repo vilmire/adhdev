@@ -22,8 +22,9 @@
  *      referencing them via `@[...](~/.gemini/config/adhdev-mesh-coordinator/<scope>/part-XX.md)`:
  *        - The coordinator (whose `HOME` holds the chunk files) expands every part
  *          within the 24,000-byte per-file budget (`AGENTS.md` for part 1 when space
- *          permits, plus `.agents/rules/adhdev-mesh-coordinator-<scope>-part-XX.md`
- *          with `trigger: always_on` for overflow parts).
+ *          permits after expanding any existing user `@[label](path)` includes, plus
+ *          `.agents/rules/adhdev-mesh-coordinator-<scope>-part-XX.md` with
+ *          `trigger: always_on` for overflow parts).
  *        - A base-node delegated worker (`launchedByCoordinator: true`) runs in the
  *          same workspace with a worker-private `HOME` (`/tmp/adhdev-worker-home/...`)
  *          where `.gemini/config/adhdev-mesh-coordinator/` does not exist; `resolveFileIncludes`
@@ -43,7 +44,7 @@
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import * as os from 'os';
-import { dirname, join, resolve } from 'path';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import { ensureLocalGitExclude } from '../git/git-local-exclude.js';
 import { LOG } from '../logging/logger.js';
 import type {
@@ -94,6 +95,51 @@ export function removeWrapperBlock(text: string, sentinels: CoordinatorWrapperSe
     return text.replace(wrapperBlockPattern(sentinels), '');
 }
 
+/**
+ * Remove the sentinel wrapper block while preserving surrounding user content
+ * byte-for-byte (including files without a trailing newline, files with leading
+ * or trailing blank lines, CRLF line endings, and concurrent user edits before
+ * or after the sentinel block).
+ */
+export function stripSentinelBlockPreservingSurroundingBytes(
+    text: string,
+    sentinels: CoordinatorWrapperSentinels,
+): string {
+    if (!sentinels.open) return text;
+    const pattern = wrapperBlockPattern(sentinels);
+    const match = pattern.exec(text);
+    if (!match || match.index === undefined) return text;
+    const before = text.slice(0, match.index);
+    const after = text.slice(match.index + match[0].length);
+
+    if (before.length > 0 && after.length === 0) {
+        if (before.endsWith('\n\n')) return before.slice(0, -2);
+        if (before.endsWith('\r\n\r\n')) return before.slice(0, -4);
+        if (before.endsWith('\n')) return before.slice(0, -1);
+        return before;
+    }
+    if (before.length > 0 && (after === '\n' || after === '\r\n')) {
+        const trimmedBefore = before.endsWith('\n\n')
+            ? before.slice(0, -2)
+            : before.endsWith('\r\n\r\n')
+              ? before.slice(0, -4)
+              : before;
+        return trimmedBefore.endsWith('\n') ? trimmedBefore : trimmedBefore + after;
+    }
+    if (before.length > 0 && after.length > 0) {
+        const trimmedBefore = before.endsWith('\n\n')
+            ? before.slice(0, -2)
+            : before.endsWith('\r\n\r\n')
+              ? before.slice(0, -4)
+              : before;
+        return trimmedBefore + after;
+    }
+    if (before.length === 0 && after.length > 0) {
+        return after.replace(/^(?:\r?\n){1,2}/, '');
+    }
+    return '';
+}
+
 /** Hard per-file UTF-8 byte cap in Antigravity CLI 1.4.2 (`rules.go:537`). */
 export const ANTIGRAVITY_RULE_FILE_MAX_BYTES = 24_000;
 
@@ -106,26 +152,72 @@ export const ANTIGRAVITY_COMPANION_CHUNK_MAX_BYTES = 22_000;
 /** Minimum free UTF-8 budget in `AGENTS.md` required to place `part-01` inline there. */
 export const ANTIGRAVITY_MIN_INLINE_PART_BYTES = 4_000;
 
-/**
- * In-memory index mapping `resolve(contextFilePath)` -> companion files written by
- * the most recent injection in this process, so a 3-arg `stripCoordinatorWrapperFile`
- * call (including in tests with a custom `launchEnv.HOME`) cleans up all companion
- * files even when `additionalOwnedFiles` is not passed explicitly.
- */
-const _companionFilesByContextPath = new Map<string, {
+interface TrackedCompanionState {
     workspace: string;
     homeDir: string;
     scope: string;
     files: string[];
-}>();
+}
 
-export function computeAntigravityCoordinatorScope(workspace: string): string {
-    return createHash('sha256').update(resolve(workspace)).digest('hex').slice(0, 12);
+interface InjectionPreWriteSnapshot {
+    targetPath: string;
+    workspace: string;
+    homeDir: string;
+    scope: string;
+    targetExistedBefore: boolean;
+    targetContentBefore: string | null;
+    hadCoordinatorBlockBefore: boolean;
+    sentinels: CoordinatorWrapperSentinels;
+    previousScopedFiles: Map<string, string>;
+    writtenFiles: string[];
+    priorUnsettledEffect?: WeakRef<object>;
+    priorTrackedCompanion?: TrackedCompanionState;
+}
+
+/**
+ * In-memory index mapping `resolve(contextFilePath)` -> companion files written by
+ * the most recent active injection in this process, so a 3-arg `stripCoordinatorWrapperFile`
+ * call cleans up all companion files even when `additionalOwnedFiles` is not passed.
+ */
+const _companionFilesByContextPath = new Map<string, TrackedCompanionState>();
+
+/** Pre-write snapshots keyed by returned `CoordinatorInjectionEffect` object. */
+const _preWriteSnapshots = new WeakMap<object, InjectionPreWriteSnapshot>();
+
+/** Latest unsettled `CoordinatorInjectionEffect` per `resolve(contextFilePath)`. */
+const _latestUnsettledEffectByTarget = new Map<string, WeakRef<object>>();
+
+export function computeAntigravityCoordinatorScope(workspace: string, systemPrompt?: string): string {
+    const hash = createHash('sha256').update(resolve(workspace));
+    if (systemPrompt) {
+        hash.update('\0').update(systemPrompt);
+    }
+    return hash.digest('hex').slice(0, 12);
 }
 
 export function resolveAntigravityCoordinatorHome(launchEnv?: Record<string, string>): string {
     const envHome = launchEnv?.HOME?.trim() || launchEnv?.USERPROFILE?.trim();
     return envHome || os.homedir();
+}
+
+/**
+ * Derive the coordinator's `HOME` directory from recorded companion chunk paths
+ * (`<coordHome>/.gemini/config/adhdev-mesh-coordinator/<scope>/part-XX.md`).
+ * Used when daemon restore (`restoreHostedSessions`) re-materializes rules without
+ * a live `launchEnv` object.
+ */
+export function extractAntigravityCoordinatorHomeFromPaths(
+    paths: readonly string[] | undefined,
+): string | undefined {
+    if (!paths?.length) return undefined;
+    const marker = join('.gemini', 'config', 'adhdev-mesh-coordinator');
+    for (const filePath of paths) {
+        const idx = filePath.indexOf(marker);
+        if (idx > 0) {
+            return filePath.slice(0, idx - 1);
+        }
+    }
+    return undefined;
 }
 
 function wrapChunkFileContent(chunk: string, partNumber: number, totalParts: number): string {
@@ -134,6 +226,53 @@ function wrapChunkFileContent(chunk: string, partNumber: number, totalParts: num
         + `${chunk}\n`
         + `<!-- /adhdev-mesh-coordinator-prompt (part ${partNumber}/${totalParts}) -->\n`
     );
+}
+
+/**
+ * Measure the UTF-8 byte length of `shellContent` AFTER Antigravity's
+ * `resolveFileIncludes` (`rules.go:643-693`) expands any existing user
+ * `@[label](path)` references in `AGENTS.md`.
+ *
+ * If any user include target does not exist or cannot be read at injection time,
+ * `hasUnresolvedInclude` is set to `true` so all coordinator parts are routed to
+ * separate `.agents/rules/` files and can never push `AGENTS.md` over 24,000 bytes.
+ */
+function measureExpandedAntigravityShellBytes(
+    shellContent: string,
+    workspaceRoot: string,
+    homeDir: string,
+): { expandedBytes: number; hasUnresolvedInclude: boolean } {
+    let hasUnresolvedInclude = false;
+    const expanded = shellContent.replace(
+        /@\[([^\]]*)\]\(([^)]+)\)/g,
+        (fullMatch, _label: string, rawTarget: string) => {
+            const trimmedTarget = rawTarget.trim();
+            if (!trimmedTarget) return fullMatch;
+            const resolvedTarget =
+                trimmedTarget.startsWith('~/') || trimmedTarget.startsWith('~\\')
+                    ? join(homeDir, trimmedTarget.slice(2))
+                    : isAbsolute(trimmedTarget)
+                      ? trimmedTarget
+                      : join(workspaceRoot, trimmedTarget);
+            try {
+                if (!existsSync(resolvedTarget)) {
+                    hasUnresolvedInclude = true;
+                    return fullMatch;
+                }
+                const included = readFileSync(resolvedTarget, 'utf-8');
+                return Buffer.byteLength(included, 'utf-8') >= Buffer.byteLength(fullMatch, 'utf-8')
+                    ? included
+                    : fullMatch;
+            } catch {
+                hasUnresolvedInclude = true;
+                return fullMatch;
+            }
+        },
+    );
+    return {
+        expandedBytes: Buffer.byteLength(expanded, 'utf-8'),
+        hasUnresolvedInclude,
+    };
 }
 
 /**
@@ -208,6 +347,33 @@ function renderIntoExistingContent(
     return `${existing}\n\n${renderedWrapperBlock}`;
 }
 
+function snapshotExistingScopedFiles(workspace: string, homeDir: string, scope: string): Map<string, string> {
+    const snap = new Map<string, string>();
+    const homeChunkDir = join(homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator', scope);
+    try {
+        if (existsSync(homeChunkDir)) {
+            for (const entry of readdirSync(homeChunkDir)) {
+                const full = join(homeChunkDir, entry);
+                try { snap.set(full, readFileSync(full, 'utf-8')); } catch { /* ignore */ }
+            }
+        }
+    } catch { /* ignore */ }
+
+    const rulesDir = join(workspace, '.agents', 'rules');
+    const prefix = `adhdev-mesh-coordinator-${scope}-part-`;
+    try {
+        if (existsSync(rulesDir)) {
+            for (const entry of readdirSync(rulesDir)) {
+                if (entry.startsWith(prefix) && entry.endsWith('.md')) {
+                    const full = join(rulesDir, entry);
+                    try { snap.set(full, readFileSync(full, 'utf-8')); } catch { /* ignore */ }
+                }
+            }
+        }
+    } catch { /* ignore */ }
+    return snap;
+}
+
 function cleanupStaleScopedFiles(workspace: string, homeDir: string, scope: string): void {
     const homeChunkDir = join(homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator', scope);
     try {
@@ -238,12 +404,59 @@ function removeDirIfEmpty(dirPath: string): void {
     } catch { /* best-effort */ }
 }
 
+function restorePreWriteSnapshot(snapshot: InjectionPreWriteSnapshot): void {
+    for (const written of snapshot.writtenFiles) {
+        if (!snapshot.previousScopedFiles.has(written)) {
+            try {
+                if (existsSync(written)) unlinkSync(written);
+            } catch { /* best-effort */ }
+        }
+    }
+    for (const [filePath, prevContent] of snapshot.previousScopedFiles.entries()) {
+        try {
+            mkdirSync(dirname(filePath), { recursive: true });
+            writeFileSync(filePath, prevContent, 'utf-8');
+        } catch { /* best-effort */ }
+    }
+    try {
+        if (snapshot.targetContentBefore !== null) {
+            mkdirSync(dirname(snapshot.targetPath), { recursive: true });
+            writeFileSync(snapshot.targetPath, snapshot.targetContentBefore, 'utf-8');
+        } else if (existsSync(snapshot.targetPath)) {
+            unlinkSync(snapshot.targetPath);
+        }
+    } catch { /* best-effort */ }
+
+    const baseCoordConfigDir = join(snapshot.homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator');
+    removeDirIfEmpty(join(baseCoordConfigDir, snapshot.scope));
+    removeDirIfEmpty(baseCoordConfigDir);
+    const rulesDir = join(snapshot.workspace, '.agents', 'rules');
+    removeDirIfEmpty(rulesDir);
+    removeDirIfEmpty(join(snapshot.workspace, '.agents'));
+
+    const resolvedTarget = resolve(snapshot.targetPath);
+    if (snapshot.priorTrackedCompanion) {
+        _companionFilesByContextPath.set(resolvedTarget, snapshot.priorTrackedCompanion);
+    } else {
+        _companionFilesByContextPath.delete(resolvedTarget);
+    }
+    if (snapshot.priorUnsettledEffect) {
+        _latestUnsettledEffectByTarget.set(resolvedTarget, snapshot.priorUnsettledEffect);
+    } else {
+        _latestUnsettledEffectByTarget.delete(resolvedTarget);
+    }
+}
+
 /**
  * Write the Antigravity coordinator prompt across `<workspace>/AGENTS.md`,
  * `<coordHome>/.gemini/config/adhdev-mesh-coordinator/<scope>/part-XX.md`, and
  * `<workspace>/.agents/rules/adhdev-mesh-coordinator-<scope>-part-XX.md` so every
  * workspace rule file expands to `<= 24,000` UTF-8 bytes and base-node workers
  * with private `HOME` directories stay isolated from the coordinator prompt.
+ *
+ * Transactional: if any directory creation or file write fails, all partial
+ * changes are rolled back and a fail-closed `{ error, errorCode }` effect is
+ * returned.
  */
 export function writeAntigravityCoordinatorContextFiles(opts: {
     systemPrompt: string;
@@ -254,8 +467,9 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
     ctx: CoordinatorInjectionContext;
 }): CoordinatorInjectionEffect {
     const { systemPrompt, target, wrapper, sentinels, ownedDeclared, ctx } = opts;
+    const resolvedTarget = resolve(target);
     const homeDir = resolveAntigravityCoordinatorHome(ctx.launchEnv);
-    const scope = computeAntigravityCoordinatorScope(ctx.workspace);
+    const scope = computeAntigravityCoordinatorScope(ctx.workspace, systemPrompt);
     const homeChunkDir = join(homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator', scope);
     const workspaceRulesDir = join(ctx.workspace, '.agents', 'rules');
     const managedNote =
@@ -263,11 +477,45 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
         + 'Changes inside the sentinels are overwritten on next coordinator launch. '
         + 'Applies only to the active mesh coordinator session (never to delegated workers)._';
 
+    const targetExistedBefore = existsSync(target);
+    let targetContentBefore: string | null = null;
+    try {
+        if (targetExistedBefore) {
+            targetContentBefore = readFileSync(target, 'utf-8');
+        }
+    } catch (error: any) {
+        const message = `Could not read ${target}: ${error?.message || error}`;
+        LOG.warn('MeshCoordinator', message);
+        return { error: message, errorCode: 'mesh_coordinator_context_file_write_failed' };
+    }
+
+    const hadCoordinatorBlockBefore = Boolean(
+        targetContentBefore !== null && sentinels.open && targetContentBefore.includes(sentinels.open),
+    );
+    const previousScopedFiles = snapshotExistingScopedFiles(ctx.workspace, homeDir, scope);
+    const priorUnsettledRef = _latestUnsettledEffectByTarget.get(resolvedTarget);
+    const priorTrackedCompanion = _companionFilesByContextPath.get(resolvedTarget);
+    const writtenFiles: string[] = [];
+
+    const snapshot: InjectionPreWriteSnapshot = {
+        targetPath: target,
+        workspace: ctx.workspace,
+        homeDir,
+        scope,
+        targetExistedBefore,
+        targetContentBefore,
+        hadCoordinatorBlockBefore,
+        sentinels,
+        previousScopedFiles,
+        writtenFiles,
+        priorUnsettledEffect: hadCoordinatorBlockBefore ? priorUnsettledRef : undefined,
+        priorTrackedCompanion,
+    };
+
     let owned = ownedDeclared;
     try {
         mkdirSync(dirname(target), { recursive: true });
-        const existing = existsSync(target) ? readFileSync(target, 'utf-8') : null;
-        if (existing !== null && owned && removeWrapperBlock(existing, sentinels).trim()) {
+        if (targetContentBefore !== null && owned && removeWrapperBlock(targetContentBefore, sentinels).trim()) {
             owned = false;
             LOG.warn(
                 'MeshCoordinator',
@@ -275,18 +523,23 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
             );
         }
 
-        cleanupStaleScopedFiles(ctx.workspace, homeDir, scope);
-
-        // Calculate how many UTF-8 bytes of `AGENTS.md` are consumed by user content,
-        // wrapper sentinels, managed note, and the ~120-byte part-01 comment header/footer.
+        // Calculate how many UTF-8 bytes of `AGENTS.md` are consumed by user content
+        // (including any user `@[label](path)` includes after AGY expands them!),
+        // wrapper sentinels, managed note, and the ~160-byte part-01 comment header/footer.
         const shellWithManagedNote = renderIntoExistingContent(
-            existing,
+            targetContentBefore,
             wrapper.replace(/\{prompt\}/g, `${managedNote}\n\n`),
             sentinels,
         );
-        const shellBytes = Buffer.byteLength(shellWithManagedNote, 'utf-8');
+        const { expandedBytes: shellBytes, hasUnresolvedInclude } = measureExpandedAntigravityShellBytes(
+            shellWithManagedNote,
+            ctx.workspace,
+            homeDir,
+        );
         const chunkWrapperOverheadBytes = 160;
-        const availableInlineBytes = ANTIGRAVITY_SAFE_EXPANDED_FILE_BYTES - shellBytes - chunkWrapperOverheadBytes;
+        const availableInlineBytes = hasUnresolvedInclude
+            ? 0
+            : ANTIGRAVITY_SAFE_EXPANDED_FILE_BYTES - shellBytes - chunkWrapperOverheadBytes;
         const inlineFirstPartInAgentsMd = availableInlineBytes >= ANTIGRAVITY_MIN_INLINE_PART_BYTES;
 
         const chunks = splitPromptByUtf8ByteBudget(
@@ -295,8 +548,18 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
             ANTIGRAVITY_COMPANION_CHUNK_MAX_BYTES,
         );
         const totalParts = chunks.length;
+        const companionStartIndex = inlineFirstPartInAgentsMd ? 1 : 0;
 
+        // Validate/create target directories BEFORE mutating files on disk so a blocked
+        // `.agents/rules` directory fails before touching `AGENTS.md`.
         mkdirSync(homeChunkDir, { recursive: true, mode: 0o700 });
+        if (companionStartIndex < totalParts) {
+            mkdirSync(workspaceRulesDir, { recursive: true });
+        }
+
+        cleanupStaleScopedFiles(ctx.workspace, homeDir, scope);
+        mkdirSync(homeChunkDir, { recursive: true, mode: 0o700 });
+
         const additionalOwnedFiles: string[] = [];
         const includeRefs: string[] = [];
 
@@ -306,33 +569,27 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
             const chunkPath = join(homeChunkDir, `part-${padded}.md`);
             const wrappedChunk = wrapChunkFileContent(chunks[i]!, partNum, totalParts);
             writeFileSync(chunkPath, wrappedChunk, { encoding: 'utf-8', mode: 0o600 });
+            writtenFiles.push(chunkPath);
             additionalOwnedFiles.push(chunkPath);
             includeRefs.push(
                 `@[adhdev-mesh-coordinator-prompt-part-${partNum}](~/.gemini/config/adhdev-mesh-coordinator/${scope}/part-${padded}.md)`,
             );
         }
 
-        // Write `AGENTS.md` (with `part-01` include if budget allows; otherwise just
-        // the managed note or minimal sentinel block so large user `AGENTS.md` files
-        // are never pushed past the 24,000-byte cap).
         let agentsPromptBody: string;
         if (inlineFirstPartInAgentsMd && includeRefs.length > 0) {
             agentsPromptBody = `${managedNote}\n\n${includeRefs[0]}`;
-        } else if (shellBytes <= ANTIGRAVITY_RULE_FILE_MAX_BYTES) {
+        } else if (!hasUnresolvedInclude && shellBytes <= ANTIGRAVITY_RULE_FILE_MAX_BYTES) {
             agentsPromptBody = managedNote;
         } else {
             agentsPromptBody = '';
         }
         const renderedAgentsBlock = wrapper.replace(/\{prompt\}/g, agentsPromptBody);
-        const nextAgentsContent = renderIntoExistingContent(existing, renderedAgentsBlock, sentinels);
+        const nextAgentsContent = renderIntoExistingContent(targetContentBefore, renderedAgentsBlock, sentinels);
         writeFileSync(target, nextAgentsContent, 'utf-8');
 
-        // Any part not included directly in `AGENTS.md` gets its own companion
-        // `.agents/rules/adhdev-mesh-coordinator-<scope>-part-XX.md` with `trigger: always_on`.
-        const companionStartIndex = inlineFirstPartInAgentsMd ? 1 : 0;
         const hasGitDir = existsSync(join(ctx.workspace, '.git'));
         if (companionStartIndex < totalParts) {
-            mkdirSync(workspaceRulesDir, { recursive: true });
             for (let i = companionStartIndex; i < totalParts; i++) {
                 const partNum = i + 1;
                 const padded = String(partNum).padStart(2, '0');
@@ -347,36 +604,75 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
                     '',
                 ].join('\n');
                 writeFileSync(companionPath, companionBody, 'utf-8');
+                writtenFiles.push(companionPath);
                 additionalOwnedFiles.push(companionPath);
                 if (hasGitDir) ensureLocalGitExclude(ctx.workspace, companionPath);
             }
         }
-        if (hasGitDir && existing === null) {
+        if (hasGitDir && targetContentBefore === null) {
             ensureLocalGitExclude(ctx.workspace, target);
         }
 
-        _companionFilesByContextPath.set(resolve(target), {
+        _companionFilesByContextPath.set(resolvedTarget, {
             workspace: ctx.workspace,
             homeDir,
             scope,
             files: [...additionalOwnedFiles],
         });
 
-        LOG.info(
-            'MeshCoordinator',
-            `Wrote antigravity-cli coordinator prompt to ${target} (${totalParts} part(s), inlineFirst=${inlineFirstPartInAgentsMd})`,
-        );
-        return {
+        const effect: CoordinatorInjectionEffect = {
             contextFilePath: target,
             contextFileOwned: owned,
             contextFileSentinels: sentinels,
             additionalOwnedFiles,
             retainContextFileForSessionLifetime: true,
+            contextFileHomeDir: homeDir,
         };
+        _preWriteSnapshots.set(effect, snapshot);
+        _latestUnsettledEffectByTarget.set(resolvedTarget, new WeakRef(effect));
+
+        LOG.info(
+            'MeshCoordinator',
+            `Wrote antigravity-cli coordinator prompt to ${target} (${totalParts} part(s), inlineFirst=${inlineFirstPartInAgentsMd})`,
+        );
+        return effect;
     } catch (error: any) {
-        LOG.warn('MeshCoordinator', `Could not write ${target}: ${error?.message || error}`);
-        return {};
+        restorePreWriteSnapshot(snapshot);
+        const message = `Could not write ${target}: ${error?.message || error}`;
+        LOG.warn('MeshCoordinator', message);
+        return {
+            error: message,
+            errorCode: 'mesh_coordinator_context_file_write_failed',
+        };
     }
+}
+
+/**
+ * Roll back a failed launch's `CoordinatorInjectionEffect` when another active
+ * coordinator (registered in `coordinator-registry` OR an earlier unsettled
+ * provisional injection) already owns `effect.contextFilePath`.
+ *
+ * Returns `true` if an overlapping active owner was preserved and restored
+ * (so the caller MUST NOT strip `effect.contextFilePath`), or `false` if no
+ * other active owner exists and normal failed-launch stripping should proceed.
+ */
+export function rollbackOverlappingFailedContextFileInjection(
+    effect: object,
+    hasRegisteredLiveOwner: boolean,
+): boolean {
+    const snapshot = _preWriteSnapshots.get(effect);
+    if (!snapshot) {
+        return hasRegisteredLiveOwner;
+    }
+    _preWriteSnapshots.delete(effect);
+    const hasProvisionalOwner = Boolean(
+        snapshot.hadCoordinatorBlockBefore && snapshot.priorUnsettledEffect?.deref(),
+    );
+    if (!hasRegisteredLiveOwner && !hasProvisionalOwner) {
+        return false;
+    }
+    restorePreWriteSnapshot(snapshot);
+    return true;
 }
 
 /**
@@ -386,6 +682,7 @@ export function writeAntigravityCoordinatorContextFiles(opts: {
 export function cleanupAntigravityCompanionFiles(
     contextFilePath: string,
     explicitAdditionalFiles?: readonly string[],
+    protectedFiles?: ReadonlySet<string>,
 ): void {
     const resolvedTarget = resolve(contextFilePath);
     const tracked = _companionFilesByContextPath.get(resolvedTarget);
@@ -397,25 +694,37 @@ export function cleanupAntigravityCompanionFiles(
     }
 
     for (const filePath of filesToDelete) {
+        if (protectedFiles?.has(filePath)) continue;
         try {
             if (existsSync(filePath)) unlinkSync(filePath);
         } catch { /* best-effort */ }
     }
 
     const workspace = tracked?.workspace ?? dirname(resolvedTarget);
-    const scope = tracked?.scope ?? computeAntigravityCoordinatorScope(workspace);
+    const candidateScopes = new Set<string>();
+    if (tracked?.scope) candidateScopes.add(tracked.scope);
     const candidateHomes = new Set<string>([os.homedir()]);
     if (tracked?.homeDir) candidateHomes.add(tracked.homeDir);
+
+    const marker = join('.gemini', 'config', 'adhdev-mesh-coordinator');
     for (const f of filesToDelete) {
-        const marker = `${join('.gemini', 'config', 'adhdev-mesh-coordinator')}`;
         const idx = f.indexOf(marker);
-        if (idx > 0) candidateHomes.add(f.slice(0, idx - 1));
+        if (idx > 0) {
+            candidateHomes.add(f.slice(0, idx - 1));
+            const afterMarker = f.slice(idx + marker.length + 1);
+            const scopeSeg = afterMarker.split(/[\\/]/)[0];
+            if (scopeSeg) candidateScopes.add(scopeSeg);
+        }
     }
 
     for (const homeDir of candidateHomes) {
-        cleanupStaleScopedFiles(workspace, homeDir, scope);
         const baseCoordConfigDir = join(homeDir, '.gemini', 'config', 'adhdev-mesh-coordinator');
-        removeDirIfEmpty(join(baseCoordConfigDir, scope));
+        for (const scope of candidateScopes) {
+            if (!protectedFiles || protectedFiles.size === 0) {
+                cleanupStaleScopedFiles(workspace, homeDir, scope);
+            }
+            removeDirIfEmpty(join(baseCoordConfigDir, scope));
+        }
         removeDirIfEmpty(baseCoordConfigDir);
     }
 
@@ -426,7 +735,7 @@ export function cleanupAntigravityCompanionFiles(
 
 /**
  * Strip the daemon's wrapper block from a context_file we previously wrote,
- * along with any companion rule/include files.
+ * along with any companion rule/include files. Preserves user content byte-for-byte.
  */
 export function stripCoordinatorWrapperFile(
     filePath: string,
@@ -435,6 +744,8 @@ export function stripCoordinatorWrapperFile(
     additionalOwnedFiles?: readonly string[],
 ): void {
     try {
+        const resolvedTarget = resolve(filePath);
+        _latestUnsettledEffectByTarget.delete(resolvedTarget);
         cleanupAntigravityCompanionFiles(filePath, additionalOwnedFiles);
         if (!existsSync(filePath)) return;
         if (owned) {
@@ -444,15 +755,12 @@ export function stripCoordinatorWrapperFile(
         if (!sentinels.open) return;
         const existing = readFileSync(filePath, 'utf-8');
         if (!existing.includes(sentinels.open)) return;
-        const stripped = removeWrapperBlock(existing, sentinels);
-        if (stripped === existing) return;
-        const remaining = stripped
-            .replace(/^\s*\n+/, '')
-            .replace(/\n+\s*$/, '');
+        const remaining = stripSentinelBlockPreservingSurroundingBytes(existing, sentinels);
+        if (remaining === existing) return;
         if (!remaining.trim()) {
             try { unlinkSync(filePath); } catch { /* best-effort */ }
         } else {
-            writeFileSync(filePath, remaining + '\n', 'utf-8');
+            writeFileSync(filePath, remaining, 'utf-8');
         }
     } catch { /* best-effort */ }
 }

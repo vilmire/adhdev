@@ -11,6 +11,7 @@ import type { ProviderModule } from '../providers/contracts.js';
 import type { MeshCoordinatorMcpConfigFormat, MeshCoordinatorSystemPromptInjection } from '../providers/mesh-coordinator-contracts.js';
 import {
   coordinatorWrapperSentinels,
+  extractAntigravityCoordinatorHomeFromPaths,
   LEGACY_COORDINATOR_WRAPPER_SENTINELS,
   removeWrapperBlock,
   stripCoordinatorWrapperFile,
@@ -471,6 +472,8 @@ export interface CoordinatorInjectionEffect {
    *  `antigravity-cli`), so startup-idle readiness must NOT strip the file;
    *  cleanup is deferred to failed launch, coordinator unregister, or dead-entry prune. */
   retainContextFileForSessionLifetime?: boolean
+  /** Effective HOME directory used for `~/` include resolution in `contextFilePath`. */
+  contextFileHomeDir?: string
   /** Absolute path of the daemon-owned temp agent file. Only set for
    *  agent_file injection. The CLI reads it once at startup, so the launch
    *  path schedules a delete after the spawn settles; leftovers in the temp
@@ -482,7 +485,7 @@ export interface CoordinatorInjectionEffect {
    *  letting the spawn die obscurely (CreateProcess / cmd.exe length limit). */
   error?: string
   /** Stable machine code for `error`. */
-  errorCode?: 'mesh_coordinator_prompt_too_long'
+  errorCode?: 'mesh_coordinator_prompt_too_long' | 'mesh_coordinator_context_file_write_failed'
 }
 
 export interface CoordinatorInjectionContext {
@@ -722,6 +725,16 @@ export function ensureCoordinatorContextFileMaterialized(
     return false
   }
 
+  const effectiveHome =
+    launchEnv?.HOME?.trim()
+    || launchEnv?.USERPROFILE?.trim()
+    || entry.injection?.contextFile?.homeDir?.trim()
+    || extractAntigravityCoordinatorHomeFromPaths(recordedExtras)
+  const effectiveLaunchEnv: Record<string, string> = {
+    ...(launchEnv ?? {}),
+    ...(effectiveHome ? { HOME: effectiveHome } : {}),
+  }
+
   const effect = applyMeshCoordinatorSystemPromptInjection(
     entry.systemPrompt,
     {
@@ -732,7 +745,7 @@ export function ensureCoordinatorContextFileMaterialized(
     },
     {
       cliArgs: [],
-      launchEnv: launchEnv ?? {},
+      launchEnv: effectiveLaunchEnv,
       workspace: entry.workspace,
       cliType: entry.cliType || 'antigravity-cli',
     },
@@ -752,6 +765,7 @@ export function ensureCoordinatorContextFileMaterialized(
       } : {}),
       ...(effect.additionalOwnedFiles?.length ? { additionalOwnedFiles: effect.additionalOwnedFiles } : {}),
       ...(effect.retainContextFileForSessionLifetime ? { retainForSessionLifetime: true } : {}),
+      ...(effect.contextFileHomeDir ? { homeDir: effect.contextFileHomeDir } : {}),
     },
   }
   registerMeshCoordinator(entry)

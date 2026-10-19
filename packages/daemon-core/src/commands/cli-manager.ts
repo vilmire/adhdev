@@ -812,7 +812,7 @@ export class DaemonCliManager {
         const replay = found ? this.roleRestartInputs.get(found.key) : undefined;
         if (isRole && !replay) return { success: false, code: 'restart_selection_unavailable',
             error: 'The role session launch arguments are unavailable; restart refused.' };
-        const { getCoordinatorForSession, registerMeshCoordinator } = await import('../mesh/coordinator-registry.js');
+        const { getCoordinatorForSession, registerMeshCoordinator, unregisterMeshCoordinator } = await import('../mesh/coordinator-registry.js');
         const savedCoordinatorEntry = found ? getCoordinatorForSession(found.key) : undefined;
         if (found) await this.stopSession(found.key);
         if (savedCoordinatorEntry) {
@@ -820,15 +820,22 @@ export class DaemonCliManager {
             const { ensureCoordinatorContextFileMaterialized } = await import('./mesh-coordinator.js');
             ensureCoordinatorContextFileMaterialized(savedCoordinatorEntry, replay?.options?.extraEnv);
         }
-        await this.startSession(isRole ? recorded!.providerType : cliType,
-            isRole ? recorded!.workspace || found!.adapter.workingDir || dir : dir,
-            isRole ? replay!.cliArgs : args?.cliArgs || prevCliArgs,
-            isRole ? replay!.initialModel : args?.initialModel, {
-                ...(isRole ? { ...replay!.options, restartRecord: recorded, presetSessionKey: found!.key } : {}),
-                launchProvenance: isRole ? { roleLaunch: recorded!.roleLaunch,
-                    launchedBy: recorded!.launchedBy, modelSource: recorded!.model.source,
-                    thinkingLevelSource: recorded!.thinkingLevel.source } : resolveLaunchProvenance(args, undefined),
-            });
+        try {
+            await this.startSession(isRole ? recorded!.providerType : cliType,
+                isRole ? recorded!.workspace || found!.adapter.workingDir || dir : dir,
+                isRole ? replay!.cliArgs : args?.cliArgs || prevCliArgs,
+                isRole ? replay!.initialModel : args?.initialModel, {
+                    ...(isRole ? { ...replay!.options, restartRecord: recorded, presetSessionKey: found!.key } : {}),
+                    launchProvenance: isRole ? { roleLaunch: recorded!.roleLaunch,
+                        launchedBy: recorded!.launchedBy, modelSource: recorded!.model.source,
+                        thinkingLevelSource: recorded!.thinkingLevel.source } : resolveLaunchProvenance(args, undefined),
+                });
+        } catch (restartError) {
+            if (savedCoordinatorEntry) {
+                unregisterMeshCoordinator(savedCoordinatorEntry.sessionId);
+            }
+            throw restartError;
+        }
         return { success: true, restarted: true };
     }
     agentCommand(args: AgentCommandArgs): Promise<CommandResult> { return agentCommand(this, args); }

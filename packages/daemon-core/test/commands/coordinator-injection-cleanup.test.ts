@@ -648,6 +648,456 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       rmSync(coordHome, { recursive: true, force: true })
     }
   })
-})
 
+  it('F1: budgets existing user @[label](path) includes after expansion so expanded AGENTS.md never exceeds 24,000 bytes', () => {
+    const ws = tempWorkspace('adhdev-agy-f1-ws-')
+    const coordHome = tempWorkspace('adhdev-agy-f1-home-')
+    try {
+      writeFileSync(join(ws, 'user-rules.md'), 'User rules.\n'.repeat(1_000), 'utf-8')
+      writeFileSync(join(ws, 'AGENTS.md'), '@[user](user-rules.md)\n', 'utf-8')
+
+      const prompt = 'COORD_HEAD\n' + 'Coordinator rule line.\n'.repeat(1_700) + 'COORD_TAIL'
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+
+      const loaded = collectAntigravityLoadedRules(ws, coordHome)
+      for (const file of loaded.files) {
+        expect(file.truncated).toBe(false)
+        expect(file.byteLength).toBeLessThanOrEqual(24_000)
+      }
+      expect(loaded.combined).toContain('User rules.')
+      expect(loaded.combined).toContain('COORD_HEAD')
+      expect(loaded.combined).toContain('COORD_TAIL')
+
+      stripCoordinatorWrapperFile(effect.contextFilePath!, false, effect.contextFileSentinels, effect.additionalOwnedFiles)
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe('@[user](user-rules.md)\n')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('F2: keeps active coordinator delivery intact after an overlapping launch fails (both registered and provisional)', async () => {
+    const {
+      registerMeshCoordinator,
+      unregisterMeshCoordinator,
+    } = await import('../../src/mesh/coordinator-registry.js')
+    const ws = tempWorkspace('adhdev-agy-f2-ws-')
+    const coordHome = tempWorkspace('adhdev-agy-f2-home-')
+    try {
+      const prompt = 'ACTIVE_HEAD\n' + 'Active coordinator rule.\n'.repeat(1_700) + 'ACTIVE_TAIL'
+      const active = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      registerMeshCoordinator({
+        meshId: 'review-active',
+        sessionId: 'review-active',
+        workspace: ws,
+        startedAt: Date.now(),
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        injection: {
+          mode: 'context_file',
+          target: 'AGENTS.md',
+          contextFile: {
+            path: active.contextFilePath!,
+            owned: false,
+            additionalOwnedFiles: active.additionalOwnedFiles,
+            retainForSessionLifetime: true,
+          },
+        },
+      })
+
+      // Overlapping launch B with same prompt fails: active coordinator files must remain intact.
+      const failedSame = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      await scheduleInjectionCleanup(failedSame, { launched: false, label: 'failed overlap same' })
+      expect(existsSync(active.contextFilePath!)).toBe(true)
+      expect(active.additionalOwnedFiles!.filter(existsSync).length).toBe(active.additionalOwnedFiles!.length)
+
+      // Overlapping launch C with a different prompt fails: active coordinator files and content must be restored.
+      const failedDifferent = applyMeshCoordinatorSystemPromptInjection(
+        'OTHER_HEAD\nShort failed prompt.\nOTHER_TAIL',
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      await scheduleInjectionCleanup(failedDifferent, { launched: false, label: 'failed overlap different' })
+      expect(existsSync(active.contextFilePath!)).toBe(true)
+      expect(active.additionalOwnedFiles!.filter(existsSync).length).toBe(active.additionalOwnedFiles!.length)
+      const loaded = collectAntigravityLoadedRules(ws, coordHome)
+      expect(loaded.combined).toContain('ACTIVE_HEAD')
+      expect(loaded.combined).toContain('ACTIVE_TAIL')
+      expect(loaded.combined).not.toContain('OTHER_HEAD')
+
+      // Unregister active coordinator and verify provisional-only overlap (before registerMeshCoordinator)
+      unregisterMeshCoordinator('review-active')
+      expect(existsSync(active.contextFilePath!)).toBe(false)
+
+      const provisionalA = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      const failedProvisionalB = applyMeshCoordinatorSystemPromptInjection(
+        'PROVISIONAL_B_HEAD\nFailed provisional prompt.\nPROVISIONAL_B_TAIL',
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      await scheduleInjectionCleanup(failedProvisionalB, { launched: false, label: 'failed provisional overlap' })
+      expect(existsSync(provisionalA.contextFilePath!)).toBe(true)
+      expect(provisionalA.additionalOwnedFiles!.filter(existsSync).length).toBe(provisionalA.additionalOwnedFiles!.length)
+      const loadedProvisional = collectAntigravityLoadedRules(ws, coordHome)
+      expect(loadedProvisional.combined).toContain('ACTIVE_HEAD')
+      expect(loadedProvisional.combined).not.toContain('PROVISIONAL_B_HEAD')
+
+      await scheduleInjectionCleanup(provisionalA, { launched: false, label: 'provisionalA failed' })
+      expect(existsSync(provisionalA.contextFilePath!)).toBe(false)
+    } finally {
+      unregisterMeshCoordinator('review-active')
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves user AGENTS.md bytes verbatim (no-trailing-newline, leading/trailing blank lines, CRLF, and concurrent user edits) across inject and strip', () => {
+    const cases = [
+      'User rule without newline',
+      '\n\nUser rule with whitespace\n\n',
+      'User rule CRLF\r\n',
+    ]
+    for (const original of cases) {
+      const ws = tempWorkspace('adhdev-agy-bytes-ws-')
+      const coordHome = tempWorkspace('adhdev-agy-bytes-home-')
+      try {
+        writeFileSync(join(ws, 'AGENTS.md'), original, 'utf-8')
+        const effect = applyMeshCoordinatorSystemPromptInjection(
+          'COORD_PROMPT',
+          { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+          { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+        )
+        stripCoordinatorWrapperFile(
+          effect.contextFilePath!,
+          false,
+          effect.contextFileSentinels,
+          effect.additionalOwnedFiles,
+        )
+        expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe(original)
+      } finally {
+        rmSync(ws, { recursive: true, force: true })
+        rmSync(coordHome, { recursive: true, force: true })
+      }
+    }
+
+    // Concurrent user edit before and after the sentinel block while coordinator is active.
+    const ws = tempWorkspace('adhdev-agy-concurrent-ws-')
+    const coordHome = tempWorkspace('adhdev-agy-concurrent-home-')
+    try {
+      writeFileSync(join(ws, 'AGENTS.md'), 'Initial user rule', 'utf-8')
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        'COORD_PROMPT',
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      const injected = readFileSync(join(ws, 'AGENTS.md'), 'utf-8')
+      const concurrentlyEdited = injected.replace('Initial user rule', 'Edited user rule\nSecond line') + '\nTrailing user addition'
+      writeFileSync(join(ws, 'AGENTS.md'), concurrentlyEdited, 'utf-8')
+
+      stripCoordinatorWrapperFile(
+        effect.contextFilePath!,
+        false,
+        effect.contextFileSentinels,
+        effect.additionalOwnedFiles,
+      )
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe('Edited user rule\nSecond line\nTrailing user addition')
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('F4: rolls back partial materialization and returns a fail-closed error when .agents/rules cannot be created', async () => {
+    const ws = tempWorkspace('adhdev-agy-f4-ws-')
+    const coordHome = tempWorkspace('adhdev-agy-f4-home-')
+    try {
+      // Seed a regular file at workspace/.agents so mkdir(.agents/rules) fails with ENOTDIR.
+      writeFileSync(join(ws, '.agents'), 'existing file', 'utf-8')
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        'COORD_HEAD\n' + 'Coordinator line.\n'.repeat(2_000) + 'COORD_TAIL',
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      await scheduleInjectionCleanup(effect, { launched: false, label: 'partial write failure' })
+
+      expect(effect.error).toBeTruthy()
+      expect(effect.errorCode).toBe('mesh_coordinator_context_file_write_failed')
+      expect(existsSync(join(ws, 'AGENTS.md'))).toBe(false)
+      expect(existsSync(join(coordHome, '.gemini', 'config', 'adhdev-mesh-coordinator'))).toBe(false)
+      expect(readFileSync(join(ws, '.agents'), 'utf-8')).toBe('existing file')
+
+      // Also verify that if AGENTS.md had existing user content before the failed partial write,
+      // the user file is preserved verbatim.
+      const userContent = 'User rule without trailing newline'
+      writeFileSync(join(ws, 'AGENTS.md'), userContent, 'utf-8')
+      const effectWithUser = applyMeshCoordinatorSystemPromptInjection(
+        'COORD_HEAD\n' + 'Coordinator line.\n'.repeat(2_000) + 'COORD_TAIL',
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      expect(effectWithUser.error).toBeTruthy()
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).toBe(userContent)
+      expect(existsSync(join(coordHome, '.gemini', 'config', 'adhdev-mesh-coordinator'))).toBe(false)
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('F3 & F5: rolls back registration and rules on restartSession spawn failure, and restores missing chunks in registered coordinator HOME when daemon restore supplies no launchEnv', async () => {
+    const {
+      registerMeshCoordinator,
+      unregisterMeshCoordinator,
+      getCoordinatorForSession,
+    } = await import('../../src/mesh/coordinator-registry.js')
+    const { ensureCoordinatorContextFileMaterialized } = await import('../../src/commands/mesh-coordinator.js')
+    const { DaemonCliManager } = await import('../../src/commands/cli-manager.js')
+    const cliDetectorMod = await import('../../src/detection/cli-detector.js')
+    const validateMod = await import('../../src/launch-defaults/validate.js')
+
+    const detectSpy = vi.spyOn(cliDetectorMod, 'detectCLI').mockResolvedValue({ version: '1.4.2' } as any)
+    const validateSpy = vi.spyOn(validateMod, 'validateLaunchDefault').mockReturnValue({ ok: true } as any)
+
+    const ws = tempWorkspace('adhdev-agy-f35-ws-')
+    const coordHome = tempWorkspace('adhdev-agy-f35-home-')
+    const key = 'review-lifecycle-session'
+    try {
+      const prompt = 'COORD_LIFECYCLE_HEAD\n' + 'Coordinator rule.\n'.repeat(2_000) + 'COORD_LIFECYCLE_TAIL'
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        { mode: 'context_file', path: 'AGENTS.md', wrapper: ANTIGRAVITY_WRAPPER },
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+      const entry = {
+        meshId: 'review-lifecycle',
+        sessionId: key,
+        workspace: ws,
+        startedAt: Date.now(),
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        injection: {
+          mode: 'context_file',
+          target: 'AGENTS.md',
+          contextFile: {
+            path: effect.contextFilePath!,
+            owned: false,
+            additionalOwnedFiles: effect.additionalOwnedFiles,
+            retainForSessionLifetime: true,
+          },
+        },
+      }
+      registerMeshCoordinator(entry)
+
+      // F5: Delete part-01 in coordHome, then call ensureCoordinatorContextFileMaterialized(entry)
+      // WITHOUT launchEnv (as cli-manager-restore.ts does). Must restore into coordHome, not daemon HOME.
+      rmSync(effect.additionalOwnedFiles![0]!)
+      const restored = ensureCoordinatorContextFileMaterialized(entry)
+      expect(restored).toBe(true)
+      const loadedAfterRestore = collectAntigravityLoadedRules(ws, coordHome)
+      expect(loadedAfterRestore.combined).toContain('COORD_LIFECYCLE_HEAD')
+      expect(loadedAfterRestore.combined).toContain('COORD_LIFECYCLE_TAIL')
+
+      // F3: Call restartSession where stopSession unregisters the coordinator and startSession rejects.
+      // Registration and re-materialized files must be rolled back.
+      const launch = {
+        providerType: 'antigravity-cli',
+        workspace: ws,
+        launchedBy: 'mesh',
+        roleLaunch: { role: 'coordinator', selection: { provider: 'antigravity-cli' } },
+        model: { source: 'provider_default' },
+        thinkingLevel: { source: 'provider_default' },
+      }
+      const manager = Object.create(DaemonCliManager.prototype) as any
+      manager.findAdapter = () => ({ key, adapter: { workingDir: ws } })
+      manager.deps = {
+        getSessionRegistry: () => ({ get: () => ({ launch }) }),
+        getInstanceManager: () => ({
+          getInstance: () => ({ getState: () => ({ settings: { meshCoordinatorFor: 'review-lifecycle' } }) }),
+        }),
+      }
+      manager.roleRestartInputs = new Map([[key, { cliArgs: [], options: { extraEnv: { HOME: coordHome } } }]])
+      manager.stopSession = vi.fn(async () => unregisterMeshCoordinator(key))
+      manager.startSession = vi.fn(async () => {
+        throw new Error('scratch spawn failed')
+      })
+
+      await expect(manager.restartSession({ cliType: 'antigravity-cli', targetSessionId: key, dir: ws }))
+        .rejects.toThrow('scratch spawn failed')
+      expect(getCoordinatorForSession(key)).toBeUndefined()
+      expect(existsSync(join(ws, 'AGENTS.md'))).toBe(false)
+      expect(effect.additionalOwnedFiles!.filter(existsSync).length).toBe(0)
+    } finally {
+      detectSpy.mockRestore()
+      validateSpy.mockRestore()
+      unregisterMeshCoordinator(key)
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+    }
+  })
+
+  it('exercises production buildCoordinatorDelegatedCliLaunchOptions worker isolation alongside active coordinator rules', async () => {
+    const { buildCoordinatorDelegatedCliLaunchOptions } = await import('../../src/commands/cli-delegated-launch.js')
+    let current = path.resolve(__dirname, '..', '..')
+    let agyManifest: any = null
+    for (let i = 0; i < 6; i++) {
+      const candidate = path.join(current, 'adhdev-providers', 'cli', 'antigravity-cli', 'provider.v1.json')
+      if (fs.existsSync(candidate)) {
+        agyManifest = JSON.parse(fs.readFileSync(candidate, 'utf-8'))
+        break
+      }
+      current = path.dirname(current)
+    }
+    expect(agyManifest).toBeTruthy()
+
+    const ws = tempWorkspace('adhdev-agy-prod-worker-ws-')
+    const coordHome = tempWorkspace('adhdev-agy-prod-coord-home-')
+    let workerHome = ''
+    try {
+      writeFileSync(join(ws, 'AGENTS.md'), '# Repo Rules\nPreserve USER_PROD_WORKER_RULE_321.\n', 'utf-8')
+      const prompt = 'COORD_PROD_HEAD\n' + 'Coordinator instruction.\n'.repeat(1_500) + 'COORD_PROD_TAIL_BEYOND_24KB'
+      const effect = applyMeshCoordinatorSystemPromptInjection(
+        prompt,
+        agyManifest.meshCoordinator.systemPromptInjection,
+        { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
+      )
+
+      const delegated = buildCoordinatorDelegatedCliLaunchOptions({
+        cliType: 'antigravity-cli',
+        workspace: ws,
+        isolation: agyManifest.meshCoordinator.delegatedWorkerIsolation,
+        mcpConfig: agyManifest.meshCoordinator.mcpConfig,
+        sessionKey: 'worker-prod-session-1',
+      })
+      workerHome = delegated.env.HOME
+      expect(workerHome).toBeTruthy()
+      expect(workerHome).not.toBe(coordHome)
+      expect(existsSync(join(workerHome, '.gemini', 'config', 'adhdev-mesh-coordinator'))).toBe(false)
+
+      const coordView = collectAntigravityLoadedRules(ws, coordHome)
+      expect(coordView.combined).toContain('USER_PROD_WORKER_RULE_321')
+      expect(coordView.combined).toContain('COORD_PROD_HEAD')
+      expect(coordView.combined).toContain('COORD_PROD_TAIL_BEYOND_24KB')
+
+      const workerView = collectAntigravityLoadedRules(ws, workerHome)
+      expect(workerView.combined).toContain('USER_PROD_WORKER_RULE_321')
+      expect(workerView.combined).not.toContain('COORD_PROD_HEAD')
+      expect(workerView.combined).not.toContain('COORD_PROD_TAIL_BEYOND_24KB')
+
+      // Also verify production DaemonCliManager.restoreHostedSessions re-materializes
+      // antigravity-cli coordinator rules into coordHome when missing on disk.
+      const { registerMeshCoordinator, unregisterMeshCoordinator } = await import(
+        '../../src/mesh/coordinator-registry.js'
+      )
+      registerMeshCoordinator({
+        meshId: 'mesh-prod-restore',
+        sessionId: 'coord-prod-restore-1',
+        workspace: ws,
+        startedAt: Date.now(),
+        cliType: 'antigravity-cli',
+        systemPrompt: prompt,
+        injection: {
+          mode: 'context_file',
+          target: 'AGENTS.md',
+          contextFile: {
+            path: effect.contextFilePath!,
+            owned: effect.contextFileOwned === true,
+            open: effect.contextFileSentinels?.open,
+            close: effect.contextFileSentinels?.close,
+            retainForSessionLifetime: true,
+            additionalOwnedFiles: effect.additionalOwnedFiles,
+            homeDir: effect.contextFileHomeDir,
+          },
+        },
+      })
+      stripCoordinatorWrapperFile(effect.contextFilePath!, false, effect.contextFileSentinels, effect.additionalOwnedFiles)
+      expect(readFileSync(join(ws, 'AGENTS.md'), 'utf-8')).not.toContain('COORD_PROD_HEAD')
+
+      const { DaemonCliManager } = await import('../../src/commands/cli-manager.js')
+      const { ProviderLoader } = await import('../../src/providers/provider-loader.js')
+      const providerRoot = tempWorkspace('adhdev-agy-prod-providers-')
+      try {
+        const binDir = join(providerRoot, 'bin')
+        fs.mkdirSync(binDir, { recursive: true })
+        const executable = join(binDir, 'agy')
+        writeFileSync(executable, '#!/bin/sh\nexit 0\n', 'utf-8')
+        fs.chmodSync(executable, 0o755)
+        const cliDir = join(providerRoot, 'cli', 'antigravity-cli')
+        fs.mkdirSync(cliDir, { recursive: true })
+        writeFileSync(join(cliDir, 'provider.json'), JSON.stringify(agyManifest), 'utf-8')
+        writeFileSync(
+          join(cliDir, 'spec.json'),
+          JSON.stringify({
+            $schema: 'adhdev:cli/spec@4',
+            id: 'antigravity-cli',
+            name: 'antigravity-cli',
+            binary: 'agy',
+            send_message: { submit_key: '\r' },
+            sections: {},
+            states: [{ id: 'idle', label: 'Idle', initial: true, status: 'idle' }],
+            transitions: [],
+          }),
+          'utf-8',
+        )
+        class ProdTestProviderLoader extends ProviderLoader {
+          constructor() {
+            super({ userDir: providerRoot, disableUpstream: true })
+          }
+          protected override readConfig(): any {
+            return {
+              machineProviders: { 'antigravity-cli': { enabled: true, executable } },
+              providerSettings: { 'antigravity-cli': { autoApprove: true } },
+            }
+          }
+          protected override writeConfig(): void {}
+        }
+        const loader = new ProdTestProviderLoader()
+        loader.loadAll()
+        const addInstance = vi.fn()
+        const manager = new DaemonCliManager(
+          {
+            getServerConn: () => null,
+            getP2p: () => null,
+            onStatusChange: vi.fn(),
+            removeAgentTracking: vi.fn(),
+            getInstanceManager: () => ({ addInstance, removeInstance: vi.fn(), getInstance: () => null } as any),
+            getSessionRegistry: () => ({ register: vi.fn() } as any),
+          },
+          loader,
+        )
+        const restoredCount = await manager.restoreHostedSessions([
+          { runtimeId: 'coord-prod-restore-1', cliType: 'antigravity-cli', workspace: ws },
+        ])
+        expect(restoredCount).toBe(1)
+        expect(addInstance).toHaveBeenCalledTimes(1)
+        const restoredView = collectAntigravityLoadedRules(ws, coordHome)
+        expect(restoredView.combined).toContain('USER_PROD_WORKER_RULE_321')
+        expect(restoredView.combined).toContain('COORD_PROD_HEAD')
+        expect(restoredView.combined).toContain('COORD_PROD_TAIL_BEYOND_24KB')
+      } finally {
+        unregisterMeshCoordinator('coord-prod-restore-1')
+        rmSync(providerRoot, { recursive: true, force: true })
+      }
+    } finally {
+      rmSync(ws, { recursive: true, force: true })
+      rmSync(coordHome, { recursive: true, force: true })
+      if (workerHome) rmSync(workerHome, { recursive: true, force: true })
+    }
+  })
+})
 

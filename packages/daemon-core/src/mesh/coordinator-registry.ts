@@ -8,10 +8,13 @@
  * Keyed by sessionId (the CLI instance key / runtimeKey).
  */
 
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { getDaemonDataDir } from '../config/config.js';
-import { stripCoordinatorWrapperFile } from '../commands/antigravity-coordinator-rules.js';
+import {
+    cleanupAntigravityCompanionFiles,
+    stripCoordinatorWrapperFile,
+} from '../commands/antigravity-coordinator-rules.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 
 export interface CoordinatorRegistryEntry {
@@ -44,6 +47,7 @@ export interface CoordinatorRegistryEntry {
             close?: string;
             additionalOwnedFiles?: string[];
             retainForSessionLifetime?: boolean;
+            homeDir?: string;
         };
     };
     /** Path of the MCP config file the daemon wrote for this session. */
@@ -99,20 +103,46 @@ function resolveEntryContextFilePath(entry: CoordinatorRegistryEntry): string {
     return `${workspace.replace(/\/$/, '')}/${target}`;
 }
 
-function isContextFileStillOwnedByLiveCoordinator(targetPath: string): boolean {
-    if (!targetPath) return false;
+export function findLiveCoordinatorsForContextFile(targetPath: string): CoordinatorRegistryEntry[] {
+    if (!targetPath) return [];
+    const normalizedTarget = resolve(targetPath);
+    const matches: CoordinatorRegistryEntry[] = [];
     for (const remaining of _registry.values()) {
-        if (resolveEntryContextFilePath(remaining) === targetPath) {
-            return true;
+        const remainingPath = resolveEntryContextFilePath(remaining);
+        if (remainingPath && resolve(remainingPath) === normalizedTarget) {
+            matches.push(remaining);
         }
     }
-    return false;
+    return matches;
+}
+
+function isContextFileStillOwnedByLiveCoordinator(targetPath: string): boolean {
+    return findLiveCoordinatorsForContextFile(targetPath).length > 0;
+}
+
+function collectLiveAdditionalOwnedFiles(): Set<string> {
+    const protectedFiles = new Set<string>();
+    for (const remaining of _registry.values()) {
+        for (const f of remaining.injection?.contextFile?.additionalOwnedFiles ?? []) {
+            protectedFiles.add(f);
+        }
+    }
+    return protectedFiles;
 }
 
 function cleanupCoordinatorEntryContextFile(entry: CoordinatorRegistryEntry): void {
     const targetPath = resolveEntryContextFilePath(entry);
-    if (!targetPath || isContextFileStillOwnedByLiveCoordinator(targetPath)) return;
+    if (!targetPath) return;
     const recorded = entry.injection?.contextFile;
+    if (isContextFileStillOwnedByLiveCoordinator(targetPath)) {
+        if (recorded && Array.isArray(recorded.additionalOwnedFiles) && recorded.additionalOwnedFiles.length > 0) {
+            const protectedFiles = collectLiveAdditionalOwnedFiles();
+            try {
+                cleanupAntigravityCompanionFiles(targetPath, recorded.additionalOwnedFiles, protectedFiles);
+            } catch { /* best-effort */ }
+        }
+        return;
+    }
     if (recorded && typeof recorded.path === 'string' && recorded.path) {
         try {
             stripCoordinatorWrapperFile(
