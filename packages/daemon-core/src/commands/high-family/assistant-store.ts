@@ -316,7 +316,7 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         if (action === 'list') {
             return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
                 launchDefaults: svc.launchDefaults?.list() ?? [], driverActivations: svc.driverStaging?.list() ?? [],
-                driverActions: getDriverService(ctx).stagedActions(), memoryStatus: svc.memory.status() };
+                driverActions: ctx.deps?.providerLoader ? getDriverService(ctx).stagedActions() : [], memoryStatus: svc.memory.status() };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);

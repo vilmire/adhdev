@@ -55,4 +55,4 @@ export const driverHandlers: Record<string, MedFamilyHandler> = {
 };
 export const driverSpecs = defineCommandSpecs('med', driverHandlers, {
     driver_set_enabled: { sources: ['p2p', 'ws', 'standalone'] },
-}, { sources: ['ipc', 'standalone'], meshSender: 'authenticated_peer' });
+}, { sources: ['ipc', 'standalone'] });

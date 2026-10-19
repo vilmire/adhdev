@@ -11,6 +11,8 @@ import { specAcceptsMeshSource } from '../../src/commands/command-registry.js';
 import { ASSISTANT_MEMORY_LIMITS_COMMAND } from '../../src/commands/high-family/assistant-store.js';
 
 const EXPECTED_SOURCES: Record<string, string[]> = {
+    driver_list: ['ipc', 'standalone'],
+    driver_describe: ['ipc', 'standalone'],
     assistant_environment: ['ipc', 'standalone'],
     assistant_action: ['ipc', 'standalone'],
     assistant_execution_state: ['ipc', 'p2p', 'standalone', 'ws'],

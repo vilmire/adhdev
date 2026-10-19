@@ -276,6 +276,7 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'plan_mesh_refine_node', 'fast_forward_mesh_node', 'refine_mesh_node', 'batch_refine_mesh_nodes',
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
     'mesh_task_output',
+    'driver_describe', 'driver_invoke', 'driver_list', 'driver_set_enabled',
 ];
 
 /** high-family/index.ts highFamilyRegistry keys. */
