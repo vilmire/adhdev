@@ -183,6 +183,74 @@ describe('native relay capture review regressions', () => {
         expect(f.db.prepare('SELECT count(*) AS n FROM assistant_attempt_bodies').get()).toEqual({ n: 0 });
     });
 
+    it('recovers final_adapter from the real cursor-cli read_chat shape when pty-parser only has the runtime_input_ack user bubble', async () => {
+        const prompt = 'One-turn release re-check. Do not run commands or edit files. Reply with four complete sentences confirming that the cursor-cli coordinator received this prompt, evaluated the final_adapter relay path, verified multi-sentence completion, and is now idle.';
+        const full = 'The cursor-cli coordinator received your one-turn release re-check prompt cleanly without running any commands or modifying any files. It evaluated the final_adapter relay path and confirmed that non-native provider replies are routed through the expected adapter completion flow. Multi-sentence completion was verified across all four sentences so the full response body remains intact from start to finish. The coordinator has finished processing this turn and is now idle.';
+        const liveCursorReadChat = {
+            success: true,
+            sessionId: 'coord',
+            status: 'idle',
+            providerObservedStatus: 'idle',
+            activeModal: null,
+            coverage: 'full',
+            hasMore: false,
+            messageSource: {
+                selected: 'pty-parser',
+                provider: 'cursor-cli',
+                providerType: 'cursor-cli',
+                identityStatus: 'ambiguous_session_identity',
+                fallbackReason: 'native_history_not_safely_mapped',
+                nativeOnlyContentPreserved: false,
+            },
+            debugReadChat: {
+                provider: 'cursor-cli',
+                parsedMsgCount: 0,
+                returnedMsgCount: 1,
+            },
+            messages: [{
+                id: 'runtime-input:coord:1',
+                role: 'user',
+                kind: 'standard',
+                messageKind: 'standard',
+                content: prompt,
+                timestamp: 11_000,
+                source: 'runtime_input_ack',
+                bubbleState: 'final',
+                meta: { runtimeInputAck: true, provider: 'cursor-cli', workspace: '/Users/dev/Work/adhdev' },
+            }],
+        };
+        const f = fixture(full);
+        const result = await f.recover(async () => liveCursorReadChat);
+        expect(result).toMatchObject({
+            body: full,
+            source: 'final_adapter',
+            completeness: 'final_adapter',
+            parts: [{ at: 20_000, chars: full.length }],
+        });
+        expect(f.db.prepare('SELECT count(*) AS n FROM assistant_attempt_bodies').get()).toEqual({ n: 0 });
+
+        const firstSentence = 'The cursor-cli coordinator received your one-turn release re-check prompt cleanly without running any commands or modifying any files.';
+        const truncatedEnv = fixture(firstSentence);
+        const fromHistory = await truncatedEnv.recover(async (command: string) => command === 'read_chat'
+            ? liveCursorReadChat
+            : {
+                success: true,
+                source: 'provider-native',
+                agent: 'cursor-cli',
+                hasMore: false,
+                messages: [
+                    { role: 'user', kind: 'standard', content: prompt },
+                    { role: 'assistant', kind: 'standard', content: full },
+                ],
+            });
+        expect(fromHistory).toMatchObject({
+            body: full,
+            source: 'final_adapter',
+            completeness: 'final_adapter',
+            parts: [{ at: 20_000, chars: full.length }],
+        });
+    });
+
     it('does not resurrect an earlier unvalidated v2 capture during a read failure', async () => {
         const f = fixture('screen row');
         const good = await f.recover(async () => native([bubble(19_000, 'screen row and the complete native reply')]));

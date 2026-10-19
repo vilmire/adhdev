@@ -37,9 +37,16 @@ export function isTimestampedNativeProvider(cliType: unknown): boolean {
     return typeof cliType === 'string' && TIMESTAMPED_PROVIDERS.has(cliType.trim().toLowerCase());
 }
 
+const normalizeProvider = (p: string): string => {
+    const v = p.trim().toLowerCase();
+    return v && !v.endsWith('-cli') && ['claude', 'codex', 'antigravity', 'hermes', 'cursor', 'kimi', 'opencode', 'grok'].includes(v)
+        ? `${v}-cli` : v;
+};
+
 export function isUnsupportedNativeProvider(read: Record<string, unknown> | null, sessionId: string): boolean {
-    const providers = [read?.agent, rec(read?.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType]
-        .filter((p): p is string => typeof p === 'string' && p.trim().length > 0).map(p => p.trim().toLowerCase());
+    const source = rec(read?.messageSource) ?? rec(read?.transcriptProvenance);
+    const providers = [read?.agent, rec(read?.debugReadChat)?.provider, source?.provider, source?.providerType, getCoordinatorForSession(sessionId)?.cliType]
+        .filter((p): p is string => typeof p === 'string' && p.trim().length > 0).map(normalizeProvider);
     return providers.length > 0 && new Set(providers).size === 1 && !TIMESTAMPED_PROVIDERS.has(providers[0]!);
 }
 
@@ -116,8 +123,8 @@ export function verifiedNativeRead(read: Record<string, unknown>, sessionId: str
 }
 
 /**
- * A history page is the stored conversation: its rows carry no \`bubbleState\`
- * and are final unless they say otherwise. A live read must say \`final\`.
+ * A history page is the stored conversation: its rows carry no `bubbleState`
+ * and are final unless they say otherwise. A live read must say `final`.
  */
 function finalized(message: unknown, storedHistory = false): boolean {
     const r = rec(message);
@@ -167,20 +174,26 @@ function selectAdapterFinal(
     if (nextAttemptAt !== null) {
         if (!needle) return null;
         const matched = candidates.filter(c => c.finalized && c.text.startsWith(needle));
-        if (matched.length !== 1) return null;
-        const pick = matched[0]!;
-        const at = pick.at !== null && pick.at >= windowStart && pick.at < nextAttemptAt ? pick.at : terminalAt;
-        return { text: pick.text, at };
+        if (matched.length === 1) {
+            const pick = matched[0]!;
+            const at = pick.at !== null && pick.at >= windowStart && pick.at < nextAttemptAt ? pick.at : terminalAt;
+            return { text: pick.text, at };
+        }
+        return candidates.length === 0 && !envelopeTruncated ? { text: needle, at: terminalAt } : null;
     }
     if (candidates.some(c => !c.finalized)) return null;
     const tail = candidates.at(-1);
     if (tail) {
+        if (!needle && (tail.at === null || tail.at < windowStart || tail.at > terminalAt)) return null;
         if (needle && !tail.text.startsWith(needle) && !needle.startsWith(tail.text)) return null;
         const text = needle && needle.startsWith(tail.text) && !envelopeTruncated && needle.length > tail.text.length ? needle : tail.text;
         const at = tail.at !== null && tail.at >= windowStart && tail.at <= terminalAt ? tail.at : terminalAt;
         return { text, at };
     }
-    if (visible.length === 0 && needle && !envelopeTruncated) {
+    // Live CLI sessions record a visible `runtime_input_ack` user bubble on send_chat;
+    // when read_chat falls back to pty-parser with 0 parsed assistant bubbles, `visible`
+    // has that user bubble while `candidates` is empty.
+    if (candidates.length === 0 && needle && !envelopeTruncated) {
         return { text: needle, at: terminalAt };
     }
     return null;
@@ -228,7 +241,25 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
     unsupportedProvider = isUnsupportedNativeProvider(chat, sessionId);
     if (take(chat)) {
         if (!invalid && chat!.coverage === 'full' && chat!.hasMore !== true) return result(true);
-    } else if (!chat || unsupportedProvider) return result(false); // deadline/failure or non-native provider
+    } else if (!chat) return result(false);
+    else if (unsupportedProvider) {
+        const visible = Array.isArray(chat.messages) ? chat.messages.filter(isVisible) : [];
+        let lastUser = -1;
+        for (let i = visible.length - 1; i >= 0; i--) {
+            if (String(rec(visible[i])?.role ?? '').toLowerCase() === 'user') { lastUser = i; break; }
+        }
+        const hasAssistantAfterUser = visible.slice(lastUser + 1).some(m => {
+            const role = String(rec(m)?.role ?? '').toLowerCase();
+            return role === 'assistant' || role === 'agent';
+        });
+        if (!hasAssistantAfterUser) {
+            const history = await request('chat_history', { targetSessionId: sessionId, offset: 0, limit: 100, excludeRecentCount: 0 });
+            if (history?.success === true && Array.isArray(history.messages) && history.messages.length > 0) {
+                chat = { ...chat, messages: history.messages };
+            }
+        }
+        return result(false);
+    }
     // History is an independent authoritative snapshot. A live streaming row
     // (or native row lacking bubbleState) must not poison a later finalized
     // version, nor collide with that version as a second reply.

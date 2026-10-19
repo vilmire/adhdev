@@ -99129,7 +99129,8 @@ ${b.text}`).join("\n\n");
       return typeof cliType === "string" && TIMESTAMPED_PROVIDERS.has(cliType.trim().toLowerCase());
     }
     function isUnsupportedNativeProvider(read2, sessionId) {
-      const providers = [read2?.agent, rec4(read2?.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.trim().length > 0).map((p) => p.trim().toLowerCase());
+      const source2 = rec4(read2?.messageSource) ?? rec4(read2?.transcriptProvenance);
+      const providers = [read2?.agent, rec4(read2?.debugReadChat)?.provider, source2?.provider, source2?.providerType, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.trim().length > 0).map(normalizeProvider);
       return providers.length > 0 && new Set(providers).size === 1 && !TIMESTAMPED_PROVIDERS.has(providers[0]);
     }
     function isAdapterEvidenceRef(reference, body, generation) {
@@ -99220,20 +99221,23 @@ ${b.text}`).join("\n\n");
       if (nextAttemptAt !== null) {
         if (!needle) return null;
         const matched = candidates.filter((c) => c.finalized && c.text.startsWith(needle));
-        if (matched.length !== 1) return null;
-        const pick = matched[0];
-        const at = pick.at !== null && pick.at >= windowStart && pick.at < nextAttemptAt ? pick.at : terminalAt;
-        return { text: pick.text, at };
+        if (matched.length === 1) {
+          const pick = matched[0];
+          const at = pick.at !== null && pick.at >= windowStart && pick.at < nextAttemptAt ? pick.at : terminalAt;
+          return { text: pick.text, at };
+        }
+        return candidates.length === 0 && !envelopeTruncated ? { text: needle, at: terminalAt } : null;
       }
       if (candidates.some((c) => !c.finalized)) return null;
       const tail = candidates.at(-1);
       if (tail) {
+        if (!needle && (tail.at === null || tail.at < windowStart || tail.at > terminalAt)) return null;
         if (needle && !tail.text.startsWith(needle) && !needle.startsWith(tail.text)) return null;
         const text4 = needle && needle.startsWith(tail.text) && !envelopeTruncated && needle.length > tail.text.length ? needle : tail.text;
         const at = tail.at !== null && tail.at >= windowStart && tail.at <= terminalAt ? tail.at : terminalAt;
         return { text: text4, at };
       }
-      if (visible.length === 0 && needle && !envelopeTruncated) {
+      if (candidates.length === 0 && needle && !envelopeTruncated) {
         return { text: needle, at: terminalAt };
       }
       return null;
@@ -99284,7 +99288,28 @@ ${b.text}`).join("\n\n");
       unsupportedProvider = isUnsupportedNativeProvider(chat, sessionId);
       if (take(chat)) {
         if (!invalid && chat.coverage === "full" && chat.hasMore !== true) return result(true);
-      } else if (!chat || unsupportedProvider) return result(false);
+      } else if (!chat) return result(false);
+      else if (unsupportedProvider) {
+        const visible = Array.isArray(chat.messages) ? chat.messages.filter(isVisible) : [];
+        let lastUser = -1;
+        for (let i = visible.length - 1; i >= 0; i--) {
+          if (String(rec4(visible[i])?.role ?? "").toLowerCase() === "user") {
+            lastUser = i;
+            break;
+          }
+        }
+        const hasAssistantAfterUser = visible.slice(lastUser + 1).some((m) => {
+          const role = String(rec4(m)?.role ?? "").toLowerCase();
+          return role === "assistant" || role === "agent";
+        });
+        if (!hasAssistantAfterUser) {
+          const history = await request("chat_history", { targetSessionId: sessionId, offset: 0, limit: 100, excludeRecentCount: 0 });
+          if (history?.success === true && Array.isArray(history.messages) && history.messages.length > 0) {
+            chat = { ...chat, messages: history.messages };
+          }
+        }
+        return result(false);
+      }
       messages = [];
       invalid = false;
       for (let offset = 0; offset < 400; offset += 100) {
@@ -99427,6 +99452,7 @@ ${b.text}`).join("\n\n");
     var ADAPTER_FINAL_REF;
     var NATIVE_READ_BUDGET_MS;
     var TIMESTAMPED_PROVIDERS;
+    var normalizeProvider;
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
@@ -99443,6 +99469,10 @@ ${b.text}`).join("\n\n");
         ADAPTER_FINAL_REF = "unverified-adapter-final:";
         NATIVE_READ_BUDGET_MS = 2e3;
         TIMESTAMPED_PROVIDERS = /* @__PURE__ */ new Set(["claude-cli", "codex-cli", "antigravity-cli", "hermes-cli"]);
+        normalizeProvider = (p) => {
+          const v = p.trim().toLowerCase();
+          return v && !v.endsWith("-cli") && ["claude", "codex", "antigravity", "hermes", "cursor", "kimi", "opencode", "grok"].includes(v) ? `${v}-cli` : v;
+        };
       }
     });
     function environmentInventory(meshes, now = Date.now(), local) {
