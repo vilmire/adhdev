@@ -1150,7 +1150,37 @@ describe('git repo status parser', () => {
       expect(ignorePair).not.toBe(ignoreSingle);
     });
 
-    it('isolates caller deadlines and AbortSignals across concurrent status reads', async () => {
+    it('subdirectory-first cohort preserves root gitlink comparison and canonical worktree root collection', async () => {
+      const sub = tempRepo('r1-subdir-sub');
+      writeFileSync(join(sub, 'a.txt'), 'base\n');
+      commit(sub, 'sub base');
+
+      const top = tempRepo('r1-subdir-top');
+      mkdirSync(join(top, 'packages', 'nested'), { recursive: true });
+      writeFileSync(join(top, 'packages', 'nested', 'x.txt'), 'x\n');
+      commit(top, 'top base');
+
+      git(top, ['-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'oss']);
+      commit(top, 'add submodule oss');
+
+      const expected = git(top, ['rev-parse', 'HEAD:oss']);
+      const checkout = join(top, 'oss');
+      git(checkout, ['config', 'user.name', 'ADHDev Test']);
+      git(checkout, ['config', 'user.email', 'test@example.com']);
+      writeFileSync(join(checkout, 'new.txt'), 'advance\n');
+      commit(checkout, 'advance submodule');
+
+      const subdirPromise = getGitRepoStatus(join(top, 'packages', 'nested'));
+      const rootPromise = getGitRepoStatus(top);
+      const [subdir, root] = await Promise.all([subdirPromise, rootPromise]);
+
+      expect(subdir.submodules?.[0]?.outOfSync).toBe(true);
+      expect(subdir.submodules?.[0]?.commit).toBe(expected);
+      expect(root.submodules?.[0]?.outOfSync).toBe(true);
+      expect(root.submodules?.[0]?.commit).toBe(expected);
+    });
+
+    it('isolates caller deadlines and AbortSignals across concurrent status reads (including same-budget initiator)', async () => {
       const repo = tempRepo('c1-deadline-isolation');
       writeFileSync(join(repo, 'a.txt'), 'one\n');
       commit(repo, 'c1');
@@ -1158,19 +1188,29 @@ describe('git repo status parser', () => {
       const realRunGit = gitExecutor.runGit;
       const spy = vi.spyOn(gitExecutor, 'runGit').mockImplementation(async (target, args, opts) => {
         if (Array.isArray(args) && args[0] === 'status') {
-          const budget = opts?.timeoutMs ?? 20_000;
-          if (budget < 50) {
-            throw new gitExecutor.GitCommandError('timeout', `Git command timed out after ${budget}ms`, { signal: 'SIGTERM' });
-          }
-          await new Promise((r) => setTimeout(r, 80));
+          await new Promise((r) => setTimeout(r, 120));
         }
         return realRunGit(target, args, opts);
       });
 
       try {
-        // 1. Short-budget initiator (15ms) must not poison a concurrent normal caller (20_000ms).
+        // 0. Same-budget initiator (40ms) has its own total wait deadline during a 120ms delayed collection.
+        const pendingInit = getGitRepoStatus(repo, { timeoutMs: 40 });
+        const early = await Promise.race([
+          pendingInit.then((status) => ({ settled: true, status })),
+          new Promise<{ settled: boolean; status?: unknown }>((r) => setTimeout(() => r({ settled: false }), 80)),
+        ]);
+        const settledInit = await pendingInit;
+        expect(early.settled).toBe(true);
+        expect(settledInit.reason).toBe('timeout');
+
+        // Wait for the background 120ms collection to finish and clean up inFlightStatusReads.
+        await new Promise((r) => setTimeout(r, 70));
+        __resetGitStatusCacheForTests();
+
+        // 1. Short-budget initiator (25ms) must not poison a concurrent normal caller (20_000ms).
         const [shortInit, normalCaller] = await Promise.all([
-          getGitRepoStatus(repo, { timeoutMs: 15 }),
+          getGitRepoStatus(repo, { timeoutMs: 25 }),
           getGitRepoStatus(repo, { timeoutMs: 20_000 }),
         ]);
         expect(shortInit.reason).toBe('timeout');
@@ -1179,11 +1219,11 @@ describe('git repo status parser', () => {
 
         __resetGitStatusCacheForTests();
 
-        // 2. Normal initiator joined by a short-budget joiner (20ms) and an aborting caller:
+        // 2. Normal initiator joined by a short-budget joiner (25ms) and an aborting caller:
         //    both impatient callers settle early with timeout while the normal initiator succeeds.
         const abortController = new AbortController();
         const normalInitPromise = getGitRepoStatus(repo, { timeoutMs: 20_000 });
-        const shortJoinerPromise = getGitRepoStatus(repo, { timeoutMs: 20 });
+        const shortJoinerPromise = getGitRepoStatus(repo, { timeoutMs: 25 });
         const abortedJoinerPromise = getGitRepoStatus(repo, { timeoutMs: 20_000, signal: abortController.signal });
         setTimeout(() => abortController.abort(), 10);
 
@@ -1401,6 +1441,61 @@ describe('git repo status parser', () => {
       expect(retargeted.upstream).toBe(`upstream/${branch}`);
       expect(retargeted.upstreamStatus).toBe('fresh');
       expect(retargeted.behind).toBe(1);
+    });
+
+    it('same remote URL configuration change invalidates fetch throttle while matching config preserves throttle and coalescing', async () => {
+      const top = tempRepo('c2-same-remote-url');
+      writeFileSync(join(top, 'a.txt'), 'base\n');
+      commit(top, 'base');
+
+      const a = realpathSync(mkdtempSync(join(tmpdir(), 'adhdev-c2-url-a-')));
+      const b = realpathSync(mkdtempSync(join(tmpdir(), 'adhdev-c2-url-b-')));
+      roots.push(a, b);
+      git(a, ['init', '--bare', '-b', 'main']);
+      git(b, ['init', '--bare', '-b', 'main']);
+
+      git(top, ['remote', 'add', 'origin', a]);
+      git(top, ['remote', 'add', 'newtarget', b]);
+      git(top, ['push', '-u', 'origin', 'HEAD']);
+      git(top, ['push', 'newtarget', 'HEAD']);
+
+      const initial = await getGitRepoStatus(top, { refreshUpstream: true, includeSubmodules: false });
+      expect(initial.upstreamStatus).toBe('fresh');
+
+      // Advance bare remote `b` via a peer repo
+      const peer = tempRepo('c2-same-remote-peer');
+      git(peer, ['remote', 'add', 'origin', b]);
+      git(peer, ['fetch', 'origin']);
+      git(peer, ['reset', '--hard', 'origin/main']);
+      writeFileSync(join(peer, 'more.txt'), 'remote change\n');
+      commit(peer, 'remote change');
+      git(peer, ['push', 'origin', 'HEAD']);
+
+      // Change the URL of the SAME remote (`origin`) to point at `b`
+      git(top, ['remote', 'set-url', 'origin', b]);
+      const now = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(now + GIT_STATUS_CACHE_TTL_MS + 100);
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      const updated = await getGitRepoStatus(top, { refreshUpstream: true, includeSubmodules: false });
+      const fetchesAfterSetUrl = spy.mock.calls.filter(c => Array.isArray(c[1]) && (c[1] as string[])[0] === 'fetch');
+      expect(fetchesAfterSetUrl.length).toBe(1);
+      expect(updated.behind).toBe(1);
+
+      // Positive control: with matching (unchanged) config, advancing past C1 TTL (within 30s C2 throttle)
+      // preserves the 30s fetch throttle AND coalesces concurrent status reads onto a single collection.
+      spy.mockClear();
+      vi.spyOn(Date, 'now').mockReturnValue(now + 2 * GIT_STATUS_CACHE_TTL_MS + 200);
+      const [coalescedA, coalescedB] = await Promise.all([
+        getGitRepoStatus(top, { refreshUpstream: true, includeSubmodules: false }),
+        getGitRepoStatus(top, { refreshUpstream: true, includeSubmodules: false }),
+      ]);
+      const fetchesWithMatchingConfig = spy.mock.calls.filter(c => Array.isArray(c[1]) && (c[1] as string[])[0] === 'fetch');
+      const statusSpawnsWithMatchingConfig = spy.mock.calls.filter(c => Array.isArray(c[1]) && (c[1] as string[])[0] === 'status');
+      expect(fetchesWithMatchingConfig.length).toBe(0);
+      expect(statusSpawnsWithMatchingConfig.length).toBe(1);
+      expect(coalescedA.behind).toBe(1);
+      expect(coalescedB.behind).toBe(1);
     });
   });
 

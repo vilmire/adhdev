@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GIT_STATUS_TIMEOUT_MS, GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
@@ -48,6 +50,7 @@ interface CachedStatusEntry {
 interface InFlightStatusEntry {
   promise: Promise<GitRepoStatus>;
   timeoutMs: number;
+  startedAtPerf: number;
 }
 const lastKnownGoodStatus = new Map<string, CachedStatusEntry>();
 const inFlightStatusReads = new Map<string, InFlightStatusEntry>();
@@ -84,15 +87,14 @@ function resolveCanonicalWorktreeRoot(workspace: string): string {
   }
 }
 
-/** Cache key folding in canonical worktree root and the option fields that change result shape. */
-function statusCacheKey(workspace: string, options: GitStatusOptions): string {
-  const canonicalWorktree = resolveCanonicalWorktreeRoot(workspace);
+/** Cache key folding in canonical worktree root, git config signature, and option fields that change result shape. */
+function statusCacheKey(canonicalWorktree: string, configSig: string, options: GitStatusOptions): string {
   const includeSubmodules = options.includeSubmodules !== false;
   const refreshUpstream = options.refreshUpstream === true;
   const ignoreKey = options.submoduleIgnorePaths && options.submoduleIgnorePaths.length > 0
     ? `\0ign=${JSON.stringify([...new Set(options.submoduleIgnorePaths)].sort())}`
     : '';
-  return `${canonicalWorktree}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
+  return `${canonicalWorktree}\0cfg=${configSig}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
 }
 
 /**
@@ -265,14 +267,14 @@ function buildStatusFailureResult(
 function awaitWithCallerDeadline(
   sharedPromise: Promise<GitRepoStatus>,
   callerTimeoutMs: number,
-  sharedTimeoutMs: number,
   signal: AbortSignal | undefined,
   workspace: string,
   cacheKey: string,
   lastCheckedAt: number,
+  elapsedMs = 0,
 ): Promise<GitRepoStatus> {
-  const needsShortTimer = callerTimeoutMs < sharedTimeoutMs;
-  if (!needsShortTimer && !signal) {
+  const hasTimer = Number.isFinite(callerTimeoutMs) && callerTimeoutMs > 0;
+  if (!hasTimer && !signal) {
     return sharedPromise;
   }
   if (signal?.aborted) {
@@ -285,6 +287,18 @@ function awaitWithCallerDeadline(
       ),
     );
   }
+  if (hasTimer && elapsedMs >= callerTimeoutMs) {
+    return Promise.resolve(
+      buildStatusFailureResult(
+        workspace,
+        cacheKey,
+        lastCheckedAt,
+        new GitCommandError('timeout', `Git status timed out after ${callerTimeoutMs}ms`),
+      ),
+    );
+  }
+
+  const remainingMs = hasTimer ? Math.max(1, Math.ceil(callerTimeoutMs - elapsedMs)) : 0;
 
   return new Promise<GitRepoStatus>((resolveCaller) => {
     let settled = false;
@@ -309,7 +323,7 @@ function awaitWithCallerDeadline(
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     }
-    if (needsShortTimer) {
+    if (hasTimer) {
       timer = setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -322,7 +336,7 @@ function awaitWithCallerDeadline(
             new GitCommandError('timeout', `Git status timed out after ${callerTimeoutMs}ms`),
           ),
         );
-      }, callerTimeoutMs);
+      }, remainingMs);
     }
     sharedPromise.then(
       (result) => {
@@ -348,6 +362,7 @@ export async function getGitRepoStatus(
   workspace: string,
   options: GitStatusOptions = {},
 ): Promise<GitRepoStatus> {
+  const callerStartedAtPerf = performance.now();
   const lastCheckedAt = Date.now();
   const includeSubmodules = options.includeSubmodules !== false;
   const callerTimeoutMs = options.timeoutMs ?? GIT_STATUS_TIMEOUT_MS;
@@ -362,7 +377,9 @@ export async function getGitRepoStatus(
       ? { ...sharedBaseOptions, timeoutMs: GIT_STATUS_TIMEOUT_MS }
       : sharedBaseOptions;
 
-  const cacheKey = statusCacheKey(workspace, options);
+  const canonicalWorktree = resolveCanonicalWorktreeRoot(workspace);
+  const configSig = resolveGitConfigSignature(canonicalWorktree);
+  const cacheKey = statusCacheKey(canonicalWorktree, configSig, options);
 
   if (signal?.aborted) {
     return buildStatusFailureResult(
@@ -370,6 +387,14 @@ export async function getGitRepoStatus(
       cacheKey,
       lastCheckedAt,
       new GitCommandError('timeout', 'Git status request aborted'),
+    );
+  }
+  if (Number.isFinite(callerTimeoutMs) && (callerTimeoutMs <= 0 || performance.now() - callerStartedAtPerf >= callerTimeoutMs)) {
+    return buildStatusFailureResult(
+      workspace,
+      cacheKey,
+      lastCheckedAt,
+      new GitCommandError('timeout', `Git status timed out after ${callerTimeoutMs}ms`),
     );
   }
 
@@ -385,25 +410,30 @@ export async function getGitRepoStatus(
     }
     // Single-flight coalescing: join an existing in-flight collection ONLY when its
     // subprocess budget is at least as large as this caller's budget (so a short-budget
-    // initiator can never drag normal joiners into a premature timeout failure), while
-    // awaitWithCallerDeadline enforces a short-budget joiner's own deadline locally.
+    // initiator can never drag normal joiners into a premature timeout failure) and it has
+    // not already outlived its own budget, while awaitWithCallerDeadline enforces every
+    // caller's own total wait deadline locally.
     const inFlight = inFlightStatusReads.get(cacheKey);
-    if (inFlight && inFlight.timeoutMs >= callerTimeoutMs) {
+    if (
+      inFlight
+      && inFlight.timeoutMs >= callerTimeoutMs
+      && callerStartedAtPerf - inFlight.startedAtPerf < inFlight.timeoutMs
+    ) {
       return awaitWithCallerDeadline(
         inFlight.promise,
         callerTimeoutMs,
-        inFlight.timeoutMs,
         signal,
         workspace,
         cacheKey,
         lastCheckedAt,
+        performance.now() - callerStartedAtPerf,
       );
     }
   }
 
   const runPromise = (async (): Promise<GitRepoStatus> => {
     try {
-      const repo = await resolveGitRepository(workspace, effectiveOptions);
+      const repo = await resolveGitRepository(canonicalWorktree, effectiveOptions);
       const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
       // Cache the fresh, fully-populated success. Stamp cachedAt at completion (with
       // Math.max(lastCheckedAt, Date.now()) so mocked clocks remain deterministic) so
@@ -421,7 +451,11 @@ export async function getGitRepoStatus(
 
   const existingInFlight = inFlightStatusReads.get(cacheKey);
   if (!existingInFlight || existingInFlight.timeoutMs < callerTimeoutMs) {
-    inFlightStatusReads.set(cacheKey, { promise: runPromise, timeoutMs: callerTimeoutMs });
+    inFlightStatusReads.set(cacheKey, {
+      promise: runPromise,
+      timeoutMs: callerTimeoutMs,
+      startedAtPerf: callerStartedAtPerf,
+    });
   }
   const cleanupPromise = runPromise.finally(() => {
     if (inFlightStatusReads.get(cacheKey)?.promise === runPromise) {
@@ -432,11 +466,11 @@ export async function getGitRepoStatus(
   return awaitWithCallerDeadline(
     cleanupPromise,
     callerTimeoutMs,
-    callerTimeoutMs,
     signal,
     workspace,
     cacheKey,
     lastCheckedAt,
+    performance.now() - callerStartedAtPerf,
   );
 }
 
@@ -1128,8 +1162,9 @@ async function refreshTrackedUpstream(
   }
 
   const canonicalWorktree = resolveCanonicalWorktreeRoot(repo.workspace);
+  const configSig = resolveGitConfigSignature(canonicalWorktree);
   const remoteName =
-    (await readBranchRemote(repo, canonicalWorktree, parsed.branch, parsed.upstream, options))
+    (await readBranchRemote(repo, canonicalWorktree, configSig, parsed.branch, parsed.upstream, options))
     ?? inferRemoteName(parsed.upstream);
   if (!remoteName) {
     return {
@@ -1138,14 +1173,14 @@ async function refreshTrackedUpstream(
     };
   }
 
-  const fetchKey = `${canonicalWorktree}\0${parsed.branch}\0${parsed.upstream}\0${remoteName}`;
+  const fetchKey = `${canonicalWorktree}\0${parsed.branch}\0${parsed.upstream}\0${remoteName}\0${configSig}`;
 
-  // C2: throttle the actual network fetch per (canonicalWorktree, branch, upstream, remote).
-  // If we fetched this exact tracking target within GIT_FETCH_THROTTLE_MS, skip the fetch
-  // and serve ahead/behind from the local porcelain (re-read fresh every call by the
-  // caller). Retargeting a branch to a different upstream remote changes fetchKey so the
-  // new remote is fetched immediately. forceFresh callers (convergence-critical: ff /
-  // refine) always re-fetch — they need true upstream.
+  // C2: throttle the actual network fetch per (canonicalWorktree, branch, upstream, remote, configSig).
+  // If we fetched this exact tracking target and remote URL/config within GIT_FETCH_THROTTLE_MS,
+  // skip the fetch and serve ahead/behind from the local porcelain (re-read fresh every call by the
+  // caller). Retargeting a branch to a different upstream remote or changing a remote's URL in
+  // git config changes fetchKey so the new target is fetched immediately. forceFresh callers
+  // (convergence-critical: ff / refine) always re-fetch — they need true upstream.
   const now = Date.now();
   const lastFetch = upstreamFetchedAt.get(fetchKey);
   if (!options.forceFresh && lastFetch !== undefined && now - lastFetch < GIT_FETCH_THROTTLE_MS) {
@@ -1199,13 +1234,19 @@ async function refreshTrackedUpstream(
   }
 }
 
+function statAndHashConfigFile(cfgPath: string): string {
+  const cfg = statSync(cfgPath);
+  const raw = readFileSync(cfgPath, 'utf8');
+  const digest = createHash('sha1').update(raw).digest('hex');
+  return `${cfg.mtimeMs}:${cfg.size}:${digest}`;
+}
+
 function resolveGitConfigSignature(canonicalWorktree: string): string {
   try {
     const dotGit = join(canonicalWorktree, '.git');
     const st = statSync(dotGit);
     if (st.isDirectory()) {
-      const cfg = statSync(join(dotGit, 'config'));
-      return `${cfg.mtimeMs}:${cfg.size}`;
+      return statAndHashConfigFile(join(dotGit, 'config'));
     }
     if (st.isFile()) {
       const content = readFileSync(dotGit, 'utf8').trim();
@@ -1214,22 +1255,19 @@ function resolveGitConfigSignature(canonicalWorktree: string): string {
       const gitDir = resolve(canonicalWorktree, match[1].trim());
       const parts: string[] = [];
       try {
-        const cfg = statSync(join(gitDir, 'config'));
-        parts.push(`g:${cfg.mtimeMs}:${cfg.size}`);
+        parts.push(`g:${statAndHashConfigFile(join(gitDir, 'config'))}`);
       } catch {
         // Optional in linked worktrees
       }
       try {
-        const wtCfg = statSync(join(gitDir, 'config.worktree'));
-        parts.push(`w:${wtCfg.mtimeMs}:${wtCfg.size}`);
+        parts.push(`w:${statAndHashConfigFile(join(gitDir, 'config.worktree'))}`);
       } catch {
         // Optional
       }
       try {
         const commonDirRaw = readFileSync(join(gitDir, 'commondir'), 'utf8').trim();
         const commonDir = resolve(gitDir, commonDirRaw);
-        const commonCfg = statSync(join(commonDir, 'config'));
-        parts.push(`c:${commonCfg.mtimeMs}:${commonCfg.size}`);
+        parts.push(`c:${statAndHashConfigFile(join(commonDir, 'config'))}`);
       } catch {
         // Not a linked worktree with commondir
       }
@@ -1244,11 +1282,11 @@ function resolveGitConfigSignature(canonicalWorktree: string): string {
 async function readBranchRemote(
   repo: ResolvedGitRepo,
   canonicalWorktree: string,
+  configSig: string,
   branch: string,
   upstream: string,
   options: GitStatusOptions,
 ): Promise<string | null> {
-  const configSig = resolveGitConfigSignature(canonicalWorktree);
   const remoteKey = `${canonicalWorktree}\0${branch}\0${upstream}\0${configSig}`;
   if (!options.forceFresh && branchRemoteCache.has(remoteKey)) {
     return branchRemoteCache.get(remoteKey) ?? null;
@@ -1539,8 +1577,10 @@ async function readGitlinkExpectedShas(
   if (submodulePaths.length === 0 || !repo.repoRoot) return expectedByPath;
   try {
     // Each NUL-terminated entry: `<mode> commit <sha>\t<path>` for a gitlink;
-    // paths that are absent or not gitlinks print nothing.
-    const result = await runGit(repo, ['ls-tree', '-z', 'HEAD', '--', ...submodulePaths], options);
+    // paths that are absent or not gitlinks print nothing. Always run relative to
+    // repoRoot so submodule paths in .gitmodules resolve against the worktree root.
+    const lsTreeOptions = repo.workspace !== repo.repoRoot ? { ...options, cwd: repo.repoRoot } : options;
+    const result = await runGit(repo, ['ls-tree', '-z', 'HEAD', '--', ...submodulePaths], lsTreeOptions);
     for (const entry of result.stdout.split('\0')) {
       const match = entry.match(/^\d{6} commit ([0-9a-f]{40,64})\t(.+)$/s);
       if (match) expectedByPath.set(match[2], match[1]);
