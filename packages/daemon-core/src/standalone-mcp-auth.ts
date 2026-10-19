@@ -76,6 +76,7 @@ export const WORKER_MCP_DAEMON_VERBS: readonly string[] = Object.freeze([
     'driver_list',
     'driver_describe',
     'driver_invoke',
+    'artifact_register',
     'worker_bridge_prepare',
     'worker_report_completion',
     'worker_progress_update',

@@ -8,6 +8,7 @@
  */
 
 import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL } from './driver-tools.js';
+import { ARTIFACT_LIST_TOOL } from './artifact-tools.js';
 import { annotateAll } from './tool-annotations.js';
 // Wiring-unification A3: every vocabulary enum is derived from the ONE tuple in
 // mesh-shared via enumOf(), so the published schema cannot drift from the code.
@@ -17,6 +18,8 @@ import { MESH_ENQUEUE_TASK_TOOL, MESH_ENQUEUE_BATCH_TOOL, MESH_VIEW_QUEUE_TOOL, 
 import { MESH_SEND_TASK_TOOL, MESH_READ_CHAT_TOOL, MESH_READ_DEBUG_TOOL, MESH_READ_TERMINAL_TOOL, MESH_SEND_KEYS_TOOL, MESH_LAUNCH_SESSION_TOOL, MESH_GIT_STATUS_TOOL, MESH_READ_NODE_LOGS_TOOL, MESH_FAST_FORWARD_NODE_TOOL, MESH_RESTART_DAEMON_TOOL, MESH_CHECKPOINT_TOOL } from './mesh-tool-schemas-session.js';
 import { MESH_ATTACH_REMOTE_TOOL, MESH_MISSION_UPSERT_TOOL, MESH_MISSION_LIST_TOOL, MESH_APPROVE_TOOL, MESH_ANSWER_QUESTION_TOOL, MESH_LIST_PENDING_APPROVALS_TOOL, MESH_CREATE_TOOL, MESH_ADD_NODE_TOOL, MESH_CLONE_NODE_TOOL, MESH_REMOVE_NODE_TOOL, MESH_CLEANUP_WORKTREE_NODES_TOOL, MESH_CLEANUP_SESSIONS_TOOL, MESH_TASK_HISTORY_TOOL, MESH_LEDGER_QUERY_TOOL, MESH_NOTE_TOOL, MESH_RECONCILE_LEDGER_TOOL } from './mesh-tool-schemas-admin.js';
 import { MESH_REFINE_NODE_TOOL, MESH_REFINE_BATCH_TOOL, MESH_CONFIG_TOOL, MESH_INIT_TOOL, MESH_REVIEW_INBOX_TOOL, MESH_NODE_SLOTS_TOOL } from './mesh-tool-schemas-refine-config.js';
+
+export { ARTIFACT_LIST_TOOL };
 
 export const MESH_STATUS_TOOL = {
     name: 'mesh_status',
@@ -135,6 +138,7 @@ export const ALL_MESH_TOOLS = [
     MESH_NODE_SLOTS_TOOL,
     DRIVER_LIST_TOOL,
     DRIVER_DESCRIBE_TOOL,
+    ARTIFACT_LIST_TOOL,
 ];
 
 // Replace each slot with an annotated copy. Does not mutate the `*_TOOL`

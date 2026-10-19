@@ -32,6 +32,7 @@
  * ★Aliases are deliberately NOT in this table — see MESH_ALIAS_DISPATCH below.
  */
 import { callDriverTool } from './driver-tools.js';
+import { callCoordinatorArtifactList } from './artifact-tools.js';
 import type { CanonicalMeshToolName } from '@adhdev/daemon-core';
 
 import type { MeshContext } from './mesh-tools.js';
@@ -65,6 +66,7 @@ type MeshToolHandler = (ctx: MeshContext, args: Record<string, any>) => Promise<
 export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshToolHandler>> = {
     driver_list: async (ctx, a) => (await callDriverTool(ctx.transport, 'driver_list', a)).text,
     driver_describe: async (ctx, a) => (await callDriverTool(ctx.transport, 'driver_describe', a)).text,
+    artifact_list: (ctx, a) => callCoordinatorArtifactList(ctx, a as any),
     mesh_status: (ctx, a) => meshStatus(ctx, a as any),
     mesh_route_preview: (ctx, a) => meshRoutePreview(ctx, a as any),
     mesh_list_nodes: (ctx) => meshListNodes(ctx),

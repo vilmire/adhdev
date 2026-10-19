@@ -52,7 +52,13 @@ import { validateMeshToolArgs, unknownToolArgsError, enumValueError, canonicaliz
 import { retiredMeshToolError } from '@adhdev/mesh-shared';
 import { annotateAll } from './tools/tool-annotations.js';
 import {
-  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
+  STANDARD_ARTIFACT_REGISTER_TOOL,
+  ARTIFACT_LIST_TOOL,
+  callStandardArtifactRegister,
+  callStandardArtifactList,
+} from './tools/artifact-tools.js';
+import {
+  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerArtifactRegister, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
   describeWorkerDeliveryAnswer,
 } from './tools/worker-tools.js';
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
@@ -268,6 +274,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       driver_list: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_list', a)),
       driver_describe: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_describe', a)),
       driver_invoke: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_invoke', a)),
+      artifact_register: async (a) => asResponse(await workerArtifactRegister(transport, credentials, a)),
       report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a, delivery)),
       progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a, delivery)),
       peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),
@@ -509,6 +516,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     // mesh mode refuses to boot without an existing meshId (see the mesh-mode block above).
     MESH_CREATE_TOOL,
     MESH_ADD_NODE_TOOL,
+    STANDARD_ARTIFACT_REGISTER_TOOL,
+    ARTIFACT_LIST_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
   ]);
 
@@ -628,6 +637,22 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         case 'mesh_add_node': {
           const text = await meshAddNode(transport, a as any);
           return { content: [{ type: 'text', text }] };
+        }
+        case 'artifact_register': {
+          const text = await callStandardArtifactRegister(transport, a);
+          let isError = false;
+          try {
+            if (JSON.parse(text)?.success === false) isError = true;
+          } catch { /* ignore */ }
+          return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
+        }
+        case 'artifact_list': {
+          const text = await callStandardArtifactList(transport, a);
+          let isError = false;
+          try {
+            if (JSON.parse(text)?.success === false) isError = true;
+          } catch { /* ignore */ }
+          return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
         }
         default:
           return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };

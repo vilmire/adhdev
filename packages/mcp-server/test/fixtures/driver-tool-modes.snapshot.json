@@ -8,7 +8,8 @@
     "git_diff",
     "driver_list",
     "driver_describe",
-    "driver_invoke"
+    "driver_invoke",
+    "artifact_register"
   ],
   "coordinator": [
     "mesh_status",
@@ -54,6 +55,7 @@
     "mesh_node_slots",
     "driver_list",
     "driver_describe",
+    "artifact_list",
     "mesh_notify_worker"
   ],
   "assistant": [

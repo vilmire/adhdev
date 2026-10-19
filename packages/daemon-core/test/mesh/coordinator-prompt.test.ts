@@ -1063,7 +1063,7 @@ describe('Repo Mesh coordinator prompt', () => {
     const end = rest.indexOf('\n## ')
     const table = end >= 0 ? rest.slice(0, end) : rest
     const names = new Set<string>()
-    for (const m of table.matchAll(/`((?:mesh_|driver_)[a-z0-9_]+)`/g)) {
+    for (const m of table.matchAll(/`((?:mesh_|driver_|artifact_)[a-z0-9_]+)`/g)) {
       names.add(m[1])
     }
     return [...names]
@@ -1096,6 +1096,9 @@ describe('Repo Mesh coordinator prompt', () => {
     expect(exposed).toContain('driver_describe')
     expect(exposed).not.toContain('driver_invoke')
     expect(prompt).toContain('invoke is delegated to a worker task')
+    expect(exposed).toContain('artifact_list')
+    expect(exposed).not.toContain('artifact_register')
+    expect(prompt).toContain('사용자에게 보여줄 결과물(스크린샷·보고서·산출물)은 artifact_register로 등록')
     expect(exposed).toEqual(canonical)
     expect(exposed.length).toBe(CANONICAL_MESH_TOOL_COUNT + FLAG_GATED_PROMPT_TOOLS.length)
   })

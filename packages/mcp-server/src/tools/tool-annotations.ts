@@ -292,6 +292,10 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   driver_list: READ_LOCAL,
   driver_describe: READ_LOCAL,
   driver_invoke: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  // Registers or updates metadata for one workspace file in the session artifact registry (idempotent upsert by path).
+  artifact_register: WRITE_LOCAL_SAFE,
+  // Lists registered session artifact metadata without reading file bytes.
+  artifact_list: READ_LOCAL,
   report_completion: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   // Each progress note is an additional note.
   progress_update: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },

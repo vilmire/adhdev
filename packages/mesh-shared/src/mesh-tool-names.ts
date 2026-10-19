@@ -67,6 +67,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_node_slots',
     'driver_list',
     'driver_describe',
+    'artifact_list',
 ] as const;
 
 export type CanonicalMeshToolName = typeof CANONICAL_MESH_TOOL_NAMES[number];
