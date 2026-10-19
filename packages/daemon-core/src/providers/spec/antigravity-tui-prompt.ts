@@ -515,21 +515,19 @@ export async function answerAntigravityInteractivePrompt(
   }
 
   // Validate all question answers up front before dispatching any keystrokes to the PTY.
-  const prevalidatedSteps: string[] = [];
   for (let i = 0; i < prompt.questions.length; i++) {
     const question = prompt.questions[i]!;
     const answer = response.answers[question.questionId];
     if (!answer) {
       throw new Error(`Missing answer for ${question.questionId}`);
     }
-    const stepKeys = buildAntigravityQuestionKeystrokes(
+    buildAntigravityQuestionKeystrokes(
       question,
       answer,
       i === 0
         ? extractScreenKeystrokeOptions(initialScreen)
         : { currentCursorRow: 1, writingIn: false, currentlyCheckedRows: [] },
     );
-    prevalidatedSteps.push(stepKeys);
   }
 
   host.antigravityAnswerInFlight = true;
@@ -538,23 +536,32 @@ export async function answerAntigravityInteractivePrompt(
   try {
     let activeScreen = initialScreen;
     for (let i = 0; i < prompt.questions.length; i++) {
+      const qNum = i + 1;
       if (i > 0) {
         activeScreen = await waitForNextAntigravityCarouselPage(
           host,
           prompt.promptId,
-          i + 1,
+          qNum,
         );
       }
       const question = prompt.questions[i]!;
       const answer = response.answers[question.questionId]!;
-      const keys =
-        i === 0
-          ? prevalidatedSteps[0]!
-          : buildAntigravityQuestionKeystrokes(
-              question,
-              answer,
-              extractScreenKeystrokeOptions(activeScreen),
-            );
+      const hasFreeform = (answer.freeformText?.trim() ?? '').length > 0;
+
+      if (activeScreen.writingIn && !question.multiSelect && !hasFreeform) {
+        host.driver.dispatch({ kind: 'pty_write', data: '\x1b' });
+        activeScreen = await waitForAntigravityWriteInExit(
+          host,
+          prompt.promptId,
+          qNum,
+        );
+      }
+
+      const keys = buildAntigravityQuestionKeystrokes(
+        question,
+        answer,
+        extractScreenKeystrokeOptions(activeScreen),
+      );
       host.driver.dispatch({ kind: 'pty_write', data: keys });
     }
   } finally {

@@ -1080,4 +1080,198 @@ describe('SpecCliAdapter Antigravity choice-question binding & response safety',
     });
     expect(writes).toEqual(['1', '2']);
   });
+
+  it('F1 (ordinary answer from open Write-in): splits Escape from option keys, requires observed Write-in exit on Q1 and Q2, and aborts on stalled exit or preemption', async () => {
+    const q1WriteInScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '',
+      '  Question 1/2: Which database engine should we use?',
+      '  Your answer:',
+      '  >',
+      '  enter Submit · esc Back',
+    ].join('\n');
+
+    const q1OptionsScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '',
+      '  Question 1/2: Which database engine should we use?',
+      '  > 1. PostgreSQL',
+      '    2. SQLite',
+      '    3. Write-in...',
+      '  ↑/↓ Navigate · enter Submit · esc Skip',
+    ].join('\n');
+
+    const q2WriteInScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '',
+      '  Question 2/2: Which runtime?',
+      '  Your answer:',
+      '  >',
+      '  enter Submit · esc Back',
+    ].join('\n');
+
+    const q2OptionsScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '',
+      '  Question 2/2: Which runtime?',
+      '  > 1. Node 22',
+      '    2. Bun',
+      '    3. Write-in...',
+      '  ↑/↓ Navigate · enter Submit All · esc Skip',
+    ].join('\n');
+
+    const dbPath = path.join(
+      tmpHome,
+      '.gemini',
+      'antigravity-cli',
+      'conversations',
+      `${convUuid}.db`,
+    );
+    const writeTwoSingleDb = (callId: string, stepIdx: number) => {
+      const payload = buildStepPayloadWithField154({
+        callId,
+        toolName: 'ask_question',
+        questions: [
+          {
+            questionText: 'Which database engine should we use?',
+            options: [{ label: 'PostgreSQL' }, { label: 'SQLite' }],
+            isMultiSelect: false,
+          },
+          {
+            questionText: 'Which runtime?',
+            options: [{ label: 'Node 22' }, { label: 'Bun' }],
+            isMultiSelect: false,
+          },
+        ],
+      });
+      createConversationDb(dbPath, [
+        { idx: 1, step_type: 14, status: 3, step_payload: Buffer.from([0x08, 0x01]) },
+        { idx: stepIdx, step_type: AGY_STEP_TYPE_ASK_QUESTION, status: AGY_STATUS_WAITING, step_payload: payload },
+      ]);
+    };
+
+    // 1. Stalled Write-in exit on Q1: sends only '\x1b', times out, and never sends option digit
+    writeTwoSingleDb('call-wi-1', 10);
+    const h1 = createHarness({ screenText: q1WriteInScreen, providerSessionId: convUuid });
+    const p1 = h1.adapter.getStatus().activeInteractivePrompt!;
+    await expect(
+      h1.adapter.setInteractivePromptResponse({
+        promptId: p1.promptId,
+        answers: {
+          q1: { selectedLabels: ['PostgreSQL'] },
+          q2: { selectedLabels: ['Bun'] },
+        },
+      }),
+    ).rejects.toThrow(/Timed out waiting for Antigravity Write-in editor to return to options on Question 1/);
+    expect(h1.writes).toEqual(['\x1b']);
+
+    // 2. Permission preemption between '\x1b' and option selection on Q1 aborts before option digit
+    writeTwoSingleDb('call-wi-2', 11);
+    const h2 = createHarness({ screenText: q1WriteInScreen, providerSessionId: convUuid });
+    const p2 = h2.adapter.getStatus().activeInteractivePrompt!;
+    h2.adapter.driver.dispatch = (cmd) => {
+      if (cmd.kind === 'pty_write') {
+        h2.writes.push(cmd.data);
+        h2.setModal({
+          kind: 'approval',
+          title: 'Do you want to proceed?',
+          buttons: [{ label: 'Yes', keys: '1' }],
+        });
+      }
+    };
+    await expect(
+      h2.adapter.setInteractivePromptResponse({
+        promptId: p2.promptId,
+        answers: {
+          q1: { selectedLabels: ['PostgreSQL'] },
+          q2: { selectedLabels: ['Bun'] },
+        },
+      }),
+    ).rejects.toThrow(/permission\/trust modal preempted/i);
+    expect(h2.writes).toEqual(['\x1b']);
+
+    // 3. Stalled Write-in exit on Q2: Q1 answers '1', Q2 opens in Write-in, sends '\x1b', times out before '2'
+    writeTwoSingleDb('call-wi-3', 12);
+    const h3 = createHarness({ screenText: q1OptionsScreen, providerSessionId: convUuid });
+    const p3 = h3.adapter.getStatus().activeInteractivePrompt!;
+    h3.adapter.driver.dispatch = (cmd) => {
+      if (cmd.kind === 'pty_write') {
+        h3.writes.push(cmd.data);
+        if (h3.writes.length === 1) {
+          h3.setScreen(q2WriteInScreen);
+        }
+      }
+    };
+    await expect(
+      h3.adapter.setInteractivePromptResponse({
+        promptId: p3.promptId,
+        answers: {
+          q1: { selectedLabels: ['PostgreSQL'] },
+          q2: { selectedLabels: ['Bun'] },
+        },
+      }),
+    ).rejects.toThrow(/Timed out waiting for Antigravity Write-in editor to return to options on Question 2/);
+    expect(h3.writes).toEqual(['1', '\x1b']);
+
+    // 4. Observed Write-in exit on both Q1 and Q2 dispatches separate '\x1b' then option digits and succeeds
+    writeTwoSingleDb('call-wi-4', 13);
+    const h4 = createHarness({ screenText: q1WriteInScreen, providerSessionId: convUuid });
+    const p4 = h4.adapter.getStatus().activeInteractivePrompt!;
+    h4.adapter.driver.dispatch = (cmd) => {
+      if (cmd.kind === 'pty_write') {
+        h4.writes.push(cmd.data);
+        if (h4.writes.length === 1) {
+          h4.setScreen(q1OptionsScreen);
+        } else if (h4.writes.length === 2) {
+          h4.setScreen(q2WriteInScreen);
+        } else if (h4.writes.length === 3) {
+          h4.setScreen(q2OptionsScreen);
+        }
+      }
+    };
+    await h4.adapter.setInteractivePromptResponse({
+      promptId: p4.promptId,
+      answers: {
+        q1: { selectedLabels: ['PostgreSQL'] },
+        q2: { selectedLabels: ['Bun'] },
+      },
+    });
+    expect(h4.writes).toEqual(['\x1b', '1', '\x1b', '2']);
+
+    // 5. Sibling multi-select Q2 arriving in Write-in editor refuses without sending any Q2 bytes
+    writeBoundWaitingDb(convUuid, AGY_STATUS_WAITING);
+    const q2MultiWriteInScreen = [
+      '  Question',
+      '  ────────────────────────────────────────',
+      '',
+      '  Question 2/2: Which features should be enabled?',
+      '  Your answer:',
+      '  >',
+      '  enter Submit · esc Back',
+    ].join('\n');
+    const h5 = createHarness({ screenText: carouselQ1Screen, providerSessionId: convUuid });
+    const p5 = h5.adapter.getStatus().activeInteractivePrompt!;
+    h5.adapter.driver.dispatch = (cmd) => {
+      if (cmd.kind === 'pty_write') {
+        h5.writes.push(cmd.data);
+        if (h5.writes.length === 1) {
+          h5.setScreen(q2MultiWriteInScreen);
+        }
+      }
+    };
+    await expect(
+      h5.adapter.setInteractivePromptResponse({
+        promptId: p5.promptId,
+        answers: {
+          q1: { selectedLabels: ['PostgreSQL'] },
+          q2: { selectedLabels: ['WAL mode'] },
+        },
+      }),
+    ).rejects.toThrow(/Cannot reconcile multi-select checkboxes/);
+    expect(h5.writes).toEqual(['1']);
+  });
 });
