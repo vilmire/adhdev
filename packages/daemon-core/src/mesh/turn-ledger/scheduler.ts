@@ -38,6 +38,7 @@
 import type { SummaryRef, TurnEvidence } from '@adhdev/mesh-shared';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { SessionLifecycleBus, Unsubscribe } from '../../sessions/lifecycle-bus.js';
+import { isPendingBackgroundWorkSummary } from '../../process/session-process-tree.js';
 import { createBackgroundWorkMonitor, type BackgroundWorkMonitor } from './background-work-guard.js';
 import type { ObserveResult, TurnLedger, TurnLedgerLog } from './ledger.js';
 import { DEFAULT_TURN_POLICY, endProbeGraceMs, type TurnPolicy } from './policy.js';
@@ -258,13 +259,33 @@ export function createTurnScheduler(deps: TurnSchedulerDeps): TurnScheduler & { 
         if (read.presence === 'present') {
             const boundary = turnStartBoundary(latest);
             const finalThisTurn = t?.finalAssistantAt !== undefined && t.finalAssistantAt >= boundary;
+            // The native turn can end while the PTY background footer still
+            // says generating. Admit that end only to the background monitor;
+            // ordinary completion keeps its existing status and tool/modal gates.
+            const nativeTurnCompleted =
+                t?.nativeMarker?.outcome === 'completed' &&
+                (t.nativeMarker.receivedAt === undefined || t.nativeMarker.receivedAt >= boundary) &&
+                (t?.trailingActivity ?? 0) === 0 &&
+                !t?.activeModal;
+            const pendingTextTurnEnded =
+                finalThisTurn &&
+                (t?.trailingActivity ?? 0) === 0 &&
+                !t?.activeModal &&
+                isPendingBackgroundWorkSummary(t?.finalSummary);
+            const turnEndedAt = finalThisTurn
+                ? t?.finalAssistantAt
+                : nativeTurnCompleted
+                    ? t?.nativeMarker?.receivedAt
+                    : undefined;
             try {
                 const bgOut = await backgroundWork.observe({
                     attempt: latest,
                     nowMs: at,
-                    status: (t?.providerObservedStatus || read.status || '').toLowerCase(),
+                    status: nativeTurnCompleted || pendingTextTurnEnded
+                        ? 'idle'
+                        : (t?.providerObservedStatus || read.status || '').toLowerCase(),
                     finalSummary: finalThisTurn ? t?.finalSummary : undefined,
-                    ...(finalThisTurn && t?.finalAssistantAt !== undefined ? { finalAssistantAt: t.finalAssistantAt } : {}),
+                    ...(turnEndedAt !== undefined ? { finalAssistantAt: turnEndedAt } : {}),
                     liveBackgroundProcesses: read.liveBackgroundProcesses,
                     ...(read.backgroundProcessesKnown !== undefined ? { processesKnown: read.backgroundProcessesKnown } : {}),
                     ...(read.backgroundCpuActivity ? { cpuActivity: read.backgroundCpuActivity } : {}),

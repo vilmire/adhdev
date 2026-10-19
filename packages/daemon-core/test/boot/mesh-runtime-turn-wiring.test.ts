@@ -266,7 +266,7 @@ describe('wireTurnLedger — S7 wiring', () => {
         }
     });
 
-    it('emits 120s coordinator notice naming real process while codex-cli background work is live (PTY held generating by background-terminal footer), then nudges and releases after exit without holding on sidecar', async () => {
+    it.each([true, false])('emits one live 120s notice, then nudges and releases despite a busy footer (final timestamp present: %s)', async (withFinalTimestamp) => {
         const T0 = 1_792_411_000_000;
         let currentNowMs = T0;
         vi.spyOn(Date, 'now').mockImplementation(() => currentNowMs);
@@ -359,10 +359,10 @@ describe('wireTurnLedger — S7 wiring', () => {
                 }
                 return {
                     success: true,
-                    // Raw PTY status stays 'generating' while `1 background terminal running` is on screen,
-                    // whereas native rollout markers reconcile providerObservedStatus to 'idle'.
+                    // Both status and providerObservedStatus stay 'generating' while `1 background terminal running`
+                    // holds the PTY busy and PTY trailing activity vetoes read_chat's status reconciliation.
                     status: instanceStatus,
-                    providerObservedStatus: 'idle',
+                    providerObservedStatus: instanceStatus,
                     turnTerminalMarkers: [
                         { receivedAt: T0 + 21_000, outcome: 'completed', turnId: 'turn_c1' },
                     ],
@@ -371,7 +371,7 @@ describe('wireTurnLedger — S7 wiring', () => {
                         {
                             role: 'assistant',
                             content: 'Background sleep 150 started; ending turn without calling report_completion yet.',
-                            timestamp: new Date(T0 + 21_000).toISOString(),
+                            ...(withFinalTimestamp ? { timestamp: new Date(T0 + 21_000).toISOString() } : {}),
                         },
                     ],
                 };
