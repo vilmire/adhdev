@@ -1,4 +1,5 @@
 import type { TaskReportCursor } from './task-report-continuation.js';
+import type { ReportCompleteness } from './assistant-native-window.js';
 import { createHash } from 'crypto';
 import { isVisible, messageText, reportMessageId, PROJECT_READ_MESSAGE_MAX_CHARS } from './project-views.js';
 import type { Execute } from './assistant-project-ports.js';
@@ -8,7 +9,7 @@ export interface ReportContinuation { messageId: string; offset: number; coordin
 export interface ReportAttemptContinuation { attemptId: string; reportId?: string; offset: number; coordinatorSessionId: string }
 export type ReportCursor = ReportContinuation | ReportAttemptContinuation | TaskReportCursor;
 export const reportBodyId = (body: string): string => createHash('sha256').update(body).digest('hex');
-export function pageAttemptReport(body: string, cursor: ReportAttemptContinuation, source: string, completeness: 'final_native' | 'envelope_unverified' = 'final_native') {
+export function pageAttemptReport(body: string, cursor: ReportAttemptContinuation, source: string, completeness: ReportCompleteness = 'final_native') {
     const reportId = reportBodyId(body);
     if (cursor.reportId && cursor.reportId !== reportId) return { success: false as const, code: 'original_report_unavailable', reason: 'original_report_identity_mismatch' };
     if (cursor.offset > body.length) return { success: false as const, code: 'invalid_report_offset' };
@@ -16,12 +17,13 @@ export function pageAttemptReport(body: string, cursor: ReportAttemptContinuatio
     const pageComplete = end === body.length;
     // Omitted completeness stays final_native so existing callers keep `complete: end === length`.
     // `success` stays a literal so callers can narrow. A conditional spread widens it to boolean.
-    const sourceComplete = completeness === 'final_native';
+    const sourceComplete = completeness === 'final_native' || completeness === 'final_adapter';
+    const verified = completeness === 'final_native';
     const page = { success: true as const, attemptId: cursor.attemptId, coordinatorSessionId: cursor.coordinatorSessionId, reportId, source,
         text: body.slice(cursor.offset, end), offset: cursor.offset, totalChars: body.length,
         sourceComplete, complete: pageComplete && sourceComplete, truncated: end < body.length, nextOffset: end < body.length ? end : null };
-    if (sourceComplete) return page;
-    return { ...page, originalCompleteness: completeness === 'envelope_unverified' ? 'envelope_unverified' as const : 'unknown' as const };
+    if (verified) return page;
+    return { ...page, verified: false as const, originalCompleteness: completeness === 'final_adapter' ? 'final_adapter' as const : completeness === 'envelope_unverified' ? 'envelope_unverified' as const : 'unknown' as const };
 }
 
 export function parseReportContinuation(args: Record<string, unknown>): ReportCursor | null | string {

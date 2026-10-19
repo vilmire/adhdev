@@ -670,7 +670,7 @@ export class AssistantRelay {
                 last = this.normalizeReport(null);
             }
             if (!live()) return;
-            if (last.completeness === 'final_native' && last.body?.trim()) {
+            if ((last.completeness === 'final_native' || last.completeness === 'final_adapter') && last.body?.trim()) {
                 this.rememberCapture(attemptId, last);
                 return;
             }
@@ -706,7 +706,8 @@ export class AssistantRelay {
         const validParts = raw.parts === undefined || (Array.isArray(raw.parts) && raw.parts.length <= 600
             && raw.parts.every(p => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime())
                 && Number.isSafeInteger(p.chars) && p.chars > 0));
-        const completeness = raw.completeness === 'final_native' && validParts ? 'final_native' : 'envelope_unverified';
+        const completeness = (raw.completeness === 'final_native' || raw.completeness === 'final_adapter') && validParts
+            ? raw.completeness : 'envelope_unverified';
         return {
             body: typeof raw.body === 'string' ? raw.body : null,
             completeness,
@@ -801,13 +802,11 @@ export class AssistantRelay {
 
     private replyCovered(reply: AuditedCoordinatorReply, text: string): boolean {
         if (this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text))) return true;
-        if (reply.attemptId) return false;
-        // Only an orphan classification may use exact session/time/hash coverage
-        // from a late-flushed report. Never cover a different explicit attempt.
         const hash = replyHash(text);
         return [...this.renderedCoverage.keys()].some(key => {
-            const [session, , at, contentHash] = JSON.parse(key);
-            return session === reply.sessionId && at === reply.messageAt && contentHash === hash;
+            const [session, attempt, at, contentHash] = JSON.parse(key);
+            if (session !== reply.sessionId || contentHash !== hash) return false;
+            return reply.attemptId ? attempt === reply.attemptId : at === reply.messageAt || (typeof at === 'number' && Math.abs(at - reply.messageAt) <= RELAY_QUIET_MS);
         });
     }
 
@@ -827,7 +826,8 @@ export class AssistantRelay {
     }
 
     private renderedParts(attemptId: string, sessionId: string, body: string, meta: AttemptReportSnapshot, renderedLimit = RELAY_BODY_MAX_CHARS): RenderedAttemptCoverage | null {
-        const parts = meta.parts;
+        const parts = meta.parts?.length ? meta.parts : meta.completeness === 'final_adapter'
+            ? [{ at: this.restoredAttempts.get(attemptId)?.committedAt ?? this.clock.now(), chars: Array.from(body).length }] : undefined;
         if (!parts?.length) return null; // no native identity: do not infer it from substring containment
         const points = Array.from(body);
         let offset = 0;
@@ -1143,7 +1143,8 @@ export class AssistantRelay {
     }
 
     private hasCapturedBody(attemptId: string): boolean {
-        return this.attemptMeta.get(attemptId)?.completeness === 'final_native' && !!this.attemptBodies.get(attemptId)?.trim();
+        const completeness = this.attemptMeta.get(attemptId)?.completeness;
+        return (completeness === 'final_native' || completeness === 'final_adapter') && !!this.attemptBodies.get(attemptId)?.trim();
     }
 
     private slugCounts(counts: ReadonlyMap<string, number>): Array<{ slug: string; count: number }> {
@@ -1182,13 +1183,14 @@ export class AssistantRelay {
     }
 
     private async renderUnavailable(item: Item & { kind: 'relay' }): Promise<Part> {
-        const ref = this.restoredAttempts.get(item.attemptIds.at(-1)!);
+        const attemptId = item.attemptIds.at(-1)!;
+        const ref = this.restoredAttempts.get(attemptId);
         const session = ref?.sessionId ?? item.coordinatorSessionId;
         let cursor: ReportContinuation | null = null;
         try { cursor = await this.bounded(this.ports.readCoordinatorReference?.(item.meshId, session) ?? Promise.resolve(null), 2_000, null); } catch { /* absence is reported explicitly */ }
         return { source: 'relay', meshId: item.meshId,
             messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`, surfaced: [...item.attemptIds],
-            text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor) };
+            text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session }) };
     }
 
     private async renderRelay(item: Item & { kind: 'relay' }): Promise<Part> {
@@ -1198,9 +1200,10 @@ export class AssistantRelay {
             const index = item.attemptIds.indexOf(attemptId); const body = bodies[index];
             const meta = this.attemptMeta.get(attemptId);
             const source = meta?.completeness ?? (body ? 'final_native' : null);
+            const verified = source === 'final_native';
             return { attemptId, coordinatorSessionId: this.restoredAttempts.get(attemptId)?.sessionId ?? item.coordinatorSessionId,
                 reportId: body ? reportBodyId(body) : null, totalChars: body?.length ?? null,
-                complete: source === 'final_native', source,
+                complete: source === 'final_native' || source === 'final_adapter', verified, source,
                 offset: body ? Array.from(body).slice(0, this.pageOffset(attemptId, body ?? '')).join('').length : 0,
                 nextOffset: body && this.pageOffset(attemptId, body ?? '') + RELAY_BODY_MAX_CHARS < codePoints(body)
                     ? Array.from(body).slice(0, this.pageOffset(attemptId, body ?? '') + RELAY_BODY_MAX_CHARS).join('').length : null };

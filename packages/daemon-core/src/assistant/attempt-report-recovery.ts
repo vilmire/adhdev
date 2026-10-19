@@ -6,10 +6,10 @@ import type { Database } from 'better-sqlite3';
 import type { TurnAttempt } from '../mesh/turn-ledger/types.js';
 import type { Execute } from './assistant-project-ports.js';
 import { LOG } from '../logging/logger.js';
-import { reportMessageId } from './project-views.js';
+import { isVisible, messageText, reportMessageId } from './project-views.js';
 import { getCoordinatorForSession } from '../mesh/coordinator-registry.js';
 import {
-    formatReplyClock, partsOf, renderNativeReplies, selectNativeWindow, standardAssistantBubble,
+    bubbleTimestamp, formatReplyClock, partsOf, renderNativeReplies, selectNativeWindow, standardAssistantBubble,
     type NativeReplyPart, type ReportCompleteness,
 } from './assistant-native-window.js';
 const rec = (v: unknown): Record<string, unknown> | null => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
@@ -28,9 +28,34 @@ export interface RecoveredAttemptReport {
 }
 
 const VERIFIED_WINDOW_REF = 'verified-native-window:';
+const ADAPTER_FINAL_REF = 'unverified-adapter-final:';
 const NATIVE_READ_BUDGET_MS = 2_000;
 const TIMESTAMPED_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'antigravity-cli', 'hermes-cli']);
 type NativeExecute = (command: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+export function isTimestampedNativeProvider(cliType: unknown): boolean {
+    return typeof cliType === 'string' && TIMESTAMPED_PROVIDERS.has(cliType.trim().toLowerCase());
+}
+
+export function isUnsupportedNativeProvider(read: Record<string, unknown> | null, sessionId: string): boolean {
+    const providers = [read?.agent, rec(read?.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType]
+        .filter((p): p is string => typeof p === 'string' && p.trim().length > 0).map(p => p.trim().toLowerCase());
+    return providers.length > 0 && new Set(providers).size === 1 && !TIMESTAMPED_PROVIDERS.has(providers[0]!);
+}
+
+export function isAdapterEvidenceRef(reference: unknown, body: string, generation?: number): boolean {
+    if (typeof reference !== 'string') return false;
+    try {
+        const parts: unknown = JSON.parse(reference);
+        const digest = createHash('sha256').update(body).digest('hex');
+        return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION
+            && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === undefined || parts[1] === generation)
+            && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime())
+            && [parts[3], parts[5]].every(v => typeof v === 'string' && v.length > 0 && v.length <= 512)
+            && [parts[4], parts[6]].every(v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v))
+            && parts[7] === ADAPTER_FINAL_REF + digest;
+    } catch { return false; }
+}
 
 /** Old v2 readers also pinned unproven windows. Version alone is insufficient. */
 export function isVerifiedNativeEvidenceRef(reference: unknown, generation?: number): boolean {
@@ -100,12 +125,75 @@ function finalized(message: unknown, storedHistory = false): boolean {
     return r.bubbleState === 'final' || (storedHistory && (r.bubbleState === undefined || r.bubbleState === null));
 }
 
+/**
+ * For providers outside TIMESTAMPED_PROVIDERS (cursor-cli, kimi-cli, opencode-cli,
+ * grok-cli, ...), extract the finalized standard assistant message for this turn
+ * once read_chat confirms the session is idle.
+ */
+function selectAdapterFinal(
+    chat: Record<string, unknown> | null,
+    sessionId: string,
+    windowStart: number,
+    terminalAt: number,
+    nextAttemptAt: number | null,
+    envelopeText: string | null,
+    envelopeTruncated: boolean,
+): { text: string; at: number } | null {
+    if (!chat || chat.success !== true || !isUnsupportedNativeProvider(chat, sessionId)) return null;
+    const status = String(chat.providerObservedStatus ?? chat.status ?? 'idle').trim().toLowerCase();
+    if (status !== 'idle' || rec(chat.turn)?.inProgress === true || chat.activeModal != null) return null;
+    const rawMessages = Array.isArray(chat.messages) ? chat.messages : [];
+    const visible = rawMessages.filter(isVisible);
+    let lastUserIndex = -1;
+    for (let i = visible.length - 1; i >= 0; i--) {
+        if (String(rec(visible[i])?.role ?? '').toLowerCase() === 'user') { lastUserIndex = i; break; }
+    }
+    const scope = nextAttemptAt === null ? visible.slice(lastUserIndex + 1) : visible;
+    const candidates: Array<{ text: string; at: number | null; finalized: boolean }> = [];
+    for (const m of scope) {
+        const r = rec(m);
+        if (!r) continue;
+        const role = String(r.role ?? '').toLowerCase();
+        if (role !== 'assistant' && role !== 'agent') continue;
+        const kind = String(r.kind ?? r.messageKind ?? '').toLowerCase();
+        if (kind && kind !== 'standard') continue;
+        const text = messageText(r).trim();
+        if (!text) continue;
+        const isFinal = r.isStreaming !== true && r.truncated !== true
+            && (r.bubbleState === undefined || r.bubbleState === null || r.bubbleState === 'final');
+        candidates.push({ text, at: bubbleTimestamp(r), finalized: isFinal });
+    }
+    const needle = envelopeText?.trim() ?? '';
+    if (nextAttemptAt !== null) {
+        if (!needle) return null;
+        const matched = candidates.filter(c => c.finalized && c.text.startsWith(needle));
+        if (matched.length !== 1) return null;
+        const pick = matched[0]!;
+        const at = pick.at !== null && pick.at >= windowStart && pick.at < nextAttemptAt ? pick.at : terminalAt;
+        return { text: pick.text, at };
+    }
+    if (candidates.some(c => !c.finalized)) return null;
+    const tail = candidates.at(-1);
+    if (tail) {
+        if (needle && !tail.text.startsWith(needle) && !needle.startsWith(tail.text)) return null;
+        const text = needle && needle.startsWith(tail.text) && !envelopeTruncated && needle.length > tail.text.length ? needle : tail.text;
+        const at = tail.at !== null && tail.at >= windowStart && tail.at <= terminalAt ? tail.at : terminalAt;
+        return { text, at };
+    }
+    if (visible.length === 0 && needle && !envelopeTruncated) {
+        return { text: needle, at: terminalAt };
+    }
+    return null;
+}
+
 /** Bounded, source-checked paging. An exhausted/failed page never proves completeness. */
 export async function readNativeWindow(execute: NativeExecute, sessionId: string, start: number, end: number) {
     const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
     let messages: unknown[] = [];
     let providerIdle = false;
     let invalid = false;
+    let chat: Record<string, unknown> | null = null;
+    let unsupportedProvider = false;
     const targets = new Map<number, string>();
     const request = async (command: string, args: Record<string, unknown>) => {
         const remaining = deadline - Date.now();
@@ -134,12 +222,13 @@ export async function readNativeWindow(execute: NativeExecute, sessionId: string
             const bubble = standardAssistantBubble(message);
             if (bubble) targets.set(bubble.at, reportMessageId(message));
         }
-        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets };
+        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets, chat, unsupportedProvider };
     };
-    const chat = await request('read_chat', { targetSessionId: sessionId, tailLimit: 200 });
+    chat = await request('read_chat', { targetSessionId: sessionId, tailLimit: 200 });
+    unsupportedProvider = isUnsupportedNativeProvider(chat, sessionId);
     if (take(chat)) {
         if (!invalid && chat!.coverage === 'full' && chat!.hasMore !== true) return result(true);
-    } else if (!chat) return result(false); // deadline/failure: do not launch a second hung request
+    } else if (!chat || unsupportedProvider) return result(false); // deadline/failure or non-native provider
     // History is an independent authoritative snapshot. A live streaming row
     // (or native row lacking bubbleState) must not poison a later finalized
     // version, nor collide with that version as a second reply.
@@ -285,6 +374,14 @@ export async function recoverAttemptReport(db: Database, attempt: TurnAttempt | 
         body: durable.body, source: 'durable_attempt_capture', completeness: 'final_native',
         parts: durable.parts, provenance: provenanceFor(durable.evidenceRef),
     };
+    const envelopeObj = rec(rec(payload?.local)?.envelope);
+    const envelopeTruncated = envelopeObj?.summaryMayBeTruncated === true || envelopeObj?.finalSummarySource === 'parsed_screen_fallback';
+    const adapterFinal = selectAdapterFinal(selected.chat, sessionId, windowStart, attempt.terminal.at, next.at, envelopeText, envelopeTruncated);
+    if (adapterFinal) {
+        const parts = [{ at: adapterFinal.at, chars: Array.from(adapterFinal.text).length }];
+        const evidenceRef = JSON.stringify([...stable, ADAPTER_FINAL_REF + hash(adapterFinal.text)]);
+        return { body: adapterFinal.text, source: 'final_adapter', completeness: 'final_adapter', parts, provenance: provenanceFor(evidenceRef) };
+    }
     // Unverified envelope is delivered flagged and is NOT stored as exact.
     if (envelopeText) return { body: envelopeText, source: 'existing_attempt_envelope', completeness: 'envelope_unverified',
         reason: anchorOutside ? 'native_reference_outside_attempt' : !selected.complete ? 'native_window_unverified' : 'terminal_native_reply_unavailable',

@@ -64,14 +64,48 @@ describe('review: bounded capture liveness', () => {
         h.relay.stop();
     });
 
-    it('bounds continuously-busy, crashed and inaccessible-path captures with the same grace', async () => {
+    it('bounds continuously-busy, crashed and inaccessible-path captures with the same grace and one actionable attempt pointer', async () => {
         const h = harness({ body: null, completeness: 'envelope_unverified', source: 'provider_busy_or_unavailable' });
-        h.context.mockResolvedValue(null as any); h.commit();
+        h.context.mockResolvedValue(null as any); h.commit('plain:unavail-1');
         await vi.advanceTimersByTimeAsync(RELAY_NATIVE_WAIT_MS + RELAY_NATIVE_GRACE_MS + 1);
         const events = await h.relay.pullPending('mcp');
+        expect(events).toHaveLength(1);
         expect(events[0].text).toContain('No readable coordinator message is available');
+        expect(events[0].text).toContain('"project":"synthetic"');
+        expect(events[0].text).toContain('"attemptId":"plain:unavail-1"');
         expect(events[0].text).not.toContain('"messageId"');
         expect(h.store.listUndelivered()).toEqual([]);
+        h.relay.tick(); await micro();
+        expect(await h.relay.pullPending('mcp')).toEqual([]);
+        h.relay.stop();
+    });
+
+    it.each(['cursor-cli', 'kimi-cli', 'opencode-cli', 'grok-cli'])('delivers a multi-sentence final once with unverified final_adapter provenance for %s and never duplicates if native evidence later appears', async provider => {
+        const warn = vi.spyOn(LOG, 'warn').mockImplementation(() => {});
+        const full = 'Sentence one reports the Cursor coordinator status. Sentence two details the verification changes across modules. Sentence three confirms all unit and boundary checks passed. Sentence four concludes the 229-character report.';
+        const h = harness({ body: full, completeness: 'final_adapter', source: 'final_adapter', parts: [{ at: NOW, chars: full.length }] });
+        h.commit('plain:adapter-1');
+        await vi.advanceTimersByTimeAsync(15_001);
+        const events = await h.relay.pullPending('mcp');
+        expect(events).toHaveLength(1);
+        expect(events[0].text).toContain(full);
+        expect(events[0].text).toContain('"source":"final_adapter"');
+        expect(events[0].text).toContain('"verified":false');
+        expect(events[0].text).toContain('"complete":true');
+        expect(warn.mock.calls.filter(c => String(c[1]).includes('native relay capture unavailable'))).toHaveLength(0);
+        expect(h.store.listUndelivered()).toEqual([]);
+        expect(h.store.countUnrendered().total).toBe(0);
+
+        // Later native evidence for the same attempt (even with an earlier wall-clock bubble timestamp) or orphan within quiet window must not duplicate.
+        h.audit.mockResolvedValue([
+            { meshId: 'mesh', sessionId: 'coord', attemptId: 'plain:adapter-1', messageAt: NOW - 1_500, text: full, chars: full.length, messageId: reportMessageId({ role: 'assistant', content: full }) },
+            { meshId: 'mesh', sessionId: 'coord', attemptId: null, messageAt: NOW + 1_000, text: full, chars: full.length, messageId: reportMessageId({ role: 'assistant', content: full }) },
+        ]);
+        h.captures.mockResolvedValue({ body: full, completeness: 'final_native', source: provider, parts: [{ at: NOW - 1_500, chars: full.length }] });
+        h.commit('plain:adapter-1');
+        h.relay.tick(); await micro();
+        expect(await h.relay.pullPending('mcp')).toEqual([]);
+        expect(warn.mock.calls.filter(c => String(c[1]).includes('relay gap class='))).toHaveLength(0);
         h.relay.stop();
     });
 

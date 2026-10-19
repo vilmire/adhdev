@@ -69,10 +69,10 @@ describe('relay audit review regressions', () => {
         expect(replies.map(r => r.sessionId)).toEqual(['coord']);
     });
 
-    it('keeps Grok clock uncertainty partial without reading or claiming an empty native history', async () => {
-        const execute = vi.fn(async () => { throw new Error('Grok clocks are not attempt evidence'); });
+    it.each(['grok-cli', 'cursor-cli', 'kimi-cli', 'opencode-cli'])('skips non-timestamped provider %s without reading or throwing coordinator native audit unavailable', async cliType => {
+        const execute = vi.fn(async () => { throw new Error('non-timestamped clocks are not attempt evidence'); });
         const replies = await collectCoordinatorReplies({ db, execute, sinceMs: NOW, now: NOW,
-            coordinatorSessions: [{ sessionId: 'grok', cliType: 'grok-cli' }],
+            coordinatorSessions: [{ sessionId: 'unsupported', cliType }],
         });
         expect(replies).toHaveLength(0);
         expect(replies.complete).toBe(false);

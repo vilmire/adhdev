@@ -120,8 +120,11 @@ export class RelayDeliveryPolicy {
     }
 }
 
-export function unavailableReportNotice(count: number, project: string, cursor: ReportContinuation | null): string {
-    const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? 'report could' : 'reports could'} not be captured in full: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
+export function unavailableReportNotice(count: number, project: string, cursor: ReportContinuation | null, attemptPointer?: { attemptId: string; coordinatorSessionId: string }): string {
+    const attemptNote = attemptPointer ? ` (attempt ${attemptPointer.attemptId})` : '';
+    const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? 'report could' : 'reports could'} not be captured in full${attemptNote}: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
     return cursor ? `${status} Inspect the latest readable coordinator context (not a verified report for this attempt) with project_read ${JSON.stringify({ project, ...cursor })}.`
-        : `${status} No readable coordinator message is available; ${count} ${count === 1 ? 'report could' : 'reports could'} not be read. Check project_status ${JSON.stringify({ project })}.`;
+        : attemptPointer
+            ? `${status} No readable coordinator message is available; ${count} ${count === 1 ? 'report could' : 'reports could'} not be read. Inspect with project_read ${JSON.stringify({ project, attemptId: attemptPointer.attemptId, coordinatorSessionId: attemptPointer.coordinatorSessionId, offset: 0 })} or check project_status ${JSON.stringify({ project })}.`
+            : `${status} No readable coordinator message is available; ${count} ${count === 1 ? 'report could' : 'reports could'} not be read. Check project_status ${JSON.stringify({ project })}.`;
 }

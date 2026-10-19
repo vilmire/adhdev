@@ -31,7 +31,7 @@ import { SESSION_STATUS_CLASS } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { collectCoordinatorReplies } from './assistant-relay-audit.js';
-import { verifiedNativeReportParts } from './attempt-report-recovery.js';
+import { isAdapterEvidenceRef, verifiedNativeReportParts } from './attempt-report-recovery.js';
 import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
 import { MeshRuntimeStore } from '../mesh/mesh-runtime-store.js';
 import { getMeshQueueStats } from '../mesh/mesh-work-queue.js';
@@ -170,7 +170,8 @@ export function buildAssistantRelayPorts(
                 if (typeof report.body !== 'string' || !report.body) return null;
                 return {
                     body: report.body,
-                    completeness: report.completeness === 'final_native' ? 'final_native' as const : 'envelope_unverified' as const,
+                    completeness: report.completeness === 'final_native' ? 'final_native' as const
+                        : report.completeness === 'final_adapter' ? 'final_adapter' as const : 'envelope_unverified' as const,
                     source: report.source,
                     ...(report.parts ? { parts: report.parts } : {}),
                 };
@@ -191,8 +192,11 @@ export function buildAssistantRelayPorts(
                 || typeof proof?.evidenceRef !== 'string' || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
             const nativeParts = proof?.version === 2 && result.completeness === 'final_native'
                 ? verifiedNativeReportParts(result.body, result.parts, proof.evidenceRef, Number(proof.generation)) : null;
-            const completeness = nativeParts ? 'final_native' as const : 'envelope_unverified' as const;
-            const parts = nativeParts?.map(({ at, chars }) => ({ at, chars }));
+            const adapterVerified = !nativeParts && proof?.version === 2 && result.completeness === 'final_adapter'
+                && isAdapterEvidenceRef(proof.evidenceRef, result.body, Number(proof.generation));
+            const completeness = nativeParts ? 'final_native' as const : adapterVerified ? 'final_adapter' as const : 'envelope_unverified' as const;
+            const parts = nativeParts ? nativeParts.map(({ at, chars }) => ({ at, chars }))
+                : adapterVerified && Array.isArray(result.parts) ? result.parts as Array<{ at: number; chars: number }> : undefined;
             return { body: result.body, completeness, ...(typeof result.source === 'string' ? { source: result.source } : {}), ...(parts ? { parts } : {}) };
         },
         auditCoordinatorReplies: async (sinceMs) => {

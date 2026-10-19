@@ -141,7 +141,8 @@ describe('native relay capture review regressions', () => {
     it('treats Grok synthesized timestamps as uncertainty even with native provenance', async () => {
         const f = fixture('grok final');
         const result = await f.recover(async () => native([bubble(7_500, 'current intermediate'), bubble(19_000, 'grok final')], { debugReadChat: { provider: 'grok-cli' } }));
-        expect(result).toMatchObject({ body: 'grok final', completeness: 'envelope_unverified' });
+        expect(result).toMatchObject({ body: 'grok final', source: 'final_adapter', completeness: 'final_adapter' });
+        expect(result.completeness).not.toBe('final_native');
         expect(f.db.prepare('SELECT count(*) AS n FROM assistant_attempt_bodies').get()).toEqual({ n: 0 });
     });
 
@@ -159,8 +160,27 @@ describe('native relay capture review regressions', () => {
             const messages = readSession(path, 'grok')!.messages.map(m => ({ ...m, timestamp: m.receivedAt, bubbleState: 'final' }));
             expect(messages.find(m => m.content === 'current intermediate')!.timestamp).toBeLessThan(18_000);
             const f = fixture('grok final', 18_000);
-            expect((await f.recover(async () => native(messages, { debugReadChat: { provider: 'grok-cli' } }))).completeness).toBe('envelope_unverified');
+            const recovered = await f.recover(async () => native(messages, { debugReadChat: { provider: 'grok-cli' } }));
+            expect(recovered.completeness).toBe('final_adapter');
+            expect(recovered.body).toBe('grok final');
         } finally { rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it.each(['cursor-cli', 'kimi-cli', 'opencode-cli', 'grok-cli'])('recovers complete multi-sentence final_adapter body for %s when idle, and withholds while streaming', async provider => {
+        const firstSentence = 'Cursor coordinator completed the verification pass across all packages.';
+        const full = `${firstSentence} Sentence two confirms the build succeeded cleanly. Sentence three notes all unit checks passed. Sentence four concludes the report without truncation.`;
+        const f = fixture(firstSentence);
+        const streaming = await f.recover(async () => ({
+            success: true, agent: provider, source: 'pty-parser', providerObservedStatus: 'idle',
+            messages: [{ role: 'user', content: 'run check' }, { role: 'assistant', kind: 'standard', bubbleState: 'streaming', content: firstSentence }],
+        }));
+        expect(streaming).toMatchObject({ body: firstSentence, completeness: 'envelope_unverified' });
+        const complete = await f.recover(async () => ({
+            success: true, agent: provider, source: 'pty-parser', providerObservedStatus: 'idle',
+            messages: [{ role: 'user', content: 'run check' }, { role: 'assistant', kind: 'standard', bubbleState: 'final', content: full }],
+        }));
+        expect(complete).toMatchObject({ body: full, source: 'final_adapter', completeness: 'final_adapter', parts: [{ at: 20_000, chars: full.length }] });
+        expect(f.db.prepare('SELECT count(*) AS n FROM assistant_attempt_bodies').get()).toEqual({ n: 0 });
     });
 
     it('does not resurrect an earlier unvalidated v2 capture during a read failure', async () => {

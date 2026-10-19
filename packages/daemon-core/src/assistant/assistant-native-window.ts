@@ -8,7 +8,7 @@
  */
 import { isVisible, messageText } from './project-views.js';
 
-export type ReportCompleteness = 'final_native' | 'envelope_unverified';
+export type ReportCompleteness = 'final_native' | 'final_adapter' | 'envelope_unverified';
 
 export interface NativeReplyPart {
     at: number;

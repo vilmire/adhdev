@@ -7,7 +7,7 @@ import { reportBodyId } from './report-continuation.js';
  */
 import type { Database } from 'better-sqlite3';
 import type { AuditedCoordinatorReply } from './assistant-native-window.js';
-import { readNativeWindow } from './attempt-report-recovery.js';
+import { isTimestampedNativeProvider, readNativeWindow } from './attempt-report-recovery.js';
 import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { listCoordinatorsForMesh } from '../mesh/coordinator-registry.js';
 import { RELAY_QUIET_MS } from './assistant-relay-format.js';
@@ -54,9 +54,9 @@ export async function collectCoordinatorReplies(opts: {
     const out: AuditedCoordinatorReply[] = [];
     const scans = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
         if (!sessionId) return { sessionId, skipped: true } as const;
-        // These timestamps cannot classify attempt membership. Until Grok has a
-        // native record boundary contract, no exact missing-attempt claim is made.
-        if (cliType === 'grok-cli') return { sessionId, skipped: true } as const;
+        // Providers outside TIMESTAMPED_PROVIDERS have no wall-clock native
+        // record boundary contract; skip them instead of failing native audit.
+        if (cliType && !isTimestampedNativeProvider(cliType)) return { sessionId, skipped: true } as const;
         const attempts = opts.db.prepare(`
             SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state,
                 r.relayed_at, c.rendered_at AS coverage_at
@@ -66,6 +66,7 @@ export async function collectCoordinatorReplies(opts: {
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId) as AttemptSpan[];
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
+        if (window.unsupportedProvider) return { sessionId, skipped: true } as const;
         return { sessionId, meshId, attempts, window };
     }));
     let complete = true;

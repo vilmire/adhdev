@@ -97817,7 +97817,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (cursor.offset > body.length) return { success: false, code: "invalid_report_offset" };
       const end = Math.min(body.length, cursor.offset + PROJECT_READ_MESSAGE_MAX_CHARS);
       const pageComplete = end === body.length;
-      const sourceComplete = completeness === "final_native";
+      const sourceComplete = completeness === "final_native" || completeness === "final_adapter";
+      const verified = completeness === "final_native";
       const page = {
         success: true,
         attemptId: cursor.attemptId,
@@ -97832,8 +97833,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         truncated: end < body.length,
         nextOffset: end < body.length ? end : null
       };
-      if (sourceComplete) return page;
-      return { ...page, originalCompleteness: completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
+      if (verified) return page;
+      return { ...page, verified: false, originalCompleteness: completeness === "final_adapter" ? "final_adapter" : completeness === "envelope_unverified" ? "envelope_unverified" : "unknown" };
     }
     function parseReportContinuation(args) {
       if (args.taskId !== void 0) {
@@ -99044,6 +99045,23 @@ ${b.text}`).join("\n\n");
         rec3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
       }
     });
+    function isTimestampedNativeProvider(cliType) {
+      return typeof cliType === "string" && TIMESTAMPED_PROVIDERS.has(cliType.trim().toLowerCase());
+    }
+    function isUnsupportedNativeProvider(read2, sessionId) {
+      const providers = [read2?.agent, rec4(read2?.debugReadChat)?.provider, getCoordinatorForSession(sessionId)?.cliType].filter((p) => typeof p === "string" && p.trim().length > 0).map((p) => p.trim().toLowerCase());
+      return providers.length > 0 && new Set(providers).size === 1 && !TIMESTAMPED_PROVIDERS.has(providers[0]);
+    }
+    function isAdapterEvidenceRef(reference, body, generation) {
+      if (typeof reference !== "string") return false;
+      try {
+        const parts = JSON.parse(reference);
+        const digest4 = (0, import_node_crypto27.createHash)("sha256").update(body).digest("hex");
+        return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
+      } catch {
+        return false;
+      }
+    }
     function isVerifiedNativeEvidenceRef(reference, generation) {
       if (typeof reference !== "string") return false;
       try {
@@ -99091,11 +99109,62 @@ ${b.text}`).join("\n\n");
       if (!r || r.isStreaming === true || r.truncated === true) return false;
       return r.bubbleState === "final" || storedHistory && (r.bubbleState === void 0 || r.bubbleState === null);
     }
+    function selectAdapterFinal(chat, sessionId, windowStart, terminalAt, nextAttemptAt, envelopeText, envelopeTruncated) {
+      if (!chat || chat.success !== true || !isUnsupportedNativeProvider(chat, sessionId)) return null;
+      const status = String(chat.providerObservedStatus ?? chat.status ?? "idle").trim().toLowerCase();
+      if (status !== "idle" || rec4(chat.turn)?.inProgress === true || chat.activeModal != null) return null;
+      const rawMessages = Array.isArray(chat.messages) ? chat.messages : [];
+      const visible = rawMessages.filter(isVisible);
+      let lastUserIndex = -1;
+      for (let i = visible.length - 1; i >= 0; i--) {
+        if (String(rec4(visible[i])?.role ?? "").toLowerCase() === "user") {
+          lastUserIndex = i;
+          break;
+        }
+      }
+      const scope = nextAttemptAt === null ? visible.slice(lastUserIndex + 1) : visible;
+      const candidates = [];
+      for (const m of scope) {
+        const r = rec4(m);
+        if (!r) continue;
+        const role = String(r.role ?? "").toLowerCase();
+        if (role !== "assistant" && role !== "agent") continue;
+        const kind = String(r.kind ?? r.messageKind ?? "").toLowerCase();
+        if (kind && kind !== "standard") continue;
+        const text4 = messageText(r).trim();
+        if (!text4) continue;
+        const isFinal = r.isStreaming !== true && r.truncated !== true && (r.bubbleState === void 0 || r.bubbleState === null || r.bubbleState === "final");
+        candidates.push({ text: text4, at: bubbleTimestamp(r), finalized: isFinal });
+      }
+      const needle = envelopeText?.trim() ?? "";
+      if (nextAttemptAt !== null) {
+        if (!needle) return null;
+        const matched = candidates.filter((c) => c.finalized && c.text.startsWith(needle));
+        if (matched.length !== 1) return null;
+        const pick = matched[0];
+        const at = pick.at !== null && pick.at >= windowStart && pick.at < nextAttemptAt ? pick.at : terminalAt;
+        return { text: pick.text, at };
+      }
+      if (candidates.some((c) => !c.finalized)) return null;
+      const tail = candidates.at(-1);
+      if (tail) {
+        if (needle && !tail.text.startsWith(needle) && !needle.startsWith(tail.text)) return null;
+        const text4 = needle && needle.startsWith(tail.text) && !envelopeTruncated && needle.length > tail.text.length ? needle : tail.text;
+        const at = tail.at !== null && tail.at >= windowStart && tail.at <= terminalAt ? tail.at : terminalAt;
+        return { text: text4, at };
+      }
+      if (visible.length === 0 && needle && !envelopeTruncated) {
+        return { text: needle, at: terminalAt };
+      }
+      return null;
+    }
     async function readNativeWindow(execute, sessionId, start, end) {
       const deadline = Date.now() + NATIVE_READ_BUDGET_MS;
       let messages = [];
       let providerIdle = false;
       let invalid = false;
+      let chat = null;
+      let unsupportedProvider = false;
       const targets = /* @__PURE__ */ new Map();
       const request = async (command, args) => {
         const remaining = deadline - Date.now();
@@ -99129,12 +99198,13 @@ ${b.text}`).join("\n\n");
           const bubble = standardAssistantBubble(message);
           if (bubble) targets.set(bubble.at, reportMessageId(message));
         }
-        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets };
+        return { ...selectNativeWindow(messages, start, end), complete: complete && !invalid, providerIdle, targets, chat, unsupportedProvider };
       };
-      const chat = await request("read_chat", { targetSessionId: sessionId, tailLimit: 200 });
+      chat = await request("read_chat", { targetSessionId: sessionId, tailLimit: 200 });
+      unsupportedProvider = isUnsupportedNativeProvider(chat, sessionId);
       if (take(chat)) {
         if (!invalid && chat.coverage === "full" && chat.hasMore !== true) return result(true);
-      } else if (!chat) return result(false);
+      } else if (!chat || unsupportedProvider) return result(false);
       messages = [];
       invalid = false;
       for (let offset = 0; offset < 400; offset += 100) {
@@ -99252,6 +99322,14 @@ ${b.text}`).join("\n\n");
         parts: durable2.parts,
         provenance: provenanceFor(durable2.evidenceRef)
       };
+      const envelopeObj = rec4(rec4(payload?.local)?.envelope);
+      const envelopeTruncated = envelopeObj?.summaryMayBeTruncated === true || envelopeObj?.finalSummarySource === "parsed_screen_fallback";
+      const adapterFinal = selectAdapterFinal(selected2.chat, sessionId, windowStart, attempt.terminal.at, next.at, envelopeText, envelopeTruncated);
+      if (adapterFinal) {
+        const parts = [{ at: adapterFinal.at, chars: Array.from(adapterFinal.text).length }];
+        const evidenceRef = JSON.stringify([...stable, ADAPTER_FINAL_REF + hash3(adapterFinal.text)]);
+        return { body: adapterFinal.text, source: "final_adapter", completeness: "final_adapter", parts, provenance: provenanceFor(evidenceRef) };
+      }
       if (envelopeText) return {
         body: envelopeText,
         source: "existing_attempt_envelope",
@@ -99266,6 +99344,7 @@ ${b.text}`).join("\n\n");
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
+    var ADAPTER_FINAL_REF;
     var NATIVE_READ_BUDGET_MS;
     var TIMESTAMPED_PROVIDERS;
     var init_attempt_report_recovery = __esm2({
@@ -99281,6 +99360,7 @@ ${b.text}`).join("\n\n");
         rec4 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
         ATTEMPT_EVIDENCE_VERSION = 2;
         VERIFIED_WINDOW_REF = "verified-native-window:";
+        ADAPTER_FINAL_REF = "unverified-adapter-final:";
         NATIVE_READ_BUDGET_MS = 2e3;
         TIMESTAMPED_PROVIDERS = /* @__PURE__ */ new Set(["claude-cli", "codex-cli", "antigravity-cli", "hermes-cli"]);
       }
@@ -100097,7 +100177,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         if (continuation.coordinatorSessionId !== sessionId && !ports.coordinatorSessionAuthorized?.(meshId, continuation.coordinatorSessionId)) return { ok: true, result: { success: false, code: "original_report_unavailable", reason: "coordinator_session_no_longer_authorized" } };
         if ("attemptId" in continuation) {
           const original = await localAttemptReport(ports, meshId, continuation.coordinatorSessionId, continuation.attemptId);
-          return { ok: true, result: original.body ? pageAttemptReport(original.body, continuation, original.source, original.completeness === "envelope_unverified" ? "envelope_unverified" : "final_native") : { success: false, code: "original_report_unavailable", reason: original.reason } };
+          return { ok: true, result: original.body ? pageAttemptReport(original.body, continuation, original.source, original.completeness ?? "final_native") : { success: false, code: "original_report_unavailable", reason: original.reason } };
         }
         return { ok: true, result: await continueReport(ports.execute, continuation) };
       }
@@ -100399,7 +100479,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const out = [];
       const scans = await Promise.all(sessions.map(async ({ sessionId, cliType, meshId }) => {
         if (!sessionId) return { sessionId, skipped: true };
-        if (cliType === "grok-cli") return { sessionId, skipped: true };
+        if (cliType && !isTimestampedNativeProvider(cliType)) return { sessionId, skipped: true };
         const attempts = opts.db.prepare(`
             SELECT a.attempt_id, a.accepted_at, a.terminal_at, a.terminal_reason, a.terminal_source, a.state,
                 r.relayed_at, c.rendered_at AS coverage_at
@@ -100409,6 +100489,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             WHERE a.session_id=? AND a.scope='plain'
         `).all(sessionId);
         const window = await readNativeWindow(opts.execute, sessionId, since, opts.now);
+        if (window.unsupportedProvider) return { sessionId, skipped: true };
         return { sessionId, meshId, attempts, window };
       }));
       let complete = true;
@@ -100545,9 +100626,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    function unavailableReportNotice(count, project, cursor) {
-      const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "report could" : "reports could"} not be captured in full: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
-      return cursor ? `${status} Inspect the latest readable coordinator context (not a verified report for this attempt) with project_read ${JSON.stringify({ project, ...cursor })}.` : `${status} No readable coordinator message is available; ${count} ${count === 1 ? "report could" : "reports could"} not be read. Check project_status ${JSON.stringify({ project })}.`;
+    function unavailableReportNotice(count, project, cursor, attemptPointer) {
+      const attemptNote = attemptPointer ? ` (attempt ${attemptPointer.attemptId})` : "";
+      const status = `[ADHDev relay gap] ${count} coordinator ${count === 1 ? "report could" : "reports could"} not be captured in full${attemptNote}: native transcript unavailable after the capture grace. No partial envelope was delivered.`;
+      return cursor ? `${status} Inspect the latest readable coordinator context (not a verified report for this attempt) with project_read ${JSON.stringify({ project, ...cursor })}.` : attemptPointer ? `${status} No readable coordinator message is available; ${count} ${count === 1 ? "report could" : "reports could"} not be read. Inspect with project_read ${JSON.stringify({ project, attemptId: attemptPointer.attemptId, coordinatorSessionId: attemptPointer.coordinatorSessionId, offset: 0 })} or check project_status ${JSON.stringify({ project })}.` : `${status} No readable coordinator message is available; ${count} ${count === 1 ? "report could" : "reports could"} not be read. Check project_status ${JSON.stringify({ project })}.`;
     }
     var replyKey;
     var RelayDeliveryPolicy;
@@ -101180,7 +101262,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 last = this.normalizeReport(null);
               }
               if (!live()) return;
-              if (last.completeness === "final_native" && last.body?.trim()) {
+              if ((last.completeness === "final_native" || last.completeness === "final_adapter") && last.body?.trim()) {
                 this.rememberCapture(attemptId, last);
                 return;
               }
@@ -101219,7 +101301,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (!raw || typeof raw !== "object") return { body: null, completeness: "envelope_unverified" };
             if (typeof raw.body === "string" && raw.body.length > ATTEMPT_BODY_MAX_CHARS) return { body: null, completeness: "envelope_unverified" };
             const validParts = raw.parts === void 0 || Array.isArray(raw.parts) && raw.parts.length <= 600 && raw.parts.every((p) => p && Number.isFinite(p.at) && Number.isFinite(new Date(p.at).getTime()) && Number.isSafeInteger(p.chars) && p.chars > 0);
-            const completeness = raw.completeness === "final_native" && validParts ? "final_native" : "envelope_unverified";
+            const completeness = (raw.completeness === "final_native" || raw.completeness === "final_adapter") && validParts ? raw.completeness : "envelope_unverified";
             return {
               body: typeof raw.body === "string" ? raw.body : null,
               completeness,
@@ -101295,11 +101377,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           }
           replyCovered(reply, text4) {
             if (this.renderedCoverage.has(coverageKey(reply.sessionId, reply.attemptId, reply.messageAt, text4))) return true;
-            if (reply.attemptId) return false;
             const hash3 = replyHash(text4);
             return [...this.renderedCoverage.keys()].some((key4) => {
-              const [session, , at, contentHash] = JSON.parse(key4);
-              return session === reply.sessionId && at === reply.messageAt && contentHash === hash3;
+              const [session, attempt, at, contentHash] = JSON.parse(key4);
+              if (session !== reply.sessionId || contentHash !== hash3) return false;
+              return reply.attemptId ? attempt === reply.attemptId : at === reply.messageAt || typeof at === "number" && Math.abs(at - reply.messageAt) <= RELAY_QUIET_MS;
             });
           }
           pruneCoverage(now) {
@@ -101316,7 +101398,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.pruneCoverage(now);
           }
           renderedParts(attemptId, sessionId, body, meta, renderedLimit = RELAY_BODY_MAX_CHARS) {
-            const parts = meta.parts;
+            const parts = meta.parts?.length ? meta.parts : meta.completeness === "final_adapter" ? [{ at: this.restoredAttempts.get(attemptId)?.committedAt ?? this.clock.now(), chars: Array.from(body).length }] : void 0;
             if (!parts?.length) return null;
             const points = Array.from(body);
             let offset = 0;
@@ -101626,7 +101708,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return this.slugCounts(counts);
           }
           hasCapturedBody(attemptId) {
-            return this.attemptMeta.get(attemptId)?.completeness === "final_native" && !!this.attemptBodies.get(attemptId)?.trim();
+            const completeness = this.attemptMeta.get(attemptId)?.completeness;
+            return (completeness === "final_native" || completeness === "final_adapter") && !!this.attemptBodies.get(attemptId)?.trim();
           }
           slugCounts(counts) {
             return [...counts.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([meshId, count]) => ({ slug: this.ports.projectSlug(meshId) ?? meshId, count }));
@@ -101657,7 +101740,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return paged ? `${base}:page:${receiptKey(bodies.map((body, index) => [reportBodyId(body ?? ""), offsets[index]]))}` : base;
           }
           async renderUnavailable(item) {
-            const ref2 = this.restoredAttempts.get(item.attemptIds.at(-1));
+            const attemptId = item.attemptIds.at(-1);
+            const ref2 = this.restoredAttempts.get(attemptId);
             const session = ref2?.sessionId ?? item.coordinatorSessionId;
             let cursor = null;
             try {
@@ -101669,7 +101753,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               meshId: item.meshId,
               messageId: `gap:unavailable:${receiptKey(item.meshId, item.attemptIds)}`,
               surfaced: [...item.attemptIds],
-              text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor)
+              text: unavailableReportNotice(item.attemptIds.length, this.ports.projectSlug(item.meshId) ?? item.meshId, cursor, { attemptId, coordinatorSessionId: session })
             };
           }
           async renderRelay(item) {
@@ -101680,12 +101764,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               const body = bodies[index];
               const meta = this.attemptMeta.get(attemptId);
               const source2 = meta?.completeness ?? (body ? "final_native" : null);
+              const verified = source2 === "final_native";
               return {
                 attemptId,
                 coordinatorSessionId: this.restoredAttempts.get(attemptId)?.sessionId ?? item.coordinatorSessionId,
                 reportId: body ? reportBodyId(body) : null,
                 totalChars: body?.length ?? null,
-                complete: source2 === "final_native",
+                complete: source2 === "final_native" || source2 === "final_adapter",
+                verified,
                 source: source2,
                 offset: body ? Array.from(body).slice(0, this.pageOffset(attemptId, body ?? "")).join("").length : 0,
                 nextOffset: body && this.pageOffset(attemptId, body ?? "") + RELAY_BODY_MAX_CHARS < codePoints(body) ? Array.from(body).slice(0, this.pageOffset(attemptId, body ?? "") + RELAY_BODY_MAX_CHARS).join("").length : null
@@ -102121,7 +102207,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (typeof report.body !== "string" || !report.body) return null;
             return {
               body: report.body,
-              completeness: report.completeness === "final_native" ? "final_native" : "envelope_unverified",
+              completeness: report.completeness === "final_native" ? "final_native" : report.completeness === "final_adapter" ? "final_adapter" : "envelope_unverified",
               source: report.source,
               ...report.parts ? { parts: report.parts } : {}
             };
@@ -102135,8 +102221,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const versionOk = proof?.version === 2 || proof?.version === 1;
           if (typeof result?.body !== "string" || !versionOk || proof?.attemptId !== attemptId || proof?.coordinatorSessionId !== sessionId || !Number.isSafeInteger(proof?.generation) || Number(proof?.generation) < 0 || typeof proof?.evidenceRef !== "string" || proof.evidenceRef.length === 0 || proof.evidenceRef.length > 2048) return null;
           const nativeParts = proof?.version === 2 && result.completeness === "final_native" ? verifiedNativeReportParts(result.body, result.parts, proof.evidenceRef, Number(proof.generation)) : null;
-          const completeness = nativeParts ? "final_native" : "envelope_unverified";
-          const parts = nativeParts?.map(({ at, chars }) => ({ at, chars }));
+          const adapterVerified = !nativeParts && proof?.version === 2 && result.completeness === "final_adapter" && isAdapterEvidenceRef(proof.evidenceRef, result.body, Number(proof.generation));
+          const completeness = nativeParts ? "final_native" : adapterVerified ? "final_adapter" : "envelope_unverified";
+          const parts = nativeParts ? nativeParts.map(({ at, chars }) => ({ at, chars })) : adapterVerified && Array.isArray(result.parts) ? result.parts : void 0;
           return { body: result.body, completeness, ...typeof result.source === "string" ? { source: result.source } : {}, ...parts ? { parts } : {} };
         },
         auditCoordinatorReplies: async (sinceMs) => {
