@@ -525,12 +525,13 @@ it('verifies full URL->canonical CLI tabKey handoff, CSS-hidden first button, si
         expect(outerShell.closest('[inert]')).not.toBeNull()
         expect(innerShell.contains(document.activeElement)).toBe(true)
 
-        // 4. Bare portaled LaunchConfirmDialog above DialogShell keeps focus and is not made inert.
+        // 4. Bare portaled LaunchConfirmDialog above DialogShell traps Tab/Shift+Tab, marks covered parent inert, and restores on close.
+        const parentCloseSpy = vi.fn()
         function PortalFixture() {
             const [child, setChild] = useState(false)
             return (
                 <>
-                    <DialogShell ariaLabel="launch-parent" onClose={() => {}}>
+                    <DialogShell ariaLabel="launch-parent" onClose={parentCloseSpy}>
                         <button data-review-launch-trigger onClick={() => setChild(true)}>
                             Open nested confirmation
                         </button>
@@ -548,15 +549,47 @@ it('verifies full URL->canonical CLI tabKey handoff, CSS-hidden first button, si
             )
         }
         await act(async () => root.render(<PortalFixture />))
+        const launchParent = document.body.querySelector('[aria-label="launch-parent"]') as HTMLElement
+        const launchTrigger = document.body.querySelector('[data-review-launch-trigger]') as HTMLButtonElement
+        expect(launchParent.closest('[inert]')).toBeNull()
+        expect(document.activeElement).toBe(launchTrigger)
+
         await act(async () => {
-            ;(document.body.querySelector('[data-review-launch-trigger]') as HTMLButtonElement).click()
+            launchTrigger.click()
         })
         const launchDialog = document.body.querySelector('[role="dialog"][aria-labelledby="launch-confirm-title"]') as HTMLElement
         expect(launchDialog).not.toBeNull()
         expect(launchDialog.closest('[inert]')).toBeNull()
+        expect(launchParent.closest('[inert]')).not.toBeNull()
         const launchBtn = launchDialog.querySelector('button') as HTMLButtonElement
         launchBtn.focus()
         expect(launchDialog.contains(document.activeElement)).toBe(true)
+
+        for (let step = 0; step < 6; step += 1) {
+            await userEvent.tab()
+            expect(launchDialog.contains(document.activeElement)).toBe(true)
+            expect(launchParent.contains(document.activeElement)).toBe(false)
+            expect(document.activeElement).not.toBe(document.body)
+        }
+        for (let step = 0; step < 4; step += 1) {
+            await userEvent.tab({ shift: true })
+            expect(launchDialog.contains(document.activeElement)).toBe(true)
+            expect(launchParent.contains(document.activeElement)).toBe(false)
+            expect(document.activeElement).not.toBe(document.body)
+        }
+
+        await act(async () => {
+            await userEvent.keyboard('{Escape}')
+        })
+        expect(parentCloseSpy).not.toHaveBeenCalled()
+        expect(document.body.querySelector('[role="dialog"][aria-labelledby="launch-confirm-title"]')).not.toBeNull()
+
+        await act(async () => {
+            launchBtn.click()
+        })
+        expect(document.body.querySelector('[role="dialog"][aria-labelledby="launch-confirm-title"]')).toBeNull()
+        expect(launchParent.closest('[inert]')).toBeNull()
+        expect(document.activeElement).toBe(launchTrigger)
     } finally {
         await act(async () => root.unmount())
         host.remove()

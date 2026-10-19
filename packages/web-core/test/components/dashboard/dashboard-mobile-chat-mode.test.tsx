@@ -120,6 +120,7 @@ describe('DashboardMobileChatMode approvals flow', () => {
             unobserve() {}
             disconnect() {}
         }
+        HTMLCanvasElement.prototype.getContext = (() => null) as any
         localStorage.setItem('lang', 'en')
         initI18n()
         currentPath = ''
@@ -568,8 +569,8 @@ describe('DashboardMobileChatMode approvals flow', () => {
         )
     })
 
-    it('ignores CSS-hidden first controls, keeps simultaneous nested DialogShells ordered with inner topmost, and does not steal focus from bare portaled LaunchConfirmDialog', () => {
-        act(() => {
+    it('ignores CSS-hidden first controls, keeps simultaneous nested DialogShells ordered with inner topmost, and contains Tab/focus within bare portaled LaunchConfirmDialog', async () => {
+        await act(async () => {
             root.render(
                 <DialogShell ariaLabel="hidden-probe" onClose={() => {}}>
                     <div style={{ display: 'none' }}>
@@ -582,7 +583,7 @@ describe('DashboardMobileChatMode approvals flow', () => {
         const visibleBtn = document.body.querySelector('[data-visible-btn]') as HTMLButtonElement
         expect(document.activeElement).toBe(visibleBtn)
 
-        act(() => {
+        await act(async () => {
             root.render(
                 <DialogShell ariaLabel="outer-shell" onClose={() => {}}>
                     <button data-outer-btn>Outer</button>
@@ -598,12 +599,13 @@ describe('DashboardMobileChatMode approvals flow', () => {
         expect(outerShell.closest('[inert]')).not.toBeNull()
         expect(innerShell.contains(document.activeElement)).toBe(true)
 
+        const parentClose = vi.fn()
         function BarePortalFixture() {
-            const [confirmOpen, setConfirmOpen] = useState(true)
+            const [confirmOpen, setConfirmOpen] = useState(false)
             return (
                 <>
-                    <DialogShell ariaLabel="launch-parent" onClose={() => {}}>
-                        <button data-parent-btn>Parent</button>
+                    <DialogShell ariaLabel="launch-parent" onClose={parentClose}>
+                        <button data-parent-btn onClick={() => setConfirmOpen(true)}>Parent</button>
                     </DialogShell>
                     {confirmOpen && (
                         <LaunchConfirmDialog
@@ -618,16 +620,57 @@ describe('DashboardMobileChatMode approvals flow', () => {
             )
         }
 
-        act(() => {
+        await act(async () => {
             root.render(<BarePortalFixture />)
+        })
+        const parentShell = document.body.querySelector('[aria-label="launch-parent"]') as HTMLElement
+        const parentBtn = document.body.querySelector('[data-parent-btn]') as HTMLButtonElement
+        expect(parentShell.closest('[inert]')).toBeNull()
+        expect(document.activeElement).toBe(parentBtn)
+
+        await act(async () => {
+            parentBtn.click()
         })
         const confirmDialog = document.body.querySelector('[aria-labelledby="launch-confirm-title"]') as HTMLElement
         expect(confirmDialog).not.toBeNull()
         expect(confirmDialog.closest('[inert]')).toBeNull()
-        const confirmBtn = confirmDialog.querySelector('button') as HTMLButtonElement
-        act(() => {
-            confirmBtn.focus()
+        expect(parentShell.closest('[inert]')).not.toBeNull()
+        const confirmButtons = Array.from(confirmDialog.querySelectorAll('button')) as HTMLButtonElement[]
+        expect(confirmButtons.length).toBeGreaterThanOrEqual(3)
+        await act(async () => {
+            confirmButtons[0]!.focus()
         })
         expect(confirmDialog.contains(document.activeElement)).toBe(true)
+
+        // Tab from the last button wraps back to the first button inside LaunchConfirmDialog
+        await act(async () => {
+            confirmButtons[confirmButtons.length - 1]!.focus()
+            const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+            document.dispatchEvent(tabEvent)
+        })
+        expect(document.activeElement).toBe(confirmButtons[0])
+        expect(parentShell.contains(document.activeElement)).toBe(false)
+
+        // Shift+Tab from the first button wraps to the last button inside LaunchConfirmDialog
+        await act(async () => {
+            const shiftTabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+            document.dispatchEvent(shiftTabEvent)
+        })
+        expect(document.activeElement).toBe(confirmButtons[confirmButtons.length - 1])
+        expect(parentShell.contains(document.activeElement)).toBe(false)
+
+        // Escape does not close the covered parent DialogShell
+        await act(async () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        expect(parentClose).not.toHaveBeenCalled()
+
+        // Closing LaunchConfirmDialog removes parent inertness and restores focus to parentBtn
+        await act(async () => {
+            confirmButtons[0]!.click()
+        })
+        expect(document.body.querySelector('[aria-labelledby="launch-confirm-title"]')).toBeNull()
+        expect(parentShell.closest('[inert]')).toBeNull()
+        expect(document.activeElement).toBe(parentBtn)
     })
 })
