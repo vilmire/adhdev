@@ -18,7 +18,7 @@ import type { ActiveConversation } from '../../src/components/dashboard/types'
 const SAMPLE_PNG_BASE64 =
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 
-const EVIDENCE_DIR = '/tmp/adhdev-rc24-artifact-evidence/task-d'
+const EVIDENCE_DIR = '/tmp/adhdev-rc24-artifact-evidence/task-d-delta'
 
 function rect(element: Element) {
     const { x, y, width, height, right, bottom } = element.getBoundingClientRect()
@@ -94,7 +94,8 @@ const FULL_BODIES: Record<string, { encoding: 'utf8' | 'base64'; content: string
             '# Architecture Plan (Full)',
             '',
             '1. **Zero Auto-Fetch**: Chat & inbox render only `ChatAttachmentMeta`.',
-            '2. **Collision-Proof Cache**: `${origin}::${daemonId}::${sessionId}::${artifactId}::${sha256}`.',
+            '2. **Collision-Proof Cache**: `JSON.stringify([origin, daemonId, sessionId, artifactId, sha256, updatedAt])`.',
+            '3. **Safe Links & Blocked Remote Media**: [Architecture RFC](https://adhdev.io/rfc) ![beacon](https://tracker.invalid/private.png) ![svg](https://tracker.invalid/vector.svg)',
             '',
             '```ts',
             'const key = buildArtifactCacheKey(scope);',
@@ -301,7 +302,15 @@ it('renders mobile inbox tail (📎 <title>), collapsed previews with zero fetch
         }
 
         expect(sendCommand).toHaveBeenCalledTimes(5)
-        expect(host.querySelector('[data-artifact-renderer="markdown"]')).not.toBeNull()
+        const mdRenderer = host.querySelector('[data-artifact-renderer="markdown"]')
+        expect(mdRenderer).not.toBeNull()
+        // D2: Verify zero remote <img> elements inside markdown renderer and safe external link rel
+        expect(mdRenderer?.querySelector('img')).toBeNull()
+        expect(mdRenderer?.querySelector('[data-testid="artifact-markdown-blocked-image"]')).not.toBeNull()
+        const mdLink = mdRenderer?.querySelector('a')
+        expect(mdLink?.getAttribute('href')).toBe('https://adhdev.io/rfc')
+        expect(mdLink?.getAttribute('rel')).toBe('noopener noreferrer')
+        expect(mdLink?.getAttribute('target')).toBe('_blank')
         expect(host.querySelector('[data-artifact-renderer="diff"]')).not.toBeNull()
         expect(host.querySelector('[data-artifact-renderer="json"]')).not.toBeNull()
         expect(host.querySelector('[data-artifact-renderer="text"]')).not.toBeNull()
@@ -361,6 +370,44 @@ it('renders mobile inbox tail (📎 <title>), collapsed previews with zero fetch
         await act(async () => {
             await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-1280x844-expanded.png` })
         })
+
+        // 5. D5: Real browser keyboard accessibility for image lightbox modal (initial focus, Tab wrap, Escape close, focus restore)
+        const openLightboxBtn = host.querySelector('[data-testid="artifact-image-lightbox-open"]') as HTMLButtonElement
+        expect(openLightboxBtn).not.toBeNull()
+        openLightboxBtn.focus()
+        await act(async () => {
+            openLightboxBtn.click()
+        })
+
+        const dialog = document.querySelector('[role="dialog"]') as HTMLElement
+        expect(dialog).not.toBeNull()
+        expect(dialog.contains(document.activeElement)).toBe(true)
+        await act(async () => {
+            await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-1280x844-lightbox.png` })
+        })
+
+        const dialogButtons = Array.from(dialog.querySelectorAll('button')) as HTMLButtonElement[]
+        expect(dialogButtons.length).toBeGreaterThanOrEqual(4)
+        const firstDialogBtn = dialogButtons[0]!
+        const lastDialogBtn = dialogButtons[dialogButtons.length - 1]!
+        lastDialogBtn.focus()
+        await act(async () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+        })
+        expect(document.activeElement).toBe(firstDialogBtn)
+
+        await act(async () => {
+            document.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }),
+            )
+        })
+        expect(document.activeElement).toBe(lastDialogBtn)
+
+        await act(async () => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        })
+        expect(document.querySelector('[role="dialog"]')).toBeNull()
+        expect(document.activeElement).toBe(openLightboxBtn)
     } finally {
         await act(async () => {
             root.unmount()

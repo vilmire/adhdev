@@ -50,7 +50,8 @@ import {
 import { resolveChatRow, type ChatRowModel } from './ChatMessageList/chat-row-model';
 import { useChatRowExpansion, type FetchToolBlock } from './ChatMessageList/chat-row-expansion';
 import { mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
-import type { FetchArtifactCommandFn } from '../hooks/useArtifactRead';
+import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonContext';
+import { resolveArtifactSessionTarget, type FetchArtifactCommandFn } from '../hooks/useArtifactRead';
 
 // ─── Types ────────────────────────────────────
 
@@ -160,6 +161,24 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
     ref
 ) {
     const { t } = useTranslation('common');
+    const { ides: contextIdes } = useBaseDaemons();
+    const { getIdes } = useBaseDaemonActions();
+    const hasArtifactMessages = useMemo(
+        () => messages.some((m) => m.kind === 'artifact' || m.attachment != null),
+        [messages],
+    );
+    const resolvedArtifactTarget = hasArtifactMessages
+        ? resolveArtifactSessionTarget({
+            daemonId,
+            sessionId,
+            meshCoordinatorDaemonId,
+            contextKey,
+            ides: contextIdes.length > 0 ? contextIdes : getIdes(),
+        })
+        : null;
+    const effectiveDaemonId = daemonId || resolvedArtifactTarget?.daemonId;
+    const effectiveSessionId = sessionId || resolvedArtifactTarget?.sessionId;
+    const effectiveCoordinatorDaemonId = meshCoordinatorDaemonId || resolvedArtifactTarget?.meshCoordinatorDaemonId;
     const containerRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -664,9 +683,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         userName={userName}
                         isCliMode={isCliMode}
                         contextKey={contextKey}
-                        daemonId={daemonId}
-                        sessionId={sessionId}
-                        meshCoordinatorDaemonId={meshCoordinatorDaemonId}
+                        daemonId={effectiveDaemonId}
+                        sessionId={effectiveSessionId}
+                        meshCoordinatorDaemonId={effectiveCoordinatorDaemonId}
                         fetchArtifact={fetchArtifact}
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
@@ -734,6 +753,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
 const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     prev.messages === next.messages
+    && !((!next.daemonId || !next.sessionId) && Boolean(next.contextKey) && next.messages.some((m) => m.kind === 'artifact' || m.attachment != null))
     && prev.actionLogs === next.actionLogs
     && prev.agentName === next.agentName
     && prev.userName === next.userName

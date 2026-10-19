@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ArtifactKind } from '@adhdev/daemon-core'
 import { isAllowedArtifactKindAndMime, type ArtifactResolvedPayload } from '../../hooks/useArtifactRead'
@@ -7,6 +7,9 @@ import ScreenshotViewer from '../remote/ScreenshotViewer'
 import { CopyButton } from '../ui/TechnicalDetails'
 import ModalPortal from '../ui/ModalPortal'
 import { trArtifact } from './artifact-i18n'
+
+const LIGHTBOX_FOCUSABLE_SELECTOR =
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export type DiffLineKind = 'hunk' | 'meta' | 'add' | 'del' | 'context'
 
@@ -60,6 +63,81 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
     const { t, i18n } = useTranslation('common')
     const [zoom, setZoom] = useState(100)
     const [lightboxOpen, setLightboxOpen] = useState(false)
+    const openerButtonRef = useRef<HTMLButtonElement | null>(null)
+    const dialogRef = useRef<HTMLDivElement | null>(null)
+    const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+    const previousActiveElementRef = useRef<HTMLElement | null>(null)
+
+    const restoreOpenerFocus = useCallback(() => {
+        const target = openerButtonRef.current ?? previousActiveElementRef.current
+        if (target && typeof target.focus === 'function' && document.contains(target)) {
+            try {
+                target.focus({ preventScroll: true })
+            } catch {
+                target.focus()
+            }
+        }
+    }, [])
+
+    const closeLightbox = useCallback(() => {
+        setLightboxOpen(false)
+        restoreOpenerFocus()
+    }, [restoreOpenerFocus])
+
+    useEffect(() => {
+        if (!lightboxOpen || !objectUrl) return
+
+        const prevOverflow = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        if (!previousActiveElementRef.current && document.activeElement instanceof HTMLElement) {
+            previousActiveElementRef.current = document.activeElement
+        }
+
+        const initialFocusEl = closeButtonRef.current ?? dialogRef.current
+        if (initialFocusEl && typeof initialFocusEl.focus === 'function') {
+            try {
+                initialFocusEl.focus({ preventScroll: true })
+            } catch {
+                initialFocusEl.focus()
+            }
+        }
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault()
+                event.stopPropagation()
+                closeLightbox()
+                return
+            }
+            if (event.key !== 'Tab') return
+            const dialog = dialogRef.current
+            if (!dialog) return
+            const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(LIGHTBOX_FOCUSABLE_SELECTOR))
+            if (focusables.length === 0) {
+                event.preventDefault()
+                dialog.focus({ preventScroll: true })
+                return
+            }
+            const first = focusables[0]!
+            const last = focusables[focusables.length - 1]!
+            const active = document.activeElement as HTMLElement | null
+            if (event.shiftKey) {
+                if (!active || !dialog.contains(active) || active === first) {
+                    event.preventDefault()
+                    last.focus({ preventScroll: true })
+                }
+            } else if (!active || !dialog.contains(active) || active === last) {
+                event.preventDefault()
+                first.focus({ preventScroll: true })
+            }
+        }
+
+        document.addEventListener('keydown', handleKeyDown)
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown)
+            document.body.style.overflow = prevOverflow
+        }
+    }, [closeLightbox, lightboxOpen, objectUrl])
 
     const kind: ArtifactKind = payload.kind
     const allowed = isAllowedArtifactKindAndMime(kind, payload.mime)
@@ -118,8 +196,15 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
                         </button>
                         {objectUrl && (
                             <button
+                                ref={openerButtonRef}
                                 type="button"
-                                onClick={() => setLightboxOpen(true)}
+                                onClick={() => {
+                                    previousActiveElementRef.current =
+                                        document.activeElement instanceof HTMLElement
+                                            ? document.activeElement
+                                            : openerButtonRef.current
+                                    setLightboxOpen(true)
+                                }}
                                 data-testid="artifact-image-lightbox-open"
                                 className="inline-flex min-h-[28px] items-center rounded-md border border-border-subtle bg-bg-secondary px-2 py-0.5 text-3xs font-medium text-text-secondary hover:border-border-default hover:text-text-primary"
                                 aria-label={openLightboxLabel}
@@ -142,6 +227,8 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
                 {lightboxOpen && objectUrl && (
                     <ModalPortal>
                         <div
+                            ref={dialogRef}
+                            tabIndex={-1}
                             className="fixed inset-0 z-50 flex flex-col bg-black/85 p-4 backdrop-blur-sm"
                             role="dialog"
                             aria-modal="true"
@@ -179,8 +266,9 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
                                         +
                                     </button>
                                     <button
+                                        ref={closeButtonRef}
                                         type="button"
-                                        onClick={() => setLightboxOpen(false)}
+                                        onClick={closeLightbox}
                                         data-testid="artifact-image-lightbox-close"
                                         className="inline-flex min-h-[36px] items-center justify-center rounded-lg border border-white/20 bg-white/15 px-3 text-xs font-semibold text-white hover:bg-white/25"
                                         aria-label={closeLightboxLabel}
@@ -215,7 +303,12 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
                 </div>
                 <div className="max-h-96 overflow-auto rounded-lg border border-border-subtle bg-bg-primary/50 p-3 text-xs text-text-primary">
                     {text ? (
-                        <ChatMarkdownBody content={text} renderAsPreformatted={false} renderAsMarkdown={true} />
+                        <ChatMarkdownBody
+                            content={text}
+                            renderAsPreformatted={false}
+                            renderAsMarkdown={true}
+                            artifactSafeMode={true}
+                        />
                     ) : (
                         <span className="text-text-muted">{emptyLabel}</span>
                     )}

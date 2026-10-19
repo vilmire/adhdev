@@ -36,6 +36,9 @@ import {
     classifyChatMessageForDisplay,
 } from '../../src/components/dashboard/chat-activity-visibility'
 import { getConversationLastMessagePreview } from '../../src/components/dashboard/conversation-selectors'
+import { controllerRegistry } from '../../src/components/dashboard/session-chat-controller'
+import { BaseDaemonProvider, useBaseDaemonActions } from '../../src/context/BaseDaemonContext'
+import { TransportProvider } from '../../src/context/TransportContext'
 import { resolveChatRow } from '../../src/components/ChatMessageList/chat-row-model'
 import ChatMessageList from '../../src/components/ChatMessageList'
 
@@ -113,6 +116,10 @@ describe('Task D — Artifact Viewer UI', () => {
                 disconnect() {}
             } as any
         }
+        if (typeof HTMLElement.prototype.scrollTo === 'undefined') {
+            HTMLElement.prototype.scrollTo = (() => {}) as any
+        }
+        controllerRegistry.clear()
 
         container = document.createElement('div')
         document.body.appendChild(container)
@@ -980,6 +987,288 @@ describe('Task D — Artifact Viewer UI', () => {
             } as any)
 
             expect(preview).toBe('📎 Deployment Diff Report')
+        })
+    })
+
+    describe('7. D1-D5 Reviewer Remediation Regression & Positive Controls', () => {
+        it('D1: ChatMessageList with only contextKey reacts to live session/daemon switch behind stable tabKey and fences deferred responses', async () => {
+            let resolveFirst!: (val: unknown) => void
+            const firstPromise = new Promise((r) => {
+                resolveFirst = r
+            })
+            const fetchCalls: Array<[string, string]> = []
+            const sendCommand = vi.fn((daemonId: string, _cmd: string, payload: any) => {
+                fetchCalls.push([daemonId, payload.sessionId])
+                if (fetchCalls.length === 1) return firstPromise
+                return Promise.resolve({
+                    success: true,
+                    artifactId: 'art_0123456789abcdef',
+                    sessionId: payload.sessionId,
+                    kind: 'text',
+                    mime: 'text/plain',
+                    filename: 'live.txt',
+                    title: 'Live Output',
+                    sizeBytes: 15,
+                    sha256: 'a'.repeat(64),
+                    registeredSha256: 'a'.repeat(64),
+                    sha256Changed: false,
+                    encoding: 'utf8',
+                    content: 'CURRENT-CONTENT',
+                })
+            })
+
+            let injectFn!: (entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => void
+            function Harness({ messages }: { messages: ChatMessage[] }) {
+                const { injectEntries } = useBaseDaemonActions()
+                injectFn = injectEntries
+                return <ChatMessageList messages={messages} contextKey="stable-tab" />
+            }
+
+            const artMsg = makeArtifactMessage(makeAttachment({ kind: 'text', mime: 'text/plain' }))
+
+            mount(
+                <BaseDaemonProvider>
+                    <TransportProvider
+                        value={{
+                            sendCommand,
+                            subscribe: () => () => {},
+                            sendPtyInput: () => false,
+                            requestRuntimeSnapshot: async () => ({ success: false, error: 'noop' }),
+                            onRuntimeEvent: () => () => {},
+                        }}
+                    >
+                        <Harness messages={[artMsg]} />
+                    </TransportProvider>
+                </BaseDaemonProvider>,
+            )
+
+            act(() => {
+                injectFn(
+                    [
+                        {
+                            id: 'stable-tab',
+                            daemonId: 'host-a',
+                            sessionId: 'old-session',
+                            type: 'claude-code',
+                            transport: 'pty',
+                            status: 'active',
+                            activeChat: { messages: [] },
+                        } as any,
+                    ],
+                    { authoritativeDaemonIds: ['host-a'] },
+                )
+            })
+
+            const viewBtn = container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLButtonElement
+            await act(async () => {
+                viewBtn.click()
+            })
+            expect(fetchCalls).toEqual([['host-a', 'old-session']])
+
+            // Switch live session/daemon behind the same tabKey before first request settles
+            act(() => {
+                injectFn(
+                    [
+                        {
+                            id: 'stable-tab',
+                            daemonId: 'host-b',
+                            sessionId: 'CURRENT-session',
+                            type: 'claude-code',
+                            transport: 'pty',
+                            status: 'active',
+                            activeChat: { messages: [] },
+                        } as any,
+                    ],
+                    { authoritativeDaemonIds: ['host-a', 'host-b'] },
+                )
+            })
+
+            await act(async () => {
+                resolveFirst({
+                    success: true,
+                    artifactId: 'art_0123456789abcdef',
+                    sessionId: 'old-session',
+                    kind: 'text',
+                    mime: 'text/plain',
+                    filename: 'live.txt',
+                    title: 'Live Output',
+                    sizeBytes: 11,
+                    sha256: 'a'.repeat(64),
+                    registeredSha256: 'a'.repeat(64),
+                    sha256Changed: false,
+                    encoding: 'utf8',
+                    content: 'OLD-CONTENT',
+                })
+                await Promise.resolve()
+            })
+
+            expect(container.textContent).not.toContain('OLD-CONTENT')
+
+            await act(async () => {
+                ;(container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLButtonElement).click()
+            })
+            expect(fetchCalls).toEqual([
+                ['host-a', 'old-session'],
+                ['host-b', 'CURRENT-session'],
+            ])
+            expect(container.textContent).toContain('CURRENT-CONTENT')
+        })
+
+        it('D1 & D4: fences in-flight response on origin change, invalidates cache on updatedAt bump, and prevents :: delimiter cache collisions', async () => {
+            const key1 = buildArtifactCacheKey({
+                origin: 'https://same.test',
+                daemonId: 'a::b',
+                sessionId: 'c',
+                artifactId: 'art_1',
+                sha256: '2'.repeat(64),
+            })
+            const key2 = buildArtifactCacheKey({
+                origin: 'https://same.test',
+                daemonId: 'a',
+                sessionId: 'b::c',
+                artifactId: 'art_1',
+                sha256: '2'.repeat(64),
+            })
+            expect(key1).not.toBeNull()
+            expect(key2).not.toBeNull()
+            expect(key1).not.toBe(key2)
+
+            let calls = 0
+            const fetchArtifact: FetchArtifactCommandFn = async () => ({
+                success: true,
+                artifactId: 'art_0123456789abcdef',
+                sessionId: 'sess-101',
+                kind: 'text',
+                mime: 'text/plain',
+                filename: 'versioned.txt',
+                title: 'Versioned',
+                sizeBytes: 6,
+                sha256: 'a'.repeat(64),
+                registeredSha256: 'a'.repeat(64),
+                sha256Changed: false,
+                encoding: 'utf8',
+                content: `call-${++calls}`,
+            })
+
+            mount(
+                <AttachmentBubble
+                    attachment={makeAttachment({ kind: 'text', mime: 'text/plain', updatedAt: 100 })}
+                    daemonId="daemon-alpha"
+                    sessionId="sess-101"
+                    fetchArtifact={fetchArtifact}
+                />,
+            )
+            await act(async () => {
+                ;(container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLButtonElement).click()
+            })
+            expect(calls).toBe(1)
+            expect(container.textContent).toContain('call-1')
+
+            // Bump updatedAt with same sha256 -> closes viewer and refetches on reopen
+            act(() => {
+                root?.render(
+                    <AttachmentBubble
+                        attachment={makeAttachment({ kind: 'text', mime: 'text/plain', updatedAt: 200 })}
+                        daemonId="daemon-alpha"
+                        sessionId="sess-101"
+                        fetchArtifact={fetchArtifact}
+                    />,
+                )
+            })
+            await act(async () => {
+                ;(container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLButtonElement).click()
+            })
+            expect(calls).toBe(2)
+            expect(container.textContent).toContain('call-2')
+        })
+
+        it('D3a: fails closed on ambiguous bare-session controllerRegistry lookup and unauthoritative colon contextKey', () => {
+            controllerRegistry.set('host-a:same', {
+                getIdentity: () => ({ daemonId: 'host-a', sessionId: 'same' }),
+            } as any)
+            controllerRegistry.set('host-b:same', {
+                getIdentity: () => ({ daemonId: 'host-b', sessionId: 'same' }),
+            } as any)
+            expect(resolveArtifactSessionTarget({ contextKey: 'same' })).toBeNull()
+            expect(resolveArtifactSessionTarget({ contextKey: 'unknown-host:guessed-session' })).toBeNull()
+            // Exact controller match still resolves
+            expect(resolveArtifactSessionTarget({ contextKey: 'host-b:same' })).toEqual({
+                daemonId: 'host-b',
+                sessionId: 'same',
+            })
+        })
+
+        it('D2 & D5: blocks remote Markdown images/SVGs, enforces safe link rel/protocol, and traps/restores focus in image lightbox', async () => {
+            const md = [
+                '![remote-png](https://tracker.invalid/pixel.png)',
+                '![remote-svg](https://tracker.invalid/icon.svg)',
+                '[safe-link](https://adhdev.io/docs)',
+                '[unsafe-js](javascript:alert(1))',
+                '<iframe src="https://evil.invalid"></iframe>',
+            ].join(' ')
+            mount(
+                <ArtifactContentRenderer
+                    payload={makeResolvedPayload({
+                        kind: 'markdown',
+                        mime: 'text/markdown',
+                        content: md,
+                        textContent: md,
+                    })}
+                    objectUrl={null}
+                />,
+            )
+            expect(container.querySelector('img')).toBeNull()
+            expect(container.querySelector('iframe')).toBeNull()
+            const links = Array.from(container.querySelectorAll('a'))
+            expect(links).toHaveLength(1)
+            expect(links[0]?.getAttribute('href')).toBe('https://adhdev.io/docs')
+            expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer')
+            expect(links[0]?.getAttribute('target')).toBe('_blank')
+
+            // Now test image lightbox focus, Tab containment, Escape, and focus restoration
+            act(() => {
+                root?.render(
+                    <ArtifactContentRenderer
+                        payload={makeResolvedPayload({
+                            kind: 'image',
+                            mime: 'image/png',
+                            filename: 'shot.png',
+                            title: 'Shot',
+                            encoding: 'base64',
+                            content: 'AAAA',
+                            textContent: null,
+                            bytes: new Uint8Array([1, 2, 3, 4]),
+                        })}
+                        objectUrl="blob:https://adhdev.local/test-image"
+                    />,
+                )
+            })
+            const openBtn = container.querySelector('[data-testid="artifact-image-lightbox-open"]') as HTMLButtonElement
+            const focusSpy = vi.spyOn(openBtn, 'focus')
+            openBtn.focus()
+            await act(async () => {
+                openBtn.click()
+            })
+
+            const dialog = document.body.querySelector('[role="dialog"]') as HTMLElement
+            expect(dialog).not.toBeNull()
+            expect(dialog.contains(document.activeElement)).toBe(true)
+
+            const dialogButtons = Array.from(dialog.querySelectorAll('button')) as HTMLButtonElement[]
+            const firstBtn = dialogButtons[0]!
+            const lastBtn = dialogButtons[dialogButtons.length - 1]!
+            lastBtn.focus()
+            await act(async () => {
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+            })
+            expect(document.activeElement).toBe(firstBtn)
+
+            await act(async () => {
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+            })
+            expect(document.body.querySelector('[role="dialog"]')).toBeNull()
+            expect(document.activeElement).toBe(openBtn)
+            expect(focusSpy).toHaveBeenLastCalledWith({ preventScroll: true })
         })
     })
 })

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ArtifactErrorCode, ArtifactKind, ChatAttachmentMeta } from '@adhdev/daemon-core'
-import { useBaseDaemonActions } from '../context/BaseDaemonContext'
+import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import { buildConversations } from '../components/dashboard/buildConversations'
 import { getCoordinatorRoutingHint, getConversationDaemonRouteId } from '../components/dashboard/conversation-selectors'
@@ -39,6 +39,7 @@ export interface ArtifactCacheScope {
     sessionId: string
     artifactId: string
     sha256: string
+    updatedAt?: number | null
 }
 
 export interface ResolvedArtifactSessionTarget {
@@ -137,8 +138,9 @@ function getRuntimeOrigin(explicitOrigin?: string | null): string {
 }
 
 /**
- * Build a collision-proof cache key scoped by web origin, owning daemonId,
- * sessionId, artifactId, and sha256. Returns null if any identity part is missing.
+ * Build a collision-proof JSON-tuple cache key scoped by web origin, owning daemonId,
+ * sessionId, artifactId, sha256, and optional updatedAt version.
+ * Returns null if any required identity part is missing.
  */
 export function buildArtifactCacheKey(scope: ArtifactCacheScope): string | null {
     const daemonId = typeof scope.daemonId === 'string' ? scope.daemonId.trim() : ''
@@ -147,7 +149,10 @@ export function buildArtifactCacheKey(scope: ArtifactCacheScope): string | null 
     const sha256 = typeof scope.sha256 === 'string' ? scope.sha256.trim() : ''
     if (!daemonId || !sessionId || !artifactId || !sha256) return null
     const origin = getRuntimeOrigin(scope.origin)
-    return `${origin}::${daemonId}::${sessionId}::${artifactId}::${sha256}`
+    if (typeof scope.updatedAt === 'number' && Number.isFinite(scope.updatedAt)) {
+        return JSON.stringify([origin, daemonId, sessionId, artifactId, sha256, scope.updatedAt])
+    }
+    return JSON.stringify([origin, daemonId, sessionId, artifactId, sha256])
 }
 
 function setCachedArtifactPayload(key: string, payload: ArtifactResolvedPayload): void {
@@ -261,17 +266,15 @@ export function resolveArtifactSessionTarget(
     if (ides.length > 0) {
         const conversations = buildConversations(ides, ides)
         const tabMatches = conversations.filter((conv) => conv.tabKey === contextKey)
-        const exactConv = tabMatches.length === 1
-            ? tabMatches[0]
-            : (() => {
-                const routeMatches = conversations.filter((conv) => conv.routeId === contextKey)
-                return routeMatches.length === 1 ? routeMatches[0] : undefined
-            })()
+        if (tabMatches.length > 1) return null
+        const routeMatches = tabMatches.length === 0 ? conversations.filter((conv) => conv.routeId === contextKey) : []
+        if (routeMatches.length > 1) return null
+        const exactConv = tabMatches[0] ?? routeMatches[0]
         if (exactConv) {
             const daemonId = getConversationDaemonRouteId(exactConv).trim()
             const sessionId = String(exactConv.sessionId || exactConv.nativeSessionId || '').trim()
             if (daemonId && sessionId) {
-                const hint = getCoordinatorRoutingHint(exactConv).meshCoordinatorDaemonId
+                const hint = explicitCoordinatorId || getCoordinatorRoutingHint(exactConv).meshCoordinatorDaemonId
                 return {
                     daemonId,
                     sessionId,
@@ -279,24 +282,95 @@ export function resolveArtifactSessionTarget(
                 }
             }
         }
-    }
 
-    for (const controller of controllerRegistry.values()) {
-        const id = controller.getIdentity()
-        if (`${id.daemonId}:${id.sessionId}` === contextKey || id.sessionId === contextKey) {
-            if (id.daemonId && id.sessionId) {
-                return { daemonId: id.daemonId, sessionId: id.sessionId }
+        const colonIndex = contextKey.indexOf(':')
+        if (colonIndex > 0 && colonIndex < contextKey.length - 1) {
+            const candidateDaemonId = contextKey.slice(0, colonIndex).trim()
+            const candidateSessionId = contextKey.slice(colonIndex + 1).trim()
+            if (candidateDaemonId && candidateSessionId && !candidateSessionId.includes(':')) {
+                const convMatches = conversations.filter(
+                    (conv) =>
+                        getConversationDaemonRouteId(conv).trim() === candidateDaemonId
+                        && (conv.sessionId === candidateSessionId || conv.nativeSessionId === candidateSessionId),
+                )
+                if (convMatches.length > 1) return null
+                if (convMatches.length === 1) {
+                    const hint = explicitCoordinatorId || getCoordinatorRoutingHint(convMatches[0]).meshCoordinatorDaemonId
+                    return {
+                        daemonId: candidateDaemonId,
+                        sessionId: candidateSessionId,
+                        ...(hint ? { meshCoordinatorDaemonId: hint } : {}),
+                    }
+                }
+
+                const ideMatches = ides.filter((ide) => {
+                    const dId = String(ide.ownerDaemonId || ide.daemonId || ide.id || '').trim()
+                    if (dId !== candidateDaemonId && String(ide.daemonId || '').trim() !== candidateDaemonId) {
+                        return false
+                    }
+                    if (ide.sessionId === candidateSessionId || ide.providerSessionId === candidateSessionId) {
+                        return true
+                    }
+                    if (
+                        Array.isArray(ide.childSessions)
+                        && ide.childSessions.some(
+                            (s) => s?.id === candidateSessionId || s?.providerSessionId === candidateSessionId,
+                        )
+                    ) {
+                        return true
+                    }
+                    const legacySessions = (ide as { sessions?: Array<{ id?: string }> }).sessions
+                    if (Array.isArray(legacySessions) && legacySessions.some((s) => s?.id === candidateSessionId)) {
+                        return true
+                    }
+                    return false
+                })
+                if (ideMatches.length > 1) return null
+                if (ideMatches.length === 1) {
+                    return {
+                        daemonId: candidateDaemonId,
+                        sessionId: candidateSessionId,
+                        ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+                    }
+                }
             }
         }
     }
 
-    const colonIndex = contextKey.indexOf(':')
-    if (colonIndex > 0 && colonIndex < contextKey.length - 1) {
-        const daemonId = contextKey.slice(0, colonIndex).trim()
-        const sessionId = contextKey.slice(colonIndex + 1).trim()
-        if (daemonId && sessionId && !sessionId.includes(':')) {
-            return { daemonId, sessionId }
+    const exactControllerMatches = new Map<string, ResolvedArtifactSessionTarget>()
+    const bareControllerMatches = new Map<string, ResolvedArtifactSessionTarget>()
+    for (const controller of controllerRegistry.values()) {
+        const id = controller.getIdentity()
+        const cDaemonId = typeof id.daemonId === 'string' ? id.daemonId.trim() : ''
+        const cSessionId = typeof id.sessionId === 'string' ? id.sessionId.trim() : ''
+        if (!cDaemonId || !cSessionId) continue
+        const pairKey = JSON.stringify([cDaemonId, cSessionId])
+        if (`${cDaemonId}:${cSessionId}` === contextKey) {
+            exactControllerMatches.set(pairKey, {
+                daemonId: cDaemonId,
+                sessionId: cSessionId,
+                ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+            })
+        } else if (cSessionId === contextKey) {
+            bareControllerMatches.set(pairKey, {
+                daemonId: cDaemonId,
+                sessionId: cSessionId,
+                ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+            })
         }
+    }
+
+    if (exactControllerMatches.size === 1) {
+        return exactControllerMatches.values().next().value ?? null
+    }
+    if (exactControllerMatches.size > 1) {
+        return null
+    }
+    if (bareControllerMatches.size === 1) {
+        return bareControllerMatches.values().next().value ?? null
+    }
+    if (bareControllerMatches.size > 1) {
+        return null
     }
 
     return null
@@ -469,7 +543,23 @@ export function useArtifactRead({
     fetchArtifact: customFetchArtifact,
 }: UseArtifactReadOptions): UseArtifactReadResult {
     const { sendCommand } = useTransport()
+    const { ides: contextIdes } = useBaseDaemons()
     const { getIdes } = useBaseDaemonActions()
+
+    const prevContextIdesRef = useRef<readonly DaemonData[]>(contextIdes)
+    const liveContextIdesRef = useRef<readonly DaemonData[]>(contextIdes)
+    if (prevContextIdesRef.current !== contextIdes) {
+        prevContextIdesRef.current = contextIdes
+        liveContextIdesRef.current = contextIdes
+    }
+
+    const getAuthoritativeIdes = useCallback((): readonly DaemonData[] => {
+        if (liveContextIdesRef.current.length > 0) {
+            return liveContextIdesRef.current
+        }
+        const fromActions = typeof getIdes === 'function' ? getIdes() : []
+        return Array.isArray(fromActions) ? fromActions : []
+    }, [getIdes])
 
     const [status, setStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle')
     const [isOpen, setIsOpen] = useState(false)
@@ -481,6 +571,7 @@ export function useArtifactRead({
     const requestSeqRef = useRef(0)
     const activeObjectUrlRef = useRef<string | null>(null)
     const pendingDownloadUrlsRef = useRef<Set<string>>(new Set())
+    const openedIdentityRef = useRef<string | null>(null)
 
     const replaceObjectUrl = useCallback((nextUrl: string | null) => {
         if (activeObjectUrlRef.current && activeObjectUrlRef.current !== nextUrl) {
@@ -496,20 +587,57 @@ export function useArtifactRead({
             sessionId,
             meshCoordinatorDaemonId,
             contextKey,
-            ides: getIdes(),
+            ides: getAuthoritativeIdes(),
         })
-    }, [contextKey, daemonId, getIdes, meshCoordinatorDaemonId, sessionId])
+    }, [contextKey, daemonId, getAuthoritativeIdes, meshCoordinatorDaemonId, sessionId])
 
-    const target = useMemo(() => resolveTarget(), [resolveTarget])
+    const computeLiveIdentitySignature = useCallback(
+        (resolvedTarget: ResolvedArtifactSessionTarget | null): string => {
+            return JSON.stringify([
+                getRuntimeOrigin(origin),
+                resolvedTarget?.daemonId ?? '',
+                resolvedTarget?.sessionId ?? '',
+                resolvedTarget?.meshCoordinatorDaemonId ?? '',
+                daemonId ?? '',
+                sessionId ?? '',
+                meshCoordinatorDaemonId ?? '',
+                contextKey ?? '',
+                attachment.artifactId,
+                attachment.sha256,
+                attachment.updatedAt,
+            ])
+        },
+        [
+            attachment.artifactId,
+            attachment.sha256,
+            attachment.updatedAt,
+            contextKey,
+            daemonId,
+            meshCoordinatorDaemonId,
+            origin,
+            sessionId,
+        ],
+    )
 
-    // Reset state and revoke any active objectUrl when artifact identity, hash, timestamp, or session changes.
+    // Resolve on every render so live getIdes()/controller updates behind a stable tabKey are observed immediately.
+    const target = resolveTarget()
+
+    // Reset state, fence in-flight completions, and revoke any active objectUrl when resolved
+    // daemon/session/coordinator/origin identity, hash, or updatedAt changes.
     // Deliberately does NOT auto-fetch during chat or inbox render.
-    const identitySignature = `${daemonId ?? ''}::${sessionId ?? ''}::${contextKey ?? ''}::${attachment.artifactId}::${attachment.sha256}::${attachment.updatedAt}`
+    const identitySignature = computeLiveIdentitySignature(target)
+    const renderIdentityRef = useRef(identitySignature)
+    if (renderIdentityRef.current !== identitySignature) {
+        renderIdentityRef.current = identitySignature
+        requestSeqRef.current += 1
+        openedIdentityRef.current = null
+    }
     const prevIdentityRef = useRef(identitySignature)
     useEffect(() => {
         if (prevIdentityRef.current === identitySignature) return
         prevIdentityRef.current = identitySignature
         requestSeqRef.current += 1
+        openedIdentityRef.current = null
         replaceObjectUrl(null)
         setData(null)
         setError(null)
@@ -538,11 +666,12 @@ export function useArtifactRead({
         async (options?: { open?: boolean; forceRefresh?: boolean }): Promise<ArtifactResolvedPayload | null> => {
             const shouldOpen = options?.open ?? true
             const forceRefresh = options?.forceRefresh === true
+            const resolved = resolveTarget()
             if (shouldOpen) {
+                openedIdentityRef.current = computeLiveIdentitySignature(resolved)
                 setIsOpen(true)
             }
 
-            const resolved = resolveTarget()
             if (!resolved) {
                 setStatus('error')
                 setError('Session context is required to fetch this artifact.')
@@ -550,12 +679,14 @@ export function useArtifactRead({
                 return null
             }
 
+            const requestOrigin = getRuntimeOrigin(origin)
             const cacheKey = buildArtifactCacheKey({
-                origin,
+                origin: requestOrigin,
                 daemonId: resolved.daemonId,
                 sessionId: resolved.sessionId,
                 artifactId: attachment.artifactId,
                 sha256: attachment.sha256,
+                updatedAt: attachment.updatedAt,
             })
 
             if (!forceRefresh && cacheKey) {
@@ -591,6 +722,28 @@ export function useArtifactRead({
                     ? await customFetchArtifact(resolved.daemonId, 'artifact_fetch', commandPayload)
                     : await sendCommand(resolved.daemonId, 'artifact_fetch', commandPayload)
 
+                // Re-verify live authoritative target and origin on completion so deferred replies
+                // after a same-tab session/daemon/coordinator/origin switch are fenced and discarded.
+                const postTarget = resolveTarget()
+                const postOrigin = getRuntimeOrigin(origin)
+                const identityChangedInFlight =
+                    !postTarget
+                    || postTarget.daemonId !== resolved.daemonId
+                    || postTarget.sessionId !== resolved.sessionId
+                    || (postTarget.meshCoordinatorDaemonId ?? '') !== (resolved.meshCoordinatorDaemonId ?? '')
+                    || postOrigin !== requestOrigin
+
+                if (identityChangedInFlight) {
+                    openedIdentityRef.current = null
+                    replaceObjectUrl(null)
+                    setData(null)
+                    setError(null)
+                    setErrorCode(null)
+                    setStatus('idle')
+                    setIsOpen(false)
+                    return null
+                }
+
                 if (requestSeqRef.current !== requestSeq) return null
 
                 const parsed = readArtifactFetchCommandResponse(rawResponse, {
@@ -611,11 +764,12 @@ export function useArtifactRead({
 
                 // Cache under both the requested attachment sha256 (if unchanged) and the actual sha256
                 const actualCacheKey = buildArtifactCacheKey({
-                    origin,
+                    origin: requestOrigin,
                     daemonId: resolved.daemonId,
                     sessionId: resolved.sessionId,
                     artifactId: attachment.artifactId,
                     sha256: parsed.data.sha256,
+                    updatedAt: attachment.updatedAt,
                 })
                 if (actualCacheKey) {
                     setCachedArtifactPayload(actualCacheKey, parsed.data)
@@ -645,7 +799,7 @@ export function useArtifactRead({
                 return null
             }
         },
-        [attachment, customFetchArtifact, origin, replaceObjectUrl, resolveTarget, sendCommand],
+        [attachment, computeLiveIdentitySignature, customFetchArtifact, origin, replaceObjectUrl, resolveTarget, sendCommand],
     )
 
     const openViewer = useCallback(async (): Promise<ArtifactResolvedPayload | null> => {
@@ -654,6 +808,7 @@ export function useArtifactRead({
 
     const closeViewer = useCallback(() => {
         requestSeqRef.current += 1
+        openedIdentityRef.current = null
         replaceObjectUrl(null)
         setIsOpen(false)
         if (status === 'loading') {
@@ -662,12 +817,13 @@ export function useArtifactRead({
     }, [data, replaceObjectUrl, status])
 
     const toggleViewer = useCallback(async () => {
-        if (isOpen) {
+        const currentLiveSig = computeLiveIdentitySignature(resolveTarget())
+        if (isOpen && openedIdentityRef.current === currentLiveSig) {
             closeViewer()
             return
         }
         await openViewer()
-    }, [closeViewer, isOpen, openViewer])
+    }, [closeViewer, computeLiveIdentitySignature, isOpen, openViewer, resolveTarget])
 
     const downloadArtifact = useCallback(async (): Promise<boolean> => {
         let payload = data
