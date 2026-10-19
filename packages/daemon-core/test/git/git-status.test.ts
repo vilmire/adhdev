@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   __changeImpactEvalCacheSizeForTests,
+  __inFlightStatusReadCountForTests,
   __resetGitStatusCacheForTests,
   classifyChangedPackages,
   GIT_FETCH_THROTTLE_MS,
   GIT_STATUS_CACHE_TTL_MS,
+  GIT_UPSTREAM_FETCH_TIMEOUT_MS,
   getGitRepoStatus,
 } from '../../src/git/git-status.js';
 import * as gitExecutor from '../../src/git/git-executor.js';
@@ -997,6 +999,72 @@ describe('git repo status parser', () => {
       expect(ok.isGitRepo).toBe(true);
       expect(ok.reason).toBeUndefined();
     });
+
+    it('coalesces concurrent in-flight status reads (including retry/poll storms) into a single git collection without cancelling shared work', async () => {
+      const repo = tempRepo('c1-inflight-coalesce');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const realRunGit = gitExecutor.runGit;
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockImplementation(async (target, args, opts) => {
+        if (Array.isArray(args) && args[0] === 'status') {
+          await new Promise((r) => setTimeout(r, 40));
+        }
+        return realRunGit(target, args, opts);
+      });
+
+      try {
+        const p1 = getGitRepoStatus(repo);
+        const p2 = getGitRepoStatus(repo);
+        const p3 = getGitRepoStatus(repo);
+        expect(__inFlightStatusReadCountForTests()).toBe(1);
+
+        const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+        expect(__inFlightStatusReadCountForTests()).toBe(0);
+        expect(r1.isGitRepo).toBe(true);
+        expect(r1.dirty).toBe(false);
+        expect(r2).toBe(r1);
+        expect(r3).toBe(r1);
+        const statusSpawns = spy.mock.calls.filter(
+          (c) => Array.isArray(c[1]) && (c[1] as string[])[0] === 'status',
+        ).length;
+        expect(statusSpawns).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('stamps cachedAt at collection completion so a slow (>1.5s) collection is still served from C1 cache on immediate follow-up', async () => {
+      const repo = tempRepo('c1-slow-complete');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      let fakeNow = 1_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+      const realRunGit = gitExecutor.runGit;
+      const runGitSpy = vi.spyOn(gitExecutor, 'runGit').mockImplementation(async (target, args, opts) => {
+        const res = await realRunGit(target, args, opts);
+        if (Array.isArray(args) && args[0] === 'status') {
+          // Simulate collection taking 2,000ms (> GIT_STATUS_CACHE_TTL_MS = 1,500ms)
+          fakeNow += GIT_STATUS_CACHE_TTL_MS + 500;
+        }
+        return res;
+      });
+
+      try {
+        const first = await getGitRepoStatus(repo);
+        expect(first.isGitRepo).toBe(true);
+
+        // Mutate working tree and call again 100ms after the slow collection completed.
+        writeFileSync(join(repo, 'untracked.txt'), 'new\n');
+        fakeNow += 100;
+        const second = await getGitRepoStatus(repo);
+        expect(second).toBe(first);
+      } finally {
+        runGitSpy.mockRestore();
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   // ─── C2: fetch throttle ───────────────────────────
@@ -1087,6 +1155,23 @@ describe('git repo status parser', () => {
       await getGitRepoStatus(repo, { refreshUpstream: true, forceFresh: true });
       await getGitRepoStatus(repo, { refreshUpstream: true, forceFresh: true });
       expect(fetchCount(spy)).toBe(2);
+    });
+
+    it('caps upstream git fetch timeout to GIT_UPSTREAM_FETCH_TIMEOUT_MS so a slow remote degrades to stale without starving the IPC budget', async () => {
+      const repo = tempRepo('c2-fetch-timeout-cap');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const bare = mkdtempSync(join(tmpdir(), 'adhdev-c2-cap-remote-'));
+      roots.push(bare);
+      git(bare, ['init', '--bare']);
+      git(repo, ['remote', 'add', 'origin', bare]);
+      git(repo, ['push', '-u', 'origin', 'HEAD']);
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      await getGitRepoStatus(repo, { refreshUpstream: true, forceFresh: true });
+      const fetchCall = spy.mock.calls.find(call => Array.isArray(call[1]) && (call[1] as string[])[0] === 'fetch');
+      expect(fetchCall).toBeDefined();
+      expect((fetchCall?.[2] as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(GIT_UPSTREAM_FETCH_TIMEOUT_MS);
     });
   });
 
@@ -1181,6 +1266,24 @@ describe('git repo status parser', () => {
       expect(second.daemonBuildBehind?.head).not.toBe(firstHead);
       // HEAD moved → memo miss → ancestry probes ran again for the new oid.
       expect(ancestryProbeCount(spy)).toBeGreaterThan(0);
+    });
+
+    it('passes pre-resolved GitRepoIdentity to ancestry/diff probes so detectDaemonBuildBehind does not re-run resolveGitRepository', async () => {
+      const repo = tempRepo('c3-no-redundant-resolve');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+      const oldCommit = git(repo, ['rev-parse', 'HEAD']);
+      writeFileSync(join(repo, 'b.txt'), 'two\n');
+      commit(repo, 'c2 (merged fix)');
+
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+      const status = await getGitRepoStatus(repo, { daemonBuildInfo: buildInfoFor(oldCommit), forceFresh: true });
+      expect(status.daemonBuildBehind).toBeDefined();
+      for (const call of spy.mock.calls) {
+        const target = call[0] as unknown;
+        expect(typeof target).toBe('object');
+        expect((target as { isGitRepo?: boolean })?.isGitRepo).toBe(true);
+      }
     });
   });
 

@@ -92,4 +92,31 @@ describe('P2P relay failure classification', () => {
       retryRecommended: true,
     }));
   });
+
+  it('classifies bare local daemon IPC timeouts as recoverable local_ipc timeouts (never P2P disconnect or unrecoverable logic failure)', () => {
+    const ipcErr = Object.assign(
+      new Error("Daemon IPC command='git_status' workspace='/Users/dev/worktree' timed out after 45s (requestId=mcp_1792434165424_abc123)"),
+      { ipcTimeout: true },
+    );
+    const classified = classifyP2pRelayFailure(ipcErr, { command: 'git_status' });
+    expect(classified).toEqual(expect.objectContaining({
+      code: 'ipc_command_timeout',
+      reason: 'local_daemon_ipc_timeout',
+      transport: 'local_ipc',
+      recoverable: true,
+      retryRecommended: true,
+    }));
+    expect(classified.noFallbackReason).toContain('Do not treat this timeout as a P2P disconnection, an offline node, or a dirty working tree');
+    expect(isP2pRelayTransportFailure(ipcErr)).toBe(false);
+
+    // Relayed P2P timeout over IPC still classifies as p2p_timeout on p2p transport
+    const relayedErr = Object.assign(
+      new Error("Daemon IPC command='mesh_relay_command' relayedCommand='git_status' targetDaemonId='daemon_remote' timed out after 120s (requestId=mcp_1792434165424_rel456)"),
+      { ipcTimeout: true },
+    );
+    const relayedClassified = classifyP2pRelayFailure(relayedErr, { command: 'git_status', targetDaemonId: 'daemon_remote' });
+    expect(relayedClassified.code).toBe('p2p_timeout');
+    expect(relayedClassified.transport).toBe('p2p');
+    expect(isP2pRelayTransportFailure(relayedErr)).toBe(true);
+  });
 });

@@ -5,6 +5,7 @@ export type P2pRelayFailureCode =
   | 'p2p_datachannel_closed'
   | 'p2p_no_route'
   | 'p2p_daemon_offline'
+  | 'ipc_command_timeout'
   | 'mesh_logic_or_provider_failure';
 
 export interface P2pRelayFailureContext {
@@ -22,7 +23,7 @@ export interface P2pRelayFailureContext {
 export interface P2pRelayFailureClassification {
   code: P2pRelayFailureCode;
   reason: string;
-  transport: 'p2p' | 'unknown';
+  transport: 'p2p' | 'local_ipc' | 'unknown';
   recoverable: boolean;
   retryRecommended: boolean;
   nextAction: string;
@@ -42,6 +43,8 @@ export interface P2pRelayFailurePayload extends P2pRelayFailureClassification {
 
 const NO_FALLBACK_REASON = 'This mesh operation needs a live peer-to-peer connection to the node, which is not open right now. This is often transient — the peer may be connecting, slow via TURN relay, or briefly offline. Wait a moment and retry, or re-establish the node\'s connection. Mesh commands use P2P only by design — there is no cloud/WS relay fallback.';
 const P2P_NEXT_ACTION = 'The peer connection is recoverable. Wait a moment for the connection to establish (especially over TURN relay), then retry. If the node remains unreachable, check that the target daemon is running and online, then re-establish its connection.';
+const LOCAL_IPC_TIMEOUT_NEXT_ACTION = 'The local daemon IPC command timed out while the daemon was busy or completing a heavy background operation. The node is local (not offline or P2P-disconnected), and the underlying operation may still complete in the background. Wait a moment and retry if needed.';
+const LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON = 'This operation timed out waiting for a local daemon IPC response on the same machine. Do not treat this timeout as a P2P disconnection, an offline node, or a dirty working tree.';
 const NON_P2P_NEXT_ACTION = 'Inspect the provider/command error and fix the underlying logic or configuration before retrying.';
 
 function messageFromError(error: unknown): string {
@@ -60,7 +63,7 @@ function readStructuredFailure(error: unknown): Partial<P2pRelayFailurePayload> 
   return {
     ...(typeof value.code === 'string' ? { code: value.code as P2pRelayFailureCode } : {}),
     ...(typeof value.reason === 'string' ? { reason: value.reason } : {}),
-    ...(value.transport === 'p2p' || value.transport === 'unknown' ? { transport: value.transport } : {}),
+    ...(value.transport === 'p2p' || value.transport === 'local_ipc' || value.transport === 'unknown' ? { transport: value.transport } : {}),
     ...(typeof value.recoverable === 'boolean' ? { recoverable: value.recoverable } : {}),
     ...(typeof value.retryRecommended === 'boolean' ? { retryRecommended: value.retryRecommended } : {}),
     ...(typeof value.nextAction === 'string' ? { nextAction: value.nextAction } : {}),
@@ -80,6 +83,7 @@ function reasonForCode(code: P2pRelayFailureCode): string {
     case 'p2p_no_route': return 'daemon_mesh_p2p_no_route';
     case 'p2p_daemon_offline': return 'daemon_mesh_target_offline';
     case 'p2p_unavailable': return 'daemon_mesh_p2p_transport_unavailable';
+    case 'ipc_command_timeout': return 'local_daemon_ipc_timeout';
     case 'mesh_logic_or_provider_failure': return 'mesh_logic_or_provider_failure';
   }
 }
@@ -87,6 +91,21 @@ function reasonForCode(code: P2pRelayFailureCode): string {
 export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailureContext = {}): P2pRelayFailureClassification {
   const message = messageFromError(error);
   const structured = readStructuredFailure(error);
+
+  if (
+    structured.code === 'ipc_command_timeout'
+    || structured.transport === 'local_ipc'
+  ) {
+    return {
+      code: 'ipc_command_timeout',
+      reason: structured.reason || reasonForCode('ipc_command_timeout'),
+      transport: 'local_ipc',
+      recoverable: structured.recoverable ?? true,
+      retryRecommended: structured.retryRecommended ?? true,
+      nextAction: structured.nextAction || LOCAL_IPC_TIMEOUT_NEXT_ACTION,
+      noFallbackReason: structured.noFallbackReason || LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON,
+    };
+  }
 
   // Structured transport metadata is authoritative. This path prevents a local IPC
   // hop from reclassifying a typed P2P error by parsing its human prose.
@@ -108,6 +127,9 @@ export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailur
 
   const hasP2pSignal = /p2p|peer|datachannel|node-datachannel|webrtc|ice|mesh_relay_command|daemon_mesh_p2p_transport/i.test(message);
   const hasFailureSignal = /unavailable|missing|failed|failure|timeout|timed out|not connected|closed|disconnected|offline|no route|route unavailable|cannot send|cannot establish/i.test(message);
+  const isLocalIpcTimeout = Boolean(
+    error && typeof error === 'object' && (error as any).ipcTimeout === true,
+  ) || /daemon ipc\b.*timed out/i.test(message);
 
   // Validation errors that merely mention mesh_relay_command are not transport failures.
   if (/requires targetdaemonid and command|providerpriority|no inference provider|permission denied|read-only|not a member/i.test(message)) {
@@ -119,6 +141,21 @@ export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailur
       retryRecommended: false,
       nextAction: NON_P2P_NEXT_ACTION,
       noFallbackReason: NO_FALLBACK_REASON,
+    };
+  }
+
+  // A bare local daemon IPC command timeout (not wrapping mesh_relay_command or P2P)
+  // is a recoverable local IPC timeout, NOT an unrecoverable logic/provider error and
+  // NOT a P2P disconnection.
+  if (isLocalIpcTimeout && !hasP2pSignal) {
+    return {
+      code: 'ipc_command_timeout',
+      reason: 'local_daemon_ipc_timeout',
+      transport: 'local_ipc',
+      recoverable: true,
+      retryRecommended: true,
+      nextAction: LOCAL_IPC_TIMEOUT_NEXT_ACTION,
+      noFallbackReason: LOCAL_IPC_TIMEOUT_NO_FALLBACK_REASON,
     };
   }
 
@@ -169,7 +206,8 @@ export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailur
 }
 
 export function isP2pRelayTransportFailure(error: unknown): boolean {
-  return classifyP2pRelayFailure(error).recoverable === true;
+  const classification = classifyP2pRelayFailure(error);
+  return classification.recoverable === true && classification.transport === 'p2p';
 }
 
 export function buildP2pRelayFailurePayload(error: unknown, context: P2pRelayFailureContext = {}): P2pRelayFailurePayload {
@@ -191,7 +229,7 @@ export function buildP2pRelayFailurePayload(error: unknown, context: P2pRelayFai
 export class P2pRelayFailureError extends Error {
   code: P2pRelayFailureCode;
   reason: string;
-  transport: 'p2p' | 'unknown';
+  transport: 'p2p' | 'local_ipc' | 'unknown';
   recoverable: boolean;
   retryRecommended: boolean;
   nextAction: string;
@@ -211,7 +249,7 @@ export class P2pRelayFailureError extends Error {
       ...(context.code ? { code: context.code } : {}),
       ...(context.recoverable !== undefined ? { recoverable: context.recoverable } : {}),
       ...(context.retryRecommended !== undefined ? { retryRecommended: context.retryRecommended } : {}),
-      transport: context.code ? 'p2p' : undefined,
+      transport: context.code === 'ipc_command_timeout' ? 'local_ipc' : (context.code ? 'p2p' : undefined),
       meshCode: context.meshCode,
       connectionState: context.connectionState,
       nextRetryAt: context.nextRetryAt,

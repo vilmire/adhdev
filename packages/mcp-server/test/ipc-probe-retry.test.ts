@@ -170,7 +170,12 @@ test('probe retry: retry count is bounded by ADHDEV_IPC_PROBE_RETRY_MAX (0 disab
 });
 
 test('allowlist: probe-class commands are retryable, mutating verbs are not', () => {
-  for (const probe of ['get_status_metadata', 'get_mesh', 'mesh_status', 'git_status', 'git_diff_summary']) {
+  for (const probe of [
+    'get_status_metadata', 'get_mesh', 'mesh_status', 'mesh_status_view',
+    'git_status', 'git_diff_summary', 'ledger_query', 'mission_list_query',
+    'mission_query', 'queue_query', 'active_work_query', 'recovery_context_query',
+    'task_stats_query', 'mesh_node_route', 'mesh_dispatch_route',
+  ]) {
     assert.ok(isRetryableProbeCommand(probe), `${probe} must be retryable`);
   }
   for (const mutating of [
@@ -182,6 +187,48 @@ test('allowlist: probe-class commands are retryable, mutating verbs are not', ()
   }
   assert.equal(resolveProbeRetryMax(), 1);
   assert.equal(resolveProbeRetryBackoffMs(), 2_000);
+});
+
+test('pre-welcome timeout: a command that times out before daemon:welcome is removed from commandQueue and not sent late', async () => {
+  await withEnv({ [TIMEOUT_ENV]: '50', [RETRY_MAX_ENV]: '0' }, async () => {
+    const sent: any[] = [];
+    let emitWelcome: (() => void) | undefined;
+    class DelayedWelcomeWS {
+      private listeners = new Map<string, Array<(event: any) => void>>();
+      readyState = 1;
+      constructor(_url: string) {
+        queueMicrotask(() => this.emit('open', {}));
+      }
+      addEventListener(type: string, listener: (event: any) => void): void {
+        const list = this.listeners.get(type) ?? [];
+        list.push(listener);
+        this.listeners.set(type, list);
+      }
+      send(data: string): void {
+        const parsed = JSON.parse(data);
+        sent.push(parsed);
+        if (parsed.type === 'ext:register') {
+          emitWelcome = () => this.emit('message', { data: JSON.stringify({ type: 'daemon:welcome' }) });
+        }
+      }
+      close(): void { /* noop */ }
+      private emit(type: string, event: any): void {
+        for (const listener of this.listeners.get(type) ?? []) listener(event);
+      }
+    }
+    const restore = installFakeWs(DelayedWelcomeWS);
+    try {
+      const transport = new IpcTransport({ port: 19985 });
+      await assert.rejects(transport.command('ledger_query', { meshId: 'm1' }), /timed out/);
+      // Now daemon:welcome arrives after the client already timed out: the timed-out
+      // request must have been pruned from commandQueue so it is not sent late.
+      emitWelcome?.();
+      const commands = sent.filter(m => m.type === 'ext:command');
+      assert.equal(commands.length, 0, 'timed-out pre-welcome command must not be flushed after timeout');
+    } finally {
+      restore();
+    }
+  });
 });
 
 test('P5: ADHDEV_IPC_COMMAND_TIMEOUT_MS overrides only the default, table entries still win', async () => {

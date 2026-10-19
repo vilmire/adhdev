@@ -109,6 +109,12 @@ test('local bare cleanup_mesh_sessions IPC deadline gets 60s mutating budget', (
   assert.equal(ipc, 60_000);
 });
 
+test('local bare mesh_status_view IPC deadline matches mesh_status (120s) — no more 15s false-timeout', () => {
+  const ipc = getTimeoutMs('mesh_status_view', '');
+  assert.equal(ipc, 120_000);
+  assert.equal(ipc, getTimeoutMs('mesh_status', ''));
+});
+
 // Static invariant sweep: every heavy/probe verb this file knows about must keep
 // IPC (here) >= its documented relay/responder floor. A future command added to one
 // tier without the other regresses silently unless this list is extended alongside it.
@@ -117,6 +123,8 @@ test('invariant sweep: IPC deadline >= documented relay/responder floor for ever
     ['clone_mesh_node', 90_000],
     ['remove_mesh_node', 60_000],
     ['fast_forward_mesh_node', 90_000],
+    ['mesh_status', 120_000],
+    ['mesh_status_view', 120_000],
     ['git_status', 30_000],
     ['git_diff_summary', 30_000],
     ['plan_mesh_onboarding', RELAY_PLAN_ONBOARDING_MS],

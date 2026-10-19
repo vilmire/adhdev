@@ -45,12 +45,18 @@ interface CachedStatusEntry {
   cachedAt: number;
 }
 const lastKnownGoodStatus = new Map<string, CachedStatusEntry>();
+const inFlightStatusReads = new Map<string, Promise<GitRepoStatus>>();
+const inFlightUpstreamFetches = new Map<string, Promise<GitUpstreamProbe>>();
+const branchRemoteCache = new Map<string, string | null>();
 
 /** Cache key folding in only the option fields that change the result shape. */
 function statusCacheKey(workspace: string, options: GitStatusOptions): string {
   const includeSubmodules = options.includeSubmodules !== false;
   const refreshUpstream = options.refreshUpstream === true;
-  return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}`;
+  const ignoreKey = options.submoduleIgnorePaths && options.submoduleIgnorePaths.length > 0
+    ? `\0ign=${[...options.submoduleIgnorePaths].sort().join(',')}`
+    : '';
+  return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
 }
 
 /**
@@ -95,6 +101,9 @@ const buildBehindAncestryCache = new Map<string, boolean>();
 /** Test seam: clear the last-known-good status cache between cases. */
 export function __resetGitStatusCacheForTests(): void {
   lastKnownGoodStatus.clear();
+  inFlightStatusReads.clear();
+  inFlightUpstreamFetches.clear();
+  branchRemoteCache.clear();
   changeImpactEvalCache.clear();
   changeImpactConfigCache.clear();
   upstreamFetchedAt.clear();
@@ -104,6 +113,11 @@ export function __resetGitStatusCacheForTests(): void {
 /** Test-only introspection: number of memoized Change Impact evaluations. */
 export function __changeImpactEvalCacheSizeForTests(): number {
   return changeImpactEvalCache.size;
+}
+
+/** Test-only introspection: number of coalesced in-flight status reads currently active. */
+export function __inFlightStatusReadCountForTests(): number {
+  return inFlightStatusReads.size;
 }
 
 /**
@@ -167,6 +181,14 @@ export interface GitStatusOptions {
  */
 export const GIT_FETCH_THROTTLE_MS = 30_000;
 
+/**
+ * Cap the network `git fetch` timeout during `refreshUpstream` so a slow/stalled
+ * remote does not consume the entire 20s status budget or starve the IPC deadline;
+ * on fetch timeout `refreshTrackedUpstream` degrades gracefully to `upstreamStatus: 'stale'`
+ * while still returning fresh local working-tree status.
+ */
+export const GIT_UPSTREAM_FETCH_TIMEOUT_MS = 10_000;
+
 /** Wall-clock of the last successful `git fetch` per workspace (C2 throttle gate). */
 const upstreamFetchedAt = new Map<string, number>();
 
@@ -204,37 +226,60 @@ export async function getGitRepoStatus(
     if (cached && lastCheckedAt - cached.cachedAt < GIT_STATUS_CACHE_TTL_MS) {
       return cached.status;
     }
+    // Single-flight coalescing: when multiple callers (e.g. IPC retry after probe,
+    // concurrent mesh_status_view + mesh_git_status + GitStatusMonitor) request the
+    // same workspace/option-shape while a collection is already in flight, join the
+    // existing Promise instead of spawning another parallel wave of git processes.
+    const inFlight = inFlightStatusReads.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
   }
 
-  try {
-    const repo = await resolveGitRepository(workspace, effectiveOptions);
-    const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
-    // Cache the fresh, fully-populated success. forceFresh callers still refresh the
-    // cache so the next normal caller benefits from their freshly-collected status.
-    lastKnownGoodStatus.set(cacheKey, { status, cachedAt: lastCheckedAt });
-    return status;
-  } catch (error) {
-    const gitError = error instanceof GitCommandError
-      ? error
-      : new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: error });
+  const runPromise = (async (): Promise<GitRepoStatus> => {
+    try {
+      const repo = await resolveGitRepository(workspace, effectiveOptions);
+      const status = await collectGitRepoStatus(repo, includeSubmodules, lastCheckedAt, effectiveOptions);
+      // Cache the fresh, fully-populated success. Stamp cachedAt at completion (with
+      // Math.max(lastCheckedAt, Date.now()) so mocked clocks remain deterministic) so
+      // a slow collection (>1.5s) is not already expired the moment it finishes.
+      const completedAt = Math.max(lastCheckedAt, Date.now());
+      lastKnownGoodStatus.set(cacheKey, { status, cachedAt: completedAt });
+      return status;
+    } catch (error) {
+      const gitError = error instanceof GitCommandError
+        ? error
+        : new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: error });
 
-    // A transient/environmental failure (timeout, slow-spawn-under-load) must NOT make
-    // a healthy node lose its repo identity and drop out of the mesh graph. Prefer the
-    // last status we successfully collected for this workspace, re-stamped as stale.
-    if (isTransientGitFailure(gitError)) {
-      const cached = lastKnownGoodStatus.get(cacheKey)?.status;
-      if (cached) {
-        return {
-          ...cached,
-          lastCheckedAt,
-          upstreamStatus: 'unavailable',
-          error: gitError.stderr || gitError.message,
-          reason: gitError.reason,
-        };
+      // A transient/environmental failure (timeout, slow-spawn-under-load) must NOT make
+      // a healthy node lose its repo identity and drop out of the mesh graph. Prefer the
+      // last status we successfully collected for this workspace, re-stamped as stale.
+      if (isTransientGitFailure(gitError)) {
+        const cached = lastKnownGoodStatus.get(cacheKey)?.status;
+        if (cached) {
+          return {
+            ...cached,
+            lastCheckedAt,
+            upstreamStatus: 'unavailable',
+            error: gitError.stderr || gitError.message,
+            reason: gitError.reason,
+          };
+        }
       }
-    }
 
-    return emptyStatus(workspace, lastCheckedAt, gitError);
+      return emptyStatus(workspace, lastCheckedAt, gitError);
+    }
+  })();
+
+  if (!inFlightStatusReads.has(cacheKey)) {
+    inFlightStatusReads.set(cacheKey, runPromise);
+  }
+  try {
+    return await runPromise;
+  } finally {
+    if (inFlightStatusReads.get(cacheKey) === runPromise) {
+      inFlightStatusReads.delete(cacheKey);
+    }
   }
 }
 
@@ -247,27 +292,28 @@ async function collectGitRepoStatus(
     let parsed = await readPorcelainStatus(repo, options);
     let upstreamProbe: GitUpstreamProbe = getInitialUpstreamProbe(parsed);
 
-    if (options.refreshUpstream) {
-      upstreamProbe = await refreshTrackedUpstream(repo, parsed, options);
-      // Re-read the porcelain (to pick up the updated ahead/behind) ONLY when this probe
-      // actually fetched. When the fetch was throttled (C2), the remote-tracking ref is
-      // unchanged, so the ahead/behind already parsed is still correct — re-reading would
-      // be a wasted spawn.
-      if (upstreamProbe.upstreamStatus === 'fresh' && upstreamProbe.didFetch) {
-        parsed = await readPorcelainStatus(repo, options);
-      }
-    }
+    const upstreamRefreshPromise = options.refreshUpstream
+      ? (async () => {
+          upstreamProbe = await refreshTrackedUpstream(repo, parsed, options);
+          // Re-read the porcelain (to pick up the updated ahead/behind) ONLY when this probe
+          // actually fetched. When the fetch was throttled (C2), the remote-tracking ref is
+          // unchanged, so the ahead/behind already parsed is still correct — re-reading would
+          // be a wasted spawn.
+          if (upstreamProbe.upstreamStatus === 'fresh' && upstreamProbe.didFetch) {
+            parsed = await readPorcelainStatus(repo, options);
+          }
+        })()
+      : Promise.resolve();
 
-    const head = await readHead(repo, options);
-    const stashCount = await readStashCount(repo, options);
+    const [_, head, stashCount, subResult] = await Promise.all([
+      upstreamRefreshPromise,
+      readHead(repo, options),
+      readStashCount(repo, options),
+      includeSubmodules ? getSubmoduleStatuses(repo, options) : Promise.resolve(undefined),
+    ]);
 
-    let submodules: GitSubmoduleStatus[] | undefined;
-    let submoduleHeadOids = new Map<string, string>();
-    if (includeSubmodules) {
-      const subResult = await getSubmoduleStatuses(repo, options);
-      submodules = subResult.submodules;
-      submoduleHeadOids = subResult.headOidByPath;
-    }
+    const submodules = subResult?.submodules;
+    const submoduleHeadOids = subResult?.headOidByPath ?? new Map<string, string>();
     const submoduleDirty = (submodules || []).some(submodule => submodule.dirty || submodule.outOfSync || !!submodule.error);
     const dirty = parsed.staged + parsed.modified + parsed.untracked + parsed.deleted + parsed.renamed > 0
       || parsed.conflictFiles.length > 0
@@ -528,13 +574,13 @@ function classifyChangedFileList(
  * known web-only package set AND is not a recognized non-runtime root file.
  */
 async function classifyDaemonBuildChange(
-  repoPath: string,
+  repo: string | ResolvedGitRepo,
   buildCommit: string,
   options: GitStatusOptions,
   policy: ResolvedChangeImpactPolicy,
 ): Promise<ChangedPackageClassification> {
   try {
-    const diff = await runGit(repoPath, ['diff', '--name-only', `${buildCommit}..HEAD`], options);
+    const diff = await runGit(repo, ['diff', '--name-only', `${buildCommit}..HEAD`], options);
     const files = diff.stdout
       .split('\n')
       .map((line) => line.trim())
@@ -573,7 +619,7 @@ export async function classifyChangedPackages(
   const repo = await resolveGitRepository(repoPath, options);
   const { config } = resolveChangeImpactConfigForRepo(repo.repoRoot, options);
   const policy = resolveChangeImpactPolicy(config);
-  const diff = await runGit(repoPath, ['diff', '--name-only', `${fromRef}..${toRef}`], options);
+  const diff = await runGit(repo, ['diff', '--name-only', `${fromRef}..${toRef}`], options);
   const files = diff.stdout
     .split('\n')
     .map((line) => line.trim())
@@ -679,7 +725,8 @@ async function refineVerdictThroughSubmodules(
 /** Registered submodule paths from `.gitmodules` (empty set if none / unreadable). */
 async function listSubmodulePaths(repoPath: string, options: GitStatusOptions): Promise<Set<string>> {
   // `git config -f .gitmodules --get-regexp path` lists `submodule.<name>.path <path>`.
-  const res = await runGit(repoPath, ['config', '-f', '.gitmodules', '--get-regexp', 'path'], options);
+  const scopeRepo: ResolvedGitRepo = { workspace: repoPath, repoRoot: repoPath, isGitRepo: true };
+  const res = await runGit(scopeRepo, ['config', '-f', '.gitmodules', '--get-regexp', 'path'], options);
   const paths = new Set<string>();
   for (const line of res.stdout.split('\n')) {
     const trimmed = line.trim();
@@ -704,7 +751,8 @@ async function resolveSubmoduleGitlinkRange(
   subPath: string,
   options: GitStatusOptions,
 ): Promise<{ from: string; to: string }> {
-  const res = await runGit(repoPath, ['diff', `${fromRef}..${toRef}`, '--', subPath], options);
+  const scopeRepo: ResolvedGitRepo = { workspace: repoPath, repoRoot: repoPath, isGitRepo: true };
+  const res = await runGit(scopeRepo, ['diff', `${fromRef}..${toRef}`, '--', subPath], options);
   let from = '';
   let to = '';
   for (const line of res.stdout.split('\n')) {
@@ -792,6 +840,9 @@ async function detectDaemonBuildBehind(
   }
 
   for (const { scope, repoPath, knownHeadOid } of scopes) {
+    // Pass a pre-resolved GitRepoIdentity to runGit so each ancestry/diff probe does
+    // not re-invoke resolveGitRepository (`git rev-parse --show-toplevel` + stat + access).
+    const scopeRepo: ResolvedGitRepo = { workspace: repoPath, repoRoot: repoPath, isGitRepo: true };
     try {
       // C3 fast path: if we already know this scope's HEAD oid and have a cached
       // ancestry verdict for (repoPath, buildCommit, headOid), reuse it. A `false`
@@ -810,9 +861,9 @@ async function detectDaemonBuildBehind(
             continue;
           }
           // Build commit must be a real object in THIS repo, else it's a different repo.
-          await runGit(repoPath, ['cat-file', '-e', `${build.commit}^{commit}`], options);
+          await runGit(scopeRepo, ['cat-file', '-e', `${build.commit}^{commit}`], options);
           try {
-            await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
+            await runGit(scopeRepo, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
           } catch {
             // Not a strict ancestor — cache the negative verdict so the next probe at
             // this same HEAD short-circuits, then move on to the next scope.
@@ -826,11 +877,11 @@ async function detectDaemonBuildBehind(
         // No known HEAD oid for this scope — fall back to the original probe (resolve
         // HEAD via rev-parse). This keeps correctness when porcelain/submodule oid is
         // unavailable; the verdict is still cached once HEAD is known.
-        await runGit(repoPath, ['cat-file', '-e', `${build.commit}^{commit}`], options);
-        const headResult = await runGit(repoPath, ['rev-parse', 'HEAD'], options);
+        await runGit(scopeRepo, ['cat-file', '-e', `${build.commit}^{commit}`], options);
+        const headResult = await runGit(scopeRepo, ['rev-parse', 'HEAD'], options);
         head = headResult.stdout.trim();
         if (!head || head === build.commit) continue;
-        await runGit(repoPath, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
+        await runGit(scopeRepo, ['merge-base', '--is-ancestor', build.commit, 'HEAD'], options);
         buildBehindAncestryCache.set(`${repoPath}::${build.commit}::${head}`, true);
       }
       // No throw → build commit IS an ancestor of HEAD → daemon is behind.
@@ -844,7 +895,7 @@ async function detectDaemonBuildBehind(
       if (!head) continue; // proven non-empty oid here; every other branch above continued
       let evaluated = changeImpactEvalCache.get(evalKey);
       if (!evaluated) {
-        evaluated = await classifyDaemonBuildChange(repoPath, build.commit, options, policy);
+        evaluated = await classifyDaemonBuildChange(scopeRepo, build.commit, options, policy);
         changeImpactEvalCache.set(evalKey, evaluated);
       }
       const { isDaemonAffecting, affectedPackages } = evaluated;
@@ -941,27 +992,60 @@ async function refreshTrackedUpstream(
     };
   }
 
+  const fetchKey = `${repo.workspace}\0${remoteName}`;
+  if (!options.forceFresh) {
+    const existingFetch = inFlightUpstreamFetches.get(fetchKey);
+    if (existingFetch) {
+      return existingFetch;
+    }
+  }
+
+  const fetchTimeoutMs =
+    options.timeoutMs !== undefined
+      ? Math.min(options.timeoutMs, GIT_UPSTREAM_FETCH_TIMEOUT_MS)
+      : GIT_UPSTREAM_FETCH_TIMEOUT_MS;
+  const fetchOptions: GitStatusOptions = { ...options, timeoutMs: fetchTimeoutMs };
+
+  const fetchPromise = (async (): Promise<GitUpstreamProbe> => {
+    try {
+      await runGit(repo, ['fetch', '--quiet', '--prune', '--no-tags', remoteName], fetchOptions);
+      const fetchedAt = Date.now();
+      upstreamFetchedAt.set(repo.workspace, fetchedAt);
+      return {
+        upstreamStatus: 'fresh',
+        upstreamFetchedAt: fetchedAt,
+        didFetch: true,
+      };
+    } catch (error) {
+      return {
+        upstreamStatus: 'stale',
+        upstreamFetchError: formatGitError(error),
+      };
+    }
+  })();
+
+  if (!inFlightUpstreamFetches.has(fetchKey)) {
+    inFlightUpstreamFetches.set(fetchKey, fetchPromise);
+  }
   try {
-    await runGit(repo, ['fetch', '--quiet', '--prune', '--no-tags', remoteName], options);
-    const fetchedAt = Date.now();
-    upstreamFetchedAt.set(repo.workspace, fetchedAt);
-    return {
-      upstreamStatus: 'fresh',
-      upstreamFetchedAt: fetchedAt,
-      didFetch: true,
-    };
-  } catch (error) {
-    return {
-      upstreamStatus: 'stale',
-      upstreamFetchError: formatGitError(error),
-    };
+    return await fetchPromise;
+  } finally {
+    if (inFlightUpstreamFetches.get(fetchKey) === fetchPromise) {
+      inFlightUpstreamFetches.delete(fetchKey);
+    }
   }
 }
 
 async function readBranchRemote(repo: ResolvedGitRepo, branch: string, options: GitStatusOptions): Promise<string | null> {
+  const remoteKey = `${repo.workspace}\0${branch}`;
+  if (!options.forceFresh && branchRemoteCache.has(remoteKey)) {
+    return branchRemoteCache.get(remoteKey) ?? null;
+  }
   try {
     const result = await runGit(repo, ['config', '--get', `branch.${branch}.remote`], options);
-    return result.stdout.trim() || null;
+    const remote = result.stdout.trim() || null;
+    branchRemoteCache.set(remoteKey, remote);
+    return remote;
   } catch {
     return null;
   }
@@ -1158,39 +1242,44 @@ async function getSubmoduleStatuses(
     const paths = await readSubmodulePaths(repo, options);
     const ignoreSet = new Set(options.submoduleIgnorePaths || []);
     const visiblePaths = paths.filter(path => !ignoreSet.has(path));
-    const expectedByPath = await readGitlinkExpectedShas(repo, visiblePaths, options);
+    const [expectedByPath, worktrees] = await Promise.all([
+      readGitlinkExpectedShas(repo, visiblePaths, options),
+      Promise.all(
+        visiblePaths.map(async (path) => {
+          const repoPath = repo.repoRoot + '/' + path;
+          const worktree = await readSubmoduleWorktreeStatus(repo, repoPath, options);
+          return { path, repoPath, worktree };
+        }),
+      ),
+    ]);
     const lastCheckedAt = Date.now();
     const headOidByPath = new Map<string, string>();
 
-    const submodules = await Promise.all(
-      visiblePaths.map(async (path): Promise<GitSubmoduleStatus> => {
-        const repoPath = repo.repoRoot + '/' + path;
-        const expected = expectedByPath.get(path) ?? null;
-        const worktree = await readSubmoduleWorktreeStatus(repo, repoPath, options);
-        const actual = worktree.headOid;
-        // Reuse the actual checked-out HEAD oid for the C3 build-behind ancestry
-        // cache key — it's the submodule HEAD the daemon build commit is tested
-        // against, and it now rides the porcelain read the dirty check already
-        // paid for (no separate rev-parse spawn).
-        if (actual) headOidByPath.set(path, actual);
-        // Uninitialized / no checked-out HEAD reproduces `git submodule status`'s
-        // `-` prefix; a present-but-divergent HEAD reproduces the `+` prefix.
-        const outOfSync = actual === null
-          ? true
-          : expected !== null && expected !== actual;
-        return {
-          path,
-          // Prefer the recorded gitlink SHA (matches the legacy column); fall back
-          // to the checked-out SHA so the field is never empty when both are known.
-          commit: expected ?? actual ?? '',
-          repoPath,
-          dirty: worktree.dirty,
-          outOfSync,
-          lastCheckedAt,
-          ...(worktree.error ? { error: worktree.error } : {}),
-        };
-      }),
-    );
+    const submodules = worktrees.map(({ path, repoPath, worktree }): GitSubmoduleStatus => {
+      const expected = expectedByPath.get(path) ?? null;
+      const actual = worktree.headOid;
+      // Reuse the actual checked-out HEAD oid for the C3 build-behind ancestry
+      // cache key — it's the submodule HEAD the daemon build commit is tested
+      // against, and it now rides the porcelain read the dirty check already
+      // paid for (no separate rev-parse spawn).
+      if (actual) headOidByPath.set(path, actual);
+      // Uninitialized / no checked-out HEAD reproduces `git submodule status`'s
+      // `-` prefix; a present-but-divergent HEAD reproduces the `+` prefix.
+      const outOfSync = actual === null
+        ? true
+        : expected !== null && expected !== actual;
+      return {
+        path,
+        // Prefer the recorded gitlink SHA (matches the legacy column); fall back
+        // to the checked-out SHA so the field is never empty when both are known.
+        commit: expected ?? actual ?? '',
+        repoPath,
+        dirty: worktree.dirty,
+        outOfSync,
+        lastCheckedAt,
+        ...(worktree.error ? { error: worktree.error } : {}),
+      };
+    });
     return { submodules, headOidByPath };
   } catch {
     return { submodules: [], headOidByPath: new Map() };
