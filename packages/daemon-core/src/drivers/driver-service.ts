@@ -1,5 +1,7 @@
 /** Local-only driver orchestration. Mesh policy and mailbox delivery are injected ports. */
 import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { ProviderRegistry } from '../providers/provider-registry.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import type { AssistantDriverStaging } from '../assistant/driver-staging.js';
@@ -50,6 +52,15 @@ export class DriverService {
     private read(type: string): Installed | null {
         try { return this.ports.readCurrent(type); } catch { return null; }
     }
+    private runtimeDirFor(installed: Installed): string {
+        const baseDir = dirname(this.ports.activations.path);
+        const candidate = join(baseDir, 'runtime', installed.module.type);
+        const rel = relative(resolve(installed.cwd), resolve(candidate));
+        if (!rel || (!rel.startsWith('..') && !isAbsolute(rel))) {
+            return join(tmpdir(), 'adhdev-driver-runtime', installed.module.type);
+        }
+        return candidate;
+    }
     async describe(type: string): Promise<DriverReply> {
         const installed = this.read(type);
         if (!installed) {
@@ -78,7 +89,8 @@ export class DriverService {
             instance.state = instance.process?.state === 'failed' ? 'failed'
                 : instance.process.state === 'stopped' ? 'stopped' : 'running';
         } else instance.state = 'ready';
-        return { success: true, type, name: module.name, state: instance.state,
+        return { success: true, type, name: module.name, providerVersion: module.providerVersion,
+            ...(module.publisher ? { publisher: module.publisher } : {}), state: instance.state,
             treeDigest, actions: await Promise.all(module.actions.map(async action => ({ ...action,
                 ...(action.inputSchema ? { inputSchema: await readDriverInputSchema(installed.cwd, action.inputSchema) } : {}) }))), resources: module.resources ?? [],
             declaredAccess: module.declaredAccess ?? {}, ...deriveDriverRiskClass(module),
@@ -182,7 +194,7 @@ export class DriverService {
                 : { kind: 'worker', ...identity } };
         this.records.push(record); if (this.records.length > 100) this.records.shift();
         try {
-            instance.process ??= this.ports.createProcess?.(installed) ?? new ManagedMcpProcess(installed.module.runtime, { cwd: installed.cwd });
+            instance.process ??= this.ports.createProcess?.(installed) ?? new ManagedMcpProcess(installed.module.runtime, { cwd: this.runtimeDirFor(installed), packageDir: installed.cwd });
             await instance.process.start(); instance.state = 'running';
             const output = await instance.process.callTool(action.tool, (input.args ?? {}) as Record<string, unknown>);
             record.status = output.isError ? 'failed' : 'completed';

@@ -1688,6 +1688,9 @@
         "protectedSkill": "cambia una habilidad que escribiste",
         "driverActivation": {
             "advisory": "Acceso declarado · no se aplica a nivel del sistema operativo",
+            "name": "Nombre",
+            "publisher": "Editor",
+            "providerVersion": "Versión",
             "trust": "Confianza",
             "digest": "Resumen del árbol",
             "command": "Comando y argumentos",

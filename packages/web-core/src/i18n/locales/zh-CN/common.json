@@ -1685,6 +1685,9 @@
         "protectedSkill": "修改你编写的技能",
         "driverActivation": {
             "advisory": "声明的访问权限 · 不在操作系统级别强制执行",
+            "name": "名称",
+            "publisher": "发布者",
+            "providerVersion": "版本",
             "trust": "信任级别",
             "digest": "文件树摘要",
             "command": "命令和参数",

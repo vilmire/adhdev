@@ -27,7 +27,7 @@ beforeEach(async () => {
     process.env.ADHDEV_CONFIG_DIR = dir;
     packageDir = join(dir, 'providers', 'driver', 'browser');
     mkdirSync(packageDir, { recursive: true });
-    manifest = { type: 'browser', name: 'Browser', category: 'driver', providerVersion: '1.0.0', _sourceTrust: 'user-custom',
+    manifest = { type: 'browser', name: 'Browser', publisher: 'ADHDev', category: 'driver', providerVersion: '1.0.0', _sourceTrust: 'user-custom',
         runtime: { kind: 'mcp-stdio', command: 'node', args: ['server.js'] },
         actions: [{ id: 'snapshot', tool: 'snapshot', risk: 'read' }],
         declaredAccess: { network: ['*'], filesystem: ['workspace'], desktopControl: false } };
@@ -35,7 +35,7 @@ beforeEach(async () => {
     svc = createAssistantServices({ configDir: dir });
     setAssistantServicesForTests(svc);
     const deps = { commandHandler: { handle: vi.fn(), rejectUnknown: vi.fn() }, cliManager: {}, cdpManagers: new Map(),
-        providerLoader: { getMeta: () => manifest, findProviderDir: () => packageDir },
+        providerLoader: { getMeta: () => manifest, getByCategory: () => [manifest], findProviderDir: () => packageDir },
         instanceManager: { getInstance: () => undefined, listInstanceIds: () => [], collectAllStates: () => [] },
         detectedIdes: { value: [] }, sessionRegistry: {}, statusInstanceId: 'test-driver-staging',
         bus: { emit: () => {}, on: () => () => {} },
@@ -43,6 +43,7 @@ beforeEach(async () => {
     router = new DaemonCommandRouter(deps);
 });
 afterEach(async () => {
+    await router?.closeDrivers();
     router?.meshNodeStatePusher.stop(); router?.localMeshNodeGitWatch.stop();
     setAssistantServicesForTests(null);
     await cleanupTempDir(dir);
@@ -50,15 +51,35 @@ afterEach(async () => {
 });
 
 describe('driver_activation through the real owner command', () => {
-    it('uses the canonical channel tree digest and persists a private proposal in the existing Inbox', async () => {
+    it('uses the canonical channel tree digest and persists a private proposal in the existing Inbox with name, publisher, and providerVersion', async () => {
         expect(digest()).toBe(computeProviderTreeDigest(join(dir, 'providers')));
         const id = stage();
         expect(await run({ action: 'list' })).toMatchObject({ success: true, driverActivations: [{ id, kind: 'driver_activation',
-            type: 'browser', trust: 'user-custom', treeDigest: digest(), riskClass: 'low', runtime: manifest.runtime,
+            type: 'browser', name: 'Browser', publisher: 'ADHDev', providerVersion: '1.0.0',
+            trust: 'user-custom', treeDigest: digest(), riskClass: 'low', runtime: manifest.runtime,
             declaredAccess: manifest.declaredAccess }] });
         expect(new AssistantDriverStaging({ configDir: dir }).read(id)).toBeTruthy();
         if (process.platform !== 'win32') expect(statSync(join(svc.driverStaging!.dir, `${id}.json`)).mode & 0o777).toBe(0o600);
         expect(svc.driverActivations!.isReady(manifest.type, digest())).toBe(false);
+    });
+
+    it('surfaces discovered unapproved drivers on assistant_staged_resolve list without an assistant session and does not restage a discarded digest', async () => {
+        const listed = await run({ action: 'list' }, 'standalone');
+        expect(listed).toMatchObject({
+            success: true,
+            driverActivations: [{
+                kind: 'driver_activation',
+                type: 'browser',
+                name: 'Browser',
+                publisher: 'ADHDev',
+                providerVersion: '1.0.0',
+                trust: 'user-custom',
+                treeDigest: digest(),
+            }],
+        });
+        const stagedId = (listed as any).driverActivations[0].id as string;
+        expect(await run({ id: stagedId, decision: 'discard' }, 'standalone')).toMatchObject({ success: true, result: 'discarded' });
+        expect(await run({ action: 'list' }, 'standalone')).toMatchObject({ success: true, driverActivations: [] });
     });
 
     it('rejects ipc even when it claims an owner source and leaves the proposal unapproved', async () => {

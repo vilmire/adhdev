@@ -672,6 +672,15 @@ export default function DashboardMainView({
         [visibleConversations, hiddenConversations],
     )
     const startAssistant = useStartAssistant({ machineEntries, conversations: allConversations, sendDaemonCommand })
+    const stagedDaemonId = React.useMemo(
+        () => allConversations.find(c => c.assistant)?.daemonId
+            ?? startAssistant.defaultTarget?.machineId
+            ?? activeConv?.daemonId
+            ?? machineEntries[0]?.id
+            ?? ides.find(i => i.type === 'adhdev-daemon')?.id
+            ?? (isStandalone ? 'standalone' : null),
+        [activeConv?.daemonId, allConversations, ides, isStandalone, machineEntries, startAssistant.defaultTarget?.machineId],
+    )
 
     return (
         <>
@@ -717,6 +726,8 @@ export default function DashboardMainView({
                     onSetCliViewMode={onSetActiveCliViewMode}
                     onOpenGitDialog={handleOpenGitDialog}
                     onOpenMeshGraph={handleOpenMeshGraph}
+                    stagedDaemonId={stagedDaemonId}
+                    sendDaemonCommand={sendDaemonCommand}
                 />
             )}
 

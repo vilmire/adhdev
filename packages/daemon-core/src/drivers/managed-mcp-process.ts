@@ -1,4 +1,6 @@
 import type { ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { hiddenSpawn } from '../process/hidden-spawn.js';
 import { sanitizeSpawnEnv } from '../cli-adapters/spawn-env.js';
 import type { DriverManifest } from './contracts.js';
@@ -11,6 +13,15 @@ export function buildDriverEnv(runtime: DriverManifest['runtime'], source: NodeJ
     const normalize = (key: string) => process.platform === 'win32' ? key.toUpperCase() : key;
     const allowed = new Set([...BASE_ENV, ...(runtime.env ?? [])].map(normalize));
     return sanitizeSpawnEnv(Object.fromEntries(Object.entries(source).filter(([key]) => allowed.has(normalize(key)))));
+}
+function resolvePackagePath(value: string, packageDir?: string): string {
+    if (!packageDir || !value || value.startsWith('-') || isAbsolute(value)) return value;
+    const isExplicitRelative = value.startsWith('./') || value.startsWith('.\\');
+    const candidate = resolve(packageDir, value);
+    const rel = relative(packageDir, candidate);
+    if (rel.startsWith('..') || isAbsolute(rel)) return value;
+    if (isExplicitRelative || existsSync(candidate)) return candidate;
+    return value;
 }
 
 /** Owns one child and never restarts a failed process. Constructing is passive;
@@ -26,7 +37,7 @@ export class ManagedMcpProcess implements DriverMcpClient {
     private exited: Promise<void> = Promise.resolve();
     private active = 0;
     constructor(private readonly runtime: DriverManifest['runtime'], private readonly options: {
-        cwd: string; requestTimeoutMs?: number; env?: NodeJS.ProcessEnv;
+        cwd: string; packageDir?: string; requestTimeoutMs?: number; env?: NodeJS.ProcessEnv;
     }) {}
     get pid(): number | undefined { return this.child?.pid; }
     start(): Promise<void> {
@@ -44,8 +55,16 @@ export class ManagedMcpProcess implements DriverMcpClient {
             this.stopping = null;
             if (this.state !== 'starting') throw new DriverMcpError('connection_closed', 'Driver start was cancelled');
             if (this.runtime.platforms && !(this.runtime.platforms as readonly string[]).includes(process.platform)) throw new Error('Driver platform is unsupported');
-            const child = hiddenSpawn(this.runtime.command, this.runtime.args ?? [], { cwd: this.options.cwd,
-                env: buildDriverEnv(this.runtime, this.options.env), stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+            mkdirSync(this.options.cwd, { recursive: true });
+            const command = resolvePackagePath(this.runtime.command, this.options.packageDir);
+            const args = (this.runtime.args ?? []).map(arg => resolvePackagePath(arg, this.options.packageDir));
+            const env = buildDriverEnv(this.runtime, this.options.env);
+            if (this.options.packageDir) {
+                env.ADHDEV_DRIVER_PACKAGE_DIR = this.options.packageDir;
+                env.ADHDEV_DRIVER_STATE_DIR = this.options.cwd;
+            }
+            const child = hiddenSpawn(command, args, { cwd: this.options.cwd,
+                env, stdio: ['pipe', 'pipe', 'pipe'], shell: false,
                 detached: process.platform !== 'win32' });
             this.child = child;
             this.exited = new Promise(resolve => child.once('close', () => {

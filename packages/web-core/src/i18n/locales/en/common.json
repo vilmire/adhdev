@@ -1685,6 +1685,9 @@
         "protectedSkill": "changes a skill you wrote",
         "driverActivation": {
             "advisory": "Declared access · not enforced at OS level",
+            "name": "Name",
+            "publisher": "Publisher",
+            "providerVersion": "Version",
             "trust": "Trust",
             "digest": "Tree digest",
             "command": "Command and arguments",

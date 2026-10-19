@@ -9,6 +9,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AssistantStagedWrites from '../../src/components/dashboard/AssistantStagedWrites'
+import DashboardHeader from '../../src/components/dashboard/DashboardHeader'
+import { BaseDaemonProvider } from '../../src/context/BaseDaemonContext'
 import {
     groupStagedItems,
     parseResolveOutcomes,
@@ -57,7 +59,8 @@ const DRIVER_ID = 'driver-activation-1792324800000-abc123'
 function driverActivationAnswer() {
     return { success: true, memory: [], skills: [], notes: [], driverActivations: [{
         kind: 'driver_activation', id: DRIVER_ID, createdAt: '2026-10-18T12:00:00.000Z', origin: 'driver',
-        type: 'computer-use', treeDigest: 'sha256:' + 'a'.repeat(64), trust: 'external-js',
+        type: 'computer-use', name: 'Computer Use Driver', publisher: 'ADHDev', providerVersion: '1.2.3',
+        treeDigest: 'sha256:' + 'a'.repeat(64), trust: 'external-js',
         runtime: { kind: 'mcp-stdio', command: 'node', args: ['server.js'] },
         declaredAccess: { network: ['example.com'], filesystem: ['/tmp'], desktopControl: true },
         riskClass: 'elevated', reasons: ['Desktop control is declared', 'Filesystem access outside workspace: /tmp'],
@@ -68,10 +71,17 @@ describe('assistant-staged model', () => {
     it('parses driver activation consent separately and drops malformed access declarations', () => {
         const answer = driverActivationAnswer()
         expect(parseStagedList({ success: true, result: answer })![0]).toMatchObject({
-            kind: 'driver_activation', target: 'computer-use', action: 'activate',
-            driverActivation: { riskClass: 'elevated', declaredAccess: { desktopControl: true } },
+            kind: 'driver_activation', target: 'computer-use', detail: 'Computer Use Driver', action: 'activate',
+            driverActivation: {
+                name: 'Computer Use Driver',
+                publisher: 'ADHDev',
+                providerVersion: '1.2.3',
+                riskClass: 'elevated',
+                declaredAccess: { desktopControl: true },
+            },
         })
         expect(parseStagedList({ success: true, driverActivations: [{ ...answer.driverActivations[0], declaredAccess: { network: '*' } }] })).toEqual([])
+        expect(parseStagedList({ success: true, driverActivations: [{ ...answer.driverActivations[0], name: 123 }] })).toEqual([])
     })
 
     it('parses all three stores (and the cloud wrapper) into display items, oldest first', () => {
@@ -259,8 +269,12 @@ describe('AssistantStagedWrites', () => {
         await mount(send)
         await click(container.querySelector('.assistant-staged-badge'))
         const row = container.querySelector(`[data-staged-item="${DRIVER_ID}"]`)!
+        expect(row.textContent).toContain('Computer Use Driver')
         const body = row.querySelector('[data-driver-activation]')!
         expect(body.textContent).toContain('Declared access · not enforced at OS level')
+        expect(body.textContent).toContain('Name: Computer Use Driver')
+        expect(body.textContent).toContain('Publisher: ADHDev')
+        expect(body.textContent).toContain('Version: 1.2.3')
         expect(body.textContent).toContain('external-js')
         expect(body.textContent).toContain('["node","server.js"]')
         expect(body.textContent).toContain('Elevated')
@@ -270,6 +284,75 @@ describe('AssistantStagedWrites', () => {
         expect(body.innerHTML).toMatchSnapshot()
         await click(row.querySelector('[data-staged-action="apply"]'))
         expect(send).toHaveBeenCalledWith('daemon-1', 'assistant_staged_resolve', { id: DRIVER_ID, decision: 'apply' })
+    })
+
+    it('surfaces and resolves pending driver activations and actions from DashboardHeader without an open assistant session', async () => {
+        const actionId = 'driver-action-1792324800000-0102030405060708'
+        let answer: unknown = {
+            ...driverActivationAnswer(),
+            driverActions: [{
+                kind: 'driver_action_request',
+                id: actionId,
+                status: 'pending',
+                type: 'computer-use',
+                action: 'erase',
+                args: { path: '/tmp/file' },
+                activationDigest: 'sha256:' + 'a'.repeat(64),
+                requester: { meshId: 'm1', taskId: 't1', sessionId: 's1' },
+                createdAt: 1792324800000,
+                expiresAt: 1792324980000,
+            }],
+        }
+        const send = vi.fn(async (_d: string, _t: string, payload?: Payload) => {
+            if (payload?.action === 'list') return answer
+            answer = { success: true, memory: [], skills: [], notes: [], driverActivations: [], driverActions: [] }
+            return { success: true, result: payload?.decision === 'apply' ? 'applied' : 'discarded' }
+        })
+        let inboxOpen = false
+        const renderHeader = async (open: boolean) => {
+            inboxOpen = open
+            await act(async () => {
+                root.render(
+                    <BaseDaemonProvider connectionOverrides={{ usesP2P: false }}>
+                        <DashboardHeader
+                            activeConv={undefined}
+                            wsStatus="connected"
+                            isConnected={true}
+                            conversations={[]}
+                            onOpenHistory={() => {}}
+                            inboxOpen={inboxOpen}
+                            onInboxOpenChange={(next) => { void renderHeader(next) }}
+                            hiddenOpen={false}
+                            onHiddenOpenChange={() => {}}
+                            notifications={[]}
+                            notificationUnreadCount={0}
+                            onOpenNotification={() => {}}
+                            onMarkNotificationRead={() => {}}
+                            onMarkNotificationUnread={() => {}}
+                            onDeleteNotification={() => {}}
+                            stagedDaemonId="standalone"
+                            sendDaemonCommand={send}
+                        />
+                    </BaseDaemonProvider>,
+                )
+            })
+        }
+        await renderHeader(false)
+        expect(send).toHaveBeenCalledWith('standalone', 'assistant_staged_resolve', { action: 'list' })
+        expect(container.querySelector('.dashboard-header-inbox-badge')?.textContent).toBe('2')
+        const headerBadge = container.querySelector('[data-dashboard-staged-badge]')
+        expect(headerBadge?.textContent).toContain('2 pending')
+
+        await click(headerBadge)
+        const section = container.querySelector('[data-dashboard-staged-approvals]')!
+        expect(section).toBeTruthy()
+        expect(container.querySelector('.dashboard-header-inbox-empty')).toBeNull()
+        expect(section.querySelector(`[data-staged-item="${DRIVER_ID}"]`)?.textContent).toContain('Computer Use Driver')
+        expect(section.querySelector(`[data-staged-item="${DRIVER_ID}"]`)?.textContent).toContain('ADHDev')
+        expect(section.querySelector(`[data-staged-item="${actionId}"]`)?.textContent).toContain('erase')
+
+        await click(section.querySelector(`[data-staged-item="${DRIVER_ID}"] [data-staged-action="apply"]`))
+        expect(send).toHaveBeenCalledWith('standalone', 'assistant_staged_resolve', { id: DRIVER_ID, decision: 'apply' })
     })
 
     it('refreshes when the assistant turn commits (busy → idle), not on every render', async () => {
@@ -313,4 +396,5 @@ describe('AssistantStagedWrites', () => {
         expect(banner?.textContent).toContain('2,178 / 2,200 (99%)')
     })
 })
+
 

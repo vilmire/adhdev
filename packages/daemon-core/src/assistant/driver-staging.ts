@@ -15,6 +15,9 @@ export interface StagedDriverActivation {
     createdAt: string;
     origin: 'driver';
     type: string;
+    name: string;
+    providerVersion: string;
+    publisher?: string;
     treeDigest: string;
     trust: string;
     declaredAccess: NonNullable<DriverManifest['declaredAccess']>;
@@ -28,6 +31,7 @@ const MAX_AGE = 14 * 24 * 60 * 60 * 1000;
 export class AssistantDriverStaging {
     readonly dir: string;
     private readonly now: () => Date;
+    private readonly discarded = new Set<string>();
     constructor(opts: { configDir?: string; now?: () => Date } = {}) {
         this.dir = join(opts.configDir ?? getConfigDir(), 'assistant', 'staged');
         this.now = opts.now ?? (() => new Date());
@@ -35,12 +39,15 @@ export class AssistantDriverStaging {
     private path(id: string): string { return join(this.dir, `${id}.json`); }
     write(module: InstalledDriverManifest, digest: string): string {
         if (!validDriverDigest(digest) || module.category !== 'driver') throw new Error('Invalid driver proposal');
+        this.discarded.delete(`${module.type}\0${digest}`);
         this.expire();
         const existing = this.list().find(r => r.type === module.type && r.treeDigest === digest);
         if (existing) return existing.id;
         const id = `driver-activation-${this.now().getTime()}-${randomBytes(8).toString('hex')}`;
         const rec: StagedDriverActivation = { kind: 'driver_activation', id, createdAt: this.now().toISOString(), origin: 'driver',
-            type: module.type, treeDigest: digest, trust: module._sourceTrust ?? 'unknown',
+            type: module.type, name: module.name, providerVersion: module.providerVersion,
+            ...(module.publisher ? { publisher: module.publisher } : {}),
+            treeDigest: digest, trust: module._sourceTrust ?? 'unknown',
             declaredAccess: structuredClone(module.declaredAccess ?? {}), runtime: structuredClone(module.runtime),
             ...deriveDriverRiskClass(module) };
         writeFileAtomic600(this.path(id), JSON.stringify(rec, null, 2));
@@ -51,7 +58,11 @@ export class AssistantDriverStaging {
         try {
             const r = JSON.parse(readFileSync(this.path(id), 'utf8')) as StagedDriverActivation;
             if (r?.kind === 'driver_activation' && r.id === id && r.origin === 'driver'
-                && typeof r.type === 'string' && !!r.type && validDriverDigest(r.treeDigest)
+                && typeof r.type === 'string' && !!r.type
+                && typeof r.name === 'string' && !!r.name
+                && typeof r.providerVersion === 'string' && !!r.providerVersion
+                && (r.publisher === undefined || typeof r.publisher === 'string')
+                && validDriverDigest(r.treeDigest)
                 && typeof r.trust === 'string' && r.runtime?.kind === 'mcp-stdio' && typeof r.runtime.command === 'string'
                 && r.declaredAccess && typeof r.declaredAccess === 'object' && !Array.isArray(r.declaredAccess)
                 && ['low', 'elevated'].includes(r.riskClass) && Array.isArray(r.reasons) && r.reasons.every(s => typeof s === 'string')
@@ -88,6 +99,9 @@ export class AssistantDriverStaging {
         if (store.isDisabled(module.type)) return { state: 'installed' };
         if (store.isReady(module.type, digest) || store.autoActivateIfTrustedLow(module, digest)) return { state: 'ready' };
         if (module._sourceTrust === 'trusted') return { state: 'installed' };
+        const existing = this.list().find(r => r.type === module.type && r.treeDigest === digest);
+        if (existing) return { state: 'staged', stagedId: existing.id };
+        if (this.discarded.has(`${module.type}\0${digest}`)) return { state: 'installed' };
         return { state: 'staged', stagedId: this.write(module, digest) };
     }
     /** Called only behind assistant_staged_resolve's owner-source gate. Read the
@@ -98,12 +112,19 @@ export class AssistantDriverStaging {
         if (decision !== 'apply' && decision !== 'discard') return fail('invalid_args');
         const rec = this.read(id);
         if (!rec) return fail('staged_not_found');
-        if (decision === 'discard') { this.remove(id); return { success: true as const, result: 'discarded' }; }
+        if (decision === 'discard') {
+            this.discarded.add(`${rec.type}\0${rec.treeDigest}`);
+            this.remove(id);
+            return { success: true as const, result: 'discarded' };
+        }
         if (this.now().getTime() - Date.parse(rec.createdAt) >= MAX_AGE) return fail('expired');
         const current = readCurrent(rec.type);
         if (!current) return fail('driver_not_installed');
         const risk = deriveDriverRiskClass(current.module);
-        if (current.module.type !== rec.type || current.treeDigest !== rec.treeDigest || risk.riskClass !== rec.riskClass
+        if (current.module.type !== rec.type || current.module.name !== rec.name
+            || current.module.providerVersion !== rec.providerVersion
+            || (current.module.publisher ?? undefined) !== (rec.publisher ?? undefined)
+            || current.treeDigest !== rec.treeDigest || risk.riskClass !== rec.riskClass
             || JSON.stringify(risk.reasons) !== JSON.stringify(rec.reasons)
             || JSON.stringify(current.module.declaredAccess ?? {}) !== JSON.stringify(rec.declaredAccess)
             || JSON.stringify(current.module.runtime) !== JSON.stringify(rec.runtime)) return fail('stale');
@@ -112,3 +133,4 @@ export class AssistantDriverStaging {
         return { success: true as const, result: 'applied', type: rec.type, treeDigest: rec.treeDigest };
     }
 }
+

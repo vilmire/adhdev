@@ -51,7 +51,6 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
             memoryStatus.user.nearLimit ? memoryStatus.user.percent : 0,
         )
         : 0
-    const groups = useMemo(() => groupStagedItems(state.items || []), [state.items])
 
     useEffect(() => {
         if (count === 0 && !nearLimit) setOpen(false)
@@ -150,13 +149,22 @@ export function AssistantStagedWritesView({ state }: { state: AssistantStagedWri
                                 </div>
                             </AlertBanner>
                         )}
-                        {groups.map(group => (
-                            <StagedGroupCard key={group.reviewTurnId || group.items[0].id} group={group} state={state} />
-                        ))}
+                        <AssistantStagedWritesList state={state} />
                     </div>
                 </div>
             )}
         </div>
+    )
+}
+
+export function AssistantStagedWritesList({ state, items }: { state: AssistantStagedWritesState; items?: ReadonlyArray<AssistantStagedItem> }) {
+    const groups = useMemo(() => groupStagedItems(items ?? state.items ?? []), [items, state.items])
+    return (
+        <>
+            {groups.map(group => (
+                <StagedGroupCard key={group.reviewTurnId || group.items[0].id} group={group} state={state} />
+            ))}
+        </>
     )
 }
 
@@ -287,6 +295,9 @@ function DriverActivationBody({ item }: { item: AssistantStagedItem }) {
     const driver = item.driverActivation
     if (!driver) return null
     const rows: Array<[string, string]> = [
+        ...(driver.name ? [['name', driver.name] as [string, string]] : []),
+        ...(driver.publisher ? [['publisher', driver.publisher] as [string, string]] : []),
+        ...(driver.providerVersion ? [['providerVersion', driver.providerVersion] as [string, string]] : []),
         ['trust', driver.trust],
         ['digest', driver.treeDigest],
         ['command', JSON.stringify([driver.runtime.command, ...(driver.runtime.args ?? [])])],
@@ -309,3 +320,4 @@ function DriverActivationBody({ item }: { item: AssistantStagedItem }) {
 function prefixLines(prefix: string, text: string): string {
     return text.split('\n').map(line => prefix + line).join('\n')
 }
+

@@ -1,4 +1,6 @@
 // Deliberately dependency-free JSON-RPC peer: tests the official client on a wire.
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 const flags = new Set(process.argv.slice(2));
 const timers = new Map();
@@ -19,6 +21,12 @@ createInterface({ input: process.stdin }).on('line', line => {
         if (msg.params.name === 'malformed' || flags.has('--malformed')) { process.stdout.write('{bad json\n'); return; }
         if (msg.params.name === 'cancel-count') { success(msg.id, content(cancelled)); return; }
         if (msg.params.name === 'env') { success(msg.id, content(process.env)); return; }
+        if (msg.params.name === 'write-cwd') {
+            const filename = String(msg.params.arguments?.filename ?? '.playwright-mcp-trace.json');
+            writeFileSync(join(process.cwd(), filename), JSON.stringify({ written: true }));
+            success(msg.id, content({ cwd: process.cwd(), packageDir: process.env.ADHDEV_DRIVER_PACKAGE_DIR, stateDir: process.env.ADHDEV_DRIVER_STATE_DIR }));
+            return;
+        }
         if (msg.params.name === 'delay' || flags.has('--delay')) {
             const timer = setTimeout(() => { timers.delete(msg.id); success(msg.id, content(msg.params.arguments)); }, msg.params.arguments?.delayMs ?? 5000);
             timers.set(msg.id, timer);

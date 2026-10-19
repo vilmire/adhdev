@@ -314,9 +314,15 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const svc = getAssistantServices();
         const action = str(args?.action) || 'resolve';
         if (action === 'list') {
+            let driverActions: unknown[] = [];
+            if (typeof ctx.deps?.providerLoader?.getByCategory === 'function') {
+                const drivers = getDriverService(ctx);
+                await drivers.list().catch(() => {});
+                driverActions = drivers.stagedActions();
+            }
             return { success: true, memory: svc.memory.listStaged(), skills: svc.skills.listStaged(), notes: svc.notes.list(),
                 launchDefaults: svc.launchDefaults?.list() ?? [], driverActivations: svc.driverStaging?.list() ?? [],
-                driverActions: ctx.deps?.providerLoader ? getDriverService(ctx).stagedActions() : [], memoryStatus: svc.memory.status() };
+                driverActions, memoryStatus: svc.memory.status() };
         }
         if (action !== 'resolve') return invalidArgs('action must be list or resolve');
         const id = str(args?.id);

@@ -1685,6 +1685,9 @@
         "protectedSkill": "あなたが書いたスキルを変更",
         "driverActivation": {
             "advisory": "アクセス宣言 · OSレベルでは強制されません",
+            "name": "名前",
+            "publisher": "発行元",
+            "providerVersion": "バージョン",
             "trust": "信頼レベル",
             "digest": "ツリーダイジェスト",
             "command": "コマンドと引数",

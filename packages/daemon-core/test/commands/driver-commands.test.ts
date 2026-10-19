@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,4 +105,33 @@ describe('real Worker → service → official SDK → stdio', () => {
         const messages = drainWorkerMailboxForTask(worker.meshId, worker.taskId); expect(messages).toHaveLength(1);
         expect(JSON.parse(messages[0].text)).toMatchObject({ kind: 'driver_action_result', stagedId: id, success: true });
     });
+    it('keeps the installed package immutable when a driver child writes into its cwd and resolves package-relative ./bin/... args', async () => {
+        const binDir = join(packageDir, 'bin');
+        mkdirSync(binDir, { recursive: true });
+        copyFileSync(fileURLToPath(new URL('../drivers/fixtures/fake-mcp-server.mjs', import.meta.url)), join(binDir, 'server.mjs'));
+        manifest.runtime.args = ['./bin/server.mjs'];
+        manifest.actions = [
+            { id: 'write-cwd', tool: 'write-cwd', risk: 'read' },
+            { id: 'echo', tool: 'echo', risk: 'read' },
+        ];
+        policy.browser.actions = ['write-cwd', 'echo'];
+        save();
+        const initialDigest = computeDriverTreeDigest(packageDir);
+        svc.driverActivations!.approve(manifest, initialDigest);
+
+        const first = await run('driver_invoke', { token, type: 'browser', action: 'write-cwd', args: { filename: '.playwright-mcp-output.json' } });
+        expect(first).toMatchObject({ success: true, status: 'completed' });
+        const payload = JSON.parse((first as any).output.content[0].text);
+        expect(payload.packageDir).toBe(packageDir);
+        expect(realpathSync(payload.cwd)).not.toBe(realpathSync(packageDir));
+        expect(realpathSync(payload.cwd)).toBe(realpathSync(payload.stateDir));
+        expect(existsSync(join(payload.cwd, '.playwright-mcp-output.json'))).toBe(true);
+        expect(existsSync(join(packageDir, '.playwright-mcp-output.json'))).toBe(false);
+        expect(computeDriverTreeDigest(packageDir)).toBe(initialDigest);
+        expect(svc.driverActivations!.isReady('browser', initialDigest)).toBe(true);
+        expect(await run('driver_describe', { type: 'browser' })).toMatchObject({ success: true, state: 'running', treeDigest: initialDigest });
+        expect(await run('driver_invoke', { token, type: 'browser', action: 'echo', args: { stillReady: true } }))
+            .toMatchObject({ success: true, status: 'completed', output: { content: [{ text: '{"stillReady":true}' }] } });
+    });
 });
+

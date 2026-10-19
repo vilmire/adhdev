@@ -48,6 +48,9 @@ export interface AssistantMemoryStatus {
 }
 
 export interface DriverActivationPreview {
+    name?: string
+    providerVersion?: string
+    publisher?: string
     treeDigest: string
     trust: string
     runtime: { kind: 'mcp-stdio'; command: string; args?: string[] }
@@ -198,6 +201,9 @@ function driverActivationItem(r: Record<string, any>): AssistantStagedItem | nul
     const runtime = rec(r.runtime)
     const access = rec(r.declaredAccess)
     if (r.kind !== 'driver_activation' || !s(r.type) || !s(r.treeDigest) || !s(r.trust)
+        || (r.name !== undefined && !s(r.name))
+        || (r.providerVersion !== undefined && !s(r.providerVersion))
+        || (r.publisher !== undefined && !s(r.publisher))
         || runtime?.kind !== 'mcp-stdio' || !s(runtime.command) || !access
         || !['low', 'elevated'].includes(r.riskClass)
         || !Array.isArray(r.reasons) || r.reasons.some((v: unknown) => typeof v !== 'string')) return null
@@ -207,8 +213,20 @@ function driverActivationItem(r: Record<string, any>): AssistantStagedItem | nul
     if (access.desktopControl !== undefined && typeof access.desktopControl !== 'boolean') return null
     if (runtime.args !== undefined && (!Array.isArray(runtime.args) || runtime.args.some((v: unknown) => typeof v !== 'string'))) return null
     const item = base(r, 'driver_activation', 'activate', r.type)
-    if (item) item.driverActivation = { treeDigest: r.treeDigest, trust: r.trust, runtime,
-        riskClass: r.riskClass, reasons: r.reasons, declaredAccess: access } as DriverActivationPreview
+    if (item) {
+        if (s(r.name)) item.detail = s(r.name)
+        item.driverActivation = {
+            ...(s(r.name) ? { name: s(r.name) } : {}),
+            ...(s(r.providerVersion) ? { providerVersion: s(r.providerVersion) } : {}),
+            ...(s(r.publisher) ? { publisher: s(r.publisher) } : {}),
+            treeDigest: r.treeDigest,
+            trust: r.trust,
+            runtime,
+            riskClass: r.riskClass,
+            reasons: r.reasons,
+            declaredAccess: access,
+        } as DriverActivationPreview
+    }
     return item
 }
 

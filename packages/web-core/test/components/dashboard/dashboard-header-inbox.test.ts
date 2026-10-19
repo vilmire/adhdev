@@ -333,4 +333,51 @@ describe('DashboardHeader inbox notifications', () => {
     expect(html.split('header-title-status-dot').length - 1).toBe(1)
     expect(html).not.toContain('header-count-mobile')
   })
+
+  it('renders pending driver activations and actions in the dashboard Inbox when no assistant session is open', () => {
+    const html = renderHeader({
+      activeConv: undefined,
+      conversations: [],
+      notifications: [],
+      notificationUnreadCount: 0,
+      stagedState: {
+        items: [
+          {
+            id: 'driver-activation-1',
+            kind: 'driver_activation',
+            action: 'activate',
+            target: 'browser-playwright',
+            detail: 'Browser (Playwright MCP)',
+            origin: 'driver',
+            createdAt: '2026-10-18T12:00:00.000Z',
+            driverActivation: {
+              name: 'Browser (Playwright MCP)',
+              publisher: 'ADHDev',
+              providerVersion: '1.0.0',
+              treeDigest: 'sha256:' + 'b'.repeat(64),
+              trust: 'user-custom',
+              runtime: { kind: 'mcp-stdio', command: 'node', args: ['./bin/browser-server.js'] },
+              riskClass: 'low',
+              reasons: [],
+              declaredAccess: { network: ['*'], filesystem: ['workspace'], desktopControl: false },
+            },
+          },
+        ],
+        memoryStatus: null,
+        busyIds: new Set<string>(),
+        outcomes: {},
+        refresh: async () => {},
+        resolve: async () => {},
+      },
+    })
+
+    expect(html).toContain('data-dashboard-staged-badge="1"')
+    expect(html).toContain('data-dashboard-staged-approvals')
+    expect(html).toContain('Held for your approval')
+    expect(html).toContain('Browser (Playwright MCP)')
+    expect(html).toContain('ADHDev')
+    expect(html).toContain('1.0.0')
+    expect(html).not.toContain('No pending activity')
+  })
 })
+
