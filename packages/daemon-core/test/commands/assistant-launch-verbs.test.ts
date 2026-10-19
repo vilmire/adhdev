@@ -6,12 +6,29 @@
  * file, idempotence, registry binding + restart note, the dangerous-mode
  * refusal, and the MCP-only pull ownership rule.
  */
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+    chmodSync,
+    existsSync,
+    linkSync,
+    lstatSync,
+    mkdirSync,
+    mkdtempSync,
+    readdirSync,
+    readFileSync,
+    realpathSync,
+    rmSync,
+    statSync,
+    symlinkSync,
+    unlinkSync,
+    writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { assistantLaunchHandlers } from '../../src/commands/high-family/assistant-launch.js';
+import { writeProtectedAssistantConfigFile } from '../../src/assistant/assistant-config-io.js';
+import { ASSISTANT_MCP_SERVER_NAME, mergeAssistantCodexMcpConfigToml } from '../../src/assistant/assistant-launch-plan.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
 import { setAssistantProjectPortsForTests, type AssistantProjectPorts } from '../../src/assistant/assistant-project-ports.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
@@ -138,7 +155,7 @@ describe('launch_assistant', () => {
         expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'claude-cli', mcpConfigPath: cfgPath });
     });
 
-    it('codex-cli: writes <workspace>/.codex/config.toml + -c override with assistantSessionKey and preserves persisted tool approval_mode across relaunches', async () => {
+    it('codex-cli: persists stable server in <workspace>/.codex/config.toml once, keeps rotated assistantSessionKey in -c overrides, and preserves persisted tool approval_mode across ordinary session/model/provider restarts without rewriting config.toml', async () => {
         const codex: any = {
             type: 'codex-cli',
             meshCoordinator: {
@@ -149,7 +166,7 @@ describe('launch_assistant', () => {
         };
         const c = ctx();
         c.deps.providerLoader = loader(codex);
-        const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        const r: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli', model: 'gpt-5.4', thinkingLevel: 'low' });
         expect(r).toMatchObject({ success: true, cliType: 'codex-cli' });
         const [launch] = launchCalls();
         expect(launch.cliArgs).toContain(`mcp_servers.adhdev-assistant.env.ADHDEV_ASSISTANT_SESSION_ID="${launch.assistantSessionKey}"`);
@@ -157,25 +174,229 @@ describe('launch_assistant', () => {
         expect(existsSync(cfgPath)).toBe(true);
         const firstToml = readFileSync(cfgPath, 'utf-8');
         expect(firstToml).toContain('[mcp_servers.adhdev-assistant]');
-        expect(firstToml).toContain(`ADHDEV_ASSISTANT_SESSION_ID = "${launch.assistantSessionKey}"`);
+        // Ephemeral session ID stays in CLI `-c` overrides, not in the persisted TOML file.
+        expect(firstToml).not.toContain('ADHDEV_ASSISTANT_SESSION_ID');
         expect(registry.read()).toMatchObject({ sessionId: 'asst-1', cliType: 'codex-cli', mcpConfigPath: cfgPath });
 
         // Simulate Codex writing persistent consent ("3. Always allow") for `project_send` into <workspace>/.codex/config.toml.
-        writeFileSync(
-            cfgPath,
-            `${firstToml}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`,
-            { encoding: 'utf-8', mode: 0o600 },
-        );
+        const withConsent = `${firstToml}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`;
+        writeFileSync(cfgPath, withConsent, { encoding: 'utf-8', mode: 0o600 });
+        const statBeforeRelaunch = statSync(cfgPath);
 
-        // Relaunch after the first session ends: new assistantSessionKey is written while preserving tools.project_send approval_mode.
-        const r2: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        // Relaunch with rotated session ID and changed model/thinkingLevel:
+        // new assistantSessionKey is passed via -c, while .codex/config.toml is not rewritten at all (same inode & bytes).
+        const r2: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli', model: 'gpt-5.4-mini', thinkingLevel: 'high' });
         expect(r2).toMatchObject({ success: true, launched: true, sessionId: 'asst-2', cliType: 'codex-cli' });
         const secondLaunch = launchCalls()[1];
         expect(secondLaunch.assistantSessionKey).not.toBe(launch.assistantSessionKey);
-        const secondToml = readFileSync(cfgPath, 'utf-8');
-        expect(secondToml).toContain(`ADHDEV_ASSISTANT_SESSION_ID = "${secondLaunch.assistantSessionKey}"`);
-        expect(secondToml).not.toContain(launch.assistantSessionKey);
-        expect(secondToml).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
+        expect(secondLaunch.cliArgs).toContain(`mcp_servers.adhdev-assistant.env.ADHDEV_ASSISTANT_SESSION_ID="${secondLaunch.assistantSessionKey}"`);
+        const statAfterRelaunch = statSync(cfgPath);
+        expect(statAfterRelaunch.ino).toBe(statBeforeRelaunch.ino);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(withConsent);
+
+        // Switch assistant provider to claude-cli and back to codex-cli: consent remains intact.
+        const rClaude: any = await run(ASSISTANT_VERB.launch, { cliType: 'claude-cli' });
+        expect(rClaude).toMatchObject({ success: true, launched: true, cliType: 'claude-cli' });
+        const rCodexAgain: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(rCodexAgain).toMatchObject({ success: true, launched: true, cliType: 'codex-cli' });
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(withConsent);
+    });
+
+    it('codex-cli: fails closed before launch and leaves malformed or foreign-server .codex/config.toml bytes unchanged', async () => {
+        const codex: any = {
+            type: 'codex-cli',
+            meshCoordinator: {
+                supported: true,
+                mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh', requiresRestart: true, instructions: 'codex mcp add', template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}' },
+                systemPromptInjection: { mode: 'cli_arg', flag: '-c' },
+            },
+        };
+        const c = ctx();
+        c.deps.providerLoader = loader(codex);
+        const codexDir = join(dir, 'assistant', '.codex');
+        mkdirSync(codexDir, { recursive: true, mode: 0o700 });
+        const cfgPath = join(codexDir, 'config.toml');
+
+        // 1. Malformed TOML input -> fails closed, zero launch_cli calls, bytes unchanged.
+        const malformedBytes = '# User broken edit\n[mcp_servers.adhdev-assistant]\nargs = ["unclosed"\n';
+        writeFileSync(cfgPath, malformedBytes, { mode: 0o600 });
+        const resMalformed: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(resMalformed).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+        expect(resMalformed.error).toContain('assistant_codex_config_invalid_toml');
+        expect(launchCalls()).toHaveLength(0);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(malformedBytes);
+
+        // 2. Foreign server holding tools.project_send approval -> fails closed, consent not transferred or erased, bytes unchanged.
+        const foreignBytes = [
+            '[mcp_servers.adhdev-assistant]',
+            'command = "/usr/local/bin/foreign-mcp"',
+            'args = ["--serve"]',
+            '',
+            '[mcp_servers.adhdev-assistant.tools.project_send]',
+            'approval_mode = "approve"',
+            '',
+        ].join('\n');
+        writeFileSync(cfgPath, foreignBytes, { mode: 0o600 });
+        const resForeign: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+        expect(resForeign).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+        expect(resForeign.error).toContain('assistant_codex_config_foreign_server');
+        expect(launchCalls()).toHaveLength(0);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(foreignBytes);
+    });
+
+    it('private boundary: refuses symlinked workspace, symlinked .codex dir, symlinked/hardlinked config.toml, and pre-rename symlink replacement with external target bytes unchanged', async () => {
+        const externalDir = mkdtempSync(join(tmpdir(), 'adhdev-external-target-'));
+        try {
+            const externalConfig = join(externalDir, 'external-config.toml');
+            const sentinelBytes = '# External sentinel config — must never be modified\n[model]\nname = "untouched"\n';
+            writeFileSync(externalConfig, sentinelBytes, { mode: 0o600 });
+            const danglingTarget = join(externalDir, 'dangling-target.toml');
+
+            const codex: any = {
+                type: 'codex-cli',
+                meshCoordinator: {
+                    supported: true,
+                    mcpConfig: { mode: 'manual', serverName: 'adhdev-mesh', requiresRestart: true, instructions: 'codex mcp add', template: 'codex mcp add {{serverName}} -- {{adhdevMcpCommand}} {{adhdevMcpArgs}}' },
+                    systemPromptInjection: { mode: 'cli_arg', flag: '-c' },
+                },
+            };
+            const c = ctx();
+            c.deps.providerLoader = loader(codex);
+            const ws = join(dir, 'assistant');
+            const dotCodex = join(ws, '.codex');
+            const cfgPath = join(dotCodex, 'config.toml');
+
+            // Case 1: workspace itself is a symlink to externalDir
+            symlinkSync(externalDir, ws);
+            const rWsSym: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+            expect(rWsSym).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+            expect(rWsSym.error).toContain('assistant_unsafe_path');
+            expect(launchCalls()).toHaveLength(0);
+            expect(readFileSync(externalConfig, 'utf-8')).toBe(sentinelBytes);
+            unlinkSync(ws);
+
+            // Case 2: <workspace>/.codex is a symlink to externalDir
+            mkdirSync(ws, { mode: 0o700 });
+            symlinkSync(externalDir, dotCodex);
+            const rDirSym: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+            expect(rDirSym).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+            expect(rDirSym.error).toContain('assistant_unsafe_path');
+            expect(launchCalls()).toHaveLength(0);
+            expect(readFileSync(externalConfig, 'utf-8')).toBe(sentinelBytes);
+            unlinkSync(dotCodex);
+
+            // Case 3: <workspace>/.codex/config.toml is a symlink to an existing external file
+            mkdirSync(dotCodex, { mode: 0o700 });
+            symlinkSync(externalConfig, cfgPath);
+            const rFileSym: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+            expect(rFileSym).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+            expect(rFileSym.error).toContain('assistant_unsafe_path');
+            expect(launchCalls()).toHaveLength(0);
+            expect(readFileSync(externalConfig, 'utf-8')).toBe(sentinelBytes);
+            unlinkSync(cfgPath);
+
+            // Case 4: <workspace>/.codex/config.toml is a dangling symlink to a non-existent external file
+            symlinkSync(danglingTarget, cfgPath);
+            const rDangling: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+            expect(rDangling).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+            expect(rDangling.error).toContain('assistant_unsafe_path');
+            expect(launchCalls()).toHaveLength(0);
+            expect(existsSync(danglingTarget)).toBe(false);
+            unlinkSync(cfgPath);
+
+            // Case 5: <workspace>/.codex/config.toml is a hardlink to externalConfig
+            linkSync(externalConfig, cfgPath);
+            const rHardlink: any = await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, { cliType: 'codex-cli' });
+            expect(rHardlink).toMatchObject({ success: false, code: 'assistant_config_write_failed' });
+            expect(rHardlink.error).toContain('assistant_unsafe_path');
+            expect(launchCalls()).toHaveLength(0);
+            expect(readFileSync(externalConfig, 'utf-8')).toBe(sentinelBytes);
+            unlinkSync(cfgPath);
+
+            // Case 6: pre-rename replacement race swaps target to a symlink pointing at externalConfig
+            expect(() => writeProtectedAssistantConfigFile({
+                rootDir: ws,
+                filePath: cfgPath,
+                transform: () => '[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\n',
+                onBeforeRenameForTest: (_attempt, canonicalFilePath) => {
+                    symlinkSync(externalConfig, canonicalFilePath);
+                },
+            })).toThrow(/assistant_unsafe_path/);
+            expect(readFileSync(externalConfig, 'utf-8')).toBe(sentinelBytes);
+            unlinkSync(cfgPath);
+            // Temporary file was cleaned up on failure.
+            expect(readdirSync(dotCodex).filter((f) => f.includes('.tmp-'))).toHaveLength(0);
+        } finally {
+            rmSync(externalDir, { recursive: true, force: true });
+        }
+    });
+
+    it('durability: preserves original bytes on mid-write IO failure and detects/merges or refuses concurrent native edits', () => {
+        const ws = join(dir, 'assistant');
+        const dotCodex = join(ws, '.codex');
+        mkdirSync(dotCodex, { recursive: true, mode: 0o700 });
+        const cfgPath = join(dotCodex, 'config.toml');
+        const targetServer = { command: 'adhdev', args: ['mcp', '--mode', 'ipc', '--assistant', '--port', '19223'] };
+
+        const legacyInitial = [
+            '[mcp_servers.adhdev-assistant]',
+            'command = "adhdev"',
+            'args = ["mcp","--mode","ipc","--assistant","--port","19223"]',
+            '',
+            '[mcp_servers.adhdev-assistant.env]',
+            'ADHDEV_ASSISTANT_SESSION_ID = "legacy-sid"',
+            '',
+        ].join('\n');
+        writeFileSync(cfgPath, legacyInitial, { mode: 0o600 });
+        const initialIno = statSync(cfgPath).ino;
+
+        // 1. Simulated partial write / EIO failure mid-write: original bytes and inode remain untouched, temp file removed.
+        expect(() => writeProtectedAssistantConfigFile({
+            rootDir: ws,
+            filePath: cfgPath,
+            transform: (before) => mergeAssistantCodexMcpConfigToml(before, ASSISTANT_MCP_SERVER_NAME, targetServer),
+            onWriteTempChunkForTest: () => {
+                throw new Error('EIO: simulated disk write failure');
+            },
+        })).toThrow(/EIO: simulated disk write failure/);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(legacyInitial);
+        expect(statSync(cfgPath).ino).toBe(initialIno);
+        expect(readdirSync(dotCodex).filter((f) => f.includes('.tmp-'))).toHaveLength(0);
+
+        // 2. Concurrent native Codex edit on attempt 0 (adding tools.project_send approval right before rename):
+        // detected, retried on attempt 1, and merged so both the session-id cleanup and the concurrent consent survive!
+        const concurrentConsent = `${legacyInitial}\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`;
+        const retryResult = writeProtectedAssistantConfigFile({
+            rootDir: ws,
+            filePath: cfgPath,
+            transform: (before) => mergeAssistantCodexMcpConfigToml(before, ASSISTANT_MCP_SERVER_NAME, targetServer),
+            onBeforeRenameForTest: (attempt, canonicalFilePath) => {
+                if (attempt === 0) {
+                    writeFileSync(canonicalFilePath, concurrentConsent, { mode: 0o600 });
+                }
+            },
+        });
+        expect(retryResult.written).toBe(true);
+        const afterRetry = readFileSync(cfgPath, 'utf-8');
+        expect(afterRetry).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
+        expect(afterRetry).not.toContain('legacy-sid');
+        expect(readdirSync(dotCodex).filter((f) => f.includes('.tmp-'))).toHaveLength(0);
+
+        // 3. Persistent concurrent edits exceeding maxRetries: refuses with assistant_config_write_conflict, preserving latest concurrent file bytes.
+        writeFileSync(cfgPath, legacyInitial, { mode: 0o600 });
+        let lastConcurrentBytes = legacyInitial;
+        expect(() => writeProtectedAssistantConfigFile({
+            rootDir: ws,
+            filePath: cfgPath,
+            maxRetries: 2,
+            transform: (before) => mergeAssistantCodexMcpConfigToml(before, ASSISTANT_MCP_SERVER_NAME, targetServer),
+            onBeforeRenameForTest: (attempt, canonicalFilePath) => {
+                lastConcurrentBytes = `${legacyInitial}\n# concurrent edit ${attempt}\n`;
+                writeFileSync(canonicalFilePath, lastConcurrentBytes, { mode: 0o600 });
+            },
+        })).toThrow(/assistant_config_write_conflict/);
+        expect(readFileSync(cfgPath, 'utf-8')).toBe(lastConcurrentBytes);
+        expect(readdirSync(dotCodex).filter((f) => f.includes('.tmp-'))).toHaveLength(0);
     });
 
     it('antigravity-cli: private HOME at <configDir>/assistant-home, MCP config + session env inside it, real ~/.gemini untouched', async () => {

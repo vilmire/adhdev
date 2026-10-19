@@ -32,7 +32,6 @@ import { assistantExecution } from '../../assistant/assistant-execution.js';
  */
 
 import { randomUUID } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname } from 'path';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
@@ -44,11 +43,12 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { ASSISTANT_TOOL_SOURCES, readAssistantSessionId } from './assistant-store.js';
 import { ASSISTANT_PROJECTS_SOURCES } from './assistant.js';
 import { resolveMeshCoordinatorSetup } from '../mesh-coordinator.js';
-import {
-    buildMeshCoordinatorMcpServerEntry, getMcpServersKey, isSupportedMeshCoordinatorConfigFormat,
-    parseMeshCoordinatorMcpConfig, serializeMeshCoordinatorMcpConfig,
-} from '../../mesh/mesh-coordinator-config.js';
 import { materializePrivateHome } from '../../mesh/worker-private-home.js';
+import {
+    ensurePrivateAssistantDirectoryChain,
+    ensurePrivateAssistantWorkspace,
+    writeAssistantMcpConfig,
+} from '../../assistant/assistant-config-io.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
 import { buildAssistantSystemPrompt, type AssistantPromptProject } from '../../assistant/assistant-prompt.js';
@@ -56,9 +56,8 @@ import { getAssistantProjectPorts } from '../../assistant/assistant-project-port
 import { projectSlugs } from '../../assistant/assistant-projects.js';
 import { isUnmanagedRepoIdentity, meshHostLabel } from '../../assistant/project-views.js';
 import {
-    ASSISTANT_CODEX_MCP_CONFIG_FORMAT,
-    assistantSessionSettings, assistantWorkspaceDir, mergeAssistantCodexMcpConfigToml, planAssistantMcp,
-    resolveAssistantApprovalSettings, type AssistantMcpConfigWrite,
+    assistantSessionSettings, assistantWorkspaceDir, planAssistantMcp,
+    resolveAssistantApprovalSettings,
 } from '../../assistant/assistant-launch-plan.js';
 
 /** `launch_assistant` is also the dashboard's assistant tab entry (§4.4). */
@@ -70,28 +69,6 @@ function str(v: unknown): string {
 
 function fail(code: string, error: string = code, extra: Record<string, unknown> = {}): CommandRouterResult {
     return { success: false, code, error, ...extra };
-}
-
-/** Merge the assistant server into the (daemon-owned) MCP config file. */
-function writeAssistantMcpConfig(w: AssistantMcpConfigWrite): void {
-    if (w.format === ASSISTANT_CODEX_MCP_CONFIG_FORMAT) {
-        mkdirSync(dirname(w.path), { recursive: true });
-        const before = existsSync(w.path) ? readFileSync(w.path, 'utf-8') : '';
-        const next = mergeAssistantCodexMcpConfigToml(before, w.serverName, w.server);
-        if (next !== before) writeFileSync(w.path, next, { encoding: 'utf-8', mode: 0o600 });
-        return;
-    }
-    if (!isSupportedMeshCoordinatorConfigFormat(w.format)) throw new Error(`unsupported MCP config format: ${w.format}`);
-    mkdirSync(dirname(w.path), { recursive: true });
-    const before = existsSync(w.path) ? readFileSync(w.path, 'utf-8') : '';
-    const parsed = before ? parseMeshCoordinatorMcpConfig(before, w.format) : {};
-    const key = getMcpServersKey(w.format);
-    const servers = parsed[key] && typeof parsed[key] === 'object' && !Array.isArray(parsed[key]) ? parsed[key] : {};
-    const next = serializeMeshCoordinatorMcpConfig({
-        ...parsed,
-        [key]: { ...servers, [w.serverName]: buildMeshCoordinatorMcpServerEntry(w.format, w.server) },
-    }, w.format);
-    if (next !== before) writeFileSync(w.path, next, { encoding: 'utf-8', mode: 0o600 });
 }
 
 /** The launch-time project table (hosted here / on another machine, relayed / unmanaged). */
@@ -189,7 +166,7 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     if (!prompt.withinLimit) return fail('assistant_prompt_too_long', `assistant prompt is ${prompt.length} chars`, { cliType });
 
     try {
-        mkdirSync(workspace, { recursive: true, mode: 0o700 });
+        ensurePrivateAssistantWorkspace(configDir, workspace);
     } catch (e) {
         return fail('assistant_config_write_failed', `could not prepare the assistant workspace: ${(e as Error)?.message ?? e}`, { cliType, workspace });
     }
@@ -199,7 +176,7 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
         // launch without it would read (and need a write to) the person's
         // global MCP config.
         try {
-            mkdirSync(dirname(mcp.privateHome.dir), { recursive: true, mode: 0o700 });
+            ensurePrivateAssistantDirectoryChain(configDir, dirname(mcp.privateHome.dir));
             const prepared = materializePrivateHome(mcp.privateHome.spec, { home: mcp.privateHome.dir, workspace });
             if (prepared.failed.length) LOG.warn('Assistant', `[${cliType}] private HOME imports failed: ${prepared.failed.join(', ')}`);
         } catch (e) {
@@ -207,7 +184,13 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
         }
     }
     try {
-        if (mcp.configWrite) writeAssistantMcpConfig(mcp.configWrite);
+        if (mcp.configWrite) {
+            writeAssistantMcpConfig(mcp.configWrite, {
+                configDir,
+                workspace,
+                privateHomeDir: mcp.privateHome?.dir,
+            });
+        }
     } catch (e) {
         return fail('assistant_config_write_failed', `could not prepare the assistant MCP config: ${(e as Error)?.message ?? e}`, { cliType, workspace });
     }

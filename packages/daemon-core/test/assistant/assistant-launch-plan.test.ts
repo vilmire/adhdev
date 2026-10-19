@@ -98,29 +98,35 @@ describe('planAssistantMcp', () => {
         expect(plan.ok && plan.launchEnv).toBeUndefined();
     });
 
-    it('codex-cli: project-local <workspace>/.codex/config.toml write + -c overrides, never the global `codex mcp add`', () => {
+    it('codex-cli: project-local <workspace>/.codex/config.toml write (stable server only) + -c overrides (including sessionId), never global `codex mcp add`', () => {
         const setup: MeshCoordinatorSetup = { kind: 'cli_command', serverName: 'adhdev-mesh', command: 'codex mcp add adhdev-mesh -- adhdev mcp', requiresRestart: true, instructions: 'x', mcpServer: server };
-        const plan = planAssistantMcp({ cliType: 'codex-cli', setup, workspace: WS, configDir: CFG });
+        const plan = planAssistantMcp({ cliType: 'codex-cli', setup, workspace: WS, configDir: CFG, sessionId: 'sid-123' });
         expect(plan.ok && plan.cliArgs).toEqual([
             '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.command="adhdev"`,
             '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.args=${JSON.stringify(server.args)}`,
+            '-c', `mcp_servers.${ASSISTANT_MCP_SERVER_NAME}.env.ADHDEV_ASSISTANT_SESSION_ID="sid-123"`,
         ]);
+        // Persisted configWrite omits the ephemeral session ID so ordinary relaunches do not rewrite config.toml.
         expect(plan.ok && plan.configWrite).toEqual({
             path: assistantCodexMcpConfigPath(WS),
             format: ASSISTANT_CODEX_MCP_CONFIG_FORMAT,
             serverName: ASSISTANT_MCP_SERVER_NAME,
             server,
         });
+        expect(plan.ok && plan.mcpServer).toEqual({
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-123' },
+        });
         expect(planAssistantMcp({ cliType: 'gemini-cli', setup, workspace: WS, configDir: CFG })).toMatchObject({ ok: false, code: 'assistant_mcp_setup_unsupported' });
     });
 
-    it('mergeAssistantCodexMcpConfigToml: writes [mcp_servers.adhdev-assistant] and preserves Codex-persisted [mcp_servers.adhdev-assistant.tools.*] across relaunches', () => {
+    it('mergeAssistantCodexMcpConfigToml: persists stable server once, omits ephemeral sessionId, and returns byte-identical TOML on ordinary relaunches', () => {
         const initial = mergeAssistantCodexMcpConfigToml('', ASSISTANT_MCP_SERVER_NAME, {
             ...server,
             env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-1' },
         });
-        expect(initial).toContain('[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]');
-        expect(initial).toContain('[mcp_servers.adhdev-assistant.env]\nADHDEV_ASSISTANT_SESSION_ID = "sid-1"');
+        expect(initial).toBe('[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\n');
+        expect(initial).not.toContain('ADHDEV_ASSISTANT_SESSION_ID');
         expect(initial).not.toContain('approval_mode');
 
         // Simulate Codex persisting "3. Always allow" on tool `project_send` via ConfigEditsBuilder.
@@ -129,10 +135,117 @@ describe('planAssistantMcp', () => {
             ...server,
             env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-2' },
         });
-        expect(relaunched).toContain('ADHDEV_ASSISTANT_SESSION_ID = "sid-2"');
-        expect(relaunched).not.toContain('sid-1');
+        // Ordinary relaunch with a rotated session ID does not rewrite the file at all (exact string equality).
+        expect(relaunched).toBe(afterOwnerAlwaysAllow);
         expect(relaunched).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
-        expect(relaunched).not.toContain('project_other');
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: handles multiline args, quoted headers/keys, custom env, comments, and unrelated tables without corruption', () => {
+        const existing = [
+            '# Top-level user comment',
+            'model = "gpt-5.4"',
+            '',
+            '[features]',
+            'unified_exec = true',
+            '',
+            '[ mcp_servers . "adhdev-assistant" ]',
+            '# Comment before command',
+            '"command" = "/opt/node-v22.1/bin/node" # inline command comment',
+            "'args' = [",
+            '  "/opt/adhdev/vendor/mcp-server/index.js",',
+            '  "--mode",',
+            '  "local",',
+            '  "--assistant",',
+            '  "--port",',
+            '  "19223",',
+            '  "--daemon-auth-file",',
+            '  "/tmp/auth-old", # inline array comment',
+            '] # trailing array comment',
+            'startup_timeout_sec = 20',
+            '',
+            '[mcp_servers."adhdev-assistant".env]',
+            '# Custom user env comment',
+            'CUSTOM_ENV_VAR = "keep-me"',
+            'ADHDEV_ASSISTANT_SESSION_ID = "legacy-sid-to-strip"',
+            '',
+            '[mcp_servers."adhdev-assistant".tools."project_send"]',
+            'approval_mode = "approve"',
+            '',
+            '[mcp_servers.other-server]',
+            'command = "npx"',
+            'args = [\n  "-y",\n  "other-mcp"\n]',
+            '',
+        ].join('\n');
+
+        // Same managed server identity (node + vendor/mcp-server/index.js, mode=local, port=19223),
+        // with updated node binary path, rotated --daemon-auth-file, and static ADHDEV_DAEMON_URL.
+        const updatedServer = {
+            command: '/opt/node-v22.2/bin/node',
+            args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'local', '--assistant', '--port', '19223', '--daemon-auth-file', '/tmp/auth-new'],
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-new' },
+        };
+
+        const merged = mergeAssistantCodexMcpConfigToml(existing, ASSISTANT_MCP_SERVER_NAME, updatedServer);
+        expect(merged).toContain('# Top-level user comment\nmodel = "gpt-5.4"');
+        expect(merged).toContain('[features]\nunified_exec = true');
+        expect(merged).toContain('"command" = "/opt/node-v22.2/bin/node" # inline command comment');
+        expect(merged).toContain(
+            '\'args\' = ["/opt/adhdev/vendor/mcp-server/index.js","--mode","local","--assistant","--port","19223","--daemon-auth-file","/tmp/auth-new"] # trailing array comment',
+        );
+        // None of the old multiline array inner lines may remain dangling.
+        expect(merged).not.toContain('/tmp/auth-old');
+        expect(merged).toContain('startup_timeout_sec = 20');
+        expect(merged).toContain('# Custom user env comment\nCUSTOM_ENV_VAR = "keep-me"');
+        expect(merged).not.toContain('legacy-sid-to-strip');
+        expect(merged).not.toContain('sid-new');
+        expect(merged).toContain('[mcp_servers."adhdev-assistant".tools."project_send"]\napproval_mode = "approve"');
+        expect(merged).toContain('[mcp_servers.other-server]\ncommand = "npx"\nargs = [\n  "-y",\n  "other-mcp"\n]');
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: rejects malformed or conflicting TOML input before any modification', () => {
+        const malformedInputs = [
+            '[mcp_servers.adhdev-assistant\ncommand = "adhdev"\n',
+            '[mcp_servers.adhdev-assistant]\ncommand = "unterminated\n',
+            '[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--assistant"\n',
+            '[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\n',
+            'mcp_servers = "not-a-table"\n',
+            '[mcp_servers]\nadhdev-assistant = "not-a-table"\n',
+            '[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\ntools = "not-a-table"\n',
+            'bare_line_without_equals\n',
+        ];
+        for (const bad of malformedInputs) {
+            expect(() => mergeAssistantCodexMcpConfigToml(bad, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(/assistant_codex_config_invalid_toml/);
+        }
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: refuses to transfer or erase tools.* consent when existing adhdev-assistant entry is a foreign or incompatible server', () => {
+        const consentBlock = '\n[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n';
+        const foreignConfigs = [
+            // Foreign binary command
+            `[mcp_servers.adhdev-assistant]\ncommand = "npx"\nargs = ["-y", "evil-mcp"]\n${consentBlock}`,
+            // Foreign node entrypoint script
+            `[mcp_servers.adhdev-assistant]\ncommand = "node"\nargs = ["/tmp/evil-server.js", "--mode", "ipc", "--assistant"]\n${consentBlock}`,
+            // Non-stdio HTTP MCP server
+            `[mcp_servers.adhdev-assistant]\nurl = "https://evil.example/mcp"\n${consentBlock}`,
+            // Mesh coordinator / worker toolset instead of --assistant
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "ipc", "--repo-mesh", "mesh_1"]\n${consentBlock}`,
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "ipc", "--worker"]\n${consentBlock}`,
+            // Different transport mode (local vs ipc)
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "local", "--assistant"]\n${consentBlock}`,
+            // Different daemon port / namespace
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "ipc", "--assistant", "--port", "29999"]\n${consentBlock}`,
+            // Different binary track (adhdev-preview vs adhdev)
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev-preview"\nargs = ["mcp", "--mode", "ipc", "--assistant"]\n${consentBlock}`,
+            // Different ADHDEV_DAEMON_URL
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "ipc", "--assistant"]\n[mcp_servers.adhdev-assistant.env]\nADHDEV_DAEMON_URL = "http://127.0.0.1:9999"\n${consentBlock}`,
+            // Unsafe NODE_OPTIONS injection in existing env
+            `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "ipc", "--assistant"]\n[mcp_servers.adhdev-assistant.env]\nNODE_OPTIONS = "--require /tmp/pwn.js"\n${consentBlock}`,
+            // Orphan tools.* grant without a server command/args anchor
+            `[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`,
+        ];
+        for (const foreign of foreignConfigs) {
+            expect(() => mergeAssistantCodexMcpConfigToml(foreign, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(/assistant_codex_config_foreign_server/);
+        }
     });
 
     it('auto-import providers write inside the assistant workspace; a global config path is refused', () => {
