@@ -6,10 +6,11 @@ interface Props {
     onOpen: () => void
 }
 
-/** Cloud mobile: always-visible entry to `/approvals` (sidebar flag stays off). */
+/** Cloud mobile: provider approvals entry shown only when positive decisions are pending. */
 export default function DashboardMobileApprovalsLink({ pendingCount, onOpen }: Props) {
     const { t } = useTranslation('common')
-    const showCount = Number.isFinite(pendingCount) && pendingCount > 0
+    const hasPending = typeof pendingCount === 'number' && Number.isFinite(pendingCount) && pendingCount > 0
+    if (!hasPending) return null
 
     return (
         <button
@@ -41,19 +42,17 @@ export default function DashboardMobileApprovalsLink({ pendingCount, onOpen }: P
                     </span>
                 </span>
             </span>
-            {showCount ? (
-                <span
-                    className="shrink-0 min-h-[28px] min-w-[28px] px-2 inline-flex items-center justify-center rounded-full text-2xs font-bold tabular-nums"
-                    style={{
-                        color: 'var(--status-warning)',
-                        background: 'color-mix(in srgb, var(--status-warning) 18%, transparent)',
-                        border: '1px solid color-mix(in srgb, var(--status-warning) 35%, transparent)',
-                    }}
-                    aria-label={t('mobileInbox.approvalsPendingCount', { count: pendingCount })}
-                >
-                    {pendingCount}
-                </span>
-            ) : null}
+            <span
+                className="shrink-0 min-h-[28px] min-w-[28px] px-2 inline-flex items-center justify-center rounded-full text-2xs font-bold tabular-nums"
+                style={{
+                    color: 'var(--status-warning)',
+                    background: 'color-mix(in srgb, var(--status-warning) 18%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--status-warning) 35%, transparent)',
+                }}
+                aria-label={t('mobileInbox.approvalsPendingCount', { count: pendingCount })}
+            >
+                {pendingCount}
+            </span>
         </button>
     )
 }

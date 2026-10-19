@@ -1,6 +1,7 @@
 /** Owner Inbox provider decision lane; ordinary worker conversations remain hidden. */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router-dom'
 import { useDaemons } from '../compat'
 import { useTransport } from '../context/TransportContext'
 import { deriveProviderApprovalInbox } from '../components/MeshGraph/providerApprovalInbox'
@@ -8,6 +9,7 @@ import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import PendingApprovalsInbox, {
     type PendingApprovalAction,
     type PendingApprovalExactButton,
+    type PendingApprovalItem,
 } from '../components/MeshGraph/PendingApprovalsInbox'
 import AppPage from '../components/ui/AppPage'
 import { IconWarning } from '../components/Icons'
@@ -17,6 +19,7 @@ const WAIT_TICK_MS = 10_000
 
 export default function Approvals() {
     const { t } = useTranslation('common')
+    const navigate = useNavigate()
     const { ides, connectionStates, initialLoaded } = useDaemons()
     const { sendCommand } = useTransport()
 
@@ -45,6 +48,16 @@ export default function Approvals() {
         [sendCommand],
     )
 
+    const openSession = useCallback(
+        (item: PendingApprovalItem) => {
+            const target = item.nodeId
+                ? `session:${item.nodeId}:${item.sessionId}`
+                : `session:${item.sessionId}`
+            navigate(`/dashboard?activeTab=${encodeURIComponent(target)}`)
+        },
+        [navigate],
+    )
+
     return (
         <AppPage
             icon={<IconWarning size={18} />}
@@ -59,6 +72,7 @@ export default function Approvals() {
                     <PendingApprovalsInbox
                         approvals={approvals}
                         onResolve={resolve}
+                        onOpenSession={openSession}
                         hideWhenEmpty={false}
                         nowMs={nowMs}
                     />

@@ -23,7 +23,7 @@ export function useDashboardActiveTabRequests({
 
     const requestedMobileTabKey = useMemo(() => {
         if (!isMobile || !urlActiveTab) return null
-        return resolveConversationBySessionId(urlActiveTab)?.tabKey ?? null
+        return resolveConversationBySessionId(urlActiveTab)?.tabKey ?? urlActiveTab
     }, [isMobile, resolveConversationBySessionId, urlActiveTab])
 
     const consumeRequestedActiveTab = useCallback(() => {
