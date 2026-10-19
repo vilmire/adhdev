@@ -357,6 +357,8 @@ async function resolveCallerAuthority(
             };
         }
 
+        let queueAssignedAttemptId = '';
+        let queueTaskAttemptId = '';
         try {
             const assigned = meshStore.findAssignedBySession(identity.meshId, workerSessionId) as Record<
                 string,
@@ -385,14 +387,16 @@ async function resolveCallerAuthority(
                         },
                     };
                 }
-                const assignedAttemptId = trimString(assigned.attemptId);
-                if (assignedAttemptId && identity.attemptId && assignedAttemptId !== identity.attemptId) {
+                queueAssignedAttemptId =
+                    trimString(assigned.attemptId) ||
+                    trimString((assigned.payload as Record<string, unknown> | undefined)?.attemptId);
+                if (queueAssignedAttemptId && identity.attemptId && queueAssignedAttemptId !== identity.attemptId) {
                     return {
                         ok: false,
                         result: {
                             success: false,
                             code: 'stale_attempt',
-                            error: `Worker credential attempt "${identity.attemptId}" does not match assigned attempt "${assignedAttemptId}" (stale_attempt)`,
+                            error: `Worker credential attempt "${identity.attemptId}" does not match assigned attempt "${queueAssignedAttemptId}" (stale_attempt)`,
                         },
                     };
                 }
@@ -435,14 +439,30 @@ async function resolveCallerAuthority(
                     },
                 };
             }
-            const taskAttemptId = trimString(taskEntry.attemptId);
-            if (taskAttemptId && identity.attemptId && taskAttemptId !== identity.attemptId) {
+            queueTaskAttemptId =
+                trimString(taskEntry.attemptId) ||
+                trimString((taskEntry.payload as Record<string, unknown> | undefined)?.attemptId);
+            if (queueTaskAttemptId && identity.attemptId && queueTaskAttemptId !== identity.attemptId) {
                 return {
                     ok: false,
                     result: {
                         success: false,
                         code: 'stale_attempt',
-                        error: `Worker credential attempt "${identity.attemptId}" is stale for task "${identity.taskId}" (current attempt "${taskAttemptId}") (stale_attempt)`,
+                        error: `Worker credential attempt "${identity.attemptId}" is stale for task "${identity.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`,
+                    },
+                };
+            }
+            if (
+                queueAssignedAttemptId &&
+                queueTaskAttemptId &&
+                queueAssignedAttemptId !== queueTaskAttemptId
+            ) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'stale_attempt',
+                        error: `Queue attempt mismatch between assigned row ("${queueAssignedAttemptId}") and task row ("${queueTaskAttemptId}") (stale_attempt)`,
                     },
                 };
             }
@@ -556,6 +576,28 @@ async function resolveCallerAuthority(
                         success: false,
                         code: 'stale_attempt',
                         error: `Worker credential attempt "${credAttempt.attemptId}" was superseded by attempt "${latestAttempt?.attemptId ?? 'none'}" (stale_attempt)`,
+                    },
+                };
+            }
+
+            if (queueAssignedAttemptId && queueAssignedAttemptId !== latestAttempt.attemptId) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'stale_attempt',
+                        error: `Assigned queue attempt "${queueAssignedAttemptId}" does not match current ledger attempt "${latestAttempt.attemptId}" (stale_attempt)`,
+                    },
+                };
+            }
+
+            if (queueTaskAttemptId && queueTaskAttemptId !== latestAttempt.attemptId) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'stale_attempt',
+                        error: `Task queue attempt "${queueTaskAttemptId}" does not match current ledger attempt "${latestAttempt.attemptId}" (stale_attempt)`,
                     },
                 };
             }

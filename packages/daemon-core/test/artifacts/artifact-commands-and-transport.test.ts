@@ -1631,5 +1631,66 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             expect(result.published).toBe(false);
             expect(result.messageKey).toBeUndefined();
         });
+
+        it('F3 delta2: requires queue attemptId to agree with the ledger even for an unscoped first-attempt token and bind', async () => {
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const router = new DaemonCommandRouter(deps);
+            const now = new Date().toISOString();
+
+            meshStore.insertQueueEntry({
+                id: 'task',
+                meshId: 'mesh',
+                message: 'fixture',
+                status: 'assigned',
+                assignedSessionId: 'worker',
+                workspace: workspaceA,
+                attemptId: 'ledger-current',
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+            seedMeshAttempt({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'ledger-current',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+
+            const token = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+            });
+            const bind = mintWorkerSessionBind({
+                meshId: 'mesh',
+                sessionId: 'worker',
+            });
+
+            // Positive control: matching queue.attemptId and ledger.attemptId with unscoped first-attempt credentials
+            for (const credentials of [{ token: token.token }, { bind: bind.bind }]) {
+                const okRes = await router.execute('artifact_list', credentials, 'ipc');
+                expect(okRes.success).toBe(true);
+            }
+
+            // Negative regression: queue.attemptId diverges from ledger.attemptId
+            meshStore.db
+                .prepare("UPDATE mesh_queue SET payload=json_set(payload, '$.attemptId', ?) WHERE mesh_id=? AND id=?")
+                .run('queue-other', 'mesh', 'task');
+            expect((meshStore.findQueueEntryById('mesh', 'task') as any).attemptId).toBe('queue-other');
+            expect(meshStore.turnStore().findLatestAttemptForTask('mesh', 'task')?.attemptId).toBe('ledger-current');
+
+            for (const credentials of [{ token: token.token }, { bind: bind.bind }]) {
+                const deniedRes = await router.execute('artifact_list', credentials, 'ipc');
+                expect(deniedRes.success).toBe(false);
+                expect(deniedRes.code).toBe('stale_attempt');
+            }
+        });
     });
 });
