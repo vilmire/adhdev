@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     ArtifactStore,
     MAX_ARTIFACTS_PER_SESSION,
@@ -29,6 +29,7 @@ import {
     mintWorkerTaskToken,
 } from '../../src/mesh/worker-mcp-isolation.js';
 import { resolveWorkerIdentity } from '../../src/mesh/worker-report.js';
+import { seedMeshAttempt } from '../helpers/turn-attempt-seed.js';
 import {
     registerMeshCoordinator,
     unregisterMeshCoordinator,
@@ -147,13 +148,16 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
     });
 
     describe('Command registry & normal/coordinator/worker authority', () => {
-        it('registers artifact_register, artifact_list, and artifact_fetch in DaemonCommandRegistry with non-mesh sources', () => {
+        it('registers artifact_register, artifact_list, and artifact_fetch in DaemonCommandRegistry with non-mesh, non-ws sources', () => {
             const registry = getDaemonCommandRegistry();
             for (const name of [
                 'artifact_register',
+                'session_artifact_register',
                 'artifact_list',
+                'session_artifact_list',
                 'artifact_fetch',
                 'artifact_read',
+                'session_artifact_fetch',
             ]) {
                 const spec = registry.get(name);
                 expect(spec).toBeDefined();
@@ -161,7 +165,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 expect(spec?.sources.includes('ipc')).toBe(true);
                 expect(spec?.sources.includes('standalone')).toBe(true);
                 expect(spec?.sources.includes('p2p')).toBe(true);
-                expect(spec?.sources.includes('ws')).toBe(true);
+                expect(spec?.sources.includes('ws')).toBe(false);
                 expect(spec?.sources.includes('mesh')).toBe(false);
             }
         });
@@ -204,7 +208,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 title: 'Build Summary',
             });
 
-            const listRes = await router.execute('artifact_list', { sessionId }, 'ws');
+            const listRes = await router.execute('artifact_list', { sessionId }, 'standalone');
             expect(listRes.success).toBe(true);
             expect((listRes.artifacts as any[]).length).toBe(1);
             expect((listRes.attachments as any[])[0].artifactId).toBe(regRes.artifactId);
@@ -865,6 +869,478 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             // Step 5: Verify ledgerSeedFromPersisted excludes artifact:* so MessageIdentityLedger only seeds chat bubbles
             const seed = ledgerSeedFromPersisted({ committed: persistedRows, torn: [] });
             expect(seed?.entries.some((e) => e.messageId.startsWith('artifact:'))).toBe(false);
+        });
+
+        it('verifies writer-change restore and web cache invalidation when only sha256 or updatedAt changes', () => {
+            const attachment: ChatAttachmentMeta = {
+                artifactId: 'art_test_restore01',
+                kind: 'text',
+                mime: 'text/plain',
+                filename: 'note.txt',
+                title: 'Note',
+                sizeBytes: 1,
+                sha256: 'a'.repeat(64),
+                previewText: 'a',
+                createdAt: 1,
+                updatedAt: 2,
+            };
+            const context = {
+                writerId: 'w',
+                producerDaemonId: 'd',
+                observedAt: '2026-10-20T00:00:00.000Z',
+                nowMs: 100,
+            };
+
+            let state = new KeyedChatSessionState('s', 'ep');
+            const folder = new KeyedTranscriptFolder({ expectedSessionId: 's' });
+            const persisted: any[] = [];
+            let seq = 1;
+            const apply = (result: any, writer = 'w') => {
+                expect(result.status).toBe('frame');
+                state.commit(result.frame, context.nowMs++);
+                const rows = result.frame.rows.map((r: any) => ({ ...r, writer, seq: seq++ }));
+                persisted.push(...rows);
+                folder.ingestRows(rows);
+                expect(folder.needsResync).toBeNull();
+                expect(folder.stats().digestMismatches).toBe(0);
+                return result.frame;
+            };
+
+            apply(state.buildArtifactFrame({ attachment }, context));
+            const initial = folder.view()!.messages[0];
+            for (let n = 1; n <= 3; n++) {
+                const frame = apply(
+                    state.build(
+                        {
+                            sessionId: 's',
+                            providerType: 'x',
+                            status: 'running',
+                            providerObservedStatus: null,
+                            messages: [
+                                {
+                                    messageId: 'chat1',
+                                    ord: 'a1',
+                                    role: 'assistant',
+                                    kind: 'standard',
+                                    content: `tick${n}`,
+                                },
+                            ],
+                            coverage: { mode: 'full', omittedBefore: false },
+                        },
+                        context,
+                    ),
+                );
+                expect(
+                    frame.rows.some(
+                        (r: any) => r.kind === 'chat.del.v2' && r.key === 'm:artifact:art_test_restore01',
+                    ),
+                ).toBe(false);
+                expect(folder.lastCommit()!.liveCount).toBe(2);
+                expect(folder.view()!.coverage.omittedBefore).toBe(false);
+            }
+
+            apply(
+                state.buildArtifactFrame(
+                    { attachment: { ...attachment, sha256: 'b'.repeat(64), updatedAt: 3 } },
+                    context,
+                ),
+            );
+            const updatedArtifact = folder
+                .view()!
+                .messages.find((m) => m.messageId === 'artifact:art_test_restore01')!;
+            expect(updatedArtifact.rev).toBe(initial.rev + 1);
+            expect(updatedArtifact.ord).toBe(initial.ord);
+            expect(updatedArtifact.attachment!.sha256).toBe('b'.repeat(64));
+
+            const latest = new Map<string, any>();
+            for (const row of persisted) latest.set(row.key, row);
+            state = new KeyedChatSessionState('s', 'ep2');
+            state.restore({ committed: [...latest.values()], torn: [] }, 'w2');
+            const base = apply(
+                state.build(
+                    {
+                        sessionId: 's',
+                        providerType: 'x',
+                        status: 'running',
+                        providerObservedStatus: null,
+                        messages: [
+                            {
+                                messageId: 'chat1',
+                                ord: 'a1',
+                                role: 'assistant',
+                                kind: 'standard',
+                                content: 'tick3',
+                            },
+                        ],
+                        coverage: { mode: 'full', omittedBefore: false },
+                    },
+                    { ...context, writerId: 'w2' },
+                ),
+                'w2',
+            );
+            expect(base.commit.baseReason).toBe('writer_change');
+            expect(folder.lastCommit()!.liveCount).toBe(2);
+            expect(
+                folder.view()!.messages.find((m) => m.messageId === 'artifact:art_test_restore01')!.ord,
+            ).toBe(initial.ord);
+
+            // Web cache invalidation when only sha256 or updatedAt changes
+            const view1 = folder.view()!;
+            const cache = new TranscriptBubbleCache();
+            const one = mapTranscriptViewToChatView(view1, cache)!.messages.find(
+                (m) => m.id === 'artifact:art_test_restore01',
+            )!;
+            const view2 = {
+                ...view1,
+                messages: view1.messages.map((m) =>
+                    m.messageId === 'artifact:art_test_restore01'
+                        ? { ...m, attachment: { ...m.attachment!, sha256: 'c'.repeat(64) } }
+                        : m,
+                ),
+            };
+            const two = mapTranscriptViewToChatView(view2, cache)!.messages.find(
+                (m) => m.id === 'artifact:art_test_restore01',
+            )!;
+            expect(two).not.toBe(one);
+            expect(two.attachment!.sha256).toBe('c'.repeat(64));
+
+            const view3 = {
+                ...view2,
+                messages: view2.messages.map((m) =>
+                    m.messageId === 'artifact:art_test_restore01'
+                        ? { ...m, attachment: { ...m.attachment!, updatedAt: 99 } }
+                        : m,
+                ),
+            };
+            const three = mapTranscriptViewToChatView(view3, cache)!.messages.find(
+                (m) => m.id === 'artifact:art_test_restore01',
+            )!;
+            expect(three).not.toBe(two);
+            expect(three.attachment!.updatedAt).toBe(99);
+        });
+    });
+
+    describe('Local security & correctness regressions (F2, F3, F4, F5, and WS source defense-in-depth)', () => {
+        const allAliases = [
+            'artifact_register',
+            'session_artifact_register',
+            'artifact_list',
+            'session_artifact_list',
+            'artifact_fetch',
+            'artifact_read',
+            'session_artifact_fetch',
+        ];
+
+        it('rejects all 7 artifact command aliases from ws, mesh, internal, ext, api, and unknown sources', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'SECRET-MARKER', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+            const reg = await router.execute(
+                'artifact_register',
+                { sessionId: 'victim', path: 'private.md' },
+                'ipc',
+            );
+            expect(reg.success).toBe(true);
+
+            for (const source of ['ws', 'mesh', 'internal', 'ext', 'api', 'invented']) {
+                for (const cmd of allAliases) {
+                    const res = await router.execute(
+                        cmd,
+                        { sessionId: 'victim', artifactId: reg.artifactId, path: 'private.md' },
+                        source,
+                    );
+                    expect(res.success).toBe(false);
+                    expect(res.code).toBe('COMMAND_SOURCE_REJECTED');
+                }
+            }
+        });
+
+        it('F2: rejects replacement of the stored canonical workspace by an outside-root symlink at fetch time via DaemonCommandRouter', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'LOCAL-WORKSPACE-CONTENT', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+            const reg = await router.execute(
+                'artifact_register',
+                { sessionId: 'victim', path: 'private.md' },
+                'ipc',
+            );
+            expect(reg.success).toBe(true);
+
+            const outside = path.join(tempRoot, 'outside-f2');
+            fs.mkdirSync(outside, { recursive: true });
+            fs.writeFileSync(path.join(outside, 'private.md'), 'OUTSIDE-ROOT-SECRET', 'utf8');
+            fs.renameSync(workspaceA, path.join(tempRoot, 'original-workspace-a'));
+            fs.symlinkSync(outside, workspaceA, 'dir');
+
+            const res = await router.execute(
+                'artifact_fetch',
+                { sessionId: 'victim', artifactId: reg.artifactId },
+                'p2p',
+            );
+            expect(res.success).toBe(false);
+            expect(res.code).toBe('path_outside_workspace');
+        });
+
+        it('F3: rejects stale worker token and stale worker bind against a newer attempt of the same task and session while allowing the current attempt', async () => {
+            sessionRegistry.register({
+                sessionId: 'worker',
+                parentSessionId: null,
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'WORKER-CONTENT', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+            const now = new Date().toISOString();
+
+            meshStore.insertQueueEntry({
+                id: 'task',
+                meshId: 'mesh',
+                message: 'fixture',
+                status: 'assigned',
+                assignedSessionId: 'worker',
+                workspace: workspaceA,
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+
+            // Case 1: Old token against newer attempt
+            const old = seedMeshAttempt({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'attempt-old',
+                attemptNo: 0,
+                stage: 'failed',
+            });
+            const oldToken = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: old.attemptId,
+            });
+            const bindBeforeNewAttempt = mintWorkerSessionBind({
+                meshId: 'mesh',
+                sessionId: 'worker',
+            });
+            seedMeshAttempt({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'attempt-current',
+                attemptNo: 1,
+                stage: 'generating',
+            });
+            expect(meshStore.turnStore().findLatestAttemptForTask('mesh', 'task')?.attemptId).toBe(
+                'attempt-current',
+            );
+
+            const staleTokenRes = await router.execute(
+                'artifact_register',
+                { token: oldToken.token, path: 'private.md' },
+                'ipc',
+            );
+            expect(staleTokenRes.success).toBe(false);
+            expect(staleTokenRes.code).toBe('stale_attempt');
+
+            // Case 2: Stale bind resolution against newer attempt
+            const staleBindRes = await router.execute(
+                'artifact_register',
+                { bind: bindBeforeNewAttempt.bind, path: 'private.md' },
+                'ipc',
+            );
+            expect(staleBindRes.success).toBe(false);
+            expect(staleBindRes.code).toBe('stale_attempt');
+
+            // Positive control: token minted for the current active attempt succeeds
+            __resetWorkerTaskTokensForTest();
+            const currentToken = mintWorkerTaskToken({
+                meshId: 'mesh',
+                taskId: 'task',
+                sessionId: 'worker',
+                attemptId: 'attempt-current',
+            });
+            const currentTokenRes = await router.execute(
+                'artifact_register',
+                { token: currentToken.token, path: 'private.md' },
+                'ipc',
+            );
+            expect(currentTokenRes.success).toBe(true);
+            expect(currentTokenRes.sessionId).toBe('worker');
+
+            const currentBindRes = await router.execute(
+                'artifact_list',
+                { bind: bindBeforeNewAttempt.bind },
+                'ipc',
+            );
+            expect(currentBindRes.success).toBe(true);
+            expect((currentBindRes.artifacts as any[]).length).toBe(1);
+        });
+
+        it('F4: does not let caller-selected meshId/nodeId/taskId authorize an unregistered target session', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'VICTIM-FILE', 'utf8');
+
+            const now = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'other-task',
+                meshId: 'mesh',
+                message: 'fixture',
+                status: 'assigned',
+                assignedSessionId: 'victim',
+                workspace: workspaceA,
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+
+            const router = new DaemonCommandRouter(deps);
+            const res = await router.execute(
+                'artifact_register',
+                {
+                    sessionId: 'invented-session',
+                    meshId: 'mesh',
+                    taskId: 'other-task',
+                    path: 'private.md',
+                },
+                'ipc',
+            );
+            expect(res.success).toBe(false);
+
+            // Also reject when registered session B attempts to claim victim's taskId
+            sessionRegistry.register({
+                sessionId: 'sess-other-b',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const crossTaskRes = await router.execute(
+                'artifact_register',
+                {
+                    sessionId: 'sess-other-b',
+                    meshId: 'mesh',
+                    taskId: 'other-task',
+                    path: 'private.md',
+                },
+                'ipc',
+            );
+            expect(crossTaskRes.success).toBe(false);
+            expect(crossTaskRes.code).toBe('task_mismatch');
+        });
+
+        it('F5: surfaces failed artifact-bubble publication as success: false with persisted artifactId, and succeeds idempotently on retry', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), '# First Draft\n', 'utf8');
+
+            const router = new DaemonCommandRouter(deps);
+            const folder = new KeyedTranscriptFolder({ expectedSessionId: 'victim' });
+            let seq = 1;
+            let shouldThrow = true;
+
+            const append = vi.fn(async (_sid: string, frame: KeyedChatFrame) => {
+                if (shouldThrow) {
+                    throw new Error('fixture append failed');
+                }
+                folder.ingestRows(frameToFolderRows(frame, 'w', seq));
+                seq += frame.rows.length;
+            });
+
+            const service = configureTranscriptProjection({
+                daemonId: () => 'd',
+                writerId: () => 'w',
+                epoch: 'ep',
+                appendChatFrame: append,
+            })!;
+
+            try {
+                // Attempt 1: appendChatFrame throws -> must return success: false, code: artifact_publication_failed
+                const failedRes = await router.execute(
+                    'artifact_register',
+                    { sessionId: 'victim', path: 'private.md', title: 'Report v1' },
+                    'ipc',
+                );
+                expect(append).toHaveBeenCalledTimes(1);
+                expect(failedRes.success).toBe(false);
+                expect(failedRes.code).toBe('artifact_publication_failed');
+                expect(failedRes.registered).toBe(true);
+                expect(failedRes.published).toBe(false);
+                expect(failedRes.artifactId).toMatch(/^art_[0-9a-f]{16}$/);
+                expect(failedRes.messageId).toBeUndefined();
+                expect(artifactStore.countBySession('victim')).toBe(1);
+                expect(folder.view()).toBeNull();
+
+                // Attempt 2 (retry on same path when publisher recovers): idempotent upsert + valid committed frame
+                shouldThrow = false;
+                const retryRes = await router.execute(
+                    'artifact_register',
+                    { sessionId: 'victim', path: 'private.md', title: 'Report v1' },
+                    'ipc',
+                );
+                expect(append).toHaveBeenCalledTimes(2);
+                expect(retryRes.success).toBe(true);
+                expect(retryRes.registered).toBe(true);
+                expect(retryRes.published).toBe(true);
+                expect(retryRes.isUpdate).toBe(true);
+                expect(retryRes.artifactId).toBe(failedRes.artifactId);
+                expect(retryRes.messageKey).toBe(`m:artifact:${failedRes.artifactId}`);
+                expect(artifactStore.countBySession('victim')).toBe(1);
+
+                expect(folder.needsResync).toBeNull();
+                expect(folder.stats().digestMismatches).toBe(0);
+                expect(folder.lastCommit()?.liveCount).toBe(1);
+                expect(folder.view()?.messages).toHaveLength(1);
+                expect(folder.view()?.messages[0].messageId).toBe(`artifact:${failedRes.artifactId}`);
+
+                // Normal read_chat tick preserves the artifact bubble
+                service.observe('victim', {
+                    sessionId: 'victim',
+                    providerType: 'claude-cli',
+                    status: 'running',
+                    providerObservedStatus: 'running',
+                    messages: [
+                        {
+                            messageId: 'd.ep.1',
+                            ord: 'a1',
+                            srcId: null,
+                            role: 'assistant',
+                            kind: 'standard',
+                            content: 'Published report',
+                            bubbleState: 'final',
+                        },
+                    ],
+                    coverage: { mode: 'full', omittedBefore: false },
+                });
+                await new Promise((resolve) => setImmediate(resolve));
+                expect(folder.needsResync).toBeNull();
+                expect(folder.stats().digestMismatches).toBe(0);
+                expect(folder.lastCommit()?.liveCount).toBe(2);
+            } finally {
+                __resetTranscriptProjectionForTests();
+            }
         });
     });
 });

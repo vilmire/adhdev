@@ -463,6 +463,22 @@ export function readVerifiedArtifactFile(
     );
     const { kind, mime } = validateExtensionKindAndMime(candidatePath, realTargetPath, options);
 
+    let rootLstat: fs.Stats;
+    try {
+        rootLstat = fs.lstatSync(realWorkspaceRoot);
+    } catch {
+        throw new ArtifactGuardError(
+            'invalid_workspace_root',
+            'Canonical workspace root is inaccessible (invalid_workspace_root)',
+        );
+    }
+    if (rootLstat.isSymbolicLink() || !rootLstat.isDirectory()) {
+        throw new ArtifactGuardError(
+            'path_outside_workspace',
+            'Canonical workspace root is not a regular directory (path_outside_workspace)',
+        );
+    }
+
     options._testHooks?.beforeOpen?.();
 
     const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
@@ -554,20 +570,29 @@ export function readVerifiedArtifactFile(
             );
         }
 
-        // Re-verify that the workspace candidate path still resolves inside the
-        // workspace to the exact same (dev, ino) we read from `fd`.
+        // Re-verify that the canonical workspace root and candidate path still
+        // resolve inside the exact same directory/file inodes we validated.
+        let postRootReal: string;
+        let postRootLstat: fs.Stats;
         let postRealTarget: string;
         let postTargetLstat: fs.Stats;
         try {
+            postRootLstat = fs.lstatSync(realWorkspaceRoot);
+            postRootReal = fs.realpathSync(realWorkspaceRoot);
             postRealTarget = fs.realpathSync(candidatePath);
             postTargetLstat = fs.lstatSync(postRealTarget);
         } catch {
             throw new ArtifactGuardError(
                 'path_outside_workspace',
-                'Artifact path was removed or replaced during read (path_outside_workspace)',
+                'Artifact path or workspace root was removed or replaced during read (path_outside_workspace)',
             );
         }
         if (
+            postRootLstat.isSymbolicLink() ||
+            !postRootLstat.isDirectory() ||
+            postRootReal !== realWorkspaceRoot ||
+            postRootLstat.dev !== rootLstat.dev ||
+            postRootLstat.ino !== rootLstat.ino ||
             !isStrictSubpath(realWorkspaceRoot, postRealTarget) ||
             postTargetLstat.isSymbolicLink() ||
             !postTargetLstat.isFile() ||

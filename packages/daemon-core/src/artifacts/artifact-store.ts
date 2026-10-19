@@ -14,6 +14,7 @@
 
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
     readVerifiedArtifactFile,
     resolveArtifactFile,
@@ -249,6 +250,33 @@ export class ArtifactStore {
         const now = typeof input.now === 'number' && Number.isFinite(input.now) ? Math.trunc(input.now) : Date.now();
 
         return runInImmediateTransaction(this.db, () => {
+            const priorRootRow = this.db
+                .prepare<{ workspace_root: string }>(
+                    `SELECT workspace_root FROM session_artifacts WHERE session_id = ? LIMIT 1`,
+                )
+                .get(sessionId);
+            if (priorRootRow) {
+                const pinnedSessionRoot = path.resolve(priorRootRow.workspace_root);
+                let currentPinnedReal: string | null = null;
+                try {
+                    const rootLstat = fs.lstatSync(pinnedSessionRoot);
+                    if (!rootLstat.isSymbolicLink() && rootLstat.isDirectory()) {
+                        currentPinnedReal = fs.realpathSync(pinnedSessionRoot);
+                    }
+                } catch {
+                    currentPinnedReal = null;
+                }
+                if (
+                    currentPinnedReal !== pinnedSessionRoot ||
+                    resolved.workspaceRoot !== pinnedSessionRoot
+                ) {
+                    throw new ArtifactGuardError(
+                        'path_outside_workspace',
+                        'Session canonical workspace root was redirected or replaced (path_outside_workspace)',
+                    );
+                }
+            }
+
             const existing = this.db
                 .prepare<SessionArtifactDbRow>(
                     `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`,
@@ -523,19 +551,40 @@ export class ArtifactStore {
             );
         }
 
+        const pinnedCanonicalRoot = path.resolve(record.workspaceRoot);
+        let storedRootLstat: fs.Stats;
+        let currentRealStoredRoot: string;
+        try {
+            storedRootLstat = fs.lstatSync(pinnedCanonicalRoot);
+            currentRealStoredRoot = fs.realpathSync(pinnedCanonicalRoot);
+        } catch {
+            throw new ArtifactGuardError(
+                'path_outside_workspace',
+                'Stored canonical workspace root is missing or inaccessible (path_outside_workspace)',
+            );
+        }
+        if (
+            storedRootLstat.isSymbolicLink() ||
+            !storedRootLstat.isDirectory() ||
+            currentRealStoredRoot !== pinnedCanonicalRoot
+        ) {
+            throw new ArtifactGuardError(
+                'path_outside_workspace',
+                'Stored canonical workspace root was redirected or replaced by a symbolic link (path_outside_workspace)',
+            );
+        }
+
         if (options?.trustedWorkspaceRoot !== undefined) {
             let realTrustedRoot: string;
-            let realStoredRoot: string;
             try {
                 realTrustedRoot = fs.realpathSync(options.trustedWorkspaceRoot);
-                realStoredRoot = fs.realpathSync(record.workspaceRoot);
             } catch {
                 throw new ArtifactGuardError(
                     'invalid_workspace_root',
                     'Trusted workspace root cannot be resolved (invalid_workspace_root)',
                 );
             }
-            if (realTrustedRoot !== realStoredRoot) {
+            if (realTrustedRoot !== pinnedCanonicalRoot) {
                 throw new ArtifactGuardError(
                     'path_outside_workspace',
                     `Artifact workspace root does not match trusted workspace root (path_outside_workspace)`,
@@ -543,7 +592,7 @@ export class ArtifactStore {
             }
         }
 
-        const verified = readVerifiedArtifactFile(record.workspaceRoot, record.relPath, {
+        const verified = readVerifiedArtifactFile(pinnedCanonicalRoot, record.relPath, {
             declaredKind: record.kind,
             declaredMime: record.mime,
             title: record.title,

@@ -720,6 +720,52 @@ describe('Task A — Artifact Store & File Guard', () => {
                 'path_outside_workspace',
             );
         });
+
+        it('rejects replacement of the stored canonical workspace by an outside-root symlink at fetch and re-register time (F2)', () => {
+            const wsFile = path.join(workspaceDir, 'private.md');
+            const outsideFile = path.join(outsideDir, 'private.md');
+            fs.writeFileSync(wsFile, 'WORKSPACE-SAFE-CONTENT', 'utf8');
+            fs.writeFileSync(outsideFile, 'OUTSIDE-ROOT-SECRET', 'utf8');
+
+            const registered = store.register({
+                sessionId: 'sess-root-swap',
+                workspaceRoot: workspaceDir,
+                path: 'private.md',
+            });
+            expect(registered.record.workspaceRoot).toBe(fs.realpathSync(workspaceDir));
+
+            // Replace workspaceDir with a directory symlink pointing to outsideDir
+            const movedWorkspace = path.join(tempRoot, 'original-workspace');
+            fs.renameSync(workspaceDir, movedWorkspace);
+            fs.symlinkSync(outsideDir, workspaceDir, 'dir');
+
+            // Fetch without trustedWorkspaceRoot must refuse the replaced root
+            expectArtifactError(
+                () => store.fetchArtifactContent(registered.record.artifactId),
+                'path_outside_workspace',
+            );
+
+            // Fetch with the symlinked workspaceDir passed as trustedWorkspaceRoot must ALSO refuse
+            expectArtifactError(
+                () =>
+                    store.fetchArtifactContent(registered.record.artifactId, {
+                        sessionId: 'sess-root-swap',
+                        trustedWorkspaceRoot: workspaceDir,
+                    }),
+                'path_outside_workspace',
+            );
+
+            // Re-registering under the same session after root replacement must also fail closed
+            expectArtifactError(
+                () =>
+                    store.register({
+                        sessionId: 'sess-root-swap',
+                        workspaceRoot: workspaceDir,
+                        path: 'private.md',
+                    }),
+                'path_outside_workspace',
+            );
+        });
     });
 
     describe('SQLite schema persistence & import-boundary invariant', () => {

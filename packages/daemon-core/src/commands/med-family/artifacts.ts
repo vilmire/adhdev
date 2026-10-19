@@ -35,6 +35,10 @@ import {
     type ArtifactKind,
 } from '../../artifacts/index.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import {
+    findWorkerTaskTokenForSession,
+    verifyWorkerSessionBind,
+} from '../../mesh/worker-mcp-isolation.js';
 import { classifyUnresolvedWorkerCredential, resolveWorkerIdentity } from '../../mesh/worker-report.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
@@ -111,7 +115,12 @@ interface ResolvedSessionAuthority {
 async function resolveRegisteredSessionWorkspace(
     ctx: ArtifactCommandContext,
     sessionId: string,
-    opts?: { meshId?: string; nodeId?: string; taskId?: string },
+    opts?: {
+        meshId?: string;
+        nodeId?: string;
+        taskId?: string;
+        allowTrustedWorkerFallback?: boolean;
+    },
 ): Promise<{
     workspaceRoot: string | null;
     nodeWorkspaceRoot: string | null;
@@ -203,46 +212,56 @@ async function resolveRegisteredSessionWorkspace(
     }
 
     let nodeWorkspaceRoot: string | null = null;
-    const meshId = trimString(opts?.meshId);
-    const nodeId = trimString(opts?.nodeId);
-    const taskId = trimString(opts?.taskId);
+    if (opts?.allowTrustedWorkerFallback) {
+        const meshId = trimString(opts.meshId);
+        const nodeId = trimString(opts.nodeId);
+        const taskId = trimString(opts.taskId);
 
-    if (meshId) {
-        try {
-            const meshStore = getMeshRuntimeStore(ctx);
-            if (taskId) {
-                const queueEntry = meshStore.findQueueEntryById(meshId, taskId) as Record<string, unknown> | null;
-                const queuePayload = (queueEntry?.payload ?? {}) as Record<string, unknown>;
-                const queueWs =
-                    trimString(queueEntry?.worktreePath) ||
-                    trimString(queueEntry?.workspace) ||
-                    trimString(queueEntry?.workspaceRoot) ||
-                    trimString(queuePayload.worktreePath) ||
-                    trimString(queuePayload.workspace) ||
-                    trimString(queuePayload.workspaceRoot);
-                if (queueWs) {
-                    nodeWorkspaceRoot = queueWs;
-                }
-            }
-        } catch {
-            // Ignore queue lookup failures.
-        }
-
-        if (!nodeWorkspaceRoot && nodeId) {
+        if (meshId) {
             try {
-                const resolvedMesh =
-                    (await ctx.getMeshForCommand?.(meshId))?.mesh ??
-                    ctx.getCachedInlineMesh?.(meshId);
-                const nodes: any[] = Array.isArray(resolvedMesh?.nodes) ? resolvedMesh.nodes : [];
-                const matchedNode = nodes.find(
-                    (n) => trimString(n?.id) === nodeId || trimString(n?.nodeId) === nodeId,
-                );
-                const nodeWs = trimString(matchedNode?.workspace) || trimString(matchedNode?.worktreePath);
-                if (nodeWs) {
-                    nodeWorkspaceRoot = nodeWs;
+                const meshStore = getMeshRuntimeStore(ctx);
+                if (taskId) {
+                    const queueEntry = meshStore.findQueueEntryById(meshId, taskId) as Record<string, unknown> | null;
+                    const assignedSession = trimString(queueEntry?.assignedSessionId);
+                    const queueStatus = trimString(queueEntry?.status);
+                    if (
+                        queueEntry &&
+                        (!queueStatus || queueStatus === 'assigned') &&
+                        (!assignedSession || sessionIdsEquivalent(assignedSession, sessionId))
+                    ) {
+                        const queuePayload = (queueEntry?.payload ?? {}) as Record<string, unknown>;
+                        const queueWs =
+                            trimString(queueEntry?.worktreePath) ||
+                            trimString(queueEntry?.workspace) ||
+                            trimString(queueEntry?.workspaceRoot) ||
+                            trimString(queuePayload.worktreePath) ||
+                            trimString(queuePayload.workspace) ||
+                            trimString(queuePayload.workspaceRoot);
+                        if (queueWs) {
+                            nodeWorkspaceRoot = queueWs;
+                        }
+                    }
                 }
             } catch {
-                // Ignore mesh lookup failures.
+                // Ignore queue lookup failures.
+            }
+
+            if (!nodeWorkspaceRoot && nodeId) {
+                try {
+                    const resolvedMesh =
+                        (await ctx.getMeshForCommand?.(meshId))?.mesh ??
+                        ctx.getCachedInlineMesh?.(meshId);
+                    const nodes: any[] = Array.isArray(resolvedMesh?.nodes) ? resolvedMesh.nodes : [];
+                    const matchedNode = nodes.find(
+                        (n) => trimString(n?.id) === nodeId || trimString(n?.nodeId) === nodeId,
+                    );
+                    const nodeWs = trimString(matchedNode?.workspace) || trimString(matchedNode?.worktreePath);
+                    if (nodeWs) {
+                        nodeWorkspaceRoot = nodeWs;
+                    }
+                } catch {
+                    // Ignore mesh lookup failures.
+                }
             }
         }
     }
@@ -339,25 +358,192 @@ async function resolveCallerAuthority(
         }
 
         try {
-            const assigned = meshStore.findAssignedBySession(identity.meshId, workerSessionId);
-            if (assigned?.id && assigned.id !== identity.taskId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'task_mismatch',
-                        error: `Worker session "${workerSessionId}" is assigned to task "${assigned.id}", not "${identity.taskId}" (task_mismatch)`,
-                    },
-                };
+            const assigned = meshStore.findAssignedBySession(identity.meshId, workerSessionId) as Record<
+                string,
+                unknown
+            > | null;
+            if (assigned) {
+                const assignedId = trimString(assigned.id);
+                if (assignedId && assignedId !== identity.taskId) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'task_mismatch',
+                            error: `Worker session "${workerSessionId}" is assigned to task "${assignedId}", not "${identity.taskId}" (task_mismatch)`,
+                        },
+                    };
+                }
+                const assignedStatus = trimString(assigned.status);
+                if (assignedStatus && assignedStatus !== 'assigned') {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'stale_attempt',
+                            error: `Task "${identity.taskId}" is no longer actively assigned (stale_attempt)`,
+                        },
+                    };
+                }
+                const assignedAttemptId = trimString(assigned.attemptId);
+                if (assignedAttemptId && identity.attemptId && assignedAttemptId !== identity.attemptId) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'stale_attempt',
+                            error: `Worker credential attempt "${identity.attemptId}" does not match assigned attempt "${assignedAttemptId}" (stale_attempt)`,
+                        },
+                    };
+                }
+            }
+
+            const taskEntry = meshStore.findQueueEntryById(identity.meshId, identity.taskId) as Record<
+                string,
+                unknown
+            > | null;
+            if (taskEntry) {
+                const taskStatus = trimString(taskEntry.status);
+                if (taskStatus && taskStatus !== 'assigned') {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'stale_attempt',
+                            error: `Task "${identity.taskId}" is not in assigned state (status="${taskStatus}") (stale_attempt)`,
+                        },
+                    };
+                }
+                const taskAssignedSession = trimString(taskEntry.assignedSessionId);
+                if (taskAssignedSession && !sessionIdsEquivalent(taskAssignedSession, workerSessionId)) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'artifact_session_mismatch',
+                            error: `Task "${identity.taskId}" is assigned to session "${taskAssignedSession}", not "${workerSessionId}" (artifact_session_mismatch)`,
+                        },
+                    };
+                }
+                const taskAttemptId = trimString(taskEntry.attemptId);
+                if (taskAttemptId && identity.attemptId && taskAttemptId !== identity.attemptId) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'stale_attempt',
+                            error: `Worker credential attempt "${identity.attemptId}" is stale for task "${identity.taskId}" (current attempt "${taskAttemptId}") (stale_attempt)`,
+                        },
+                    };
+                }
             }
         } catch {
-            // Proceed with token/bind identity if store has no active queue row.
+            // Proceed to turn ledger checks if queue helpers are unavailable on mock.
+        }
+
+        // Fence worker credentials against the authoritative turn attempt ledger.
+        try {
+            const turns = meshStore.turnStore?.();
+            if (turns) {
+                if (identity.attemptId) {
+                    const credAttempt = turns.getAttempt?.(identity.attemptId);
+                    if (
+                        credAttempt &&
+                        (credAttempt.terminal ||
+                            credAttempt.meshId !== identity.meshId ||
+                            credAttempt.taskId !== identity.taskId ||
+                            (credAttempt.sessionId &&
+                                !sessionIdsEquivalent(credAttempt.sessionId, workerSessionId)))
+                    ) {
+                        return {
+                            ok: false,
+                            result: {
+                                success: false,
+                                code: 'stale_attempt',
+                                error: `Worker credential attempt "${identity.attemptId}" is terminal or mismatched (stale_attempt)`,
+                            },
+                        };
+                    }
+                }
+
+                const latestAttempt = turns.findLatestAttemptForTask?.(identity.meshId, identity.taskId);
+                if (latestAttempt) {
+                    if (latestAttempt.terminal) {
+                        return {
+                            ok: false,
+                            result: {
+                                success: false,
+                                code: 'stale_attempt',
+                                error: `Latest attempt "${latestAttempt.attemptId}" for task "${identity.taskId}" is already terminal (stale_attempt)`,
+                            },
+                        };
+                    }
+                    if (
+                        latestAttempt.sessionId &&
+                        !sessionIdsEquivalent(latestAttempt.sessionId, workerSessionId)
+                    ) {
+                        return {
+                            ok: false,
+                            result: {
+                                success: false,
+                                code: 'artifact_session_mismatch',
+                                error: `Latest attempt "${latestAttempt.attemptId}" belongs to session "${latestAttempt.sessionId}", not "${workerSessionId}" (artifact_session_mismatch)`,
+                            },
+                        };
+                    }
+                    if (!identity.attemptId || latestAttempt.attemptId !== identity.attemptId) {
+                        return {
+                            ok: false,
+                            result: {
+                                success: false,
+                                code: 'stale_attempt',
+                                error: `Worker credential attempt "${identity.attemptId ?? 'unscoped'}" was superseded by attempt "${latestAttempt.attemptId}" (stale_attempt)`,
+                            },
+                        };
+                    }
+                    if (typeof rawBind === 'string' && rawBind.trim().length > 0 && latestAttempt.attemptNo > 0) {
+                        const liveTok = findWorkerTaskTokenForSession(
+                            identity.meshId,
+                            identity.taskId,
+                            workerSessionId,
+                        );
+                        if (liveTok && liveTok.attemptId !== latestAttempt.attemptId) {
+                            return {
+                                ok: false,
+                                result: {
+                                    success: false,
+                                    code: 'stale_attempt',
+                                    error: `Worker bind resolves to superseded attempt "${liveTok.attemptId ?? 'unscoped'}" instead of "${latestAttempt.attemptId}" (stale_attempt)`,
+                                },
+                            };
+                        }
+                        if (!liveTok) {
+                            const binding = verifyWorkerSessionBind(rawBind);
+                            const acceptedAtMs =
+                                typeof latestAttempt.acceptedAt === 'number' ? latestAttempt.acceptedAt : NaN;
+                            if (binding && Number.isFinite(acceptedAtMs) && binding.mintedAtMs < acceptedAtMs) {
+                                return {
+                                    ok: false,
+                                    result: {
+                                        success: false,
+                                        code: 'stale_attempt',
+                                        error: `Worker bind was minted before retry attempt "${latestAttempt.attemptId}" without a fresh attempt token (stale_attempt)`,
+                                    },
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Ignore if turnStore is unavailable on custom test mock.
         }
 
         const resolved = await resolveRegisteredSessionWorkspace(ctx, workerSessionId, {
             meshId: identity.meshId,
             nodeId: identity.nodeId,
             taskId: identity.taskId,
+            allowTrustedWorkerFallback: true,
         });
 
         if (resolved.workspaceRoot && resolved.nodeWorkspaceRoot) {
@@ -425,11 +611,34 @@ async function resolveCallerAuthority(
         };
     }
 
-    const resolved = await resolveRegisteredSessionWorkspace(ctx, explicitSessionId, {
-        meshId: trimString(args?.meshId),
-        nodeId: trimString(args?.nodeId),
-        taskId: trimString(args?.taskId),
-    });
+    const explicitMeshId = trimString(args?.meshId);
+    const explicitTaskId = trimString(args?.taskId);
+    if (explicitMeshId && explicitTaskId) {
+        try {
+            const meshStore = getMeshRuntimeStore(ctx);
+            const queueEntry = meshStore.findQueueEntryById(explicitMeshId, explicitTaskId) as Record<
+                string,
+                unknown
+            > | null;
+            const assignedSession = trimString(queueEntry?.assignedSessionId);
+            if (assignedSession && !sessionIdsEquivalent(assignedSession, explicitSessionId)) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'task_mismatch',
+                        error: `Task "${explicitTaskId}" belongs to session "${assignedSession}", not "${explicitSessionId}" (task_mismatch)`,
+                    },
+                };
+            }
+        } catch {
+            // Best-effort check against queue entry ownership.
+        }
+    }
+
+    // Never allow caller-supplied meshId/nodeId/taskId to invent workspace
+    // authority for an unregistered session (F4).
+    const resolved = await resolveRegisteredSessionWorkspace(ctx, explicitSessionId);
 
     if (payloadWorkspace) {
         const canonTrusted = resolved.workspaceRoot ? canonicalizeDir(resolved.workspaceRoot) : null;
@@ -461,7 +670,7 @@ async function resolveCallerAuthority(
         ok: true,
         authority: {
             sessionId: explicitSessionId,
-            taskId: trimString(args?.taskId) || null,
+            taskId: explicitTaskId || null,
             workspaceRoot: resolved.workspaceRoot,
             providerType: resolved.providerType,
             status: resolved.status,
@@ -522,13 +731,30 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
             title,
         });
 
-        await publishSessionArtifactBubble(authority.sessionId, {
-            attachment: registered.attachment,
-            providerType: authority.providerType,
-            status: authority.status,
-            title: authority.title,
-            forceUpsert: true,
-        });
+        try {
+            await publishSessionArtifactBubble(authority.sessionId, {
+                attachment: registered.attachment,
+                providerType: authority.providerType,
+                status: authority.status,
+                title: authority.title,
+                forceUpsert: true,
+            });
+        } catch (pubErr) {
+            const pubMessage = pubErr instanceof Error ? pubErr.message : String(pubErr);
+            return {
+                success: false,
+                code: 'artifact_publication_failed',
+                error: `Artifact registered (${registered.record.artifactId}) but transcript bubble publication failed: ${pubMessage} (artifact_publication_failed)`,
+                artifact: registered.record,
+                attachment: registered.attachment,
+                artifactId: registered.record.artifactId,
+                sessionId: registered.record.sessionId,
+                taskId: registered.record.taskId,
+                isUpdate: registered.isUpdate,
+                registered: true,
+                published: false,
+            };
+        }
 
         return {
             success: true,
@@ -538,6 +764,8 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
             sessionId: registered.record.sessionId,
             taskId: registered.record.taskId,
             isUpdate: registered.isUpdate,
+            registered: true,
+            published: true,
             messageId: `artifact:${registered.record.artifactId}`,
             messageKey: `m:artifact:${registered.record.artifactId}`,
         };
@@ -618,7 +846,7 @@ export const artifactSpecs = defineCommandSpecs(
     artifactHandlers,
     {},
     {
-        sources: ['ipc', 'standalone', 'p2p', 'ws'],
+        sources: ['ipc', 'standalone', 'p2p'],
         session: { scope: 'optional', aliasSessionId: true },
     },
 );

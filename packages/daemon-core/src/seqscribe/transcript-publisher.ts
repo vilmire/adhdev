@@ -742,11 +742,16 @@ export class TranscriptProjectionService {
      * (`m:artifact:<artifactId>`) on the session's keyed chat topic.
      */
     async publishArtifact(sessionId: string, input: KeyedChatArtifactInput): Promise<KeyedChatFrame | null> {
-        if (!sessionId) return null;
+        if (!sessionId) {
+            throw new Error('sessionId is required to publish artifact bubble');
+        }
         while (this.inFlight.has(sessionId)) {
             await new Promise((resolve) => setImmediate(resolve));
         }
-        if (!this.admitSession(sessionId)) return null;
+        if (!this.admitSession(sessionId)) {
+            this.counters.publishFailed++;
+            throw new Error(`transcript session cap prevented artifact publish session=${redactSessionId(sessionId)}`);
+        }
         try {
             const state = this.stateFor(sessionId);
             const nowIso = (this.deps.now ?? (() => new Date().toISOString()))();
@@ -763,7 +768,7 @@ export class TranscriptProjectionService {
             }
             if (built.status === 'unidentified') {
                 this.counters.unidentified++;
-                return null;
+                throw new Error(`artifact attachment lacks valid artifactId for session=${redactSessionId(sessionId)}`);
             }
             const frame = built.frame;
             const syntheticObservation: TranscriptObservation = {
@@ -783,7 +788,7 @@ export class TranscriptProjectionService {
                     'Seqscribe',
                     `transcript artifact publish failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
                 );
-                return null;
+                throw error;
             }
             state.commit(frame, nowMs);
             this.counters.published++;
