@@ -28847,10 +28847,11 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
     });
     function statusCacheKey(workspace, options) {
+      const normalizedWorkspace = (0, import_node_path.resolve)(workspace);
       const includeSubmodules = options.includeSubmodules !== false;
       const refreshUpstream = options.refreshUpstream === true;
       const ignoreKey = options.submoduleIgnorePaths && options.submoduleIgnorePaths.length > 0 ? `\0ign=${[...options.submoduleIgnorePaths].sort().join(",")}` : "";
-      return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
+      return `${normalizedWorkspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
     }
     function isTransientGitFailure(error) {
       return error.reason === "timeout" || error.reason === "git_command_failed";
@@ -30912,19 +30913,19 @@ ${renderWorkerProtocolFooter2(input)}`;
       return null;
     }
     function execAsync(cmd, timeoutMs = 5e3) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         const child = (0, import_child_process2.exec)(cmd, {
           encoding: "utf-8",
           timeout: timeoutMs,
           ...process.platform === "win32" ? { windowsHide: true } : {}
         }, (err, stdout) => {
           if (err || !stdout?.trim()) {
-            resolve47(null);
+            resolve48(null);
           } else {
-            resolve47(stdout.trim());
+            resolve48(stdout.trim());
           }
         });
-        child.on("error", () => resolve47(null));
+        child.on("error", () => resolve48(null));
       });
     }
     async function resolveVersion(candidates) {
@@ -31600,13 +31601,13 @@ ${renderWorkerProtocolFooter2(input)}`;
       return path7.join(getConfigDir2(), "version-history.json");
     }
     async function runCommand(cmd, timeout = 1e4) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         hiddenExec(cmd, {
           encoding: "utf-8",
           timeout
         }, (error, stdout) => {
-          if (error) return resolve47(null);
-          resolve47(stdout.trim());
+          if (error) return resolve48(null);
+          resolve48(stdout.trim());
         });
       });
     }
@@ -31977,7 +31978,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return `Antigravity quota is only supported on macOS, Windows, and Linux (this machine reports platform "${platform10}").`;
     }
     function runCredStoreCommand(deps, command, args) {
-      return new Promise((resolve47, reject) => {
+      return new Promise((resolve48, reject) => {
         let child;
         try {
           child = deps.spawn(command, args, { env: deps.env });
@@ -32014,7 +32015,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         });
         child.on("error", (err) => finish(() => reject(err)));
         child.on("exit", (code) => {
-          finish(() => resolve47({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
+          finish(() => resolve48({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
         });
         child.stdin.end();
       });
@@ -33631,7 +33632,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchCodexQuotaFromAppServer(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         let child;
         try {
           child = deps.spawn(
@@ -33641,7 +33642,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve47(
+          resolve48(
             quotaFailure("codex-cli", "unavailable", `Codex CLI could not be started: ${message}`, {
               source: "app-server",
               collectorScope: "background-collector",
@@ -33677,7 +33678,7 @@ child.on('exit', () => process.exit(0));
           } catch {
           }
           void killHandle;
-          resolve47(quota);
+          resolve48(quota);
         };
         const handleLine = (line) => {
           let message;
@@ -33973,7 +33974,7 @@ child.on('exit', () => process.exit(0));
       }
     }
     function runKeychainRead(deps, service) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         let child;
         try {
           child = deps.spawn(
@@ -33982,7 +33983,7 @@ child.on('exit', () => process.exit(0));
             { env: deps.env }
           );
         } catch {
-          resolve47(null);
+          resolve48(null);
           return;
         }
         let settled = false;
@@ -33991,7 +33992,7 @@ child.on('exit', () => process.exit(0));
           if (settled) return;
           settled = true;
           deps.clearTimeout(timer);
-          resolve47(value);
+          resolve48(value);
         };
         const timer = deps.setTimeout(() => {
           try {
@@ -34879,7 +34880,7 @@ child.on('exit', () => process.exit(0));
     }
     async function fetchOpencodeUsage(overrides = {}) {
       const deps = resolveDeps(overrides);
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         let child;
         try {
           child = deps.spawn(
@@ -34889,7 +34890,7 @@ child.on('exit', () => process.exit(0));
           );
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          resolve47(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
+          resolve48(quotaFailure("opencode", "unavailable", `opencode could not be started: ${message}`, {
             source: SOURCE3,
             failureKind: "cli-unavailable"
           }));
@@ -34906,7 +34907,7 @@ child.on('exit', () => process.exit(0));
             child.kill();
           } catch {
           }
-          resolve47(quota);
+          resolve48(quota);
         };
         const timeoutHandle = deps.setTimeout(() => {
           finish(quotaFailure("opencode", "error", `opencode stats timed out after ${TIMEOUT_MS}ms`, {
@@ -45498,7 +45499,7 @@ ${rendered.join("\n\n")}`,
       const taskSuffix = taskId ? ` for task ${taskId}` : "";
       return `[System] ${label2} is not yet available${taskSuffix} \u2014 call mesh_task_report once it replicates; do not poll repeatedly.`;
     }
-    function resolve15(ref2, resolveRef, missing) {
+    function resolve16(ref2, resolveRef, missing) {
       if (!ref2) return null;
       const text4 = resolveRef(ref2);
       if (text4 === null) missing.push(ref2);
@@ -45547,7 +45548,7 @@ ${statusLine}` : text4;
       const weakCompletion = s2.strength === "weak";
       const completionLead = weakCompletion ? `[System] ${nodeLabel} reported a possible completion (weak evidence) \u2014 awaiting confirmation${metadata}.` : `[System] ${nodeLabel} has completed its task and is now idle${metadata}.`;
       const verifyTextNote = " Completion evidence is weak \u2014 verify via mesh_read_chat or git status before declaring the task done; the worker may still be mid-turn or parked on an approval/modal.";
-      const completionSummary = resolve15(input.refs.summary, input.resolveRef, missing);
+      const completionSummary = resolve16(input.refs.summary, input.resolveRef, missing);
       if (completionSummary) {
         const truncationSuffix = "\n\u2026[truncated \u2014 call mesh_read_chat once for the full transcript]";
         const surfaced = truncate(completionSummary, MESH_COMPLETION_SURFACE_MAX_CHARS, truncationSuffix);
@@ -45583,7 +45584,7 @@ ${surfaced}`;
           });
         }
       } else {
-        const modalMessage = resolve15(input.refs.summary, input.resolveRef, missing);
+        const modalMessage = resolve16(input.refs.summary, input.resolveRef, missing);
         if (modalMessage) lines.push(`
 ${modalMessage}`);
       }
@@ -45599,11 +45600,11 @@ Answer with mesh_answer_question(node_id, session_id${s2.promptId ? `, promptId:
       const metadata = formatMetadataSuffix(s2);
       if (s2.stopReason === "auth_failed" || s2.stopReason === "billing_failed") {
         const kind = s2.stopReason === "billing_failed" ? "billing/subscription" : "authentication";
-        const detail = resolve15(input.refs.error, input.resolveRef, missing) ?? resolve15(input.refs.summary, input.resolveRef, missing);
+        const detail = resolve16(input.refs.error, input.resolveRef, missing) ?? resolve16(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider reported a non-retryable ${kind} failure${metadata}. Automatic recovery was suppressed so the same rejected credential or entitlement does not waste retries.${detail ? ` ${detail}` : ""}`;
       }
       if (s2.stopReason === "quota_exceeded") {
-        const detail = resolve15(input.refs.error, input.resolveRef, missing) ?? resolve15(input.refs.summary, input.resolveRef, missing);
+        const detail = resolve16(input.refs.error, input.resolveRef, missing) ?? resolve16(input.refs.summary, input.resolveRef, missing);
         return `[System] ${nodeLabel} stopped because the provider's usage quota is exhausted${metadata}. This is not a billing or auth problem \u2014 it resets automatically at the next window boundary, and ADHDev will resume work on it once quota is available.${detail ? ` ${detail}` : ""}`;
       }
       if (s2.stopReason === "direct_not_redelivered") {
@@ -45621,7 +45622,7 @@ Answer with mesh_answer_question(node_id, session_id${s2.promptId ? `, promptId:
           rc.taskAttemptCount > 0 ? `- This task has been attempted ${rc.taskAttemptCount} time(s)` : "",
           `- Recommendation: ${rc.advice}`
         ];
-        const lastTaskMessage = resolve15(input.refs.lastTaskMessage ?? input.refs.prompt, input.resolveRef, missing);
+        const lastTaskMessage = resolve16(input.refs.lastTaskMessage ?? input.refs.prompt, input.resolveRef, missing);
         if (rc.retryRecommended && lastTaskMessage) {
           parts.push(
             `
@@ -45650,7 +45651,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
     }
     function renderProgress(input, missing) {
       const s2 = input.scalars;
-      const note2 = resolve15(input.refs.note, input.resolveRef, missing);
+      const note2 = resolve16(input.refs.note, input.resolveRef, missing);
       const taskId = s2.progressTaskId ?? s2.taskId ?? "";
       if (note2 === null) return pointerLine(`${s2.nodeLabel}'s progress note`, taskId);
       return `[System] ${s2.nodeLabel} progress on task ${taskId}: ${note2.trim()} \u2014 this is an informational mid-task update, NOT a completion. The task is still running; do not dispatch it elsewhere and do not poll. Wait for its completion event.`;
@@ -45658,7 +45659,7 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
     function renderWorktreeBootstrap(input, missing) {
       const s2 = input.scalars;
       if (s2.worktreeOutcome === "failed") {
-        const error = resolve15(input.refs.error, input.resolveRef, missing);
+        const error = resolve16(input.refs.error, input.resolveRef, missing);
         return `[System] ${s2.nodeLabel} worktree bootstrap failed${error ? `: ${error}` : "."}. Use \`mesh_retry_node_bootstrap\` to retry or inspect the node state.`;
       }
       const prefix = `[System] ${s2.nodeLabel} worktree bootstrap completed${s2.worktreePath ? ` at ${s2.worktreePath}` : ""}${s2.durationMs !== void 0 ? ` in ${Math.round(s2.durationMs / 1e3)}s` : ""}.`;
@@ -45695,7 +45696,7 @@ Next step: ${nextStep}`;
         s2.convergenceStatus ? `convergence=${s2.convergenceStatus}` : "",
         s2.refineBlockedReason ? `reason=${s2.refineBlockedReason}` : ""
       ].filter(Boolean).join("; ");
-      const refineError = resolve15(input.refs.error, input.resolveRef, missing);
+      const refineError = resolve16(input.refs.error, input.resolveRef, missing);
       const parts = [
         `[System] Refinery async job for ${nodeLabel} failed${details ? ` (${details})` : ""}${refineError ? `: ${refineError}` : "."}`,
         s2.refineNextStep ? `Next step: ${s2.refineNextStep}` : "Review the terminal refine event/ledger before retrying."
@@ -45717,7 +45718,7 @@ Next step: ${nextStep}`;
       const taskId = s2.reportTaskId ?? s2.taskId ?? "";
       const outcome = s2.reportOutcome ?? "";
       if (s2.reportHasSummary) {
-        const summary = resolve15(input.refs.report, input.resolveRef, missing);
+        const summary = resolve16(input.refs.report, input.resolveRef, missing);
         if (summary !== null) {
           return `[System] ${s2.nodeLabel} reported task ${taskId} as '${outcome}' via report_completion: ${summary}`;
         }
@@ -45735,7 +45736,7 @@ Next step: ${nextStep}`;
       const taskId = s2.taskId ?? "";
       const priorGen = s2.priorGeneration !== void 0 ? `g${s2.priorGeneration}` : "a prior generation";
       const lead = `[System] ${s2.nodeLabel} reported a late completion for task ${taskId} from a superseded attempt (generation ${priorGen}); the current attempt continues \u2014 review the summary below if you want to salvage it`;
-      const summary = resolve15(input.refs.summary, input.resolveRef, missing);
+      const summary = resolve16(input.refs.summary, input.resolveRef, missing);
       if (summary !== null) {
         return `${lead}.
 
@@ -45753,7 +45754,7 @@ ${summary}`;
       if (s2.refineOutcome) return renderRefine(input, missing);
       if (s2.reportTaskId || s2.reportOutcome) return renderReportSubstitution(input, missing);
       if (s2.progressTaskId !== void 0) return renderProgress(input, missing);
-      const missionTitle = resolve15(input.refs.missionTitle, input.resolveRef, missing);
+      const missionTitle = resolve16(input.refs.missionTitle, input.resolveRef, missing);
       if (missionTitle !== null) {
         return `[System] ${s2.nodeLabel}: "${missionTitle}"`;
       }
@@ -46528,7 +46529,7 @@ ${line}`;
       const waiters = /* @__PURE__ */ new Set();
       return {
         wait(meshId, untilMs, signal) {
-          return new Promise((resolve47, reject) => {
+          return new Promise((resolve48, reject) => {
             if (signal.aborted) {
               reject(signal.reason ?? new Error("aborted"));
               return;
@@ -46543,7 +46544,7 @@ ${line}`;
                 waiters.delete(waiter);
                 timers.clearTimeout(handle);
                 signal.removeEventListener("abort", onAbort);
-                resolve47(v);
+                resolve48(v);
               }
             };
             const onAbort = () => {
@@ -47258,8 +47259,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
       return {
         acquire() {
           if (held < max && waiters.length === 0) return Promise.resolve(grant());
-          return new Promise((resolve47) => {
-            waiters.push(resolve47);
+          return new Promise((resolve48) => {
+            waiters.push(resolve48);
           });
         },
         inflight: () => held,
@@ -49094,7 +49095,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               const through = this.deps.store.maxRowid(topic);
               if (this.deps.store.cursorGet(name, topic) >= through)
                 return Promise.resolve({ throughRowid: through });
-              return new Promise((resolve47, reject) => c.waiters.push({ through, resolve: resolve47, reject }));
+              return new Promise((resolve48, reject) => c.waiters.push({ through, resolve: resolve48, reject }));
             } catch (e) {
               return Promise.reject(e);
             }
@@ -50459,7 +50460,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve47, reject) => {
+            return new Promise((resolve48, reject) => {
               this.push({
                 t: "append",
                 topic,
@@ -50469,7 +50470,7 @@ The instruction it carried was never delivered to anyone. If it still matters, r
                 causal: o?.causal,
                 causalProvider: o?.causalProvider,
                 ref: o?.ref,
-                resolve: resolve47,
+                resolve: resolve48,
                 reject
               });
             });
@@ -50479,8 +50480,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
             validateEntry(entry, this.constants);
             this.topics.get(entry.topic);
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "external", entry, via, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "external", entry, via, resolve: resolve48, reject });
             });
           }
           // §6.4 fork path ② (HAVE contradiction) is detected outside the queue but the
@@ -50488,8 +50489,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           sealStream(topic, writer) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "seal", topic, writer, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "seal", topic, writer, resolve: resolve48, reject });
             });
           }
           setOnApplied(hook) {
@@ -50512,15 +50513,15 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           applyCert(cert) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "cert", cert, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "cert", cert, resolve: resolve48, reject });
             });
           }
           applyDirective(directive) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "directive", directive, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "directive", directive, resolve: resolve48, reject });
             });
           }
           // §7.8 snapshot adoption: stream heads jump to the cut (chains continue from
@@ -50528,8 +50529,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptSnapshotCut(topic, cut) {
             if (this.closed)
               throw new SeqscribeError("ERR_MISUSE", "node is closed");
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "adopt", topic, cut, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "adopt", topic, cut, resolve: resolve48, reject });
             });
           }
           // C7-7 writer-row GC. Local housekeeping only — no signed authority, no
@@ -50548,8 +50549,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (entry.policy.replication === "full-sync") {
               return Promise.reject(misuse(`retireTopic: full-sync topics are not GC-eligible (${topic})`));
             }
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "retireTopic", topic, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "retireTopic", topic, resolve: resolve48, reject });
             });
           }
           // Local entry prune (host-guide `pruneTopic`, REQUESTED EDIT). Unlike
@@ -50583,13 +50584,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             if (o.olderThanMs === void 0 && o.keepNewest === void 0) {
               return Promise.reject(misuse(`pruneTopic: at least one of olderThanMs/keepNewest is required`));
             }
-            return new Promise((resolve47, reject) => {
+            return new Promise((resolve48, reject) => {
               this.push({
                 t: "pruneTopic",
                 topic,
                 olderThanMs: o.olderThanMs,
                 keepNewest: o.keepNewest,
-                resolve: resolve47,
+                resolve: resolve48,
                 reject
               });
             });
@@ -50625,14 +50626,14 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve47, reject) => {
+            return new Promise((resolve48, reject) => {
               this.push({
                 t: "pruneSuperseded",
                 topic,
                 uptoRowid: o.uptoRowid,
                 maxRows: Math.min(o.maxRows ?? PRUNE_SUPERSEDED_DEFAULT_MAX_ROWS, PRUNE_SUPERSEDED_MAX_ROWS_CAP),
                 supersedeOtherWriters: o.supersedeOtherWriters === true,
-                resolve: resolve47,
+                resolve: resolve48,
                 reject
               });
             });
@@ -50661,13 +50662,13 @@ The instruction it carried was never delivered to anyone. If it still matters, r
             } catch (e) {
               return Promise.reject(e);
             }
-            return new Promise((resolve47, reject) => {
+            return new Promise((resolve48, reject) => {
               this.push({
                 t: "pruneAcked",
                 topic,
                 o,
                 maxRows: Math.min(o.maxRows ?? ACKED_PRUNE_DEFAULT_MAX_ROWS, ACKED_PRUNE_MAX_ROWS_CAP),
-                resolve: resolve47,
+                resolve: resolve48,
                 reject
               });
             });
@@ -50675,8 +50676,8 @@ The instruction it carried was never delivered to anyone. If it still matters, r
           adoptFloor(topic, writer, seq2, chain) {
             if (this.closed)
               return Promise.reject(new SeqscribeError("ERR_MISUSE", "node is closed"));
-            return new Promise((resolve47, reject) => {
-              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve47, reject });
+            return new Promise((resolve48, reject) => {
+              this.push({ t: "adoptFloor", topic, writer, seq: seq2, chain, resolve: resolve48, reject });
             });
           }
           // This node's retention floor for a stream (rows ≤ seq are not held), or null.
@@ -59812,7 +59813,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     });
     function awaitWithWarmupDeadline(work, opts) {
       const pollMs = Math.max(1, Math.min(opts.pollIntervalMs ?? 200, opts.connectTimeoutMs));
-      return new Promise((resolve47, reject) => {
+      return new Promise((resolve48, reject) => {
         let done = false;
         let poll2;
         let responseTimer;
@@ -59862,7 +59863,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           if (typeof poll2.unref === "function") poll2.unref();
         }
         work.then(
-          (val) => settle2(() => resolve47(val)),
+          (val) => settle2(() => resolve48(val)),
           (err) => settle2(() => reject(err))
         );
       });
@@ -62308,7 +62309,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           const connection = args.getConnection?.(args.daemonId);
           if (args.getConnection && readMeshConnectionState(connection) !== "connected") break;
           if (connection) args.onConnection?.(connection);
-          await new Promise((resolve47) => setTimeout(resolve47, 250 * 2 ** (attempt - 1)));
+          await new Promise((resolve48) => setTimeout(resolve48, 250 * 2 ** (attempt - 1)));
         }
         try {
           const remoteGit = await probeRemoteMeshGitStatus({
@@ -74529,7 +74530,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const deadline = Date.now() + LOCAL_LAUNCH_READY_TIMEOUT_MS;
       while (Date.now() < deadline) {
         if (adapter.isReady() || adapter.currentStatus === "idle") return;
-        await new Promise((resolve47) => setTimeout(resolve47, LOCAL_LAUNCH_READY_POLL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, LOCAL_LAUNCH_READY_POLL_MS));
       }
       LOG.warn("MeshQueue", `Auto-launched session ${sessionId} not interactive after ${LOCAL_LAUNCH_READY_TIMEOUT_MS}ms; dispatching anyway (adapter queue-until-ready will buffer)`);
     }
@@ -74902,7 +74903,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const timeoutMs = opts.timeoutMs ?? REMOTE_LAUNCH_READY_TIMEOUT_MS;
       const pollMs = opts.pollMs ?? REMOTE_LAUNCH_READY_POLL_MS;
       const now = opts.now ?? (() => Date.now());
-      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve47) => setTimeout(resolve47, ms3)));
+      const sleep3 = opts.sleep ?? ((ms3) => new Promise((resolve48) => setTimeout(resolve48, ms3)));
       const deadline = now() + timeoutMs;
       for (; ; ) {
         let ready2 = false;
@@ -76467,7 +76468,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       trackInFlightAutoLaunch(meshId, autoLaunchPromise);
       autoLaunchStarted = await Promise.race([
         autoLaunchPromise,
-        new Promise((resolve47) => setImmediate(() => resolve47(false)))
+        new Promise((resolve48) => setImmediate(() => resolve48(false)))
       ]);
       sweepAutoLaunchOrphanSessions(components, meshId, {
         idleTtlMinutes: resolveDelegatedSessionIdleTtlMinutes(resolveMeshPolicy2(mesh.policy).delegatedSessionIdleTtlMinutes)
@@ -78054,8 +78055,8 @@ ${continuationNotice}` } : task,
           try {
             const settled = await Promise.race([
               pending,
-              new Promise((resolve47) => {
-                timer = setTimeout(() => resolve47("timeout"), maxWaitMs);
+              new Promise((resolve48) => {
+                timer = setTimeout(() => resolve48("timeout"), maxWaitMs);
                 timer.unref?.();
               })
             ]);
@@ -79092,7 +79093,7 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
           }
           const realByDispatch = /* @__PURE__ */ new Map();
           const approvalByDispatch = /* @__PURE__ */ new Map();
-          const resolve47 = (queries, buckets, bucketKind, output) => {
+          const resolve48 = (queries, buckets, bucketKind, output) => {
             for (const [key4, bucketQueries] of queries) {
               const terminals = buckets.get(key4)?.[bucketKind];
               if (!terminals?.length) continue;
@@ -79108,9 +79109,9 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
               }
             }
           };
-          resolve47(taskQueries, taskBuckets, "real", realByDispatch);
-          resolve47(sessionQueries, sessionBuckets, "real", realByDispatch);
-          resolve47(nodeQueries, nodeBuckets, "real", realByDispatch);
+          resolve48(taskQueries, taskBuckets, "real", realByDispatch);
+          resolve48(sessionQueries, sessionBuckets, "real", realByDispatch);
+          resolve48(nodeQueries, nodeBuckets, "real", realByDispatch);
           const resolveLatestApproval = (queries, buckets) => {
             for (const [key4, bucketQueries] of queries) {
               const transitions = buckets.get(key4)?.approval;
@@ -85908,7 +85909,7 @@ ${cleanBody}`;
     async function discoverByCommand(provider, binary2, spec, deps) {
       const timeoutMs = spec.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
       const started = deps.now();
-      const result = await new Promise((resolve47) => {
+      const result = await new Promise((resolve48) => {
         let stdout = "";
         let stderr = "";
         let settled = false;
@@ -85917,7 +85918,7 @@ ${cleanBody}`;
           if (settled) return;
           settled = true;
           if (timer) clearTimeout(timer);
-          resolve47(value);
+          resolve48(value);
         };
         let child;
         try {
@@ -89739,8 +89740,8 @@ ${body}`;
           try {
             const raw = await Promise.race([
               dispatch2(readText(m.meshHost.hostDaemonId), "get_mesh", { meshId: m.id, membershipOnly: true }),
-              new Promise((resolve47) => {
-                timer = setTimeout(() => resolve47(null), DESCRIPTOR_FETCH_TIMEOUT_MS);
+              new Promise((resolve48) => {
+                timer = setTimeout(() => resolve48(null), DESCRIPTOR_FETCH_TIMEOUT_MS);
                 timer.unref?.();
               })
             ]);
@@ -93640,7 +93641,7 @@ ${asText(streams.stderr)}
         env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || "1", ...refineGateChildEnv(), ...candidate.env || {} },
         ...spawn9.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}
       };
-      return new Promise((resolve47, reject) => {
+      return new Promise((resolve48, reject) => {
         let timer;
         let idleTimedOut = false;
         let childRef;
@@ -93673,7 +93674,7 @@ ${asText(streams.stderr)}
             reject(err);
             return;
           }
-          resolve47({ stdout, stderr });
+          resolve48({ stdout, stderr });
         });
         execOptions.timeout = idleTimeoutMs;
         childRef = child;
@@ -94479,7 +94480,7 @@ ${asText(streams.stderr)}
       const maxWaitMs = Math.max(minSettleMs, opts.maxWaitMs ?? INJECTION_CLEANUP_MAX_WAIT_MS);
       const pollMs = opts.pollMs ?? INJECTION_CLEANUP_POLL_MS;
       const startedAt = Date.now();
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         const tick = () => {
           const elapsed = Date.now() - startedAt;
           let ready2 = true;
@@ -94492,7 +94493,7 @@ ${asText(streams.stderr)}
           }
           if (ready2 || elapsed >= maxWaitMs) {
             removeInjectionFiles(effect, ready2 ? "session ready" : `session not ready after ${maxWaitMs}ms`, opts.label);
-            resolve47();
+            resolve48();
             return;
           }
           const t2 = setTimeout(tick, pollMs);
@@ -94649,7 +94650,7 @@ ${asText(streams.stderr)}
           };
           async send(message) {
             if (this.closed || !this.child.stdin?.writable) throw new DriverMcpError("connection_closed", "Driver stdio is closed");
-            await new Promise((resolve47, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve47()));
+            await new Promise((resolve48, reject) => this.child.stdin.write((0, import_stdio3.serializeMessage)(message), (error) => error ? reject(error) : resolve48()));
           }
           async close() {
             if (this.closed) return;
@@ -94746,8 +94747,8 @@ ${asText(streams.stderr)}
                 detached: process.platform !== "win32"
               });
               this.child = child;
-              this.exited = new Promise((resolve47) => child.once("close", () => {
-                resolve47();
+              this.exited = new Promise((resolve48) => child.once("close", () => {
+                resolve48();
                 if (this.child === child && !this.stopping && this.state !== "stopped") this.fail(new DriverMcpError("connection_closed", "Driver process exited"));
               }));
               child.on("error", (error) => this.fail(error));
@@ -94851,13 +94852,13 @@ ${asText(streams.stderr)}
                 try {
                   if (process.platform !== "win32" && child.pid) process.kill(-child.pid, name);
                   else if (child.pid) {
-                    await new Promise((resolve47) => {
+                    await new Promise((resolve48) => {
                       const killer = hiddenSpawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
                       killer.once("error", () => {
                         child.kill(name);
-                        resolve47();
+                        resolve48();
                       });
-                      killer.once("close", () => resolve47());
+                      killer.once("close", () => resolve48());
                     });
                   } else child.kill(name);
                 } catch {
@@ -94866,8 +94867,8 @@ ${asText(streams.stderr)}
               const wait = async (ms3) => {
                 let timer;
                 try {
-                  await Promise.race([this.exited, new Promise((resolve47) => {
-                    timer = setTimeout(resolve47, ms3);
+                  await Promise.race([this.exited, new Promise((resolve48) => {
+                    timer = setTimeout(resolve48, ms3);
                   })]);
                 } finally {
                   clearTimeout(timer);
@@ -99399,8 +99400,8 @@ ${b.text}`).join("\n\n");
         try {
           return await Promise.race([
             Promise.resolve().then(() => execute(command, args)),
-            new Promise((resolve47) => {
-              timer = setTimeout(() => resolve47(null), remaining);
+            new Promise((resolve48) => {
+              timer = setTimeout(() => resolve48(null), remaining);
             })
           ]);
         } catch {
@@ -101129,9 +101130,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.attemptBodies.clear();
             this.attemptMeta.clear();
             this.attemptBodyAt.clear();
-            for (const [timer, resolve47] of this.pendingTimers) {
+            for (const [timer, resolve48] of this.pendingTimers) {
               this.clock.clearTimeout(timer);
-              resolve47();
+              resolve48();
             }
             this.pendingTimers.clear();
             this.renderedCoverage.clear();
@@ -101536,8 +101537,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /** A stopped relay resolves its waits too; late I/O cannot repopulate caches. */
           async bounded(read2, ms3, fallback) {
             let timer;
-            const timeout = new Promise((resolve47) => {
-              const finish = () => resolve47(fallback);
+            const timeout = new Promise((resolve48) => {
+              const finish = () => resolve48(fallback);
               timer = this.clock.setTimeout(finish, ms3);
               this.pendingTimers.set(timer, finish);
             });
@@ -103760,8 +103761,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const limit = resolveRefineMaxConcurrentJobs();
       if (activeExecutions >= limit) {
         LOG.info("Mesh", `[Refinery] ${label2} QUEUED \u2014 ${activeExecutions} refine job(s) already executing (limit ${limit}), ${waitQueue.length + 1} waiting. It starts automatically; do not re-invoke.`);
-        await new Promise((resolve47) => {
-          waitQueue.push(resolve47);
+        await new Promise((resolve48) => {
+          waitQueue.push(resolve48);
         });
         LOG.info("Mesh", `[Refinery] ${label2} dequeued \u2014 starting now (${activeExecutions} other job(s) still executing).`);
       }
@@ -110269,7 +110270,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return null;
     }
     function performMeshHandshake(socket, side, opts, timeoutMs = MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS) {
-      return new Promise((resolve47, reject) => {
+      return new Promise((resolve48, reject) => {
         let settled = false;
         const send = (frame2) => {
           if (socket.readyState !== WS_OPEN2) return;
@@ -110287,7 +110288,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           if (settled) return;
           settled = true;
           detach();
-          resolve47(result);
+          resolve48(result);
         };
         const settleFail = (code, detail) => {
           if (settled) return;
@@ -110529,10 +110530,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         }
         const peer = this.getOrCreatePeer(target, "initiator", "demand");
         peer.lastCommandAt = (/* @__PURE__ */ new Date()).toISOString();
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           const id4 = `${this.idNonce}:${this.idSeq++}`;
           const resultTimeoutMs = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : resultTimeoutForCommand(command);
-          const pending = { id: id4, command, args, resolve: resolve47, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
+          const pending = { id: id4, command, args, resolve: resolve48, reject, queuedAt: (/* @__PURE__ */ new Date()).toISOString(), resultTimeoutMs };
           if (peer.state === "connected" && peer.dc.isOpen()) {
             this.writeRequest(peer, pending);
             return;
@@ -112097,7 +112098,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       for (; ; ) {
         if (isConnectedMeshPeer(getConnectionStatus(daemonId))) return true;
         if (Date.now() >= deadline) return false;
-        await new Promise((resolve47) => setTimeout(resolve47, RECONNECT_POLL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, RECONNECT_POLL_MS));
       }
     }
     async function dispatchMeshOneshotWithAckRetry(dispatch2, opts) {
@@ -112412,7 +112413,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       while (Date.now() - start < timeoutMs) {
         try {
           process.kill(pid, 0);
-          await new Promise((resolve47) => setTimeout(resolve47, 250));
+          await new Promise((resolve48) => setTimeout(resolve48, 250));
         } catch {
           return true;
         }
@@ -112515,17 +112516,17 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     var DEFAULT_HEALTH_TIMEOUT_MS = 12e4;
     function fetchLocalJson(port, pathname) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         const req = http.get(`http://127.0.0.1:${port}${pathname}`, { timeout: 1500 }, (res) => {
           let body = "";
           res.setEncoding("utf8");
           res.on("data", (chunk) => {
             body += chunk;
           });
-          res.on("end", () => resolve47({ ok: res.statusCode === 200, body }));
+          res.on("end", () => resolve48({ ok: res.statusCode === 200, body }));
         });
         req.on("timeout", () => req.destroy());
-        req.on("error", () => resolve47({ ok: false, body: "" }));
+        req.on("error", () => resolve48({ ok: false, body: "" }));
       });
     }
     async function fetchLocalHealth(port) {
@@ -113000,7 +113001,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
               loggedVersionPending = true;
               options.log(`Health gate: replacement reports version ${version2} (want ${targetVersion}) at ${elapsedMs}ms`);
             }
-            await new Promise((resolve47) => setTimeout(resolve47, 500));
+            await new Promise((resolve48) => setTimeout(resolve48, 500));
           }
           options.log(`Health gate timed out after ${Date.now() - startedAt}ms (${attempt} probe(s), budget ${healthTimeoutMs}ms) waiting for pid ${pid} to report ${targetVersion}`);
           return false;
@@ -113997,7 +113998,7 @@ ${marker2}`,
           });
           return "reinstall";
         },
-        sleep: (ms3) => new Promise((resolve47) => setTimeout(resolve47, ms3)),
+        sleep: (ms3) => new Promise((resolve48) => setTimeout(resolve48, ms3)),
         now: () => Date.now(),
         log
       };
@@ -114412,7 +114413,7 @@ ${marker2}`,
             appendUpgradeLog(`Install attempt ${attempt} hit a file lock (${error?.code || "lock"}); clearing holders + staging and retrying after backoff`);
             await stopForeignNativeAddonHolders(installCommand.surface.packageRoot, { parentPid: payload.parentPid });
             cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
-            await new Promise((resolve47) => setTimeout(resolve47, attempt * 1500));
+            await new Promise((resolve48) => setTimeout(resolve48, attempt * 1500));
             continue;
           }
           if (isRetriableInstallLockError(error)) {
@@ -114455,7 +114456,7 @@ ${marker2}`,
         }
       }
       if (process.platform === "win32") {
-        await new Promise((resolve47) => setTimeout(resolve47, 500));
+        await new Promise((resolve48) => setTimeout(resolve48, 500));
         cleanupStaleGlobalInstallDirs(payload.packageName, installCommand.surface);
         appendUpgradeLog("Post-install staging cleanup complete");
       }
@@ -115487,14 +115488,14 @@ ${marker2}`,
       });
       const records = readRecords3();
       if (new Set(records.map((r) => r.pid)).size !== records.length) throw new Error("maintenance_mcp_pid_incarnation_ambiguous");
-      const membershipDigest = sha4(records), members = await Promise.all(records.map((identity2) => new Promise((resolve47) => {
+      const membershipDigest = sha4(records), members = await Promise.all(records.map((identity2) => new Promise((resolve48) => {
         const name = `${root}:${key2(identity2)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
         const nonce = (0, import_node_crypto10.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
-          resolve47({ identity: identity2, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
+          resolve48({ identity: identity2, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
-        waiting.set(name, { identity: identity2, nonce, epoch: state2.epoch, resolve: resolve47, timer });
+        waiting.set(name, { identity: identity2, nonce, epoch: state2.epoch, resolve: resolve48, timer });
       })));
       if (sha4(fs42.readdirSync(dir).sort()) !== sha4(names) || sha4(readRecords3()) !== membershipDigest) throw new Error("maintenance_mcp_membership_changed");
       return { observed: members.every((m) => m.observed), reason: members.some((m) => !m.observed) ? "mcp_incarnation_unreachable" : void 0, membershipDigest, members, nativeCensusRequired: true };
@@ -115984,7 +115985,7 @@ ${marker2}`,
       * Returns multiple entries if multiple IDE windows are open on same port
       */
       static listAllTargets(port) {
-        return new Promise((resolve47) => {
+        return new Promise((resolve48) => {
           const req = http2.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -116000,16 +116001,16 @@ ${marker2}`,
                   (t) => !isNonMain(t.title || "") && t.url?.includes("workbench.html") && !t.url?.includes("agent")
                 );
                 const fallbackPages = pages.filter((t) => !isNonMain(t.title || ""));
-                resolve47(mainPages.length > 0 ? mainPages : fallbackPages);
+                resolve48(mainPages.length > 0 ? mainPages : fallbackPages);
               } catch {
-                resolve47([]);
+                resolve48([]);
               }
             });
           });
-          req.on("error", () => resolve47([]));
+          req.on("error", () => resolve48([]));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve47([]);
+            resolve48([]);
           });
         });
       }
@@ -116049,7 +116050,7 @@ ${marker2}`,
         }
       }
       findTargetOnPort(port) {
-        return new Promise((resolve47) => {
+        return new Promise((resolve48) => {
           const req = http2.get(`http://127.0.0.1:${port}/json`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
@@ -116060,7 +116061,7 @@ ${marker2}`,
                   (t) => (t.type === "page" || t.type === "browser" || t.type === "Page") && t.webSocketDebuggerUrl
                 );
                 if (pages.length === 0) {
-                  resolve47(targets.find((t) => t.webSocketDebuggerUrl) || null);
+                  resolve48(targets.find((t) => t.webSocketDebuggerUrl) || null);
                   return;
                 }
                 const titleFilteredPages = pages.filter((t) => !this.isNonMainTitle(t.title || ""));
@@ -116079,25 +116080,25 @@ ${marker2}`,
                     this._targetId = selected2.target.id;
                   }
                   this._pageTitle = selected2.target.title || "";
-                  resolve47(selected2.target);
+                  resolve48(selected2.target);
                   return;
                 }
                 if (previousTargetId) {
                   this.log(`[CDP] Target ${previousTargetId} not found in page list`);
-                  resolve47(null);
+                  resolve48(null);
                   return;
                 }
                 this._pageTitle = list2[0]?.title || "";
-                resolve47(list2[0]);
+                resolve48(list2[0]);
               } catch {
-                resolve47(null);
+                resolve48(null);
               }
             });
           });
-          req.on("error", () => resolve47(null));
+          req.on("error", () => resolve48(null));
           req.setTimeout(2e3, () => {
             req.destroy();
-            resolve47(null);
+            resolve48(null);
           });
         });
       }
@@ -116108,7 +116109,7 @@ ${marker2}`,
         this.extensionProviders = providers;
       }
       connectToTarget(wsUrl) {
-        return new Promise((resolve47) => {
+        return new Promise((resolve48) => {
           this.ws = new import_ws3.default(wsUrl);
           this.ws.on("open", async () => {
             this._connected = true;
@@ -116118,17 +116119,17 @@ ${marker2}`,
             }
             this.connectBrowserWs().catch(() => {
             });
-            resolve47(true);
+            resolve48(true);
           });
           this.ws.on("message", (data) => {
             try {
               const msg = JSON.parse(data.toString());
               if (msg.id && this.pending.has(msg.id)) {
-                const { resolve: resolve48, reject } = this.pending.get(msg.id);
+                const { resolve: resolve49, reject } = this.pending.get(msg.id);
                 this.pending.delete(msg.id);
                 this.failureCount = 0;
                 if (msg.error) reject(new Error(msg.error.message));
-                else resolve48(msg.result);
+                else resolve49(msg.result);
               } else if (msg.method === "Runtime.executionContextCreated") {
                 this.contexts.add(msg.params.context.id);
               } else if (msg.method === "Runtime.executionContextDestroyed") {
@@ -116151,7 +116152,7 @@ ${marker2}`,
           this.ws.on("error", (err) => {
             this.log(`[CDP] WebSocket error: ${err.message}`);
             this._connected = false;
-            resolve47(false);
+            resolve48(false);
           });
         });
       }
@@ -116165,7 +116166,7 @@ ${marker2}`,
             return;
           }
           this.log(`[CDP] Connecting browser WS for target discovery...`);
-          await new Promise((resolve47, reject) => {
+          await new Promise((resolve48, reject) => {
             this.browserWs = new import_ws3.default(browserWsUrl);
             this.browserWs.on("open", async () => {
               this._browserConnected = true;
@@ -116175,16 +116176,16 @@ ${marker2}`,
               } catch (e) {
                 this.log(`[CDP] setDiscoverTargets failed: ${e.message}`);
               }
-              resolve47();
+              resolve48();
             });
             this.browserWs.on("message", (data) => {
               try {
                 const msg = JSON.parse(data.toString());
                 if (msg.id && this.browserPending.has(msg.id)) {
-                  const { resolve: resolve48, reject: reject2 } = this.browserPending.get(msg.id);
+                  const { resolve: resolve49, reject: reject2 } = this.browserPending.get(msg.id);
                   this.browserPending.delete(msg.id);
                   if (msg.error) reject2(new Error(msg.error.message));
-                  else resolve48(msg.result);
+                  else resolve49(msg.result);
                 }
               } catch {
               }
@@ -116204,31 +116205,31 @@ ${marker2}`,
         }
       }
       getBrowserWsUrl() {
-        return new Promise((resolve47) => {
+        return new Promise((resolve48) => {
           const req = http2.get(`http://127.0.0.1:${this.port}/json/version`, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk.toString());
             res.on("end", () => {
               try {
                 const info = JSON.parse(data);
-                resolve47(info.webSocketDebuggerUrl || null);
+                resolve48(info.webSocketDebuggerUrl || null);
               } catch {
-                resolve47(null);
+                resolve48(null);
               }
             });
           });
-          req.on("error", () => resolve47(null));
+          req.on("error", () => resolve48(null));
           req.setTimeout(3e3, () => {
             req.destroy();
-            resolve47(null);
+            resolve48(null);
           });
         });
       }
       sendBrowser(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           if (!this.browserWs || !this._browserConnected) return reject(new Error("Browser WS not connected"));
           const id4 = this.browserMsgId++;
-          this.browserPending.set(id4, { resolve: resolve47, reject });
+          this.browserPending.set(id4, { resolve: resolve48, reject });
           this.browserWs.send(JSON.stringify({ id: id4, method, params }));
           setTimeout(() => {
             if (this.browserPending.has(id4)) {
@@ -116268,11 +116269,11 @@ ${marker2}`,
       }
       // ─── CDP Protocol ────────────────────────────────────────
       sendInternal(method, params = {}, timeoutMs = 15e3) {
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           if (!this.ws || !this._connected) return reject(new Error("CDP not connected"));
           if (this.ws.readyState !== import_ws3.default.OPEN) return reject(new Error("WebSocket not open"));
           const id4 = this.msgId++;
-          this.pending.set(id4, { resolve: resolve47, reject });
+          this.pending.set(id4, { resolve: resolve48, reject });
           this.ws.send(JSON.stringify({ id: id4, method, params }));
           setTimeout(() => {
             if (this.pending.has(id4)) {
@@ -116521,7 +116522,7 @@ ${marker2}`,
         const browserWs = this.browserWs;
         let msgId = this.browserMsgId;
         const sendWs = (method, params = {}, sessionId) => {
-          return new Promise((resolve47, reject) => {
+          return new Promise((resolve48, reject) => {
             const mid = msgId++;
             this.browserMsgId = msgId;
             const handler = (raw) => {
@@ -116530,7 +116531,7 @@ ${marker2}`,
                 if (msg.id === mid) {
                   browserWs.removeListener("message", handler);
                   if (msg.error) reject(new Error(msg.error.message || JSON.stringify(msg.error)));
-                  else resolve47(msg.result);
+                  else resolve48(msg.result);
                 }
               } catch {
               }
@@ -116731,14 +116732,14 @@ ${marker2}`,
         if (!ws || ws.readyState !== import_ws3.default.OPEN) {
           throw new Error("CDP not connected");
         }
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           const id4 = getNextId();
           pendingMap.set(id4, {
             resolve: (result) => {
               if (result?.result?.subtype === "error") {
                 reject(new Error(result.result.description));
               } else {
-                resolve47(result?.result?.value);
+                resolve48(result?.result?.value);
               }
             },
             reject
@@ -116770,10 +116771,10 @@ ${marker2}`,
           throw new Error("CDP not connected");
         }
         const sendViaSession = (method, params = {}) => {
-          return new Promise((resolve47, reject) => {
+          return new Promise((resolve48, reject) => {
             const pendingMap = this._browserConnected ? this.browserPending : this.pending;
             const id4 = this._browserConnected ? this.browserMsgId++ : this.msgId++;
-            pendingMap.set(id4, { resolve: resolve47, reject });
+            pendingMap.set(id4, { resolve: resolve48, reject });
             ws.send(JSON.stringify({ id: id4, sessionId, method, params }));
             setTimeout(() => {
               if (pendingMap.has(id4)) {
@@ -124668,7 +124669,7 @@ ${output}` : "";
       return e?.message || String(e);
     }
     function delay(ms3) {
-      return new Promise((resolve47) => setTimeout(resolve47, ms3));
+      return new Promise((resolve48) => setTimeout(resolve48, ms3));
     }
     var ProviderChannelRuntime = class {
       store;
@@ -125022,7 +125023,7 @@ ${output}` : "";
     }
     function defaultFetchJson(url) {
       const https = require("https");
-      return new Promise((resolve47, reject) => {
+      return new Promise((resolve48, reject) => {
         const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", Accept: "application/json" }, timeout: 15e3 }, (res) => {
           if (res.statusCode !== 200) {
             reject(new Error(`HTTP ${res.statusCode}`));
@@ -125032,7 +125033,7 @@ ${output}` : "";
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
             try {
-              resolve47(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+              resolve48(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
             } catch (e) {
               reject(e);
             }
@@ -125048,7 +125049,7 @@ ${output}` : "";
     function defaultDownloadFile(url, destPath) {
       const https = require("https");
       const http4 = require("http");
-      return new Promise((resolve47, reject) => {
+      return new Promise((resolve48, reject) => {
         const doRequest = (reqUrl, redirectCount = 0) => {
           if (redirectCount > 5) {
             reject(new Error("Too many redirects"));
@@ -125068,7 +125069,7 @@ ${output}` : "";
             res.pipe(ws);
             ws.on("finish", () => {
               ws.close();
-              resolve47();
+              resolve48();
             });
             ws.on("error", reject);
           });
@@ -127131,10 +127132,10 @@ ${output}` : "";
       return pids;
     }
     async function execQuiet(command, options = {}) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         (0, import_child_process13.exec)(command, { windowsHide: true, ...options }, (error, stdout) => {
-          if (error) return resolve47("");
-          resolve47(stdout.toString());
+          if (error) return resolve48("");
+          resolve48(stdout.toString());
         });
       });
     }
@@ -127220,17 +127221,17 @@ ${output}` : "";
       throw new Error("No free port found");
     }
     function checkPortFree(port) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         const server = net.createServer();
         server.unref();
-        server.on("error", () => resolve47(false));
+        server.on("error", () => resolve48(false));
         server.listen(port, "127.0.0.1", () => {
-          server.close(() => resolve47(true));
+          server.close(() => resolve48(true));
         });
       });
     }
     async function isCdpActive(port) {
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         const req = require("http").get(`http://127.0.0.1:${port}/json/version`, {
           timeout: 2e3
         }, (res) => {
@@ -127239,16 +127240,16 @@ ${output}` : "";
           res.on("end", () => {
             try {
               const info = JSON.parse(data);
-              resolve47(!!info["WebKit-Version"] || !!info["Browser"]);
+              resolve48(!!info["WebKit-Version"] || !!info["Browser"]);
             } catch {
-              resolve47(false);
+              resolve48(false);
             }
           });
         });
-        req.on("error", () => resolve47(false));
+        req.on("error", () => resolve48(false));
         req.on("timeout", () => {
           req.destroy();
-          resolve47(false);
+          resolve48(false);
         });
       });
     }
@@ -133268,7 +133269,7 @@ ${output}` : "";
       }
     }
     function sleep(ms3) {
-      return new Promise((resolve47) => setTimeout(resolve47, ms3));
+      return new Promise((resolve48) => setTimeout(resolve48, ms3));
     }
     async function waitForIdleAfterInterrupt(target, timeoutMs = INTERRUPT_IDLE_TIMEOUT_MS, pollMs = INTERRUPT_IDLE_POLL_MS, options) {
       const startedAt = Date.now();
@@ -133926,7 +133927,7 @@ ${output}` : "";
     async function getStableExtensionBaseline(h) {
       const first = await readExtensionChatState(h);
       if (getStateMessageCount(first) > 0 || getStateLastSignature(first)) return first;
-      await new Promise((resolve47) => setTimeout(resolve47, 150));
+      await new Promise((resolve48) => setTimeout(resolve48, 150));
       const second = await readExtensionChatState(h);
       return getStateMessageCount(second) >= getStateMessageCount(first) ? second : first;
     }
@@ -133934,7 +133935,7 @@ ${output}` : "";
       const beforeCount = getStateMessageCount(before);
       const beforeSignature = getStateLastSignature(before);
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        await new Promise((resolve47) => setTimeout(resolve47, 250));
+        await new Promise((resolve48) => setTimeout(resolve48, 250));
         const state2 = await readExtensionChatState(h);
         if (state2?.status === "waiting_approval") return true;
         const afterCount = getStateMessageCount(state2);
@@ -135671,7 +135672,7 @@ ${output}` : "";
             const enterCount = cliCommand.enterCount || 1;
             await adapter.writeRaw(cliCommand.text + "\r");
             for (let i = 1; i < enterCount; i += 1) {
-              await new Promise((resolve47) => setTimeout(resolve47, 50));
+              await new Promise((resolve48) => setTimeout(resolve48, 50));
               await adapter.writeRaw("\r");
             }
           }
@@ -141324,7 +141325,7 @@ ${output}` : "";
           const setupPromise = finishWorktreeSetup();
           const setupResult = await Promise.race([
             setupPromise.then((value) => ({ completed: true, value })),
-            new Promise((resolve47) => setTimeout(() => resolve47({ completed: false }), setupWaitMs))
+            new Promise((resolve48) => setTimeout(() => resolve48({ completed: false }), setupWaitMs))
           ]);
           const bootstrapStartedMs = Date.now();
           const terminalBootstrapEvent = (state2) => state2.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
@@ -142855,7 +142856,7 @@ ${output}` : "";
         return ports.store.withSnapshot((stored) => {
           if (stored.status !== "ok") return resolveLaunchSelection({ role, stored, override }, ports.validation);
           if (projectId && !ports.projects) return unavailable2("project_storage_unavailable");
-          const resolve47 = () => {
+          const resolve48 = () => {
             let hasHostInventory = false;
             if (projectId) {
               try {
@@ -142883,7 +142884,7 @@ ${output}` : "";
               } } : {}
             }, ports.validation);
           };
-          return projectId && ports.projects ? ports.projects.withWriteLock(resolve47) : resolve47();
+          return projectId && ports.projects ? ports.projects.withWriteLock(resolve48) : resolve48();
         });
       } catch {
         return unavailable2("launch_snapshot_unavailable");
@@ -146535,7 +146536,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     async function bestEffortRemoveWorktreeDir(self, dir) {
       if (!dir || !fs91.existsSync(dir)) return { removed: true, residue: false };
-      const sleep3 = (ms3) => new Promise((resolve47) => setTimeout(resolve47, ms3));
+      const sleep3 = (ms3) => new Promise((resolve48) => setTimeout(resolve48, ms3));
       const ABSORB = /* @__PURE__ */ new Set(["EINVAL", "EPERM", "EBUSY", "ENOTEMPTY", "EACCES", "EMFILE", "ENFILE"]);
       let lastErr;
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -150159,7 +150160,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const channel = host._ctx.providerLoader?.channel ?? "stable";
       const url = `${REGISTRY}/providers?sort=${encodeURIComponent(sort)}&limit=${limit}&channel=${encodeURIComponent(channel)}`;
       try {
-        const data = await new Promise((resolve47, reject) => {
+        const data = await new Promise((resolve48, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -150169,7 +150170,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve47(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve48(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -150193,7 +150194,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const cfg = loadConfig();
       const REGISTRY = resolveRegistryBaseUrl(cfg.registryUrl, process.env, cfg.serverUrl);
       function fetchJson(url) {
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           const req = https.get(url, { headers: { "User-Agent": "adhdev-daemon", "Accept": "application/json" }, timeout: 1e4 }, (res) => {
             if (res.statusCode !== 200) {
               reject(new Error(`HTTP ${res.statusCode}`));
@@ -150203,7 +150204,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             res.on("data", (c) => chunks.push(c));
             res.on("end", () => {
               try {
-                resolve47(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+                resolve48(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
               } catch (e) {
                 reject(e);
               }
@@ -151003,7 +151004,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(body);
-          const result = await new Promise((resolve47, reject) => {
+          const result = await new Promise((resolve48, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -151015,9 +151016,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve47(JSON.parse(data));
+                  resolve48(JSON.parse(data));
                 } catch {
-                  resolve47({ raw: data });
+                  resolve48({ raw: data });
                 }
               });
             });
@@ -151035,15 +151036,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (!providerType) return { success: false, error: "providerType required" };
         try {
           const http4 = await import("http");
-          const result = await new Promise((resolve47, reject) => {
+          const result = await new Promise((resolve48, reject) => {
             http4.get(`http://127.0.0.1:19280/api/providers/${providerType}/${endpoint}`, (res) => {
               let data = "";
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve47(JSON.parse(data));
+                  resolve48(JSON.parse(data));
                 } catch {
-                  resolve47({ raw: data });
+                  resolve48({ raw: data });
                 }
               });
             }).on("error", reject);
@@ -151057,7 +151058,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         try {
           const http4 = await import("http");
           const postData = JSON.stringify(args || {});
-          const result = await new Promise((resolve47, reject) => {
+          const result = await new Promise((resolve48, reject) => {
             const req = http4.request({
               hostname: "127.0.0.1",
               port: 19280,
@@ -151069,9 +151070,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
               res.on("data", (chunk) => data += chunk);
               res.on("end", () => {
                 try {
-                  resolve47(JSON.parse(data));
+                  resolve48(JSON.parse(data));
                 } catch {
-                  resolve47({ raw: data });
+                  resolve48({ raw: data });
                 }
               });
             });
@@ -153134,14 +153135,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       whenSubmitDrained(timeoutMs) {
         if (!this.hasInFlightSubmit()) return Promise.resolve(true);
         const deadline = Date.now() + Math.max(0, timeoutMs);
-        return new Promise((resolve47) => {
+        return new Promise((resolve48) => {
           const poll2 = () => {
             if (!this.hasInFlightSubmit()) {
-              resolve47(true);
+              resolve48(true);
               return;
             }
             if (Date.now() >= deadline) {
-              resolve47(false);
+              resolve48(false);
               return;
             }
             setTimeout(poll2, 100);
@@ -155547,7 +155548,7 @@ trust_level = "trusted"
     };
     init_evaluator();
     function delay2(ms3) {
-      return new Promise((resolve47) => setTimeout(resolve47, ms3));
+      return new Promise((resolve48) => setTimeout(resolve48, ms3));
     }
     async function openPickerAndListChoices(driver, ctl, action2) {
       driver.dispatch({ kind: "click_control", control_id: ctl.id });
@@ -157131,7 +157132,7 @@ ${text4}` : text4;
       let screenText = readClaudeTuiSnapshotForAnswer(host);
       let focused = readFocusedClaudeTuiQuestion(screenText);
       while (Date.now() < deadline && !(focused && claudeTuiQuestionMatches(expected, focused))) {
-        await new Promise((resolve47) => setTimeout(resolve47, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
         focused = readFocusedClaudeTuiQuestion(screenText);
       }
@@ -157182,7 +157183,7 @@ ${text4}` : text4;
         if (review) return screenText;
         if (directSubmitted) return null;
         if (Date.now() >= deadline) return screenText;
-        await new Promise((resolve47) => setTimeout(resolve47, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = readClaudeTuiSnapshotForAnswer(host);
       }
     }
@@ -157218,7 +157219,7 @@ ${text4}` : text4;
       let screenText = host.driver.snapshot();
       const deadline = Date.now() + CLAUDE_TUI_PAGE_SETTLE_TIMEOUT_MS;
       while (!detectClaudeTuiMultiSelect(screenText) && Date.now() < deadline) {
-        await new Promise((resolve47) => setTimeout(resolve47, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         screenText = host.driver.snapshot();
       }
       return screenText;
@@ -157229,13 +157230,13 @@ ${text4}` : text4;
       for (let index = 1; index < headers.length; index += 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "	" });
-        await new Promise((resolve47) => setTimeout(resolve47, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         pages.push({ screenText: await snapshotSettledClaudeTuiPage(host), header: headers[index] });
       }
       for (let index = headers.length - 1; index > 0; index -= 1) {
         if (host.claudeTuiCaptureSuppressed) return;
         host.driver.dispatch({ kind: "pty_write", data: "\x1B[Z" });
-        await new Promise((resolve47) => setTimeout(resolve47, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, CLAUDE_TUI_PAGE_POLL_INTERVAL_MS));
         const reread = await snapshotSettledClaudeTuiPage(host);
         const landed = pages[index - 1];
         if (landed && !detectClaudeTuiMultiSelect(landed.screenText) && detectClaudeTuiMultiSelect(reread) && claudeTuiPagesLookLikeSameQuestion(landed, reread)) {
@@ -157290,7 +157291,7 @@ ${text4}` : text4;
               break questionLoop;
             }
             host.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve47) => setTimeout(resolve47, 180));
+            await new Promise((resolve48) => setTimeout(resolve48, 180));
           }
           const answer = response.answers[question.questionId];
           const singleSelectDigitOnly = !question.multiSelect && (answer?.selectedLabels.length ?? 0) === 1 && !answer?.freeformText?.trim();
@@ -157301,7 +157302,7 @@ ${text4}` : text4;
               previewLayoutAnswer = true;
               LOG.info("SpecAdapter", `[${host.cliType}] preview panel layout detected on screen after digit \u2014 sending commit Enter (question "${question.questionId}")`);
               host.driver.dispatch({ kind: "pty_write", data: "\r" });
-              await new Promise((resolve47) => setTimeout(resolve47, 180));
+              await new Promise((resolve48) => setTimeout(resolve48, 180));
             }
           }
         }
@@ -157317,7 +157318,7 @@ ${text4}` : text4;
             throw new Error("Claude TUI active interactive prompt changed before review submission");
           }
           host.driver.dispatch({ kind: "pty_write", data: "\r" });
-          await new Promise((resolve47) => setTimeout(resolve47, 180));
+          await new Promise((resolve48) => setTimeout(resolve48, 180));
         }
       } else {
         host.driver.dispatch({ kind: "pty_write", data: `${buildClaudeInteractiveToolResult(response)}
@@ -158238,7 +158239,7 @@ ${text4}` : text4;
           const steps = prompt.promptId.startsWith(KIMI_TUI_SELECTOR_PROMPT_PREFIX) ? buildKimiSelectorAnswerSteps(prompt, response, this.driver.snapshot()) : buildKimiInteractiveTuiAnswerSteps(prompt, response);
           for (const step of steps) {
             this.driver.dispatch({ kind: "pty_write", data: step });
-            await new Promise((resolve47) => setTimeout(resolve47, 180));
+            await new Promise((resolve48) => setTimeout(resolve48, 180));
           }
           this.activeInteractivePrompt = null;
           this.notifyChange("prompt_cleared");
@@ -158737,13 +158738,13 @@ ${text4}` : text4;
       }
       request(method, params) {
         const id4 = `adhdev:${this.generation}:${(0, import_node_crypto322.randomUUID)()}`;
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
             reject(new Error(`Codex ${method} timed out`));
             if (["initialize", "thread/start", "turn/start", "turn/steer", "turn/interrupt"].includes(method)) this.stop("timeout");
           }, 15e3);
-          this.pending.set(id4, { resolve: resolve47, reject, timer });
+          this.pending.set(id4, { resolve: resolve48, reject, timer });
           try {
             this.write({ id: id4, method, params });
           } catch (error) {
@@ -159620,7 +159621,7 @@ ${JSON.stringify(replies)}
         if (status === "stopped") {
           throw new Error("CLI runtime stopped before it became ready");
         }
-        await new Promise((resolve47) => setTimeout(resolve47, pollMs));
+        await new Promise((resolve48) => setTimeout(resolve48, pollMs));
       }
       throw new Error(`CLI runtime did not become ready within ${timeoutMs}ms`);
     }
@@ -162526,7 +162527,7 @@ ${buttons.join("\n")}`;
         const enterCount = cliCommand.enterCount || 1;
         await host.adapter.writeRaw(cliCommand.text + "\r");
         for (let i = 1; i < enterCount; i += 1) {
-          await new Promise((resolve47) => setTimeout(resolve47, 50));
+          await new Promise((resolve48) => setTimeout(resolve48, 50));
           await host.adapter.writeRaw("\r");
         }
       }
@@ -165989,7 +165990,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         const beforeCount = this.messageCount(before);
         const beforeSignature = this.lastMessageSignature(before);
         for (let attempt = 0; attempt < 12; attempt += 1) {
-          await new Promise((resolve47) => setTimeout(resolve47, 250));
+          await new Promise((resolve48) => setTimeout(resolve48, 250));
           let state2;
           try {
             state2 = await this.readChat(evaluate);
@@ -166011,7 +166012,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         if (this.messageCount(first) > 0 || this.lastMessageSignature(first)) {
           return first;
         }
-        await new Promise((resolve47) => setTimeout(resolve47, 150));
+        await new Promise((resolve48) => setTimeout(resolve48, 150));
         const second = await this.readChat(evaluate);
         return this.messageCount(second) >= this.messageCount(first) ? second : first;
       }
@@ -166162,7 +166163,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           if (typeof data.error === "string" && data.error.trim()) return false;
         }
         for (let attempt = 0; attempt < 6; attempt += 1) {
-          await new Promise((resolve47) => setTimeout(resolve47, 250));
+          await new Promise((resolve48) => setTimeout(resolve48, 250));
           const state2 = await this.readChat(evaluate);
           const title = this.getStateTitle(state2);
           if (this.titlesMatch(title, sessionId)) return true;
@@ -169258,7 +169259,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { target, instance, adapter };
     }
     function sleep2(ms3) {
-      return new Promise((resolve47) => setTimeout(resolve47, ms3));
+      return new Promise((resolve48) => setTimeout(resolve48, ms3));
     }
     async function waitForCliReady(ctx, type2, instanceId, timeoutMs) {
       const startedAt = Date.now();
@@ -170099,15 +170100,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             this.json(res, 500, { error: e.message });
           }
         });
-        return new Promise((resolve47, reject) => {
+        return new Promise((resolve48, reject) => {
           this.server.listen(port, "127.0.0.1", () => {
             this.log(`Dev server listening on http://127.0.0.1:${port}`);
-            resolve47();
+            resolve48();
           });
           this.server.on("error", (e) => {
             if (e.code === "EADDRINUSE") {
               this.log(`Port ${port} in use, skipping dev server`);
-              resolve47();
+              resolve48();
             } else {
               reject(e);
             }
@@ -170191,20 +170192,20 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           child.stderr?.on("data", (d) => {
             stderr += d.toString().slice(0, 2e3);
           });
-          await new Promise((resolve47) => {
+          await new Promise((resolve48) => {
             const timer = setTimeout(() => {
               child.kill();
-              resolve47();
+              resolve48();
             }, 3e3);
             child.on("exit", () => {
               clearTimeout(timer);
-              resolve47();
+              resolve48();
             });
             child.stdout?.once("data", () => {
               setTimeout(() => {
                 child.kill();
                 clearTimeout(timer);
-                resolve47();
+                resolve48();
               }, 500);
             });
           });
@@ -170741,14 +170742,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         res.end(JSON.stringify(data, null, 2));
       }
       async readBody(req) {
-        return new Promise((resolve47) => {
+        return new Promise((resolve48) => {
           let body = "";
           req.on("data", (chunk) => body += chunk);
           req.on("end", () => {
             try {
-              resolve47(JSON.parse(body));
+              resolve48(JSON.parse(body));
             } catch {
-              resolve47({});
+              resolve48({});
             }
           });
         });
@@ -171527,7 +171528,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         if (await canConnect(endpoint, requiredRequestTypes)) return;
-        await new Promise((resolve47) => setTimeout(resolve47, STARTUP_POLL_MS));
+        await new Promise((resolve48) => setTimeout(resolve48, STARTUP_POLL_MS));
       }
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
@@ -171971,10 +171972,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             const buffer = Buffer.from(await res.arrayBuffer());
             const fs112 = await import("fs");
             fs112.writeFileSync(vsixPath, buffer);
-            return new Promise((resolve47) => {
+            return new Promise((resolve48) => {
               const cmd = `"${ide.cliCommand}" --install-extension "${vsixPath}" --force`;
               hiddenExec(cmd, { timeout: 6e4 }, (error, _stdout, stderr) => {
-                resolve47({
+                resolve48({
                   extensionId: extension.id,
                   marketplaceId: extension.marketplaceId,
                   success: !error,
@@ -171987,11 +171988,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch (e) {
         }
       }
-      return new Promise((resolve47) => {
+      return new Promise((resolve48) => {
         const cmd = `"${ide.cliCommand}" --install-extension ${extension.marketplaceId} --force`;
         hiddenExec(cmd, { timeout: 6e4 }, (error, stdout, stderr) => {
           if (error) {
-            resolve47({
+            resolve48({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: false,
@@ -171999,7 +172000,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               error: stderr || error.message
             });
           } else {
-            resolve47({
+            resolve48({
               extensionId: extension.id,
               marketplaceId: extension.marketplaceId,
               success: true,
@@ -172249,7 +172250,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           LOG.warn(logCategory, `response write under backpressure: command='${command}' requestId=${requestId} handlerMs=${handlerMs} payloadBytes=${body.length} bufferedBefore=${bufferedBefore}`);
         }
       }
-      await new Promise((resolve47, reject) => {
+      await new Promise((resolve48, reject) => {
         const onError = (error) => {
           httpServer?.off("listening", onListening);
           reject(error);
@@ -172257,7 +172258,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const onListening = () => {
           httpServer?.off("error", onError);
           listening = true;
-          resolve47();
+          resolve48();
         };
         httpServer.once("error", onError);
         httpServer.once("listening", onListening);
@@ -172284,12 +172285,12 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             }
           }
           clients.clear();
-          await new Promise((resolve47) => {
+          await new Promise((resolve48) => {
             if (!httpServer) {
-              resolve47();
+              resolve48();
               return;
             }
-            httpServer.close(() => resolve47());
+            httpServer.close(() => resolve48());
           });
           httpServer = null;
           wss = null;
@@ -173277,7 +173278,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { legacyCleared: [], discovered: [], budgetExhausted: false, meshRowsPruned: 0, vacuumedPages: 0 };
     }
     function yieldToEventLoop() {
-      return new Promise((resolve47) => setImmediate(resolve47));
+      return new Promise((resolve48) => setImmediate(resolve48));
     }
     function errText2(error) {
       return error instanceof Error ? error.message : String(error);
@@ -174628,8 +174629,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         try {
           read2 = await Promise.race([
             probe.reader.read(attempt, location, target.holds),
-            new Promise((resolve47) => {
-              deadline = setTimeout(() => resolve47({ presence: "unknown" }), endProbeGraceMs(policy));
+            new Promise((resolve48) => {
+              deadline = setTimeout(() => resolve48({ presence: "unknown" }), endProbeGraceMs(policy));
             })
           ]);
         } catch (error) {
@@ -175158,7 +175159,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return { ...runtimeCounters };
     }
     function yieldToEventLoop2() {
-      return new Promise((resolve47) => setImmediate(resolve47));
+      return new Promise((resolve48) => setImmediate(resolve48));
     }
     var CHAT_SCAN_PAGE_ROWS = 2e3;
     function scanAllLatestPerKey(node, topic, options = {}) {
@@ -181410,8 +181411,12 @@ function resolveProbeRetryMax() {
 function resolveProbeRetryBackoffMs() {
   return parsePositiveInt(process.env[IPC_PROBE_RETRY_BACKOFF_MS_ENV], DEFAULT_IPC_PROBE_RETRY_BACKOFF_MS);
 }
-function isRetryableProbeCommand(type2) {
-  return IPC_PROBE_RETRYABLE_COMMANDS.has(type2);
+function isRetryableProbeCommand(type2, args) {
+  if (!IPC_PROBE_RETRYABLE_COMMANDS.has(type2)) return false;
+  if (type2 === "mesh_status_view" && (args?.pendingEvents != null || args?.toolCall != null)) {
+    return false;
+  }
+  return true;
 }
 var WS_CONNECTING = 0;
 var WS_OPEN = 1;
@@ -181476,10 +181481,11 @@ function getOrCreateConnection(WebSocketCtor, url) {
   connectionPool.set(url, conn);
   const drainQueue = () => {
     conn.ready = true;
-    for (const { type: type2, args, requestId } of conn.commandQueue) {
+    const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
+    for (const { type: type2, args, requestId } of queued) {
+      if (!conn.pending.has(requestId)) continue;
       conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId } }));
     }
-    conn.commandQueue = [];
   };
   let tornDown = false;
   const teardown = (error) => {
@@ -181487,12 +181493,13 @@ function getOrCreateConnection(WebSocketCtor, url) {
     tornDown = true;
     connectionPool.delete(url);
     conn.ready = false;
-    for (const [, req] of conn.pending) {
+    conn.commandQueue.length = 0;
+    const pendingEntries = Array.from(conn.pending.values());
+    conn.pending.clear();
+    for (const req of pendingEntries) {
       clearTimeout(req.timer);
       req.reject(error);
     }
-    conn.pending.clear();
-    conn.commandQueue = [];
   };
   conn.ws.addEventListener("open", () => {
     conn.ws.send(JSON.stringify({
@@ -181583,7 +181590,7 @@ var IpcTransport = class {
     });
   }
   async sendIpcCommand(type2, args) {
-    const maxRetries = isRetryableProbeCommand(type2) ? resolveProbeRetryMax() : 0;
+    const maxRetries = isRetryableProbeCommand(type2, args) ? resolveProbeRetryMax() : 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await this.sendIpcCommandOnce(type2, args);
@@ -181613,11 +181620,22 @@ var IpcTransport = class {
     ];
     const url = `ws://127.0.0.1:${this.port}${this.path}`;
     return new Promise((resolve2, reject) => {
+      let settled = false;
+      const settleResolve = (val) => {
+        if (settled) return;
+        settled = true;
+        resolve2(val);
+      };
+      const settleReject = (err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
       let conn;
       try {
         conn = getOrCreateConnection(WebSocketCtor, url);
       } catch (e) {
-        return reject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
+        return settleReject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
       }
       const sentAt = Date.now();
       const timer = setTimeout(() => {
@@ -181633,9 +181651,9 @@ var IpcTransport = class {
         console.error(`[ipc] timeout: command='${type2}' requestId=${requestId} elapsedMs=${elapsedMs} pendingBeforeRemoval=${pendingCountBeforeRemoval} ts=${(/* @__PURE__ */ new Date()).toISOString()}`);
         pruneTimedOutRequests(Date.now());
         trackTimedOutRequest(requestId, type2);
-        reject(error);
+        settleReject(error);
       }, timeoutMs);
-      conn.pending.set(requestId, { resolve: resolve2, reject, timer, command: type2, sentAt });
+      conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type2, sentAt });
       conn.lastUsedAt = Date.now();
       if (conn.ready) {
         conn.ws.send(JSON.stringify({ type: "ext:command", payload: { command: type2, args, requestId } }));

@@ -205,8 +205,16 @@ export function resolveProbeRetryBackoffMs(): number {
 }
 
 /** Probe-class allowlist check (exported for tests and for the retry loop). */
-export function isRetryableProbeCommand(type: string): boolean {
-  return IPC_PROBE_RETRYABLE_COMMANDS.has(type);
+export function isRetryableProbeCommand(type: string, args?: Record<string, unknown>): boolean {
+  if (!IPC_PROBE_RETRYABLE_COMMANDS.has(type)) return false;
+  // SAFETY: mesh_status_view is pure read-only UNLESS the caller piggies an inbox
+  // drain (`pendingEvents`) or coordinator rate-limit write (`toolCall`). Never
+  // auto-retry an uncertain inbox drain or write; its 120s outer deadline in
+  // IPC_COMMAND_TIMEOUTS_MS already covers the full local+remote status fan-out.
+  if (type === 'mesh_status_view' && (args?.pendingEvents != null || args?.toolCall != null)) {
+    return false;
+  }
+  return true;
 }
 
 // WS readyState constants (same as browser)
@@ -319,10 +327,11 @@ function getOrCreateConnection(
 
   const drainQueue = () => {
     conn.ready = true;
-    for (const { type, args, requestId } of conn.commandQueue) {
+    const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
+    for (const { type, args, requestId } of queued) {
+      if (!conn.pending.has(requestId)) continue;
       conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId } }));
     }
-    conn.commandQueue = [];
   };
 
   let tornDown = false;
@@ -331,12 +340,13 @@ function getOrCreateConnection(
     tornDown = true;
     connectionPool.delete(url);
     conn.ready = false;
-    for (const [, req] of conn.pending) {
+    conn.commandQueue.length = 0;
+    const pendingEntries = Array.from(conn.pending.values());
+    conn.pending.clear();
+    for (const req of pendingEntries) {
       clearTimeout(req.timer);
       req.reject(error);
     }
-    conn.pending.clear();
-    conn.commandQueue = [];
   };
 
   conn.ws.addEventListener('open', () => {
@@ -466,7 +476,7 @@ export class IpcTransport {
     // allowlist's safety note). A relayed probe (mesh_relay_command wrapping
     // get_status_metadata) is intentionally NOT retried here: its 120s budget
     // already dwarfs the observed freeze windows.
-    const maxRetries = isRetryableProbeCommand(type) ? resolveProbeRetryMax() : 0;
+    const maxRetries = isRetryableProbeCommand(type, args) ? resolveProbeRetryMax() : 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await this.sendIpcCommandOnce(type, args);
@@ -501,11 +511,23 @@ export class IpcTransport {
     const url = `ws://127.0.0.1:${this.port}${this.path}`;
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const settleResolve = (val: any) => {
+        if (settled) return;
+        settled = true;
+        resolve(val);
+      };
+      const settleReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       let conn: PooledConnection;
       try {
         conn = getOrCreateConnection(WebSocketCtor as typeof WebSocket, url);
       } catch (e: any) {
-        return reject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
+        return settleReject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
       }
 
       const sentAt = Date.now();
@@ -530,10 +552,10 @@ export class IpcTransport {
         console.error(`[ipc] timeout: command='${type}' requestId=${requestId} elapsedMs=${elapsedMs} pendingBeforeRemoval=${pendingCountBeforeRemoval} ts=${new Date().toISOString()}`);
         pruneTimedOutRequests(Date.now());
         trackTimedOutRequest(requestId, type);
-        reject(error);
+        settleReject(error);
       }, timeoutMs);
 
-      conn.pending.set(requestId, { resolve, reject, timer, command: type, sentAt });
+      conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type, sentAt });
       conn.lastUsedAt = Date.now();
 
       if (conn.ready) {

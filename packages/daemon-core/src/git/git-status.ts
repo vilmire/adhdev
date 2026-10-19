@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GIT_STATUS_TIMEOUT_MS, GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
@@ -49,14 +49,15 @@ const inFlightStatusReads = new Map<string, Promise<GitRepoStatus>>();
 const inFlightUpstreamFetches = new Map<string, Promise<GitUpstreamProbe>>();
 const branchRemoteCache = new Map<string, string | null>();
 
-/** Cache key folding in only the option fields that change the result shape. */
+/** Cache key folding in canonical worktree path and the option fields that change result shape. */
 function statusCacheKey(workspace: string, options: GitStatusOptions): string {
+  const normalizedWorkspace = resolve(workspace);
   const includeSubmodules = options.includeSubmodules !== false;
   const refreshUpstream = options.refreshUpstream === true;
   const ignoreKey = options.submoduleIgnorePaths && options.submoduleIgnorePaths.length > 0
     ? `\0ign=${[...options.submoduleIgnorePaths].sort().join(',')}`
     : '';
-  return `${workspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
+  return `${normalizedWorkspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
 }
 
 /**

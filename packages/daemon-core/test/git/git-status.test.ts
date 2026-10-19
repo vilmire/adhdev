@@ -1065,6 +1065,64 @@ describe('git repo status parser', () => {
         nowSpy.mockRestore();
       }
     });
+
+    it('does not coalesce or cross-contaminate status across linked worktrees sharing the same .git common dir', async () => {
+      const mainWt = tempRepo('c1-linked-main');
+      writeFileSync(join(mainWt, 'a.txt'), 'one\n');
+      commit(mainWt, 'c1');
+
+      const linkedWt = join(mainWt, '..', `c1-linked-wt-${Date.now()}`);
+      roots.push(linkedWt);
+      git(mainWt, ['worktree', 'add', '-b', 'wt-branch', linkedWt]);
+
+      // Dirty only the linked worktree; keep main worktree clean.
+      writeFileSync(join(linkedWt, 'dirty.txt'), 'dirty\n');
+
+      // Fire concurrent status reads on both worktrees plus a trailing-slash alias of mainWt.
+      const [mainRes, mainSlashRes, linkedRes] = await Promise.all([
+        getGitRepoStatus(mainWt),
+        getGitRepoStatus(`${mainWt}/`),
+        getGitRepoStatus(linkedWt),
+      ]);
+
+      expect(mainRes.isGitRepo).toBe(true);
+      expect(mainRes.dirty).toBe(false);
+      expect(mainRes.untracked).toBe(0);
+      // Trailing slash normalizes to the same worktree key and coalesces with mainWt.
+      expect(mainSlashRes).toBe(mainRes);
+
+      // Linked worktree sharing the same .git common dir has its own distinct status.
+      expect(linkedRes.isGitRepo).toBe(true);
+      expect(linkedRes.dirty).toBe(true);
+      expect(linkedRes.untracked).toBe(1);
+      expect(linkedRes.branch).toBe('wt-branch');
+    });
+
+    it('cleans up inFlightStatusReads in finally after a failure so a subsequent read runs fresh', async () => {
+      const repo = tempRepo('c1-inflight-finally');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockRejectedValueOnce(
+        new gitExecutor.GitCommandError('timeout', 'Git command timed out', { signal: 'SIGTERM' }),
+      );
+      try {
+        const [failed1, failed2] = await Promise.all([
+          getGitRepoStatus(repo),
+          getGitRepoStatus(repo),
+        ]);
+        expect(failed1.reason).toBe('timeout');
+        expect(failed2).toBe(failed1);
+        expect(__inFlightStatusReadCountForTests()).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+
+      const fresh = await getGitRepoStatus(repo);
+      expect(fresh.isGitRepo).toBe(true);
+      expect(fresh.reason).toBeUndefined();
+      expect(__inFlightStatusReadCountForTests()).toBe(0);
+    });
   });
 
   // ─── C2: fetch throttle ───────────────────────────
