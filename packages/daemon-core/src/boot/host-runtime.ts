@@ -112,7 +112,7 @@ export interface DaemonHostRuntime {
         cmd: string,
         args: unknown,
         source: CommandSource | string,
-        opts?: { peerId?: string },
+        opts?: { peerId?: string; ownerVerified?: boolean },
     ): Promise<CommandRouterResult & { interactionId: string }>;
     /** Latest interaction id recorded for a session (router-owned, bounded). */
     interactionId(sessionId: string | undefined): string | undefined;

@@ -219,6 +219,26 @@ export function readCommandSource(args: unknown): string | undefined {
     return typeof raw === 'string' && raw ? raw : undefined
 }
 
+/**
+ * Non-serializable provenance token stamped ONLY by `DaemonCommandRouter.execute`
+ * onto the fresh `normalizedArgs` object when a command entered via a verified
+ * owner transport (`p2p` owner DataChannel or `standalone` HTTP/WS with
+ * `ownerVerified !== false`). Because this lives in an in-memory `WeakSet`
+ * rather than a JSON property, no payload field (`_commandSource`, `source`,
+ * `ownerVerified`, etc.) from IPC, server WS, or mesh relay can forge it.
+ */
+const trustedOwnerIngressArgs = new WeakSet<Record<string, unknown>>()
+
+export function markTrustedOwnerIngress<T extends Record<string, unknown>>(args: T): T {
+    trustedOwnerIngressArgs.add(args)
+    return args
+}
+
+export function isTrustedOwnerIngress(args: unknown): boolean {
+    return typeof args === 'object' && args !== null && !Array.isArray(args)
+        && trustedOwnerIngressArgs.has(args as Record<string, unknown>)
+}
+
 // ─── Refine dry-run/execute precedence ──────────────────────────────────────
 
 /**
