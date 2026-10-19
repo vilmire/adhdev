@@ -338,7 +338,9 @@ function getOrCreateConnection(
   const teardown = (error: Error) => {
     if (tornDown) return;
     tornDown = true;
-    connectionPool.delete(url);
+    if (connectionPool.get(url) === conn) {
+      connectionPool.delete(url);
+    }
     conn.ready = false;
     conn.commandQueue.length = 0;
     const pendingEntries = Array.from(conn.pending.values());
@@ -368,10 +370,12 @@ function getOrCreateConnection(
       const raw = typeof event.data === 'string' ? event.data : String(event.data);
       const msg = JSON.parse(raw);
       if (msg?.type === 'daemon:welcome') {
+        conn.lastUsedAt = Date.now();
         drainQueue();
         return;
       }
       if (msg?.type !== 'ext:command_result') return;
+      conn.lastUsedAt = Date.now();
       const requestId = msg?.payload?.requestId;
       const req = conn.pending.get(requestId);
       if (!req) {
@@ -542,8 +546,13 @@ export class IpcTransport {
         const error = new Error(`Daemon IPC ${diagnosticParts.join(' ')} timed out after ${Math.round(timeoutMs / 1000)}s (requestId=${requestId})`);
         // Tagged so the retry loop in sendIpcCommand can tell a TIMEOUT (the
         // freeze symptom, retryable for read-only probes) apart from a
-        // semantic failure reply or a connection error (neither retried).
+        // semantic failure reply or a connection error (neither retried), and
+        // downstream error classifiers can distinguish local IPC commands from
+        // relayed P2P commands without substring-matching workspace paths.
         (error as any).ipcTimeout = true;
+        (error as any).ipcCommand = type;
+        if (nestedCommand) (error as any).ipcRelayedCommand = nestedCommand;
+        if (targetDaemonId) (error as any).ipcTargetDaemonId = targetDaemonId;
         // UTC ISO timestamp + requestId make this correlatable against the
         // daemon's own local-ipc-server response-write log by requestId, even
         // across separate log files/clocks. pendingCountBeforeRemoval helps

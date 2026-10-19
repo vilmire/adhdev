@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1123,6 +1123,124 @@ describe('git repo status parser', () => {
       expect(fresh.reason).toBeUndefined();
       expect(__inFlightStatusReadCountForTests()).toBe(0);
     });
+
+    it('coalesces symlink aliases and nested checkout subdirectories onto the same canonical worktree key while keeping submoduleIgnorePaths collision-free', async () => {
+      const repo = tempRepo('c1-canonical-subdir');
+      mkdirSync(join(repo, 'packages', 'sub'), { recursive: true });
+      writeFileSync(join(repo, 'packages', 'sub', 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const aliasParent = mkdtempSync(join(tmpdir(), 'adhdev-c1-alias-'));
+      roots.push(aliasParent);
+      const symlinkRepo = join(aliasParent, 'repo-link');
+      symlinkSync(repo, symlinkRepo);
+      const subdirPath = join(repo, 'packages', 'sub');
+
+      const [rootStatus, symlinkStatus, subdirStatus] = await Promise.all([
+        getGitRepoStatus(repo),
+        getGitRepoStatus(symlinkRepo),
+        getGitRepoStatus(subdirPath),
+      ]);
+      expect(symlinkStatus).toBe(rootStatus);
+      expect(subdirStatus).toBe(rootStatus);
+
+      // submoduleIgnorePaths ['a,b'] vs ['a', 'b'] must produce distinct cache keys.
+      const ignoreSingle = await getGitRepoStatus(repo, { submoduleIgnorePaths: ['a,b'] });
+      const ignorePair = await getGitRepoStatus(repo, { submoduleIgnorePaths: ['a', 'b'] });
+      expect(ignorePair).not.toBe(ignoreSingle);
+    });
+
+    it('isolates caller deadlines and AbortSignals across concurrent status reads', async () => {
+      const repo = tempRepo('c1-deadline-isolation');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const realRunGit = gitExecutor.runGit;
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockImplementation(async (target, args, opts) => {
+        if (Array.isArray(args) && args[0] === 'status') {
+          const budget = opts?.timeoutMs ?? 20_000;
+          if (budget < 50) {
+            throw new gitExecutor.GitCommandError('timeout', `Git command timed out after ${budget}ms`, { signal: 'SIGTERM' });
+          }
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        return realRunGit(target, args, opts);
+      });
+
+      try {
+        // 1. Short-budget initiator (15ms) must not poison a concurrent normal caller (20_000ms).
+        const [shortInit, normalCaller] = await Promise.all([
+          getGitRepoStatus(repo, { timeoutMs: 15 }),
+          getGitRepoStatus(repo, { timeoutMs: 20_000 }),
+        ]);
+        expect(shortInit.reason).toBe('timeout');
+        expect(normalCaller.isGitRepo).toBe(true);
+        expect(normalCaller.reason).toBeUndefined();
+
+        __resetGitStatusCacheForTests();
+
+        // 2. Normal initiator joined by a short-budget joiner (20ms) and an aborting caller:
+        //    both impatient callers settle early with timeout while the normal initiator succeeds.
+        const abortController = new AbortController();
+        const normalInitPromise = getGitRepoStatus(repo, { timeoutMs: 20_000 });
+        const shortJoinerPromise = getGitRepoStatus(repo, { timeoutMs: 20 });
+        const abortedJoinerPromise = getGitRepoStatus(repo, { timeoutMs: 20_000, signal: abortController.signal });
+        setTimeout(() => abortController.abort(), 10);
+
+        const [shortJoiner, abortedJoiner, normalInit] = await Promise.all([
+          shortJoinerPromise,
+          abortedJoinerPromise,
+          normalInitPromise,
+        ]);
+        expect(shortJoiner.reason).toBe('timeout');
+        expect(abortedJoiner.reason).toBe('timeout');
+        expect(normalInit.isGitRepo).toBe(true);
+        expect(normalInit.reason).toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('rejects post-validation ResolvedGitRepo workspace mutation and workspace symlink retargeting outside the repo', async () => {
+      const repo = tempRepo('f3-immutable-repo');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const outsideDir = realpathSync(mkdtempSync(join(tmpdir(), 'adhdev-f3-outside-')));
+      roots.push(outsideDir);
+      git(outsideDir, ['init']);
+      git(outsideDir, ['config', 'user.email', 'test@example.com']);
+      git(outsideDir, ['config', 'user.name', 'ADHDev Test']);
+      writeFileSync(join(outsideDir, 'outside.txt'), 'secret\n');
+      commit(outsideDir, 'outside commit');
+
+      // Case 1: Mutating resolved.workspace after resolveGitRepository must not bypass validation.
+      const resolved = await gitExecutor.resolveGitRepository(repo);
+      (resolved as { workspace: string }).workspace = outsideDir;
+      await expect(gitExecutor.runGit(resolved, ['status', '--porcelain=v2'])).rejects.toMatchObject({
+        reason: 'path_outside_repo',
+      });
+
+      // Case 2: Retargeting a workspace symlink after resolveGitRepository must keep default
+      // runGit pinned to canonicalWorkspace and reject explicit options.cwd via the retargeted symlink.
+      const linkHolder = mkdtempSync(join(tmpdir(), 'adhdev-f3-link-'));
+      roots.push(linkHolder);
+      const workspaceLink = join(linkHolder, 'ws');
+      symlinkSync(repo, workspaceLink);
+
+      const resolvedViaLink = await gitExecutor.resolveGitRepository(workspaceLink);
+      rmSync(workspaceLink, { recursive: true, force: true });
+      symlinkSync(outsideDir, workspaceLink);
+
+      const headOut = await gitExecutor.runGit(resolvedViaLink, ['rev-parse', '--show-toplevel']);
+      expect(realpathSync(headOut.stdout.trim())).toBe(repo);
+
+      await expect(
+        gitExecutor.runGit(resolvedViaLink, ['status'], { cwd: workspaceLink }),
+      ).rejects.toMatchObject({
+        reason: 'path_outside_repo',
+      });
+    });
   });
 
   // ─── C2: fetch throttle ───────────────────────────
@@ -1230,6 +1348,59 @@ describe('git repo status parser', () => {
       const fetchCall = spy.mock.calls.find(call => Array.isArray(call[1]) && (call[1] as string[])[0] === 'fetch');
       expect(fetchCall).toBeDefined();
       expect((fetchCall?.[2] as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(GIT_UPSTREAM_FETCH_TIMEOUT_MS);
+    });
+
+    it('invalidates cached branch remote and fetch throttle when upstream tracking switches to a different remote', async () => {
+      const repo = tempRepo('c2-retarget-remote');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const originBare = mkdtempSync(join(tmpdir(), 'adhdev-c2-origin-'));
+      const upstreamBare = mkdtempSync(join(tmpdir(), 'adhdev-c2-upstream-'));
+      roots.push(originBare, upstreamBare);
+      git(originBare, ['init', '--bare']);
+      git(upstreamBare, ['init', '--bare']);
+
+      git(repo, ['remote', 'add', 'origin', originBare]);
+      git(repo, ['remote', 'add', 'upstream', upstreamBare]);
+      git(repo, ['push', '-u', 'origin', 'HEAD']);
+      git(repo, ['push', 'upstream', 'HEAD']);
+
+      // Seed branchRemoteCache and upstreamFetchedAt on `origin`
+      const initial = await getGitRepoStatus(repo, { refreshUpstream: true, includeSubmodules: false });
+      expect(initial.upstreamStatus).toBe('fresh');
+      expect(initial.behind).toBe(0);
+
+      // Advance `upstream` via a peer clone while `origin` remains unchanged
+      const peerParent = mkdtempSync(join(tmpdir(), 'adhdev-c2-upstream-peer-'));
+      roots.push(peerParent);
+      git(peerParent, ['clone', upstreamBare, 'peer']);
+      const peer = join(peerParent, 'peer');
+      git(peer, ['config', 'user.email', 'test@example.com']);
+      git(peer, ['config', 'user.name', 'ADHDev Test']);
+      writeFileSync(join(peer, 'a.txt'), 'one\nfrom-upstream\n');
+      git(peer, ['add', '.']);
+      git(peer, ['commit', '-m', 'upstream advance']);
+      git(peer, ['push', 'origin', 'HEAD']);
+
+      // Retarget the local branch to track `upstream/<branch>` while `origin` still exists
+      const branch = initial.branch!;
+      git(repo, ['branch', '--set-upstream-to', `upstream/${branch}`]);
+
+      // Advance past the 1.5s C1 status result TTL (still well within the 30s C2 fetch throttle)
+      // and call WITHOUT forceFresh: must detect the new upstream remote and fetch `upstream`.
+      const realNow = Date.now();
+      vi.spyOn(Date, 'now').mockReturnValue(realNow + GIT_STATUS_CACHE_TTL_MS + 100);
+      const spy = vi.spyOn(gitExecutor, 'runGit');
+
+      const retargeted = await getGitRepoStatus(repo, { refreshUpstream: true, includeSubmodules: false });
+      const fetchedRemotes = spy.mock.calls
+        .filter(call => Array.isArray(call[1]) && (call[1] as string[])[0] === 'fetch')
+        .map(call => (call[1] as string[])[4]);
+      expect(fetchedRemotes).toEqual(['upstream']);
+      expect(retargeted.upstream).toBe(`upstream/${branch}`);
+      expect(retargeted.upstreamStatus).toBe('fresh');
+      expect(retargeted.behind).toBe(1);
     });
   });
 

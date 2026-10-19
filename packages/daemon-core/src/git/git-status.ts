@@ -1,4 +1,5 @@
-import { join, resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import type { DaemonBuildBehind, GitRepoStatus, GitSubmoduleStatus, GitUpstreamFreshness } from './git-types.js';
 import { GIT_STATUS_TIMEOUT_MS, GitCommandError, resolveGitRepository, runGit } from './git-executor.js';
 import { getDaemonBuildInfo, type DaemonBuildInfo } from '../build-info.js';
@@ -44,20 +45,54 @@ interface CachedStatusEntry {
   status: GitRepoStatus;
   cachedAt: number;
 }
+interface InFlightStatusEntry {
+  promise: Promise<GitRepoStatus>;
+  timeoutMs: number;
+}
 const lastKnownGoodStatus = new Map<string, CachedStatusEntry>();
-const inFlightStatusReads = new Map<string, Promise<GitRepoStatus>>();
+const inFlightStatusReads = new Map<string, InFlightStatusEntry>();
 const inFlightUpstreamFetches = new Map<string, Promise<GitUpstreamProbe>>();
 const branchRemoteCache = new Map<string, string | null>();
 
-/** Cache key folding in canonical worktree path and the option fields that change result shape. */
+/**
+ * Resolve any workspace path (including `/var` vs `/private/var` symlink aliases and
+ * nested subdirectories inside a checkout) to its canonical worktree root. Linked
+ * worktrees (`git worktree add`) and submodules have their own `.git` entry at their
+ * checkout root, so they remain strictly distinct cohorts.
+ */
+function resolveCanonicalWorktreeRoot(workspace: string): string {
+  let canonical: string;
+  try {
+    canonical = realpathSync(workspace);
+  } catch {
+    return resolve(workspace);
+  }
+  let current = canonical;
+  while (true) {
+    try {
+      if (existsSync(join(current, '.git'))) {
+        return current;
+      }
+    } catch {
+      // Ignore permission/stat errors while walking upward.
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return canonical;
+    }
+    current = parent;
+  }
+}
+
+/** Cache key folding in canonical worktree root and the option fields that change result shape. */
 function statusCacheKey(workspace: string, options: GitStatusOptions): string {
-  const normalizedWorkspace = resolve(workspace);
+  const canonicalWorktree = resolveCanonicalWorktreeRoot(workspace);
   const includeSubmodules = options.includeSubmodules !== false;
   const refreshUpstream = options.refreshUpstream === true;
   const ignoreKey = options.submoduleIgnorePaths && options.submoduleIgnorePaths.length > 0
-    ? `\0ign=${[...options.submoduleIgnorePaths].sort().join(',')}`
+    ? `\0ign=${JSON.stringify([...new Set(options.submoduleIgnorePaths)].sort())}`
     : '';
-  return `${normalizedWorkspace}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
+  return `${canonicalWorktree}\0sub=${includeSubmodules ? 1 : 0}\0up=${refreshUpstream ? 1 : 0}${ignoreKey}`;
 }
 
 /**
@@ -132,6 +167,8 @@ function isTransientGitFailure(error: GitCommandError): boolean {
 
 export interface GitStatusOptions {
   timeoutMs?: number;
+  /** Optional caller-scoped cancellation signal (aborts only this caller, never shared in-flight work). */
+  signal?: AbortSignal;
   /** When true, include submodule status in the result. Defaults to true. */
   includeSubmodules?: boolean;
   /** Optional filter to exclude specific submodule paths from status */
@@ -190,7 +227,7 @@ export const GIT_FETCH_THROTTLE_MS = 30_000;
  */
 export const GIT_UPSTREAM_FETCH_TIMEOUT_MS = 10_000;
 
-/** Wall-clock of the last successful `git fetch` per workspace (C2 throttle gate). */
+/** Wall-clock of the last successful `git fetch` per workspace+upstream+remote (C2 throttle gate). */
 const upstreamFetchedAt = new Map<string, number>();
 
 interface GitUpstreamProbe {
@@ -201,21 +238,140 @@ interface GitUpstreamProbe {
   didFetch?: boolean;
 }
 
+function buildStatusFailureResult(
+  workspace: string,
+  cacheKey: string,
+  lastCheckedAt: number,
+  gitError: GitCommandError,
+): GitRepoStatus {
+  // A transient/environmental failure (timeout, slow-spawn-under-load) must NOT make
+  // a healthy node lose its repo identity and drop out of the mesh graph. Prefer the
+  // last status we successfully collected for this workspace, re-stamped as stale.
+  if (isTransientGitFailure(gitError)) {
+    const cached = lastKnownGoodStatus.get(cacheKey)?.status;
+    if (cached) {
+      return {
+        ...cached,
+        lastCheckedAt,
+        upstreamStatus: 'unavailable',
+        error: gitError.stderr || gitError.message,
+        reason: gitError.reason,
+      };
+    }
+  }
+  return emptyStatus(workspace, lastCheckedAt, gitError);
+}
+
+function awaitWithCallerDeadline(
+  sharedPromise: Promise<GitRepoStatus>,
+  callerTimeoutMs: number,
+  sharedTimeoutMs: number,
+  signal: AbortSignal | undefined,
+  workspace: string,
+  cacheKey: string,
+  lastCheckedAt: number,
+): Promise<GitRepoStatus> {
+  const needsShortTimer = callerTimeoutMs < sharedTimeoutMs;
+  if (!needsShortTimer && !signal) {
+    return sharedPromise;
+  }
+  if (signal?.aborted) {
+    return Promise.resolve(
+      buildStatusFailureResult(
+        workspace,
+        cacheKey,
+        lastCheckedAt,
+        new GitCommandError('timeout', 'Git status request aborted'),
+      ),
+    );
+  }
+
+  return new Promise<GitRepoStatus>((resolveCaller) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolveCaller(
+        buildStatusFailureResult(
+          workspace,
+          cacheKey,
+          lastCheckedAt,
+          new GitCommandError('timeout', 'Git status request aborted'),
+        ),
+      );
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    if (needsShortTimer) {
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolveCaller(
+          buildStatusFailureResult(
+            workspace,
+            cacheKey,
+            lastCheckedAt,
+            new GitCommandError('timeout', `Git status timed out after ${callerTimeoutMs}ms`),
+          ),
+        );
+      }, callerTimeoutMs);
+    }
+    sharedPromise.then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolveCaller(result);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const gitError = err instanceof GitCommandError
+          ? err
+          : new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: err });
+        resolveCaller(buildStatusFailureResult(workspace, cacheKey, lastCheckedAt, gitError));
+      },
+    );
+  });
+}
+
 export async function getGitRepoStatus(
   workspace: string,
   options: GitStatusOptions = {},
 ): Promise<GitRepoStatus> {
   const lastCheckedAt = Date.now();
   const includeSubmodules = options.includeSubmodules !== false;
+  const callerTimeoutMs = options.timeoutMs ?? GIT_STATUS_TIMEOUT_MS;
   // Status collection fans out into several git subprocesses (status, head, stash,
   // submodule, optionally fetch). On Windows the per-spawn cost alone can exceed the
   // 5s default, so unless the caller pinned a timeout, give the whole collection path
-  // the larger status budget. A caller that explicitly sets timeoutMs (e.g. a test
-  // injecting 1ms to exercise the transient-failure path) is respected.
+  // the larger status budget. Strip caller-local `signal` from the shared options so one
+  // caller aborting never kills subprocesses shared with concurrent waiters.
+  const { signal, ...sharedBaseOptions } = options;
   const effectiveOptions: GitStatusOptions =
-    options.timeoutMs === undefined ? { ...options, timeoutMs: GIT_STATUS_TIMEOUT_MS } : options;
+    options.timeoutMs === undefined
+      ? { ...sharedBaseOptions, timeoutMs: GIT_STATUS_TIMEOUT_MS }
+      : sharedBaseOptions;
 
   const cacheKey = statusCacheKey(workspace, options);
+
+  if (signal?.aborted) {
+    return buildStatusFailureResult(
+      workspace,
+      cacheKey,
+      lastCheckedAt,
+      new GitCommandError('timeout', 'Git status request aborted'),
+    );
+  }
 
   // C1: happy-path TTL result cache. A non-forceFresh caller within the TTL window is
   // served the last successfully-collected status for this exact option shape instead
@@ -227,13 +383,21 @@ export async function getGitRepoStatus(
     if (cached && lastCheckedAt - cached.cachedAt < GIT_STATUS_CACHE_TTL_MS) {
       return cached.status;
     }
-    // Single-flight coalescing: when multiple callers (e.g. IPC retry after probe,
-    // concurrent mesh_status_view + mesh_git_status + GitStatusMonitor) request the
-    // same workspace/option-shape while a collection is already in flight, join the
-    // existing Promise instead of spawning another parallel wave of git processes.
+    // Single-flight coalescing: join an existing in-flight collection ONLY when its
+    // subprocess budget is at least as large as this caller's budget (so a short-budget
+    // initiator can never drag normal joiners into a premature timeout failure), while
+    // awaitWithCallerDeadline enforces a short-budget joiner's own deadline locally.
     const inFlight = inFlightStatusReads.get(cacheKey);
-    if (inFlight) {
-      return inFlight;
+    if (inFlight && inFlight.timeoutMs >= callerTimeoutMs) {
+      return awaitWithCallerDeadline(
+        inFlight.promise,
+        callerTimeoutMs,
+        inFlight.timeoutMs,
+        signal,
+        workspace,
+        cacheKey,
+        lastCheckedAt,
+      );
     }
   }
 
@@ -251,37 +415,29 @@ export async function getGitRepoStatus(
       const gitError = error instanceof GitCommandError
         ? error
         : new GitCommandError('git_command_failed', 'Failed to read Git status', { cause: error });
-
-      // A transient/environmental failure (timeout, slow-spawn-under-load) must NOT make
-      // a healthy node lose its repo identity and drop out of the mesh graph. Prefer the
-      // last status we successfully collected for this workspace, re-stamped as stale.
-      if (isTransientGitFailure(gitError)) {
-        const cached = lastKnownGoodStatus.get(cacheKey)?.status;
-        if (cached) {
-          return {
-            ...cached,
-            lastCheckedAt,
-            upstreamStatus: 'unavailable',
-            error: gitError.stderr || gitError.message,
-            reason: gitError.reason,
-          };
-        }
-      }
-
-      return emptyStatus(workspace, lastCheckedAt, gitError);
+      return buildStatusFailureResult(workspace, cacheKey, lastCheckedAt, gitError);
     }
   })();
 
-  if (!inFlightStatusReads.has(cacheKey)) {
-    inFlightStatusReads.set(cacheKey, runPromise);
+  const existingInFlight = inFlightStatusReads.get(cacheKey);
+  if (!existingInFlight || existingInFlight.timeoutMs < callerTimeoutMs) {
+    inFlightStatusReads.set(cacheKey, { promise: runPromise, timeoutMs: callerTimeoutMs });
   }
-  try {
-    return await runPromise;
-  } finally {
-    if (inFlightStatusReads.get(cacheKey) === runPromise) {
+  const cleanupPromise = runPromise.finally(() => {
+    if (inFlightStatusReads.get(cacheKey)?.promise === runPromise) {
       inFlightStatusReads.delete(cacheKey);
     }
-  }
+  });
+
+  return awaitWithCallerDeadline(
+    cleanupPromise,
+    callerTimeoutMs,
+    callerTimeoutMs,
+    signal,
+    workspace,
+    cacheKey,
+    lastCheckedAt,
+  );
 }
 
 async function collectGitRepoStatus(
@@ -971,12 +1127,27 @@ async function refreshTrackedUpstream(
     return { upstreamStatus: 'no_upstream' };
   }
 
-  // C2: throttle the actual network fetch. If we fetched this workspace within
-  // GIT_FETCH_THROTTLE_MS, skip the fetch and serve ahead/behind from the local
-  // porcelain (re-read fresh every call by the caller). forceFresh callers
-  // (convergence-critical: ff / refine) always re-fetch — they need true upstream.
+  const canonicalWorktree = resolveCanonicalWorktreeRoot(repo.workspace);
+  const remoteName =
+    (await readBranchRemote(repo, canonicalWorktree, parsed.branch, parsed.upstream, options))
+    ?? inferRemoteName(parsed.upstream);
+  if (!remoteName) {
+    return {
+      upstreamStatus: 'stale',
+      upstreamFetchError: `Unable to resolve remote for upstream '${parsed.upstream}'`,
+    };
+  }
+
+  const fetchKey = `${canonicalWorktree}\0${parsed.branch}\0${parsed.upstream}\0${remoteName}`;
+
+  // C2: throttle the actual network fetch per (canonicalWorktree, branch, upstream, remote).
+  // If we fetched this exact tracking target within GIT_FETCH_THROTTLE_MS, skip the fetch
+  // and serve ahead/behind from the local porcelain (re-read fresh every call by the
+  // caller). Retargeting a branch to a different upstream remote changes fetchKey so the
+  // new remote is fetched immediately. forceFresh callers (convergence-critical: ff /
+  // refine) always re-fetch — they need true upstream.
   const now = Date.now();
-  const lastFetch = upstreamFetchedAt.get(repo.workspace);
+  const lastFetch = upstreamFetchedAt.get(fetchKey);
   if (!options.forceFresh && lastFetch !== undefined && now - lastFetch < GIT_FETCH_THROTTLE_MS) {
     return {
       upstreamStatus: 'fresh',
@@ -985,15 +1156,6 @@ async function refreshTrackedUpstream(
     };
   }
 
-  const remoteName = (await readBranchRemote(repo, parsed.branch, options)) ?? inferRemoteName(parsed.upstream);
-  if (!remoteName) {
-    return {
-      upstreamStatus: 'stale',
-      upstreamFetchError: `Unable to resolve remote for upstream '${parsed.upstream}'`,
-    };
-  }
-
-  const fetchKey = `${repo.workspace}\0${remoteName}`;
   if (!options.forceFresh) {
     const existingFetch = inFlightUpstreamFetches.get(fetchKey);
     if (existingFetch) {
@@ -1011,7 +1173,7 @@ async function refreshTrackedUpstream(
     try {
       await runGit(repo, ['fetch', '--quiet', '--prune', '--no-tags', remoteName], fetchOptions);
       const fetchedAt = Date.now();
-      upstreamFetchedAt.set(repo.workspace, fetchedAt);
+      upstreamFetchedAt.set(fetchKey, fetchedAt);
       return {
         upstreamStatus: 'fresh',
         upstreamFetchedAt: fetchedAt,
@@ -1037,8 +1199,57 @@ async function refreshTrackedUpstream(
   }
 }
 
-async function readBranchRemote(repo: ResolvedGitRepo, branch: string, options: GitStatusOptions): Promise<string | null> {
-  const remoteKey = `${repo.workspace}\0${branch}`;
+function resolveGitConfigSignature(canonicalWorktree: string): string {
+  try {
+    const dotGit = join(canonicalWorktree, '.git');
+    const st = statSync(dotGit);
+    if (st.isDirectory()) {
+      const cfg = statSync(join(dotGit, 'config'));
+      return `${cfg.mtimeMs}:${cfg.size}`;
+    }
+    if (st.isFile()) {
+      const content = readFileSync(dotGit, 'utf8').trim();
+      const match = /^gitdir:\s*(.+)$/m.exec(content);
+      if (!match) return 'unknown';
+      const gitDir = resolve(canonicalWorktree, match[1].trim());
+      const parts: string[] = [];
+      try {
+        const cfg = statSync(join(gitDir, 'config'));
+        parts.push(`g:${cfg.mtimeMs}:${cfg.size}`);
+      } catch {
+        // Optional in linked worktrees
+      }
+      try {
+        const wtCfg = statSync(join(gitDir, 'config.worktree'));
+        parts.push(`w:${wtCfg.mtimeMs}:${wtCfg.size}`);
+      } catch {
+        // Optional
+      }
+      try {
+        const commonDirRaw = readFileSync(join(gitDir, 'commondir'), 'utf8').trim();
+        const commonDir = resolve(gitDir, commonDirRaw);
+        const commonCfg = statSync(join(commonDir, 'config'));
+        parts.push(`c:${commonCfg.mtimeMs}:${commonCfg.size}`);
+      } catch {
+        // Not a linked worktree with commondir
+      }
+      return parts.length > 0 ? parts.join('|') : 'unknown';
+    }
+  } catch {
+    // Ignore stat/read errors
+  }
+  return 'unknown';
+}
+
+async function readBranchRemote(
+  repo: ResolvedGitRepo,
+  canonicalWorktree: string,
+  branch: string,
+  upstream: string,
+  options: GitStatusOptions,
+): Promise<string | null> {
+  const configSig = resolveGitConfigSignature(canonicalWorktree);
+  const remoteKey = `${canonicalWorktree}\0${branch}\0${upstream}\0${configSig}`;
   if (!options.forceFresh && branchRemoteCache.has(remoteKey)) {
     return branchRemoteCache.get(remoteKey) ?? null;
   }

@@ -280,6 +280,7 @@ test('pool max-age grace: a healthy >10min connection does NOT tear down between
     }
     close(): void {
       this.readyState = 3;
+      queueMicrotask(() => this.emit('close', {}));
     }
     private emit(type: string, event: any): void {
       for (const listener of this.listeners.get(type) ?? []) listener(event);
@@ -303,21 +304,60 @@ test('pool max-age grace: a healthy >10min connection does NOT tear down between
     fakeNow += 4 * 60_000;
     await transport.command('ledger_query', { meshId: 'm1' });
     assert.equal(wsConstructions, 1);
-
-    // Advance another 3 minutes: connection is now 11 minutes old (> POOL_MAX_AGE_MS = 10 min),
-    // and was last used 3 minutes ago (> POOL_MAX_AGE_IDLE_GRACE_MS = 30s) -> rotates cleanly.
-    // First test the active-turn case: advance to 9m55s, run a command, then 10s later (10m05s total age,
-    // but only 10s idle < 30s grace) run an immediate follow-up command -> MUST NOT tear down mid-turn!
   } finally {
     Date.now = realDateNow;
     restore();
   }
 
-  // Dedicated port for exact active-turn vs idle-grace boundary check:
+  // Dedicated port for exact active-turn vs idle-grace boundary check, including a >30s
+  // command on an aged (>10m) socket and delayed close-event eviction safety:
   wsConstructions = 0;
+  let commandDurationMs = 0;
+  class SlowAwareCountingFakeWS {
+    private listeners = new Map<string, Array<(event: any) => void>>();
+    readyState = 1;
+    constructor(_url: string) {
+      wsConstructions += 1;
+      queueMicrotask(() => this.emit('open', {}));
+    }
+    addEventListener(type: string, listener: (event: any) => void): void {
+      const list = this.listeners.get(type) ?? [];
+      list.push(listener);
+      this.listeners.set(type, list);
+    }
+    send(data: string): void {
+      const parsed = JSON.parse(data);
+      sent.push(parsed);
+      if (parsed.type === 'ext:register') {
+        queueMicrotask(() => this.emit('message', { data: JSON.stringify({ type: 'daemon:welcome' }) }));
+        return;
+      }
+      if (parsed.type === 'ext:command') {
+        queueMicrotask(() => {
+          fakeNow += commandDurationMs;
+          this.emit('message', {
+            data: JSON.stringify({
+              type: 'ext:command_result',
+              payload: { requestId: parsed.payload.requestId, success: true, result: { ok: true } },
+            }),
+          });
+        });
+      }
+    }
+    close(): void {
+      this.readyState = 3;
+      // Realistic async close event fires AFTER getOrCreateConnection has already stored
+      // the replacement PooledConnection in connectionPool.
+      queueMicrotask(() => this.emit('close', {}));
+    }
+    private emit(type: string, event: any): void {
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+  }
+
   fakeNow = 2_000_000;
   Date.now = () => fakeNow;
-  const restore2 = installFakeWs(CountingFakeWS);
+  const restore2 = installFakeWs(SlowAwareCountingFakeWS);
   try {
     const transport = new IpcTransport({ port: 19987 });
     await transport.command('ledger_query', { meshId: 'm1' });
@@ -329,19 +369,40 @@ test('pool max-age grace: a healthy >10min connection does NOT tear down between
     fakeNow += 4 * 60_000;
     await transport.command('ledger_query', { meshId: 'm1' });
     fakeNow += 115_000; // age = 9m55s
+    await transport.command('ledger_query', { meshId: 'm1' });
+    fakeNow += 10_000; // age = 10m05s (> 10min POOL_MAX_AGE_MS), idle = 10s (< 30s grace)
+
+    // Execute a slow 35s git_status command (> 30s POOL_MAX_AGE_IDLE_GRACE_MS) on the aged socket.
+    // Because lastUsedAt is updated when the response arrives, a follow-up command 1s after
+    // completion must see 1s idle (NOT 36s since send) and reuse connection #1!
+    commandDurationMs = 35_000;
     await transport.command('git_status', { workspace: '/repo' });
+    commandDurationMs = 0;
     assert.equal(wsConstructions, 1);
 
-    // 10 seconds later: age is 10m05s (> 10min max age), pending.size === 0,
-    // but lastUsedAt was only 10s ago (< 30s grace). Must reuse the healthy socket!
-    fakeNow += 10_000;
+    fakeNow += 1_000;
     await transport.command('ledger_query', { meshId: 'm1' });
-    assert.equal(wsConstructions, 1, 'healthy aged pool must not tear down between immediate commands in an active turn');
+    assert.equal(
+      wsConstructions,
+      1,
+      'aged socket completing a >30s command must update lastUsedAt on response receipt and not rotate on immediate follow-up',
+    );
 
-    // Now wait 35s (> 30s idle grace): next command rotates the aged connection cleanly.
+    // Now wait 35s (> 30s idle grace after response completion): next command rotates to connection #2.
     fakeNow += 35_000;
     await transport.command('ledger_query', { meshId: 'm1' });
     assert.equal(wsConstructions, 2, 'aged pool rotates once quiet past POOL_MAX_AGE_IDLE_GRACE_MS');
+
+    // Flush microtasks so connection #1's async 'close' event has definitely run teardown().
+    // Connection #1's teardown must NOT have deleted connection #2 from connectionPool!
+    await new Promise(resolve => setImmediate(resolve));
+    fakeNow += 1_000;
+    await transport.command('ledger_query', { meshId: 'm1' });
+    assert.equal(
+      wsConstructions,
+      2,
+      'delayed close event from evicted connection #1 must not delete replacement connection #2 from connectionPool',
+    );
   } finally {
     Date.now = realDateNow;
     restore2();

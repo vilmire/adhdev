@@ -125,11 +125,40 @@ export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailur
     };
   }
 
-  const hasP2pSignal = /p2p|peer|datachannel|node-datachannel|webrtc|ice|mesh_relay_command|daemon_mesh_p2p_transport/i.test(message);
+  // Strip diagnostic workspace/nodeId key-value tokens before scanning prose for P2P
+  // keywords so paths like `/repo/services` ("ice") or `/repo/peer-tools` ("peer")
+  // cannot misclassify a local IPC timeout as a P2P transport failure.
+  const messageWithoutDiagnosticPaths = message.replace(/\b(?:workspace|nodeId)='[^']*'/gi, '');
+  const hasP2pSignal =
+    /\b(?:p2p|peer|datachannel|webrtc|ice|mesh_relay_command|daemon_mesh_p2p_transport)\b|node-datachannel/i.test(
+      messageWithoutDiagnosticPaths,
+    );
   const hasFailureSignal = /unavailable|missing|failed|failure|timeout|timed out|not connected|closed|disconnected|offline|no route|route unavailable|cannot send|cannot establish/i.test(message);
   const isLocalIpcTimeout = Boolean(
     error && typeof error === 'object' && (error as any).ipcTimeout === true,
   ) || /daemon ipc\b.*timed out/i.test(message);
+  const ipcCommand =
+    (error && typeof error === 'object' && typeof (error as any).ipcCommand === 'string'
+      ? (error as any).ipcCommand
+      : undefined)
+    ?? /\bcommand='([^']+)'/i.exec(message)?.[1];
+  const ipcRelayedCommand =
+    (error && typeof error === 'object' && typeof (error as any).ipcRelayedCommand === 'string'
+      ? (error as any).ipcRelayedCommand
+      : undefined)
+    ?? /\brelayedCommand='([^']+)'/i.exec(message)?.[1];
+  const ipcTargetDaemonId =
+    (error && typeof error === 'object' && typeof (error as any).ipcTargetDaemonId === 'string'
+      ? (error as any).ipcTargetDaemonId
+      : undefined)
+    ?? /\btargetDaemonId='([^']+)'/i.exec(message)?.[1];
+  const isExplicitLocalIpcCommand = Boolean(
+    ipcCommand
+    && ipcCommand !== 'mesh_relay_command'
+    && !ipcRelayedCommand
+    && !ipcTargetDaemonId
+    && !_context.targetDaemonId,
+  );
 
   // Validation errors that merely mention mesh_relay_command are not transport failures.
   if (/requires targetdaemonid and command|providerpriority|no inference provider|permission denied|read-only|not a member/i.test(message)) {
@@ -147,7 +176,7 @@ export function classifyP2pRelayFailure(error: unknown, _context: P2pRelayFailur
   // A bare local daemon IPC command timeout (not wrapping mesh_relay_command or P2P)
   // is a recoverable local IPC timeout, NOT an unrecoverable logic/provider error and
   // NOT a P2P disconnection.
-  if (isLocalIpcTimeout && !hasP2pSignal) {
+  if (isLocalIpcTimeout && (isExplicitLocalIpcCommand || !hasP2pSignal)) {
     return {
       code: 'ipc_command_timeout',
       reason: 'local_daemon_ipc_timeout',
