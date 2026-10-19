@@ -7,22 +7,26 @@
  * Security & Durability Guarantees:
  * 1. Private Boundary (P1): Every directory segment from `configDir` down to
  *    `workspace` and the config parent directory is verified via `lstatSync`
- *    (never traversing symlinks, non-directories, or foreign-owned directories)
- *    and checked with `realpathSync` containment. The target config file is
- *    verified via `lstatSync` + `O_NOFOLLOW` + `fstatSync` to be an owner-only
- *    regular file with `nlink === 1` (refusing live or dangling symlinks,
- *    hardlinks, FIFOs, sockets, or directories).
+ *    (never traversing symlinks, non-directories, or foreign-UID directories;
+ *    newly created directories use `0700`) and checked with `realpathSync`
+ *    containment. Existing target config files are verified via `lstatSync` +
+ *    `O_NOFOLLOW` + `fstatSync` to be regular files owned by the current UID
+ *    (`stat.uid === process.geteuid()` on POSIX) with `nlink === 1` (refusing
+ *    live or dangling symlinks, hardlinks, FIFOs, sockets, or directories),
+ *    while newly created temporary/replacement files use mode `0600`.
  * 2. Write Minimization & Atomic Replacement (P2): If `transform(before)`
  *    produces `next === before` on an existing regular file, no write occurs.
  *    When a write is needed, bytes are written to an `O_CREAT | O_EXCL`
- *    temporary file in the same canonical directory, flushed with `fsyncSync`,
- *    re-validated against concurrent modification or symlink replacement right
- *    before `renameSync`, and retried (re-running `transform` over the latest
- *    bytes) if a concurrent native/user edit occurred.
- *    Residual OS limit: POSIX `rename(2)` does not provide a kernel-level
- *    compare-and-swap on target inode; pre-rename `lstat`/`fstat`/content
- *    revalidation plus write minimization (`next === before` on ordinary
- *    relaunches) narrows the race window to the final `renameSync` syscall.
+ *    temporary file (`0600`) in the same canonical directory, flushed with
+ *    `fsyncSync`, re-validated against concurrent modification or symlink
+ *    replacement right before `renameSync`, and retried (re-running `transform`
+ *    over the latest bytes) if a concurrent native/user edit occurred.
+ *    Residual OS limit: POSIX `rename(2)` is an unconditional directory-entry
+ *    replacement rather than an atomic kernel compare-and-swap (CAS) on the
+ *    target inode; a narrow TOCTOU window remains between the final pre-rename
+ *    `readPrivateAssistantConfigSnapshot` check and `renameSync(tmpPath, canonicalFilePath)`.
+ *    Write minimization (`next === before` no-op on ordinary relaunches) avoids
+ *    entering the rename path once the stable server entry is present.
  */
 
 import { randomUUID } from 'node:crypto';

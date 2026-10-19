@@ -2,29 +2,38 @@
  * TOML 1.0 parser, semantic validator, server-identity guard, and AST-span
  * surgical updater for `<workspace>/.codex/config.toml`.
  *
- * Why this exists:
- * - Codex CLI (`codex-rs/core/src/mcp_tool_call.rs`) only persists owner-selected
- *   "Always allow" (`ReviewDecision::ApprovedMcpPolicyAmendment`) when
- *   `mcp_servers.<server>` is present as a valid `McpServerConfig` in
- *   `ConfigLayerSource::Project` (`.codex/config.toml`) or user config.
- * - Line-regex slicing corrupts multiline arrays/strings, drops custom `env`
- *   keys, misses quoted headers/keys, and fails to detect malformed TOML or
- *   foreign server definitions that happen to share the name `adhdev-assistant`.
- * - This module parses the full TOML 1.0 grammar used by Codex configs,
- *   records exact source spans for every table and key-value assignment,
- *   verifies that any existing `adhdev-assistant` entry belongs to the same
- *   managed ADHDev assistant MCP server identity before preserving `tools.*`
- *   consent, and leaves the file byte-for-byte untouched (`next === before`)
- *   on ordinary relaunches where the stable server definition already matches.
+ * - Parses the TOML 1.0 grammar used by Codex configs (matching Python 3.14
+ *   `tomllib` table/array-of-tables scoping and RFC 3339 calendar/time
+ *   validation with seconds `00..59`), recording exact character spans for
+ *   surgical in-place updates without whole-document reformatting.
+ * - Verifies exact command + entrypoint + track + transport + daemon identity
+ *   before preserving `tools.*` consent, and leaves the file byte-for-byte
+ *   untouched (`next === before`) on ordinary relaunches.
  */
 
-import { basename, resolve } from 'node:path';
+import { basename } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { ASSISTANT_SESSION_ID_ENV } from '@adhdev/mesh-shared';
 
 export interface AssistantCodexMcpServerSpec {
     command: string;
     args: string[];
     env?: Record<string, string>;
+}
+
+export interface TomlDateTimeValue {
+    readonly __tomlType: 'offset-date-time' | 'local-date-time' | 'local-date' | 'local-time';
+    readonly raw: string;
+}
+
+export function isTomlDateTimeValue(value: unknown): value is TomlDateTimeValue {
+    return (
+        typeof value === 'object'
+        && value !== null
+        && !Array.isArray(value)
+        && '__tomlType' in value
+        && typeof (value as TomlDateTimeValue).__tomlType === 'string'
+    );
 }
 
 interface TomlAssignmentSpan {
@@ -50,36 +59,29 @@ export interface ParsedTomlDocument {
     root: Record<string, any>;
     sections: TomlSectionSpan[];
     inlineTables: WeakSet<object>;
-    arrayOfTables: Set<string>;
+    arrayOfTables: WeakSet<Array<any>>;
 }
 
 const UNSAFE_ENV_OVERRIDE_KEYS = new Set([
     'NODE_OPTIONS',
+    'NODE_PATH',
     'LD_PRELOAD',
     'DYLD_INSERT_LIBRARIES',
     'ADHDEV_COORDINATOR_MCP_ENTRY_PATH',
     'ADHDEV_COORDINATOR_MCP_COMMAND',
     'ADHDEV_COORDINATOR_MCP_PORT',
     'ADHDEV_COORDINATOR_MCP_TRANSPORT',
+    'ADHDEV_COORDINATOR_NODE_EXECUTABLE',
 ]);
 
-const NON_STDIO_MCP_KEYS = new Set([
-    'url',
-    'bearer_token_env_var',
-    'http_headers',
-    'env_http_headers',
-]);
+const NON_STDIO_MCP_KEYS = new Set(['url', 'bearer_token_env_var', 'http_headers', 'env_http_headers']);
 
 function isPlainTable(value: unknown): value is Record<string, any> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
+    return typeof value === 'object' && value !== null && !Array.isArray(value) && !isTomlDateTimeValue(value);
 }
 
 function createTable(): Record<string, any> {
     return Object.create(null) as Record<string, any>;
-}
-
-function canonicalPathKey(path: readonly string[]): string {
-    return JSON.stringify(path);
 }
 
 export function formatTomlSegment(segment: string): string {
@@ -91,12 +93,9 @@ export function withoutAssistantSessionEnv<T extends AssistantCodexMcpServerSpec
     if (!server.env) return { command: server.command, args: [...server.args] } as T;
     const nextEnv: Record<string, string> = {};
     for (const [k, v] of Object.entries(server.env)) {
-        if (k === ASSISTANT_SESSION_ID_ENV) continue;
-        nextEnv[k] = v;
+        if (k !== ASSISTANT_SESSION_ID_ENV) nextEnv[k] = v;
     }
-    if (Object.keys(nextEnv).length === 0) {
-        return { command: server.command, args: [...server.args] } as T;
-    }
+    if (Object.keys(nextEnv).length === 0) return { command: server.command, args: [...server.args] } as T;
     return { command: server.command, args: [...server.args], env: nextEnv } as T;
 }
 
@@ -108,25 +107,157 @@ function foreignServerError(message: string): Error {
     return new Error(`assistant_codex_config_foreign_server: ${message}`);
 }
 
+const FLAG_FROZEN = 0;
+const FLAG_EXPLICIT_NEST = 1;
+
+interface FlagEntry {
+    flags: Set<number>;
+    recursiveFlags: Set<number>;
+    nested: Map<string, FlagEntry>;
+}
+
+function createFlagEntry(): FlagEntry {
+    return { flags: new Set<number>(), recursiveFlags: new Set<number>(), nested: new Map<string, FlagEntry>() };
+}
+
+/**
+ * Namespace flag tracker modeled directly after Python 3.14 `tomllib._parser.Flags`.
+ * `unsetAll(key)` frees the sub-namespace whenever a new `[[array_of_tables]]`
+ * element is opened, while keeping `key` itself marked `EXPLICIT_NEST` against `[key]`.
+ */
+class TomlFlags {
+    private readonly root = new Map<string, FlagEntry>();
+    private readonly pending: Array<{ key: readonly string[]; flag: number }> = [];
+
+    addPending(key: readonly string[], flag: number): void {
+        this.pending.push({ key, flag });
+    }
+
+    finalizePending(): void {
+        for (const item of this.pending) this.set(item.key, item.flag, false);
+        this.pending.length = 0;
+    }
+
+    unsetAll(key: readonly string[]): void {
+        if (key.length === 0) return;
+        let cont = this.root;
+        for (let i = 0; i < key.length - 1; i++) {
+            const entry = cont.get(key[i]);
+            if (!entry) return;
+            cont = entry.nested;
+        }
+        cont.delete(key[key.length - 1]);
+    }
+
+    set(key: readonly string[], flag: number, recursive: boolean): void {
+        if (key.length === 0) return;
+        let cont = this.root;
+        for (let i = 0; i < key.length - 1; i++) {
+            const seg = key[i];
+            let entry = cont.get(seg);
+            if (!entry) {
+                entry = createFlagEntry();
+                cont.set(seg, entry);
+            }
+            cont = entry.nested;
+        }
+        const stem = key[key.length - 1];
+        let stemEntry = cont.get(stem);
+        if (!stemEntry) {
+            stemEntry = createFlagEntry();
+            cont.set(stem, stemEntry);
+        }
+        if (recursive) stemEntry.recursiveFlags.add(flag);
+        else stemEntry.flags.add(flag);
+    }
+
+    is(key: readonly string[], flag: number): boolean {
+        if (key.length === 0) return false;
+        let cont = this.root;
+        for (let i = 0; i < key.length - 1; i++) {
+            const entry = cont.get(key[i]);
+            if (!entry) return false;
+            if (entry.recursiveFlags.has(flag)) return true;
+            cont = entry.nested;
+        }
+        const stemEntry = cont.get(key[key.length - 1]);
+        if (!stemEntry) return false;
+        return stemEntry.flags.has(flag) || stemEntry.recursiveFlags.has(flag);
+    }
+}
+
+function isLeapYear(year: number): boolean {
+    return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInMonth(year: number, month: number): number {
+    if (month < 1 || month > 12) return 0;
+    if (month === 2) return isLeapYear(year) ? 29 : 28;
+    return [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+}
+
+function parseTomlDateOrTime(rawToken: string): TomlDateTimeValue | null {
+    if (rawToken.includes(':')) {
+        const localTimeMatch = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/.exec(rawToken);
+        if (localTimeMatch) {
+            const hour = Number(localTimeMatch[1]);
+            const minute = Number(localTimeMatch[2]);
+            const second = Number(localTimeMatch[3]);
+            if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+                throw invalidToml(`invalid local time ${JSON.stringify(rawToken)}`);
+            }
+            return { __tomlType: 'local-time', raw: rawToken };
+        }
+    }
+
+    if (/^\d{4}-/.test(rawToken)) {
+        const dtMatch = /^(\d{4})-(\d{2})-(\d{2})(?:[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:([Zz])|([+-])(\d{2}):(\d{2}))?)?$/.exec(rawToken);
+        if (!dtMatch) throw invalidToml(`invalid date or datetime ${JSON.stringify(rawToken)}`);
+        const year = Number(dtMatch[1]);
+        const month = Number(dtMatch[2]);
+        const day = Number(dtMatch[3]);
+        const maxDay = daysInMonth(year, month);
+        if (month < 1 || month > 12 || day < 1 || day > maxDay) {
+            throw invalidToml(`invalid calendar date in ${JSON.stringify(rawToken)}`);
+        }
+        if (dtMatch[4] === undefined) return { __tomlType: 'local-date', raw: rawToken };
+        const hour = Number(dtMatch[4]);
+        const minute = Number(dtMatch[5]);
+        const second = Number(dtMatch[6]);
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+            throw invalidToml(`invalid time in datetime ${JSON.stringify(rawToken)}`);
+        }
+        if (dtMatch[9] !== undefined) {
+            const offsetHour = Number(dtMatch[10]);
+            const offsetMinute = Number(dtMatch[11]);
+            if (offsetHour < 0 || offsetHour > 23 || offsetMinute < 0 || offsetMinute > 59) {
+                throw invalidToml(`invalid timezone offset in ${JSON.stringify(rawToken)}`);
+            }
+            return { __tomlType: 'offset-date-time', raw: rawToken };
+        }
+        if (dtMatch[8] !== undefined) return { __tomlType: 'offset-date-time', raw: rawToken };
+        return { __tomlType: 'local-date-time', raw: rawToken };
+    }
+
+    return null;
+}
+
 /**
  * Full TOML 1.0 recursive-descent parser with exact character span tracking.
  * Rejects syntax errors, unclosed strings/arrays/inline tables, duplicate keys,
- * duplicate table headers, and table/scalar/inline-table type conflicts.
+ * duplicate table headers, invalid calendar dates/times, and table/scalar/inline-table
+ * type conflicts while properly scoping `[[array_of_tables]]` instances.
  */
 export function parseTomlDocument(source: string): ParsedTomlDocument {
-    if (source.includes('\0')) {
-        throw invalidToml('null byte in TOML input');
-    }
+    if (source.includes('\0')) throw invalidToml('null byte in TOML input');
 
     const len = source.length;
     let pos = 0;
 
     const root = createTable();
+    const flags = new TomlFlags();
     const inlineTables = new WeakSet<object>();
-    const explicitTables = new Set<string>();
-    const dottedDefinedTables = new Map<string, string>(); // tablePathKey -> definingSectionKey
-    const scalarOrArrayPaths = new Set<string>();
-    const arrayOfTables = new Set<string>();
+    const arrayOfTables = new WeakSet<Array<any>>();
 
     const preamble: TomlSectionSpan = {
         headerPath: [],
@@ -138,11 +269,9 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
     };
     const sections: TomlSectionSpan[] = [preamble];
     let currentSection: TomlSectionSpan = preamble;
-    let currentTableTarget: Record<string, any> = root;
 
     const isHws = (ch: string) => ch === ' ' || ch === '\t';
     const isNewline = (ch: string) => ch === '\n' || ch === '\r';
-
     const skipHws = () => {
         while (pos < len && isHws(source[pos])) pos++;
     };
@@ -166,9 +295,7 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
         if (pos >= len) return;
         if (source[pos] === '\r') {
             pos++;
-            if (pos >= len || source[pos] !== '\n') {
-                throw invalidToml(`bare CR without LF after ${context}`);
-            }
+            if (pos >= len || source[pos] !== '\n') throw invalidToml(`bare CR without LF after ${context}`);
             pos++;
             return;
         }
@@ -177,6 +304,50 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             return;
         }
         throw invalidToml(`unexpected token ${JSON.stringify(source[pos])} after ${context}`);
+    };
+
+    const getOrCreateNest = (
+        baseDict: Record<string, any>,
+        key: readonly string[],
+        accessLists: boolean,
+        markInline = false,
+    ): Record<string, any> => {
+        let cont: any = baseDict;
+        for (const k of key) {
+            if (!(k in cont)) {
+                const created = createTable();
+                if (markInline) inlineTables.add(created);
+                cont[k] = created;
+            }
+            cont = cont[k];
+            if (accessLists && Array.isArray(cont)) {
+                if (!arrayOfTables.has(cont) || cont.length === 0) {
+                    throw invalidToml(`cannot traverse static array at ${key.join('.')}`);
+                }
+                cont = cont[cont.length - 1];
+            }
+            if (!isPlainTable(cont)) throw invalidToml(`cannot overwrite non-table key in ${key.join('.')}`);
+        }
+        return cont;
+    };
+
+    const appendNestToList = (key: readonly string[]): Record<string, any> => {
+        const cont = getOrCreateNest(root, key.slice(0, -1), true);
+        const lastKey = key[key.length - 1];
+        if (lastKey in cont) {
+            const list = cont[lastKey];
+            if (!Array.isArray(list) || !arrayOfTables.has(list)) {
+                throw invalidToml(`cannot overwrite non-array-of-tables key at [[${key.join('.')}]]`);
+            }
+            const elem = createTable();
+            list.push(elem);
+            return elem;
+        }
+        const elem = createTable();
+        const list = [elem];
+        arrayOfTables.add(list);
+        cont[lastKey] = list;
+        return elem;
     };
 
     const parseEscape = (allowMultilineContinuations: boolean): string => {
@@ -216,9 +387,7 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
                     }
                     pos++;
                     while (pos < len && (isHws(source[pos]) || isNewline(source[pos]))) {
-                        if (source[pos] === '\r' && source[pos + 1] !== '\n') {
-                            throw invalidToml('bare CR in multiline string');
-                        }
+                        if (source[pos] === '\r' && source[pos + 1] !== '\n') throw invalidToml('bare CR in multiline string');
                         pos++;
                     }
                     return '';
@@ -237,12 +406,9 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             while (pos < len) {
                 if (source.startsWith('"""', pos)) {
                     let quoteCount = 0;
-                    while (pos + quoteCount < len && source[pos + quoteCount] === '"' && quoteCount < 5) {
-                        quoteCount++;
-                    }
+                    while (pos + quoteCount < len && source[pos + quoteCount] === '"' && quoteCount < 6) quoteCount++;
                     if (quoteCount >= 6) throw invalidToml('too many consecutive quotes in multiline basic string');
-                    const extra = quoteCount - 3;
-                    out += '"'.repeat(extra);
+                    out += '"'.repeat(quoteCount - 3);
                     pos += quoteCount;
                     return out;
                 }
@@ -293,12 +459,9 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             while (pos < len) {
                 if (source.startsWith("'''", pos)) {
                     let quoteCount = 0;
-                    while (pos + quoteCount < len && source[pos + quoteCount] === "'" && quoteCount < 5) {
-                        quoteCount++;
-                    }
+                    while (pos + quoteCount < len && source[pos + quoteCount] === "'" && quoteCount < 6) quoteCount++;
                     if (quoteCount >= 6) throw invalidToml('too many consecutive single quotes in multiline literal string');
-                    const extra = quoteCount - 3;
-                    out += "'".repeat(extra);
+                    out += "'".repeat(quoteCount - 3);
                     pos += quoteCount;
                     return out;
                 }
@@ -346,12 +509,8 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             return parseLiteralString(false);
         }
         const start = pos;
-        while (pos < len && /[A-Za-z0-9_-]/.test(source[pos])) {
-            pos++;
-        }
-        if (pos === start) {
-            throw invalidToml(`expected key segment at offset ${pos}`);
-        }
+        while (pos < len && /[A-Za-z0-9_-]/.test(source[pos])) pos++;
+        if (pos === start) throw invalidToml(`expected key segment at offset ${pos}`);
         return source.slice(start, pos);
     };
 
@@ -371,13 +530,11 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
 
     const skipArrayWsAndComments = () => {
         while (pos < len) {
-            if (isHws(source[pos])) {
+            if (isHws(source[pos]) || source[pos] === '\n') {
                 pos++;
             } else if (source[pos] === '\r') {
                 pos++;
                 if (pos >= len || source[pos] !== '\n') throw invalidToml('bare CR inside array');
-                pos++;
-            } else if (source[pos] === '\n') {
                 pos++;
             } else if (source[pos] === '#') {
                 skipCommentToLineEnd();
@@ -402,8 +559,7 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
                 return arr;
             }
             while (pos < len) {
-                const elem = parseValue();
-                arr.push(elem);
+                arr.push(parseValue());
                 skipArrayWsAndComments();
                 if (pos < len && source[pos] === ',') {
                     pos++;
@@ -426,7 +582,7 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             pos++; // consume {
             const tbl = createTable();
             inlineTables.add(tbl);
-            const localDefined = new Set<string>();
+            const inlineFlags = new TomlFlags();
             skipHws();
             if (pos < len && source[pos] === '}') {
                 pos++;
@@ -435,59 +591,37 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             while (pos < len) {
                 const kPath = parseKeyPath();
                 skipHws();
-                if (pos >= len || source[pos] !== '=') {
-                    throw invalidToml(`expected '=' in inline table at offset ${pos}`);
-                }
+                if (pos >= len || source[pos] !== '=') throw invalidToml(`expected '=' in inline table at offset ${pos}`);
                 pos++;
                 const val = parseValue();
-                let cursor: Record<string, any> = tbl;
-                for (let i = 0; i < kPath.length - 1; i++) {
-                    const seg = kPath[i];
-                    const subKey = canonicalPathKey(kPath.slice(0, i + 1));
-                    if (localDefined.has(subKey)) {
-                        throw invalidToml(`conflicting key ${kPath.slice(0, i + 1).join('.')} in inline table`);
-                    }
-                    if (!(seg in cursor)) {
-                        const sub = createTable();
-                        inlineTables.add(sub);
-                        cursor[seg] = sub;
-                    } else if (!isPlainTable(cursor[seg])) {
-                        throw invalidToml(`conflicting non-table key ${seg} in inline table`);
-                    }
-                    cursor = cursor[seg];
+                const keyParent = kPath.slice(0, -1);
+                const keyStem = kPath[kPath.length - 1];
+                if (inlineFlags.is(kPath, FLAG_FROZEN)) {
+                    throw invalidToml(`cannot mutate immutable namespace ${kPath.join('.')} in inline table`);
                 }
-                const leaf = kPath[kPath.length - 1];
-                const fullKey = canonicalPathKey(kPath);
-                if (leaf in cursor || localDefined.has(fullKey)) {
-                    throw invalidToml(`duplicate key ${kPath.join('.')} in inline table`);
-                }
-                localDefined.add(fullKey);
-                cursor[leaf] = val;
+                const nest = getOrCreateNest(tbl, keyParent, false, true);
+                if (keyStem in nest) throw invalidToml(`duplicate key ${kPath.join('.')} in inline table`);
+                nest[keyStem] = val;
                 skipHws();
-                if (pos < len && source[pos] === ',') {
-                    pos++;
-                    skipHws();
-                    if (pos < len && source[pos] === '}') {
-                        throw invalidToml('trailing comma not permitted in TOML 1.0 inline table');
-                    }
-                    continue;
-                }
                 if (pos < len && source[pos] === '}') {
                     pos++;
                     return tbl;
                 }
-                throw invalidToml(`expected ',' or '}' in inline table at offset ${pos}`);
+                if (pos >= len || source[pos] !== ',') throw invalidToml(`expected ',' or '}' in inline table at offset ${pos}`);
+                if (isPlainTable(val) || Array.isArray(val)) inlineFlags.set(kPath, FLAG_FROZEN, true);
+                pos++; // consume ,
+                skipHws();
+                if (pos < len && source[pos] === '}') throw invalidToml('trailing comma not permitted in TOML 1.0 inline table');
             }
             throw invalidToml('unterminated inline table');
         }
 
-        // Scalar token: boolean, integer, float, or datetime
+        // Scalar token: boolean, date/time/datetime, integer, or float
         const start = pos;
         while (pos < len && !isHws(source[pos]) && !isNewline(source[pos]) && source[pos] !== '#' && source[pos] !== ',' && source[pos] !== ']' && source[pos] !== '}') {
             pos++;
         }
         let rawToken = source.slice(start, pos);
-        // Handle space-separated ISO date + time (e.g. 1979-05-27 07:32:00Z)
         if (/^\d{4}-\d{2}-\d{2}$/.test(rawToken) && pos < len && source[pos] === ' ' && /^\d{2}:\d{2}/.test(source.slice(pos + 1))) {
             pos++; // consume single space
             const tStart = pos;
@@ -499,9 +633,11 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
         if (!rawToken) throw invalidToml(`unexpected character at offset ${pos}`);
         if (rawToken === 'true') return true;
         if (rawToken === 'false') return false;
-        if (/^[+-]?(?:0|[1-9](?:_?[0-9])*)$/.test(rawToken)) {
-            return Number(rawToken.replace(/_/g, ''));
-        }
+
+        const dtValue = parseTomlDateOrTime(rawToken);
+        if (dtValue !== null) return dtValue;
+
+        if (/^[+-]?(?:0|[1-9](?:_?[0-9])*)$/.test(rawToken)) return Number(rawToken.replace(/_/g, ''));
         if (/^0x[0-9a-fA-F](?:_?[0-9a-fA-F])*$/.test(rawToken)
             || /^0o[0-7](?:_?[0-7])*$/.test(rawToken)
             || /^0b[01](?:_?[01])*$/.test(rawToken)) {
@@ -514,116 +650,52 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             if (rawToken.endsWith('nan')) return NaN;
             return rawToken.startsWith('-') ? -Infinity : Infinity;
         }
-        if (/^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?$/.test(rawToken)
-            || /^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(rawToken)) {
-            return rawToken;
-        }
         throw invalidToml(`invalid scalar value ${JSON.stringify(rawToken)}`);
     };
 
-    const resolveHeaderTable = (headerPath: string[], isArrayTable: boolean): Record<string, any> => {
-        const fullKey = canonicalPathKey(headerPath);
-        if (!isArrayTable) {
-            if (explicitTables.has(fullKey) || dottedDefinedTables.has(fullKey) || arrayOfTables.has(fullKey) || scalarOrArrayPaths.has(fullKey)) {
-                throw invalidToml(`duplicate or conflicting table header [${headerPath.join('.')}]`);
-            }
-        } else {
-            if (explicitTables.has(fullKey) || dottedDefinedTables.has(fullKey) || scalarOrArrayPaths.has(fullKey)) {
-                throw invalidToml(`conflicting array-of-tables header [[${headerPath.join('.')}]]`);
-            }
+    const openDictHeader = (headerPath: string[]): void => {
+        if (flags.is(headerPath, FLAG_EXPLICIT_NEST) || flags.is(headerPath, FLAG_FROZEN)) {
+            throw invalidToml(`duplicate or conflicting table header [${headerPath.join('.')}]`);
         }
-
-        let cursor: Record<string, any> = root;
-        for (let i = 0; i < headerPath.length - 1; i++) {
-            const seg = headerPath[i];
-            const prefixKey = canonicalPathKey(headerPath.slice(0, i + 1));
-            if (scalarOrArrayPaths.has(prefixKey)) {
-                throw invalidToml(`cannot open table [${headerPath.join('.')}]: ${headerPath.slice(0, i + 1).join('.')} is not a table`);
-            }
-            if (!(seg in cursor)) {
-                cursor[seg] = createTable();
-            } else if (Array.isArray(cursor[seg])) {
-                if (!arrayOfTables.has(prefixKey) || cursor[seg].length === 0) {
-                    throw invalidToml(`cannot traverse static array ${headerPath.slice(0, i + 1).join('.')}`);
-                }
-                cursor = cursor[seg][cursor[seg].length - 1];
-                continue;
-            } else if (!isPlainTable(cursor[seg]) || inlineTables.has(cursor[seg])) {
-                throw invalidToml(`cannot extend inline or non-table ${headerPath.slice(0, i + 1).join('.')}`);
-            }
-            cursor = cursor[seg];
-        }
-
-        const leaf = headerPath[headerPath.length - 1];
-        if (isArrayTable) {
-            arrayOfTables.add(fullKey);
-            if (!(leaf in cursor)) {
-                cursor[leaf] = [];
-            } else if (!Array.isArray(cursor[leaf])) {
-                throw invalidToml(`conflicting non-array value at [[${headerPath.join('.')}]]`);
-            }
-            const elem = createTable();
-            cursor[leaf].push(elem);
-            return elem;
-        }
-
-        explicitTables.add(fullKey);
-        if (!(leaf in cursor)) {
-            cursor[leaf] = createTable();
-        } else if (!isPlainTable(cursor[leaf]) || inlineTables.has(cursor[leaf])) {
-            throw invalidToml(`conflicting value at [${headerPath.join('.')}]`);
-        }
-        return cursor[leaf];
+        flags.set(headerPath, FLAG_EXPLICIT_NEST, false);
+        const target = getOrCreateNest(root, headerPath, true);
+        if (Array.isArray(target)) throw invalidToml(`conflicting table header [${headerPath.join('.')}]`);
     };
 
-    const assignIntoSection = (sectionPath: string[], targetObj: Record<string, any>, keyPath: string[], value: unknown) => {
-        const sectionKey = canonicalPathKey(sectionPath);
-        let cursor = targetObj;
-        for (let i = 0; i < keyPath.length - 1; i++) {
-            const seg = keyPath[i];
-            const subPath = [...sectionPath, ...keyPath.slice(0, i + 1)];
-            const subKey = canonicalPathKey(subPath);
-            if (scalarOrArrayPaths.has(subKey) || arrayOfTables.has(subKey)) {
-                throw invalidToml(`conflicting key path ${subPath.join('.')}`);
+    const openListHeader = (headerPath: string[]): void => {
+        if (flags.is(headerPath, FLAG_FROZEN)) {
+            throw invalidToml(`cannot mutate immutable namespace [[${headerPath.join('.')}]]`);
+        }
+        flags.unsetAll(headerPath);
+        flags.set(headerPath, FLAG_EXPLICIT_NEST, false);
+        appendNestToList(headerPath);
+    };
+
+    const assignIntoSection = (sectionPath: string[], keyPath: string[], value: unknown): void => {
+        const keyParent = keyPath.slice(0, -1);
+        const keyStem = keyPath[keyPath.length - 1];
+        const absKeyParent = [...sectionPath, ...keyParent];
+
+        for (let i = 1; i < keyPath.length; i++) {
+            const contKey = [...sectionPath, ...keyPath.slice(0, i)];
+            if (flags.is(contKey, FLAG_EXPLICIT_NEST)) {
+                throw invalidToml(`cannot redefine table ${contKey.join('.')} via dotted key`);
             }
-            if (explicitTables.has(subKey)) {
-                throw invalidToml(`cannot add dotted key to already-defined table [${subPath.join('.')}]`);
-            }
-            const prevOwner = dottedDefinedTables.get(subKey);
-            if (prevOwner !== undefined && prevOwner !== sectionKey) {
-                throw invalidToml(`cannot reopen dotted table ${subPath.join('.')} from another section`);
-            }
-            dottedDefinedTables.set(subKey, sectionKey);
-            if (!(seg in cursor)) {
-                cursor[seg] = createTable();
-            } else if (!isPlainTable(cursor[seg]) || inlineTables.has(cursor[seg])) {
-                throw invalidToml(`cannot extend inline or non-table key ${subPath.join('.')}`);
-            }
-            cursor = cursor[seg];
+            flags.addPending(contKey, FLAG_EXPLICIT_NEST);
         }
 
-        const leaf = keyPath[keyPath.length - 1];
-        const fullPath = [...sectionPath, ...keyPath];
-        const fullKey = canonicalPathKey(fullPath);
-        if (leaf in cursor || explicitTables.has(fullKey) || dottedDefinedTables.has(fullKey) || arrayOfTables.has(fullKey) || scalarOrArrayPaths.has(fullKey)) {
-            throw invalidToml(`duplicate or conflicting key ${fullPath.join('.')}`);
+        if (flags.is(absKeyParent, FLAG_FROZEN)) {
+            throw invalidToml(`cannot extend inline or frozen value at ${absKeyParent.join('.')}`);
         }
-        if (isPlainTable(value)) {
-            // Inline table: mark all nested paths as sealed
-            const markInline = (obj: Record<string, any>, prefix: string[]) => {
-                const pk = canonicalPathKey(prefix);
-                explicitTables.add(pk);
-                for (const [k, v] of Object.entries(obj)) {
-                    const childPath = [...prefix, k];
-                    if (isPlainTable(v)) markInline(v, childPath);
-                    else scalarOrArrayPaths.add(canonicalPathKey(childPath));
-                }
-            };
-            markInline(value, fullPath);
-        } else {
-            scalarOrArrayPaths.add(fullKey);
+
+        const nest = getOrCreateNest(root, absKeyParent, true);
+        if (keyStem in nest) {
+            throw invalidToml(`duplicate or conflicting key ${[...sectionPath, ...keyPath].join('.')}`);
         }
-        cursor[leaf] = value;
+        if (isPlainTable(value) || Array.isArray(value)) {
+            flags.set([...sectionPath, ...keyPath], FLAG_FROZEN, true);
+        }
+        nest[keyStem] = value;
     };
 
     while (pos < len) {
@@ -641,28 +713,24 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
         }
         if (ch === '[') {
             currentSection.sectionEnd = lineStart;
+            flags.finalizePending();
             const isArrayTable = source.startsWith('[[', pos);
             pos += isArrayTable ? 2 : 1;
             skipHws();
-            if (pos < len && source[pos] === ']') {
-                throw invalidToml('empty table header []');
-            }
+            if (pos < len && source[pos] === ']') throw invalidToml('empty table header []');
             const headerPath = parseKeyPath();
             skipHws();
             if (isArrayTable) {
-                if (!source.startsWith(']]', pos)) {
-                    throw invalidToml('expected closing ]] for array-of-tables header');
-                }
+                if (!source.startsWith(']]', pos)) throw invalidToml('expected closing ]] for array-of-tables header');
                 pos += 2;
             } else {
-                if (pos >= len || source[pos] !== ']') {
-                    throw invalidToml('expected closing ] for table header');
-                }
+                if (pos >= len || source[pos] !== ']') throw invalidToml('expected closing ] for table header');
                 pos += 1;
             }
             consumeLineEndingOrEof('table header');
             const headerLineEnd = pos;
-            currentTableTarget = resolveHeaderTable(headerPath, isArrayTable);
+            if (isArrayTable) openListHeader(headerPath);
+            else openDictHeader(headerPath);
             currentSection = {
                 headerPath,
                 isArrayTable,
@@ -675,12 +743,9 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
             continue;
         }
 
-        // Key-value assignment
         const keyPath = parseKeyPath();
         skipHws();
-        if (pos >= len || source[pos] !== '=') {
-            throw invalidToml(`expected '=' after key ${keyPath.join('.')}`);
-        }
+        if (pos >= len || source[pos] !== '=') throw invalidToml(`expected '=' after key ${keyPath.join('.')}`);
         pos++; // consume =
         skipHws();
         const valueStart = pos;
@@ -689,7 +754,7 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
         consumeLineEndingOrEof(`assignment to ${keyPath.join('.')}`);
         const lineEnd = pos;
 
-        assignIntoSection(currentSection.headerPath, currentTableTarget, keyPath, value);
+        assignIntoSection(currentSection.headerPath, keyPath, value);
         currentSection.assignments.push({
             keyPath,
             fullPath: [...currentSection.headerPath, ...keyPath],
@@ -708,25 +773,17 @@ export function parseTomlDocument(source: string): ParsedTomlDocument {
 export interface ManagedAssistantServerIdentity {
     kind: 'adhdev-cli' | 'adhdev-mcp-bin' | 'node-entry';
     track: 'adhdev' | 'adhdev-preview';
-    commandIdentity: string;
+    command: string;
+    entrypoint: string;
     mode: 'ipc' | 'local';
     port: number | null;
     daemonUrl: string | null;
 }
 
-function normalizeIdentityPath(p: string): string {
-    const normalized = p.trim().replace(/\\/g, '/');
-    if (normalized.includes('/vendor/mcp-server/index.js')) {
-        return normalized.includes('adhdev-preview') ? 'vendor:adhdev-preview:mcp-server/index.js' : 'vendor:adhdev:mcp-server/index.js';
-    }
-    return resolve(p.trim());
-}
-
 /**
- * Inspect a parsed `mcp_servers.<name>` table and extract its canonical ADHDev
- * assistant MCP server identity. Rejects foreign commands, non-stdio servers,
- * worker/mesh toolsets, missing `--assistant` or `--mode` flags, unknown flags,
- * or orphan `tools.*` tables that lack a server command/args anchor.
+ * Inspect a parsed `mcp_servers.<name>` table and extract its exact ADHDev
+ * assistant MCP server identity. Both `command` and `entrypoint` are recorded
+ * verbatim so any foreign installation path or foreign Node binary fails closed.
  */
 export function parseManagedAssistantServerIdentity(
     entry: Record<string, any>,
@@ -749,27 +806,27 @@ export function parseManagedAssistantServerIdentity(
 
     let kind: ManagedAssistantServerIdentity['kind'];
     let track: ManagedAssistantServerIdentity['track'];
-    let commandIdentity: string;
+    let entrypoint: string;
     let restArgs: string[];
 
     if ((cmdBase === 'adhdev' || cmdBase === 'adhdev-preview') && args[0] === 'mcp') {
         kind = 'adhdev-cli';
         track = cmdBase;
-        commandIdentity = command.includes('/') || command.includes('\\') ? normalizeIdentityPath(command) : cmdBase;
+        entrypoint = 'mcp';
         restArgs = args.slice(1);
     } else if (cmdBase.startsWith('adhdev-mcp') || command.includes('/vendor/mcp-server/') || command.includes('\\vendor\\mcp-server\\')) {
         kind = 'adhdev-mcp-bin';
-        track = cmdBase.includes('preview') || command.includes('preview') ? 'adhdev-preview' : 'adhdev';
-        commandIdentity = normalizeIdentityPath(command);
+        track = cmdBase.includes('preview') || command.includes('adhdev-preview') ? 'adhdev-preview' : 'adhdev';
+        entrypoint = command;
         restArgs = args;
-    } else if (cmdBase === 'node' && args.length >= 1 && !args[0].startsWith('-')) {
-        const script = args[0];
+    } else if ((cmdBase === 'node' || cmdBase === 'nodejs') && args.length >= 1 && !args[0].startsWith('-')) {
+        const script = args[0].trim();
         if (!/(?:^|[\\/])(?:mcp-server|adhdev-mcp|fixture-mcp-server)/i.test(script)) {
             return { ok: false, reason: `unrecognized node entrypoint "${script}"` };
         }
         kind = 'node-entry';
         track = script.includes('adhdev-preview') ? 'adhdev-preview' : 'adhdev';
-        commandIdentity = normalizeIdentityPath(script);
+        entrypoint = script;
         restArgs = args.slice(1);
     } else {
         return { ok: false, reason: `unrecognized MCP server command "${command}"` };
@@ -803,9 +860,7 @@ export function parseManagedAssistantServerIdentity(
         }
         if (arg === '--daemon-auth-file') {
             const val = restArgs[++i];
-            if (!val || !val.trim()) {
-                return { ok: false, reason: 'missing value for --daemon-auth-file' };
-            }
+            if (!val || !val.trim()) return { ok: false, reason: 'missing value for --daemon-auth-file' };
             continue;
         }
         return { ok: false, reason: `unrecognized or non-assistant MCP server argument "${arg}"` };
@@ -820,30 +875,23 @@ export function parseManagedAssistantServerIdentity(
         ? env.ADHDEV_DAEMON_URL.trim()
         : null;
 
-    return {
-        ok: true,
-        value: {
-            kind,
-            track,
-            commandIdentity,
-            mode,
-            port,
-            daemonUrl,
-        },
-    };
+    return { ok: true, value: { kind, track, command, entrypoint, mode, port, daemonUrl } };
 }
 
 /**
- * Verify that `existingEntry` in `.codex/config.toml` represents the SAME
- * managed ADHDev assistant server identity as `desiredServer`. Throws
- * `assistant_codex_config_foreign_server` if the command, entrypoint, track,
- * transport mode, daemon port, or daemon URL differs, or if unsafe env
- * overrides are present.
+ * Verify that `existingEntry` in `.codex/config.toml` represents the exact SAME
+ * managed ADHDev assistant server installation and daemon identity as `desiredServer`.
  */
 export function assertCompatibleAssistantServerIdentity(
     existingEntry: Record<string, any>,
     desiredServer: AssistantCodexMcpServerSpec,
 ): void {
+    if (isPlainTable(existingEntry.env)) {
+        for (const [k, v] of Object.entries(existingEntry.env)) {
+            if (typeof v !== 'string') throw invalidToml(`mcp_servers env key "${k}" must be a string`);
+        }
+    }
+
     const desiredIdentity = parseManagedAssistantServerIdentity(desiredServer);
     if (!desiredIdentity.ok) {
         throw foreignServerError(`target server is not a recognized ADHDev assistant MCP server (${desiredIdentity.reason})`);
@@ -855,9 +903,9 @@ export function assertCompatibleAssistantServerIdentity(
 
     const a = existingIdentity.value;
     const b = desiredIdentity.value;
-    if (a.kind !== b.kind || a.track !== b.track || a.commandIdentity !== b.commandIdentity) {
+    if (a.kind !== b.kind || a.track !== b.track || a.command !== b.command || a.entrypoint !== b.entrypoint) {
         throw foreignServerError(
-            `existing server command/entrypoint (${a.kind}:${a.commandIdentity}) does not match target (${b.kind}:${b.commandIdentity})`,
+            `existing server command/entrypoint (${a.kind}:${a.command}:${a.entrypoint}) does not match target (${b.kind}:${b.command}:${b.entrypoint})`,
         );
     }
     if (a.mode !== b.mode) {
@@ -873,9 +921,6 @@ export function assertCompatibleAssistantServerIdentity(
     if (isPlainTable(existingEntry.env)) {
         const desiredEnv = desiredServer.env ?? {};
         for (const [k, v] of Object.entries(existingEntry.env)) {
-            if (typeof v !== 'string') {
-                throw invalidToml(`mcp_servers env key "${k}" must be a string`);
-            }
             if (UNSAFE_ENV_OVERRIDE_KEYS.has(k) && desiredEnv[k] !== v) {
                 throw foreignServerError(`existing server env contains unsafe override "${k}"`);
             }
@@ -889,18 +934,22 @@ function sameStringArray(a: unknown, b: readonly string[]): boolean {
 
 function sameEnvRecord(existingEnv: unknown, desiredEnv: Record<string, string>): boolean {
     const desiredKeys = Object.keys(desiredEnv);
-    if ( existingEnv === undefined ) return desiredKeys.length === 0;
+    if (existingEnv === undefined) return desiredKeys.length === 0;
     if (!isPlainTable(existingEnv)) return false;
     const existingKeys = Object.keys(existingEnv);
-    if (existingKeys.length !== desiredKeys.length) return false;
-    return desiredKeys.every((k) => existingEnv[k] === desiredEnv[k]);
+    return existingKeys.length === desiredKeys.length && desiredKeys.every((k) => existingEnv[k] === desiredEnv[k]);
 }
 
 function pathsEqual(a: readonly string[], b: readonly string[]): boolean {
     return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-function serializeServerBlock(seg: string, server: AssistantCodexMcpServerSpec, envEntries: Array<[string, string]>): string {
+function serializeServerBlock(
+    seg: string,
+    server: AssistantCodexMcpServerSpec,
+    envEntries: Array<[string, string]>,
+    eol = '\n',
+): string {
     const lines = [
         `[mcp_servers.${seg}]`,
         `command = ${JSON.stringify(server.command)}`,
@@ -908,11 +957,9 @@ function serializeServerBlock(seg: string, server: AssistantCodexMcpServerSpec, 
     ];
     if (envEntries.length > 0) {
         lines.push('', `[mcp_servers.${seg}.env]`);
-        for (const [k, v] of envEntries) {
-            lines.push(`${formatTomlSegment(k)} = ${JSON.stringify(v)}`);
-        }
+        for (const [k, v] of envEntries) lines.push(`${formatTomlSegment(k)} = ${JSON.stringify(v)}`);
     }
-    return lines.join('\n');
+    return lines.join(eol);
 }
 
 interface TextEdit {
@@ -926,28 +973,40 @@ function applyTextEdits(source: string, edits: TextEdit[]): string {
     let out = source;
     let prevStart = Infinity;
     for (const edit of sorted) {
-        if (edit.end > prevStart) {
-            throw invalidToml('overlapping AST edits while updating TOML');
-        }
+        if (edit.end > prevStart) throw invalidToml('overlapping AST edits while updating TOML');
         out = out.slice(0, edit.start) + edit.replacement + out.slice(edit.end);
         prevStart = edit.start;
     }
     return out;
 }
 
+function stripManagedFieldsForTreeComparison(root: Record<string, any>, serverName: string): Record<string, any> {
+    const clone: Record<string, any> = {};
+    for (const [k, v] of Object.entries(root)) {
+        if (k !== 'mcp_servers' || !isPlainTable(v)) {
+            clone[k] = v;
+            continue;
+        }
+        const serversClone: Record<string, any> = {};
+        for (const [sk, sv] of Object.entries(v)) {
+            if (sk !== serverName || !isPlainTable(sv)) {
+                serversClone[sk] = sv;
+                continue;
+            }
+            const managedClone: Record<string, any> = {};
+            for (const [mk, mv] of Object.entries(sv)) {
+                if (mk !== 'command' && mk !== 'args' && mk !== 'env') managedClone[mk] = mv;
+            }
+            serversClone[sk] = managedClone;
+        }
+        clone[k] = serversClone;
+    }
+    return clone;
+}
+
 /**
- * Validate and merge `[mcp_servers.<serverName>]` into `<workspace>/.codex/config.toml`:
- * - Rejects malformed or structurally conflicting TOML before any change.
- * - Rejects foreign/incompatible `mcp_servers.<serverName>` entries (or orphan
- *   `tools.*` tables without a recognized managed server definition) so consent
- *   is never transferred across unrelated servers or silently erased.
- * - Keeps per-session `ADHDEV_ASSISTANT_SESSION_ID` out of the persisted file
- *   (it is passed via `-c` CLI overrides), returning `existingToml` byte-for-byte
- *   unchanged on ordinary relaunches when the stable server definition already matches.
- * - Preserves multiline `args` (updating the full array span when changed),
- *   quoted keys/headers, custom user `env` keys, extra server settings,
- *   Codex-persisted `[mcp_servers.<serverName>.tools.*]` policies, unrelated
- *   tables, and comments.
+ * Validate and merge `[mcp_servers.<serverName>]` into `<workspace>/.codex/config.toml`
+ * using surgical AST-span edits with zero whole-document whitespace/newline normalization.
  */
 export function mergeAssistantCodexMcpConfigToml(
     existingToml: string,
@@ -955,7 +1014,6 @@ export function mergeAssistantCodexMcpConfigToml(
     server: AssistantCodexMcpServerSpec,
 ): string {
     const stableServer = withoutAssistantSessionEnv(server);
-    // Validate that the target server itself is a recognized managed assistant server.
     const targetIdentity = parseManagedAssistantServerIdentity(stableServer);
     if (!targetIdentity.ok) {
         throw foreignServerError(`refusing to write unrecognized assistant MCP server config (${targetIdentity.reason})`);
@@ -965,29 +1023,33 @@ export function mergeAssistantCodexMcpConfigToml(
     const staticEnvEntries = Object.entries(stableServer.env ?? {}).filter(([k]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
 
     if (!existingToml.trim()) {
-        const fresh = `${serializeServerBlock(seg, stableServer, staticEnvEntries)}\n`;
+        const fresh = `${serializeServerBlock(seg, stableServer, staticEnvEntries, '\n')}\n`;
         parseTomlDocument(fresh);
         return fresh;
     }
 
     const doc = parseTomlDocument(existingToml);
+    const eol = existingToml.includes('\r\n') ? '\r\n' : '\n';
     const mcpServers = doc.root.mcp_servers;
-    if (mcpServers !== undefined) {
-        if (!isPlainTable(mcpServers) || doc.inlineTables.has(mcpServers) || doc.arrayOfTables.has(canonicalPathKey(['mcp_servers']))) {
-            throw invalidToml('mcp_servers must be a standard TOML table');
-        }
+    if (mcpServers !== undefined && (!isPlainTable(mcpServers) || doc.inlineTables.has(mcpServers))) {
+        throw invalidToml('mcp_servers must be a standard TOML table');
     }
 
     const existingServer = mcpServers?.[serverName];
     if (existingServer === undefined) {
-        const suffix = serializeServerBlock(seg, stableServer, staticEnvEntries);
-        const trimmedEnd = existingToml.replace(/\s+$/, '');
-        const appended = `${trimmedEnd}\n\n${suffix}\n`;
-        parseTomlDocument(appended);
+        const suffix = serializeServerBlock(seg, stableServer, staticEnvEntries, eol);
+        const sep = existingToml.endsWith('\n')
+            ? (existingToml.endsWith('\r\n\r\n') || existingToml.endsWith('\n\n') ? '' : eol)
+            : `${eol}${eol}`;
+        const appended = `${existingToml}${sep}${suffix}${eol}`;
+        const verifiedAppended = parseTomlDocument(appended);
+        if (!isDeepStrictEqual(stripManagedFieldsForTreeComparison(doc.root, serverName), stripManagedFieldsForTreeComparison(verifiedAppended.root, serverName))) {
+            throw invalidToml('post-append TOML verification detected unrelated AST change');
+        }
         return appended;
     }
 
-    if (!isPlainTable(existingServer) || doc.inlineTables.has(existingServer) || doc.arrayOfTables.has(canonicalPathKey(['mcp_servers', serverName]))) {
+    if (!isPlainTable(existingServer) || doc.inlineTables.has(existingServer)) {
         throw invalidToml(`mcp_servers.${seg} must be a standard TOML table`);
     }
     if (existingServer.env !== undefined && !isPlainTable(existingServer.env)) {
@@ -1004,23 +1066,16 @@ export function mergeAssistantCodexMcpConfigToml(
         }
     }
 
-    // P2 Identity check: verify existing entry is the SAME managed ADHDev assistant server.
     assertCompatibleAssistantServerIdentity(existingServer, stableServer);
 
-    // Compute desired merged env: preserve custom user env keys (excluding session ID), overlay static server env.
     const mergedEnv: Record<string, string> = {};
     if (isPlainTable(existingServer.env)) {
         for (const [k, v] of Object.entries(existingServer.env)) {
-            if (k === ASSISTANT_SESSION_ID_ENV) continue;
-            mergedEnv[k] = String(v);
+            if (k !== ASSISTANT_SESSION_ID_ENV) mergedEnv[k] = String(v);
         }
     }
-    for (const [k, v] of staticEnvEntries) {
-        mergedEnv[k] = v;
-    }
+    for (const [k, v] of staticEnvEntries) mergedEnv[k] = v;
 
-    // Fast path: if existing TOML already has the exact desired command, args, and env (and no stale session ID),
-    // return existingToml completely untouched so ordinary relaunches perform zero disk writes.
     if (
         existingServer.command === stableServer.command
         && sameStringArray(existingServer.args, stableServer.args)
@@ -1029,7 +1084,6 @@ export function mergeAssistantCodexMcpConfigToml(
         return existingToml;
     }
 
-    // Surgical AST-span update for command, args, and env.
     const serverPath = ['mcp_servers', serverName];
     const cmdPath = [...serverPath, 'command'];
     const argsPath = [...serverPath, 'args'];
@@ -1077,7 +1131,6 @@ export function mergeAssistantCodexMcpConfigToml(
         const envSection = doc.sections.find((s) => !s.isArrayTable && pathsEqual(s.headerPath, envPath));
         const staleSessionSpan = envKeyAssignments.get(ASSISTANT_SESSION_ID_ENV);
 
-        // Check if the entire [mcp_servers.<serverName>.env] section becomes empty and has no comments
         if (envSection && mergedEnvEntries.length === 0) {
             const sectionBody = existingToml.slice(envSection.headerLineEnd, envSection.sectionEnd);
             const hasComments = sectionBody.split(/\r?\n/).some((l) => l.trim().startsWith('#'));
@@ -1094,30 +1147,28 @@ export function mergeAssistantCodexMcpConfigToml(
             for (const [k, v] of mergedEnvEntries) {
                 const span = envKeyAssignments.get(k);
                 if (span) {
-                    if (span.value !== v) {
-                        edits.push({ start: span.valueStart, end: span.valueEnd, replacement: JSON.stringify(v) });
-                    }
+                    if (span.value !== v) edits.push({ start: span.valueStart, end: span.valueEnd, replacement: JSON.stringify(v) });
                 } else {
-                    missingEnvLines.push(`${formatTomlSegment(k)} = ${JSON.stringify(v)}\n`);
+                    missingEnvLines.push(`${formatTomlSegment(k)} = ${JSON.stringify(v)}${eol}`);
                 }
             }
             if (missingEnvLines.length > 0) {
                 if (envSection) {
                     const insertPos = envSection.sectionEnd;
-                    const prefix = insertPos > 0 && existingToml[insertPos - 1] !== '\n' ? '\n' : '';
+                    const prefix = insertPos > 0 && existingToml[insertPos - 1] !== '\n' ? eol : '';
                     edits.push({ start: insertPos, end: insertPos, replacement: `${prefix}${missingEnvLines.join('')}` });
                 } else {
                     const serverSection = doc.sections.find((s) => !s.isArrayTable && pathsEqual(s.headerPath, serverPath));
                     const insertPos = serverSection ? serverSection.sectionEnd : existingToml.length;
-                    const prefix = insertPos > 0 && existingToml[insertPos - 1] !== '\n' ? '\n\n' : '\n';
-                    const block = `${prefix}[mcp_servers.${seg}.env]\n${missingEnvLines.join('')}`;
+                    const prefix = insertPos > 0 && existingToml[insertPos - 1] !== '\n' ? `${eol}${eol}` : eol;
+                    const block = `${prefix}[mcp_servers.${seg}.env]${eol}${missingEnvLines.join('')}`;
                     edits.push({ start: insertPos, end: insertPos, replacement: block });
                 }
             }
         }
     }
 
-    const updated = `${applyTextEdits(existingToml, edits).replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+    const updated = applyTextEdits(existingToml, edits);
     const verified = parseTomlDocument(updated);
     const verifiedServer = verified.root.mcp_servers?.[serverName];
     if (!isPlainTable(verifiedServer) || verifiedServer.command !== stableServer.command || !sameStringArray(verifiedServer.args, stableServer.args)) {
@@ -1125,6 +1176,9 @@ export function mergeAssistantCodexMcpConfigToml(
     }
     if (!sameEnvRecord(verifiedServer.env, mergedEnv)) {
         throw invalidToml('post-merge TOML verification failed for env');
+    }
+    if (!isDeepStrictEqual(stripManagedFieldsForTreeComparison(doc.root, serverName), stripManagedFieldsForTreeComparison(verified.root, serverName))) {
+        throw invalidToml('post-merge TOML verification detected unintended change to unrelated AST nodes');
     }
     return updated;
 }

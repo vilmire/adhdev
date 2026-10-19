@@ -177,10 +177,10 @@ describe('planAssistantMcp', () => {
             '',
         ].join('\n');
 
-        // Same managed server identity (node + vendor/mcp-server/index.js, mode=local, port=19223),
-        // with updated node binary path, rotated --daemon-auth-file, and static ADHDEV_DAEMON_URL.
+        // Same managed server identity (same node binary + same vendor/mcp-server/index.js, mode=local, port=19223),
+        // with rotated per-boot --daemon-auth-file and legacy session ID cleanup.
         const updatedServer = {
-            command: '/opt/node-v22.2/bin/node',
+            command: '/opt/node-v22.1/bin/node',
             args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'local', '--assistant', '--port', '19223', '--daemon-auth-file', '/tmp/auth-new'],
             env: { ADHDEV_ASSISTANT_SESSION_ID: 'sid-new' },
         };
@@ -188,7 +188,7 @@ describe('planAssistantMcp', () => {
         const merged = mergeAssistantCodexMcpConfigToml(existing, ASSISTANT_MCP_SERVER_NAME, updatedServer);
         expect(merged).toContain('# Top-level user comment\nmodel = "gpt-5.4"');
         expect(merged).toContain('[features]\nunified_exec = true');
-        expect(merged).toContain('"command" = "/opt/node-v22.2/bin/node" # inline command comment');
+        expect(merged).toContain('"command" = "/opt/node-v22.1/bin/node" # inline command comment');
         expect(merged).toContain(
             '\'args\' = ["/opt/adhdev/vendor/mcp-server/index.js","--mode","local","--assistant","--port","19223","--daemon-auth-file","/tmp/auth-new"] # trailing array comment',
         );
@@ -200,6 +200,175 @@ describe('planAssistantMcp', () => {
         expect(merged).not.toContain('sid-new');
         expect(merged).toContain('[mcp_servers."adhdev-assistant".tools."project_send"]\napproval_mode = "approve"');
         expect(merged).toContain('[mcp_servers.other-server]\ncommand = "npx"\nargs = [\n  "-y",\n  "other-mcp"\n]');
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: preserves unrelated multiline strings with 3+ consecutive newlines (LF and CRLF) byte-for-byte during stale-session cleanup', () => {
+        const prefix = [
+            'developer_instructions = """',
+            'first',
+            '',
+            '',
+            'last"""',
+            "literal_notes = '''",
+            'alpha',
+            '',
+            '',
+            '',
+            "beta'''",
+            '',
+            '',
+            '[features]',
+            'unified_exec = true',
+            '',
+        ].join('\n');
+        const suffix = [
+            '[mcp_servers.adhdev-assistant.tools.project_send]',
+            'approval_mode = "approve"',
+            '',
+        ].join('\n');
+        const existingLf = [
+            prefix,
+            '[mcp_servers.adhdev-assistant]',
+            'command = "adhdev"',
+            'args = ["mcp","--mode","ipc","--assistant"]',
+            '',
+            '[mcp_servers.adhdev-assistant.env]',
+            'ADHDEV_ASSISTANT_SESSION_ID = "stale-session-id"',
+            'CUSTOM_KEEP = "1"',
+            '',
+            suffix,
+        ].join('\n');
+
+        const mergedLf = mergeAssistantCodexMcpConfigToml(existingLf, ASSISTANT_MCP_SERVER_NAME, {
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'rotated-session-id' },
+        });
+        expect(mergedLf).toContain('developer_instructions = """\nfirst\n\n\nlast"""');
+        expect(mergedLf).toContain("literal_notes = '''\nalpha\n\n\n\nbeta'''");
+        expect(mergedLf.startsWith(prefix)).toBe(true);
+        expect(mergedLf.endsWith(suffix)).toBe(true);
+        expect(mergedLf).not.toContain('stale-session-id');
+        expect(mergedLf).toContain('CUSTOM_KEEP = "1"');
+
+        // CRLF variant with 3+ consecutive CRLF blank lines inside multiline string
+        const existingCrlf = existingLf.replace(/\n/g, '\r\n');
+        const mergedCrlf = mergeAssistantCodexMcpConfigToml(existingCrlf, ASSISTANT_MCP_SERVER_NAME, {
+            ...server,
+            env: { ADHDEV_ASSISTANT_SESSION_ID: 'rotated-session-id' },
+        });
+        expect(mergedCrlf).toContain('developer_instructions = """\r\nfirst\r\n\r\n\r\nlast"""');
+        expect(mergedCrlf).not.toContain('stale-session-id');
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: accepts valid repeated [[array_of_tables]] entries and per-instance subtables while rejecting same-instance duplicates', () => {
+        const validArrayTables = [
+            '[[skills.config]]',
+            "path = '/tmp/a/SKILL.md'",
+            'enabled = true',
+            '',
+            '[[skills.config]]',
+            "path = '/tmp/b/SKILL.md'",
+            'enabled = false',
+            '',
+            '[[servers]]',
+            'name = "alpha"',
+            '[servers.env]',
+            'PORT = "8001"',
+            '[[servers.endpoints]]',
+            'url = "http://127.0.0.1:8001"',
+            '',
+            '[[servers]]',
+            'name = "beta"',
+            '[servers.env]',
+            'PORT = "8002"',
+            '[[servers.endpoints]]',
+            'url = "http://127.0.0.1:8002"',
+            '',
+            '[mcp_servers.adhdev-assistant]',
+            'command = "adhdev"',
+            'args = ["mcp","--mode","ipc","--assistant"]',
+            '',
+            '[mcp_servers.adhdev-assistant.env]',
+            'ADHDEV_ASSISTANT_SESSION_ID = "stale-sid"',
+            '',
+            '[mcp_servers.adhdev-assistant.tools.project_send]',
+            'approval_mode = "approve"',
+            '',
+        ].join('\n');
+
+        const merged = mergeAssistantCodexMcpConfigToml(validArrayTables, ASSISTANT_MCP_SERVER_NAME, server);
+        expect(merged).toContain("[[skills.config]]\npath = '/tmp/a/SKILL.md'\nenabled = true\n\n[[skills.config]]\npath = '/tmp/b/SKILL.md'\nenabled = false");
+        expect(merged).toContain('[[servers]]\nname = "alpha"\n[servers.env]\nPORT = "8001"');
+        expect(merged).toContain('[[servers]]\nname = "beta"\n[servers.env]\nPORT = "8002"');
+        expect(merged).not.toContain('stale-sid');
+        expect(merged).toContain('[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"');
+
+        // Same-instance duplicate key or duplicate subtable within the same [[...]] element must still fail closed:
+        const invalidSameInstanceDupKey = [
+            '[[skills.config]]',
+            "path = '/tmp/a/SKILL.md'",
+            "path = '/tmp/b/SKILL.md'",
+            '',
+        ].join('\n');
+        expect(() => mergeAssistantCodexMcpConfigToml(invalidSameInstanceDupKey, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(/assistant_codex_config_invalid_toml/);
+
+        const invalidSameInstanceDupSubtable = [
+            '[[servers]]',
+            'name = "alpha"',
+            '[servers.env]',
+            'PORT = "8001"',
+            '[servers.env]',
+            'PORT = "8002"',
+            '',
+        ].join('\n');
+        expect(() => mergeAssistantCodexMcpConfigToml(invalidSameInstanceDupSubtable, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(/assistant_codex_config_invalid_toml/);
+    });
+
+    it('mergeAssistantCodexMcpConfigToml: validates TOML 1.0 calendar dates, times, leap days, timezones, and type distinctions', () => {
+        const validDatesConfig = [
+            'leap_day_2024 = 2024-02-29',
+            'leap_day_2000 = 2000-02-29',
+            'offset_dt = 1979-05-27T07:32:00-07:00',
+            'space_utc_dt = 1979-05-27 07:32:00Z',
+            'max_offset_dt = 1979-05-27t07:32:00.999999+23:59',
+            'local_dt = 1979-05-27T07:32:00.123',
+            'local_time = 23:59:59.999999',
+            '',
+            '[mcp_servers.adhdev-assistant]',
+            'command = "adhdev"',
+            'args = ["mcp","--mode","ipc","--assistant"]',
+            '',
+        ].join('\n');
+        expect(mergeAssistantCodexMcpConfigToml(validDatesConfig, ASSISTANT_MCP_SERVER_NAME, server)).toBe(validDatesConfig);
+
+        const invalidDateAndTimeInputs = [
+            'date = 2026-99-99\n',
+            'time = 99:99:99\n',
+            'non_leap = 2023-02-29\n',
+            'century_non_leap = 1900-02-29\n',
+            'april_31 = 2026-04-31\n',
+            'month_zero = 2026-00-10\n',
+            'day_zero = 2026-01-00\n',
+            'hour_24 = 24:00:00\n',
+            'minute_60 = 23:60:00\n',
+            // Matches Python 3.14 tomllib: second=60 is rejected.
+            'second_60 = 23:59:60\n',
+            'bad_tz_hour = 1979-05-27T07:32:00+24:00\n',
+            'bad_tz_min = 1979-05-27T07:32:00-00:60\n',
+            // Date/time token where string is required in mcp_servers.<name>.env:
+            '[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp","--mode","ipc","--assistant"]\n[mcp_servers.adhdev-assistant.env]\nSTAMP = 2026-01-01\n',
+        ];
+        for (const bad of invalidDateAndTimeInputs) {
+            expect(() => mergeAssistantCodexMcpConfigToml(bad, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(/assistant_codex_config_invalid_toml/);
+        }
+        // Date/time token where command string is required:
+        expect(() =>
+            mergeAssistantCodexMcpConfigToml(
+                '[mcp_servers.adhdev-assistant]\ncommand = 2026-01-01\nargs = ["mcp","--mode","ipc","--assistant"]\n',
+                ASSISTANT_MCP_SERVER_NAME,
+                server,
+            ),
+        ).toThrow(/assistant_codex_config_foreign_server/);
     });
 
     it('mergeAssistantCodexMcpConfigToml: rejects malformed or conflicting TOML input before any modification', () => {
@@ -242,10 +411,37 @@ describe('planAssistantMcp', () => {
             `[mcp_servers.adhdev-assistant]\ncommand = "adhdev"\nargs = ["mcp", "--mode", "ipc", "--assistant"]\n[mcp_servers.adhdev-assistant.env]\nNODE_OPTIONS = "--require /tmp/pwn.js"\n${consentBlock}`,
             // Orphan tools.* grant without a server command/args anchor
             `[mcp_servers.adhdev-assistant.tools.project_send]\napproval_mode = "approve"\n`,
+            // Different CLI path for adhdev binary (/tmp/foreign/bin/adhdev vs adhdev)
+            `[mcp_servers.adhdev-assistant]\ncommand = "/tmp/foreign/bin/adhdev"\nargs = ["mcp", "--mode", "ipc", "--assistant"]\n${consentBlock}`,
         ];
         for (const foreign of foreignConfigs) {
             expect(() => mergeAssistantCodexMcpConfigToml(foreign, ASSISTANT_MCP_SERVER_NAME, server)).toThrow(/assistant_codex_config_foreign_server/);
         }
+
+        // Reviewer P1 identity regressions: foreign vendor/mcp-server/index.js path or foreign Node runtime binary must NEVER transfer tools.project_send consent!
+        const managedVendorServer = {
+            command: '/opt/node/bin/node',
+            args: ['/opt/adhdev/vendor/mcp-server/index.js', '--mode', 'local', '--assistant', '--port', '19223'],
+        };
+        const foreignVendorInstallToml = [
+            '[mcp_servers.adhdev-assistant]',
+            'command = "/opt/node/bin/node"',
+            'args = ["/tmp/foreign/vendor/mcp-server/index.js", "--mode", "local", "--assistant", "--port", "19223"]',
+            consentBlock,
+        ].join('\n');
+        expect(() => mergeAssistantCodexMcpConfigToml(foreignVendorInstallToml, ASSISTANT_MCP_SERVER_NAME, managedVendorServer)).toThrow(
+            /assistant_codex_config_foreign_server/,
+        );
+
+        const foreignNodeBinaryToml = [
+            '[mcp_servers.adhdev-assistant]',
+            'command = "/tmp/foreign/bin/node"',
+            'args = ["/opt/adhdev/vendor/mcp-server/index.js", "--mode", "local", "--assistant", "--port", "19223"]',
+            consentBlock,
+        ].join('\n');
+        expect(() => mergeAssistantCodexMcpConfigToml(foreignNodeBinaryToml, ASSISTANT_MCP_SERVER_NAME, managedVendorServer)).toThrow(
+            /assistant_codex_config_foreign_server/,
+        );
     });
 
     it('auto-import providers write inside the assistant workspace; a global config path is refused', () => {
