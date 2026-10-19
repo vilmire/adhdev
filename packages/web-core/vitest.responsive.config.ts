@@ -18,6 +18,7 @@ export default defineConfig({
         include: [
             'test-browser/components/assistant-mobile-controls.browser.test.tsx',
             'test-browser/components/mobile-approvals-entry.browser.test.tsx',
+            'test-browser/components/artifact-viewer.browser.test.tsx',
         ],
         testTimeout: 30_000,
         browser: {

@@ -12,6 +12,7 @@
  */
 
 import { buildChatMessageSignature, hashSignatureParts } from '@adhdev/daemon-core/chat/chat-signatures';
+import type { ChatAttachmentMeta } from '@adhdev/daemon-core';
 import { stringifyTextContent } from '../../utils/text';
 import { classifyChatMessageForDisplay, type ChatTranscriptSurface } from '../dashboard/chat-activity-visibility';
 import type { ChatMessage } from '../../types';
@@ -27,7 +28,7 @@ import {
 import { extractReplyChoices } from './reply-choices';
 import { detectInjectedText, type InjectedSegment, type InjectedSource } from './injected-text';
 
-export type ChatRowKind = 'user' | 'assistant' | 'system' | 'injected' | 'tool' | 'thought' | 'terminal' | 'activity';
+export type ChatRowKind = 'user' | 'assistant' | 'system' | 'injected' | 'tool' | 'thought' | 'terminal' | 'activity' | 'artifact';
 
 export type RowIcon = 'thought' | 'tool-dot' | 'activity-dot' | 'running' | 'done' | 'git';
 
@@ -78,6 +79,7 @@ export interface ChatRowModel {
     copyText: string | null;
     body: RowBody;
     collapse: RowCollapse;
+    attachment?: ChatAttachmentMeta;
     injected?: InjectedMeta;
     status?: RowStatus;
     /** Assistant question with fixed answers: the options (choices line stripped from the body). */
@@ -155,6 +157,7 @@ function labelOr(text: string, i18nKey: string): RowLabel {
 }
 
 function resolveKind(message: ChatMessage, role: string, isActivityFacing: boolean, injected: InjectedMeta | undefined): ChatRowKind {
+    if (message.kind === 'artifact' || message.attachment) return 'artifact';
     if (injected) return injected.source === 'system' ? 'system' : 'injected';
     const rawKind = message.kind || (role === 'tool' ? 'tool' : 'standard');
     if (isActivityFacing && !ACTIVITY_KINDS.has(rawKind)) return 'activity';
@@ -177,6 +180,7 @@ function resolveLabel(kind: ChatRowKind, message: ChatMessage, meta: Record<stri
         case 'thought': return labelOr(metaLabel(meta), 'chat.thought');
         case 'terminal': return labelOr(metaLabel(meta), 'chat.ranCommand');
         case 'activity': return labelOr(metaLabel(meta).trim(), activityLabelKey);
+        case 'artifact': return labelOr(message.attachment?.title || metaLabel(meta), 'chat.artifact');
         case 'system': return { i18nKey: 'chat.system' };
         case 'injected': return { i18nKey: 'chat.injected' };
     }
@@ -209,7 +213,7 @@ function resolveBody(kind: ChatRowKind, text: string, parts: StructuredMessagePa
 }
 
 function resolveCollapse(kind: ChatRowKind, message: ChatMessage, text: string, hasParts: boolean): RowCollapse {
-    if (hasParts) return { mode: 'none' };
+    if (hasParts || kind === 'artifact') return { mode: 'none' };
     if (kind === 'tool') {
         // (TOOL-EXPAND) The parser stamps a ref only on bubbles it truncated, so
         // the affordance appears exactly where there is more text to fetch.
@@ -245,6 +249,9 @@ function collapseSignature(collapse: RowCollapse): string {
 
 function buildSignature(message: ChatMessage, model: Omit<ChatRowModel, 'signature'>): string {
     const body = model.body;
+    const attachmentSig = model.attachment
+        ? `${model.attachment.artifactId}:${model.attachment.sha256}:${model.attachment.updatedAt}`
+        : '';
     return hashSignatureParts([
         // id / index / role / time / full content hash.
         buildChatMessageSignature(message),
@@ -258,6 +265,7 @@ function buildSignature(message: ChatMessage, model: Omit<ChatRowModel, 'signatu
         model.copyText === null ? '' : 'copy',
         body.type === 'parts' ? `parts:${body.preformatted}` : body.type,
         collapseSignature(model.collapse),
+        attachmentSig,
         model.status?.queued ? `queued:${model.status.queued.pendingId}` : '',
         model.injected ? model.injected.segments.map((s) => `${s.source}:${s.project ?? ''}:${s.outcome ?? ''}:${s.idle ? 1 : 0}`).join(',') : '',
         model.replyChoices ? model.replyChoices.join('\u0001') : '',
@@ -315,6 +323,7 @@ function computeChatRow(message: ChatMessage, ctx: ResolveChatRowContext): ChatR
         copyText: text ? text : null,
         body: resolveBody(kind, kind === 'tool' && !parts ? presentToolText(text).body : text, parts, meta),
         collapse: resolveCollapse(kind, message, text, !!parts),
+        ...(message.attachment ? { attachment: message.attachment } : {}),
         ...(injected ? { injected } : {}),
         ...(kind === 'user' ? { status: resolveStatus(meta) } : {}),
         ...(extracted && extracted.choices.length ? { replyChoices: extracted.choices } : {}),

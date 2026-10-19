@@ -50,6 +50,7 @@ import {
 import { resolveChatRow, type ChatRowModel } from './ChatMessageList/chat-row-model';
 import { useChatRowExpansion, type FetchToolBlock } from './ChatMessageList/chat-row-expansion';
 import { mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
+import type { FetchArtifactCommandFn } from '../hooks/useArtifactRead';
 
 // ─── Types ────────────────────────────────────
 
@@ -84,6 +85,14 @@ export interface ChatMessageListProps {
     isWorking?: boolean;
     /** Manage expand status with this key prefix */
     contextKey?: string;
+    /** Explicit owning daemon route id for session-scoped artifact fetches (falls back to resolving from contextKey). */
+    daemonId?: string;
+    /** Explicit owning session id for session-scoped artifact fetches (falls back to resolving from contextKey). */
+    sessionId?: string;
+    /** Optional coordinator routing hint for mesh-delegated sessions. */
+    meshCoordinatorDaemonId?: string;
+    /** Optional custom artifact_fetch command dispatcher. */
+    fetchArtifact?: FetchArtifactCommandFn;
     /** Forward received timestamp map from external (messageId → timestamp) */
     receivedAtMap?: Record<string, number>;
     /** Daemon-provided hash for the current last message; avoids re-hashing large idle transcripts. */
@@ -147,7 +156,7 @@ export interface ChatMessageListRef {
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock, onChooseReply },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', daemonId, sessionId, meshCoordinatorDaemonId, fetchArtifact, receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock, onChooseReply },
     ref
 ) {
     const { t } = useTranslation('common');
@@ -654,6 +663,11 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                         agentName={agentName}
                         userName={userName}
                         isCliMode={isCliMode}
+                        contextKey={contextKey}
+                        daemonId={daemonId}
+                        sessionId={sessionId}
+                        meshCoordinatorDaemonId={meshCoordinatorDaemonId}
+                        fetchArtifact={fetchArtifact}
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
                         onCancelQueued={onCancelQueued}
@@ -727,6 +741,10 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.isWorking === next.isWorking
     && prev.onChooseReply === next.onChooseReply
     && prev.contextKey === next.contextKey
+    && prev.daemonId === next.daemonId
+    && prev.sessionId === next.sessionId
+    && prev.meshCoordinatorDaemonId === next.meshCoordinatorDaemonId
+    && prev.fetchArtifact === next.fetchArtifact
     && prev.receivedAtMap === next.receivedAtMap
     && prev.lastMessageHash === next.lastMessageHash
     && prev.showActivityMessages === next.showActivityMessages

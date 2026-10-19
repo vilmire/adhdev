@@ -113,6 +113,16 @@ export function getConversationLastMessagePreview(
     snapshot?: ConversationPreviewSnapshot | null,
 ): string {
     const lastMessage = getConversationLastMessage(conversation, snapshot)
+    if (lastMessage && (lastMessage.kind === 'artifact' || lastMessage.attachment)) {
+        const artifactTitle = normalizeTextContent(
+            lastMessage.attachment?.title
+            || lastMessage.attachment?.filename
+            || lastMessage.content,
+        )
+        if (artifactTitle) {
+            return artifactTitle.startsWith('📎') ? artifactTitle : `📎 ${artifactTitle}`
+        }
+    }
     const messagePreview = normalizeTextContent(lastMessage?.content)
     const summaryPreview = normalizeTextContent(conversation.lastMessagePreview)
 
