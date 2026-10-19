@@ -34,9 +34,9 @@ export interface ArtifactStoreStatement<Row = unknown> {
     all(...params: unknown[]): Row[];
 }
 
-export interface ArtifactStoreTransactionFn<T extends (...args: any[]) => any> {
-    (...args: Parameters<T>): ReturnType<T>;
-    immediate?: (...args: Parameters<T>) => ReturnType<T>;
+export interface ArtifactStoreTransactionFn<T extends (...args: any[]) => any = (...args: any[]) => any> {
+    (...args: any[]): ReturnType<T>;
+    immediate?: (...args: any[]) => ReturnType<T>;
 }
 
 export interface ArtifactStoreDatabase {

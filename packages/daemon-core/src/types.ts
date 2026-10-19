@@ -107,11 +107,14 @@ export interface ChatMessage {
    *  one — distinct from the generic senderName:'Tool'. Currently only
    *  antigravity's native-history reader stamps this. */
   toolName?: string;
+  /** Wire-safe artifact attachment metadata for kind='artifact' bubbles. */
+  attachment?: ChatAttachmentMeta;
 }
 
 // Re-export from contracts for convenience
 import type { MessagePart, ProviderCategory, ToolCallInfo } from './providers/contracts.js';
 import type { MessageSourceAddress } from './chat/message-source-address.js';
+import type { ChatAttachmentMeta } from './artifacts/types.js';
 
 // ── Extension Info ──
 

@@ -155,7 +155,9 @@ export function ledgerSeedFromPersisted(persisted: PersistedChatState): MessageI
             map.set(part.k, part.text);
         } else if (row.kind === CHAT_MSG_KIND) {
             const head = readChatMsg(row.payload);
-            if (head) heads.push({ id: head.id, ord: head.ord, rev: head.rev, role: head.role, kind: head.kind, body: head.body, srcId: head.srcId });
+            if (head && !head.id.startsWith('artifact:')) {
+                heads.push({ id: head.id, ord: head.ord, rev: head.rev, role: head.role, kind: head.kind, body: head.body, srcId: head.srcId });
+            }
         }
     }
     if (!epoch && heads.length === 0) return null;

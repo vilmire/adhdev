@@ -18,6 +18,12 @@ export type {
   ProviderInfo,
   AgentEntry,
 } from './types.js';
+export type {
+  ArtifactErrorCode,
+  ArtifactKind,
+  ArtifactRecord,
+  ChatAttachmentMeta,
+} from './artifacts/types.js';
 
 // ── Shared Types (cross-package) ──
 export type {

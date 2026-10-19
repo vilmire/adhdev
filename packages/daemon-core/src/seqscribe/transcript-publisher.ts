@@ -56,6 +56,7 @@ import { dropMessageIdentityLedger, peekMessageIdentityLedger } from '../chat/me
 import { redactSessionId, type ChatBaseReason } from './transcript-keyed-codec.js';
 import {
     KeyedChatSessionState,
+    type KeyedChatArtifactInput,
     type KeyedChatFrame,
     type PersistedChatState,
 } from './transcript-keyed-frame.js';
@@ -736,6 +737,64 @@ export class TranscriptProjectionService {
         }
     }
 
+    /**
+     * Publish a committed delta frame for a registered or updated artifact bubble
+     * (`m:artifact:<artifactId>`) on the session's keyed chat topic.
+     */
+    async publishArtifact(sessionId: string, input: KeyedChatArtifactInput): Promise<KeyedChatFrame | null> {
+        if (!sessionId) return null;
+        while (this.inFlight.has(sessionId)) {
+            await new Promise((resolve) => setImmediate(resolve));
+        }
+        if (!this.admitSession(sessionId)) return null;
+        try {
+            const state = this.stateFor(sessionId);
+            const nowIso = (this.deps.now ?? (() => new Date().toISOString()))();
+            const nowMs = Date.now();
+            const built = state.buildArtifactFrame(input, {
+                writerId: this.deps.writerId(),
+                producerDaemonId: this.deps.daemonId(),
+                observedAt: nowIso,
+                nowMs,
+            });
+            if (built.status === 'unchanged') {
+                this.counters.deduped++;
+                return null;
+            }
+            if (built.status === 'unidentified') {
+                this.counters.unidentified++;
+                return null;
+            }
+            const frame = built.frame;
+            const syntheticObservation: TranscriptObservation = {
+                sessionId,
+                providerType: input.providerType ?? 'unknown',
+                status: input.status ?? 'running',
+                providerObservedStatus: null,
+                messages: [],
+                coverage: { mode: 'full', omittedBefore: false },
+            };
+            try {
+                await this.deps.appendChatFrame(sessionId, frame, syntheticObservation);
+            } catch (error) {
+                this.counters.publishFailed++;
+                this.sessionState.delete(sessionId);
+                LOG.warn(
+                    'Seqscribe',
+                    `transcript artifact publish failed session=${redactSessionId(sessionId)}: ${error instanceof Error ? error.message : String(error)}`,
+                );
+                return null;
+            }
+            state.commit(frame, nowMs);
+            this.counters.published++;
+            this.counters.chatRowsWritten += frame.rows.length;
+            this.counters.chatBytesWritten += frame.bytes;
+            return frame;
+        } finally {
+            await this.settle(sessionId);
+        }
+    }
+
     getCounters(): TranscriptProjectionCounters {
         return { ...this.counters, chatBaseFrames: { ...this.counters.chatBaseFrames } };
     }
@@ -795,6 +854,18 @@ export function configureTranscriptProjection(deps: TranscriptProjectionDeps | n
 
 export function activeTranscriptProjectionService(): TranscriptProjectionService | null {
     return activeService;
+}
+
+/**
+ * Publish a committed artifact bubble frame via the active projection service.
+ * Safe no-op (returns null) when unconfigured.
+ */
+export async function publishSessionArtifactBubble(
+    sessionId: string,
+    input: KeyedChatArtifactInput,
+): Promise<KeyedChatFrame | null> {
+    if (!activeService) return null;
+    return activeService.publishArtifact(sessionId, input);
 }
 
 /**
