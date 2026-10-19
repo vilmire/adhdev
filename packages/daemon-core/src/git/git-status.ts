@@ -46,6 +46,7 @@ export const GIT_STATUS_CACHE_TTL_MS = 1500;
 interface CachedStatusEntry {
   status: GitRepoStatus;
   cachedAt: number;
+  startedAtPerf?: number;
 }
 interface InFlightStatusEntry {
   promise: Promise<GitRepoStatus>;
@@ -439,7 +440,30 @@ export async function getGitRepoStatus(
       // Math.max(lastCheckedAt, Date.now()) so mocked clocks remain deterministic) so
       // a slow collection (>1.5s) is not already expired the moment it finishes.
       const completedAt = Math.max(lastCheckedAt, Date.now());
-      lastKnownGoodStatus.set(cacheKey, { status, cachedAt: completedAt });
+      const existingCached = lastKnownGoodStatus.get(cacheKey);
+      const currentInFlight = inFlightStatusReads.get(cacheKey);
+      const supersededByNewerInFlight =
+        currentInFlight !== undefined && currentInFlight.startedAtPerf > callerStartedAtPerf;
+      if (
+        !supersededByNewerInFlight
+        && (
+          !existingCached
+          || existingCached.startedAtPerf === undefined
+          || existingCached.startedAtPerf <= callerStartedAtPerf
+        )
+      ) {
+        lastKnownGoodStatus.set(cacheKey, {
+          status,
+          cachedAt: completedAt,
+          startedAtPerf: callerStartedAtPerf,
+        });
+      } else if (supersededByNewerInFlight && !existingCached) {
+        lastKnownGoodStatus.set(cacheKey, {
+          status,
+          cachedAt: 0,
+          startedAtPerf: callerStartedAtPerf,
+        });
+      }
       return status;
     } catch (error) {
       const gitError = error instanceof GitCommandError
@@ -450,7 +474,15 @@ export async function getGitRepoStatus(
   })();
 
   const existingInFlight = inFlightStatusReads.get(cacheKey);
-  if (!existingInFlight || existingInFlight.timeoutMs < callerTimeoutMs) {
+  const existingExpired =
+    existingInFlight !== undefined
+    && callerStartedAtPerf - existingInFlight.startedAtPerf >= existingInFlight.timeoutMs;
+  if (
+    !existingInFlight
+    || existingExpired
+    || existingInFlight.timeoutMs < callerTimeoutMs
+    || (options.forceFresh && existingInFlight.timeoutMs <= callerTimeoutMs)
+  ) {
     inFlightStatusReads.set(cacheKey, {
       promise: runPromise,
       timeoutMs: callerTimeoutMs,

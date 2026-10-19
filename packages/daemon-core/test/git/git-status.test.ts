@@ -1241,6 +1241,74 @@ describe('git repo status parser', () => {
       }
     });
 
+    it('replaces an expired in-flight cohort so matching follow-up callers share one fresh collection and late settlement of the old cohort never deletes the new slot', async () => {
+      const repo = tempRepo('r2b-expired-cohort-replacement');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      commit(repo, 'c1');
+
+      const realRunGit = gitExecutor.runGit;
+      let starts = 0;
+      const gates: Array<() => void> = [];
+      const spy = vi.spyOn(gitExecutor, 'runGit').mockImplementation(async (target, args, opts) => {
+        if (Array.isArray(args) && args[0] === 'status') {
+          starts += 1;
+          await new Promise<void>((resolveGate) => {
+            gates.push(resolveGate);
+          });
+        }
+        return realRunGit(target, args, opts);
+      });
+
+      try {
+        const budgetMs = 250;
+        // 1. First caller (250ms budget) times out while its background collection stays in flight.
+        const first = await getGitRepoStatus(repo, { timeoutMs: budgetMs });
+        expect(first.reason).toBe('timeout');
+        expect(starts).toBe(1);
+        expect(__inFlightStatusReadCountForTests()).toBe(1);
+
+        // Wait past the first cohort's budget so it is expired for subsequent callers.
+        await new Promise((r) => setTimeout(r, 20));
+
+        // 2. Two matching follow-up callers (same 250ms budget) arrive after the first cohort expired:
+        //    the first follow-up replaces the expired in-flight slot, and the second coalesces onto it.
+        const secondPromise = getGitRepoStatus(repo, { timeoutMs: budgetMs });
+        const thirdPromise = getGitRepoStatus(repo, { timeoutMs: budgetMs });
+
+        // Wait until the replacement collection reaches its `git status` gate.
+        const waitStart = Date.now();
+        while (gates.length < 2 && Date.now() - waitStart < 1000) {
+          await new Promise((r) => setTimeout(r, 2));
+        }
+        expect(starts).toBe(2);
+        expect(__inFlightStatusReadCountForTests()).toBe(1);
+
+        // 3. Settle the OLD cohort BEFORE the fresh replacement cohort settles:
+        //    old `.finally()` must NOT erase the newer cohort's inFlightStatusReads slot.
+        gates[0]!();
+        await new Promise((r) => setTimeout(r, 60));
+        expect(__inFlightStatusReadCountForTests()).toBe(1);
+
+        // Another caller arriving while the replacement cohort is still within its budget coalesces onto it.
+        const fourthPromise = getGitRepoStatus(repo, { timeoutMs: budgetMs });
+
+        // 4. Release the replacement cohort and verify all callers receive its fresh result and cleanup completes.
+        gates[1]!();
+        const [second, third, fourth] = await Promise.all([secondPromise, thirdPromise, fourthPromise]);
+        expect(starts).toBe(2);
+        expect(second.isGitRepo).toBe(true);
+        expect(second.reason).toBeUndefined();
+        expect(third).toBe(second);
+        expect(fourth).toBe(second);
+        expect(__inFlightStatusReadCountForTests()).toBe(0);
+      } finally {
+        for (const release of gates) {
+          release();
+        }
+        spy.mockRestore();
+      }
+    });
+
     it('rejects post-validation ResolvedGitRepo workspace mutation and workspace symlink retargeting outside the repo', async () => {
       const repo = tempRepo('f3-immutable-repo');
       writeFileSync(join(repo, 'a.txt'), 'one\n');
