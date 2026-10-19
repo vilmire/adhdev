@@ -484,8 +484,14 @@ export function createComponentsProbeReader(components: ProbeComponents, options
         if (!target && !instance) return { presence: 'absent' };
         const instanceKey = target?.instanceKey || attempt.sessionId;
         const status = localInstanceStatus(components, instanceKey, target?.transport ?? 'pty');
-        if (!wantsTranscript(attempt, holds, status)) return { presence: 'present', ...(status ? { status } : {}) };
+        // A background-terminal footer can keep the PTY generating after the native
+        // turn ended. Inspect descendants before the busy-status shortcut so the
+        // transcript can establish that turn end and start the shared monitor.
         const background = await readLocalBackgroundProcesses(attempt, instanceKey, instance);
+        const hasLiveBackgroundProcesses = (background.liveBackgroundProcesses?.length ?? 0) > 0;
+        if (!hasLiveBackgroundProcesses && !wantsTranscript(attempt, holds, status)) {
+            return { presence: 'present', ...(status ? { status } : {}) };
+        }
         const ptyOutputAt = attempt.scope === 'plain' ? undefined : readLocalPtyOutputAt(instanceKey, instance);
         try {
             const result = await components.commandHandler.handle('read_chat', readArgsFor(attempt));

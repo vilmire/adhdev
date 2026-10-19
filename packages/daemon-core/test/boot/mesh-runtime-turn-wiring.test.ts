@@ -32,9 +32,13 @@ import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { getActiveTurnLedgerForIpc, turnLedgerIpcHandlers } from '../../src/commands/low-family/turn-ledger-ipc.js';
 import { __resetMeshRuntimeStoreForTests } from '../../src/mesh/mesh-work-queue.js';
 import { meshNoticeRuntime } from '../../src/mesh/turn-ledger/deliver.js';
+import { startTurnLoops, stopTurnLoops } from '../../src/boot/stages/loops.js';
+import { __setSharedProcessTableSourceForTests, createProcessTableSource } from '../../src/process/process-table-snapshot.js';
+import { parsePosixPsOutput, type ProcessNodeInfo } from '../../src/process/session-process-tree.js';
 import type { TurnEvidencePort } from '../../src/providers/turn-evidence-port.js';
 
 afterEach(() => {
+    __setSharedProcessTableSourceForTests(null);
     vi.restoreAllMocks();
     __resetMeshRuntimeStoreForTests();
     try { fs.rmSync(testTmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
@@ -258,6 +262,240 @@ describe('wireTurnLedger — S7 wiring', () => {
                 policy: { mode: 'queue' },
             });
         } finally {
+            wiring.dispose();
+        }
+    });
+
+    it('emits 120s coordinator notice naming real process while codex-cli background work is live (PTY held generating by background-terminal footer), then nudges and releases after exit without holding on sidecar', async () => {
+        const T0 = 1_792_411_000_000;
+        let currentNowMs = T0;
+        vi.spyOn(Date, 'now').mockImplementation(() => currentNowMs);
+        let instanceStatus: 'generating' | 'idle' = 'generating';
+        let sleepRunning = true;
+        let turnEndedInTranscript = false;
+        const submitted: any[] = [];
+
+        const buildPsTable = (): ProcessNodeInfo[] => {
+            const lines = [
+                // Root codex PTY process (started 30s before T0)
+                '20000     1    01:00   00:01.00 codex            codex --dangerously-bypass-approvals-and-sandbox',
+                // Lazy sidecar spawned during the turn with macOS truncated comm '.' (started at T0 + 15_000)
+                '20010 20000    00:05   00:00.10 .                /Users/dev/.nvm/versions/node/v22.22.0/bin/node /Users/dev/.nvm/versions/node/v22.22.0/lib/node_modules/@openai/codex/bin/codex-code-mode-host.js',
+            ];
+            if (sleepRunning) {
+                lines.push(
+                    '20020 20000    00:02   00:00.01 /bin/zsh         /bin/zsh -lc sleep 150 && echo done',
+                    '20021 20020    00:02   00:00.00 sleep            sleep 150',
+                );
+            }
+            const parsed = parsePosixPsOutput(lines.join('\n'), T0 + 20_000);
+            return parsed.map((row) => {
+                if (row.pid === 20000) return { ...row, startedAtMs: T0 - 30_000 };
+                if (row.pid === 20010) return { ...row, startedAtMs: T0 + 15_000 };
+                return { ...row, startedAtMs: T0 + 18_000 };
+            });
+        };
+
+        __setSharedProcessTableSourceForTests(
+            createProcessTableSource({
+                now: () => currentNowMs,
+                ttlMs: 0,
+                maxStaleMs: 600_000,
+                read: async () => buildPsTable(),
+            }),
+        );
+
+        const workerInstance = {
+            category: 'cli',
+            getState: () => ({
+                instanceId: 'inst_worker_c1',
+                status: instanceStatus,
+                pid: 20000,
+                settings: { meshNodeFor: 'm1', meshNodeId: 'n1', meshActiveTaskId: 'task_c1' },
+            }),
+            adapter: {
+                getPid: () => 20000,
+                getStatus: () => ({ status: instanceStatus, lastOutputAt: T0 + 21_000 }),
+            },
+        };
+
+        const { components } = fakeComponents({});
+        components.instanceManager = {
+            setTurnEvidencePort: () => {},
+            listInstanceIds: () => ['inst_worker_c1'],
+            getInstance: (id: string) => (id === 'inst_worker_c1' || id === 'sess_worker_c1' ? workerInstance : undefined),
+        };
+        components.sessionRegistry = {
+            has: (id: string) => id === 'sess_worker_c1',
+            get: (id: string) => (id === 'sess_worker_c1'
+                ? { sessionId: 'sess_worker_c1', instanceKey: 'inst_worker_c1', adapterKey: 'adapter_worker_c1', transport: 'pty', status: instanceStatus }
+                : undefined),
+            list: () => [],
+        };
+        components.providerLoader = {
+            getAvailableProviderInfos: () => [],
+        };
+        components.cliManager = {
+            input: {
+                submit: vi.fn(async (req: any) => {
+                    submitted.push({ at: currentNowMs, req });
+                    return { kind: 'delivered' };
+                }),
+            },
+        };
+        components.commandHandler = {
+            handle: vi.fn(async (cmd: string) => {
+                if (cmd !== 'read_chat') return { success: false };
+                if (!turnEndedInTranscript) {
+                    return {
+                        success: true,
+                        status: 'generating',
+                        providerObservedStatus: 'generating',
+                        turnTerminalMarkers: [],
+                        messages: [
+                            { role: 'user', content: 'start sleep 150', timestamp: new Date(T0 + 14_000).toISOString() },
+                        ],
+                    };
+                }
+                return {
+                    success: true,
+                    // Raw PTY status stays 'generating' while `1 background terminal running` is on screen,
+                    // whereas native rollout markers reconcile providerObservedStatus to 'idle'.
+                    status: instanceStatus,
+                    providerObservedStatus: 'idle',
+                    turnTerminalMarkers: [
+                        { receivedAt: T0 + 21_000, outcome: 'completed', turnId: 'turn_c1' },
+                    ],
+                    messages: [
+                        { role: 'user', content: 'start sleep 150', timestamp: new Date(T0 + 14_000).toISOString() },
+                        {
+                            role: 'assistant',
+                            content: 'Background sleep 150 started; ending turn without calling report_completion yet.',
+                            timestamp: new Date(T0 + 21_000).toISOString(),
+                        },
+                    ],
+                };
+            }),
+        };
+
+        const wiring = wireTurnLedger(components, { runMigration: false });
+        components.turnLedger = wiring.ledger;
+        components.turnProbePort = wiring.probePort;
+        components.meshTurn = wiring;
+        startTurnLoops(components);
+        // Stop background interval timers so deterministic `turnScheduler.tick(nowMs)` drives time.
+        components.turnScheduler!.stop();
+
+        try {
+            const attemptId = 'att_c1_live_notice';
+            expect(wiring.ledger.observe({
+                eventId: 'ev_c1_enq',
+                at: T0 + 5_000,
+                source: 'dispatch',
+                observedBy: 'daemon_wiring',
+                sessionId: 'sess_worker_c1',
+                kind: 'dispatch_accepted',
+                scope: 'mesh_direct',
+                attemptRef: { attemptId, generation: 0 },
+                messageId: 'msg_c1_1',
+                meshId: 'm1',
+                nodeId: 'n1',
+                taskId: 'task_c1',
+                providerType: 'codex-cli',
+                coordinator: { daemonId: 'daemon_wiring', coordinatorRunId: 'run_c1', sessionId: 'sess_coord_1' },
+            } as any).rule).toBe('R1');
+            expect(wiring.ledger.observe({
+                eventId: 'ev_c1_deliv',
+                at: T0 + 6_000,
+                source: 'input_service',
+                observedBy: 'daemon_wiring',
+                sessionId: 'sess_worker_c1',
+                kind: 'delivered',
+                attemptRef: { attemptId, generation: 0 },
+                messageId: 'msg_c1_1',
+                outcome: 'delivered',
+                via: 'local',
+            } as any).rule).toBe('R2');
+
+            // Pre-turn probe while in `delivered` state (stamps last_probe_at = T0 + 8_000, matching live C1-retry):
+            currentNowMs = T0 + 8_000;
+            await components.turnScheduler!.tick(currentNowMs);
+
+            // Worker turn starts at T0 + 14_000:
+            currentNowMs = T0 + 14_000;
+            expect(wiring.ledger.observe({
+                eventId: 'ev_c1_start',
+                at: T0 + 14_000,
+                source: 'fsm_edge',
+                observedBy: 'daemon_wiring',
+                sessionId: 'sess_worker_c1',
+                kind: 'turn_started',
+                attemptRef: { attemptId, generation: 0 },
+                retro: false,
+            } as any).rule).toBe('R4');
+
+            // Worker launches `sleep 150` at T0 + 18_000 and ends its assistant turn at T0 + 21_000
+            // without calling report_completion. PTY screen stays 'generating' due to background terminal footer.
+            turnEndedInTranscript = true;
+
+            // Tick every 4s up to T0 + 144_000 (123s after turn ended at T0 + 21_000, while sleep 150 is still running
+            // and has 24s remaining before exiting at T0 + 168_000):
+            const noticeEventId = `background_work_timeout:m1:task_c1:sess_worker_c1:${attemptId}:g0`;
+            for (let t = T0 + 24_000; t <= T0 + 144_000; t += 4_000) {
+                currentNowMs = t;
+                await components.turnScheduler!.tick(currentNowMs);
+                if (t < T0 + 141_000) expect(wiring.ledger.store.getEvent(noticeEventId)).toBeNull();
+            }
+
+            // 1. At ~120s into the background hold (while sleep 150 is still alive), the coordinator notice MUST have fired once:
+            const timeoutNoticeRow = wiring.ledger.store.getEvent(noticeEventId);
+            expect(timeoutNoticeRow).not.toBeNull();
+            expect(timeoutNoticeRow).toMatchObject({
+                eventId: noticeEventId,
+                kind: 'notify',
+                verdict: 'applied',
+                atMs: T0 + 144_000,
+            });
+            expect(wiring.ledger.getAttempt(attemptId)?.terminal).toBeNull();
+            expect((timeoutNoticeRow as any)?.payload?.event).toBe('mesh:background_work_no_results');
+            const noticeText = String((timeoutNoticeRow as any)?.payload?.local?.payload?.coordinatorMessage ?? '');
+            expect(noticeText).toContain('background work still running (live processes:');
+            expect(noticeText).toContain('sleep');
+            expect(noticeText).not.toContain('(live processes: .)');
+            expect(noticeText).not.toContain('codex-code-mode-host');
+
+            // No worker nudge yet while sleep 150 is still alive:
+            expect(submitted.filter((s) => String(s.req?.messageId).startsWith('bg-nudge:'))).toHaveLength(0);
+
+            // 2. At T0 + 168_000 (150s after T0 + 18_000), sleep 150 exits; only codex + sidecar codex-code-mode-host remain:
+            sleepRunning = false;
+            instanceStatus = 'idle';
+            currentNowMs = T0 + 172_000;
+            await components.turnScheduler!.tick(currentNowMs);
+
+            const nudges = submitted.filter((s) => String(s.req?.messageId).startsWith('bg-nudge:'));
+            expect(nudges).toHaveLength(1);
+            expect(nudges[0]!.req).toMatchObject({
+                messageId: `bg-nudge:${attemptId}:g0`,
+                sessionId: 'adapter_worker_c1',
+                origin: 'mesh',
+            });
+
+            // 3. After the 180s post-nudge grace expires with no worker report (T0 + 360_000, well before the 600s inactivity release),
+            // the hold releases instead of holding 10m on the sidecar:
+            for (let t = T0 + 176_000; t <= T0 + 360_000; t += 4_000) {
+                currentNowMs = t;
+                await components.turnScheduler!.tick(currentNowMs);
+            }
+            expect(wiring.backgroundWork.isReleased(attemptId, 0)).toBe(true);
+            expect(wiring.ledger.getAttempt(attemptId)?.state).toBe('completed');
+            // Still only 1 background_work_timeout notice row (no duplicate notice on release):
+            const allTimeoutNotices = wiring.ledger.store.db
+                .prepare(`SELECT event_id FROM turn_events WHERE event_id LIKE 'background_work_timeout:%'`)
+                .all();
+            expect(allTimeoutNotices).toHaveLength(1);
+        } finally {
+            stopTurnLoops(components);
             wiring.dispose();
         }
     });

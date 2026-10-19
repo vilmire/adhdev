@@ -396,6 +396,16 @@ export function createBackgroundWorkMonitor(
         if (decision.complete) {
           return { holdTurnEnd: false, nudgedWorker: false, emittedCoordinatorNotice: false };
         }
+        // Probes can first discover the ended turn a minute later. Measure the
+        // notice deadline from its validated final timestamp, not that delayed read.
+        const baselineMs = backgroundWorkBaselineMs(attempt);
+        const turnEndedAt =
+          typeof finalAssistantAt === 'number' &&
+          Number.isFinite(finalAssistantAt) &&
+          finalAssistantAt >= baselineMs &&
+          finalAssistantAt <= nowMs
+            ? finalAssistantAt
+            : nowMs;
         entry = {
           attemptId: attempt.attemptId,
           generation: attempt.generation,
@@ -407,7 +417,7 @@ export function createBackgroundWorkMonitor(
             daemonId: attempt.coordinator.daemonId,
             sessionId: attempt.coordinator.sessionId,
           },
-          firstObservedAt: nowMs,
+          firstObservedAt: turnEndedAt,
           lastActivityAt: nowMs,
           ...(typeof input.outputAtMs === 'number' && Number.isFinite(input.outputAtMs) ? { lastOutputSeenAt: input.outputAtMs } : {}),
           initialReason: decision.reason,
