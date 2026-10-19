@@ -278,17 +278,32 @@ export class AssistantRelay {
     /**
      * The owner stopped following the project from the dashboard: close its
      * thread now (no more progress / stall notices; the remote poller stops on
-     * its next pass). A relay already batched still goes out. The next
-     * \`project_send\` opens the thread again.
+     * its next pass). A relay already batched still goes out unless
+     * `opts.suppressPending` is true (known revocation / remote unfollow).
      */
-    closeThread(meshId: string): boolean {
-        if (!this.ports.store.isThreadOpen(meshId)) return false;
-        this.ports.store.closeThread(meshId, this.clock.now());
+    closeThread(meshId: string, opts?: { suppressPending?: boolean }): boolean {
+        const wasOpen = this.ports.store.isThreadOpen(meshId);
+        if (wasOpen) {
+            this.ports.store.closeThread(meshId, this.clock.now());
+        }
         this.idleSince.delete(meshId);
         this.stallSent.delete(meshId);
         this.progressSent.delete(meshId);
         this.working.delete(meshId);
-        return true;
+        if (opts?.suppressPending) {
+            const batch = this.batches.get(meshId);
+            const batchAttemptIds = batch ? [...batch.attemptIds] : [];
+            this.dropBatch(meshId);
+            const queuedAttemptIds = this.queue
+                .filter((i): i is Item & { kind: 'relay' } => i.kind === 'relay' && i.meshId === meshId)
+                .flatMap((i) => i.attemptIds);
+            const allSuppressedIds = [...new Set([...batchAttemptIds, ...queuedAttemptIds])];
+            if (allSuppressedIds.length > 0) {
+                this.ports.store.markDelivered(allSuppressedIds, this.clock.now(), []);
+            }
+            this.queue = this.queue.filter((i) => i.meshId !== meshId);
+        }
+        return wasOpen;
     }
 
     /**
@@ -587,6 +602,31 @@ export class AssistantRelay {
         if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
         const slug = this.ports.projectSlug(meshId);
         if (slug !== null) this.pushLine('relay', buildUnreachableRelay(slug, hostLabel, reason), meshId);
+    }
+
+    /**
+     * A remote-hosted project's coordinator session was replaced or its commit
+     * cursor fell behind the host's poll window: record a gap metric and queue
+     * a content-free baseline notice for the assistant.
+     */
+    onRemoteGapOrBaseline(
+        meshId: string,
+        info: {
+            reason: 'coordinator_replaced' | 'cursor_gap';
+            previousSessionId?: string | null;
+            currentSessionId?: string | null;
+            previousCursor?: string | null;
+            currentCursor?: string | null;
+        },
+    ): void {
+        const now = this.clock.now();
+        this.ports.onRelayGap?.('restart_closed', now);
+        if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
+        const slug = this.ports.projectSlug(meshId) ?? meshId;
+        const detail = info.reason === 'coordinator_replaced'
+            ? `coordinator session replaced (${info.previousSessionId ?? 'none'} → ${info.currentSessionId ?? 'none'}); cursor baseline reset to ${info.currentCursor ?? 'latest'}`
+            : `commit cursor gap (${info.previousCursor ?? 'none'} → ${info.currentCursor ?? 'latest'}); earlier unpolled turns skipped`;
+        this.pushLine('relay', `[ADHDev relay baseline] ${slug} — ${detail}.`, meshId);
     }
 
     private workOf(meshId: string): MeshWorkCounts | null {

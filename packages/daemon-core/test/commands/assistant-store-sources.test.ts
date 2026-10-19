@@ -70,9 +70,18 @@ describe('assistant verbs — sources', () => {
     });
 
     it('no owner verb accepts ipc', () => {
-        for (const verb of [...ASSISTANT_OWNER_VERBS, ASSISTANT_MEMORY_LIMITS_COMMAND]) {
+        for (const verb of [
+            ...ASSISTANT_OWNER_VERBS,
+            ASSISTANT_MEMORY_LIMITS_COMMAND,
+            'assistant_remote_project_catalog',
+            'assistant_remote_project_access',
+            'assistant_remote_follow',
+        ]) {
             expect(registry.get(verb)?.sources ?? ['<all>']).not.toContain('ipc');
             expect(registry.get(verb)?.sources).toBeDefined();
+        }
+        for (const verb of ['assistant_remote_project_catalog', 'assistant_remote_project_access', 'assistant_remote_follow']) {
+            expect(registry.get(verb)?.sources).toEqual(['p2p', 'ws', 'standalone']);
         }
     });
 

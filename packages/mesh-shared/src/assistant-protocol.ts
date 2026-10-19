@@ -128,8 +128,9 @@ export const ASSISTANT_REVIEW_TURN_VERBS: readonly AssistantVerb[] = [
     ASSISTANT_VERB.projectNote,
 ]
 
-/**
- * Env var the daemon sets on the assistant CLI's process (§4.5), read by the
+import { canonicalDaemonId } from './daemon-normalize'
+
+/** Env var the daemon sets on the assistant CLI's process (§4.5), read by the
  * assistant MCP server and forwarded on every verb as
  * `ASSISTANT_SESSION_ID_ARG`. Routing / ownership only — never an auth gate.
  */
@@ -137,3 +138,208 @@ export const ASSISTANT_SESSION_ID_ENV = 'ADHDEV_ASSISTANT_SESSION_ID'
 
 /** Request arg carrying the calling assistant session id. */
 export const ASSISTANT_SESSION_ID_ARG = 'assistantSessionId'
+
+// ─── Remote Assistant Project Follow & Host-Authoritative Grant (rc24) ──────
+
+/**
+ * Conceptual single-assistant slot in the verified account namespace.
+ * Fixed to `'personal'` — one logical assistant per account with one
+ * owner-selected active execution daemon binding per project ACL.
+ */
+export const ASSISTANT_ACCOUNT_SLOT = 'personal' as const
+export type AssistantAccountSlot = typeof ASSISTANT_ACCOUNT_SLOT
+
+/**
+ * Daemon commands for remote project discovery, host ACL grant/revoke, and
+ * assistant-side follow/unfollow. Registered outside `ASSISTANT_VERB` so the
+ * assistant MCP server tool/verb parity table remains untouched.
+ */
+export const ASSISTANT_REMOTE_PROJECT_COMMAND = 'assistant_remote_project' as const
+export const ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND = 'assistant_remote_project_catalog' as const
+export const ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND = 'assistant_remote_project_access' as const
+export const ASSISTANT_REMOTE_FOLLOW_COMMAND = 'assistant_remote_follow' as const
+
+/**
+ * Narrow operations a non-roster follower deputy is permitted to invoke on
+ * `assistant_remote_project` when the host's `assistantRemoteAccess` ACL is active.
+ * `note`, `terminal`, and `inventory` remain strictly roster-member-only.
+ */
+export const ASSISTANT_FOLLOWER_ALLOWED_OPS = ['status', 'read', 'poll', 'report', 'send'] as const
+export type AssistantFollowerAllowedOp = typeof ASSISTANT_FOLLOWER_ALLOWED_OPS[number]
+
+const ASSISTANT_FOLLOWER_ALLOWED_OP_SET: ReadonlySet<string> = new Set(ASSISTANT_FOLLOWER_ALLOWED_OPS)
+
+export function isAssistantFollowerAllowedOp(value: unknown): value is AssistantFollowerAllowedOp {
+    return typeof value === 'string' && ASSISTANT_FOLLOWER_ALLOWED_OP_SET.has(value)
+}
+
+/**
+ * Host-authoritative narrow project ACL persisted on the hosting daemon's
+ * `LocalMeshEntry` in `meshes.json`. Revocation increments `grantRevision`
+ * and retains a `'revoked'` tombstone so stale follower caches cannot replay.
+ */
+export interface AssistantRemoteAccessBinding {
+    hostDaemonId: string
+    meshId: string
+    accountSlot: AssistantAccountSlot
+    activeDaemonId: string
+    bindingRevision: number
+    grantRevision: number
+    status: 'active' | 'revoked'
+    allowedOps: readonly AssistantFollowerAllowedOp[]
+    grantedAt: number
+    revokedAt?: number
+}
+
+/**
+ * Durable owner-binding receipt persisted in the assistant daemon's
+ * `assistant.json`. Survives ordinary daemon restarts and session/provider
+ * replacements (`bindSession`), while missing/corrupt/mismatched receipts
+ * fail closed until owner reconciliation.
+ */
+export interface AssistantOwnerBindingReceipt {
+    accountSlot: AssistantAccountSlot
+    daemonId: string
+    bindingRevision: number
+    boundAt: number | string
+}
+
+export type FollowedRemoteProjectState = 'followed' | 'unfollowed' | 'revoked'
+
+export type RemoteAccessState =
+    | 'not_granted'
+    | 'granted_unfollowed'
+    | 'followed'
+    | 'revoked'
+    | 'host_unreachable'
+    | 'binding_mismatch'
+
+/**
+ * Assistant-local followed remote project reference persisted in `assistant.json`.
+ * Never injected into `meshes.json`, `mesh-host-records.json`, `mesh-node-state-push.json`,
+ * or `inlineMeshCache`.
+ */
+export interface FollowedRemoteProjectEntry {
+    /** Canonical key: `${canonicalDaemonId(hostDaemonId)}::${meshId}` */
+    key: string
+    hostDaemonId: string
+    hostLabel?: string
+    meshId: string
+    name: string
+    slug: string
+    sanitizedRepoIdentity: string | null
+    repoIdentity?: string
+    accountSlot: AssistantAccountSlot
+    bindingRevision: number
+    grantRevision: number
+    state: FollowedRemoteProjectState
+    followedAt: number | string
+    updatedAt: number | string
+    unfollowedAt?: number | string
+    revokedAt?: number | string
+    lastCursor?: string | null
+    coordinatorSessionId?: string | null
+    lastErrorCode?: string
+    lastObserved?: {
+        observedAt: number | string
+        coordinatorState?: string
+        coordinatorMissing?: boolean
+        coordinatorPresent?: boolean
+        lastHeadline?: string
+        summary?: string
+    }
+}
+
+/**
+ * Content-free canonical catalog metadata returned by `assistant_remote_project_catalog`
+ * for meshes actually hosted on the queried remote daemon.
+ */
+export interface RemoteProjectCatalogItem {
+    hostDaemonId: string
+    meshId: string
+    name: string
+    sanitizedRepoIdentity: string | null
+    coordinatorState?: 'none' | 'idle' | 'working' | 'waiting' | string
+    capabilities: {
+        status: true
+        read: true
+        poll: true
+        report: true
+        send: true
+        coordinatorPresent?: boolean
+    }
+    observedAt: number | string
+}
+
+/** Build the canonical `(hostDaemonId, meshId)` key used across assistant follow state. */
+export function followedRemoteProjectKey(hostDaemonId: string, meshId: string): string {
+    const canonHost = canonicalDaemonId(hostDaemonId) ?? hostDaemonId.trim()
+    return `${canonHost}::${meshId.trim()}`
+}
+
+/**
+ * Sanitize a repository identity or remote URL into a content-free `host/path`
+ * identifier suitable for remote discovery catalogs. Strips credentials, query
+ * strings, fragments, and `.git` suffixes, and rejects local filesystem paths.
+ */
+export function sanitizeRemoteRepoIdentity(raw: string | null | undefined): string | null {
+    if (typeof raw !== 'string') return null
+    const trimmed = raw.trim()
+    if (!trimmed) return null
+
+    // Reject local filesystem paths (Unix absolute/relative/home, Windows drive/UNC, file:// URLs).
+    if (
+        trimmed.startsWith('/')
+        || trimmed.startsWith('./')
+        || trimmed.startsWith('../')
+        || trimmed.startsWith('~/')
+        || trimmed.startsWith('\\')
+        || /^[a-zA-Z]:[\\/]/.test(trimmed)
+        || /^file:/i.test(trimmed)
+    ) {
+        return null
+    }
+
+    const withoutQuery = trimmed.replace(/[?#].*$/, '').replace(/\/+$/, '')
+    if (!withoutQuery) return null
+
+    let host = ''
+    let repoPath = ''
+
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(withoutQuery)) {
+        try {
+            const url = new URL(withoutQuery)
+            if (url.protocol === 'file:') return null
+            host = url.hostname.toLowerCase()
+            repoPath = decodeURIComponent(url.pathname)
+                .replace(/^\/+|\/+$/g, '')
+                .replace(/\.git$/i, '')
+        } catch {
+            return null
+        }
+    } else {
+        const scpMatch = withoutQuery.match(/^(?:[^@/:]+@)?(\[[^\]]+\]|[^/:]+):(.+)$/)
+        if (scpMatch) {
+            host = scpMatch[1].replace(/^\[|\]$/g, '').toLowerCase()
+            repoPath = scpMatch[2].replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
+        } else {
+            const slash = withoutQuery.indexOf('/')
+            if (slash > 0) {
+                const rawHost = withoutQuery.slice(0, slash)
+                const atIdx = rawHost.lastIndexOf('@')
+                host = (atIdx >= 0 ? rawHost.slice(atIdx + 1) : rawHost).toLowerCase()
+                repoPath = withoutQuery.slice(slash + 1).replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '')
+            }
+        }
+    }
+
+    if (!host || !repoPath) return null
+    if (!host.includes('.') && host !== 'localhost') return null
+    if (/[\s@:\\]/.test(host)) return null
+    const segments = repoPath.split('/').filter(Boolean)
+    if (segments.length === 0) return null
+    if (segments.some(seg => seg === '.' || seg === '..' || /[\s@:\\]/.test(seg))) return null
+
+    return `${host}/${segments.join('/')}`.slice(0, 200)
+}
+

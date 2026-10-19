@@ -9,6 +9,7 @@
 import { randomUUID } from 'crypto';
 import { getMachineNickname } from './config.js';
 import type {
+    AssistantRemoteAccessBinding,
     LocalMeshEntry,
     LocalMeshNodeEntry,
     RepoMeshPolicy,
@@ -19,12 +20,68 @@ import type {
     RepoMeshDaemonRole,
     MeshReportedMemberState,
 } from '../repo-mesh-types.js';
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import {
+    ASSISTANT_ACCOUNT_SLOT,
+    ASSISTANT_FOLLOWER_ALLOWED_OPS,
+    canonicalDaemonId,
+    daemonIdsEquivalent,
+    isAssistantFollowerAllowedOp,
+} from '@adhdev/mesh-shared';
 import { mergePolicyOverrides, normalizePolicyOverrides, MESH_POLICY_STORAGE_VERSION } from '../repo-mesh-types.js';
 import { createDefaultMeshHostMetadata } from '../mesh/mesh-host-ownership.js';
 import { withMeshConfigWriteLock, loadMeshConfig, normalizeCapabilityTags, saveMeshConfig, normalizeRepoIdentity } from './mesh-config-store.js';
 import { assertMeshNodeCapacity } from './mesh-node-limit.js';
 import { stripRemovedCoordinatorPromptFields } from './mesh-json-config.js';
+
+/**
+ * Strictly validate a persisted `assistantRemoteAccess` binding from `meshes.json`.
+ * Returns `null` when absent, malformed, or carrying an invalid revision/status/slot
+ * so callers fail closed on corrupt ACL state.
+ */
+export function normalizeAssistantRemoteAccessBinding(
+    raw: unknown,
+    expectedMeshId?: string,
+): AssistantRemoteAccessBinding | null {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const rec = raw as Record<string, unknown>;
+    const hostDaemonId = typeof rec.hostDaemonId === 'string' ? rec.hostDaemonId.trim() : '';
+    const meshId = typeof rec.meshId === 'string' ? rec.meshId.trim() : '';
+    const activeDaemonId = typeof rec.activeDaemonId === 'string' ? rec.activeDaemonId.trim() : '';
+    if (!hostDaemonId || !meshId || !activeDaemonId) return null;
+    if (expectedMeshId && meshId !== expectedMeshId) return null;
+    if (rec.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
+    const status = rec.status === 'active' || rec.status === 'revoked' ? rec.status : null;
+    if (!status) return null;
+    const bindingRevision = typeof rec.bindingRevision === 'number' && Number.isInteger(rec.bindingRevision) && rec.bindingRevision >= 1
+        ? rec.bindingRevision
+        : null;
+    const grantRevision = typeof rec.grantRevision === 'number' && Number.isInteger(rec.grantRevision) && rec.grantRevision >= 1
+        ? rec.grantRevision
+        : null;
+    if (bindingRevision === null || grantRevision === null) return null;
+    const grantedAt = typeof rec.grantedAt === 'number' && Number.isFinite(rec.grantedAt) && rec.grantedAt > 0
+        ? rec.grantedAt
+        : null;
+    if (grantedAt === null) return null;
+    const revokedAt = typeof rec.revokedAt === 'number' && Number.isFinite(rec.revokedAt) && rec.revokedAt > 0
+        ? rec.revokedAt
+        : undefined;
+    const rawOps = Array.isArray(rec.allowedOps) ? rec.allowedOps : ASSISTANT_FOLLOWER_ALLOWED_OPS;
+    const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
+    if (allowedOps.length === 0) return null;
+    return {
+        hostDaemonId: canonicalDaemonId(hostDaemonId) ?? hostDaemonId,
+        meshId,
+        accountSlot: ASSISTANT_ACCOUNT_SLOT,
+        activeDaemonId: canonicalDaemonId(activeDaemonId) ?? activeDaemonId,
+        bindingRevision,
+        grantRevision,
+        status,
+        allowedOps,
+        grantedAt,
+        ...(revokedAt !== undefined ? { revokedAt } : {}),
+    };
+}
 
 // ─── CRUD Operations ────────────────────────────
 

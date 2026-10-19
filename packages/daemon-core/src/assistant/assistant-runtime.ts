@@ -160,12 +160,13 @@ export function buildAssistantRelayPorts(
     return {
         subscribe: (handler) => components.bus.on(ASSISTANT_RELAY_BUS_KINDS, handler, { name: 'assistant.relay' }),
         coordinatorMeshOf: (sessionId) => str(instanceOf(components, sessionId)?.getState?.()?.settings?.meshCoordinatorFor) || null,
-        projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId) ?? null,
+        projectSlug: (meshId) => projectSlugs(svc.listMeshes()).get(meshId)
+            ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed')?.slug
+            ?? null,
         rehydrateAttemptReport: async (meshId, sessionId, attemptId) => {
             const ports = await projectPorts();
             const mesh = ports.listMeshes().find(m => m.id === meshId);
-            if (!mesh) return null;
-            if (ports.isHostedHere(mesh)) {
+            if (mesh && ports.isHostedHere(mesh)) {
                 const report = await localAttemptReport(ports, meshId, sessionId, attemptId);
                 if (typeof report.body !== 'string' || !report.body) return null;
                 return {
@@ -176,8 +177,11 @@ export function buildAssistantRelayPorts(
                     ...(report.parts ? { parts: report.parts } : {}),
                 };
             }
-            const target = ports.remoteHost(mesh);
-            if (!target.reachable) return null;
+            const followed = !mesh
+                ? (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).find((e) => e.meshId === meshId && e.state === 'followed')
+                : undefined;
+            const target = mesh ? ports.remoteHost(mesh) : (followed && ports.followedRemoteHost ? ports.followedRemoteHost(followed) : null);
+            if (!target || !target.reachable) return null;
             const out = await ports.callHost(target, 'report', { coordinatorSessionId: sessionId, attemptId });
             if (!out.ok) return null;
             const result = out.result.result as { body?: unknown; completeness?: unknown; source?: unknown; parts?: unknown; provenance?: {
@@ -220,13 +224,15 @@ export function buildAssistantRelayPorts(
         readCoordinatorReference: async (meshId, sessionId) => {
             const ports = await projectPorts();
             const mesh = ports.listMeshes().find(mesh => mesh.id === meshId);
-            if (!mesh) return null;
-            if (ports.isHostedHere(mesh)) {
+            if (mesh && ports.isHostedHere(mesh)) {
                 if (ports.coordinatorSessionAuthorized?.(meshId, sessionId) === false) return null;
                 return latestCoordinatorReference(ports.execute, sessionId);
             }
-            const host = ports.remoteHost(mesh);
-            if (!host.reachable) return null;
+            const followed = !mesh
+                ? (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).find((e) => e.meshId === meshId && e.state === 'followed')
+                : undefined;
+            const host = mesh ? ports.remoteHost(mesh) : (followed && ports.followedRemoteHost ? ports.followedRemoteHost(followed) : null);
+            if (!host || !host.reachable) return null;
             const out = await ports.callHost(host, 'read', { tail: 10 });
             if (!out.ok) return null;
             const result = out.result.result as { coordinatorSessionId?: unknown; messages?: unknown } | undefined;
@@ -373,15 +379,40 @@ export function wireAssistantRuntime(
         return projectPorts;
     };
     const remotePoller = new AssistantRemoteRelayPoller({
-        openThreads: () => store.openThreads().map((t) => ({ meshId: t.meshId, lastSendAt: t.lastSendAt })),
+        openThreads: () => store.openThreads().map((t) => ({
+            meshId: t.meshId,
+            lastSendAt: t.lastSendAt,
+            ...(t.lastCursor !== undefined ? { lastCursor: t.lastCursor } : {}),
+            ...(t.coordinatorSessionId !== undefined ? { coordinatorSessionId: t.coordinatorSessionId } : {}),
+        })),
         remoteTarget: (meshId) => {
             const ports = projectPorts;
-            const mesh = ports?.listMeshes().find((m) => m.id === meshId);
-            if (!ports || !mesh || ports.isHostedHere(mesh)) return null;
-            return ports.remoteHost(mesh);
+            if (!ports) return null;
+            const mesh = ports.listMeshes().find((m) => m.id === meshId);
+            if (mesh) {
+                if (ports.isHostedHere(mesh)) return null;
+                return ports.remoteHost(mesh);
+            }
+            const followed = (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects())
+                .find((e) => e.meshId === meshId && e.state === 'followed');
+            if (!followed || !ports.followedRemoteHost) return null;
+            return ports.followedRemoteHost(followed);
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
         relay,
+        onCursorUpdated: (meshId, cursor, coordinatorSessionId) => {
+            store.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
+            const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+            if (followed) {
+                registry.updateFollowedRemoteProject(followed.key, { lastCursor: cursor, coordinatorSessionId });
+            }
+        },
+        onAccessRevoked: (meshId) => {
+            const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+            if (followed) {
+                registry.updateFollowedRemoteProject(followed.key, { state: 'revoked', revokedAt: Date.now() });
+            }
+        },
     });
     let terminalDelivery: TerminalWatchDelivery | null = null;
     try {
@@ -492,6 +523,9 @@ export function wireAssistantRuntime(
             relay.openThread(meshId);
             metrics?.bump('assistant_sends', meshId, Date.now());
         },
+        closeThread: (meshId, closeOpts) => {
+            relay.closeThread(meshId, closeOpts);
+        },
         isThreadOpen: (meshId) => store.isThreadOpen(meshId),
         lastRelayAt: (meshId) => relay.lastRelayAtFor(meshId),
         assistantSessionId: () => liveSessionId() ?? mcpRecipient,
@@ -518,8 +552,14 @@ export function wireAssistantRuntime(
             if (callerSessionId) mcpRecipient = callerSessionId;
             activate('pull');
             const slugs = projectSlugs(getAssistantServices().listMeshes());
+            const followed = registry.listFollowedRemoteProjects();
             const events = await relay.pullPending(callerSessionId);
-            return events.map((e) => (e.meshId && slugs.get(e.meshId) ? { ...e, project: slugs.get(e.meshId) } : e));
+            return events.map((e) => {
+                const slug = e.meshId
+                    ? (slugs.get(e.meshId) ?? followed.find((f) => f.meshId === e.meshId)?.slug)
+                    : undefined;
+                return slug ? { ...e, project: slug } : e;
+            });
         },
         liveSessionId,
         reviewQuotaRemainingPct(now = Date.now()) {

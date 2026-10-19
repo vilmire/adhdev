@@ -229,7 +229,9 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
             opened_at INTEGER NOT NULL,
             last_send_at INTEGER NOT NULL,
             closed_at INTEGER,
-            stall_notified_at INTEGER
+            stall_notified_at INTEGER,
+            last_cursor TEXT,
+            coordinator_session_id TEXT
         );
 
         -- delivered_at = the row left the queue (settled). relayed_at = its OWN
@@ -303,6 +305,8 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
     // survives a restart).
     const threadCols = new Set((db.prepare('PRAGMA table_info(assistant_threads)').all() as Array<{ name: string }>).map((r) => r.name));
     if (!threadCols.has('stall_notified_at')) db.exec('ALTER TABLE assistant_threads ADD COLUMN stall_notified_at INTEGER');
+    if (!threadCols.has('last_cursor')) db.exec('ALTER TABLE assistant_threads ADD COLUMN last_cursor TEXT');
+    if (!threadCols.has('coordinator_session_id')) db.exec('ALTER TABLE assistant_threads ADD COLUMN coordinator_session_id TEXT');
     const relayCols = new Set((db.prepare('PRAGMA table_info(assistant_relays)').all() as Array<{ name: string }>).map((r) => r.name));
     if (!relayCols.has('relayed_at')) {
         db.exec('ALTER TABLE assistant_relays ADD COLUMN relayed_at INTEGER');

@@ -62,14 +62,22 @@ export interface ProjectRow {
     meshId: string;
     name: string;
     repo: string;
-    /** `here`: this daemon hosts the mesh. `remote`: another daemon does; it is driven by relay (owner decision 2026-10-08). */
-    hosting: 'here' | 'remote';
+    /** `here`: this daemon hosts the mesh. `remote`: another daemon does; it is driven by relay (owner decision 2026-10-08). `remote_followed`: checkout-less followed remote project. */
+    hosting: 'here' | 'remote' | 'remote_followed';
     /** `this machine`, or the remote host's label. */
     host: string;
     /** Remote only: same as `host`. */
     hostLabel?: string;
     /** Remote only, when it differs from `meshId`: the id the host keys this mesh by (standalone address + code pairing). */
     hostMeshId?: string;
+    /** Canonical host daemon id for followed remote projects. */
+    hostDaemonId?: string;
+    /** Canonical `${hostDaemonId}::${meshId}` key for followed remote projects. */
+    canonicalKey?: string;
+    /** Monotonic host grant revision for followed remote projects. */
+    grantRevision?: number;
+    /** Local owner binding revision for followed remote projects. */
+    bindingRevision?: number;
     /** `local` (hosted here), `relay` (remote, reachable now) or `unreachable` (with `unreachableReason`). */
     reachability: 'local' | 'relay' | 'unreachable';
     unreachableReason?: ProjectUnreachableReason;

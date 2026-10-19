@@ -17,7 +17,14 @@
  * The host's half is commands/high-family/assistant-remote.ts.
  */
 
-import { canonicalDaemonId, daemonIdsEquivalent, withStatusProbeMarker } from '@adhdev/mesh-shared';
+import {
+    canonicalDaemonId,
+    daemonIdsEquivalent,
+    isAssistantFollowerAllowedOp,
+    withStatusProbeMarker,
+    type AssistantAccountSlot,
+    type FollowedRemoteProjectEntry,
+} from '@adhdev/mesh-shared';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { classifyP2pRelayFailure } from '../mesh/p2p-relay-failure.js';
 import { findMeshRelayAnswer } from '../commands/mesh-relay-result.js';
@@ -43,6 +50,17 @@ export interface MeshTransportPort {
     peerStatus?: (daemonId: string) => Record<string, unknown> | null;
 }
 
+export interface RemoteFollowerAccessClaim {
+    accountSlot: AssistantAccountSlot;
+    bindingRevision: number;
+    grantRevision: number;
+    followedKey?: string;
+    localBindingError?: {
+        code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'assistant_owner_binding_missing' | 'assistant_owner_binding_mismatch';
+        error: string;
+    };
+}
+
 export interface RemoteHostView {
     /** Host node's machine nickname, else a short daemon id. */
     label: string;
@@ -51,6 +69,8 @@ export interface RemoteHostView {
     hostMeshId: string;
     reachable: boolean;
     reason?: ProjectUnreachableReason;
+    /** Present ONLY when driving a checkout-less followed remote project under narrow follower authority. */
+    followerAccess?: RemoteFollowerAccessClaim;
 }
 
 function str(v: unknown): string {
@@ -110,6 +130,52 @@ export function describeRemoteHost(
     return { ...base, reachable: true };
 }
 
+/**
+ * Build a `RemoteHostView` for a checkout-less followed remote project entry,
+ * carrying the narrow follower ACL claim (`accountSlot`, `bindingRevision`,
+ * `grantRevision`) and optional local owner-binding verification failure.
+ */
+export function describeFollowedRemoteHost(
+    entry: FollowedRemoteProjectEntry,
+    selfDaemonId: string,
+    ownerBindingVerification:
+        | { ok: true; receipt?: { bindingRevision: number }; binding?: { bindingRevision: number } }
+        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'assistant_owner_binding_missing' | 'assistant_owner_binding_mismatch'; error: string },
+    transport: MeshTransportPort,
+): RemoteHostView {
+    const rawHost = str(entry.hostDaemonId);
+    const hostDaemonId = rawHost && !(selfDaemonId && daemonIdsEquivalent(rawHost, selfDaemonId)) ? rawHost : null;
+    const label = str(entry.hostLabel) || (hostDaemonId ? shortId(canonicalDaemonId(hostDaemonId) ?? hostDaemonId) : 'unknown host');
+    const hostMeshId = str(entry.meshId);
+    const verifiedRevision = ownerBindingVerification.ok
+        ? (ownerBindingVerification.receipt?.bindingRevision ?? ownerBindingVerification.binding?.bindingRevision)
+        : undefined;
+    const localBindingError = !ownerBindingVerification.ok
+        ? { code: ownerBindingVerification.code, error: ownerBindingVerification.error }
+        : (verifiedRevision !== undefined && verifiedRevision !== entry.bindingRevision
+            ? {
+                code: 'local_owner_binding_mismatch' as const,
+                error: `Followed project bindingRevision (${entry.bindingRevision}) does not match local ownerBinding (${verifiedRevision}).`,
+            }
+            : undefined);
+    const followerAccess: RemoteFollowerAccessClaim = {
+        accountSlot: entry.accountSlot,
+        bindingRevision: entry.bindingRevision,
+        grantRevision: entry.grantRevision,
+        followedKey: entry.key,
+        ...(localBindingError ? { localBindingError } : {}),
+    };
+    const base = { label, hostDaemonId, hostMeshId, followerAccess };
+    if (!hostDaemonId) return { ...base, reachable: false, reason: 'host_unknown' };
+    if (typeof transport.dispatch !== 'function') return { ...base, reachable: false, reason: 'no_mesh_transport' };
+    let snapshot: Record<string, unknown> | null = null;
+    try { snapshot = transport.peerStatus?.(hostDaemonId) ?? null; } catch { snapshot = null; }
+    if (snapshot && snapshot.linkIsPresence === true && snapshot.state !== 'connected') {
+        return { ...base, reachable: false, reason: 'host_offline' };
+    }
+    return { ...base, reachable: true };
+}
+
 /** Per-op deadlines: a send may launch a coordinator on the host; a poll must stay cheap. */
 export const REMOTE_OP_TIMEOUT_MS: Record<AssistantRemoteOp, number> = {
     status: 20_000,
@@ -135,6 +201,8 @@ function unreachable(reason: ProjectUnreachableReason, error: string): RemoteCal
 
 class RemoteCallTimeout extends Error {}
 
+const FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
+
 /**
  * One `assistant_remote_project` call on the host. `poll` carries the status
  * probe marker (the short connect-wait budget — an offline host must not hold
@@ -142,14 +210,45 @@ class RemoteCallTimeout extends Error {}
  */
 export async function callRemoteHost(
     transport: MeshTransportPort,
-    target: Pick<RemoteHostView, 'hostDaemonId' | 'hostMeshId'>,
+    target: Pick<RemoteHostView, 'hostDaemonId' | 'hostMeshId' | 'followerAccess'>,
     op: AssistantRemoteOp,
     args: Record<string, unknown> = {},
     opts: { timeoutMs?: number } = {},
 ): Promise<RemoteCallOutcome> {
+    if (target.followerAccess?.localBindingError) {
+        const { code, error } = target.followerAccess.localBindingError;
+        return {
+            ok: false,
+            kind: 'refused',
+            code,
+            error,
+            result: { success: false, code, error },
+        };
+    }
+    if (target.followerAccess && !isAssistantFollowerAllowedOp(op)) {
+        const error = `Operation '${op}' is not permitted for a followed remote project.`;
+        return {
+            ok: false,
+            kind: 'refused',
+            code: 'remote_op_forbidden',
+            error,
+            result: { success: false, code: 'remote_op_forbidden', error },
+        };
+    }
     if (!target.hostDaemonId) return unreachable('host_unknown', 'the host daemon of this project is not known here');
     if (typeof transport.dispatch !== 'function') return unreachable('no_mesh_transport', 'this daemon has no mesh transport to the host');
-    const payload = { ...args, meshId: target.hostMeshId, op };
+    const followerClaim = target.followerAccess
+        ? {
+            followerAccess: {
+                accountSlot: target.followerAccess.accountSlot,
+                bindingRevision: target.followerAccess.bindingRevision,
+                grantRevision: target.followerAccess.grantRevision,
+            },
+            bindingRevision: target.followerAccess.bindingRevision,
+            grantRevision: target.followerAccess.grantRevision,
+        }
+        : {};
+    const payload = { ...followerClaim, ...args, meshId: target.hostMeshId, op };
     const timeoutMs = opts.timeoutMs ?? REMOTE_OP_TIMEOUT_MS[op];
     let timer: ReturnType<typeof setTimeout> | undefined;
     let raw: unknown;
@@ -176,6 +275,27 @@ export async function callRemoteHost(
     const transportCode = str(answer.code);
     if (/^p2p_/.test(transportCode) && transportCode !== 'mesh_logic_or_provider_failure') {
         return unreachable(transportCode === 'p2p_daemon_offline' ? 'host_offline' : transportCode === 'p2p_timeout' ? 'relay_timeout' : 'relay_failed', str(answer.error) || transportCode);
+    }
+    const detail = str(answer.detail);
+    const detailMatch = FOLLOWER_REFUSAL_DETAIL_RE.exec(detail);
+    if (detailMatch) {
+        const specificCode = detailMatch[1]!;
+        return {
+            ok: false,
+            kind: 'refused',
+            code: specificCode,
+            error: detail || str(answer.error) || specificCode,
+            result: answer,
+        };
+    }
+    if (target.followerAccess && transportCode === 'mesh_sender_not_on_roster') {
+        return {
+            ok: false,
+            kind: 'refused',
+            code: 'remote_access_denied',
+            error: detail || str(answer.error) || 'remote_access_denied',
+            result: answer,
+        };
     }
     // A host on a build without the verb answers `Unknown command: …`.
     const error = str(answer.error);

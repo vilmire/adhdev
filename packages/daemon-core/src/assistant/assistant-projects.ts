@@ -19,6 +19,10 @@ export interface AssistantProjectMesh {
     repoIdentity?: string;
     /** A standalone member's record of a mesh another daemon hosts keeps the HOST's id here. */
     meshHost?: { hostMeshId?: string } | null;
+    /** Optional canonical host daemon id for followed remote projects (`hostDaemonId::meshId`). */
+    hostDaemonId?: string;
+    /** Optional canonical key (`hostDaemonId::meshId`) for followed remote projects. */
+    canonicalKey?: string;
 }
 
 /** Last path segment of the repo identity, lowercased (`github.com/o/Repo` → `repo`). */
@@ -48,7 +52,9 @@ export function projectSlugs<T extends AssistantProjectMesh>(meshes: readonly T[
     for (const [base, group] of byBase) {
         for (const m of group) {
             const owner = group.length > 1 ? ownerSegment(m.repoIdentity) : '';
-            out.set(m.id, owner ? `${owner}-${base}` : base);
+            const slug = owner ? `${owner}-${base}` : base;
+            out.set(m.id, slug);
+            if (m.canonicalKey) out.set(m.canonicalKey, slug);
         }
     }
     return out;
@@ -57,7 +63,7 @@ export function projectSlugs<T extends AssistantProjectMesh>(meshes: readonly T[
 export type ResolveAssistantProjectResult<T extends AssistantProjectMesh> =
     | { ok: true; mesh: T; slug: string }
     | { ok: false; code: 'project_not_found'; projects: string[] }
-    | { ok: false; code: 'project_ambiguous'; candidates: Array<{ meshId: string; name?: string; slug: string }> };
+    | { ok: false; code: 'project_ambiguous'; candidates: Array<{ meshId: string; name?: string; slug: string; hostDaemonId?: string; canonicalKey?: string }> };
 
 export function resolveAssistantProject<T extends AssistantProjectMesh>(
     ref: unknown,
@@ -65,16 +71,17 @@ export function resolveAssistantProject<T extends AssistantProjectMesh>(
     aliases: Readonly<Record<string, string>> = {},
 ): ResolveAssistantProjectResult<T> {
     const slugs = projectSlugs(meshes);
-    const slugOf = (m: T) => slugs.get(m.id) ?? '';
+    const slugOf = (m: T) => (m.canonicalKey ? slugs.get(m.canonicalKey) : undefined) ?? slugs.get(m.id) ?? '';
     const r = typeof ref === 'string' ? ref.trim() : '';
     const lower = r.toLowerCase();
     const steps: Array<(m: T) => boolean> = [
+        (m) => !!r && typeof m.canonicalKey === 'string' && m.canonicalKey.trim() === r,
         (m) => m.id === r,
         // The id the host dashboard shows for a standalone-paired member mesh (it differs from
         // the member's local id); without this the host's mesh id answered project_not_found.
         (m) => !!r && typeof m.meshHost?.hostMeshId === 'string' && m.meshHost.hostMeshId.trim() === r,
         (m) => !!m.name && m.name.trim().toLowerCase() === lower,
-        (m) => Object.entries(aliases).some(([alias, meshId]) => alias.trim().toLowerCase() === lower && meshId === m.id),
+        (m) => Object.entries(aliases).some(([alias, meshId]) => alias.trim().toLowerCase() === lower && (meshId === m.id || (!!m.canonicalKey && meshId === m.canonicalKey))),
         (m) => slugOf(m) === lower,
         (m) => {
             const id = String(m.repoIdentity ?? '').toLowerCase().replace(/\.git$/i, '');
@@ -89,7 +96,13 @@ export function resolveAssistantProject<T extends AssistantProjectMesh>(
                 return {
                     ok: false,
                     code: 'project_ambiguous',
-                    candidates: hits.map((m) => ({ meshId: m.id, ...(m.name ? { name: m.name } : {}), slug: slugOf(m) })),
+                    candidates: hits.map((m) => ({
+                        meshId: m.id,
+                        ...(m.name ? { name: m.name } : {}),
+                        slug: slugOf(m),
+                        ...(m.hostDaemonId ? { hostDaemonId: m.hostDaemonId } : {}),
+                        ...(m.canonicalKey ? { canonicalKey: m.canonicalKey } : {}),
+                    })),
                 };
             }
         }

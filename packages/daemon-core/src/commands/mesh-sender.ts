@@ -50,7 +50,13 @@
  *      Every later sender must match (step 2).
  * No evidence at all ⇒ refuse (`roster_unknown`).
  */
-import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
+import {
+    ASSISTANT_REMOTE_PROJECT_COMMAND,
+    daemonIdsEquivalent,
+    isAssistantFollowerAllowedOp,
+    meshNodeIdMatches,
+} from '@adhdev/mesh-shared';
+import { normalizeAssistantRemoteAccessBinding } from '../config/mesh-config.js';
 import { readMeshNodeDaemonId } from '../mesh/mesh-node-identity.js';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import { LOG } from '../logging/logger.js';
@@ -64,10 +70,24 @@ import { LOG } from '../logging/logger.js';
  */
 export const MESH_SENDER_DAEMON_ID_ARG = '_meshSenderDaemonId';
 
+const VERIFIED_MESH_SENDER_SYMBOL = Symbol.for('adhdev.verifiedMeshSender');
+
+/** Attach the transport-stamped mesh sender as a non-enumerable symbol so it survives stripTransportMetadata. */
+export function markVerifiedMeshSender(args: Record<string, unknown>, sender: string): void {
+    if (!sender) return;
+    Object.defineProperty(args, VERIFIED_MESH_SENDER_SYMBOL, {
+        value: sender.trim(),
+        enumerable: false,
+        configurable: true,
+        writable: false,
+    });
+}
+
 /** The transport-stamped sender daemon id of a mesh command, or '' when absent. */
 export function readMeshSender(args: unknown): string {
     if (!args || typeof args !== 'object' || Array.isArray(args)) return '';
-    const value = (args as Record<string, unknown>)[MESH_SENDER_DAEMON_ID_ARG];
+    const rec = args as Record<string | symbol, unknown>;
+    const value = rec[MESH_SENDER_DAEMON_ID_ARG] ?? rec[VERIFIED_MESH_SENDER_SYMBOL];
     return typeof value === 'string' ? value.trim() : '';
 }
 
@@ -125,6 +145,8 @@ export interface MeshSenderGateDeps {
     selfDaemonId?: string;
     /** The local mesh view for `meshId` (inline cache, then local config) — never the payload's. */
     getLocalMesh(meshId: string): Promise<any | null | undefined>;
+    /** Disk-only `meshes.json` lookup for host-authoritative follower ACL evaluation. */
+    getDiskMesh?(meshId: string): Promise<any | null | undefined> | any | null | undefined;
     /** Every mesh this daemon knows locally (inline cache + local config). */
     listLocalMeshes(): Promise<any[]> | any[];
     /** A live session's settings; `null` when no such session is live here. */
@@ -193,6 +215,10 @@ interface RosterOptions {
      * on first use (step 7 of the module header).
      */
     tofuClaim?: boolean;
+    /** Never accept payload `inlineMesh` as roster evidence. */
+    disallowInlineRoster?: boolean;
+    /** Allow narrow host-authoritative follower ACL when sender is not on the worker roster. */
+    allowFollowerAcl?: boolean;
 }
 
 /**
@@ -270,15 +296,18 @@ async function rosterAnswer(
     }
     // (4) payload inlineMesh — only when this daemon knows nothing of the mesh,
     // and only when it is self-consistent (names this mesh, lists sender AND us).
-    const inline = record(args.inlineMesh);
-    if (inline && nodesOf(inline).length > 0) {
-        const inlineId = str(inline.id) || str(inline.meshId);
-        if (inlineId && inlineId !== meshId) return { known: false };
-        const self = str(deps.selfDaemonId);
-        // No host synthesis here (it can name the evaluating daemon): the inline
-        // roster must list both daemons as nodes or as its declared host.
-        if (self && senderOnMesh(inline, self)) {
-            return { known: true, onRoster: senderOnMesh(inline, sender), source: 'payload_inline_self_consistent', mesh: inline };
+    // Never accepted for commands that opt out (`disallowInlineRoster`).
+    if (!opts.disallowInlineRoster) {
+        const inline = record(args.inlineMesh);
+        if (inline && nodesOf(inline).length > 0) {
+            const inlineId = str(inline.id) || str(inline.meshId);
+            if (inlineId && inlineId !== meshId) return { known: false };
+            const self = str(deps.selfDaemonId);
+            // No host synthesis here (it can name the evaluating daemon): the inline
+            // roster must list both daemons as nodes or as its declared host.
+            if (self && senderOnMesh(inline, self)) {
+                return { known: true, onRoster: senderOnMesh(inline, sender), source: 'payload_inline_self_consistent', mesh: inline };
+            }
         }
     }
     // (5) trust on first use: nothing on this daemon names any host for the
@@ -322,12 +351,84 @@ function refuse(sender: string, refusal: MeshSenderRefusal, detail: string): Mes
     return { ok: false, sender, refusal, detail };
 }
 
+async function checkFollowerAccess(
+    deps: MeshSenderGateDeps,
+    meshId: string,
+    sender: string,
+    args: Record<string, unknown>,
+): Promise<MeshSenderVerdict | null> {
+    let diskMesh: unknown;
+    try {
+        diskMesh = deps.getDiskMesh ? await deps.getDiskMesh(meshId) : await deps.getLocalMesh(meshId);
+    } catch {
+        diskMesh = undefined;
+    }
+    const meshRec = record(diskMesh);
+    if (!meshRec) return null;
+    try {
+        const host = resolveMeshHostStatus(diskMesh, deps.selfDaemonId ? { localDaemonId: deps.selfDaemonId } : undefined);
+        if (!host.canOwnCoordinator || !host.canOwnQueue) return null;
+        if (deps.selfDaemonId && host.hostDaemonId && !sameDaemon(host.hostDaemonId, deps.selfDaemonId)) return null;
+    } catch {
+        return null;
+    }
+
+    const rawAcl = meshRec.assistantRemoteAccess;
+    const followerClaim = record(args.followerAccess);
+    const hasFollowerClaim = followerClaim !== undefined
+        || typeof args.bindingRevision === 'number'
+        || typeof args.grantRevision === 'number';
+    if (rawAcl === undefined && !hasFollowerClaim) return null;
+
+    const acl = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
+    if (!acl) {
+        return refuse(sender, 'mesh_sender_not_on_roster', `remote_access_denied: mesh ${meshId} has no valid assistantRemoteAccess binding`);
+    }
+    if (deps.selfDaemonId && !sameDaemon(acl.hostDaemonId, deps.selfDaemonId)) {
+        return refuse(sender, 'mesh_sender_not_on_roster', `remote_access_denied: mesh ${meshId} assistantRemoteAccess hostDaemonId mismatch`);
+    }
+    if (acl.status !== 'active') {
+        return refuse(sender, 'mesh_sender_not_on_roster', `host_revoked: assistantRemoteAccess for mesh ${meshId} is revoked (grantRevision=${acl.grantRevision})`);
+    }
+    if (!sameDaemon(acl.activeDaemonId, sender)) {
+        return refuse(sender, 'mesh_sender_not_on_roster', `remote_access_denied: sender is not the active follower deputy for mesh ${meshId}`);
+    }
+    const op = str(args.op);
+    if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
+        return refuse(sender, 'mesh_sender_not_on_roster', `remote_op_forbidden: operation '${op || 'unknown'}' is not permitted for follower access on mesh ${meshId}`);
+    }
+    const claimedBindingRev = typeof args.bindingRevision === 'number'
+        ? args.bindingRevision
+        : typeof followerClaim?.bindingRevision === 'number'
+            ? (followerClaim.bindingRevision as number)
+            : null;
+    const claimedGrantRev = typeof args.grantRevision === 'number'
+        ? args.grantRevision
+        : typeof followerClaim?.grantRevision === 'number'
+            ? (followerClaim.grantRevision as number)
+            : null;
+    if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
+        return refuse(
+            sender,
+            'mesh_sender_not_on_roster',
+            `remote_access_denied: follower revision mismatch on mesh ${meshId} (claimed binding=${claimedBindingRev ?? 'none'}/grant=${claimedGrantRev ?? 'none'}, expected binding=${acl.bindingRevision}/grant=${acl.grantRevision})`,
+        );
+    }
+    return { ok: true, sender, evidence: `follower_acl:${meshId}:g${acl.grantRevision}:b${acl.bindingRevision}` };
+}
+
 async function checkRoster(deps: MeshSenderGateDeps, meshId: string, sender: string, args: Record<string, unknown>, opts: RosterOptions = {}): Promise<MeshSenderVerdict> {
     if (!meshId) return refuse(sender, 'mesh_sender_not_on_roster', 'command names no mesh');
     const answer = await rosterAnswer(deps, meshId, sender, args, opts);
+    if (answer.known && answer.onRoster) {
+        return { ok: true, sender, evidence: `${answer.source}:${meshId}` };
+    }
+    if (opts.allowFollowerAcl) {
+        const followerVerdict = await checkFollowerAccess(deps, meshId, sender, args);
+        if (followerVerdict) return followerVerdict;
+    }
     if (!answer.known) return refuse(sender, 'mesh_sender_not_on_roster', `roster_unknown: this daemon holds no roster for mesh ${meshId}`);
-    if (!answer.onRoster) return refuse(sender, 'mesh_sender_not_on_roster', answer.detail || `sender is not on the roster of mesh ${meshId} (${answer.source})`);
-    return { ok: true, sender, evidence: `${answer.source}:${meshId}` };
+    return refuse(sender, 'mesh_sender_not_on_roster', answer.detail || `sender is not on the roster of mesh ${meshId} (${answer.source})`);
 }
 
 async function checkAnyMemberMesh(deps: MeshSenderGateDeps, sender: string, args: Record<string, unknown>): Promise<MeshSenderVerdict> {
@@ -488,6 +589,7 @@ export async function evaluateMeshSender(
     cls: MeshSenderClass | undefined,
     args: Record<string, unknown>,
     deps: MeshSenderGateDeps,
+    cmd?: string,
 ): Promise<MeshSenderVerdict> {
     const sender = readMeshSender(args);
     if (!sender) return refuse('', 'mesh_sender_unknown', 'no transport-stamped sender daemon id');
@@ -498,8 +600,13 @@ export async function evaluateMeshSender(
     switch (cls) {
         case 'authenticated_peer':
             return { ok: true, sender, evidence: 'authenticated_peer' };
-        case 'roster':
-            return checkRoster(deps, readCommandMeshId(args), sender, args);
+        case 'roster': {
+            const isRemoteProjectCmd = cmd === ASSISTANT_REMOTE_PROJECT_COMMAND;
+            return checkRoster(deps, readCommandMeshId(args), sender, args, {
+                disallowInlineRoster: isRemoteProjectCmd,
+                allowFollowerAcl: isRemoteProjectCmd,
+            });
+        }
         case 'any_member_mesh':
             return checkAnyMemberMesh(deps, sender, args);
         case 'node_owner':
