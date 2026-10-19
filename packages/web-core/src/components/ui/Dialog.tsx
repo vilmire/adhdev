@@ -34,11 +34,50 @@
  *     renderToStaticMarkup works without a DOM.
  */
 import i18next from 'i18next'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
 import { IconX } from '../Icons'
+
+const FOCUSABLE_SELECTOR = [
+    'a[href]',
+    'button:not(:disabled)',
+    'input:not(:disabled):not([type="hidden"])',
+    'select:not(:disabled)',
+    'textarea:not(:disabled)',
+    '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => !el.hasAttribute('disabled') && !el.hasAttribute('hidden') && el.getAttribute('aria-hidden') !== 'true' && !el.closest('[inert]'),
+    )
+}
+
+const openDialogOverlays: HTMLDivElement[] = []
+const inertManagedBodyChildren = new Set<HTMLElement>()
+
+function syncDialogBodyInertness() {
+    if (typeof document === 'undefined' || !document.body) return
+    const topOverlay = openDialogOverlays[openDialogOverlays.length - 1] ?? null
+    for (const child of Array.from(document.body.children)) {
+        if (!(child instanceof HTMLElement)) continue
+        if (child.tagName === 'SCRIPT' || child.tagName === 'STYLE') continue
+        const shouldBeInert = Boolean(topOverlay && child !== topOverlay && !child.contains(topOverlay))
+        if (shouldBeInert) {
+            if (!child.inert && !child.hasAttribute('inert')) {
+                child.inert = true
+                child.setAttribute('inert', '')
+                inertManagedBodyChildren.add(child)
+            }
+        } else if (inertManagedBodyChildren.has(child)) {
+            child.inert = false
+            child.removeAttribute('inert')
+            inertManagedBodyChildren.delete(child)
+        }
+    }
+}
 
 export type DialogSize = 'sm' | 'md' | 'lg'
 
@@ -119,10 +158,16 @@ export function DialogShell({
     surfaceClassName,
     children,
 }: DialogShellProps) {
+    const overlayRef = useRef<HTMLDivElement | null>(null)
+    const surfaceRef = useRef<HTMLDivElement | null>(null)
+
     useEffect(() => {
         if (!open || !closeOnEsc) return
         const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose()
+            if (event.key !== 'Escape') return
+            const topOverlay = openDialogOverlays[openDialogOverlays.length - 1]
+            if (topOverlay && overlayRef.current && topOverlay !== overlayRef.current) return
+            onClose()
         }
         // Bubble phase on purpose — capture-phase inner-layer handlers
         // (scheduling popover, mesh detail modal) must be able to consume
@@ -130,6 +175,88 @@ export function DialogShell({
         document.addEventListener('keydown', onKeyDown)
         return () => document.removeEventListener('keydown', onKeyDown)
     }, [open, closeOnEsc, onClose])
+
+    useEffect(() => {
+        if (!open || typeof document === 'undefined') return
+        const overlay = overlayRef.current
+        const surface = surfaceRef.current
+        if (!overlay || !surface) return
+
+        const previousActiveElement = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null
+
+        if (!openDialogOverlays.includes(overlay)) {
+            openDialogOverlays.push(overlay)
+        }
+        syncDialogBodyInertness()
+
+        if (!surface.hasAttribute('tabindex')) {
+            surface.tabIndex = -1
+        }
+        if (!surface.contains(document.activeElement)) {
+            const firstFocusable = getFocusableElements(surface)[0] ?? surface
+            firstFocusable.focus({ preventScroll: true })
+        }
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Tab') return
+            const topOverlay = openDialogOverlays[openDialogOverlays.length - 1]
+            if (topOverlay && topOverlay !== overlay) return
+
+            const focusables = getFocusableElements(surface)
+            if (focusables.length === 0) {
+                event.preventDefault()
+                surface.focus({ preventScroll: true })
+                return
+            }
+
+            const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
+            const index = active ? focusables.indexOf(active) : -1
+
+            if (event.shiftKey) {
+                if (index <= 0 || !surface.contains(active)) {
+                    event.preventDefault()
+                    focusables[focusables.length - 1].focus({ preventScroll: true })
+                }
+            } else if (index === -1 || index === focusables.length - 1 || !surface.contains(active)) {
+                event.preventDefault()
+                focusables[0].focus({ preventScroll: true })
+            }
+        }
+
+        const onFocusIn = (event: FocusEvent) => {
+            const topOverlay = openDialogOverlays[openDialogOverlays.length - 1]
+            if (topOverlay && topOverlay !== overlay) return
+            const target = event.target instanceof HTMLElement ? event.target : null
+            if (!target || surface.contains(target)) return
+            const focusables = getFocusableElements(surface)
+            const fallback = focusables[0] ?? surface
+            fallback.focus({ preventScroll: true })
+        }
+
+        document.addEventListener('keydown', onKeyDown)
+        document.addEventListener('focusin', onFocusIn)
+
+        return () => {
+            document.removeEventListener('keydown', onKeyDown)
+            document.removeEventListener('focusin', onFocusIn)
+            const idx = openDialogOverlays.indexOf(overlay)
+            if (idx !== -1) openDialogOverlays.splice(idx, 1)
+            syncDialogBodyInertness()
+
+            if (
+                previousActiveElement
+                && previousActiveElement.isConnected
+                && !previousActiveElement.closest('[inert]')
+            ) {
+                const currentActive = document.activeElement
+                if (!currentActive || currentActive === document.body || surface.contains(currentActive)) {
+                    previousActiveElement.focus({ preventScroll: true })
+                }
+            }
+        }
+    }, [open])
 
     const onBackdropClick = useCallback(
         (event: React.MouseEvent<HTMLDivElement>) => {
@@ -165,11 +292,13 @@ export function DialogShell({
 
     const tree = (
         <div
+            ref={overlayRef}
             className={overlayClasses}
             style={chrome ? { zIndex: 'var(--z-modal-backdrop)' } : undefined}
             onClick={onBackdropClick}
         >
             <div
+                ref={surfaceRef}
                 role="dialog"
                 aria-modal="true"
                 aria-label={ariaLabel}

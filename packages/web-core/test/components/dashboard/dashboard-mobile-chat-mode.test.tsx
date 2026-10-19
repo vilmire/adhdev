@@ -238,6 +238,10 @@ describe('DashboardMobileChatMode approvals flow', () => {
         expect(scrollContainer).not.toBeNull()
         scrollContainer.scrollTop = 180
 
+        // Focus trigger before opening sheet (simulating keyboard activation).
+        entry.focus()
+        expect(document.activeElement).toBe(entry)
+
         // Open approvals sheet in-place.
         act(() => { entry.click() })
 
@@ -248,12 +252,31 @@ describe('DashboardMobileChatMode approvals flow', () => {
         expect(sheet.textContent).toContain('Provider setup decision')
         expect(sheet.textContent).toContain('/tmp/worktree')
 
-        // Dismiss sheet and verify inbox screen, scroll position, and expanded hidden list stay intact without marking any chat read.
+        // Focus moves into the sheet and the covered inbox container is made inert.
+        expect(sheet.contains(document.activeElement)).toBe(true)
+        expect(entry.closest('[inert]')).not.toBeNull()
+
+        // Tabbing at the boundaries wraps within the sheet rather than escaping to the covered inbox.
         const closeBtn = document.body.querySelector('[data-testid="mobile-approvals-close"]') as HTMLButtonElement
         expect(closeBtn).not.toBeNull()
+        closeBtn.focus()
+        act(() => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
+        })
+        expect(sheet.contains(document.activeElement)).toBe(true)
+        expect(document.activeElement).not.toBe(closeBtn)
+
+        act(() => {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: false, bubbles: true, cancelable: true }))
+        })
+        expect(document.activeElement).toBe(closeBtn)
+
+        // Dismiss sheet and verify focus returns to entry while inbox screen, scroll position, and expanded hidden list stay intact without marking any chat read.
         act(() => { closeBtn.click() })
 
         expect(document.body.querySelector('[data-testid="mobile-approvals-sheet"]')).toBeNull()
+        expect(entry.closest('[inert]')).toBeNull()
+        expect(document.activeElement).toBe(entry)
         expect(currentPath).toBe('/dashboard')
         expect(scrollContainer.scrollTop).toBe(180)
         expect(container.textContent).toContain('Hidden Worker Chat')
@@ -343,6 +366,21 @@ describe('DashboardMobileChatMode approvals flow', () => {
         const sheet = document.body.querySelector('[data-testid="mobile-approvals-sheet"]') as HTMLElement
         const openSessionLink = sheet.querySelector('a[href*="/dashboard?activeTab="]') as HTMLAnchorElement
         expect(openSessionLink).not.toBeNull()
+        expect(openSessionLink.getAttribute('href')).toBe('/dashboard?activeTab=session%3Adaemon-b%3Ashared-sess')
+
+        // Modified click (Ctrl/Cmd-click) does not trigger in-app callback and leaves the machine-scoped href for browser navigation.
+        let preventedByComponent = true
+        const recordBubble = (event: MouseEvent) => {
+            preventedByComponent = event.defaultPrevented
+            event.preventDefault()
+        }
+        document.body.addEventListener('click', recordBubble, { once: true })
+        const ctrlClickEvent = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true })
+        act(() => {
+            openSessionLink.dispatchEvent(ctrlClickEvent)
+        })
+        expect(preventedByComponent).toBe(false)
+        expect(onRestoreHiddenConversation).not.toHaveBeenCalled()
 
         act(() => {
             openSessionLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }))
@@ -363,7 +401,7 @@ describe('DashboardMobileChatMode approvals flow', () => {
         )
     })
 
-    it('does not fall back to conversations[0] or mark it read when requestedActiveTabKey targets a missing session', () => {
+    it('does not fall back to conversations[0] or mark it read when requestedActiveTabKey targets a missing, unknown-owner, or replaced runtime session', () => {
         const visibleFirst = makeConversation({
             tabKey: 'daemon-a:first',
             routeId: 'daemon-a:first',
@@ -371,22 +409,41 @@ describe('DashboardMobileChatMode approvals flow', () => {
             sessionId: 'first',
             displayPrimary: 'First Visible Chat',
         })
+        const unknownOwner = makeConversation({
+            tabKey: 'unscoped-tab',
+            routeId: 'unscoped-route',
+            sessionId: 'shared-sess',
+            displayPrimary: 'Unknown Owner Chat',
+        })
+        const replacedSession = makeConversation({
+            tabKey: 'daemon-b:old-sess',
+            routeId: 'daemon-b:old-sess',
+            daemonId: 'daemon-b',
+            sessionId: 'replacement-sess',
+            displayPrimary: 'Replaced Runtime Chat',
+        })
         const sendDaemonCommand = vi.fn(async () => ({ ok: true }))
 
-        renderMobileMode({
-            conversations: [visibleFirst],
-            hiddenConversations: [],
-            ides: [],
-            sendDaemonCommand,
-            requestedActiveTabKey: 'session:non-existent-session',
-        })
+        for (const requestedActiveTabKey of [
+            'session:non-existent-session',
+            'session:daemon-b:shared-sess',
+            'session:daemon-b:old-sess',
+        ]) {
+            renderMobileMode({
+                conversations: [visibleFirst, unknownOwner, replacedSession],
+                hiddenConversations: [],
+                ides: [],
+                sendDaemonCommand,
+                requestedActiveTabKey,
+            })
 
-        // Should stay on the inbox screen rather than opening First Visible Chat in the chat room.
-        expect(container.querySelector('button[aria-label="Back"]')).toBeNull()
-        expect(sendDaemonCommand).not.toHaveBeenCalledWith(
-            expect.anything(),
-            'mark_session_seen',
-            expect.anything(),
-        )
+            // Should stay on the inbox screen rather than opening an unrelated or replaced chat in the chat room.
+            expect(container.querySelector('button[aria-label="Back"]')).toBeNull()
+            expect(sendDaemonCommand).not.toHaveBeenCalledWith(
+                expect.anything(),
+                'mark_session_seen',
+                expect.anything(),
+            )
+        }
     })
 })

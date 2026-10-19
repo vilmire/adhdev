@@ -73,6 +73,15 @@ export function formatApprovalWait(waitingSince: number | null | undefined, nowM
     return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`
 }
 
+/** Build the dashboard activeTab query target for an approval row, scoping by nodeId when known. */
+export function buildApprovalSessionActiveTabTarget(
+    item: Pick<PendingApprovalItem, 'nodeId' | 'sessionId'>,
+): string {
+    const nodeId = typeof item.nodeId === 'string' ? item.nodeId.trim() : ''
+    const sessionId = typeof item.sessionId === 'string' ? item.sessionId.trim() : ''
+    return nodeId ? `session:${nodeId}:${sessionId}` : `session:${sessionId}`
+}
+
 /** Fields that carry a session's live status text — union of the mesh session-status shape. */
 function sessionStatusText(session: RepoMeshSessionStatus): string {
     return `${session.state ?? ''} ${session.chatStatus ?? ''} ${session.lifecycle ?? ''}`.toLowerCase()
@@ -280,7 +289,7 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                     {item.approvalType === 'provider_setup' && <div className="text-3xs break-all">{t('mesh.approvals.displayedDirectory')}: {item.displayedDirectory || t('mesh.approvals.directoryUnknown')}</div>}
                                     <a
                                         className="text-3xs underline"
-                                        href={`/dashboard?activeTab=${encodeURIComponent(`session:${item.sessionId}`)}`}
+                                        href={`/dashboard?activeTab=${encodeURIComponent(buildApprovalSessionActiveTabTarget(item))}`}
                                         onClick={onOpenSession ? (event) => {
                                             if (
                                                 event.defaultPrevented

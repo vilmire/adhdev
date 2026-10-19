@@ -86,4 +86,81 @@ describe('useDashboardMobileChatEffects', () => {
             { targetKey: 'session:missing-session' },
         )).toBeNull()
     })
+
+    it('refuses explicit machine target when candidate owner is unknown', () => {
+        const unknownOwner = makeConv({
+            tabKey: 'unscoped-tab',
+            routeId: 'unscoped-route',
+            sessionId: 'shared-session',
+        })
+
+        expect(findMatchingMobileConversation(
+            [unknownOwner],
+            [],
+            { nodeId: 'daemon-b', sessionId: 'shared-session' },
+        )).toBeNull()
+
+        expect(findMatchingMobileConversation(
+            [unknownOwner],
+            [],
+            { targetKey: 'session:daemon-b:shared-session' },
+        )).toBeNull()
+
+        // Deliberate unscoped session lookup still resolves when no machine owner was requested.
+        expect(findMatchingMobileConversation(
+            [unknownOwner],
+            [],
+            { targetKey: 'session:shared-session' },
+        )).toEqual({
+            conversation: unknownOwner,
+            isHidden: false,
+        })
+    })
+
+    it('refuses obsolete route or tab suffix when current runtime sessionId differs', () => {
+        const replacedSession = makeConv({
+            tabKey: 'daemon-b:old-session',
+            routeId: 'daemon-b:old-session',
+            daemonId: 'daemon-b',
+            sessionId: 'replacement-session',
+            providerSessionId: 'prov-replacement',
+        })
+
+        expect(findMatchingMobileConversation(
+            [replacedSession],
+            [],
+            { nodeId: 'daemon-b', sessionId: 'old-session' },
+        )).toBeNull()
+
+        expect(findMatchingMobileConversation(
+            [replacedSession],
+            [],
+            { targetKey: 'session:daemon-b:old-session' },
+        )).toBeNull()
+
+        expect(findMatchingMobileConversation(
+            [replacedSession],
+            [],
+            { targetKey: 'session:old-session' },
+        )).toBeNull()
+
+        // Current runtime sessionId and deliberate provider lookup still resolve.
+        expect(findMatchingMobileConversation(
+            [replacedSession],
+            [],
+            { nodeId: 'daemon-b', sessionId: 'replacement-session' },
+        )).toEqual({
+            conversation: replacedSession,
+            isHidden: false,
+        })
+
+        expect(findMatchingMobileConversation(
+            [replacedSession],
+            [],
+            { targetKey: 'provider:prov-replacement' },
+        )).toEqual({
+            conversation: replacedSession,
+            isHidden: false,
+        })
+    })
 })

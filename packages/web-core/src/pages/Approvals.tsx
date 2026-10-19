@@ -7,6 +7,7 @@ import { useTransport } from '../context/TransportContext'
 import { deriveProviderApprovalInbox } from '../components/MeshGraph/providerApprovalInbox'
 import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import PendingApprovalsInbox, {
+    buildApprovalSessionActiveTabTarget,
     type PendingApprovalAction,
     type PendingApprovalExactButton,
     type PendingApprovalItem,
@@ -50,9 +51,7 @@ export default function Approvals() {
 
     const openSession = useCallback(
         (item: PendingApprovalItem) => {
-            const target = item.nodeId
-                ? `session:${item.nodeId}:${item.sessionId}`
-                : `session:${item.sessionId}`
+            const target = buildApprovalSessionActiveTabTarget(item)
             navigate(`/dashboard?activeTab=${encodeURIComponent(target)}`)
         },
         [navigate],

@@ -436,8 +436,24 @@ export default function DashboardMobileChatMode({
         ],
     )
 
+    const isApprovalsSheetOpen = approvalsOpen && pendingProviderApprovalCount > 0
+
     return (
-        <div className="dashboard-mobile-chat w-full min-w-0">
+        <div
+            className="dashboard-mobile-chat w-full min-w-0"
+            ref={(element) => {
+                if (!element) return
+                const htmlElement = element as HTMLElement & { inert?: boolean }
+                if (isApprovalsSheetOpen) {
+                    htmlElement.inert = true
+                    htmlElement.setAttribute('inert', '')
+                } else {
+                    htmlElement.inert = false
+                    htmlElement.removeAttribute('inert')
+                }
+            }}
+            aria-hidden={isApprovalsSheetOpen ? true : undefined}
+        >
             {screen === 'chat' && selectedConversation ? (
                 <DashboardMobileChatRoom
                     selectedConversation={selectedConversation}
@@ -522,7 +538,7 @@ export default function DashboardMobileChatMode({
                 />
             )}
             <DialogShell
-                open={approvalsOpen && pendingProviderApprovalCount > 0}
+                open={isApprovalsSheetOpen}
                 onClose={closeApprovals}
                 align="sheet"
                 size="lg"

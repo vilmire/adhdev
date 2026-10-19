@@ -24,17 +24,30 @@ export interface MobileConversationLookupMatch {
     isHidden: boolean
 }
 
+const RESERVED_CONVERSATION_KEY_PREFIXES = new Set([
+    'session',
+    'tab',
+    'route',
+    'provider',
+    'history',
+    'native',
+    'unknown',
+])
+
+function extractCandidateMachinePrefix(key: string | null | undefined): string | undefined {
+    if (typeof key !== 'string' || !key.includes(':')) return undefined
+    const prefix = key.split(':')[0]?.trim() || ''
+    if (!prefix || RESERVED_CONVERSATION_KEY_PREFIXES.has(prefix.toLowerCase())) return undefined
+    return prefix
+}
+
 function getConversationCandidateNodeIds(
     conversation: ActiveConversation,
     ides?: DaemonData[],
 ): string[] {
     const ide = ides?.find(entry => entry.id === conversation.routeId)
-    const routePrefix = conversation.routeId?.includes(':')
-        ? conversation.routeId.split(':')[0]
-        : undefined
-    const tabPrefix = conversation.tabKey?.includes(':')
-        ? conversation.tabKey.split(':')[0]
-        : undefined
+    const routePrefix = extractCandidateMachinePrefix(conversation.routeId)
+    const tabPrefix = extractCandidateMachinePrefix(conversation.tabKey)
     return Array.from(new Set(
         [
             conversation.daemonId,
@@ -55,9 +68,14 @@ function conversationMatchesSessionId(
 ): boolean {
     const normalized = sessionId.trim()
     if (!normalized) return false
+    const currentRuntimeSessionId = typeof conversation.sessionId === 'string'
+        ? conversation.sessionId.trim()
+        : ''
+    if (currentRuntimeSessionId) {
+        return currentRuntimeSessionId === normalized
+    }
     if (
-        conversation.sessionId === normalized
-        || conversation.providerSessionId === normalized
+        conversation.providerSessionId === normalized
         || conversation.nativeSessionId === normalized
         || conversation.historySessionId === normalized
         || conversation.tabKey === normalized
@@ -86,19 +104,12 @@ function matchByNodeAndSession(
             if (!conversationMatchesSessionId(entry.conversation, normalizedSessionId)) return false
             const candidateNodeIds = getConversationCandidateNodeIds(entry.conversation, ides)
             return candidateNodeIds.includes(normalizedNodeId)
-                || entry.conversation.tabKey === `${normalizedNodeId}:${normalizedSessionId}`
-                || entry.conversation.routeId === `${normalizedNodeId}:${normalizedSessionId}`
         })
-        if (exactMatch) return exactMatch
+        return exactMatch || null
     }
 
-    const fallbackMatch = entries.find(entry => {
-        if (!conversationMatchesSessionId(entry.conversation, normalizedSessionId)) return false
-        if (!normalizedNodeId) return true
-        const candidateNodeIds = getConversationCandidateNodeIds(entry.conversation, ides)
-        return candidateNodeIds.length === 0
-    })
-    return fallbackMatch || null
+    const unscopedMatch = entries.find(entry => conversationMatchesSessionId(entry.conversation, normalizedSessionId))
+    return unscopedMatch || null
 }
 
 export function findMatchingMobileConversation(
@@ -122,14 +133,6 @@ export function findMatchingMobileConversation(
     const rawKey = typeof target.targetKey === 'string' ? target.targetKey.trim() : ''
     if (!rawKey) return null
 
-    const exactKeyMatch = entries.find(({ conversation }) => (
-        conversation.tabKey === rawKey
-        || conversation.routeId === rawKey
-        || `tab:${conversation.tabKey}` === rawKey
-        || `route:${conversation.routeId}` === rawKey
-    ))
-    if (exactKeyMatch) return exactKeyMatch
-
     if (rawKey.startsWith('session:')) {
         const rest = rawKey.slice('session:'.length).trim()
         if (!rest) return null
@@ -137,8 +140,7 @@ export function findMatchingMobileConversation(
         if (colonIndex > 0) {
             const candidateNodeId = rest.slice(0, colonIndex).trim()
             const candidateSessionId = rest.slice(colonIndex + 1).trim()
-            const scopedMatch = matchByNodeAndSession(entries, candidateNodeId, candidateSessionId, ides)
-            if (scopedMatch) return scopedMatch
+            return matchByNodeAndSession(entries, candidateNodeId, candidateSessionId, ides)
         }
         return matchByNodeAndSession(entries, null, rest, ides)
     }
@@ -149,12 +151,38 @@ export function findMatchingMobileConversation(
         return entries.find(({ conversation }) => conversation.providerSessionId === providerId) || null
     }
 
+    if (rawKey.startsWith('tab:')) {
+        const tabKey = rawKey.slice('tab:'.length).trim()
+        if (!tabKey) return null
+        return entries.find(({ conversation }) => conversation.tabKey === tabKey) || null
+    }
+
+    if (rawKey.startsWith('route:')) {
+        const routeId = rawKey.slice('route:'.length).trim()
+        if (!routeId) return null
+        return entries.find(({ conversation }) => conversation.routeId === routeId) || null
+    }
+
+    const exactKeyMatch = entries.find(({ conversation }) => {
+        if (conversation.tabKey !== rawKey && conversation.routeId !== rawKey) return false
+        const currentRuntimeSessionId = typeof conversation.sessionId === 'string'
+            ? conversation.sessionId.trim()
+            : ''
+        if (currentRuntimeSessionId && rawKey.includes(':')) {
+            const keySuffix = rawKey.slice(rawKey.indexOf(':') + 1).trim()
+            if (keySuffix && keySuffix !== currentRuntimeSessionId) {
+                return false
+            }
+        }
+        return true
+    })
+    if (exactKeyMatch) return exactKeyMatch
+
     const colonIndex = rawKey.indexOf(':')
     if (colonIndex > 0) {
         const candidateNodeId = rawKey.slice(0, colonIndex).trim()
         const candidateSessionId = rawKey.slice(colonIndex + 1).trim()
-        const scopedMatch = matchByNodeAndSession(entries, candidateNodeId, candidateSessionId, ides)
-        if (scopedMatch) return scopedMatch
+        return matchByNodeAndSession(entries, candidateNodeId, candidateSessionId, ides)
     }
 
     return matchByNodeAndSession(entries, null, rawKey, ides)

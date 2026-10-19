@@ -173,13 +173,14 @@ describe('mobile approvals discoverability', () => {
 
         const openLink = container.querySelector('a[href*="/dashboard?activeTab="]') as HTMLAnchorElement
         expect(openLink).not.toBeNull()
+        expect(openLink.getAttribute('href')).toBe('/dashboard?activeTab=session%3Anode-b%3Asess-hidden')
         act(() => {
             openLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }))
         })
         expect(currentLocation).toBe('/dashboard?activeTab=session%3Anode-b%3Asess-hidden')
     })
 
-    it('keeps provider_setup rows non-actionable in PendingApprovalsInbox', () => {
+    it('keeps provider_setup rows non-actionable in PendingApprovalsInbox and scopes Open session href by nodeId', () => {
         const html = renderToStaticMarkup(createElement(PendingApprovalsInbox, {
             approvals: [{
                 nodeId: 'd', sessionId: 's', approvalType: 'provider_setup', actionable: false,
@@ -189,5 +190,6 @@ describe('mobile approvals discoverability', () => {
             hideWhenEmpty: false,
         }))
         expect(html).not.toContain('<button')
+        expect(html).toContain('/dashboard?activeTab=session%3Ad%3As')
     })
 })

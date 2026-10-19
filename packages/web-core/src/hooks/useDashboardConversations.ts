@@ -329,6 +329,12 @@ export function useDashboardConversations({
         return map
     }, [conversations])
     const conversationBySessionId = useMemo(() => {
+        const reservedPrefixes = new Set(['session', 'tab', 'route', 'provider', 'history', 'native', 'unknown'])
+        const extractPrefix = (value: string | undefined) => {
+            if (!value || !value.includes(':')) return ''
+            const prefix = value.split(':')[0]?.trim() || ''
+            return reservedPrefixes.has(prefix.toLowerCase()) ? '' : prefix
+        }
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
             const preferred = preferredConversationByIdeId.get(conversation.routeId)
@@ -343,12 +349,14 @@ export function useDashboardConversations({
             }
             const machineId = String(
                 conversation.daemonId
-                || (conversation.routeId?.includes(':') ? conversation.routeId.split(':')[0] : '')
+                || extractPrefix(conversation.routeId)
+                || extractPrefix(conversation.tabKey)
                 || '',
             ).trim()
-            if (machineId && conversation.sessionId) {
-                map.set(`${machineId}:${conversation.sessionId}`, sessionTarget)
-                map.set(`session:${machineId}:${conversation.sessionId}`, sessionTarget)
+            const currentSessionId = typeof conversation.sessionId === 'string' ? conversation.sessionId.trim() : ''
+            if (machineId && currentSessionId) {
+                map.set(`${machineId}:${currentSessionId}`, sessionTarget)
+                map.set(`session:${machineId}:${currentSessionId}`, sessionTarget)
             }
         }
         return map
@@ -359,31 +367,19 @@ export function useDashboardConversations({
 
     const resolveConversationBySessionId = useCallback((sessionId: string | null | undefined) => {
         if (!sessionId) return undefined
-        const direct = conversationBySessionId.get(sessionId)
-        if (direct) return direct
-        if (sessionId.startsWith('session:')) {
-            const rest = sessionId.slice('session:'.length)
+        const normalized = sessionId.trim()
+        if (!normalized) return undefined
+        if (normalized.startsWith('session:')) {
+            const rest = normalized.slice('session:'.length).trim()
             const colonIndex = rest.indexOf(':')
             if (colonIndex > 0) {
                 const candidateMachineId = rest.slice(0, colonIndex).trim()
                 const candidateSessionId = rest.slice(colonIndex + 1).trim()
-                if (candidateSessionId) {
-                    const fallback = conversationBySessionId.get(`session:${candidateSessionId}`)
-                        || conversationBySessionId.get(candidateSessionId)
-                    if (fallback) {
-                        const fallbackMachineId = String(
-                            fallback.daemonId
-                            || (fallback.routeId?.includes(':') ? fallback.routeId.split(':')[0] : '')
-                            || '',
-                        ).trim()
-                        if (!fallbackMachineId || fallbackMachineId === candidateMachineId) {
-                            return fallback
-                        }
-                    }
-                }
+                if (!candidateMachineId || !candidateSessionId) return undefined
+                return conversationBySessionId.get(`session:${candidateMachineId}:${candidateSessionId}`)
             }
         }
-        return undefined
+        return conversationBySessionId.get(normalized)
     }, [conversationBySessionId])
 
     const resolveConversationByTarget = useCallback((target: string | null | undefined) => {

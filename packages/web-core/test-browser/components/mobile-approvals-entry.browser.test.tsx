@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import '../../src/index.css'
 import { initI18n } from '../../src/i18n/config'
@@ -36,7 +36,7 @@ vi.mock('../../src/hooks/useInteractivePrompt', () => ({
     }),
 }))
 
-const EVIDENCE_DIR = '/tmp'
+const EVIDENCE_DIR = '/tmp/adhdev-rc24-mobile-followup-evidence'
 
 function rect(element: Element) {
     const { x, y, width, height } = element.getBoundingClientRect()
@@ -275,22 +275,59 @@ it('hides the mobile approvals entry when zero/invalid and handles inline sheet 
             await page.screenshot({ path: `${EVIDENCE_DIR}/after-positive-pending-entry-390x844.png` })
         })
 
+        // Focus entry before opening sheet (as keyboard or tap activation does) with inbox scrolled to 96.
+        entry.focus()
+        scrollContainer.scrollTop = 96
+        expect(document.activeElement).toBe(entry)
+        expect(scrollContainer.scrollTop).toBe(96)
+
         // Open sheet inline in DashboardMobileChatMode.
         await act(async () => { entry.click() })
         expect(currentRoute).toBe('/dashboard')
         const sheet = document.body.querySelector('[data-testid="mobile-approvals-sheet"]') as HTMLElement
         expect(sheet).not.toBeNull()
         expect(sheet.textContent).toContain('2 waiting · 1 actionable')
+
+        // Initial focus moves into the sheet and the covered inbox is made inert.
+        expect(sheet.contains(document.activeElement)).toBe(true)
+        expect(entry.closest('[inert]')).not.toBeNull()
+
+        // Real keyboard Tab / Shift+Tab navigation stays trapped inside the sheet and never scrolls the covered inbox.
+        for (let i = 0; i < 6; i += 1) {
+            await userEvent.tab()
+            expect(sheet.contains(document.activeElement)).toBe(true)
+            expect(scrollContainer.scrollTop).toBe(96)
+        }
+        await userEvent.tab({ shift: true })
+        expect(sheet.contains(document.activeElement)).toBe(true)
+        expect(scrollContainer.scrollTop).toBe(96)
+
+        // Machine-scoped href is present on the Open session link for modified/middle-click/new-tab navigation.
+        const initialOpenSessionLink = sheet.querySelector('a[href*="shared-sess"]') as HTMLAnchorElement
+        expect(initialOpenSessionLink).not.toBeNull()
+        expect(initialOpenSessionLink.getAttribute('href')).toBe('/dashboard?activeTab=session%3Adaemon-b%3Ashared-sess')
+
         await act(async () => {
             await page.screenshot({ path: `${EVIDENCE_DIR}/after-open-approvals-sheet-390x844.png` })
         })
 
-        // Dismiss sheet and verify inbox state, scroll, and expanded hidden list remain intact without marking read.
+        // Dismiss via Escape first: focus returns to entry and scrollTop stays 96.
+        await act(async () => {
+            await userEvent.keyboard('{Escape}')
+        })
+        expect(document.body.querySelector('[data-testid="mobile-approvals-sheet"]')).toBeNull()
+        expect(entry.closest('[inert]')).toBeNull()
+        expect(document.activeElement).toBe(entry)
+        expect(scrollContainer.scrollTop).toBe(96)
+
+        // Re-open and dismiss via Close button: verify inbox state, focus restoration, scroll, and expanded hidden list remain intact without marking read.
+        await act(async () => { entry.click() })
         const closeBtn = document.body.querySelector('[data-testid="mobile-approvals-close"]') as HTMLButtonElement
         expect(closeBtn).not.toBeNull()
         expect(rect(closeBtn).height).toBeGreaterThanOrEqual(44)
         await act(async () => { closeBtn.click() })
         expect(document.body.querySelector('[data-testid="mobile-approvals-sheet"]')).toBeNull()
+        expect(document.activeElement).toBe(entry)
         expect(currentRoute).toBe('/dashboard')
         expect(scrollContainer.scrollTop).toBe(96)
         expect(hiddenToggle.getAttribute('aria-expanded')).toBe('true')
@@ -304,6 +341,7 @@ it('hides the mobile approvals entry when zero/invalid and handles inline sheet 
         const reopenedSheet = document.body.querySelector('[data-testid="mobile-approvals-sheet"]') as HTMLElement
         const openSessionLink = reopenedSheet.querySelector('a[href*="shared-sess"]') as HTMLAnchorElement
         expect(openSessionLink).not.toBeNull()
+        expect(openSessionLink.getAttribute('href')).toBe('/dashboard?activeTab=session%3Adaemon-b%3Ashared-sess')
         await act(async () => {
             openSessionLink.click()
         })
