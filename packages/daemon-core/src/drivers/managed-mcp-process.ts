@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { access, mkdir } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { hiddenSpawn } from '../process/hidden-spawn.js';
 import { sanitizeSpawnEnv } from '../cli-adapters/spawn-env.js';
@@ -14,14 +14,19 @@ export function buildDriverEnv(runtime: DriverManifest['runtime'], source: NodeJ
     const allowed = new Set([...BASE_ENV, ...(runtime.env ?? [])].map(normalize));
     return sanitizeSpawnEnv(Object.fromEntries(Object.entries(source).filter(([key]) => allowed.has(normalize(key)))));
 }
-function resolvePackagePath(value: string, packageDir?: string): string {
+async function resolvePackagePath(value: string, packageDir?: string): Promise<string> {
     if (!packageDir || !value || value.startsWith('-') || isAbsolute(value)) return value;
     const isExplicitRelative = value.startsWith('./') || value.startsWith('.\\');
     const candidate = resolve(packageDir, value);
     const rel = relative(packageDir, candidate);
     if (rel.startsWith('..') || isAbsolute(rel)) return value;
-    if (isExplicitRelative || existsSync(candidate)) return candidate;
-    return value;
+    if (isExplicitRelative) return candidate;
+    try {
+        await access(candidate);
+        return candidate;
+    } catch {
+        return value;
+    }
 }
 
 /** Owns one child and never restarts a failed process. Constructing is passive;
@@ -55,9 +60,10 @@ export class ManagedMcpProcess implements DriverMcpClient {
             this.stopping = null;
             if (this.state !== 'starting') throw new DriverMcpError('connection_closed', 'Driver start was cancelled');
             if (this.runtime.platforms && !(this.runtime.platforms as readonly string[]).includes(process.platform)) throw new Error('Driver platform is unsupported');
-            mkdirSync(this.options.cwd, { recursive: true });
-            const command = resolvePackagePath(this.runtime.command, this.options.packageDir);
-            const args = (this.runtime.args ?? []).map(arg => resolvePackagePath(arg, this.options.packageDir));
+            await mkdir(this.options.cwd, { recursive: true });
+            const command = await resolvePackagePath(this.runtime.command, this.options.packageDir);
+            const args = await Promise.all((this.runtime.args ?? []).map(arg => resolvePackagePath(arg, this.options.packageDir)));
+            if (this.state !== 'starting') throw new DriverMcpError('connection_closed', 'Driver start was cancelled');
             const env = buildDriverEnv(this.runtime, this.options.env);
             if (this.options.packageDir) {
                 env.ADHDEV_DRIVER_PACKAGE_DIR = this.options.packageDir;

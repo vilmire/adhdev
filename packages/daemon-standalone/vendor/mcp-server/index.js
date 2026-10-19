@@ -94405,23 +94405,28 @@ ${asText(streams.stderr)}
       const allowed = new Set([...BASE_ENV, ...runtime.env ?? []].map(normalize8));
       return (0, import_session_host_core.sanitizeSpawnEnv)(Object.fromEntries(Object.entries(source2).filter(([key4]) => allowed.has(normalize8(key4)))));
     }
-    function resolvePackagePath(value, packageDir) {
+    async function resolvePackagePath(value, packageDir) {
       if (!packageDir || !value || value.startsWith("-") || (0, import_node_path12.isAbsolute)(value)) return value;
       const isExplicitRelative = value.startsWith("./") || value.startsWith(".\\");
       const candidate = (0, import_node_path12.resolve)(packageDir, value);
       const rel = (0, import_node_path12.relative)(packageDir, candidate);
       if (rel.startsWith("..") || (0, import_node_path12.isAbsolute)(rel)) return value;
-      if (isExplicitRelative || (0, import_node_fs13.existsSync)(candidate)) return candidate;
-      return value;
+      if (isExplicitRelative) return candidate;
+      try {
+        await (0, import_promises8.access)(candidate);
+        return candidate;
+      } catch {
+        return value;
+      }
     }
-    var import_node_fs13;
+    var import_promises8;
     var import_node_path12;
     var BASE_ENV;
     var ManagedMcpProcess;
     var init_managed_mcp_process = __esm2({
       "src/drivers/managed-mcp-process.ts"() {
         "use strict";
-        import_node_fs13 = require("fs");
+        import_promises8 = require("fs/promises");
         import_node_path12 = require("path");
         init_hidden_spawn();
         init_spawn_env();
@@ -94460,9 +94465,10 @@ ${asText(streams.stderr)}
               this.stopping = null;
               if (this.state !== "starting") throw new DriverMcpError("connection_closed", "Driver start was cancelled");
               if (this.runtime.platforms && !this.runtime.platforms.includes(process.platform)) throw new Error("Driver platform is unsupported");
-              (0, import_node_fs13.mkdirSync)(this.options.cwd, { recursive: true });
-              const command = resolvePackagePath(this.runtime.command, this.options.packageDir);
-              const args = (this.runtime.args ?? []).map((arg) => resolvePackagePath(arg, this.options.packageDir));
+              await (0, import_promises8.mkdir)(this.options.cwd, { recursive: true });
+              const command = await resolvePackagePath(this.runtime.command, this.options.packageDir);
+              const args = await Promise.all((this.runtime.args ?? []).map((arg) => resolvePackagePath(arg, this.options.packageDir)));
+              if (this.state !== "starting") throw new DriverMcpError("connection_closed", "Driver start was cancelled");
               const env2 = buildDriverEnv(this.runtime, this.options.env);
               if (this.options.packageDir) {
                 env2.ADHDEV_DRIVER_PACKAGE_DIR = this.options.packageDir;
@@ -94617,11 +94623,11 @@ ${asText(streams.stderr)}
     });
     async function readDriverInputSchema(cwd, schemaPath) {
       try {
-        const root = await (0, import_promises8.realpath)(cwd);
-        const file = await (0, import_promises8.realpath)((0, import_node_path13.resolve)(root, schemaPath));
+        const root = await (0, import_promises9.realpath)(cwd);
+        const file = await (0, import_promises9.realpath)((0, import_node_path13.resolve)(root, schemaPath));
         const rel = (0, import_node_path13.relative)(root, file);
         if (!rel || rel === ".." || rel.startsWith("../") || rel.startsWith("..\\") || (0, import_node_path13.isAbsolute)(rel)) return null;
-        const schema22 = JSON.parse(await (0, import_promises8.readFile)(file, "utf8"));
+        const schema22 = JSON.parse(await (0, import_promises9.readFile)(file, "utf8"));
         return schema22 && typeof schema22 === "object" && !Array.isArray(schema22) ? schema22 : null;
       } catch {
         return null;
@@ -94640,14 +94646,14 @@ ${asText(streams.stderr)}
         return false;
       }
     }
-    var import_promises8;
+    var import_promises9;
     var import_node_path13;
     var import_ajv;
     var import_ajv_formats2;
     var init_input_schema = __esm2({
       "src/drivers/input-schema.ts"() {
         "use strict";
-        import_promises8 = require("fs/promises");
+        import_promises9 = require("fs/promises");
         import_node_path13 = require("path");
         import_ajv = __toESM2(require_ajv());
         import_ajv_formats2 = __toESM2(require_dist2());
@@ -94940,7 +94946,7 @@ ${asText(streams.stderr)}
       }
     });
     var import_node_crypto23;
-    var import_node_fs14;
+    var import_node_fs13;
     var import_node_path15;
     var ID3;
     var DRIVER_ACTION_TTL_MS;
@@ -94949,7 +94955,7 @@ ${asText(streams.stderr)}
       "src/drivers/staged-action.ts"() {
         "use strict";
         import_node_crypto23 = require("crypto");
-        import_node_fs14 = require("fs");
+        import_node_fs13 = require("fs");
         import_node_path15 = require("path");
         init_config();
         init_store_guards();
@@ -94980,15 +94986,15 @@ ${asText(streams.stderr)}
           read(id4) {
             if (!ID3.test(id4)) return null;
             try {
-              const r = JSON.parse((0, import_node_fs14.readFileSync)((0, import_node_path15.join)(this.dir, `${id4}.json`), "utf8"));
+              const r = JSON.parse((0, import_node_fs13.readFileSync)((0, import_node_path15.join)(this.dir, `${id4}.json`), "utf8"));
               return r.kind === "driver_action_request" && r.id === id4 && typeof r.type === "string" && typeof r.action === "string" && r.args && typeof r.args === "object" && !Array.isArray(r.args) && /^sha256:[a-f0-9]{64}$/.test(r.activationDigest) && !!r.requester?.sessionId && !!r.requester.meshId && r.requester.taskId === r.requesterTaskId && Number.isFinite(r.expiresAt) && r.expiresAt === r.createdAt + DRIVER_ACTION_TTL_MS ? r : null;
             } catch {
               return null;
             }
           }
           list() {
-            if (!(0, import_node_fs14.existsSync)(this.dir)) return [];
-            return (0, import_node_fs14.readdirSync)(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+            if (!(0, import_node_fs13.existsSync)(this.dir)) return [];
+            return (0, import_node_fs13.readdirSync)(this.dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
               const r = this.read(f.slice(0, -5));
               if (!r || r.status !== "pending") return [];
               if (r.expiresAt <= this.now()) {
@@ -95025,10 +95031,10 @@ ${asText(streams.stderr)}
       }
     });
     function computeDriverTreeDigest(dir) {
-      if (!(0, import_node_fs15.lstatSync)(dir).isDirectory() || (0, import_node_fs15.lstatSync)(dir).isSymbolicLink()) throw new Error("Invalid driver directory");
+      if (!(0, import_node_fs14.lstatSync)(dir).isDirectory() || (0, import_node_fs14.lstatSync)(dir).isSymbolicLink()) throw new Error("Invalid driver directory");
       const files = [];
       const walk = (sub) => {
-        for (const entry of (0, import_node_fs15.readdirSync)((0, import_node_path16.join)(dir, sub), { withFileTypes: true })) {
+        for (const entry of (0, import_node_fs14.readdirSync)((0, import_node_path16.join)(dir, sub), { withFileTypes: true })) {
           const rel = sub ? `${sub}/${entry.name}` : entry.name;
           if (entry.isDirectory()) walk(rel);
           else if (entry.isFile()) files.push(rel);
@@ -95039,7 +95045,7 @@ ${asText(streams.stderr)}
       if (!files.length) throw new Error("Empty driver tree");
       const hash3 = (0, import_node_crypto24.createHash)("sha256");
       for (const rel of files.sort()) {
-        const bytes = (0, import_node_fs15.readFileSync)((0, import_node_path16.join)(dir, rel));
+        const bytes = (0, import_node_fs14.readFileSync)((0, import_node_path16.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path16.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
       }
       return `sha256:${hash3.digest("hex")}`;
@@ -95051,23 +95057,23 @@ ${asText(streams.stderr)}
       const digest4 = computeDriverTreeDigest(dir);
       let raw;
       try {
-        raw = (0, import_node_fs15.readFileSync)((0, import_node_path16.join)(dir, "provider.v1.json"), "utf8");
+        raw = (0, import_node_fs14.readFileSync)((0, import_node_path16.join)(dir, "provider.v1.json"), "utf8");
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
-        raw = (0, import_node_fs15.readFileSync)((0, import_node_path16.join)(dir, "provider.json"), "utf8");
+        raw = (0, import_node_fs14.readFileSync)((0, import_node_path16.join)(dir, "provider.json"), "utf8");
       }
       const module22 = JSON.parse(raw);
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta._sourceTrust }, treeDigest: digest4 };
     }
     var import_node_crypto24;
-    var import_node_fs15;
+    var import_node_fs14;
     var import_node_path16;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
         import_node_crypto24 = require("crypto");
-        import_node_fs15 = require("fs");
+        import_node_fs14 = require("fs");
         import_node_path16 = require("path");
         init_manifest();
       }
@@ -97994,28 +98000,28 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
     }
     async function managedCheckoutPath(meshId, identity2) {
-      const config = await (0, import_promises9.realpath)(getConfigDir2());
+      const config = await (0, import_promises10.realpath)(getConfigDir2());
       const root = (0, import_node_path17.join)(config, "remote-projects");
       try {
-        await (0, import_promises9.mkdir)(root);
+        await (0, import_promises10.mkdir)(root);
       } catch (e) {
         if (e.code !== "EEXIST") throw e;
       }
-      if ((await (0, import_promises9.lstat)(root)).isSymbolicLink() || await (0, import_promises9.realpath)(root) !== (0, import_node_path17.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
+      if ((await (0, import_promises10.lstat)(root)).isSymbolicLink() || await (0, import_promises10.realpath)(root) !== (0, import_node_path17.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
       const key4 = (0, import_node_crypto25.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
       return (0, import_node_path17.join)(root, key4);
     }
     async function verifyCheckout(workspace, identity2) {
-      const info = await (0, import_promises9.lstat)(workspace);
-      if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises9.realpath)(workspace) !== (0, import_node_path17.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
+      const info = await (0, import_promises10.lstat)(workspace);
+      if (info.isSymbolicLink() || !info.isDirectory() || await (0, import_promises10.realpath)(workspace) !== (0, import_node_path17.resolve)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Preserve the existing path and choose a separate managed checkout.");
       const root = await git2(workspace, ["rev-parse", "--show-toplevel"]);
-      if (await (0, import_promises9.realpath)(root) !== await (0, import_promises9.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
+      if (await (0, import_promises10.realpath)(root) !== await (0, import_promises10.realpath)(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "Existing path is not the repository root.");
       const remote = githubRemote(await git2(workspace, ["remote", "get-url", "origin"]));
       if (remote?.identity !== identity2) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "checkout", "Existing checkout origin differs from the verified project. Preserve it and resolve the conflict locally.");
     }
     async function present(path103) {
       try {
-        await (0, import_promises9.lstat)(path103);
+        await (0, import_promises10.lstat)(path103);
         return true;
       } catch (e) {
         if (e.code === "ENOENT") return false;
@@ -98032,11 +98038,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
     }
     async function readOwner2(lockPath) {
-      const info = await (0, import_promises9.lstat)(lockPath);
+      const info = await (0, import_promises10.lstat)(lockPath);
       if (!info.isFile() || info.isSymbolicLink()) throw recovery();
       let owner;
       try {
-        owner = JSON.parse(await (0, import_promises9.readFile)(lockPath, "utf-8"));
+        owner = JSON.parse(await (0, import_promises10.readFile)(lockPath, "utf-8"));
       } catch {
         throw recovery();
       }
@@ -98046,7 +98052,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     async function guardIsStale(guard2) {
       let info;
       try {
-        info = await (0, import_promises9.lstat)(guard2);
+        info = await (0, import_promises10.lstat)(guard2);
       } catch (e) {
         if (e?.code === "ENOENT") return false;
         throw e;
@@ -98064,7 +98070,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     async function lockMutation(lockPath, action2) {
       const guard2 = `${lockPath}.guard`;
       try {
-        await (0, import_promises9.mkdir)(guard2);
+        await (0, import_promises10.mkdir)(guard2);
       } catch (e) {
         if (e.code !== "EEXIST") throw e;
         if (await guardIsStale(guard2)) throw guardRecovery(guard2);
@@ -98073,9 +98079,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const ownerPath = (0, import_node_path17.join)(guard2, "owner");
       const self = { pid: process.pid, nonce: (0, import_node_crypto25.randomUUID)() };
       try {
-        await (0, import_promises9.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
+        await (0, import_promises10.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
-        await (0, import_promises9.rm)(ownerPath, { force: true }).then(() => (0, import_promises9.rmdir)(guard2)).catch(() => {
+        await (0, import_promises10.rm)(ownerPath, { force: true }).then(() => (0, import_promises10.rmdir)(guard2)).catch(() => {
         });
         throw e;
       }
@@ -98084,8 +98090,8 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       } finally {
         const current4 = await readOwner2(ownerPath);
         if (current4.nonce !== self.nonce || current4.pid !== self.pid) throw guardRecovery(guard2);
-        await (0, import_promises9.rm)(ownerPath);
-        await (0, import_promises9.rmdir)(guard2);
+        await (0, import_promises10.rm)(ownerPath);
+        await (0, import_promises10.rmdir)(guard2);
       }
     }
     async function acquireLock(lockPath) {
@@ -98095,10 +98101,10 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (pidAlive2(old.pid)) throw busy();
           const current4 = await readOwner2(lockPath);
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
-          await (0, import_promises9.rm)(lockPath);
+          await (0, import_promises10.rm)(lockPath);
         }
         const owner = { pid: process.pid, nonce: (0, import_node_crypto25.randomUUID)() };
-        await (0, import_promises9.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
+        await (0, import_promises10.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
     }
@@ -98106,33 +98112,33 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       await lockMutation(lockPath, async () => {
         const current4 = await readOwner2(lockPath);
         if (current4.nonce !== owner.nonce || current4.pid !== owner.pid) throw recovery();
-        await (0, import_promises9.rm)(lockPath);
+        await (0, import_promises10.rm)(lockPath);
       });
     }
     async function completedStaging(staging, meshId, identity2) {
       const marker2 = `${staging}.complete`;
-      const info = await (0, import_promises9.lstat)(marker2);
+      const info = await (0, import_promises10.lstat)(marker2);
       if (!info.isFile() || info.isSymbolicLink()) throw recovery();
-      const evidence = JSON.parse(await (0, import_promises9.readFile)(marker2, "utf-8"));
-      const dir = await (0, import_promises9.lstat)(staging);
+      const evidence = JSON.parse(await (0, import_promises10.readFile)(marker2, "utf-8"));
+      const dir = await (0, import_promises10.lstat)(staging);
       if (evidence.meshId !== meshId || evidence.identity !== identity2 || evidence.dev !== dir.dev || evidence.ino !== dir.ino || !/^[0-9a-f-]{36}$/.test(evidence.nonce)) throw recovery();
       await verifyCheckout(staging, identity2);
     }
     async function discardStaleMarker(marker2) {
       let info;
       try {
-        info = await (0, import_promises9.lstat)(marker2);
+        info = await (0, import_promises10.lstat)(marker2);
       } catch (e) {
         if (e?.code === "ENOENT") return;
         throw e;
       }
       if (!info.isFile() && !info.isSymbolicLink()) throw recovery();
-      await (0, import_promises9.rm)(marker2);
+      await (0, import_promises10.rm)(marker2);
     }
     async function renameWithRetry(from, to) {
       for (let i = 0; ; i++) {
         try {
-          await (0, import_promises9.rename)(from, to);
+          await (0, import_promises10.rename)(from, to);
           return;
         } catch (e) {
           if (i >= 5 || !["EPERM", "EBUSY", "EACCES"].includes(e?.code)) throw e;
@@ -98156,7 +98162,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           let claimed = false;
           if (!await present(staging)) await discardStaleMarker(`${staging}.complete`);
           try {
-            await (0, import_promises9.mkdir)(staging);
+            await (0, import_promises10.mkdir)(staging);
             claimed = true;
           } catch (e) {
             if (e?.code !== "EEXIST") throw e;
@@ -98170,22 +98176,22 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             }
             if (await present(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "A destination appeared during checkout; both paths were preserved.");
             await renameWithRetry(staging, workspace);
-            await (0, import_promises9.rm)(`${staging}.complete`);
+            await (0, import_promises10.rm)(`${staging}.complete`);
             reused = true;
           } else {
             try {
               await git2(getConfigDir2(), ["clone", "--progress", "--origin", "origin", "--", remote.url, staging]);
             } catch (e) {
-              if (!(e instanceof AttachFailure && e.preserveCheckout)) await (0, import_promises9.rm)(staging, { recursive: true, force: true }).catch(() => {
+              if (!(e instanceof AttachFailure && e.preserveCheckout)) await (0, import_promises10.rm)(staging, { recursive: true, force: true }).catch(() => {
               });
               throw e;
             }
             await verifyCheckout(staging, remote.identity);
-            const dir = await (0, import_promises9.lstat)(staging);
-            await (0, import_promises9.writeFile)(`${staging}.complete`, JSON.stringify({ meshId, identity: remote.identity, nonce: owner.nonce, dev: dir.dev, ino: dir.ino }), { flag: "wx" });
+            const dir = await (0, import_promises10.lstat)(staging);
+            await (0, import_promises10.writeFile)(`${staging}.complete`, JSON.stringify({ meshId, identity: remote.identity, nonce: owner.nonce, dev: dir.dev, ino: dir.ino }), { flag: "wx" });
             if (await present(workspace)) throw new AttachFailure("PATH_CONFLICT", "checkout", "A destination appeared during checkout; both paths were preserved.");
             await renameWithRetry(staging, workspace);
-            await (0, import_promises9.rm)(`${staging}.complete`);
+            await (0, import_promises10.rm)(`${staging}.complete`);
           }
         }
         await verifyCheckout(workspace, remote.identity);
@@ -98220,7 +98226,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var import_node_child_process13;
     var import_node_util7;
     var import_node_crypto25;
-    var import_promises9;
+    var import_promises10;
     var import_node_path17;
     var exec5;
     var REMOTE_GIT_TIMEOUT_MS;
@@ -98239,7 +98245,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         import_node_child_process13 = require("child_process");
         import_node_util7 = require("util");
         import_node_crypto25 = require("crypto");
-        import_promises9 = require("fs/promises");
+        import_promises10 = require("fs/promises");
         import_node_path17 = require("path");
         init_config();
         exec5 = (0, import_node_util7.promisify)(import_node_child_process13.execFile);
@@ -102452,7 +102458,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs16.existsSync)(cwd),
+          cwdExists: (0, import_node_fs15.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -102559,7 +102565,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process14;
-    var import_node_fs16;
+    var import_node_fs15;
     var import_node_util8;
     var execFileAsync5;
     var GIT2;
@@ -102568,7 +102574,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process14 = require("child_process");
-        import_node_fs16 = require("fs");
+        import_node_fs15 = require("fs");
         import_node_util8 = require("util");
         init_resolve_executable();
         init_logger();
@@ -102590,7 +102596,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     async function assessScope(cwd, path103, baseRef, branchRef) {
       try {
-        if (!(0, import_node_fs17.existsSync)(cwd)) return { path: path103, verdict: "unknown", error: `path does not exist: ${cwd}` };
+        if (!(0, import_node_fs16.existsSync)(cwd)) return { path: path103, verdict: "unknown", error: `path does not exist: ${cwd}` };
         const liveBaseHead = await git3(cwd, ["rev-parse", baseRef]);
         const branchHead = await git3(cwd, ["rev-parse", branchRef]);
         if (!liveBaseHead || !branchHead) {
@@ -102681,12 +102687,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return { verdict, scopes: scopes2, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
     var import_node_path18;
-    var import_node_fs17;
+    var import_node_fs16;
     var init_mesh_refine_base_divergence = __esm2({
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
         import_node_path18 = require("path");
-        import_node_fs17 = require("fs");
+        import_node_fs16 = require("fs");
         init_mesh_refine_batch();
         init_git_executor();
       }
@@ -103170,7 +103176,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function refineWorktreeVanishedOutcome(ctx, nextStage) {
       const workspace = ctx?.node?.workspace;
       if (typeof workspace !== "string" || !workspace) return null;
-      if ((0, import_node_fs18.existsSync)(workspace)) return null;
+      if ((0, import_node_fs17.existsSync)(workspace)) return null;
       recordMeshRefineStage(ctx.refineStages, nextStage, "failed", Date.now(), {
         workspace,
         workspaceMissing: true,
@@ -103190,12 +103196,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       };
     }
-    var import_node_fs18;
+    var import_node_fs17;
     var REFINE_INFLIGHT_FRESHNESS_MS;
     var init_mesh_refine_inflight = __esm2({
       "src/mesh/mesh-refine-inflight.ts"() {
         "use strict";
-        import_node_fs18 = require("fs");
+        import_node_fs17 = require("fs");
         init_mesh_refine_zombie_sweep();
         init_mesh_refine_landing();
         init_mesh_refine_gates();
@@ -104055,7 +104061,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
-      if (!(0, import_node_fs19.existsSync)(node.workspace)) {
+      if (!(0, import_node_fs18.existsSync)(node.workspace)) {
         recordMeshRefineStage(refineStages, "resolve_refs", "failed", Date.now(), {
           workspace: node.workspace,
           workspaceMissing: true
@@ -104415,13 +104421,13 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Array.isArray(refineStages)) return false;
       return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
     }
-    var import_node_fs19;
+    var import_node_fs18;
     var init_router_refine_sync_stages = __esm2({
       "src/commands/router-refine-sync-stages.ts"() {
         "use strict";
         init_mesh_refine_gates();
         init_dist();
-        import_node_fs19 = require("fs");
+        import_node_fs18 = require("fs");
         init_mesh_refine_landing();
         init_git_locale();
         init_git_status();
@@ -141267,7 +141273,7 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
+          const { mkdirSync: mkdirSync59, writeFileSync: writeFileSync50 } = await import("fs");
           const { dirname: dirname51, join: join131 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
@@ -141308,7 +141314,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync60(dirname51(absolutePath), { recursive: true });
+          mkdirSync59(dirname51(absolutePath), { recursive: true });
           writeFileSync50(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
@@ -141377,7 +141383,7 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync119, readFileSync: readFileSync107, mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
+          const { existsSync: existsSync118, readFileSync: readFileSync107, mkdirSync: mkdirSync59, writeFileSync: writeFileSync50 } = await import("fs");
           const { dirname: dirname51, join: join131 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -141386,7 +141392,7 @@ ${output}` : "";
           let existedAsYaml = false;
           for (const relative17 of MESH_JSON_CONFIG_LOCATIONS2) {
             const candidate = join131(workspace, relative17);
-            if (!existsSync119(candidate)) continue;
+            if (!existsSync118(candidate)) continue;
             try {
               const text4 = readFileSync107(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text4) : yaml3.load(text4);
@@ -141442,7 +141448,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync60(dirname51(absolutePath), { recursive: true });
+          mkdirSync59(dirname51(absolutePath), { recursive: true });
           writeFileSync50(absolutePath, serialized, "utf-8");
           return {
             success: true,
@@ -143054,7 +143060,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync119, readFileSync: readFileSync107, writeFileSync: writeFileSync50, mkdirSync: mkdirSync60 } = await import("fs");
+          const { existsSync: existsSync118, readFileSync: readFileSync107, writeFileSync: writeFileSync50, mkdirSync: mkdirSync59 } = await import("fs");
           const { dirname: dirname51 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -143083,13 +143089,13 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync60(dirname51(mcpConfigPath), { recursive: true });
+              mkdirSync59(dirname51(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
               return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
             }
-            const hadExistingMcpConfig = existsSync119(mcpConfigPath);
+            const hadExistingMcpConfig = existsSync118(mcpConfigPath);
             let existingMcpConfig = {};
             let existingMcpConfigText = "";
             if (hadExistingMcpConfig) {
@@ -143120,7 +143126,7 @@ ${ptyResult.output.slice(-2e3)}`);
               if (nextMcpConfigText !== existingMcpConfigText) {
                 if (hadExistingMcpConfig) {
                   const backupDir = (0, import_path38.join)(getConfigDir2(), "mcp-config-backups");
-                  mkdirSync60(backupDir, { recursive: true });
+                  mkdirSync59(backupDir, { recursive: true });
                   const backupName = `${mcpConfigPath.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+/, "")}.${Date.now()}`;
                   writeFileSync50((0, import_path38.join)(backupDir, backupName), existingMcpConfigText, "utf-8");
                 }
@@ -143919,7 +143925,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
           const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
           const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-          const { existsSync: existsSync119 } = await import("fs");
+          const { existsSync: existsSync118 } = await import("fs");
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
@@ -143938,7 +143944,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
           for (const item of derivation.items) {
             const workspace = item.workspace;
-            if (!workspace || !existsSync119(workspace)) continue;
+            if (!workspace || !existsSync118(workspace)) continue;
             const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
             try {
               const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -171901,10 +171907,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto15 = __toESM2(require("crypto"));
-    var import_node_fs20 = require("fs");
+    var import_node_fs19 = require("fs");
     var import_node_path19 = require("path");
     init_provider_cli_shared();
-    var import_node_fs21 = require("fs");
+    var import_node_fs20 = require("fs");
     var import_node_path20 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
