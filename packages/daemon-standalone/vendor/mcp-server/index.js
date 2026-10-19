@@ -77193,29 +77193,45 @@ ${continuationNotice}` } : task,
         targetPinGeneratingCreditMs = /* @__PURE__ */ new Map();
       }
     });
-    function sanitizeProcessCommandName(comm, args) {
-      const raw = comm && comm.trim() || args && args.trim() || "";
-      if (!raw) return "unknown";
-      let execToken = raw;
-      if (raw.startsWith('"')) {
-        const endQuote = raw.indexOf('"', 1);
-        execToken = endQuote > 1 ? raw.slice(1, endQuote) : raw.slice(1);
-      } else if (raw.startsWith("'")) {
-        const endQuote = raw.indexOf("'", 1);
-        execToken = endQuote > 1 ? raw.slice(1, endQuote) : raw.slice(1);
-      } else {
-        const winExeMatch = /^([a-zA-Z]:[\\/][^\r\n]*?\.(?:exe|cmd|bat|ps1|com))(?:\s|$)/i.exec(raw);
-        if (winExeMatch) {
-          execToken = winExeMatch[1];
-        } else {
-          execToken = raw.split(/\s+/)[0] ?? "";
-        }
+    function extractExecToken(raw) {
+      const trimmed2 = raw.trim();
+      if (!trimmed2) return "";
+      if (trimmed2.startsWith('"')) {
+        const endQuote = trimmed2.indexOf('"', 1);
+        return endQuote > 1 ? trimmed2.slice(1, endQuote) : trimmed2.slice(1);
       }
+      if (trimmed2.startsWith("'")) {
+        const endQuote = trimmed2.indexOf("'", 1);
+        return endQuote > 1 ? trimmed2.slice(1, endQuote) : trimmed2.slice(1);
+      }
+      const winExeMatch = /^([a-zA-Z]:[\\/][^\r\n]*?\.(?:exe|cmd|bat|ps1|com))(?:\s|$)/i.exec(trimmed2);
+      if (winExeMatch) {
+        return winExeMatch[1];
+      }
+      return trimmed2.split(/\s+/)[0] ?? "";
+    }
+    function cleanExecBasename(execToken) {
       const unquoted = execToken.replace(/^['"]+|['"]+$/g, "");
       const normalizedSlashes = unquoted.replace(/\\/g, "/");
       const base = import_node_path4.default.posix.basename(normalizedSlashes).replace(/^-+/, "");
       const cleaned = base.replace(/[^a-zA-Z0-9._+@/-]/g, "");
-      return cleaned || "unknown";
+      if (cleaned === "." || cleaned === "..") return "";
+      return cleaned;
+    }
+    function sanitizeProcessCommandName(comm, args) {
+      const commToken = extractExecToken(comm ?? "");
+      const argsToken = extractExecToken(args ?? "");
+      const commName = cleanExecBasename(commToken);
+      const argsName = cleanExecBasename(argsToken);
+      if (argsName && !argsToken.startsWith("-")) {
+        const normComm = commToken.replace(/^['"]+|['"]+$/g, "").replace(/\\/g, "/");
+        const normArgs = argsToken.replace(/^['"]+|['"]+$/g, "").replace(/\\/g, "/");
+        const commTruncatedOrPathPrefix = !commName || commName.startsWith(".") || normComm.endsWith("/") || normComm.length > 0 && normArgs.startsWith(normComm) && normArgs.length > normComm.length || commName.length > 0 && argsName.toLowerCase().startsWith(commName.toLowerCase()) && argsName.length > commName.length || normComm.includes("/") && normComm.length >= POSIX_COMM_TRUNCATION_LEN && commName !== argsName;
+        if (commTruncatedOrPathPrefix) {
+          return argsName;
+        }
+      }
+      return commName || argsName || "unknown";
     }
     function normalizeExecName(name) {
       return sanitizeProcessCommandName(name).toLowerCase().replace(EXEC_EXTENSIONS, "");
@@ -77307,13 +77323,16 @@ ${continuationNotice}` } : task,
         if (MCP_NAME.test(name) || MCP_SCOPED_PACKAGE.test(name)) return true;
         if (name.startsWith("@") && MCP_NAME.test(name.slice(name.indexOf("/") + 1))) return true;
       }
+      if ((id4.exec === "adhdev" || id4.script === "adhdev") && id4.argv.some((tok, idx) => idx > 0 && tok.toLowerCase() === "mcp" && normalizeExecName(id4.argv[idx - 1]) === "adhdev")) {
+        return true;
+      }
       return id4.script !== null && MCP_ENTRY_BASENAMES.has(id4.script) && id4.scriptDirs.some((dir) => MCP_ENTRY_DIRS.has(dir));
     }
     function isLanguageServerIdentity(id4) {
       return identityNames(id4).some((name) => LANGUAGE_SERVER_NAMES.has(name));
     }
     function isCliSidecarIdentity(id4) {
-      if (CLI_SIDECAR_NAMES.has(id4.exec)) return true;
+      if (CLI_SIDECAR_NAMES.has(id4.exec) || id4.script !== null && CLI_SIDECAR_NAMES.has(id4.script)) return true;
       if (id4.exec === "esbuild" && id4.argv.some((tok) => tok === "--ping" || tok.startsWith("--service"))) return true;
       return id4.argv.includes("--type=crashpad-handler");
     }
@@ -77644,6 +77663,7 @@ ${continuationNotice}` } : task,
     var MAX_TREE_NODES;
     var MAX_HARNESS_DEPTH;
     var BASELINE_START_TOLERANCE_MS;
+    var POSIX_COMM_TRUNCATION_LEN;
     var EXEC_EXTENSIONS;
     var identityCache;
     var MCP_NAME;
@@ -77670,6 +77690,7 @@ ${continuationNotice}` } : task,
           "antigravity-cli",
           "opencode",
           "cursor-agent",
+          "cursor-agent-sea",
           "qwen",
           "droid",
           "hermes",
@@ -77734,6 +77755,14 @@ ${continuationNotice}` } : task,
           "omnisharp"
         ]);
         CLI_SIDECAR_NAMES = /* @__PURE__ */ new Set([
+          "codex-code-mode-host",
+          "codex-voice-host",
+          "codex-linux-sandbox",
+          "cursor-agent-worker-sea",
+          "cursor-askpass",
+          "cursorsandbox",
+          "crepectl",
+          "claude-askpass",
           "watchman",
           "fseventsd",
           "caffeinate",
@@ -77754,6 +77783,7 @@ ${continuationNotice}` } : task,
         MAX_TREE_NODES = 256;
         MAX_HARNESS_DEPTH = 3;
         BASELINE_START_TOLERANCE_MS = 1500;
+        POSIX_COMM_TRUNCATION_LEN = 15;
         EXEC_EXTENSIONS = /\.(exe|cmd|bat|ps1|sh|js|mjs|cjs|ts|mts|py)$/i;
         identityCache = /* @__PURE__ */ new WeakMap();
         MCP_NAME = /^(?:adhdev-mcp|mcp-server(?:-[\w.-]+)?|[\w.-]+-mcp(?:-server)?|fastmcp|mcp-(?:proxy|remote|inspector)|mcp_server(?:_[\w]+)?|[\w]+_mcp)$/;
@@ -78349,7 +78379,7 @@ ${continuationNotice}` } : task,
               resolution: entry.resolution
             };
           }
-          if (entry.nudgedAt === void 0 && entry.timeoutNotifiedAt === void 0) {
+          if (entry.nudgedAt === void 0) {
             entry.nudgedAt = nowMs2;
             entry.resolution = entry.initialReason === "pending_background_work_text" ? "no_results" : "nudged_after_exit";
             const messageId = `bg-nudge:${entry.attemptId}:g${entry.generation}`;
@@ -177252,6 +177282,50 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
+    function createRuntimeBackgroundWorkMonitor(components) {
+      return createBackgroundWorkMonitor({
+        // `components.cliManager` is read at call time: the monitor is built here,
+        // before every component exists, and only nudges once a worker has ended a turn.
+        nudgeWorker: async (sessionId, text4, meta) => {
+          const target = components.sessionRegistry?.get(sessionId);
+          const resolvedSessionId = target?.adapterKey || target?.instanceKey || sessionId;
+          const inputPort = components.cliManager?.input;
+          if (inputPort) {
+            let out = await inputPort.submit({
+              messageId: meta.messageId,
+              sessionId: resolvedSessionId,
+              origin: "mesh",
+              policy: { mode: "queue" },
+              input: { parts: [{ type: "text", text: text4 }], textFallback: text4 },
+              createdAt: Date.now()
+            });
+            if (out.kind === "refused" && out.reason === "no_target" && resolvedSessionId !== sessionId) {
+              out = await inputPort.submit({
+                messageId: meta.messageId,
+                sessionId,
+                origin: "mesh",
+                policy: { mode: "queue" },
+                input: { parts: [{ type: "text", text: text4 }], textFallback: text4 },
+                createdAt: Date.now()
+              });
+            }
+            if (out.kind === "delivered" || out.kind === "queued" || out.kind === "duplicate") {
+              return true;
+            }
+          }
+          if (components.commandHandler) {
+            await components.commandHandler.handle("send_chat", {
+              sessionId: resolvedSessionId,
+              messageId: meta.messageId,
+              text: text4,
+              origin: "mesh"
+            });
+            return true;
+          }
+          return false;
+        }
+      });
+    }
     function wireTurnLedger(components, opts = {}) {
       const rt = components.seqscribe ?? null;
       const store2 = MeshRuntimeStore.getInstance();
@@ -177310,33 +177384,7 @@ ${notice.notice}${supersededHint}`;
         },
         probe: (e) => lateProbe.port(e)
       };
-      const backgroundWork = createBackgroundWorkMonitor({
-        // `components.cliManager` is read at call time: the monitor is built here,
-        // before every component exists, and only nudges once a worker has ended a turn.
-        nudgeWorker: async (sessionId, text4, meta) => {
-          const inputPort2 = components.cliManager?.input;
-          if (inputPort2) {
-            const out = await inputPort2.submit({
-              messageId: meta.messageId,
-              sessionId,
-              origin: "mesh",
-              policy: { mode: "queue" },
-              input: { parts: [{ type: "text", text: text4 }], textFallback: text4 },
-              createdAt: Date.now()
-            });
-            if (out.kind === "delivered" || out.kind === "queued" || out.kind === "duplicate") {
-              return true;
-            }
-          }
-          await components.commandHandler?.handle("send_message", {
-            sessionId,
-            targetSessionId: sessionId,
-            message: text4,
-            messageId: meta.messageId
-          });
-          return true;
-        }
-      });
+      const backgroundWork = createRuntimeBackgroundWorkMonitor(components);
       const ledger = createMeshRuntimeTurnLedger({
         selfDaemonId,
         ports,
@@ -178059,7 +178107,6 @@ ${notice.notice}${supersededHint}`;
     init_mesh_auto_fast_forward();
     init_mesh_housekeeping_tick();
     init_policy();
-    init_background_work_guard();
     init_probe();
     init_mesh_node_git_refresher();
     init_worker_session_health();
@@ -178189,7 +178236,7 @@ ${notice.notice}${supersededHint}`;
           sessionHealth: workerSessionHealthFor(components),
           // The SAME monitor the ledger's evidence gate consults (wireTurnLedger),
           // so a release decided here also stands the ledger gate down.
-          backgroundWork: components.meshTurn?.backgroundWork ?? createBackgroundWorkMonitor(),
+          backgroundWork: components.meshTurn?.backgroundWork ?? createRuntimeBackgroundWorkMonitor(components),
           probe: {
             reader,
             locate: (attempt) => resolveProbeLocation({
