@@ -38,6 +38,7 @@ export function resolveModalParkStatus(host: ModalParkHost): 'waiting_choice' | 
     } catch {
         return null;
     }
+    if (adapterStatus.status === 'waiting_choice') return 'waiting_choice';
     // A session whose auto-approve is held by manual attendance IS parked on a
     // modal awaiting the human — autoApproveEffectivelyActive folds that in, so
     // the mesh force-inject guard correctly treats it as modal-parked. STATUS-MISMATCH:

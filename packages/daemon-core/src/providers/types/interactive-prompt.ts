@@ -187,6 +187,9 @@ export function resolveInteractivePromptResponse(
   if (record.answers && typeof record.answers === 'object' && !Array.isArray(record.answers)) {
     return normalizeInteractivePromptResponse(record);
   }
+  if (record.action === 'dismiss' && record.answers === undefined) {
+    return { promptId, answers: {}, action: 'dismiss' };
+  }
   if (!Array.isArray(record.answers)) throw new Error('answers must be an array or a questionId-keyed object');
 
   const resolveOneLabel = (question: InteractiveQuestion, sel: unknown): string => {
@@ -244,7 +247,11 @@ export function resolveInteractivePromptResponse(
       ...(freeformText ? { freeformText } : {}),
     };
   });
-  return { promptId, answers };
+  return {
+    promptId,
+    answers,
+    ...(record.action === 'dismiss' ? { action: 'dismiss' as const } : {}),
+  };
 }
 
 /**
@@ -1029,3 +1036,16 @@ export function detectClaudeAskUserQuestionPromptFromJson(value: unknown, provid
   }
   return null;
 }
+
+export {
+  type ParsedAntigravityChoiceOption,
+  type ParsedAntigravityChoiceScreen,
+  normalizeAntigravityPromptText,
+  parseAntigravityChoiceScreen,
+  doesAntigravityScreenMatchNativeStep,
+  buildAntigravityInteractivePrompt,
+  buildAntigravityQuestionKeystrokes,
+  buildAntigravityCancelKeystrokes,
+  buildAntigravityInteractiveTuiAnswerSteps,
+} from './antigravity-interactive-prompt.js';
+

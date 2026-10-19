@@ -122,6 +122,10 @@ export const AGY_STEP_TYPE_MODEL = 15;
  * has always required `row.status === 'DONE'`. The .db path was the outlier.
  */
 export const AGY_STATUS_DONE = 3;
+/** `steps.status` value 9 (`CORTEX_STEP_STATUS_WAITING`) — step is parked awaiting user input (e.g. AskQuestion). */
+export const AGY_STATUS_WAITING = 9;
+/** `steps.step_type` value 140 (`CORTEX_STEP_TYPE_ASK_QUESTION`). */
+export const AGY_STEP_TYPE_ASK_QUESTION = 140;
 
 interface ProtoField {
   field: number;
@@ -626,7 +630,199 @@ export function extractUserRequestContent(content: string): string {
   if (match) return match[1].trim();
   return raw
     .replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, '')
-    .replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, '')
+    .replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>|\s*$/gi, '')
     .replace(/<\/?USER_REQUEST>/gi, '')
     .trim();
 }
+
+// ─── Pending AskQuestion step decoding (field 154 + tool-call arg fallback) ──
+
+export interface AgyAskQuestionOption {
+  id: string;
+  text: string;
+  label: string;
+}
+
+export interface AgyAskQuestionItem {
+  questionText: string;
+  options: AgyAskQuestionOption[];
+  multiSelect: boolean;
+  isMultiSelect: boolean;
+}
+
+export interface AgyPendingAskQuestion {
+  callId: string;
+  toolName: string;
+  questions: AgyAskQuestionItem[];
+  source: 'field_154' | 'tool_args';
+}
+
+export interface AntigravityPendingAskQuestion extends AgyPendingAskQuestion {
+  conversationId: string;
+  stepIdx: number;
+  stepType?: number;
+  status?: number;
+}
+
+function decodeAskQuestionCallHeader(payload: Buffer): { callId: string; name: string; argsJson: string } | null {
+  const header = firstLenField(payload, 5);
+  if (header) {
+    const callBuf = firstLenField(header, 4);
+    if (callBuf) {
+      const name = textField(callBuf, 2)?.trim() ?? '';
+      const callId = textField(callBuf, 1)?.trim() ?? '';
+      const argsJson = textField(callBuf, 3)?.trim() ?? '';
+      if (name || callId || argsJson) return { callId, name, argsJson };
+    }
+    const directName = textField(header, 3)?.trim() ?? '';
+    const directCallId = textField(header, 5)?.trim() ?? '';
+    const directArgs = textField(header, 4)?.trim() ?? '';
+    if (directName || directCallId || directArgs) {
+      return { callId: directCallId, name: directName, argsJson: directArgs };
+    }
+  }
+  const modelInner = firstLenField(payload, 20);
+  if (modelInner) {
+    for (const raw of allLenFields(modelInner, 7)) {
+      const name = textField(raw, 2)?.trim() ?? '';
+      if (name === 'ask_question') {
+        return {
+          callId: textField(raw, 1)?.trim() ?? '',
+          name,
+          argsJson: textField(raw, 3)?.trim() ?? '',
+        };
+      }
+    }
+    const directModelName = textField(modelInner, 2)?.trim() ?? '';
+    if (directModelName === 'ask_question') {
+      return {
+        callId: textField(modelInner, 1)?.trim() ?? '',
+        name: directModelName,
+        argsJson: textField(modelInner, 7)?.trim() ?? '',
+      };
+    }
+  }
+  return null;
+}
+
+function parseAskQuestionArgsFallback(argsJson: string): AgyAskQuestionItem[] | null {
+  if (!argsJson) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argsJson);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const rawQuestions = (parsed as Record<string, unknown>).questions;
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return null;
+
+  const questions: AgyAskQuestionItem[] = [];
+  for (const item of rawQuestions) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const rec = item as Record<string, unknown>;
+    const questionText = (
+      typeof rec.question === 'string'
+        ? rec.question
+        : typeof rec.question_text === 'string'
+          ? rec.question_text
+          : typeof rec.questionText === 'string'
+            ? rec.questionText
+            : ''
+    ).trim();
+    if (!questionText) return null;
+    const multiSelect = rec.is_multi_select === true || rec.multiSelect === true;
+    const rawOptions = Array.isArray(rec.options) ? rec.options : [];
+    const options: AgyAskQuestionOption[] = [];
+    for (let i = 0; i < rawOptions.length; i++) {
+      const opt = rawOptions[i];
+      if (typeof opt === 'string') {
+        const text = opt.trim();
+        if (text) options.push({ id: `opt_${i + 1}`, text, label: text });
+      } else if (opt && typeof opt === 'object' && !Array.isArray(opt)) {
+        const o = opt as Record<string, unknown>;
+        const text = (
+          typeof o.text === 'string'
+            ? o.text
+            : typeof o.label === 'string'
+              ? o.label
+              : ''
+        ).trim();
+        const id = (typeof o.id === 'string' && o.id.trim()) ? o.id.trim() : `opt_${i + 1}`;
+        if (text) options.push({ id, text, label: text });
+      }
+    }
+    if (options.length === 0) return null;
+    questions.push({ questionText, options, multiSelect, isMultiSelect: multiSelect });
+  }
+  return questions.length > 0 ? questions : null;
+}
+
+/**
+ * Decode a pending AskQuestion step payload from `CortexTrajectoryStep` field 154
+ * (`CortexStepAskQuestion`), falling back to `5.4` / `20.7` `ask_question` tool-call
+ * JSON arguments when field 154 is absent.
+ *
+ * Returns null if the step is not an AskQuestion step, has already recorded
+ * responses in field `154.3` or `AskQuestionEntry` fields `4/5/6`, or carries no valid questions.
+ */
+export function extractPendingAskQuestionFromStepPayload(payload: Buffer | null | undefined): AgyPendingAskQuestion | null {
+  if (!payload || !Buffer.isBuffer(payload) || payload.length === 0) return null;
+  const callHeader = decodeAskQuestionCallHeader(payload);
+  const callId = callHeader?.callId || 'ask_question';
+
+  const askStep = firstLenField(payload, 154);
+  if (askStep) {
+    // Field 3 on CortexStepAskQuestion (if present) indicates settled responses.
+    if (allLenFields(askStep, 3).length > 0) return null;
+    const questionBufs = allLenFields(askStep, 1);
+    const questions: AgyAskQuestionItem[] = [];
+    for (const qBuf of questionBufs) {
+      // AskQuestionEntry fields 4 (selected_option_ids), 5 (write_in_response),
+      // and 6 (skipped) are populated once the entry is answered.
+      if (allLenFields(qBuf, 4).length > 0) return null;
+      if ((textField(qBuf, 5) ?? '').trim().length > 0) return null;
+      const questionText = (textField(qBuf, 1) ?? '').trim();
+      if (!questionText) continue;
+      let multiSelect = false;
+      let skipped = false;
+      for (const f of decodeProtoFields(qBuf)) {
+        if (f.field === 3 && f.wireType === 0 && typeof f.varint === 'number') {
+          multiSelect = f.varint !== 0;
+        } else if (f.field === 6 && f.wireType === 0 && typeof f.varint === 'number' && f.varint !== 0) {
+          skipped = true;
+        }
+      }
+      if (skipped) return null;
+      const optionBufs = allLenFields(qBuf, 2);
+      const options: AgyAskQuestionOption[] = [];
+      for (let i = 0; i < optionBufs.length; i++) {
+        const optBuf = optionBufs[i];
+        const field1 = (textField(optBuf, 1) ?? '').trim();
+        const field2 = (textField(optBuf, 2) ?? '').trim();
+        // AskQuestionOption proto: field 1 = id, field 2 = text.
+        // If only field 1 is present, treat field 1 as text with default id.
+        const text = field2 || field1;
+        if (!text) continue;
+        const id = (field2 ? field1 : '') || `opt_${i + 1}`;
+        options.push({ id, text, label: text });
+      }
+      if (options.length > 0) {
+        questions.push({ questionText, options, multiSelect, isMultiSelect: multiSelect });
+      }
+    }
+    if (questions.length > 0) {
+      return { callId, toolName: callHeader?.name || 'ask_question', questions, source: 'field_154' };
+    }
+  }
+
+  if (callHeader && (!callHeader.name || callHeader.name === 'ask_question')) {
+    const fallbackQuestions = parseAskQuestionArgsFallback(callHeader.argsJson);
+    if (fallbackQuestions) {
+      return { callId, toolName: callHeader.name || 'ask_question', questions: fallbackQuestions, source: 'tool_args' };
+    }
+  }
+
+  return null;
+}
+

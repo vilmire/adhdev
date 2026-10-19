@@ -27,7 +27,7 @@
 'use strict';
 
 import type {
-    RegexCondition, ChangedCondition,
+    RegexCondition, ChangedCondition, SectionAbsentCondition,
     Control, NotificationRule, DelegateTrigger,
     NativeHistoryConfig, SectionDef, ExtractTitle, ExtractButtons,
 } from './types.js';
@@ -118,6 +118,7 @@ export interface FsmSignalCondition {
 export type FsmCondition =
     | RegexCondition
     | ChangedCondition
+    | SectionAbsentCondition
     | ElapsedCondition
     | StableCondition
     | FsmSignalCondition
@@ -135,14 +136,14 @@ export type FsmCondition =
  * again surfaces as type errors at every site instead of silently diverging —
  * the `waiting_external` addition found three copies of the literal union.
  */
-export type FsmStatus = 'idle' | 'generating' | 'approval' | 'waiting_external' | 'owner_attention';
+export type FsmStatus = 'idle' | 'generating' | 'approval' | 'waiting_external' | 'owner_attention' | 'waiting_choice';
 
 /** Runtime mirror of `FsmStatus`, used by the loader to validate a spec's
  *  declared `status`. Kept next to the type (and `satisfies`-checked against it)
  *  so a future value cannot be added to one without the other — the loader
  *  silently rejecting a status the engine understands would present as "my spec
  *  does not load" with no hint why. */
-export const FSM_STATUS_VALUES = ['idle', 'generating', 'approval', 'waiting_external', 'owner_attention'] as const;
+export const FSM_STATUS_VALUES = ['idle', 'generating', 'approval', 'waiting_external', 'owner_attention', 'waiting_choice'] as const;
 
 // Two-way lock between the list and the union. `Extract` proves every LISTED
 // value is a real FsmStatus; `Exclude` proves every FsmStatus member is LISTED.
@@ -180,13 +181,16 @@ export interface FsmState {
      *     silently changes the model/mode. Auto-approve must NOT fire — the user
      *     chooses.
      *   - 'confirm'  — a non-consent yes/no the user must decide. Left to the user.
+     *   - 'choice'   — a structured user question (AskUserQuestion / ask_question),
+     *     surfaced via activeInteractivePrompt and waiting_choice status rather than
+     *     permission consent. Auto-approve must NEVER fire.
      *
      * Defaults to 'approval' for a modal state that omits it (preserves the
      * pre-existing "auto-approve any modal" behaviour for un-migrated specs;
      * picker/confirm states declare their kind explicitly). Non-modal states
      * have no modal_kind.
      */
-    modal_kind?: 'approval' | 'picker' | 'confirm';
+    modal_kind?: 'approval' | 'picker' | 'confirm' | 'choice';
     /** Status this state maps to for the dashboard/cli-adapter status field.
      *  One of: idle | generating | approval | waiting_external. Defaults:
      *  modal→approval, initial→idle, id==='busy'→generating, else idle.
@@ -370,7 +374,7 @@ export type PreLaunchTrust = PreLaunchTrustSettingsArray | PreLaunchTrustScheme;
  * published claude spec declares it explicitly.
  */
 export interface InteractivePrompts {
-    scheme: 'claude_tui' | 'kimi_wire';
+    scheme: 'claude_tui' | 'kimi_wire' | 'antigravity_tui';
 }
 
 /**
@@ -649,7 +653,7 @@ export function statusForState(state: FsmState): FsmStatus {
  * This is the value the cli-adapter carries on `activeModal.kind` and the
  * auto-approve gate reads — see cli-provider-instance.maybeAutoApproveStatus.
  */
-export function modalKindForState(state: FsmState): 'approval' | 'picker' | 'confirm' | null {
+export function modalKindForState(state: FsmState): 'approval' | 'picker' | 'confirm' | 'choice' | null {
     if (state.modal_kind) return state.modal_kind;
     if (state.modal) return 'approval';
     return null;

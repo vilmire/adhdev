@@ -125,6 +125,9 @@ function isRegex(c: FsmCondition): c is import('./types.js').RegexCondition {
 function isChanged(c: FsmCondition): c is import('./types.js').ChangedCondition {
     return 'cursor_above' in c && 'changed' in c;
 }
+function isSectionAbsent(c: FsmCondition): c is import('./types.js').SectionAbsentCondition {
+    return 'section_absent' in c;
+}
 function isElapsed(c: FsmCondition): c is import('./fsm-types.js').ElapsedCondition {
     return 'elapsed_ms' in c;
 }
@@ -273,6 +276,10 @@ function evalCond(
             : cond.cursor_above && cond.cursor_above > 0 ? `cursor_above=${cond.cursor_above}` : 'screen';
         const ign = cond.ignore_lines ? ' (ignore_lines)' : '';
         return { kind: 'stable', result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
+    }
+    if (isSectionAbsent(cond)) {
+        const result = evaluateCondition(cond as Condition, sections, fullScreen, cursor, prevLines, legacyTrace, stateId);
+        return { kind: 'regex', result, detail: `section_absent=${cond.section_absent}` };
     }
     // regex / changed → shared evaluator (operates on v3 Condition shape)
     if (isRegex(cond) || isChanged(cond)) {
