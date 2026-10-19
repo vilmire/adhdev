@@ -75,8 +75,21 @@ it('real HTTP scope → host → router → send_chat never grants owner authori
     expect(await call('send_chat', { Authorization: 'Bearer owner-token' }, { targetSessionId: 'assistant', message })).toMatchObject({ success: true, ownerActionExpiresAt: expect.any(Number) });
     expect(submitted[1]).toContain('[ADHDev owner action]');
     expect(await call('assistant_execution_settings', { Authorization: 'Bearer owner-token', ...internal }, { enabled: false })).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+    expect(await call('assistant_memory_limits', { Authorization: 'Bearer owner-token' }, { action: 'set', memory: 100, user: 10000 })).toMatchObject({
+        success: false,
+        code: 'out_of_range',
+        min: { memory: 2200, user: 1375 },
+        max: { memory: 8800, user: 5500 },
+    });
+    expect(await call('assistant_memory_limits', { Authorization: 'Bearer owner-token' }, { action: 'set', memory: 4400, user: 2750 })).toMatchObject({
+        success: true,
+        result: 'applied',
+        limits: { memory: 4400, user: 2750 },
+    });
     http.configureAuth(null);
     expect(await call('send_chat', {}, { targetSessionId: 'assistant', message })).toMatchObject({ success: true });
     expect(submitted[2]).toBe(message); // no configured owner authentication is not owner consent
     expect(await call('assistant_execution_settings', internal, { enabled: false })).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+    expect(await call('assistant_memory_limits', {}, { action: 'get' })).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+    expect(await call('assistant_memory_limits', {}, { action: 'set', memory: 4400, user: 2750 })).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
 });

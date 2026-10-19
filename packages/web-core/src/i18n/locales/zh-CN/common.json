@@ -4410,7 +4410,9 @@
         "saving": "保存中…",
         "saved": "已保存助手记忆上限。",
         "saveFailed": "保存助手记忆上限失败。",
-        "resetDefaults": "恢复默认值"
+        "resetDefaults": "恢复默认值",
+        "outOfRange": "必须在 {{min}} 到 {{max}} 字符之间（默认: {{default}}）。",
+        "ownerRequired": "只有所有者可以更改助手记忆上限。请登录此仪表板（设置仪表板密码或令牌）或使用云端仪表板。"
     }
 }
 

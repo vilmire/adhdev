@@ -5,6 +5,7 @@ import { useTransport } from '../../context/TransportContext'
 import {
     ASSISTANT_MEMORY_LIMITS_COMMAND,
     parseStagedMemoryStatus,
+    unwrapStagedAnswer,
     type AssistantMemoryStatus,
 } from '../dashboard/assistant-staged'
 import { AlertBanner } from '../ui/AlertBanner'
@@ -15,6 +16,14 @@ type SendCommand = (daemonId: string, type: string, payload?: any) => Promise<an
 export interface AssistantMemoryLimitsSectionProps {
     daemonId?: string | null
     sendCommand?: SendCommand
+    ownerRequired?: boolean
+}
+
+function parseLimitValue(raw: string): number {
+    const trimmed = raw.trim()
+    if (!trimmed) return Number.NaN
+    const n = Number(trimmed)
+    return Number.isFinite(n) ? Math.round(n) : Number.NaN
 }
 
 const FALLBACK_STATUS: AssistantMemoryStatus = {
@@ -50,6 +59,7 @@ const FALLBACK_STATUS: AssistantMemoryStatus = {
 export function AssistantMemoryLimitsSection({
     daemonId: daemonIdProp,
     sendCommand: sendCommandProp,
+    ownerRequired: ownerRequiredProp,
 }: AssistantMemoryLimitsSectionProps = {}) {
     const { t } = useTranslation('common')
     const baseDaemons = useBaseDaemons()
@@ -78,6 +88,8 @@ export function AssistantMemoryLimitsSection({
     const [saving, setSaving] = useState(false)
     const [error, setError] = useState('')
     const [savedNotice, setSavedNotice] = useState(false)
+    const [ownerRequiredState, setOwnerRequiredState] = useState(false)
+    const ownerRequired = Boolean(ownerRequiredProp || ownerRequiredState)
 
     const applyStatus = useCallback((next: AssistantMemoryStatus) => {
         setStatus(next)
@@ -90,8 +102,17 @@ export function AssistantMemoryLimitsSection({
         if (!resolvedDaemonId) return
         try {
             const raw = await sendRef.current(resolvedDaemonId, ASSISTANT_MEMORY_LIMITS_COMMAND, { action: 'get' })
+            const unwrapped = unwrapStagedAnswer(raw)
+            if (unwrapped?.code === 'COMMAND_SOURCE_REJECTED') {
+                setOwnerRequiredState(true)
+                setLoaded(true)
+                return
+            }
             const parsed = parseStagedMemoryStatus(raw)
-            if (parsed) applyStatus(parsed)
+            if (parsed) {
+                setOwnerRequiredState(false)
+                applyStatus(parsed)
+            }
         } catch {
             // Keep fallback defaults when daemon is offline or uninitialized
         }
@@ -103,25 +124,82 @@ export function AssistantMemoryLimitsSection({
         void refresh()
     }, [refresh])
 
+    const memoryNum = parseLimitValue(memoryInput)
+    const userNum = parseLimitValue(userInput)
+    const memoryRangeError = !Number.isFinite(memoryNum) || memoryNum < status.memory.min || memoryNum > status.memory.max
+        ? t('assistantMemoryLimits.outOfRange', {
+            min: status.memory.min.toLocaleString(),
+            max: status.memory.max.toLocaleString(),
+            default: status.memory.defaultBudget.toLocaleString(),
+        })
+        : ''
+    const userRangeError = !Number.isFinite(userNum) || userNum < status.user.min || userNum > status.user.max
+        ? t('assistantMemoryLimits.outOfRange', {
+            min: status.user.min.toLocaleString(),
+            max: status.user.max.toLocaleString(),
+            default: status.user.defaultBudget.toLocaleString(),
+        })
+        : ''
+
     const handleSave = async (nextMemory?: number, nextUser?: number) => {
-        if (!resolvedDaemonId) return
+        if (!resolvedDaemonId || ownerRequired) return
+        const memNum = nextMemory !== undefined ? Math.round(nextMemory) : parseLimitValue(memoryInput)
+        const usrNum = nextUser !== undefined ? Math.round(nextUser) : parseLimitValue(userInput)
+        const clientErrors: string[] = []
+        if (!Number.isFinite(memNum) || memNum < status.memory.min || memNum > status.memory.max) {
+            clientErrors.push(
+                `${t('assistantMemoryLimits.memoryLabel')}: ${t('assistantMemoryLimits.outOfRange', {
+                    min: status.memory.min.toLocaleString(),
+                    max: status.memory.max.toLocaleString(),
+                    default: status.memory.defaultBudget.toLocaleString(),
+                })}`,
+            )
+        }
+        if (!Number.isFinite(usrNum) || usrNum < status.user.min || usrNum > status.user.max) {
+            clientErrors.push(
+                `${t('assistantMemoryLimits.userLabel')}: ${t('assistantMemoryLimits.outOfRange', {
+                    min: status.user.min.toLocaleString(),
+                    max: status.user.max.toLocaleString(),
+                    default: status.user.defaultBudget.toLocaleString(),
+                })}`,
+            )
+        }
+        if (!Number.isFinite(memNum) || !Number.isFinite(usrNum)) {
+            setSavedNotice(false)
+            setError(clientErrors.join(' '))
+            return
+        }
         setSaving(true)
         setError('')
         setSavedNotice(false)
         try {
-            const memNum = nextMemory ?? Number(memoryInput)
-            const usrNum = nextUser ?? Number(userInput)
             const raw = await sendRef.current(resolvedDaemonId, ASSISTANT_MEMORY_LIMITS_COMMAND, {
                 action: 'set',
-                memory: Number.isFinite(memNum) ? Math.round(memNum) : status.memory.budget,
-                user: Number.isFinite(usrNum) ? Math.round(usrNum) : status.user.budget,
+                memory: memNum,
+                user: usrNum,
             })
+            const unwrapped = unwrapStagedAnswer(raw)
+            if (unwrapped?.code === 'COMMAND_SOURCE_REJECTED') {
+                setOwnerRequiredState(true)
+                setError(t('assistantMemoryLimits.ownerRequired'))
+                return
+            }
+            if (unwrapped?.success === false || clientErrors.length > 0) {
+                const daemonError = typeof unwrapped?.error === 'string' && unwrapped.error.trim()
+                    ? unwrapped.error.trim()
+                    : ''
+                setError(daemonError || clientErrors.join(' ') || t('assistantMemoryLimits.saveFailed'))
+                return
+            }
             const parsed = parseStagedMemoryStatus(raw)
             if (parsed) {
                 applyStatus(parsed)
                 setSavedNotice(true)
             } else {
-                setError(t('assistantMemoryLimits.saveFailed'))
+                const daemonError = typeof unwrapped?.error === 'string' && unwrapped.error.trim()
+                    ? unwrapped.error.trim()
+                    : ''
+                setError(daemonError || t('assistantMemoryLimits.saveFailed'))
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : t('assistantMemoryLimits.saveFailed'))
@@ -131,6 +209,7 @@ export function AssistantMemoryLimitsSection({
     }
 
     const handleResetDefaults = () => {
+        if (ownerRequired) return
         const memDefault = Math.max(status.memory.defaultBudget, status.memory.min)
         const usrDefault = Math.max(status.user.defaultBudget, status.user.min)
         setMemoryInput(String(memDefault))
@@ -141,7 +220,12 @@ export function AssistantMemoryLimitsSection({
     const nearLimit = status.nearLimit || status.memory.percent >= status.warningThresholdPct || status.user.percent >= status.warningThresholdPct
 
     return (
-        <div className="flex flex-col gap-3" data-assistant-memory-limits-section data-loaded={loaded ? 'true' : 'false'}>
+        <div
+            className="flex flex-col gap-3"
+            data-assistant-memory-limits-section
+            data-loaded={loaded ? 'true' : 'false'}
+            data-owner-required={ownerRequired ? 'true' : 'false'}
+        >
             <p className="text-xs text-text-muted m-0">
                 {t('assistantMemoryLimits.promptNote')}
             </p>
@@ -155,8 +239,24 @@ export function AssistantMemoryLimitsSection({
                 </AlertBanner>
             )}
 
-            {error && <AlertBanner variant="error">{error}</AlertBanner>}
-            {savedNotice && <AlertBanner variant="success">{t('assistantMemoryLimits.saved')}</AlertBanner>}
+            {ownerRequired && (
+                <AlertBanner variant="error">
+                    <span data-assistant-memory-owner-required data-memory-limit-outcome="COMMAND_SOURCE_REJECTED">
+                        {t('assistantMemoryLimits.ownerRequired')}
+                    </span>
+                </AlertBanner>
+            )}
+
+            {error && !ownerRequired && (
+                <AlertBanner variant="error">
+                    <span data-memory-limit-message data-memory-limit-outcome="error">{error}</span>
+                </AlertBanner>
+            )}
+            {savedNotice && (
+                <AlertBanner variant="success">
+                    <span data-memory-limit-message data-memory-limit-outcome="saved">{t('assistantMemoryLimits.saved')}</span>
+                </AlertBanner>
+            )}
 
             <div className="grid gap-3 md:grid-cols-2">
                 {([
@@ -165,6 +265,7 @@ export function AssistantMemoryLimitsSection({
                         label: t('assistantMemoryLimits.memoryLabel'),
                         target: status.memory,
                         value: memoryInput,
+                        rangeError: memoryRangeError,
                         onChange: setMemoryInput,
                     },
                     {
@@ -172,9 +273,10 @@ export function AssistantMemoryLimitsSection({
                         label: t('assistantMemoryLimits.userLabel'),
                         target: status.user,
                         value: userInput,
+                        rangeError: userRangeError,
                         onChange: setUserInput,
                     },
-                ]).map(({ key, label, target, value, onChange }) => {
+                ]).map(({ key, label, target, value, rangeError, onChange }) => {
                     const isNear = target.nearLimit || target.percent >= status.warningThresholdPct
                     return (
                         <div
@@ -218,7 +320,8 @@ export function AssistantMemoryLimitsSection({
                                     max={target.max}
                                     step={25}
                                     value={value}
-                                    disabled={!resolvedDaemonId || saving}
+                                    aria-invalid={rangeError ? 'true' : 'false'}
+                                    disabled={!resolvedDaemonId || saving || ownerRequired}
                                     data-memory-limit-input={key}
                                     onChange={e => {
                                         setSavedNotice(false)
@@ -233,6 +336,12 @@ export function AssistantMemoryLimitsSection({
                                     })}
                                 </span>
                             </div>
+
+                            {rangeError && (
+                                <div className="text-2xs text-status-error" data-memory-limit-error={key}>
+                                    {rangeError}
+                                </div>
+                            )}
                         </div>
                     )
                 })}
@@ -243,7 +352,7 @@ export function AssistantMemoryLimitsSection({
                     type="button"
                     variant="primary"
                     size="sm"
-                    disabled={!resolvedDaemonId || saving}
+                    disabled={!resolvedDaemonId || saving || ownerRequired}
                     data-memory-limit-save
                     onClick={() => { void handleSave() }}
                 >
@@ -253,7 +362,7 @@ export function AssistantMemoryLimitsSection({
                     type="button"
                     variant="secondary"
                     size="sm"
-                    disabled={!resolvedDaemonId || saving}
+                    disabled={!resolvedDaemonId || saving || ownerRequired}
                     data-memory-limit-reset
                     onClick={handleResetDefaults}
                 >

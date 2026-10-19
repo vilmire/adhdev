@@ -4413,7 +4413,9 @@
         "saving": "Guardando…",
         "saved": "Límites de memoria del asistente guardados.",
         "saveFailed": "Error al guardar los límites de memoria del asistente.",
-        "resetDefaults": "Restablecer valores predeterminados"
+        "resetDefaults": "Restablecer valores predeterminados",
+        "outOfRange": "Debe estar entre {{min}} y {{max}} caracteres (predeterminado: {{default}}).",
+        "ownerRequired": "Solo el propietario puede cambiar los límites de memoria del asistente. Inicia sesión en este panel (configura una contraseña o token) o usa el panel en la nube."
     }
 }
 

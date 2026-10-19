@@ -86398,6 +86398,40 @@ ${result.stderr}`, result.code);
       };
       return { memory: pick("memory"), user: pick("user") };
     }
+    function validateMemoryBudgets(patch, currentUsed) {
+      const minFor = (t) => {
+        const used2 = currentUsed?.[t];
+        const usedFloor = typeof used2 === "number" && Number.isFinite(used2) ? Math.max(0, Math.floor(used2)) : 0;
+        return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], usedFloor));
+      };
+      const min = { memory: minFor("memory"), user: minFor("user") };
+      const max = { ...MAX_MEMORY_BUDGETS };
+      const messages = [];
+      let firstTarget = null;
+      let firstValue = Number.NaN;
+      for (const t of ["memory", "user"]) {
+        const v = patch?.[t];
+        if (v === void 0) continue;
+        if (typeof v !== "number" || !Number.isFinite(v) || v < min[t] || v > max[t]) {
+          if (!firstTarget) {
+            firstTarget = t;
+            firstValue = typeof v === "number" ? v : Number.NaN;
+          }
+          const label2 = t === "memory" ? "MEMORY" : "USER";
+          messages.push(`${label2} limit (${String(v)}) must be between ${min[t].toLocaleString("en-US")} and ${max[t].toLocaleString("en-US")} chars`);
+        }
+      }
+      if (!firstTarget) return null;
+      return {
+        code: "out_of_range",
+        result: "out_of_range",
+        target: firstTarget,
+        value: firstValue,
+        min,
+        max,
+        error: `${messages.join("; ")}.`
+      };
+    }
     function charCount(s2) {
       return Array.from(s2).length;
     }
@@ -86539,9 +86573,16 @@ ${result.stderr}`, result.code);
               user: this.readRawUsed("user")
             });
           }
+          validateBudgets(patch) {
+            return validateMemoryBudgets(patch, {
+              memory: this.readRawUsed("memory"),
+              user: this.readRawUsed("user")
+            });
+          }
           /**
            * Persist owner-configured memory limits to `<configDir>/assistant.json`
-           * (`memoryBudget`) after clamping to [max(MIN, currentUsed), MAX].
+           * (`memoryBudget`). Command handlers call `validateBudgets` first to reject
+           * out-of-range inputs; `resolveMemoryBudgets` remains as a defensive guard.
            */
           setBudgets(patch) {
             const currentUsed = {
@@ -96978,15 +97019,24 @@ ${asText(streams.stderr)}
       if (hasUser && (typeof args.user !== "number" || !Number.isFinite(args.user))) {
         return invalidArgs("user limit must be a finite number");
       }
-      svc.memory.setBudgets({
-        ...hasMemory ? { memory: args.memory } : {},
-        ...hasUser ? { user: args.user } : {}
-      });
+      const patch = {
+        ...hasMemory ? { memory: Math.round(args.memory) } : {},
+        ...hasUser ? { user: Math.round(args.user) } : {}
+      };
+      const rangeErr = svc.memory.validateBudgets(patch);
+      if (rangeErr) {
+        return {
+          success: false,
+          ...rangeErr
+        };
+      }
+      svc.memory.setBudgets(patch);
       try {
         getAssistantRegistry().reload();
       } catch {
       }
-      return { success: true, result: "applied", ...svc.memory.status() };
+      const status = svc.memory.status();
+      return { success: true, result: "applied", limits: status.budgets, ...status };
     }
     var ASSISTANT_TOOL_SOURCES;
     var ASSISTANT_OWNER_SOURCES;

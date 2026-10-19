@@ -4,7 +4,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AssistantMemoryLimitsSection } from '../../src/components/settings/AssistantMemoryLimitsSection'
 import { ASSISTANT_MEMORY_LIMITS_COMMAND } from '../../src/components/dashboard/assistant-staged'
+import { initI18n } from '../../src/i18n/config'
 
+initI18n()
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 type Payload = Record<string, unknown> | undefined
@@ -153,5 +155,79 @@ describe('AssistantMemoryLimitsSection', () => {
         })
         expect(container.querySelector('[data-memory-usage="memory"]')?.textContent).toContain('2,178 / 4,400 chars (50%)')
         expect(container.querySelector('[data-assistant-memory-settings-warning]')).toBeNull()
+    })
+
+    it('validates out-of-range values inline, shows daemon out_of_range error on save, and never silently clamps inputs', async () => {
+        const send = vi.fn(async (_d: string, _t: string, payload?: Payload) => {
+            if (payload?.action === 'set') {
+                return {
+                    success: false,
+                    code: 'out_of_range',
+                    result: 'out_of_range',
+                    target: 'memory',
+                    value: 100,
+                    min: { memory: 2200, user: 1375 },
+                    max: { memory: 8800, user: 5500 },
+                    error: 'MEMORY limit must be between 2,200 and 8,800 chars (received 100).',
+                }
+            }
+            return makeStatusResponse({ memUsed: 500, memBudget: 2200, userUsed: 200, userBudget: 1375 })
+        })
+        await mount(send)
+
+        const memInput = container.querySelector('[data-memory-limit-input="memory"]') as HTMLInputElement
+        const userInput = container.querySelector('[data-memory-limit-input="user"]') as HTMLInputElement
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+
+        await act(async () => {
+            setter?.call(memInput, '100')
+            memInput.dispatchEvent(new Event('input', { bubbles: true }))
+            memInput.dispatchEvent(new Event('change', { bubbles: true }))
+            setter?.call(userInput, '10000')
+            userInput.dispatchEvent(new Event('input', { bubbles: true }))
+            userInput.dispatchEvent(new Event('change', { bubbles: true }))
+        })
+
+        // Inline range errors shown for both inputs:
+        expect(memInput.getAttribute('aria-invalid')).toBe('true')
+        expect(userInput.getAttribute('aria-invalid')).toBe('true')
+        expect(container.querySelector('[data-memory-limit-error="memory"]')?.textContent).toContain('2,200')
+        expect(container.querySelector('[data-memory-limit-error="memory"]')?.textContent).toContain('8,800')
+        expect(container.querySelector('[data-memory-limit-error="user"]')?.textContent).toContain('1,375')
+        expect(container.querySelector('[data-memory-limit-error="user"]')?.textContent).toContain('5,500')
+
+        const saveBtn = container.querySelector('[data-memory-limit-save]') as HTMLButtonElement
+        await act(async () => {
+            saveBtn.click()
+        })
+
+        // Daemon out_of_range error is shown and inputs are NOT silently clamped to 2200/5500:
+        const errBanner = container.querySelector('[data-memory-limit-outcome="error"]')
+        expect(errBanner?.textContent).toContain('MEMORY limit must be between 2,200 and 8,800 chars (received 100).')
+        expect(memInput.value).toBe('100')
+        expect(userInput.value).toBe('10000')
+    })
+
+    it('surfaces the ownerRequired explanation and disables controls when standalone rejects with COMMAND_SOURCE_REJECTED', async () => {
+        const send = vi.fn(async () => ({
+            success: false,
+            code: 'COMMAND_SOURCE_REJECTED',
+            error: "Command 'assistant_memory_limits' is not allowed from 'ipc'",
+        }))
+        await mount(send)
+
+        const ownerBanner = container.querySelector('[data-assistant-memory-owner-required]')
+        expect(ownerBanner).toBeTruthy()
+        expect(ownerBanner?.textContent).toContain('Only the owner can change assistant memory limits')
+        expect(ownerBanner?.textContent).toContain('set a dashboard password or token')
+
+        const memInput = container.querySelector('[data-memory-limit-input="memory"]') as HTMLInputElement
+        const userInput = container.querySelector('[data-memory-limit-input="user"]') as HTMLInputElement
+        const saveBtn = container.querySelector('[data-memory-limit-save]') as HTMLButtonElement
+        const resetBtn = container.querySelector('[data-memory-limit-reset]') as HTMLButtonElement
+        expect(memInput.disabled).toBe(true)
+        expect(userInput.disabled).toBe(true)
+        expect(saveBtn.disabled).toBe(true)
+        expect(resetBtn.disabled).toBe(true)
     })
 })

@@ -355,7 +355,7 @@ describe('owner verbs', () => {
         expect(svc.memory.readFile('memory').entries).toEqual(['Windows git spawn is slow']);
     });
 
-    it('assistant_memory_limits accepts owner sources (p2p, ws, standalone), rejects ipc, clamps limits, and updates enforcement + usage %', async () => {
+    it('assistant_memory_limits accepts owner sources (p2p, ws, standalone), rejects ipc, rejects out-of-range limits with min/max, and updates enforcement + usage %', async () => {
         const router = new DaemonCommandRouter({} as any);
         // IPC is rejected by the command router:
         const ipcDenied = await router.execute(
@@ -378,30 +378,56 @@ describe('owner verbs', () => {
                 memory: { used: 0, budget: 2200, percent: 0, nearLimit: false },
                 user: { used: 0, budget: 1375, percent: 0, nearLimit: false },
                 defaults: { memory: 2200, user: 1375 },
+                min: { memory: 2200, user: 1375 },
                 max: { memory: 8800, user: 5500 },
                 warningThresholdPct: 90,
             });
         }
 
-        // Set limits via owner source (clamps above 8800/5500 and below 2200/1375):
-        const clampedMax = await router.execute(
+        // Out-of-range inputs (memory=100 < min 2,200; user=10000 > max 5,500; memory=50000 > max 8,800) are rejected, never silently clamped:
+        const outOfRangeLow = await router.execute(
             ASSISTANT_MEMORY_LIMITS_COMMAND,
-            { action: 'set', memory: 50_000, user: 100 },
+            { action: 'set', memory: 100, user: 10_000 },
             'p2p',
         );
-        expect(clampedMax).toMatchObject({
-            success: true,
-            result: 'applied',
-            memory: { budget: 8800 },
-            user: { budget: 1375 },
+        expect(outOfRangeLow).toMatchObject({
+            success: false,
+            code: 'out_of_range',
+            result: 'out_of_range',
+            target: 'memory',
+            value: 100,
+            min: { memory: 2200, user: 1375 },
+            max: { memory: 8800, user: 5500 },
         });
+        const outOfRangeHighUser = await router.execute(
+            ASSISTANT_MEMORY_LIMITS_COMMAND,
+            { action: 'set', memory: 2200, user: 10_000 },
+            'p2p',
+        );
+        expect(outOfRangeHighUser).toMatchObject({
+            success: false,
+            code: 'out_of_range',
+            result: 'out_of_range',
+            target: 'user',
+            value: 10_000,
+            min: { memory: 2200, user: 1375 },
+            max: { memory: 8800, user: 5500 },
+        });
+        expect(svc.memory.status().budgets).toEqual({ memory: 2200, user: 1375 });
 
         // Set custom budget (4,400 / 2,750) and verify enforcement + usage %:
-        await router.execute(
+        const appliedCustom = await router.execute(
             ASSISTANT_MEMORY_LIMITS_COMMAND,
             { action: 'set', memory: 4400, user: 2750 },
             'standalone',
         );
+        expect(appliedCustom).toMatchObject({
+            success: true,
+            result: 'applied',
+            limits: { memory: 4400, user: 2750 },
+            memory: { budget: 4400 },
+            user: { budget: 2750 },
+        });
         svc.inputLog.append(SID, 'human');
         for (const [i, len] of [[1, 500], [2, 500], [3, 500], [4, 500], [5, 178]] as const) {
             const chunk = `rule ${i} `.padEnd(len, 'w');
@@ -418,6 +444,21 @@ describe('owner verbs', () => {
             success: true,
             result: 'applied',
             usage: { memory: '52%', user: '0%' },
+        });
+
+        // Shrinking below current used content (2,293 chars) is rejected with updated min:
+        const belowUsed = await router.execute(
+            ASSISTANT_MEMORY_LIMITS_COMMAND,
+            { action: 'set', memory: 2200, user: 2750 },
+            'standalone',
+        );
+        expect(belowUsed).toMatchObject({
+            success: false,
+            code: 'out_of_range',
+            target: 'memory',
+            value: 2200,
+            min: { memory: 2293, user: 1375 },
+            max: { memory: 8800, user: 5500 },
         });
 
         // Staged resolve list includes memoryStatus for the dashboard header/Inbox:

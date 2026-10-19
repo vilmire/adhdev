@@ -4410,7 +4410,9 @@
         "saving": "Saving…",
         "saved": "Assistant memory limits saved.",
         "saveFailed": "Failed to save assistant memory limits.",
-        "resetDefaults": "Reset to defaults"
+        "resetDefaults": "Reset to defaults",
+        "outOfRange": "Must be between {{min}} and {{max}} chars (default {{default}}).",
+        "ownerRequired": "Only the owner can change assistant memory limits. Sign in to this dashboard (set a dashboard password or token) or use the cloud dashboard."
     }
 }
 

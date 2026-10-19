@@ -541,14 +541,23 @@ function applyMemoryLimitsUpdate(svc: AssistantServices, args: any): CommandRout
     if (hasUser && (typeof args.user !== 'number' || !Number.isFinite(args.user))) {
         return invalidArgs('user limit must be a finite number');
     }
-    svc.memory.setBudgets({
-        ...(hasMemory ? { memory: args.memory } : {}),
-        ...(hasUser ? { user: args.user } : {}),
-    });
+    const patch = {
+        ...(hasMemory ? { memory: Math.round(args.memory) } : {}),
+        ...(hasUser ? { user: Math.round(args.user) } : {}),
+    };
+    const rangeErr = svc.memory.validateBudgets(patch);
+    if (rangeErr) {
+        return {
+            success: false,
+            ...rangeErr,
+        };
+    }
+    svc.memory.setBudgets(patch);
     try {
         getAssistantRegistry().reload();
     } catch { /* registry singleton may not be initialized in unit tests */ }
-    return { success: true, result: 'applied', ...svc.memory.status() };
+    const status = svc.memory.status();
+    return { success: true, result: 'applied', limits: status.budgets, ...status };
 }
 
 export const assistantStoreSpecs = defineCommandSpecs('high', assistantStoreHandlers, {

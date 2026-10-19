@@ -11,6 +11,7 @@ import {
     parseMemoryEntries,
     renderMemorySnapshot,
     resolveMemoryBudgets,
+    validateMemoryBudgets,
     type MemoryJournalRecord,
 } from '../../src/assistant/memory/memory-store.js';
 
@@ -123,6 +124,31 @@ describe('budget', () => {
         expect(resolveMemoryBudgets({ memory: 2200, user: 1375 }, { memory: 3100, user: 1900 })).toEqual({
             memory: 3100,
             user: 1900,
+        });
+        expect(validateMemoryBudgets({ memory: 2200, user: 1375 })).toBeNull();
+        expect(validateMemoryBudgets({ memory: 8800, user: 5500 })).toBeNull();
+        expect(validateMemoryBudgets({ memory: 100, user: 10000 })).toMatchObject({
+            code: 'out_of_range',
+            result: 'out_of_range',
+            target: 'memory',
+            value: 100,
+            min: { memory: 2200, user: 1375 },
+            max: { memory: 8800, user: 5500 },
+        });
+        expect(validateMemoryBudgets({ memory: 2200, user: 10000 })).toMatchObject({
+            code: 'out_of_range',
+            result: 'out_of_range',
+            target: 'user',
+            value: 10000,
+            min: { memory: 2200, user: 1375 },
+            max: { memory: 8800, user: 5500 },
+        });
+        expect(validateMemoryBudgets({ memory: 2500 }, { memory: 3100, user: 0 })).toMatchObject({
+            code: 'out_of_range',
+            target: 'memory',
+            value: 2500,
+            min: { memory: 3100, user: 1375 },
+            max: { memory: 8800, user: 5500 },
         });
     });
 

@@ -93,8 +93,11 @@ export interface AssistantMemoryStatus {
 }
 
 /**
- * Clamp an override to [max(MIN, currentUsed), MAX]; missing / non-finite
+ * Defensive read-side guard for stored `assistant.json` `memoryBudget` values:
+ * clamp an override to [max(MIN, currentUsed), MAX]; missing / non-finite
  * values fall back to the default (clamped up to currentUsed when content is larger).
+ * Write-side commands validate with `validateMemoryBudgets` and reject out-of-range
+ * inputs rather than clamping.
  */
 export function resolveMemoryBudgets(
     override?: Partial<MemoryBudgets> | null,
@@ -111,6 +114,59 @@ export function resolveMemoryBudgets(
         return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(min, Math.floor(v)));
     };
     return { memory: pick('memory'), user: pick('user') };
+}
+
+export interface MemoryBudgetValidationError {
+    code: 'out_of_range';
+    result: 'out_of_range';
+    target: MemoryTarget;
+    value: number;
+    min: MemoryBudgets;
+    max: MemoryBudgets;
+    error: string;
+}
+
+/**
+ * Validate an owner-supplied `memoryBudget` patch against `[max(MIN, currentUsed), MAX]`.
+ * Returns a typed `out_of_range` error with `min`/`max` when any provided limit is
+ * outside the allowed range, or `null` when all provided limits are in range.
+ */
+export function validateMemoryBudgets(
+    patch: Partial<MemoryBudgets> | null | undefined,
+    currentUsed?: Partial<MemoryBudgets> | null,
+): MemoryBudgetValidationError | null {
+    const minFor = (t: MemoryTarget): number => {
+        const used = currentUsed?.[t];
+        const usedFloor = typeof used === 'number' && Number.isFinite(used) ? Math.max(0, Math.floor(used)) : 0;
+        return Math.min(MAX_MEMORY_BUDGETS[t], Math.max(MIN_MEMORY_BUDGETS[t], usedFloor));
+    };
+    const min: MemoryBudgets = { memory: minFor('memory'), user: minFor('user') };
+    const max: MemoryBudgets = { ...MAX_MEMORY_BUDGETS };
+    const messages: string[] = [];
+    let firstTarget: MemoryTarget | null = null;
+    let firstValue = Number.NaN;
+    for (const t of ['memory', 'user'] as const) {
+        const v = patch?.[t];
+        if (v === undefined) continue;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < min[t] || v > max[t]) {
+            if (!firstTarget) {
+                firstTarget = t;
+                firstValue = typeof v === 'number' ? v : Number.NaN;
+            }
+            const label = t === 'memory' ? 'MEMORY' : 'USER';
+            messages.push(`${label} limit (${String(v)}) must be between ${min[t].toLocaleString('en-US')} and ${max[t].toLocaleString('en-US')} chars`);
+        }
+    }
+    if (!firstTarget) return null;
+    return {
+        code: 'out_of_range',
+        result: 'out_of_range',
+        target: firstTarget,
+        value: firstValue,
+        min,
+        max,
+        error: `${messages.join('; ')}.`,
+    };
 }
 
 // ── Parsing ─────────────────────────────────────────────────────────────────
@@ -299,9 +355,17 @@ export class AssistantMemoryStore {
         });
     }
 
+    validateBudgets(patch: Partial<MemoryBudgets>): MemoryBudgetValidationError | null {
+        return validateMemoryBudgets(patch, {
+            memory: this.readRawUsed('memory'),
+            user: this.readRawUsed('user'),
+        });
+    }
+
     /**
      * Persist owner-configured memory limits to `<configDir>/assistant.json`
-     * (`memoryBudget`) after clamping to [max(MIN, currentUsed), MAX].
+     * (`memoryBudget`). Command handlers call `validateBudgets` first to reject
+     * out-of-range inputs; `resolveMemoryBudgets` remains as a defensive guard.
      */
     setBudgets(patch: Partial<MemoryBudgets>): MemoryBudgets {
         const currentUsed = {
