@@ -1,3 +1,5 @@
+import { unwrapLaunchDefaultsAnswer } from '../../pages/machine/launchDefaults'
+import LaunchDefaultsCard from '../../pages/machine/LaunchDefaultsCard'
 import { useTransport } from '../../context/TransportContext'
 import { removeRetiredRoleLaunchMemory } from '../../utils/retired-role-launch-memory'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -117,6 +119,7 @@ export default function DashboardNewSessionDialog({
     const [activeKind, setActiveKind] = useState<LaunchKind | null>(getDefaultLaunchKind(sortedMachines[0]))
     const [selectedTarget, setSelectedTarget] = useState('')
     const [coordinatorDefaultLabel, setCoordinatorDefaultLabel] = useState('')
+    const [defaultsRevision, setDefaultsRevision] = useState(0)
     useEffect(() => {
         if (workspaceMode !== 'mesh') return
         setSelectedTarget('__daemon_default__')
@@ -127,14 +130,14 @@ export default function DashboardNewSessionDialog({
         let cancelled = false
         void sendCommand(selectedMachine.id, 'launch_defaults_get', { role: 'coordinator',
             ...(selectedMeshId ? { project: selectedMeshId } : {}) }).then(raw => {
-            const body = raw?.result || raw
+            const body = unwrapLaunchDefaultsAnswer(raw)
             const effective = body?.roles?.coordinator?.effective
             if (!cancelled) setCoordinatorDefaultLabel(effective?.ok
                 ? [effective.selection.provider, effective.selection.model, effective.selection.thinkingLevel].filter(Boolean).join(' · ')
                 : effective?.reason || body?.error || '')
         }).catch(() => { /* The launch command reports the store error. */ })
         return () => { cancelled = true }
-    }, [workspaceMode, selectedMachine?.id, selectedMeshId, sendCommand])
+    }, [workspaceMode, selectedMachine?.id, selectedMeshId, sendCommand, defaultsRevision])
     const [launchArgs, setLaunchArgs] = useState('')
     const [codexManagedQuestions, setCodexManagedQuestions] = useState(false)
     const [legacyAutoApprove, setLegacyAutoApprove] = useState(false)
@@ -1229,6 +1232,12 @@ export default function DashboardNewSessionDialog({
                                 onClose={() => setResumeHistoryOpen(false)}
                                 onResume={resumeSavedSession}
                             />
+                        )}
+
+                        {workspaceMode === 'mesh' && selectedMachine && (
+                            <LaunchDefaultsCard key={selectedMachine.id} machineId={selectedMachine.id}
+                                providers={cliProviders} sendDaemonCommand={sendCommand} role="coordinator"
+                                onSaved={() => { setDefaultsRevision(value => value + 1); setMessage('') }} />
                         )}
 
                         {message && (

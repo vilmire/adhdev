@@ -3301,6 +3301,8 @@
             "quotaToggleFailed": "No se pudo actualizar el sondeo de cuota para {{provider}}: {{error}}"
         },
         "launchDefaults": {
+            "setupTitle": "Configurar valores de inicio",
+            "setupHint": "Antes del primer inicio en esta máquina, elige una CLI y guarda sus valores de inicio. Después, inicia la sesión.",
             "title": "Valores de inicio",
             "description": "La CLI con la que esta máquina inicia nuevas sesiones de asistente y coordinador. Se aplica al próximo inicio; las sesiones en curso no cambian.",
             "role": {

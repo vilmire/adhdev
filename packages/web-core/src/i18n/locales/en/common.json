@@ -3298,6 +3298,8 @@
             "quotaToggleFailed": "Failed to update quota probe for {{provider}}: {{error}}"
         },
         "launchDefaults": {
+            "setupTitle": "Set up launch defaults",
+            "setupHint": "Before the first launch on this machine, choose a CLI and save its launch default. Then start the session.",
             "title": "Launch defaults",
             "description": "The CLI this machine starts new assistant and coordinator sessions with. Applies to the next launch; running sessions are unchanged.",
             "role": {

@@ -3298,6 +3298,8 @@
             "quotaToggleFailed": "{{provider}}의 쿼터 조회 설정 변경 실패: {{error}}"
         },
         "launchDefaults": {
+            "setupTitle": "실행 기본값 설정",
+            "setupHint": "이 머신에서 처음 실행하기 전에 CLI를 선택하고 실행 기본값을 저장해 주세요. 저장한 뒤 세션을 시작할 수 있습니다.",
             "title": "실행 기본값",
             "description": "이 머신에서 새 어시스턴트·코디네이터 세션을 시작할 때 쓰는 CLI입니다. 다음 실행부터 적용되며, 실행 중인 세션은 바뀌지 않습니다.",
             "role": {

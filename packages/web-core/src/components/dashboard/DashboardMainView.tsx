@@ -9,6 +9,7 @@ import DashboardMobileChatMode from './DashboardMobileChatMode'
 import DashboardPaneWorkspace from './DashboardPaneWorkspace'
 import DashboardDockviewWorkspace from './DashboardDockviewWorkspace'
 import DashboardNewSessionDialog from './DashboardNewSessionDialog'
+import AssistantLaunchSetupDialog from './AssistantLaunchSetupDialog'
 // Lazy: the graph dialog (xyflow + elkjs) only loads when it first opens.
 import DashboardMeshGraphDialog from './LazyDashboardMeshGraphDialog'
 import GitStatusDialog from '../git/GitStatusDialog'
@@ -825,6 +826,11 @@ export default function DashboardMainView({
                     connectionStates={connectionStates}
                 />
             )}
+            {startAssistant.setupMachineId && machineEntries.filter(machine => machine.id === startAssistant.setupMachineId).map(machine => (
+                <AssistantLaunchSetupDialog key={machine.id} machine={machine} sendDaemonCommand={sendDaemonCommand}
+                    onClose={() => startAssistant.closeSetup?.()}
+                    onStart={target => { startAssistant.closeSetup?.(); void startAssistant.start(target) }} />
+            ))}
             {newSessionOpen && (
                 <DashboardNewSessionDialog
                     key={newSessionInitialTarget ? `${newSessionInitialTarget.machineId}:${newSessionInitialTarget.workspaceId || ''}:${newSessionInitialTarget.mode || ''}:${newSessionInitialTarget.meshWorkspacePath || ''}` : 'default'}

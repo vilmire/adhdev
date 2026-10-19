@@ -30,12 +30,14 @@ import {
 interface LaunchDefaultsCardProps {
     machineId: string
     providers: ProviderInfo[]
+    role?: LaunchDefaultRole
+    onSaved?: (role: LaunchDefaultRole, selection: LaunchDefaultSelectionView | null) => void
     sendDaemonCommand: (id: string, type: string, data?: Record<string, unknown>) => Promise<any>
 }
 
 type Outcome = { ok: true } | { ok: false; code: string }
 
-export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCommand }: LaunchDefaultsCardProps) {
+export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCommand, role: onlyRole, onSaved }: LaunchDefaultsCardProps) {
     const { t } = useTranslation('common')
     const [read, setRead] = useState<LaunchDefaultsRead | null>(null)
     const [loadError, setLoadError] = useState<string | null>(null)
@@ -72,7 +74,10 @@ export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCom
         setSavingRole(null)
         // Re-read either way: success moves the revision, a conflict shows the current value.
         await load()
-    }, [machineId, read, sendDaemonCommand, load])
+        if (outcome.ok) onSaved?.(role, draft ? { provider: draft.provider,
+            ...(draft.model?.trim() ? { model: draft.model.trim() } : {}),
+            ...(draft.thinkingLevel?.trim() ? { thinkingLevel: draft.thinkingLevel.trim() } : {}) } : null)
+    }, [machineId, read, sendDaemonCommand, load, onSaved])
 
     if (read?.kind === 'unsupported' || (!read && !loadError)) return null
 
@@ -82,11 +87,14 @@ export default function LaunchDefaultsCard({ machineId, providers, sendDaemonCom
                 {t('machine.launchDefaults.title')}
                 <InfoTip content={t('machine.launchDefaults.description')} size={12} />
             </div>
+            {onlyRole && read?.kind === 'ok' && !read.state.roles[onlyRole]?.stored && (
+                <p className="mb-3 text-sm text-text-secondary">{t('machine.launchDefaults.setupHint')}</p>
+            )}
             {loadError && <div className="text-2xs text-status-error">{t('machine.launchDefaults.loadFailed', { error: loadError })}</div>}
             {read?.kind === 'error' && <div className="text-2xs text-status-error">{t('machine.launchDefaults.loadFailed', { error: read.code })}</div>}
             {read?.kind === 'ok' && (
                 <div className="flex flex-col gap-3">
-                    {LAUNCH_DEFAULT_ROLE_ORDER.map(role => (
+                    {(onlyRole ? [onlyRole] : LAUNCH_DEFAULT_ROLE_ORDER).map(role => (
                         <LaunchDefaultRoleRow
                             key={role}
                             role={role}

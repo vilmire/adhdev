@@ -3298,6 +3298,8 @@
             "quotaToggleFailed": "更新 {{provider}} 的配额探测设置失败：{{error}}"
         },
         "launchDefaults": {
+            "setupTitle": "设置启动默认值",
+            "setupHint": "在这台机器上首次启动前，请选择 CLI 并保存启动默认值，然后启动会话。",
             "title": "启动默认值",
             "description": "此机器启动新的助手和协调者会话时使用的 CLI。从下次启动开始生效，正在运行的会话不受影响。",
             "role": {

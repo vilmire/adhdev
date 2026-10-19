@@ -1,3 +1,4 @@
+import { parseLaunchDefaultsRead, unwrapLaunchDefaultsAnswer } from '../pages/machine/launchDefaults'
 import { removeRetiredRoleLaunchMemory } from '../utils/retired-role-launch-memory'
 /** Assistant host selection and launch. The main click sends no role axes;
  * the daemon resolves its saved default. Explicit picks affect one launch only. */
@@ -90,6 +91,8 @@ export interface StartAssistantState {
     visible: boolean
     pending: boolean
     error: string | null
+    setupMachineId?: string | null
+    closeSetup?: () => void
     /** What the main click launches. */
     defaultTarget: AssistantLaunchTarget | null
     /** Machines and their CLIs for the dropdown (ineligible CLIs included, flagged). */
@@ -99,6 +102,8 @@ export interface StartAssistantState {
 }
 
 export function useStartAssistant({ machineEntries, conversations, sendDaemonCommand }: UseStartAssistantOptions): StartAssistantState {
+    const [setupMachineId, setSetupMachineId] = useState<string | null>(null)
+    const closeSetup = useCallback(() => setSetupMachineId(null), [])
     const [pending, setPending] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const inFlight = useRef(false)
@@ -117,7 +122,7 @@ export function useStartAssistant({ machineEntries, conversations, sendDaemonCom
         if (!defaultMachineId) return
         let cancelled = false
         void sendDaemonCommand(defaultMachineId, 'launch_defaults_get', { role: 'assistant' }).then(raw => {
-            const result = raw?.result || raw
+            const result = unwrapLaunchDefaultsAnswer(raw)
             const selection = result?.roles?.assistant?.stored
             if (!cancelled && selection?.provider) setSavedTarget({ machineId: defaultMachineId,
                 cliType: selection.provider, model: selection.model, thinkingLevel: selection.thinkingLevel })
@@ -134,9 +139,19 @@ export function useStartAssistant({ machineEntries, conversations, sendDaemonCom
         setPending(true)
         setError(null)
         try {
+            const read = parseLaunchDefaultsRead(await sendDaemonCommand(target.machineId, 'launch_defaults_get', { role: 'assistant' }).catch(() => null))
+            const effective = read.kind === 'ok' ? read.state.roles.assistant?.effective : undefined
+            // Missing documents require an owner save even for explicit picks.
+            // An unset role in an existing document only blocks the main/default launch.
+            if (effective && 'code' in effective && effective.code === 'launch_default_required'
+                && (!picked || effective.reason === 'launch_defaults_read_failed')) {
+                setSetupMachineId(target.machineId)
+                return
+            }
             const res: any = await sendDaemonCommand(target.machineId, LAUNCH_ASSISTANT_COMMAND, picked ? assistantLaunchArgs(picked) : {})
             const result = res?.result || res
             if (res?.success === false || result?.success === false) {
+                if (result?.code === 'launch_default_required') { setSetupMachineId(target.machineId); return }
                 setError(String(result?.error || res?.error || result?.code || 'launch_assistant failed'))
             }
         } catch (e) {
@@ -147,5 +162,5 @@ export function useStartAssistant({ machineEntries, conversations, sendDaemonCom
         }
     }, [sendDaemonCommand, defaultTarget])
 
-    return { visible, pending, error, defaultTarget, machines: options.machines, start }
+    return { visible, pending, error, defaultTarget, machines: options.machines, start, setupMachineId, closeSetup }
 }
