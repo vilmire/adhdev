@@ -34,7 +34,7 @@
  *     renderToStaticMarkup works without a DOM.
  */
 import i18next from 'i18next'
-import { useCallback, useEffect, useRef } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../../lib/utils'
@@ -49,22 +49,121 @@ const FOCUSABLE_SELECTOR = [
     '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
+function isElementFocusableAndVisible(el: HTMLElement, container: HTMLElement): boolean {
+    if (el.hasAttribute('disabled') || el.hasAttribute('hidden')) return false
+    if (el.getAttribute('aria-hidden') === 'true') return false
+    if (el.closest('[hidden], [aria-hidden="true"], [inert]')) return false
+
+    let current: HTMLElement | null = el
+    while (current) {
+        const inlineDisplay = current.style?.display
+        const inlineVisibility = current.style?.visibility
+        if (inlineDisplay === 'none' || inlineVisibility === 'hidden' || inlineVisibility === 'collapse') {
+            return false
+        }
+        if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+            const computed = window.getComputedStyle(current)
+            if (
+                computed.display === 'none'
+                || computed.visibility === 'hidden'
+                || computed.visibility === 'collapse'
+            ) {
+                return false
+            }
+        }
+        if (current === container || current === document.body) break
+        current = current.parentElement
+    }
+    return true
+}
+
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
     return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        (el) => !el.hasAttribute('disabled') && !el.hasAttribute('hidden') && el.getAttribute('aria-hidden') !== 'true' && !el.closest('[inert]'),
+        (el) => isElementFocusableAndVisible(el, container),
     )
 }
 
-const openDialogOverlays: HTMLDivElement[] = []
+function focusFirstAvailable(surface: HTMLElement, candidates: HTMLElement[]): void {
+    for (const candidate of candidates) {
+        candidate.focus({ preventScroll: true })
+        if (typeof document !== 'undefined' && document.activeElement === candidate) {
+            return
+        }
+    }
+    surface.focus({ preventScroll: true })
+}
+
+interface DialogStackEntry {
+    overlay: HTMLDivElement
+    surface: HTMLDivElement
+    depth: number
+    order: number
+}
+
+const DialogDepthContext = createContext<number>(0)
+const openDialogEntries: DialogStackEntry[] = []
 const inertManagedBodyChildren = new Set<HTMLElement>()
+let nextDialogMountOrder = 0
+let initialStackTriggerElement: HTMLElement | null = null
+
+function sortDialogEntries() {
+    openDialogEntries.sort((a, b) => (a.depth - b.depth) || (a.order - b.order))
+    if (typeof document !== 'undefined' && document.body && openDialogEntries.length > 1) {
+        for (let i = openDialogEntries.length - 1; i > 0; i -= 1) {
+            const higher = openDialogEntries[i]!
+            const lower = openDialogEntries[i - 1]!
+            if (
+                higher.overlay.parentElement === document.body
+                && lower.overlay.parentElement === document.body
+                && (higher.overlay.compareDocumentPosition(lower.overlay) & Node.DOCUMENT_POSITION_FOLLOWING)
+            ) {
+                document.body.insertBefore(lower.overlay, higher.overlay)
+            }
+        }
+    }
+}
+
+function getTopDialogEntry(): DialogStackEntry | null {
+    return openDialogEntries[openDialogEntries.length - 1] ?? null
+}
+
+function hasExternalModalAbove(overlay: HTMLElement): boolean {
+    if (typeof document === 'undefined' || !document.body) return false
+    const modals = document.body.querySelectorAll<HTMLElement>('[role="dialog"], [aria-modal="true"]')
+    for (const modal of Array.from(modals)) {
+        if (modal === overlay || overlay.contains(modal) || modal.contains(overlay)) continue
+        const isRegisteredDialog = openDialogEntries.some(
+            (entry) => entry.overlay === modal || entry.overlay.contains(modal),
+        )
+        if (isRegisteredDialog) continue
+        if (modal.closest('[inert], [hidden], [aria-hidden="true"]')) continue
+        if (overlay.compareDocumentPosition(modal) & Node.DOCUMENT_POSITION_FOLLOWING) {
+            return true
+        }
+    }
+    return false
+}
 
 function syncDialogBodyInertness() {
     if (typeof document === 'undefined' || !document.body) return
-    const topOverlay = openDialogOverlays[openDialogOverlays.length - 1] ?? null
+    const topEntry = getTopDialogEntry()
+    const topOverlay = topEntry?.overlay ?? null
     for (const child of Array.from(document.body.children)) {
         if (!(child instanceof HTMLElement)) continue
         if (child.tagName === 'SCRIPT' || child.tagName === 'STYLE') continue
-        const shouldBeInert = Boolean(topOverlay && child !== topOverlay && !child.contains(topOverlay))
+        const isAfterTopOverlayWithExternalDialog = Boolean(
+            topOverlay
+            && child !== topOverlay
+            && !openDialogEntries.some((entry) => entry.overlay === child || child.contains(entry.overlay))
+            && (topOverlay.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && (child.matches('[role="dialog"], [aria-modal="true"]') || child.querySelector('[role="dialog"], [aria-modal="true"]')),
+        )
+        const shouldBeInert = Boolean(
+            topOverlay
+            && child !== topOverlay
+            && !child.contains(topOverlay)
+            && !isAfterTopOverlayWithExternalDialog,
+        )
         if (shouldBeInert) {
             if (!child.inert && !child.hasAttribute('inert')) {
                 child.inert = true
@@ -158,6 +257,7 @@ export function DialogShell({
     surfaceClassName,
     children,
 }: DialogShellProps) {
+    const depth = useContext(DialogDepthContext)
     const overlayRef = useRef<HTMLDivElement | null>(null)
     const surfaceRef = useRef<HTMLDivElement | null>(null)
 
@@ -165,8 +265,10 @@ export function DialogShell({
         if (!open || !closeOnEsc) return
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== 'Escape') return
-            const topOverlay = openDialogOverlays[openDialogOverlays.length - 1]
-            if (topOverlay && overlayRef.current && topOverlay !== overlayRef.current) return
+            const overlay = overlayRef.current
+            const topEntry = getTopDialogEntry()
+            if (topEntry && overlay && topEntry.overlay !== overlay) return
+            if (overlay && hasExternalModalAbove(overlay)) return
             onClose()
         }
         // Bubble phase on purpose — capture-phase inner-layer handlers
@@ -182,27 +284,48 @@ export function DialogShell({
         const surface = surfaceRef.current
         if (!overlay || !surface) return
 
-        const previousActiveElement = document.activeElement instanceof HTMLElement
+        const activeBeforeMount = document.activeElement instanceof HTMLElement
             ? document.activeElement
             : null
-
-        if (!openDialogOverlays.includes(overlay)) {
-            openDialogOverlays.push(overlay)
+        if (openDialogEntries.length === 0) {
+            initialStackTriggerElement = activeBeforeMount
         }
+        const activeIsInHigherRegisteredDialog = Boolean(
+            activeBeforeMount
+            && openDialogEntries.some((entry) => entry.depth > depth && entry.overlay.contains(activeBeforeMount)),
+        )
+        const previousActiveElement = activeIsInHigherRegisteredDialog
+            ? initialStackTriggerElement
+            : activeBeforeMount
+
+        const stackEntry: DialogStackEntry = {
+            overlay,
+            surface,
+            depth,
+            order: ++nextDialogMountOrder,
+        }
+        openDialogEntries.push(stackEntry)
+        sortDialogEntries()
         syncDialogBodyInertness()
 
         if (!surface.hasAttribute('tabindex')) {
             surface.tabIndex = -1
         }
-        if (!surface.contains(document.activeElement)) {
-            const firstFocusable = getFocusableElements(surface)[0] ?? surface
-            firstFocusable.focus({ preventScroll: true })
+
+        const topOnMount = getTopDialogEntry()
+        if (topOnMount && topOnMount.overlay === overlay && !hasExternalModalAbove(overlay)) {
+            if (!surface.contains(document.activeElement)) {
+                focusFirstAvailable(surface, getFocusableElements(surface))
+            }
+        } else if (topOnMount && !topOnMount.surface.contains(document.activeElement) && !hasExternalModalAbove(topOnMount.overlay)) {
+            focusFirstAvailable(topOnMount.surface, getFocusableElements(topOnMount.surface))
         }
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key !== 'Tab') return
-            const topOverlay = openDialogOverlays[openDialogOverlays.length - 1]
-            if (topOverlay && topOverlay !== overlay) return
+            const topEntry = getTopDialogEntry()
+            if (topEntry && topEntry.overlay !== overlay) return
+            if (hasExternalModalAbove(overlay)) return
 
             const focusables = getFocusableElements(surface)
             if (focusables.length === 0) {
@@ -217,22 +340,25 @@ export function DialogShell({
             if (event.shiftKey) {
                 if (index <= 0 || !surface.contains(active)) {
                     event.preventDefault()
-                    focusables[focusables.length - 1].focus({ preventScroll: true })
+                    focusFirstAvailable(surface, [...focusables].reverse())
                 }
             } else if (index === -1 || index === focusables.length - 1 || !surface.contains(active)) {
                 event.preventDefault()
-                focusables[0].focus({ preventScroll: true })
+                focusFirstAvailable(surface, focusables)
             }
         }
 
         const onFocusIn = (event: FocusEvent) => {
-            const topOverlay = openDialogOverlays[openDialogOverlays.length - 1]
-            if (topOverlay && topOverlay !== overlay) return
+            const topEntry = getTopDialogEntry()
+            if (topEntry && topEntry.overlay !== overlay) return
+            if (hasExternalModalAbove(overlay)) return
             const target = event.target instanceof HTMLElement ? event.target : null
             if (!target || surface.contains(target)) return
-            const focusables = getFocusableElements(surface)
-            const fallback = focusables[0] ?? surface
-            fallback.focus({ preventScroll: true })
+            const enclosingDialog = target.closest('[role="dialog"], [aria-modal="true"]')
+            if (enclosingDialog && enclosingDialog !== surface && !overlay.contains(enclosingDialog)) {
+                return
+            }
+            focusFirstAvailable(surface, getFocusableElements(surface))
         }
 
         document.addEventListener('keydown', onKeyDown)
@@ -241,8 +367,11 @@ export function DialogShell({
         return () => {
             document.removeEventListener('keydown', onKeyDown)
             document.removeEventListener('focusin', onFocusIn)
-            const idx = openDialogOverlays.indexOf(overlay)
-            if (idx !== -1) openDialogOverlays.splice(idx, 1)
+            const idx = openDialogEntries.indexOf(stackEntry)
+            if (idx !== -1) openDialogEntries.splice(idx, 1)
+            if (openDialogEntries.length === 0) {
+                initialStackTriggerElement = null
+            }
             syncDialogBodyInertness()
 
             if (
@@ -254,9 +383,14 @@ export function DialogShell({
                 if (!currentActive || currentActive === document.body || surface.contains(currentActive)) {
                     previousActiveElement.focus({ preventScroll: true })
                 }
+            } else {
+                const remainingTop = getTopDialogEntry()
+                if (remainingTop && !remainingTop.surface.contains(document.activeElement)) {
+                    focusFirstAvailable(remainingTop.surface, getFocusableElements(remainingTop.surface))
+                }
             }
         }
-    }, [open])
+    }, [open, depth])
 
     const onBackdropClick = useCallback(
         (event: React.MouseEvent<HTMLDivElement>) => {
@@ -307,7 +441,9 @@ export function DialogShell({
                 style={chrome ? { zIndex: 'var(--z-modal)' } : undefined}
                 onClick={(event) => event.stopPropagation()}
             >
-                {children}
+                <DialogDepthContext.Provider value={depth + 1}>
+                    {children}
+                </DialogDepthContext.Provider>
             </div>
         </div>
     )

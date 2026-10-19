@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, useLocation, useSearchParams } from 'react-router-dom'
 import { initI18n } from '../../../src/i18n/config'
 import DashboardMobileChatMode from '../../../src/components/dashboard/DashboardMobileChatMode'
+import { DialogShell } from '../../../src/components/ui/Dialog'
+import LaunchConfirmDialog from '../../../src/components/machine/LaunchConfirmDialog'
+import { useDashboardActiveTabRequests } from '../../../src/hooks/useDashboardActiveTabRequests'
+import { useDashboardConversations } from '../../../src/hooks/useDashboardConversations'
 import { TransportProvider } from '../../../src/context/TransportContext'
 import type { ActiveConversation } from '../../../src/components/dashboard/types'
 import type { DaemonData } from '../../../src/types'
@@ -445,5 +449,185 @@ describe('DashboardMobileChatMode approvals flow', () => {
                 expect.anything(),
             )
         }
+    })
+
+    it('resolves the full URL -> useDashboardConversations -> useDashboardActiveTabRequests -> DashboardMobileChatMode handoff for production daemon:cli:session tab keys without incidental read', () => {
+        const ideVisibleA: DaemonData = {
+            id: 'daemon-a:cli:shared-sess',
+            daemonId: 'daemon-a',
+            machineId: 'daemon-a',
+            hostname: 'Node A',
+            sessionId: 'shared-sess',
+            type: 'codex-cli',
+            transport: 'pty',
+            mode: 'chat',
+            status: 'idle',
+            activeChat: {
+                id: 'chat-a',
+                title: 'Visible Node A Chat',
+                status: 'idle',
+                messages: [{ id: 'm1', role: 'assistant', content: 'A', index: 0, timestamp: 1 }],
+            },
+        } as DaemonData
+        const ideHiddenB = makeApprovalIde({
+            id: 'daemon-b:cli:shared-sess',
+            daemonId: 'daemon-b',
+            sessionId: 'shared-sess',
+            surfaceHidden: true,
+            activeChat: {
+                id: 'chat-b',
+                title: 'Hidden Node B Worker Chat',
+                status: 'waiting_approval',
+                messages: [{ id: 'm2', role: 'assistant', content: 'B', index: 0, timestamp: 2 }],
+            },
+        } as any)
+        const sendDaemonCommand = vi.fn(async () => ({ ok: true }))
+        const onRestoreHiddenConversation = vi.fn()
+        let resolvedRequestedTabKey: string | null = null
+
+        function FullUrlHandoffHarness() {
+            const [searchParams, setSearchParams] = useSearchParams()
+            const { conversations, visibleConversations, resolveConversationBySessionId } = useDashboardConversations({
+                ides: [ideVisibleA, ideHiddenB],
+                connectionStates: { 'daemon-a': 'connected', 'daemon-b': 'connected' },
+                clearedTabs: {},
+                isConversationHidden: conv => conv.daemonId === 'daemon-b',
+            })
+            const hiddenList = conversations.filter(
+                conv => !visibleConversations.some(vis => vis.tabKey === conv.tabKey),
+            )
+            const { requestedMobileTabKey, consumeRequestedActiveTab } = useDashboardActiveTabRequests({
+                isMobile: true,
+                urlActiveTab: searchParams.get('activeTab'),
+                resolveConversationBySessionId,
+                setSearchParams,
+            })
+            resolvedRequestedTabKey = requestedMobileTabKey
+            return (
+                <DashboardMobileChatMode
+                    conversations={visibleConversations}
+                    hiddenConversations={hiddenList}
+                    ides={[ideVisibleA, ideHiddenB]}
+                    actionLogs={[]}
+                    sendDaemonCommand={sendDaemonCommand}
+                    setActionLogs={vi.fn()}
+                    setCliViewModeOverrides={vi.fn()}
+                    isStandalone={false}
+                    requestedActiveTabKey={requestedMobileTabKey}
+                    onRequestedActiveTabConsumed={consumeRequestedActiveTab}
+                    onOpenHistory={vi.fn()}
+                    onOpenRemote={vi.fn()}
+                    onShowAllHiddenConversations={vi.fn()}
+                    onRestoreHiddenConversation={onRestoreHiddenConversation}
+                    liveSessionInboxState={new Map()}
+                    connectionStates={{ 'daemon-a': 'connected', 'daemon-b': 'connected' }}
+                />
+            )
+        }
+
+        act(() => {
+            root.render(
+                <MemoryRouter initialEntries={['/dashboard?activeTab=session%3Adaemon-b%3Ashared-sess']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                    <TransportProvider value={{ sendCommand: sendDaemonCommand }}>
+                        <FullUrlHandoffHarness />
+                    </TransportProvider>
+                </MemoryRouter>,
+            )
+        })
+
+        expect(onRestoreHiddenConversation).toHaveBeenCalledTimes(1)
+        expect(onRestoreHiddenConversation.mock.calls[0]?.[0]?.tabKey).toBe('daemon-b:cli:shared-sess')
+        expect(container.textContent).toContain('Hidden Node B Worker Chat')
+        expect(container.textContent).not.toContain('Visible Node A Chat')
+        expect(sendDaemonCommand).toHaveBeenCalledTimes(1)
+        expect(sendDaemonCommand).toHaveBeenCalledWith(
+            'daemon-b',
+            'mark_session_seen',
+            expect.objectContaining({ sessionId: 'shared-sess' }),
+        )
+        expect(resolvedRequestedTabKey).toBeNull()
+
+        sendDaemonCommand.mockClear()
+        onRestoreHiddenConversation.mockClear()
+        act(() => {
+            root.render(
+                <MemoryRouter key="visible-handoff" initialEntries={['/dashboard?activeTab=session%3Adaemon-a%3Ashared-sess']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                    <TransportProvider value={{ sendCommand: sendDaemonCommand }}>
+                        <FullUrlHandoffHarness />
+                    </TransportProvider>
+                </MemoryRouter>,
+            )
+        })
+        expect(onRestoreHiddenConversation).not.toHaveBeenCalled()
+        expect(container.textContent).toContain('Visible Node A Chat')
+        expect(sendDaemonCommand).toHaveBeenCalledTimes(1)
+        expect(sendDaemonCommand).toHaveBeenCalledWith(
+            'daemon-a',
+            'mark_session_seen',
+            expect.objectContaining({ sessionId: 'shared-sess' }),
+        )
+    })
+
+    it('ignores CSS-hidden first controls, keeps simultaneous nested DialogShells ordered with inner topmost, and does not steal focus from bare portaled LaunchConfirmDialog', () => {
+        act(() => {
+            root.render(
+                <DialogShell ariaLabel="hidden-probe" onClose={() => {}}>
+                    <div style={{ display: 'none' }}>
+                        <button data-hidden-btn>Hidden</button>
+                    </div>
+                    <button data-visible-btn>Visible</button>
+                </DialogShell>,
+            )
+        })
+        const visibleBtn = document.body.querySelector('[data-visible-btn]') as HTMLButtonElement
+        expect(document.activeElement).toBe(visibleBtn)
+
+        act(() => {
+            root.render(
+                <DialogShell ariaLabel="outer-shell" onClose={() => {}}>
+                    <button data-outer-btn>Outer</button>
+                    <DialogShell ariaLabel="inner-shell" onClose={() => {}}>
+                        <button data-inner-btn>Inner</button>
+                    </DialogShell>
+                </DialogShell>,
+            )
+        })
+        const innerShell = document.body.querySelector('[aria-label="inner-shell"]') as HTMLElement
+        const outerShell = document.body.querySelector('[aria-label="outer-shell"]') as HTMLElement
+        expect(innerShell.closest('[inert]')).toBeNull()
+        expect(outerShell.closest('[inert]')).not.toBeNull()
+        expect(innerShell.contains(document.activeElement)).toBe(true)
+
+        function BarePortalFixture() {
+            const [confirmOpen, setConfirmOpen] = useState(true)
+            return (
+                <>
+                    <DialogShell ariaLabel="launch-parent" onClose={() => {}}>
+                        <button data-parent-btn>Parent</button>
+                    </DialogShell>
+                    {confirmOpen && (
+                        <LaunchConfirmDialog
+                            title="Review confirmation"
+                            description="Fixture"
+                            details={[]}
+                            onConfirm={() => {}}
+                            onCancel={() => setConfirmOpen(false)}
+                        />
+                    )}
+                </>
+            )
+        }
+
+        act(() => {
+            root.render(<BarePortalFixture />)
+        })
+        const confirmDialog = document.body.querySelector('[aria-labelledby="launch-confirm-title"]') as HTMLElement
+        expect(confirmDialog).not.toBeNull()
+        expect(confirmDialog.closest('[inert]')).toBeNull()
+        const confirmBtn = confirmDialog.querySelector('button') as HTMLButtonElement
+        act(() => {
+            confirmBtn.focus()
+        })
+        expect(confirmDialog.contains(document.activeElement)).toBe(true)
     })
 })

@@ -151,37 +151,19 @@ export function findMatchingMobileConversation(
         return entries.find(({ conversation }) => conversation.providerSessionId === providerId) || null
     }
 
-    if (rawKey.startsWith('tab:')) {
-        const tabKey = rawKey.slice('tab:'.length).trim()
-        if (!tabKey) return null
-        return entries.find(({ conversation }) => conversation.tabKey === tabKey) || null
-    }
-
-    if (rawKey.startsWith('route:')) {
-        const routeId = rawKey.slice('route:'.length).trim()
-        if (!routeId) return null
-        return entries.find(({ conversation }) => conversation.routeId === routeId) || null
-    }
-
-    const exactKeyMatch = entries.find(({ conversation }) => {
-        if (conversation.tabKey !== rawKey && conversation.routeId !== rawKey) return false
-        const currentRuntimeSessionId = typeof conversation.sessionId === 'string'
-            ? conversation.sessionId.trim()
-            : ''
-        if (currentRuntimeSessionId && rawKey.includes(':')) {
-            const keySuffix = rawKey.slice(rawKey.indexOf(':') + 1).trim()
-            if (keySuffix && keySuffix !== currentRuntimeSessionId) {
-                return false
-            }
-        }
-        return true
-    })
+    const exactKeyMatch = entries.find(({ conversation }) => (
+        conversation.tabKey === rawKey
+        || conversation.routeId === rawKey
+        || `tab:${conversation.tabKey}` === rawKey
+        || `route:${conversation.routeId}` === rawKey
+    ))
     if (exactKeyMatch) return exactKeyMatch
 
     const colonIndex = rawKey.indexOf(':')
     if (colonIndex > 0) {
         const candidateNodeId = rawKey.slice(0, colonIndex).trim()
-        const candidateSessionId = rawKey.slice(colonIndex + 1).trim()
+        const lastColonIndex = rawKey.lastIndexOf(':')
+        const candidateSessionId = rawKey.slice(lastColonIndex + 1).trim()
         return matchByNodeAndSession(entries, candidateNodeId, candidateSessionId, ides)
     }
 

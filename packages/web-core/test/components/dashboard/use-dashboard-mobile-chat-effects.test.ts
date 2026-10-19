@@ -163,4 +163,49 @@ describe('useDashboardMobileChatEffects', () => {
             isHidden: false,
         })
     })
+
+    it('preserves production CLI canonical tab keys (daemon:cli:session) returned by URL resolution while keeping explicit runtime session checks strict', () => {
+        const visibleFirst = makeConv({
+            tabKey: 'daemon-a:cli:shared-session',
+            routeId: 'daemon-a:cli:shared-session',
+            daemonId: 'daemon-a',
+            sessionId: 'shared-session',
+        })
+        const hiddenTarget = makeConv({
+            tabKey: 'daemon-b:cli:shared-session',
+            routeId: 'daemon-b:cli:shared-session',
+            daemonId: 'daemon-b',
+            sessionId: 'shared-session',
+        })
+        const replacedCli = makeConv({
+            tabKey: 'daemon-b:cli:old-session',
+            routeId: 'daemon-b:cli:old-session',
+            daemonId: 'daemon-b',
+            sessionId: 'replacement-session',
+        })
+
+        expect(findMatchingMobileConversation(
+            [visibleFirst, replacedCli],
+            [hiddenTarget],
+            { targetKey: 'session:daemon-b:shared-session' },
+        )).toEqual({
+            conversation: hiddenTarget,
+            isHidden: true,
+        })
+
+        expect(findMatchingMobileConversation(
+            [visibleFirst, replacedCli],
+            [hiddenTarget],
+            { targetKey: hiddenTarget.tabKey },
+        )).toEqual({
+            conversation: hiddenTarget,
+            isHidden: true,
+        })
+
+        expect(findMatchingMobileConversation(
+            [visibleFirst, replacedCli],
+            [hiddenTarget],
+            { targetKey: 'session:daemon-b:old-session' },
+        )).toBeNull()
+    })
 })
