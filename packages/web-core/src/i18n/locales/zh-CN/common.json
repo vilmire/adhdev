@@ -1625,7 +1625,8 @@
         },
         "relayIdle": "没有进行中的工作",
         "reviewLabel": "记忆整理",
-        "daemonNoticeLabel": "通知"
+        "daemonNoticeLabel": "通知",
+        "artifact": "产物"
     },
     "assistantWatched": {
         "badge": "关注中 {{count}}",
@@ -4415,6 +4416,37 @@
         "resetDefaults": "恢复默认值",
         "outOfRange": "必须在 {{min}} 到 {{max}} 字符之间（默认: {{default}}）。",
         "ownerRequired": "只有所有者可以更改助手记忆上限。请登录此仪表板（设置仪表板密码或令牌）或使用云端仪表板。"
+    },
+    "artifact": {
+        "viewFull": "查看全部",
+        "viewFullTitle": "查看全部 (전체 보기)",
+        "collapse": "收起",
+        "download": "下载",
+        "downloading": "下载中…",
+        "copyContent": "复制",
+        "loading": "正在加载产物…",
+        "retry": "重试",
+        "openLightbox": "放大图片",
+        "closeLightbox": "关闭图片预览",
+        "zoomIn": "放大",
+        "zoomOut": "缩小",
+        "zoomReset": "重置缩放",
+        "hashChangedWarning": "文件在注册后已更改",
+        "hashChangedDetail": "此产物注册后，工作区文件的 SHA-256 哈希值已发生更改。",
+        "invalidJsonNotice": "JSON 格式无效 — 显示原始文本",
+        "emptyContent": "空产物文件",
+        "errorMissingSession": "加载此产物需要会话上下文。",
+        "errorFileMissing": "工作区中已不存在该产物文件。",
+        "errorFileTooLarge": "此产物超过 4 MiB 查看器限制。",
+        "errorUnsupported": "查看器不支持此产物格式。",
+        "errorGeneric": "无法加载完整产物内容。",
+        "kind": {
+            "markdown": "Markdown",
+            "diff": "Diff",
+            "json": "JSON",
+            "text": "文本",
+            "image": "图片"
+        }
     }
 }
 

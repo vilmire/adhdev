@@ -1625,7 +1625,8 @@
         },
         "relayIdle": "Nothing left running",
         "reviewLabel": "Memory review",
-        "daemonNoticeLabel": "Notice"
+        "daemonNoticeLabel": "Notice",
+        "artifact": "Artifact"
     },
     "assistantWatched": {
         "badge": "Following {{count}}",
@@ -4415,6 +4416,37 @@
         "resetDefaults": "Reset to defaults",
         "outOfRange": "Must be between {{min}} and {{max}} chars (default {{default}}).",
         "ownerRequired": "Only the owner can change assistant memory limits. Sign in to this dashboard (set a dashboard password or token) or use the cloud dashboard."
+    },
+    "artifact": {
+        "viewFull": "View full",
+        "viewFullTitle": "View full (전체 보기)",
+        "collapse": "Collapse",
+        "download": "Download",
+        "downloading": "Downloading…",
+        "copyContent": "Copy",
+        "loading": "Loading artifact…",
+        "retry": "Retry",
+        "openLightbox": "Expand image",
+        "closeLightbox": "Close image preview",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "zoomReset": "Reset zoom",
+        "hashChangedWarning": "File modified since registration",
+        "hashChangedDetail": "The workspace file SHA-256 hash changed after this artifact was registered.",
+        "invalidJsonNotice": "Malformed JSON — showing raw text",
+        "emptyContent": "Empty artifact file",
+        "errorMissingSession": "Session context is required to load this artifact.",
+        "errorFileMissing": "The artifact file is no longer present in the workspace.",
+        "errorFileTooLarge": "This artifact exceeds the 4 MiB viewer limit.",
+        "errorUnsupported": "This artifact format is not supported in the viewer.",
+        "errorGeneric": "Could not load full artifact content.",
+        "kind": {
+            "markdown": "Markdown",
+            "diff": "Diff",
+            "json": "JSON",
+            "text": "Text",
+            "image": "Image"
+        }
     }
 }
 
