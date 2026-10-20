@@ -1239,4 +1239,3 @@ export function stripCoordinatorWrapperFile(
     } catch { /* best-effort */ }
     return true;
 }
-
