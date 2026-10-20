@@ -909,9 +909,7 @@ export class StandaloneHttpApi {
             ? true
             : internalScope !== null
               ? undefined
-              : this.hasAnyAuth() || this.authEpoch > 0 || ownerGuard !== null
-                ? false
-                : undefined;
+              : false;
           const result = await this.deps.executeCommand(
             type,
             commandPayload,

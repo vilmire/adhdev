@@ -276,6 +276,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
     const { MeshRuntimeStore } = await import('../../daemon-core/src/mesh/mesh-runtime-store.js');
     const { SessionRegistry } = await import('../../daemon-core/src/sessions/registry.js');
     const { mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest } = await import('../../daemon-core/src/mesh/worker-mcp-isolation.js');
+    const { isLiveWorkerMcpCredential } = await import('../../daemon-core/src/standalone-mcp-auth-verify.js');
     const { seedMeshAttempt } = await import('../../daemon-core/test/helpers/turn-attempt-seed.js');
     const { registerMeshCoordinator, unregisterMeshCoordinator } = await import('../../daemon-core/src/mesh/coordinator-registry.js');
     const { configureTranscriptProjection, __resetTranscriptProjectionForTests } = await import('../../daemon-core/src/seqscribe/transcript-publisher.js');
@@ -419,7 +420,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       interactivePromptService: () => ({}) as any,
       isCliSession: () => false,
       createSessionHostClient: async () => ({}) as any,
-      verifyWorkerCredential: (credential) => credential === workerBind.bind || credential === workerToken.token,
+      verifyWorkerCredential: isLiveWorkerMcpCredential,
     });
     http.configureAuth(DASHBOARD_TOKEN);
     http.passwordConfig = authMod.createPasswordRecord('fixture-password');
@@ -502,6 +503,9 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         { sessionId: 'unregistered-sa' },
         { sessionId: 'coord-sa', callerSessionId: 'foreign-sa' },
         { sessionId: 'coord-sa', workspaceRoot: foreignDir },
+        { sessionId: 'worker-sa', meshId: 'mesh-sa', taskId: 'task-sa-1' },
+        { sessionId: 'worker-sa', attemptId: 'att-sa-1' },
+        { sessionId: 'worker-sa', nodeId: 'node-sa' },
       ]) {
         const response = await postCmd('artifact_list', payload, { [INTERNAL_HEADER]: INTERNAL });
         expect((await response.json() as any).success).toBe(false);
@@ -616,6 +620,19 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       const revokedCopy = coreMod.preserveTrustedOwnerTransportProof(freshMcpPayload, { ...freshMcpPayload });
       expect(await router.execute('artifact_list', revokedCopy, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
       expect((await postCmd('artifact_list', { sessionId: 'coord-sa' }, { [INTERNAL_HEADER]: INTERNAL })).status).toBe(401);
+      // Disabling dashboard auth does not turn an anonymous HTTP request into
+      // a native MCP IPC caller (or an authenticated owner).
+      http.internalAuthToken = null;
+      http.configureAuth(null);
+      for (const alias of [...allAliases, 'get_command_history']) {
+        const response = await postCmd(alias, { sessionId: 'worker-sa', path: 'doc.md', artifactId: workerArtId });
+        expect(response.status).toBe(200);
+        const denied = await response.json() as any;
+        expect(denied).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+        expect(denied.content).toBeUndefined();
+        expect(denied.artifacts).toBeUndefined();
+        expect(denied.history).toBeUndefined();
+      }
     } finally {
       __resetTranscriptProjectionForTests();
       unregisterMeshCoordinator('coord-sa');

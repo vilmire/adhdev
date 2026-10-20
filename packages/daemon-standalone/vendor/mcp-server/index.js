@@ -146799,6 +146799,12 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       const expectedOwnerSource = routerIngress?.source === "p2p" || routerIngress?.source === "standalone" ? routerIngress.source : void 0;
       const ownerTrusted = isTrustedOwnerIngress(recordArgs, expectedOwnerSource);
+      if (mcp.valid && !hasWorkerCredentialInput(recordArgs) && (trimString2(recordArgs.taskId) || trimString2(recordArgs.attemptId) || trimString2(recordArgs.nodeId))) {
+        return {
+          ok: false,
+          result: { success: false, code: "artifact_session_mismatch", error: "Internal MCP credential does not establish worker task/attempt/node authority" }
+        };
+      }
       if (hasRevokedTrustedOwnerIngress(recordArgs, expectedOwnerSource) || routerIngress?.hasRevokedOwnerProof) {
         return {
           ok: false,

@@ -49,6 +49,16 @@ export function verifyArtifactCommandIngress(
             : undefined;
     const ownerTrusted = isTrustedOwnerIngress(recordArgs, expectedOwnerSource);
 
+    // The per-boot internal API credential proves no worker/task principal.
+    // Only the existing bind/token authority path may establish that scope.
+    if (mcp.valid && !hasWorkerCredentialInput(recordArgs)
+        && (trimString(recordArgs.taskId) || trimString(recordArgs.attemptId) || trimString(recordArgs.nodeId))) {
+        return {
+            ok: false,
+            result: { success: false, code: 'artifact_session_mismatch', error: 'Internal MCP credential does not establish worker task/attempt/node authority' },
+        };
+    }
+
     if (
         hasRevokedTrustedOwnerIngress(recordArgs, expectedOwnerSource) ||
         routerIngress?.hasRevokedOwnerProof
