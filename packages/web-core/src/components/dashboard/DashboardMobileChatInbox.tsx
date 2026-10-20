@@ -584,7 +584,11 @@ export default function DashboardMobileChatInbox({
                         </button>
                     </div>
                 </div>
-                {!isStandalone && onOpenApprovals ? (
+                {!isStandalone
+                    && onOpenApprovals
+                    && typeof pendingProviderApprovalCount === 'number'
+                    && Number.isFinite(pendingProviderApprovalCount)
+                    && pendingProviderApprovalCount > 0 ? (
                     <div className="mt-3 px-1">
                         <DashboardMobileApprovalsLink
                             pendingCount={pendingProviderApprovalCount}

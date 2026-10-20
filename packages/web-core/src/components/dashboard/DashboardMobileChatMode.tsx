@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
+import type { ProviderApprovalTarget } from '@adhdev/mesh-shared'
 import type { DaemonData } from '../../types'
 import type { ActiveConversation } from './types'
 import type { MachineRecentLaunch } from '../../pages/machine/types'
@@ -26,16 +28,25 @@ import {
     groupMobileInboxItems,
     type MobileInboxBuckets,
 } from './dashboard-mobile-chat-mode-helpers'
-import { useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
+import { findMatchingMobileConversation, useDashboardMobileChatEffects } from './useDashboardMobileChatEffects'
 import { useDashboardMobileMachineActions } from './useDashboardMobileMachineActions'
 import { useDashboardMobileNavigationController } from './useDashboardMobileNavigationController'
+import PendingApprovalsInbox, {
+    type PendingApprovalAction,
+    type PendingApprovalExactButton,
+    type PendingApprovalItem,
+} from '../MeshGraph/PendingApprovalsInbox'
 import { deriveProviderApprovalInbox } from '../MeshGraph/providerApprovalInbox'
+import { DialogShell } from '../ui/Dialog'
+import { IconX } from '../Icons'
 import { isLaunchableMachineProvider } from '../../utils/provider-activation'
 import { getDaemonUpdateTargetVersion } from '../../utils/daemon-update-policy'
 import { isVersionMismatch } from '../../utils/version-update'
 import type { StartAssistantState } from '../../hooks/useStartAssistant'
 
 declare const __APP_VERSION__: string
+
+const MOBILE_APPROVALS_WAIT_TICK_MS = 10_000
 
 interface DashboardMobileChatModeProps {
     conversations: ActiveConversation[]
@@ -112,25 +123,95 @@ export default function DashboardMobileChatMode({
     startAssistant = null,
     connectionStates = {},
 }: DashboardMobileChatModeProps) {
-    const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => conversations[0]?.tabKey || null)
-    const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => (conversations[0] ? 'chat' : 'inbox'))
-    const [section, setSection] = useState<DashboardMobileSection>('chats')
+    const { t } = useTranslation('common')
+    const initialRequestedMatch = useMemo(
+        () => requestedActiveTabKey
+            ? findMatchingMobileConversation(
+                conversations,
+                hiddenConversations,
+                { targetKey: requestedActiveTabKey },
+                ides,
+            )
+            : null,
+        // Intentionally only used for initial state; updates are handled by useDashboardMobileChatEffects.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [],
+    )
+    const [selectedTabKey, setSelectedTabKey] = useState<string | null>(() => {
+        if (requestedActiveTabKey) {
+            return initialRequestedMatch?.conversation.tabKey || null
+        }
+        if (requestedMobileSection) {
+            return null
+        }
+        return conversations[0]?.tabKey || null
+    })
+    const [screen, setScreen] = useState<'inbox' | 'chat' | 'machine'>(() => {
+        if (requestedActiveTabKey) {
+            return initialRequestedMatch ? 'chat' : 'inbox'
+        }
+        if (requestedMobileSection) {
+            return 'inbox'
+        }
+        return conversations[0] ? 'chat' : 'inbox'
+    })
+    const [section, setSection] = useState<DashboardMobileSection>(() => requestedMobileSection || 'chats')
     const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
     const [machineBackTarget, setMachineBackTarget] = useState<'inbox' | 'chat'>('inbox')
+    const [approvalsOpen, setApprovalsOpen] = useState(false)
+    const [approvalsNowMs, setApprovalsNowMs] = useState(() => Date.now())
     const liveWorkingOrderRef = useRef<string[]>([])
     const navigate = useNavigate()
     const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null
-    const pendingProviderApprovalCount = useMemo(() => {
-        if (isStandalone) return 0
-        return deriveProviderApprovalInbox(ides, connectionStates).length
+    const pendingProviderApprovals = useMemo(() => {
+        if (isStandalone) return []
+        return deriveProviderApprovalInbox(ides, connectionStates)
     }, [connectionStates, ides, isStandalone])
-    const openApprovals = useCallback(() => navigate('/approvals'), [navigate])
+    const pendingProviderApprovalCount = pendingProviderApprovals.length
+    const openApprovals = useCallback(() => {
+        setApprovalsNowMs(Date.now())
+        setApprovalsOpen(true)
+    }, [])
+    const closeApprovals = useCallback(() => {
+        setApprovalsOpen(false)
+    }, [])
+    useEffect(() => {
+        if (pendingProviderApprovalCount === 0) {
+            setApprovalsOpen(false)
+        }
+    }, [pendingProviderApprovalCount])
+    useEffect(() => {
+        if (!approvalsOpen) return
+        setApprovalsNowMs(Date.now())
+        const timer = setInterval(() => setApprovalsNowMs(Date.now()), MOBILE_APPROVALS_WAIT_TICK_MS)
+        return () => clearInterval(timer)
+    }, [approvalsOpen])
+    const resolvePendingApproval = useCallback(
+        async (
+            nodeId: string,
+            sessionId: string,
+            action: PendingApprovalAction,
+            approvalTarget?: ProviderApprovalTarget,
+            exact?: PendingApprovalExactButton,
+        ) => {
+            if (!approvalTarget) return
+            await sendDaemonCommand(nodeId, 'resolve_action', {
+                action,
+                sessionId,
+                approvalTarget,
+                ...(exact ? { button: exact.button, buttonIndex: exact.buttonIndex } : {}),
+            })
+        },
+        [sendDaemonCommand],
+    )
 
     const selectedConversation = useMemo(
-        () => conversations.find(conversation => conversation.tabKey === selectedTabKey)
-            || hiddenConversations.find(conversation => conversation.tabKey === selectedTabKey)
-            || conversations[0]
-            || null,
+        () => {
+            if (!selectedTabKey) return null
+            return conversations.find(conversation => conversation.tabKey === selectedTabKey)
+                || hiddenConversations.find(conversation => conversation.tabKey === selectedTabKey)
+                || null
+        },
         [conversations, hiddenConversations, selectedTabKey],
     )
     const selectedIdeEntry = useMemo(
@@ -194,6 +275,8 @@ export default function DashboardMobileChatMode({
     }), [conversations, liveSessionInboxState, screen, selectedConversation, warmChatVersion])
     const { markConversationRead } = useDashboardMobileChatEffects({
         conversations,
+        hiddenConversations,
+        ides,
         machineEntries,
         items,
         selectedConversation,
@@ -203,6 +286,8 @@ export default function DashboardMobileChatMode({
         sendDaemonCommand,
         requestedActiveTabKey,
         onRequestedActiveTabConsumed,
+        onRestoreHiddenConversation,
+        onShowHiddenConversation,
         requestedMachineId,
         onRequestedMachineConsumed,
         requestedMobileSection,
@@ -322,8 +407,53 @@ export default function DashboardMobileChatMode({
         await machineActions.handleOpenRecent(selectedMachineEntry.id, session)
     }, [machineActions, selectedMachineEntry])
 
+    const handleOpenApprovalSession = useCallback(
+        (item: PendingApprovalItem) => {
+            setApprovalsOpen(false)
+            const matched = findMatchingMobileConversation(
+                conversations,
+                hiddenConversations,
+                { nodeId: item.nodeId, sessionId: item.sessionId },
+                ides,
+            )
+            if (!matched) return
+            if (matched.isHidden) {
+                if (onRestoreHiddenConversation) {
+                    onRestoreHiddenConversation(matched.conversation)
+                } else if (onShowHiddenConversation) {
+                    onShowHiddenConversation(matched.conversation)
+                }
+            }
+            openConversation(matched.conversation)
+        },
+        [
+            conversations,
+            hiddenConversations,
+            ides,
+            onRestoreHiddenConversation,
+            onShowHiddenConversation,
+            openConversation,
+        ],
+    )
+
+    const isApprovalsSheetOpen = approvalsOpen && pendingProviderApprovalCount > 0
+
     return (
-        <div className="dashboard-mobile-chat w-full min-w-0">
+        <div
+            className="dashboard-mobile-chat w-full min-w-0"
+            ref={(element) => {
+                if (!element) return
+                const htmlElement = element as HTMLElement & { inert?: boolean }
+                if (isApprovalsSheetOpen) {
+                    htmlElement.inert = true
+                    htmlElement.setAttribute('inert', '')
+                } else {
+                    htmlElement.inert = false
+                    htmlElement.removeAttribute('inert')
+                }
+            }}
+            aria-hidden={isApprovalsSheetOpen ? true : undefined}
+        >
             {screen === 'chat' && selectedConversation ? (
                 <DashboardMobileChatRoom
                     selectedConversation={selectedConversation}
@@ -404,9 +534,53 @@ export default function DashboardMobileChatMode({
                     isConversationMuted={isConversationMuted}
                     onToggleMuteConversation={toggleMute}
                     pendingProviderApprovalCount={pendingProviderApprovalCount}
-                    onOpenApprovals={isStandalone ? undefined : openApprovals}
+                    onOpenApprovals={!isStandalone && pendingProviderApprovalCount > 0 ? openApprovals : undefined}
                 />
             )}
+            <DialogShell
+                open={isApprovalsSheetOpen}
+                onClose={closeApprovals}
+                align="sheet"
+                size="lg"
+                ariaLabel={t('approvals.pageTitle')}
+                surfaceClassName="rounded-2xl"
+            >
+                <div
+                    data-testid="mobile-approvals-sheet"
+                    className="flex min-h-0 flex-1 flex-col overflow-hidden"
+                >
+                    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-default px-4 py-3.5">
+                        <div className="min-w-0">
+                            <h2 className="truncate text-base font-bold text-text-primary">
+                                {t('approvals.pageTitle')}
+                            </h2>
+                            <p className="truncate text-2xs text-text-muted mt-0.5">
+                                {t('approvals.pageSubtitle')}
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            data-testid="mobile-approvals-close"
+                            onClick={closeApprovals}
+                            className="-m-1.5 inline-flex h-11 w-11 shrink-0 items-center justify-center"
+                            aria-label={t('common.closeDialog')}
+                        >
+                            <span className="btn btn-ghost btn-sm inline-flex h-8 w-8 items-center justify-center p-0">
+                                <IconX size={16} />
+                            </span>
+                        </button>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
+                        <PendingApprovalsInbox
+                            approvals={pendingProviderApprovals}
+                            onResolve={resolvePendingApproval}
+                            onOpenSession={handleOpenApprovalSession}
+                            hideWhenEmpty={false}
+                            nowMs={approvalsNowMs}
+                        />
+                    </div>
+                </div>
+            </DialogShell>
         </div>
     )
 }
