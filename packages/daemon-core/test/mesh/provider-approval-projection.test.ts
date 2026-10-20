@@ -56,10 +56,12 @@ describe('typed provider approval projection', () => {
             expect(byId.get(id)!.activeChat!.activeModal).toMatchObject({ buttons: ['Run', 'Cancel'] });
         }
     });
-    it('actual FSM metadata writes omit live labels and absolute trust directories', () => {
+    it.each(['claude-cli', 'antigravity-cli'])('actual %s FSM metadata writes omit live labels and absolute trust directories', (cliType) => {
         const adapter = Object.assign(Object.create(SpecCliAdapter.prototype), {
-            approvalLifecycle: new ProviderApprovalLifecycle(), runtimeSettings: {}, workingDir: '/private/runtime', cliType: 'claude-cli',
-            driver: { updateMeta: vi.fn(), snapshot: () => 'Do you trust the contents of this directory?\n/private/displayed' },
+            approvalLifecycle: new ProviderApprovalLifecycle(), runtimeSettings: {}, workingDir: '/private/runtime', cliType,
+            // The real constructor always loads a spec before subscribing to FSM events.
+            spec: { id: cliType, name: cliType },
+            driver: { updateMeta: vi.fn(), dispatch: vi.fn(), snapshot: () => 'Do you trust the contents of this directory?\n/private/displayed' },
             maybeClearResolvedClaudeTuiPrompt: vi.fn(), maybeCaptureClaudeTuiPrompt: vi.fn(), maybeUpgradeClaudeTuiMultiSelect: vi.fn(), notifyChange: vi.fn(),
         });
         (adapter as any).handleEvent({ kind: 'state_changed', state: { ...state, id: 'trust' }, modal: { ...modal, kind: 'confirm', buttons: [{ index: 1, label: 'private-command' }] } });
@@ -67,6 +69,7 @@ describe('typed provider approval projection', () => {
         expect(saved).toMatchObject({ type: 'provider_setup', evidence: 'cached', buttons: [], actionable: false });
         expect(JSON.stringify(saved)).not.toMatch(/private/);
         expect(adapter.approvalLifecycle.read()).toMatchObject({ runtimeDirectory: '/private/runtime', displayedDirectory: '/private/displayed', buttons: ['private-command'] });
+        expect(adapter.driver.dispatch).not.toHaveBeenCalled();
     });
     it('suppression null overrides durable raw metadata, while host-only metadata stays non-actionable', () => {
         const lifecycle = new ProviderApprovalLifecycle(); lifecycle.observe(state, modal, 1000);

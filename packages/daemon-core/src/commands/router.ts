@@ -140,7 +140,18 @@ import {
 } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
-import { COMMAND_SOURCE_ARG, COMMAND_SOURCE_STAMPED, readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
+import {
+    COMMAND_SOURCE_ARG,
+    COMMAND_SOURCE_STAMPED,
+    issueTrustedOwnerIngressProof,
+    isValidTrustedOwnerIngressProof,
+    markTrustedOwnerIngress,
+    preserveTrustedOwnerIngress,
+    readMeshDirectDispatchFlag,
+    readTrustedOwnerIngressProof,
+    withMeshDirectDispatch,
+    type TrustedOwnerIngressProof,
+} from './command-args.js';
 import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
@@ -403,52 +414,7 @@ function meshIdsRevealedByCommandArgs(args: unknown): string[] {
     return [...new Set(ids)];
 }
 
-export function buildMemberJoinNode(mesh: any, args: any, fallbackDaemonId?: string): Record<string, unknown> | null {
-    const requestedNodeId = typeof args?.memberNodeId === 'string' ? args.memberNodeId.trim() : '';
-    const explicit = args?.memberNode && typeof args.memberNode === 'object' && !Array.isArray(args.memberNode)
-        ? args.memberNode as Record<string, any>
-        : null;
-    const configured = Array.isArray(mesh?.nodes)
-        ? (requestedNodeId
-            ? mesh.nodes.find((node: any) => meshNodeIdMatches(node, requestedNodeId))
-            : mesh.nodes[0])
-        : null;
-    const source = explicit || configured;
-    const workspace = typeof source?.workspace === 'string' && source.workspace.trim()
-        ? source.workspace.trim()
-        : typeof args?.workspace === 'string' && args.workspace.trim()
-            ? args.workspace.trim()
-            : process.cwd();
-    if (!workspace) return null;
-    const nodeId = typeof source?.id === 'string' && source.id.trim()
-        ? source.id.trim()
-        : typeof source?.nodeId === 'string' && source.nodeId.trim()
-            ? source.nodeId.trim()
-            : undefined;
-    const baseOverrides = source?.userOverrides && typeof source.userOverrides === 'object' && !Array.isArray(source.userOverrides)
-        ? source.userOverrides as Record<string, unknown>
-        : {};
-    // This payload is built ON THE MEMBER DAEMON, so process.platform/process.arch
-    // are the member's OWN machine. Stamp them into userOverrides so the host
-    // stores the member's real platform/arch on the node record — the coordinator's
-    // buildMeshNodeCapabilityTags then advertises os=<member-os> instead of the
-    // coordinator's own platform. Only fill values the operator hasn't already set.
-    const userOverrides: Record<string, unknown> = {
-        ...baseOverrides,
-        ...(typeof baseOverrides.platform === 'string' && baseOverrides.platform.trim() ? {} : { platform: process.platform }),
-        ...(typeof baseOverrides.arch === 'string' && baseOverrides.arch.trim() ? {} : { arch: process.arch }),
-    };
-    return {
-        ...(nodeId ? { id: nodeId } : {}),
-        workspace,
-        ...(typeof source?.repoRoot === 'string' && source.repoRoot.trim() ? { repoRoot: source.repoRoot.trim() } : {}),
-        ...(typeof source?.daemonId === 'string' && source.daemonId.trim() ? { daemonId: source.daemonId.trim() } : fallbackDaemonId ? { daemonId: fallbackDaemonId } : {}),
-        ...(typeof source?.machineId === 'string' && source.machineId.trim() ? { machineId: source.machineId.trim() } : {}),
-        userOverrides,
-        policy: source?.policy && typeof source.policy === 'object' && !Array.isArray(source.policy) ? source.policy : {},
-        role: 'member',
-    };
-}
+export { buildMemberJoinNode } from './router-member-join.js';
 
 export class DaemonCommandRouter {
     /** Public (not private) so the extracted ./router-refine.ts orchestration can reach it via `self`. */
@@ -854,10 +820,21 @@ export class DaemonCommandRouter {
      *   in-process caller of the router can set it: the host runtime's
      *   transport entry (`DaemonHostRuntime.execute`) does not carry it.
      */
-    async execute(cmd: string, args: any, source: string = 'internal', opts?: { peerId?: string; inProcess?: boolean }): Promise<CommandRouterResult> {
+    async execute(
+        cmd: string,
+        args: any,
+        source: string = 'internal',
+        opts?: {
+            peerId?: string;
+            inProcess?: boolean;
+            ownerVerified?: boolean;
+            ownerProof?: TrustedOwnerIngressProof | null;
+            verifyCurrentOwner?: () => boolean;
+        },
+    ): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source);
-        const peerId = typeof opts?.peerId === 'string' && opts.peerId.length > 0 ? opts.peerId : undefined;
+        const peerId = typeof opts?.peerId === 'string' && opts.peerId.trim().length > 0 ? opts.peerId.trim() : undefined;
         const spec = getDaemonCommandRegistry().get(cmd);
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
         // Only the mesh transport may present a sender identity: drop the
@@ -868,6 +845,24 @@ export class DaemonCommandRouter {
         // The command source is the router's to state, never the caller's.
         if (COMMAND_SOURCE_ARG in normalizedArgs) delete normalizedArgs[COMMAND_SOURCE_ARG];
         if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
+        if ((logSource === 'p2p' || logSource === 'standalone') && opts?.ownerVerified !== false) {
+            const attachedProof = readTrustedOwnerIngressProof(args, logSource);
+            const explicitProof = isValidTrustedOwnerIngressProof(opts?.ownerProof, logSource)
+                ? opts!.ownerProof
+                : null;
+            const mintedProof = !attachedProof && !explicitProof && opts?.ownerVerified === true
+                ? issueTrustedOwnerIngressProof({
+                    source: logSource,
+                    ownerVerified: true,
+                    peerId: logSource === 'p2p' ? (peerId || 'owner-p2p') : undefined,
+                    verifyCurrent: opts.verifyCurrentOwner,
+                })
+                : null;
+            const resolvedProof = attachedProof ?? explicitProof ?? mintedProof;
+            if (resolvedProof) {
+                markTrustedOwnerIngress(normalizedArgs, resolvedProof);
+            }
+        }
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
 
@@ -1057,10 +1052,12 @@ export class DaemonCommandRouter {
     /** Run a spec in the context its family needs. */
     private async runSpec(spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult> {
         if (spec.stripTransportMetadata) {
+            const previousArgs = args;
             args = { ...args };
             delete args._interactionId;
             delete args[MESH_SENDER_DAEMON_ID_ARG];
             delete args[COMMAND_SOURCE_ARG];
+            preserveTrustedOwnerIngress(previousArgs, args);
         }
         switch (spec.family) {
             case 'low': {

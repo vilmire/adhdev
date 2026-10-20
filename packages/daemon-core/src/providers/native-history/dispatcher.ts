@@ -49,6 +49,7 @@ export interface NativeHistoryInput {
     instanceId?: string;
     workspace?: string;
     sessionStartedAtMs?: number;
+    envOverrides?: Record<string, string>;
     format?: string;
     watchPath?: string;
     forceRefresh?: boolean;
@@ -176,7 +177,10 @@ export function createNativeHistoryDispatcher(reader: ReaderId): (input: NativeH
             : typeof input.args?.instanceId === 'string'
                 ? (input.args.instanceId as string)
                 : '';
-        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid);
+        const homeDir = typeof input.envOverrides?.HOME === 'string' && input.envOverrides.HOME.trim()
+            ? input.envOverrides.HOME.trim()
+            : undefined;
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
         // Owner-confirmation only meaningful for antigravity (see resolveAntigravityPath).
@@ -241,11 +245,11 @@ interface ResolvedSource {
     ownerConfirmed?: boolean;
 }
 
-function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string, providerSessionId: string): ResolvedSource | null {
+function resolveSourcePath(reader: ReaderId, workspace: string, sessionId: string, sessionStartedAtMs: number, instanceId: string, providerSessionId: string, homeDir?: string): ResolvedSource | null {
     switch (reader) {
         case 'claude-cli':   { const p = resolveClaudePath(workspace, sessionId); return p ? { path: p } : null; }
         case 'codex-cli':    { const p = resolveCodexPath(workspace, sessionId, sessionStartedAtMs); return p ? { path: p } : null; }
-        case 'antigravity-cli': return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId);
+        case 'antigravity-cli': return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId, homeDir);
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
         // the filename, so resolution lives in the reader module.
@@ -265,8 +269,16 @@ export function resolveAntigravityConversationPath(
     sessionId: string,
     sessionStartedAtMs: number,
     instanceId: string,
+    options?: { homeDir?: string; allowDiscovery?: boolean },
 ): { path: string; ownerConfirmed?: boolean } | null {
-    return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
+    return resolveAntigravityPath(
+        workspace,
+        sessionId,
+        sessionStartedAtMs,
+        instanceId,
+        options?.allowDiscovery ?? true,
+        options?.homeDir,
+    );
 }
 
 function resolveClaudePath(workspace: string, sessionId: string): string | null {
@@ -488,8 +500,10 @@ function resolveAntigravityPath(
     sessionStartedAtMs: number,
     instanceId: string,
     allowDiscovery = true,
+    homeDir?: string,
 ): ResolvedSource | null {
-    const agyRoot = path.join(os.homedir(), '.gemini', 'antigravity-cli');
+    const baseHome = typeof homeDir === 'string' && homeDir.trim() ? homeDir.trim() : os.homedir();
+    const agyRoot = path.join(baseHome, '.gemini', 'antigravity-cli');
     const owner = antigravityOwnerToken(workspace, sessionStartedAtMs, instanceId);
     const brainPath = (uuid: string) => path.join(agyRoot, 'brain', uuid, '.system_generated', 'logs', 'transcript.jsonl');
     const accept = (uuid: string, sourcePath: string): ResolvedSource | null => {

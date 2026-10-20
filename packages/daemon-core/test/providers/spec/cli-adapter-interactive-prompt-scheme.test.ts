@@ -189,11 +189,12 @@ describe('validateFsmSpec -- interactive_prompts', () => {
         states: [{ id: 'idle', label: 'Idle', initial: true, status: 'idle' }],
         transitions: [],
     }
-    it('accepts both scheme names and rejects unknown ones', () => {
+    it('accepts supported scheme names and rejects unknown ones', () => {
         expect(validateFsmSpec({ ...base, interactive_prompts: { scheme: 'kimi_wire' } })).toEqual([])
         expect(validateFsmSpec({ ...base, interactive_prompts: { scheme: 'claude_tui' } })).toEqual([])
+        expect(validateFsmSpec({ ...base, interactive_prompts: { scheme: 'antigravity_tui' } })).toEqual([])
         expect(validateFsmSpec({ ...base, interactive_prompts: { scheme: 'nope' } }))
-            .toContain('interactive_prompts.scheme must be "claude_tui" or "kimi_wire"')
+            .toContain('interactive_prompts.scheme must be "claude_tui", "kimi_wire", or "antigravity_tui"')
         expect(validateFsmSpec({ ...base, interactive_prompts: [] }))
             .toContain('interactive_prompts must be an object')
     })

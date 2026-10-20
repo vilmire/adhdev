@@ -73,6 +73,15 @@ export function formatApprovalWait(waitingSince: number | null | undefined, nowM
     return `${hours}h ${String(minutes % 60).padStart(2, '0')}m`
 }
 
+/** Build the dashboard activeTab query target for an approval row, scoping by nodeId when known. */
+export function buildApprovalSessionActiveTabTarget(
+    item: Pick<PendingApprovalItem, 'nodeId' | 'sessionId'>,
+): string {
+    const nodeId = typeof item.nodeId === 'string' ? item.nodeId.trim() : ''
+    const sessionId = typeof item.sessionId === 'string' ? item.sessionId.trim() : ''
+    return nodeId ? `session:${nodeId}:${sessionId}` : `session:${sessionId}`
+}
+
 /** Fields that carry a session's live status text — union of the mesh session-status shape. */
 function sessionStatusText(session: RepoMeshSessionStatus): string {
     return `${session.state ?? ''} ${session.chatStatus ?? ''} ${session.lifecycle ?? ''}`.toLowerCase()
@@ -188,9 +197,15 @@ interface Props {
      * Defaults to Date.now() at render time.
      */
     nowMs?: number
+    /**
+     * Optional in-app handler when "Open session" is clicked. Plain primary clicks invoke
+     * this instead of performing a full-document reload, while `<a href>` remains intact
+     * for modified clicks and page fallback.
+     */
+    onOpenSession?: (item: PendingApprovalItem) => void
 }
 
-export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hideWhenEmpty = true, nowMs }: Props) {
+export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hideWhenEmpty = true, nowMs, onOpenSession }: Props) {
     const { t } = useTranslation()
     const resolvedNow = nowMs ?? Date.now()
     const items = useMemo(
@@ -272,7 +287,26 @@ export default function PendingApprovalsInbox({ approvals, nodes, onResolve, hid
                                     </div>
                                     {item.runtimeDirectory && <div className="text-3xs break-all">{t('mesh.approvals.runtimeDirectory')}: {item.runtimeDirectory}</div>}
                                     {item.approvalType === 'provider_setup' && <div className="text-3xs break-all">{t('mesh.approvals.displayedDirectory')}: {item.displayedDirectory || t('mesh.approvals.directoryUnknown')}</div>}
-                                    <a className="text-3xs underline" href={`/dashboard?activeTab=${encodeURIComponent(`session:${item.sessionId}`)}`}>{t('mesh.approvals.openSession')}</a>
+                                    <a
+                                        className="text-3xs underline"
+                                        href={`/dashboard?activeTab=${encodeURIComponent(buildApprovalSessionActiveTabTarget(item))}`}
+                                        onClick={onOpenSession ? (event) => {
+                                            if (
+                                                event.defaultPrevented
+                                                || event.button !== 0
+                                                || event.metaKey
+                                                || event.ctrlKey
+                                                || event.shiftKey
+                                                || event.altKey
+                                            ) {
+                                                return
+                                            }
+                                            event.preventDefault()
+                                            onOpenSession(item)
+                                        } : undefined}
+                                    >
+                                        {t('mesh.approvals.openSession')}
+                                    </a>
                                     {providerButtons.length === 0 && item.options && item.options.length > 0 && (
                                         <div className="mt-1 flex flex-wrap gap-1">
                                             {item.options.slice(0, 4).map((option, i) => (

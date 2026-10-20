@@ -15,7 +15,9 @@
  *     available tools from the built-in set", so MCP tools stay available; the
  *     `=` form keeps the variadic flag from swallowing later args.
  *   - codex-cli (`cli_command` registration): never `codex mcp add` (that
- *     writes the user's global codex config) — `-c mcp_servers.*` overrides.
+ *     writes the user's global codex config) — writes `<workspace>/.codex/config.toml`
+ *     (preserving Codex-persisted `[mcp_servers.adhdev-assistant.tools.*]` consent
+ *     across launches) plus `-c mcp_servers.*` overrides.
  *   - other auto-import providers: the config is written inside the assistant
  *     workspace (not a repo, so nothing tracked gets dirty).
  *   - an auto-import provider whose config is a global `~/…` file (antigravity:
@@ -54,6 +56,7 @@ import type { ProviderModule } from '../providers/contracts.js';
 import type { ProviderAssistantEligibility } from '../shared-types.js';
 
 export const ASSISTANT_MCP_SERVER_NAME = 'adhdev-assistant';
+export const ASSISTANT_CODEX_MCP_CONFIG_FORMAT = 'codex_toml';
 /**
  * Env every claude-cli assistant launch carries. Claude Code's auto memory
  * (`~/.claude/projects/<p>/memory/`) is on by default for local sessions and
@@ -73,6 +76,10 @@ export function assistantWorkspaceDir(configDir: string): string {
 
 export function assistantClaudeMcpConfigPath(configDir: string): string {
     return join(configDir, 'mcp-configs', 'assistant.json');
+}
+
+export function assistantCodexMcpConfigPath(workspace: string): string {
+    return join(workspace, '.codex', 'config.toml');
 }
 
 /**
@@ -173,6 +180,24 @@ export function buildAssistantCodexOverrideArgs(serverName: string, server: Assi
     return args;
 }
 
+import {
+    assertCompatibleAssistantServerIdentity,
+    formatTomlSegment,
+    mergeAssistantCodexMcpConfigToml,
+    parseManagedAssistantServerIdentity,
+    parseTomlDocument,
+    withoutAssistantSessionEnv,
+} from './assistant-codex-toml.js';
+
+export {
+    assertCompatibleAssistantServerIdentity,
+    formatTomlSegment,
+    mergeAssistantCodexMcpConfigToml,
+    parseManagedAssistantServerIdentity,
+    parseTomlDocument,
+    withoutAssistantSessionEnv,
+};
+
 /** The assistant MCP server launch with its session id in the entry's own env (absent id → unchanged). */
 export function withAssistantSessionEnv(
     server: { command: string; args: string[]; env?: Record<string, string> },
@@ -237,10 +262,12 @@ export function planAssistantMcp(input: {
             };
         }
         const codexServer = withAssistantSessionEnv(setup.mcpServer, input.sessionId);
+        const persistedCodexServer = withoutAssistantSessionEnv(codexServer);
+        const path = assistantCodexMcpConfigPath(workspace);
         return {
             ok: true,
             cliArgs: buildAssistantCodexOverrideArgs(serverName, codexServer),
-            configWrite: null,
+            configWrite: { path, format: ASSISTANT_CODEX_MCP_CONFIG_FORMAT, serverName, server: persistedCodexServer },
             mcpServer: codexServer,
             toolRestriction: 'prompt_only',
         };

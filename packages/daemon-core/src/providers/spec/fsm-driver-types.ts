@@ -20,7 +20,7 @@ import type { QueuedWriteOutcome, SendDisposition } from './submit-policy.js';
 export type DashboardEvent =
     | { kind: 'pty_data'; chunk: string }
     | { kind: 'state_changed'; state: { id: string; label: string; title: string | null; status: FsmStatus };
-        modal: { title: string | null; buttons: { index: number; label: string }[]; kind: 'approval' | 'picker' | 'confirm' | null } | null;
+        modal: { title: string | null; buttons: { index: number; label: string }[]; kind: 'approval' | 'picker' | 'confirm' | 'choice' | null } | null;
         controls: { id: string; label: string; action_type: string }[] }
     | { kind: 'notification'; id: string; title: string; body: string }
     | { kind: 'delegate'; id: string; task: string }

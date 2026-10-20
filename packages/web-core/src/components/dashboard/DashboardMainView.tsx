@@ -386,6 +386,12 @@ export default function DashboardMainView({
         onMarkNotificationRead,
         onRequestScrollToBottom,
     ])
+    React.useEffect(() => {
+        if (showMobileChatMode || !requestedDesktopTabKey) return
+        const hiddenMatch = hiddenConversations.find(conversation => conversation.tabKey === requestedDesktopTabKey)
+        if (!hiddenMatch) return
+        handleShowHiddenConversationWithRestore(hiddenMatch)
+    }, [handleShowHiddenConversationWithRestore, hiddenConversations, requestedDesktopTabKey, showMobileChatMode])
     // session-nav bus: observation surfaces buried inside dialogs (session
     // info's coordinator jump, the mesh dialog's session modal, topology
     // session chips) request "open this session's chat" here — the one place
