@@ -25,6 +25,8 @@
 
 import * as fs from 'node:fs';
 import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { hasWorkerCredentialInput, verifyArtifactCommandIngress } from './artifact-command-ingress.js';
+import { bindAuthenticatedMcpWorkspace } from '../mcp-command-ingress.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
@@ -54,7 +56,22 @@ export interface ArtifactCommandRuntime {
     readonly meshRuntimeStore?: MeshRuntimeStore;
 }
 
-const runtimeByDeps = new WeakMap<CommandRouterDeps, ArtifactCommandRuntime>();
+const ARTIFACT_RUNTIME_BY_DEPS_KEY = Symbol.for('adhdev.daemon-core.artifactCommandRuntimeByDeps');
+function getRuntimeByDepsMap(): WeakMap<CommandRouterDeps, ArtifactCommandRuntime> {
+    const g = globalThis as Record<symbol, WeakMap<CommandRouterDeps, ArtifactCommandRuntime> | undefined>;
+    let map = g[ARTIFACT_RUNTIME_BY_DEPS_KEY];
+    if (!map) {
+        map = new WeakMap<CommandRouterDeps, ArtifactCommandRuntime>();
+        Object.defineProperty(globalThis, ARTIFACT_RUNTIME_BY_DEPS_KEY, {
+            value: map,
+            writable: false,
+            enumerable: false,
+            configurable: false,
+        });
+    }
+    return map;
+}
+const runtimeByDeps = getRuntimeByDepsMap();
 
 /** Optional test/embedding injection hook for custom store instances per router deps. */
 export function setArtifactCommandRuntimeForDeps(
@@ -275,18 +292,99 @@ async function resolveRegisteredSessionWorkspace(
     };
 }
 
+async function isSessionAuthorizedForMesh(
+    ctx: ArtifactCommandContext,
+    meshStore: any,
+    meshId: string,
+    sessionId: string,
+): Promise<boolean> {
+    if (!meshId || !sessionId) return false;
+    try {
+        const coord = getCoordinatorForSession(sessionId);
+        if (coord) {
+            if (coord.meshId !== meshId) return false;
+            return true;
+        }
+    } catch {
+        // Continue to store/mesh membership checks.
+    }
+
+    if (meshStore) {
+        try {
+            const assigned = meshStore.findAssignedBySession?.(meshId, sessionId);
+            if (assigned) return true;
+        } catch {
+            // Continue.
+        }
+        try {
+            const queueEntries: any[] = meshStore.getQueue?.(meshId) ?? [];
+            if (
+                Array.isArray(queueEntries) &&
+                queueEntries.some((entry) =>
+                    sessionIdsEquivalent(trimString(entry?.assignedSessionId), sessionId),
+                )
+            ) {
+                return true;
+            }
+        } catch {
+            // Continue.
+        }
+    }
+
+    const matchesMeshNodes = (mesh: any): boolean => {
+        if (!mesh || !Array.isArray(mesh.nodes)) return false;
+        return mesh.nodes.some((node: any) => {
+            const nodeSid = trimString(node?.sessionId);
+            const activeSid = trimString(node?.activeSessionId);
+            const coordSid = trimString(node?.coordinatorSessionId);
+            if (
+                (nodeSid && sessionIdsEquivalent(nodeSid, sessionId)) ||
+                (activeSid && sessionIdsEquivalent(activeSid, sessionId)) ||
+                (coordSid && sessionIdsEquivalent(coordSid, sessionId))
+            ) {
+                return true;
+            }
+            const sessions = Array.isArray(node?.sessions) ? node.sessions : [];
+            if (
+                sessions.some((s: any) =>
+                    sessionIdsEquivalent(trimString(typeof s === 'string' ? s : s?.sessionId), sessionId),
+                )
+            ) {
+                return true;
+            }
+            const delegated = Array.isArray(node?.delegatedSessions) ? node.delegatedSessions : [];
+            return delegated.some((s: any) =>
+                sessionIdsEquivalent(trimString(typeof s === 'string' ? s : s?.sessionId), sessionId),
+            );
+        });
+    };
+
+    try {
+        const cachedMesh = ctx.getCachedInlineMesh?.(meshId);
+        if (matchesMeshNodes(cachedMesh)) return true;
+    } catch {
+        // Continue.
+    }
+
+    try {
+        const resolved = await ctx.getMeshForCommand?.(meshId);
+        if (matchesMeshNodes(resolved?.mesh)) return true;
+    } catch {
+        // Continue.
+    }
+
+    return false;
+}
+
 async function resolveCallerAuthority(
     ctx: ArtifactCommandContext,
     args: Record<string, unknown>,
     mode: 'register' | 'list' | 'fetch',
+    ownerTrusted = false,
 ): Promise<{ ok: true; authority: ResolvedSessionAuthority } | { ok: false; result: CommandRouterResult }> {
     const rawBind = args?.bind;
     const rawToken = args?.token;
-    const hasWorkerCredential =
-        (typeof rawBind === 'string' && rawBind.trim().length > 0) ||
-        (typeof rawToken === 'string' && rawToken.trim().length > 0) ||
-        (rawBind !== undefined && rawBind !== null) ||
-        (rawToken !== undefined && rawToken !== null);
+    const hasWorkerCredential = hasWorkerCredentialInput(args);
 
     const rawSessionId = trimString(args?.sessionId);
     const rawTargetSessionId = trimString(args?.targetSessionId);
@@ -693,7 +791,7 @@ async function resolveCallerAuthority(
             }
         }
 
-        if (mode === 'register' && !resolved.workspaceRoot) {
+        if (!resolved.workspaceRoot) {
             return {
                 ok: false,
                 result: {
@@ -730,26 +828,100 @@ async function resolveCallerAuthority(
 
     const explicitMeshId = trimString(args?.meshId);
     const explicitTaskId = trimString(args?.taskId);
-    if (explicitMeshId && explicitTaskId) {
-        try {
-            const meshStore = getMeshRuntimeStore(ctx);
-            const queueEntry = meshStore.findQueueEntryById(explicitMeshId, explicitTaskId) as Record<
-                string,
-                unknown
-            > | null;
-            const assignedSession = trimString(queueEntry?.assignedSessionId);
-            if (assignedSession && !sessionIdsEquivalent(assignedSession, explicitSessionId)) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'task_mismatch',
-                        error: `Task "${explicitTaskId}" belongs to session "${assignedSession}", not "${explicitSessionId}" (task_mismatch)`,
-                    },
-                };
+    if (explicitTaskId) {
+        if (!explicitMeshId && !ownerTrusted) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'task_mismatch',
+                    error: `Task "${explicitTaskId}" cannot be verified without an owning mesh scope (task_mismatch)`,
+                },
+            };
+        }
+        if (explicitMeshId) {
+            try {
+                const meshStore = getMeshRuntimeStore(ctx);
+                const queueEntry = meshStore.findQueueEntryById(explicitMeshId, explicitTaskId) as Record<
+                    string,
+                    unknown
+                > | null;
+                const assignedSession = trimString(queueEntry?.assignedSessionId);
+                const queueStatus = trimString(queueEntry?.status);
+                if (assignedSession && !sessionIdsEquivalent(assignedSession, explicitSessionId)) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'task_mismatch',
+                            error: `Task "${explicitTaskId}" belongs to session "${assignedSession}", not "${explicitSessionId}" (task_mismatch)`,
+                        },
+                    };
+                }
+                if (
+                    !ownerTrusted &&
+                    (!queueEntry ||
+                        !assignedSession ||
+                        !sessionIdsEquivalent(assignedSession, explicitSessionId) ||
+                        (queueStatus && queueStatus !== 'assigned'))
+                ) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'task_mismatch',
+                            error: `Task "${explicitTaskId}" is not actively assigned to session "${explicitSessionId}" in mesh "${explicitMeshId}" (task_mismatch)`,
+                        },
+                    };
+                }
+            } catch {
+                if (!ownerTrusted) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'task_mismatch',
+                            error: `Task "${explicitTaskId}" ownership could not be verified in mesh "${explicitMeshId}" (task_mismatch)`,
+                        },
+                    };
+                }
             }
+        }
+    }
+
+    if (!ownerTrusted && mode === 'register' && (rawCallerSessionId || (explicitMeshId && !explicitTaskId))) {
+        return {
+            ok: false,
+            result: {
+                success: false,
+                code: 'artifact_session_mismatch',
+                error: `Session "${explicitSessionId}" cannot register artifacts via unverified caller/mesh scope without worker credentials (artifact_session_mismatch)`,
+            },
+        };
+    }
+
+    if (!ownerTrusted && mode === 'list' && explicitMeshId) {
+        let meshStore: any = null;
+        try {
+            meshStore = getMeshRuntimeStore(ctx);
         } catch {
-            // Best-effort check against queue entry ownership.
+            meshStore = null;
+        }
+        const authorizedInMesh = await isSessionAuthorizedForMesh(
+            ctx,
+            meshStore,
+            explicitMeshId,
+            explicitSessionId,
+        );
+        if (!authorizedInMesh) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'artifact_session_mismatch',
+                    error: `Session "${explicitSessionId}" is not an authorized member of mesh "${explicitMeshId}" (artifact_session_mismatch)`,
+                },
+            };
         }
     }
 
@@ -772,7 +944,7 @@ async function resolveCallerAuthority(
         }
     }
 
-    if (mode === 'register' && !resolved.workspaceRoot) {
+    if (!resolved.workspaceRoot) {
         return {
             ok: false,
             result: {
@@ -813,8 +985,15 @@ function handleArtifactError(err: unknown): CommandRouterResult {
 }
 
 const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
-    const auth = await resolveCallerAuthority(ctx, args ?? {}, 'register');
+    const ingress = verifyArtifactCommandIngress(args, 'register');
+    if (!ingress.ok) return ingress.result;
+    const auth = await resolveCallerAuthority(ctx, ingress.recordArgs, 'register', ingress.ownerTrusted);
     if (!auth.ok) return auth.result;
+    const currentIngress = verifyArtifactCommandIngress(args, 'register');
+    if (!currentIngress.ok) return currentIngress.result;
+    if (!bindAuthenticatedMcpWorkspace(args, auth.authority.workspaceRoot ?? '')) {
+        return { success: false, code: 'artifact_session_mismatch', error: 'Artifact MCP workspace scope changed' };
+    }
 
     const { authority } = auth;
     const rawPath =
@@ -860,6 +1039,8 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
                 throw new Error('Transcript projection service is unavailable');
             }
         } catch (pubErr) {
+            const responseIngress = verifyArtifactCommandIngress(args, 'register');
+            if (!responseIngress.ok) return responseIngress.result;
             const pubMessage = pubErr instanceof Error ? pubErr.message : String(pubErr);
             return {
                 success: false,
@@ -876,6 +1057,8 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
             };
         }
 
+        const responseIngress = verifyArtifactCommandIngress(args, 'register');
+        if (!responseIngress.ok) return responseIngress.result;
         return {
             success: true,
             artifact: registered.record,
@@ -895,8 +1078,15 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
 };
 
 const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
-    const auth = await resolveCallerAuthority(ctx, args ?? {}, 'list');
+    const ingress = verifyArtifactCommandIngress(args, 'list');
+    if (!ingress.ok) return ingress.result;
+    const auth = await resolveCallerAuthority(ctx, ingress.recordArgs, 'list', ingress.ownerTrusted);
     if (!auth.ok) return auth.result;
+    const currentIngress = verifyArtifactCommandIngress(args, 'list');
+    if (!currentIngress.ok) return currentIngress.result;
+    if (!bindAuthenticatedMcpWorkspace(args, auth.authority.workspaceRoot ?? '')) {
+        return { success: false, code: 'artifact_session_mismatch', error: 'Artifact MCP workspace scope changed' };
+    }
 
     const { authority } = auth;
     const rawLimit = args?.limit;
@@ -921,8 +1111,15 @@ const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
 };
 
 const handleArtifactFetch: MedFamilyHandler = async (ctx, args) => {
-    const auth = await resolveCallerAuthority(ctx, args ?? {}, 'fetch');
+    const ingress = verifyArtifactCommandIngress(args, 'fetch');
+    if (!ingress.ok) return ingress.result;
+    const auth = await resolveCallerAuthority(ctx, ingress.recordArgs, 'fetch', ingress.ownerTrusted);
     if (!auth.ok) return auth.result;
+    const currentIngress = verifyArtifactCommandIngress(args, 'fetch');
+    if (!currentIngress.ok) return currentIngress.result;
+    if (!bindAuthenticatedMcpWorkspace(args, auth.authority.workspaceRoot ?? '')) {
+        return { success: false, code: 'artifact_session_mismatch', error: 'Artifact MCP workspace scope changed' };
+    }
 
     const { authority } = auth;
     const artifactId = trimString(args?.artifactId) || trimString(args?.id);
@@ -960,6 +1157,15 @@ export const artifactHandlers: Record<string, MedFamilyHandler> = {
     artifact_read: handleArtifactFetch,
     session_artifact_fetch: handleArtifactFetch,
 };
+
+/** Transport rejection precedes the router's topic/log/forwarding side effects. */
+export function rejectUntrustedArtifactIngress(command: string, args: unknown): CommandRouterResult | null {
+    const handler = artifactHandlers[command];
+    if (!handler) return null;
+    const mode = handler === handleArtifactRegister ? 'register' : handler === handleArtifactList ? 'list' : 'fetch';
+    const ingress = verifyArtifactCommandIngress(args, mode);
+    return ingress.ok ? null : ingress.result;
+}
 
 export const artifactSpecs = defineCommandSpecs(
     'med',

@@ -17,6 +17,7 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 process.env.ADHDEV_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'adhdev-sa-mcp-auth-'));
@@ -264,4 +265,364 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
     expect(logoutRes.status).toBe(200);
     expect(coreMod.readTrustedOwnerIngressProof(cookieArgs, 'standalone')).toBeNull();
   });
+
+  it('F1 consumer: StandaloneHttpApi + DaemonCommandRouter enforces live owner proof, revoked-to-ipc downgrade refusal, and worker/coordinator MCP IPC scopes across all 7 artifact aliases', async () => {
+    const fsMod = await import('node:fs');
+    const authMod = await import('../src/standalone-auth.js');
+    const coreMod = await import('@adhdev/daemon-core');
+    const { ArtifactStore } = await import('../../daemon-core/src/artifacts/index.js');
+    const { setArtifactCommandRuntimeForDeps } = await import('../../daemon-core/src/commands/med-family/artifacts.js');
+    const { DaemonCommandRouter } = await import('../../daemon-core/src/commands/router.js');
+    const { MeshRuntimeStore } = await import('../../daemon-core/src/mesh/mesh-runtime-store.js');
+    const { SessionRegistry } = await import('../../daemon-core/src/sessions/registry.js');
+    const { mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest } = await import('../../daemon-core/src/mesh/worker-mcp-isolation.js');
+    const { seedMeshAttempt } = await import('../../daemon-core/test/helpers/turn-attempt-seed.js');
+    const { registerMeshCoordinator, unregisterMeshCoordinator } = await import('../../daemon-core/src/mesh/coordinator-registry.js');
+    const { configureTranscriptProjection, __resetTranscriptProjectionForTests } = await import('../../daemon-core/src/seqscribe/transcript-publisher.js');
+
+    const tempRoot = mkdtempSync(join(tmpdir(), 'adhdev-f1-sa-artifacts-'));
+    const workspaceDir = join(tempRoot, 'workspace');
+    const foreignDir = join(tempRoot, 'foreign');
+    fsMod.mkdirSync(workspaceDir, { recursive: true });
+    fsMod.mkdirSync(foreignDir, { recursive: true });
+    fsMod.writeFileSync(join(workspaceDir, 'doc.md'), 'STANDALONE-SECRET-DOC', 'utf8');
+    fsMod.writeFileSync(join(foreignDir, 'foreign.md'), 'FOREIGN-STANDALONE-SECRET', 'utf8');
+
+    const sessionRegistry = new SessionRegistry();
+    sessionRegistry.register({
+      sessionId: 'coord-sa',
+      parentSessionId: null,
+      providerType: 'claude-cli',
+      transport: 'pty',
+      workspace: workspaceDir,
+    });
+    sessionRegistry.register({
+      sessionId: 'worker-sa',
+      parentSessionId: 'coord-sa',
+      providerType: 'codex-cli',
+      transport: 'pty',
+      workspace: workspaceDir,
+    });
+    sessionRegistry.register({
+      sessionId: 'foreign-sa',
+      parentSessionId: null,
+      providerType: 'claude-cli',
+      transport: 'pty',
+      workspace: foreignDir,
+    });
+
+    MeshRuntimeStore.resetForTests();
+    configureTranscriptProjection({
+      daemonId: () => 'test-sa-daemon',
+      writerId: () => 'test-sa-writer',
+      epoch: 'test-sa-epoch',
+      appendChatFrame: async () => {},
+    });
+    const meshStore = MeshRuntimeStore.getInstance();
+    const artifactStore = new ArtifactStore(meshStore.db);
+    const now = new Date().toISOString();
+    meshStore.insertQueueEntry({
+      id: 'task-sa-1',
+      meshId: 'mesh-sa',
+      message: 'sa worker task',
+      status: 'assigned',
+      assignedSessionId: 'worker-sa',
+      attemptId: 'att-sa-1',
+      workspace: workspaceDir,
+      createdAt: now,
+      updatedAt: now,
+    } as any);
+    seedMeshAttempt({
+      meshId: 'mesh-sa',
+      taskId: 'task-sa-1',
+      sessionId: 'worker-sa',
+      attemptId: 'att-sa-1',
+      attemptNo: 0,
+      stage: 'generating',
+    });
+
+    const workerToken = mintWorkerTaskToken({
+      meshId: 'mesh-sa',
+      taskId: 'task-sa-1',
+      sessionId: 'worker-sa',
+      attemptId: 'att-sa-1',
+    });
+    const workerBind = mintWorkerSessionBind({
+      meshId: 'mesh-sa',
+      sessionId: 'worker-sa',
+    });
+    registerMeshCoordinator({
+      meshId: 'mesh-sa',
+      sessionId: 'coord-sa',
+      workspace: workspaceDir,
+      startedAt: Date.now(),
+    });
+
+    artifactStore.register({
+      sessionId: 'foreign-sa',
+      workspaceRoot: foreignDir,
+      path: 'foreign.md',
+    });
+
+    const deps: any = {
+      commandHandler: {
+        rejectUnknown: async (cmd: string) => ({ success: false, error: `Unknown command: ${cmd}` }),
+      },
+      cliManager: {},
+      cdpManagers: new Map(),
+      providerLoader: {},
+      instanceManager: { listInstanceIds: () => [] },
+      detectedIdes: { value: [] },
+      sessionRegistry,
+      statusInstanceId: 'daemon_mach_f1_sa',
+    };
+    setArtifactCommandRuntimeForDeps(deps, {
+      artifactStore,
+      meshRuntimeStore: meshStore,
+    });
+    const router = new DaemonCommandRouter(deps);
+
+    const capturedPayloads: Array<Record<string, unknown>> = [];
+    const http = new mod.StandaloneHttpApi({
+      isReady: () => true,
+      getStatus: () => ({ ok: true }) as any,
+      executeCommand: async (type, payload, source, opts) => {
+        capturedPayloads.push(payload);
+        const verifyCurrentOwner = typeof opts?.verifyCurrentOwner === 'function' ? opts.verifyCurrentOwner : undefined;
+        let currentOwnerOk = true;
+        if (verifyCurrentOwner) {
+          try {
+            currentOwnerOk = verifyCurrentOwner() === true;
+          } catch {
+            currentOwnerOk = false;
+          }
+        }
+        const attachedProof = currentOwnerOk ? coreMod.readTrustedOwnerIngressProof(payload, 'standalone') : null;
+        const explicitProof = currentOwnerOk && opts?.ownerProof && coreMod.isValidTrustedOwnerIngressProof(opts.ownerProof, 'standalone')
+          ? opts.ownerProof
+          : null;
+        const ownerProof = attachedProof ?? explicitProof;
+        const isOwner = source === 'standalone' && opts?.ownerVerified === true && currentOwnerOk && Boolean(ownerProof);
+        const effectiveSource = isOwner ? 'standalone' : 'ipc';
+        // Same copy primitive as the production host's toArgsRecord; retain
+        // authenticated MCP context as well as owner transport context.
+        const forwardedPayload = coreMod.preserveTrustedOwnerTransportProof(
+          payload, { ...payload, _interactionId: 'itx-f1-sa' },
+        );
+        return router.execute(type, forwardedPayload, effectiveSource, {
+          ownerVerified: isOwner ? true : opts?.ownerVerified,
+          ...(ownerProof ? { ownerProof } : {}),
+          ...(verifyCurrentOwner ? { verifyCurrentOwner } : {}),
+        });
+      },
+      rawTerminalService: () => ({}) as any,
+      interactivePromptService: () => ({}) as any,
+      isCliSession: () => false,
+      createSessionHostClient: async () => ({}) as any,
+      verifyWorkerCredential: (credential) => credential === workerBind.bind || credential === workerToken.token,
+    });
+    http.configureAuth(DASHBOARD_TOKEN);
+    http.passwordConfig = authMod.createPasswordRecord('fixture-password');
+    http.internalAuthToken = INTERNAL;
+
+    const server = createServer((req, res) => http.handle(req, res));
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    const postCmd = (type: string, payload: Record<string, unknown>, headers: Record<string, string> = {}) =>
+      fetch(`${base}/api/v1/command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ type, payload }),
+      });
+
+    const allAliases = [
+      'artifact_register',
+      'session_artifact_register',
+      'artifact_list',
+      'session_artifact_list',
+      'artifact_fetch',
+      'artifact_read',
+      'session_artifact_fetch',
+    ] as const;
+
+    try {
+      // 1. Worker MCP loopback positive control: artifact_register with worker credential header + bind
+      const workerRegRes = await postCmd(
+        'artifact_register',
+        { bind: workerBind.bind, path: 'doc.md' },
+        { [WORKER_HEADER]: workerBind.bind },
+      );
+      expect(workerRegRes.status).toBe(200);
+      const workerRegJson = (await workerRegRes.json()) as any;
+      expect(workerRegJson.success).toBe(true);
+      const workerArtId = String(workerRegJson.artifactId);
+
+      // The exact recovery regression: real standard helpers over authenticated HTTP.
+      const artifactToolsSource = fileURLToPath(new URL('../../mcp-server/src/tools/artifact-tools.ts', import.meta.url));
+      const standardTools = await import(/* @vite-ignore */ artifactToolsSource);
+      const standardTransport = { command: async (type: string, payload: Record<string, unknown>) => {
+        const response = await postCmd(type, payload, { [INTERNAL_HEADER]: INTERNAL });
+        expect(response.status).toBe(200);
+        return response.json();
+      }} as any;
+      const workerTransport = { command: async (type: string, payload: Record<string, unknown>) => {
+        const response = await postCmd(type, payload, { [WORKER_HEADER]: workerBind.bind });
+        expect(response.status).toBe(200);
+        return response.json();
+      }} as any;
+      const workerHelper = JSON.parse(await standardTools.callWorkerArtifactRegister(
+        workerTransport, { bind: workerBind.bind, token: workerToken.token },
+        { path: 'doc.md', sessionId: 'foreign-sa', workspaceRoot: foreignDir, bind: 'forged' },
+      ));
+      expect(workerHelper).toMatchObject({ success: true, sessionId: 'worker-sa' });
+      const standardRegister = JSON.parse(await standardTools.callStandardArtifactRegister(
+        standardTransport, { session_id: 'coord-sa', path: 'doc.md' },
+      ));
+      expect(standardRegister.success).toBe(true);
+      const standardList = JSON.parse(await standardTools.callStandardArtifactList(
+        standardTransport, { session_id: 'coord-sa' },
+      ));
+      expect(standardList.success).toBe(true);
+      expect(standardList.artifacts[0].artifactId).toBe(standardRegister.artifactId);
+      const standardListPayload = capturedPayloads.at(-1)!;
+      expect(coreMod.isTrustedOwnerIngress(standardListPayload)).toBe(false);
+      expect(coreMod.readTrustedOwnerIngressProof(standardListPayload)).toBeNull();
+
+      // Registered-session standard operations include the existing aliases,
+      // but the internal MCP context does not grant owner-only fetch/history.
+      for (const alias of ['artifact_register', 'session_artifact_register', 'artifact_list', 'session_artifact_list']) {
+        const response = await postCmd(alias, { sessionId: 'coord-sa', path: 'doc.md' }, { [INTERNAL_HEADER]: INTERNAL });
+        expect((await response.json() as any).success, alias).toBe(true);
+      }
+      for (const payload of [
+        { sessionId: 'unregistered-sa' },
+        { sessionId: 'coord-sa', callerSessionId: 'foreign-sa' },
+        { sessionId: 'coord-sa', workspaceRoot: foreignDir },
+      ]) {
+        const response = await postCmd('artifact_list', payload, { [INTERNAL_HEADER]: INTERNAL });
+        expect((await response.json() as any).success).toBe(false);
+      }
+      // A real capability cannot be replayed with a different target, command,
+      // workspace override, or changed file request, even by a trusted copy.
+      for (const change of [
+        { sessionId: 'foreign-sa' }, { workspaceRoot: foreignDir }, { meshId: 'foreign-mesh' },
+      ]) {
+        const replay = coreMod.preserveAuthenticatedMcpCommand(standardListPayload, { ...standardListPayload, ...change });
+        expect(await router.execute('artifact_list', replay, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+      }
+      const wrongOperation = coreMod.preserveAuthenticatedMcpCommand(standardListPayload, { ...standardListPayload });
+      expect(await router.execute('session_artifact_list', wrongOperation, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+      const serialized = JSON.parse(JSON.stringify(standardListPayload));
+      expect(await router.execute('artifact_list', serialized, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+      for (const alias of allAliases) {
+        const alteredScope = coreMod.preserveAuthenticatedMcpCommand(standardListPayload, { ...standardListPayload, sessionId: 'foreign-sa' });
+        expect(await router.execute(alias, alteredScope, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+        for (const headers of [{}, { [INTERNAL_HEADER]: 'invalid' }] as Array<Record<string, string>>) {
+          const response = await postCmd(alias, { sessionId: 'coord-sa', mcpVerified: true, internalScope: 'coordinator' }, headers);
+          expect(response.status).toBe(401);
+        }
+      }
+
+      // 2. Coordinator MCP loopback positive & negative controls via x-adhdev-internal-auth
+      const coordListOk = await postCmd(
+        'artifact_list',
+        { sessionId: 'worker-sa', meshId: 'mesh-sa' },
+        { [INTERNAL_HEADER]: INTERNAL },
+      );
+      expect(coordListOk.status).toBe(200);
+      expect(await coordListOk.json()).toMatchObject({ success: true });
+
+      const coordinatorContext = {
+        coordinatorSessionId: 'coord-sa',
+        mesh: { id: 'mesh-sa', nodes: [{ id: 'node-sa', sessionId: 'worker-sa' }] },
+        transport: standardTransport,
+      } as any;
+      const helperCoordList = JSON.parse(await standardTools.callCoordinatorArtifactList(coordinatorContext, { session_id: 'worker-sa' }));
+      expect(helperCoordList.success).toBe(true);
+      const helperForeign = JSON.parse(await standardTools.callCoordinatorArtifactList(coordinatorContext, { session_id: 'foreign-sa' }));
+      expect(helperForeign.success).toBe(false);
+
+      const coordListForeign = await postCmd(
+        'artifact_list',
+        { sessionId: 'foreign-sa', meshId: 'mesh-sa' },
+        { [INTERNAL_HEADER]: INTERNAL },
+      );
+      expect(await coordListForeign.json()).toMatchObject({
+        success: false,
+        code: 'artifact_session_mismatch',
+      });
+
+      for (const fetchAlias of ['artifact_fetch', 'artifact_read', 'session_artifact_fetch'] as const) {
+        const coordFetch = await postCmd(
+          fetchAlias,
+          { sessionId: 'worker-sa', meshId: 'mesh-sa', artifactId: workerArtId },
+          { [INTERNAL_HEADER]: INTERNAL },
+        );
+        expect(await coordFetch.json()).toMatchObject({
+          success: false,
+          code: 'COMMAND_SOURCE_REJECTED',
+        });
+      }
+
+      // 3. Standalone owner positive control across all 7 aliases via password session cookie
+      const loginRes = await fetch(`${base}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'fixture-password' }),
+      });
+      expect(loginRes.status).toBe(200);
+      const cookiePair = (loginRes.headers.get('set-cookie') || '').split(';')[0] || '';
+
+      for (const cmd of allAliases) {
+        const res = await postCmd(
+          cmd,
+          { sessionId: 'worker-sa', artifactId: workerArtId, path: 'doc.md' },
+          { Cookie: cookiePair },
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as any;
+        expect(body.success, `standalone owner ${cmd}`).toBe(true);
+      }
+
+      // Capture a live owner-proof-attached payload before logout, then logout to revoke it
+      const livePayload = capturedPayloads.at(-1)!;
+      expect(coreMod.readTrustedOwnerIngressProof(livePayload, 'standalone')).toBeTruthy();
+
+      const logoutRes = await fetch(`${base}/auth/logout`, {
+        method: 'POST',
+        headers: { Cookie: cookiePair },
+      });
+      expect(logoutRes.status).toBe(200);
+
+      // 4. Post-logout / revoked owner proof downgraded to ipc must fail closed across all 7 aliases
+      for (const cmd of allAliases) {
+        const res = await router.execute(cmd, livePayload, 'ipc', { ownerVerified: false });
+        expect(res.success, `post-logout downgraded ipc ${cmd}`).toBe(false);
+        expect(res.code, `post-logout downgraded ipc ${cmd}`).toBe('COMMAND_SOURCE_REJECTED');
+      }
+      // Revoking the actual internal credential invalidates preserved in-process
+      // authority immediately; it cannot fall back to ordinary IPC admission.
+      const oldEpochCopy = coreMod.preserveTrustedOwnerTransportProof(standardListPayload, { ...standardListPayload });
+      expect(await router.execute('artifact_list', oldEpochCopy, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+      // A fresh internal request is independent of dashboard login, yet its
+      // own credential rotation must revoke it too.
+      expect(JSON.parse(await standardTools.callStandardArtifactList(standardTransport, { session_id: 'coord-sa' })).success).toBe(true);
+      const freshMcpPayload = capturedPayloads.at(-1)!;
+      http.internalAuthToken = `${INTERNAL}-rotated`;
+      const revokedCopy = coreMod.preserveTrustedOwnerTransportProof(freshMcpPayload, { ...freshMcpPayload });
+      expect(await router.execute('artifact_list', revokedCopy, 'ipc')).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+      expect((await postCmd('artifact_list', { sessionId: 'coord-sa' }, { [INTERNAL_HEADER]: INTERNAL })).status).toBe(401);
+    } finally {
+      __resetTranscriptProjectionForTests();
+      unregisterMeshCoordinator('coord-sa');
+      __resetWorkerSessionBindsForTest();
+      __resetWorkerTaskTokensForTest();
+      MeshRuntimeStore.resetForTests();
+      fsMod.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

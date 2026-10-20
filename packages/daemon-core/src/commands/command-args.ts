@@ -26,6 +26,7 @@
  */
 
 import { isOutboundMessageOrigin, isSendPolicy, mintMessageId, type OutboundMessageOrigin, type SendPolicy } from '@adhdev/mesh-shared'
+import { preserveAuthenticatedMcpCommand } from './mcp-command-ingress.js'
 
 // ─── MeshCommandContext ─────────────────────────────────────────────────────
 
@@ -374,7 +375,80 @@ export function preserveTrustedOwnerTransportProof<T extends Record<string, unkn
             transportAttachedOwnerProofs.set(targetArgs, proof)
         }
     }
-    return targetArgs
+    return preserveAuthenticatedMcpCommand(sourceArgs, targetArgs)
+}
+
+export interface RouterCommandIngressMetadata {
+    readonly command?: string
+    readonly source: string
+    readonly ownerVerified?: boolean
+    readonly inProcess?: boolean
+    readonly hasForgedProvenanceFields?: boolean
+    readonly hasRevokedOwnerProof?: boolean
+}
+
+const ROUTER_COMMAND_INGRESS_STATE_KEY = Symbol.for('adhdev.daemon-core.routerCommandIngressState')
+
+function getRouterCommandIngressMap(): WeakMap<Record<string, unknown>, RouterCommandIngressMetadata> {
+    const g = globalThis as Record<symbol, WeakMap<Record<string, unknown>, RouterCommandIngressMetadata> | undefined>
+    let map = g[ROUTER_COMMAND_INGRESS_STATE_KEY]
+    if (!map) {
+        map = new WeakMap<Record<string, unknown>, RouterCommandIngressMetadata>()
+        Object.defineProperty(globalThis, ROUTER_COMMAND_INGRESS_STATE_KEY, {
+            value: map,
+            writable: false,
+            enumerable: false,
+            configurable: false,
+        })
+    }
+    return map
+}
+
+const routerCommandIngressArgs = getRouterCommandIngressMap()
+
+export function stampRouterCommandIngress<T extends Record<string, unknown>>(
+    args: T,
+    metadata: RouterCommandIngressMetadata,
+): T {
+    if (isPlainRecord(args) && metadata && typeof metadata.source === 'string') {
+        routerCommandIngressArgs.set(
+            args,
+            Object.freeze({
+                source: metadata.source,
+                ...(metadata.command ? { command: metadata.command } : {}),
+                ...(metadata.ownerVerified !== undefined ? { ownerVerified: metadata.ownerVerified } : {}),
+                ...(metadata.inProcess !== undefined ? { inProcess: metadata.inProcess } : {}),
+                ...(metadata.hasForgedProvenanceFields !== undefined
+                    ? { hasForgedProvenanceFields: metadata.hasForgedProvenanceFields }
+                    : {}),
+                ...(metadata.hasRevokedOwnerProof !== undefined
+                    ? { hasRevokedOwnerProof: metadata.hasRevokedOwnerProof }
+                    : {}),
+            }),
+        )
+    }
+    return args
+}
+
+export function readRouterCommandIngress(args: unknown): RouterCommandIngressMetadata | null {
+    if (!isPlainRecord(args)) return null
+    return routerCommandIngressArgs.get(args) ?? null
+}
+
+export function hasRevokedTrustedOwnerIngress(
+    args: unknown,
+    expectedSource?: 'p2p' | 'standalone',
+): boolean {
+    if (!isPlainRecord(args)) return false
+    const stored = trustedOwnerIngressArgs.get(args)
+    if (stored !== undefined && !isStoredProofCurrentlyValid(stored, expectedSource)) {
+        return true
+    }
+    const attached = transportAttachedOwnerProofs.get(args)
+    if (attached !== undefined && !isValidTrustedOwnerIngressProof(attached, expectedSource)) {
+        return true
+    }
+    return false
 }
 
 export function markTrustedOwnerIngress<T extends Record<string, unknown>>(
@@ -400,14 +474,97 @@ export function preserveTrustedOwnerIngress<T extends Record<string, unknown>>(
         if (isStoredProofCurrentlyValid(stored)) {
             trustedOwnerIngressArgs.set(targetArgs, stored)
         }
+        const routerIngress = routerCommandIngressArgs.get(sourceArgs)
+        if (routerIngress) {
+            routerCommandIngressArgs.set(targetArgs, routerIngress)
+        }
     }
-    return targetArgs
+    return preserveAuthenticatedMcpCommand(sourceArgs, targetArgs)
 }
 
-export function isTrustedOwnerIngress(args: unknown): boolean {
+export function isTrustedOwnerIngress(
+    args: unknown,
+    expectedSource?: 'p2p' | 'standalone',
+): boolean {
     if (!isPlainRecord(args)) return false
     const stored = trustedOwnerIngressArgs.get(args)
-    return isStoredProofCurrentlyValid(stored)
+    return isStoredProofCurrentlyValid(stored, expectedSource)
+}
+
+export function applyRouterCommandIngressProvenance(
+    rawArgs: unknown,
+    normalizedArgs: Record<string, unknown>,
+    logSource: string,
+    peerId: string | undefined,
+    opts?: {
+        inProcess?: boolean
+        ownerVerified?: boolean
+        ownerProof?: TrustedOwnerIngressProof | null
+        verifyCurrentOwner?: () => boolean
+    },
+    hadCommandSourceArg?: boolean,
+    command?: string,
+): void {
+    const rawRecord = isPlainRecord(rawArgs) ? rawArgs : null
+    const hasForgedProvenanceFields = Boolean(
+        hadCommandSourceArg ||
+            (rawRecord &&
+                ('ownerVerified' in rawRecord ||
+                    '_ownerVerified' in rawRecord ||
+                    'source' in rawRecord ||
+                    COMMAND_SOURCE_ARG in rawRecord)),
+    )
+    const expectedOwnerSource = logSource === 'p2p' || logSource === 'standalone' ? logSource : undefined
+    let verifyCurrentOwnerFailed = false
+    if (typeof opts?.verifyCurrentOwner === 'function') {
+        try {
+            if (opts.verifyCurrentOwner() !== true) verifyCurrentOwnerFailed = true
+        } catch {
+            verifyCurrentOwnerFailed = true
+        }
+    }
+    const hasRevokedOwnerProof = Boolean(
+        hasRevokedTrustedOwnerIngress(rawArgs, expectedOwnerSource) ||
+            (opts?.ownerProof !== undefined &&
+                opts?.ownerProof !== null &&
+                !isValidTrustedOwnerIngressProof(opts.ownerProof, expectedOwnerSource)) ||
+            verifyCurrentOwnerFailed,
+    )
+    if (
+        (logSource === 'p2p' || logSource === 'standalone') &&
+        opts?.ownerVerified !== false &&
+        opts?.inProcess !== true &&
+        !hasRevokedOwnerProof
+    ) {
+        const attachedProof = readTrustedOwnerIngressProof(rawArgs, logSource)
+        const explicitProof = isValidTrustedOwnerIngressProof(opts?.ownerProof, logSource)
+            ? opts!.ownerProof
+            : null
+        const mintedProof =
+            !attachedProof && !explicitProof && opts?.ownerVerified === true
+                ? issueTrustedOwnerIngressProof({
+                      source: logSource,
+                      ownerVerified: true,
+                      peerId: logSource === 'p2p' ? peerId || 'owner-p2p' : undefined,
+                      verifyCurrent: opts.verifyCurrentOwner,
+                  })
+                : null
+        const resolvedProof = attachedProof ?? explicitProof ?? mintedProof
+        if (resolvedProof) {
+            markTrustedOwnerIngress(normalizedArgs, resolvedProof)
+        } else if (isTrustedOwnerIngress(rawArgs, logSource)) {
+            preserveTrustedOwnerIngress(rawArgs, normalizedArgs)
+        }
+    }
+    preserveAuthenticatedMcpCommand(rawArgs, normalizedArgs)
+    stampRouterCommandIngress(normalizedArgs, {
+        command,
+        source: logSource,
+        ownerVerified: opts?.ownerVerified,
+        inProcess: opts?.inProcess === true,
+        hasForgedProvenanceFields,
+        hasRevokedOwnerProof,
+    })
 }
 
 // ─── Refine dry-run/execute precedence ──────────────────────────────────────

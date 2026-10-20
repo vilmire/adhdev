@@ -23,6 +23,13 @@ import {
     type CommandRouterDeps,
 } from '../../src/commands/router.js';
 import {
+    attachTrustedOwnerIngressProof,
+    isTrustedOwnerIngress,
+    issueTrustedOwnerIngressProof,
+    markTrustedOwnerIngress,
+    preserveTrustedOwnerIngress,
+} from '../../src/commands/command-args.js';
+import {
     artifactHandlers,
     setArtifactCommandRuntimeForDeps,
     type ArtifactCommandContext,
@@ -222,7 +229,9 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 title: 'Build Summary',
             });
 
-            const listRes = await router.execute('artifact_list', { sessionId }, 'standalone');
+            const listRes = await router.execute('artifact_list', { sessionId }, 'standalone', {
+                ownerVerified: true,
+            });
             expect(listRes.success).toBe(true);
             expect((listRes.artifacts as any[]).length).toBe(1);
             expect((listRes.attachments as any[])[0].artifactId).toBe(regRes.artifactId);
@@ -234,6 +243,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                     artifactId: regRes.artifactId,
                 },
                 'p2p',
+                { peerId: 'peer-owner', ownerVerified: true },
             );
             expect(fetchRes.success).toBe(true);
             expect(fetchRes.encoding).toBe('utf8');
@@ -1122,6 +1132,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 'artifact_fetch',
                 { sessionId: 'victim', artifactId: reg.artifactId },
                 'p2p',
+                { peerId: 'peer-owner', ownerVerified: true },
             );
             expect(res.success).toBe(false);
             expect(res.code).toBe('path_outside_workspace');
@@ -1412,7 +1423,12 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             }) as any);
 
             try {
-                const result = await router.execute('artifact_fetch', { sessionId: 'victim', artifactId }, 'p2p');
+                const result = await router.execute(
+                    'artifact_fetch',
+                    { sessionId: 'victim', artifactId },
+                    'p2p',
+                    { peerId: 'peer-owner', ownerVerified: true },
+                );
                 expect(swapped).toBe(true);
                 expect(result.success).toBe(false);
                 expect(result.code).toBe('path_outside_workspace');
@@ -1690,6 +1706,431 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 const deniedRes = await router.execute('artifact_list', credentials, 'ipc');
                 expect(deniedRes.success).toBe(false);
                 expect(deniedRes.code).toBe('stale_attempt');
+            }
+        });
+    });
+
+    describe('F1 shared-ingress foundation consumer & provenance enforcement', () => {
+        const allAliases = [
+            'artifact_register',
+            'session_artifact_register',
+            'artifact_list',
+            'session_artifact_list',
+            'artifact_fetch',
+            'artifact_read',
+            'session_artifact_fetch',
+        ] as const;
+
+        it('F1: rejects all 7 artifact aliases on unverified p2p/standalone, shared/unknown peer, inProcess, downgraded ipc, forged payload flags, and cloned _interactionId args before side effects or content read', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'OWNER-ONLY-SECRET-MARKER', 'utf8');
+            fs.writeFileSync(path.join(workspaceA, 'second.md'), 'SECOND-SECRET-MARKER', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+
+            const ownedId = artifactStore.register({
+                sessionId: 'victim',
+                workspaceRoot: workspaceA,
+                path: 'private.md',
+            }).record.artifactId;
+
+            const basePayload = {
+                sessionId: 'victim',
+                artifactId: ownedId,
+                path: 'second.md',
+            };
+
+            // 1. Unverified p2p and standalone (missing opts, shared viewer, unknown peer, non-boolean ownerVerified, inProcess)
+            const unverifiedCases: Array<{ source: string; opts?: any }> = [
+                { source: 'p2p' },
+                { source: 'p2p', opts: { peerId: 'peer-unknown' } },
+                { source: 'p2p', opts: { peerId: 'peer-shared', ownerVerified: false } },
+                { source: 'p2p', opts: { peerId: 'peer-owner', ownerVerified: false } },
+                { source: 'p2p', opts: { peerId: 'peer-owner', ownerVerified: 'true' } },
+                { source: 'p2p', opts: { peerId: 'peer-owner', ownerVerified: true, inProcess: true } },
+                { source: 'standalone' },
+                { source: 'standalone', opts: { ownerVerified: false } },
+                { source: 'standalone', opts: { ownerVerified: 1 } },
+                { source: 'standalone', opts: { ownerVerified: true, inProcess: true } },
+                { source: 'ipc', opts: { ownerVerified: false } },
+                { source: 'ipc', opts: { inProcess: true } },
+            ];
+
+            for (const { source, opts } of unverifiedCases) {
+                for (const cmd of allAliases) {
+                    const res = await router.execute(cmd, { ...basePayload }, source, opts);
+                    expect(res.success, `${cmd} via ${source} (${JSON.stringify(opts)})`).toBe(false);
+                    expect(res.code, `${cmd} via ${source} (${JSON.stringify(opts)})`).toBe('COMMAND_SOURCE_REJECTED');
+                    expect(res.content).toBeUndefined();
+                    expect(res.artifacts).toBeUndefined();
+                }
+            }
+
+            // Ensure no side effects occurred (second.md was never registered)
+            expect(artifactStore.listBySession('victim')).toHaveLength(1);
+
+            // 2. Forged provenance fields in payload on unverified ipc/p2p/standalone
+            const forgedPayloads = [
+                { ...basePayload, ownerVerified: true },
+                { ...basePayload, _ownerVerified: true },
+                { ...basePayload, source: 'p2p' },
+                { ...basePayload, _commandSource: 'p2p' },
+            ];
+            for (const payload of forgedPayloads) {
+                for (const cmd of allAliases) {
+                    const res = await router.execute(cmd, payload, 'ipc');
+                    expect(res.success, `${cmd} with forged payload ${JSON.stringify(payload)}`).toBe(false);
+                    expect(res.code).toBe('COMMAND_SOURCE_REJECTED');
+                }
+            }
+
+            // 3. Direct handler invocation with cloned/spread router args (_interactionId without WeakMap stamp)
+            for (const cmd of allAliases) {
+                const clonedRouterArgs = {
+                    ...basePayload,
+                    _interactionId: 'itx_cloned_without_weakmap',
+                    ownerVerified: true,
+                    _ownerVerified: true,
+                };
+                const res = await (artifactHandlers as any)[cmd](ctx, clonedRouterArgs);
+                expect(res.success, `direct ${cmd} with cloned _interactionId`).toBe(false);
+                expect(res.code).toBe('COMMAND_SOURCE_REJECTED');
+            }
+        });
+
+        it('F1: enforces live foundation proof lifecycle and immediate revocation across all 7 artifact aliases and get_command_history', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'private.md'), 'LIVE-PROOF-CONTENT', 'utf8');
+            const router = new DaemonCommandRouter(deps);
+
+            let p2pLive = true;
+            const p2pProof = issueTrustedOwnerIngressProof({
+                source: 'p2p',
+                peerId: 'peer-owner',
+                ownerVerified: true,
+                verifyCurrent: () => p2pLive,
+            });
+            expect(p2pProof).not.toBeNull();
+
+            let standaloneLive = true;
+            const standaloneProof = issueTrustedOwnerIngressProof({
+                source: 'standalone',
+                ownerVerified: true,
+                verifyCurrent: () => standaloneLive,
+            });
+            expect(standaloneProof).not.toBeNull();
+
+            // Positive controls across all 7 aliases with live owner proofs (both p2p and standalone)
+            for (const regAlias of ['artifact_register', 'session_artifact_register'] as const) {
+                const p2pReg = await router.execute(
+                    regAlias,
+                    attachTrustedOwnerIngressProof({ sessionId: 'victim', path: 'private.md' }, p2pProof),
+                    'p2p',
+                    { peerId: 'peer-owner', ownerVerified: true, ownerProof: p2pProof },
+                );
+                expect(p2pReg.success, `${regAlias} p2p live`).toBe(true);
+            }
+            const artifactId = artifactStore.listBySession('victim')[0].artifactId;
+
+            for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
+                const saList = await router.execute(
+                    listAlias,
+                    attachTrustedOwnerIngressProof({ sessionId: 'victim' }, standaloneProof),
+                    'standalone',
+                    { ownerVerified: true, ownerProof: standaloneProof },
+                );
+                expect(saList.success, `${listAlias} standalone live`).toBe(true);
+                expect((saList.artifacts as any[])[0].artifactId).toBe(artifactId);
+            }
+
+            for (const fetchAlias of ['artifact_fetch', 'artifact_read', 'session_artifact_fetch'] as const) {
+                const p2pFetch = await router.execute(
+                    fetchAlias,
+                    attachTrustedOwnerIngressProof({ sessionId: 'victim', artifactId }, p2pProof),
+                    'p2p',
+                    { peerId: 'peer-owner', ownerVerified: true, ownerProof: p2pProof },
+                );
+                expect(p2pFetch.success, `${fetchAlias} p2p live`).toBe(true);
+                expect(p2pFetch.content).toBe('LIVE-PROOF-CONTENT');
+            }
+
+            // Cross-source proof mismatch must fail closed even while proofs are live
+            for (const cmd of allAliases) {
+                const crossRes = await router.execute(
+                    cmd,
+                    attachTrustedOwnerIngressProof({ sessionId: 'victim', artifactId, path: 'private.md' }, standaloneProof),
+                    'p2p',
+                    { peerId: 'peer-owner', ownerVerified: true, ownerProof: standaloneProof },
+                );
+                expect(crossRes.success, `${cmd} cross-source standalone proof on p2p`).toBe(false);
+                expect(crossRes.code).toBe('COMMAND_SOURCE_REJECTED');
+            }
+
+            // Pre-mark and copy args while proof is still live, then revoke proof (epoch rotation / disconnect / logout)
+            const markedWhileLive = markTrustedOwnerIngress(
+                { sessionId: 'victim', artifactId, path: 'private.md' },
+                p2pProof,
+            );
+            const copiedWhileLive = preserveTrustedOwnerIngress(markedWhileLive, { ...markedWhileLive });
+            expect(isTrustedOwnerIngress(markedWhileLive, 'p2p')).toBe(true);
+            expect(isTrustedOwnerIngress(copiedWhileLive, 'p2p')).toBe(true);
+
+            p2pLive = false;
+            standaloneLive = false;
+            expect(isTrustedOwnerIngress(markedWhileLive, 'p2p')).toBe(false);
+            expect(isTrustedOwnerIngress(copiedWhileLive, 'p2p')).toBe(false);
+
+            // Revoked proofs must fail closed across all 7 aliases on p2p, standalone, ipc fallthrough, and direct handler call
+            for (const cmd of allAliases) {
+                const revokedP2p = await router.execute(
+                    cmd,
+                    attachTrustedOwnerIngressProof({ sessionId: 'victim', artifactId, path: 'private.md' }, p2pProof),
+                    'p2p',
+                    { peerId: 'peer-owner', ownerVerified: true, ownerProof: p2pProof },
+                );
+                expect(revokedP2p.success, `${cmd} revoked p2p`).toBe(false);
+                expect(revokedP2p.code).toBe('COMMAND_SOURCE_REJECTED');
+
+                const revokedSa = await router.execute(
+                    cmd,
+                    attachTrustedOwnerIngressProof({ sessionId: 'victim', artifactId, path: 'private.md' }, standaloneProof),
+                    'standalone',
+                    { ownerVerified: true, ownerProof: standaloneProof },
+                );
+                expect(revokedSa.success, `${cmd} revoked standalone`).toBe(false);
+                expect(revokedSa.code).toBe('COMMAND_SOURCE_REJECTED');
+
+                const revokedIpcFallthrough = await router.execute(cmd, copiedWhileLive, 'ipc');
+                expect(revokedIpcFallthrough.success, `${cmd} revoked proof ipc fallthrough`).toBe(false);
+                expect(revokedIpcFallthrough.code).toBe('COMMAND_SOURCE_REJECTED');
+
+                const directRevoked = await (artifactHandlers as any)[cmd](ctx, copiedWhileLive);
+                expect(directRevoked.success, `${cmd} direct handler with revoked proof`).toBe(false);
+                expect(directRevoked.code).toBe('COMMAND_SOURCE_REJECTED');
+            }
+        });
+
+        it('F1: enforces worker/coordinator MCP IPC provenance while preserving legitimate worker and coordinator flows', async () => {
+            sessionRegistry.register({
+                sessionId: 'victim',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            sessionRegistry.register({
+                sessionId: 'coord-sess',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            sessionRegistry.register({
+                sessionId: 'worker-sess',
+                parentSessionId: 'coord-sess',
+                providerType: 'codex-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            sessionRegistry.register({
+                sessionId: 'foreign-sess',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceB,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'report.md'), 'WORKER-REPORT-CONTENT', 'utf8');
+            fs.writeFileSync(path.join(workspaceB, 'foreign.md'), 'FOREIGN-SECRET-CONTENT', 'utf8');
+
+            const router = new DaemonCommandRouter(deps);
+            const now = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'task-1',
+                meshId: 'mesh-1',
+                message: 'implement feature',
+                status: 'assigned',
+                assignedSessionId: 'worker-sess',
+                attemptId: 'att-1',
+                workspace: workspaceA,
+                createdAt: now,
+                updatedAt: now,
+            } as any);
+            seedMeshAttempt({
+                meshId: 'mesh-1',
+                taskId: 'task-1',
+                sessionId: 'worker-sess',
+                attemptId: 'att-1',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+
+            const workerToken = mintWorkerTaskToken({
+                meshId: 'mesh-1',
+                taskId: 'task-1',
+                sessionId: 'worker-sess',
+                attemptId: 'att-1',
+            });
+            const workerBind = mintWorkerSessionBind({
+                meshId: 'mesh-1',
+                sessionId: 'worker-sess',
+            });
+
+            const foreignArtId = artifactStore.register({
+                sessionId: 'foreign-sess',
+                workspaceRoot: workspaceB,
+                path: 'foreign.md',
+            }).record.artifactId;
+
+            // Positive control 1: Legitimate worker MCP IPC across all 7 aliases (both token and bind)
+            for (const cred of [{ token: workerToken.token }, { bind: workerBind.bind }]) {
+                for (const regAlias of ['artifact_register', 'session_artifact_register'] as const) {
+                    const reg = await router.execute(regAlias, { ...cred, path: 'report.md' }, 'ipc');
+                    expect(reg.success, `worker ${regAlias}`).toBe(true);
+                }
+                const workerArtId = artifactStore.listBySession('worker-sess')[0].artifactId;
+                for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
+                    const list = await router.execute(listAlias, { ...cred }, 'ipc');
+                    expect(list.success, `worker ${listAlias}`).toBe(true);
+                    expect((list.artifacts as any[])[0].artifactId).toBe(workerArtId);
+                }
+                for (const fetchAlias of ['artifact_fetch', 'artifact_read', 'session_artifact_fetch'] as const) {
+                    const fetched = await router.execute(fetchAlias, { ...cred, artifactId: workerArtId }, 'ipc');
+                    expect(fetched.success, `worker ${fetchAlias}`).toBe(true);
+                    expect(fetched.content).toBe('WORKER-REPORT-CONTENT');
+                }
+            }
+
+            // Negative control 1: Unauthenticated IPC cannot fetch/read artifact content without worker credential or owner proof
+            const workerArtId = artifactStore.listBySession('worker-sess')[0].artifactId;
+            for (const fetchAlias of ['artifact_fetch', 'artifact_read', 'session_artifact_fetch'] as const) {
+                const bareFetch = await router.execute(
+                    fetchAlias,
+                    { sessionId: 'worker-sess', artifactId: workerArtId },
+                    'ipc',
+                );
+                expect(bareFetch.success, `bare ipc ${fetchAlias}`).toBe(false);
+                expect(bareFetch.code).toBe('COMMAND_SOURCE_REJECTED');
+                expect(bareFetch.content).toBeUndefined();
+
+                const forgedCoordFetch = await router.execute(
+                    fetchAlias,
+                    {
+                        sessionId: 'foreign-sess',
+                        callerSessionId: 'coord-sess',
+                        meshId: 'mesh-1',
+                        artifactId: foreignArtId,
+                    },
+                    'ipc',
+                );
+                expect(forgedCoordFetch.success, `forged coordinator ipc ${fetchAlias}`).toBe(false);
+                expect(forgedCoordFetch.code).toBe('COMMAND_SOURCE_REJECTED');
+            }
+
+            // Negative control 2: Unauthenticated IPC cannot list artifacts without meshId or worker credential
+            for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
+                const bareList = await router.execute(listAlias, { sessionId: 'foreign-sess' }, 'ipc');
+                expect(bareList.success, `bare ipc ${listAlias}`).toBe(false);
+                expect(bareList.code).toBe('COMMAND_SOURCE_REJECTED');
+            }
+
+            // Positive control 2: Registered coordinator MCP IPC can list its own session and mesh-authorized worker session
+            registerMeshCoordinator({
+                meshId: 'mesh-1',
+                sessionId: 'coord-sess',
+                workspace: workspaceA,
+            });
+            try {
+                for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
+                    const coordWorkerList = await router.execute(
+                        listAlias,
+                        {
+                            sessionId: 'worker-sess',
+                            meshId: 'mesh-1',
+                        },
+                        'ipc',
+                    );
+                    expect(coordWorkerList.success, `coordinator ${listAlias} worker-sess`).toBe(true);
+                    expect((coordWorkerList.artifacts as any[])[0].artifactId).toBe(workerArtId);
+
+                    const coordSelfList = await router.execute(
+                        listAlias,
+                        {
+                            sessionId: 'coord-sess',
+                            callerSessionId: 'coord-sess',
+                            meshId: 'mesh-1',
+                        },
+                        'ipc',
+                    );
+                    expect(coordSelfList.success, `coordinator ${listAlias} coord-sess`).toBe(true);
+                }
+
+                // Negative control 3: Coordinator cannot list foreign session outside mesh-1 or with mismatched callerSessionId
+                for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
+                    const foreignList = await router.execute(
+                        listAlias,
+                        {
+                            sessionId: 'foreign-sess',
+                            meshId: 'mesh-1',
+                        },
+                        'ipc',
+                    );
+                    expect(foreignList.success, `coordinator ${listAlias} foreign-sess`).toBe(false);
+                    expect(foreignList.code).toBe('artifact_session_mismatch');
+
+                    const spoofedCallerList = await router.execute(
+                        listAlias,
+                        {
+                            sessionId: 'worker-sess',
+                            callerSessionId: 'foreign-sess',
+                            meshId: 'mesh-1',
+                        },
+                        'ipc',
+                    );
+                    expect(spoofedCallerList.success, `spoofed caller ${listAlias}`).toBe(false);
+                    expect(spoofedCallerList.code).toBe('artifact_session_mismatch');
+                }
+
+                // Negative control 4: Unauthenticated IPC register with forged taskId / meshId / callerSessionId
+                for (const regAlias of ['artifact_register', 'session_artifact_register'] as const) {
+                    const forgedTaskReg = await router.execute(
+                        regAlias,
+                        {
+                            sessionId: 'victim',
+                            taskId: 'task-1',
+                            meshId: 'mesh-1',
+                            path: 'report.md',
+                        },
+                        'ipc',
+                    );
+                    expect(forgedTaskReg.success, `${regAlias} forged taskId`).toBe(false);
+                    expect(forgedTaskReg.code).toBe('task_mismatch');
+
+                    const forgedCallerReg = await router.execute(
+                        regAlias,
+                        {
+                            sessionId: 'victim',
+                            callerSessionId: 'coord-sess',
+                            meshId: 'mesh-1',
+                            path: 'report.md',
+                        },
+                        'ipc',
+                    );
+                    expect(forgedCallerReg.success, `${regAlias} forged callerSessionId`).toBe(false);
+                    expect(forgedCallerReg.code).toBe('artifact_session_mismatch');
+                }
+            } finally {
+                unregisterMeshCoordinator('coord-sess');
             }
         });
     });

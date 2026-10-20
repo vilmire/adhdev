@@ -18,6 +18,7 @@ import {
   ADHDEV_WORKER_CREDENTIAL_HEADER,
   MESH_JOIN_HTTP_PATH,
   attachTrustedOwnerIngressProof,
+  attachAuthenticatedMcpCommand,
   issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
   isWorkerMcpDaemonVerb,
@@ -868,6 +869,11 @@ export class StandaloneHttpApi {
         try {
           const parsed = JSON.parse(body || '{}');
           const { type, payload } = normalizeCommandEnvelope(parsed);
+          if (internalScope !== null && this.resolveInternalAuthScope(req) !== internalScope) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'MCP credential was revoked before command execution' }));
+            return;
+          }
           if (internalScope === 'worker' && !isWorkerMcpDaemonVerb(type)) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: `Command ${type} is not available to a worker MCP credential.` }));
@@ -886,12 +892,32 @@ export class StandaloneHttpApi {
           if (ownerProof) {
             attachTrustedOwnerIngressProof(commandPayload, ownerProof);
           }
+          if (internalScope === 'coordinator') {
+            // This credential authenticates the internal command API, not a
+            // dashboard owner or a particular coordinator principal. Retain
+            // only this request's artifact operation/arguments and lifetime;
+            // the consumer still resolves registered session/workspace/mesh.
+            const token = this.internalAuthToken;
+            const epoch = this.authEpoch;
+            attachAuthenticatedMcpCommand(commandPayload, type, () =>
+              token !== null && this.internalAuthToken === token
+              && this.authEpoch === epoch
+              && this.resolveInternalAuthScope(req) === 'coordinator',
+            );
+          }
+          const ownerVerified = isOwner
+            ? true
+            : internalScope !== null
+              ? undefined
+              : this.hasAnyAuth() || this.authEpoch > 0 || ownerGuard !== null
+                ? false
+                : undefined;
           const result = await this.deps.executeCommand(
             type,
             commandPayload,
             isOwner ? 'standalone' : 'ipc',
             {
-              ownerVerified: isOwner,
+              ownerVerified,
               ownerProof,
               verifyCurrentOwner: ownerGuard ?? undefined,
             },

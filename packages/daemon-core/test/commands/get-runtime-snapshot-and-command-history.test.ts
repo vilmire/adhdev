@@ -136,10 +136,36 @@ describe('get_command_history', () => {
     expect((result as any).code).toBe('COMMAND_SOURCE_REJECTED')
   })
 
-  it('returns the process-local command log when accepted from p2p', async () => {
+  it('is refused from an unverified, shared-viewer, or spoofed p2p source before reading command history', async () => {
+    const { router } = createRouter()
+    commandLogMocks.getRecentCommands.mockClear()
+
+    for (const opts of [
+      undefined,
+      { peerId: 'peer-unknown' },
+      { peerId: 'peer-shared', ownerVerified: false },
+      { peerId: 'peer-owner', ownerVerified: false },
+      { peerId: 'peer-owner', ownerVerified: true, inProcess: true },
+    ]) {
+      const result = await router.execute(
+        'get_command_history',
+        { count: 10, ownerVerified: true, _ownerVerified: true, source: 'p2p', _commandSource: 'p2p' },
+        'p2p',
+        opts as any,
+      )
+      expect(result.success).toBe(false)
+      expect((result as any).code).toBe('COMMAND_SOURCE_REJECTED')
+    }
+    expect(commandLogMocks.getRecentCommands).not.toHaveBeenCalled()
+  })
+
+  it('returns the process-local command log when accepted from verified owner p2p', async () => {
     const { router } = createRouter()
 
-    const result = await router.execute('get_command_history', { count: 10 }, 'p2p')
+    const result = await router.execute('get_command_history', { count: 10 }, 'p2p', {
+      peerId: 'peer-owner',
+      ownerVerified: true,
+    })
 
     expect(result.success).toBe(true)
     expect((result as any).history).toEqual(commandLogMocks.getRecentCommands())

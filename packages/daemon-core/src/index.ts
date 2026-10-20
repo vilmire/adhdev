@@ -1013,11 +1013,17 @@ export {
   readTrustedOwnerIngressProof,
   preserveTrustedOwnerTransportProof,
   isTrustedOwnerIngress,
+  hasRevokedTrustedOwnerIngress,
+  stampRouterCommandIngress,
+  readRouterCommandIngress,
+  applyRouterCommandIngressProvenance,
 } from './commands/command-args.js';
 export type {
   TrustedOwnerIngressProof,
   TrustedOwnerIngressProofInput,
+  RouterCommandIngressMetadata,
 } from './commands/command-args.js';
+export { attachAuthenticatedMcpCommand, preserveAuthenticatedMcpCommand } from './commands/mcp-command-ingress.js';
 // Assistant input attribution for PTY input that skips the router (cloud P2P
 // `pty_input` frame): the host reports the transport's own source.
 export { reportSessionTerminalInput } from './assistant/assistant-human-input.js';

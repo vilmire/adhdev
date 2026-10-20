@@ -64,7 +64,7 @@ import { meshStatusSpecs } from './high-family/mesh-status.js';
 import { meshNodeStateSpecs } from './high-family/mesh-node-state.js';
 import { meshStatusViewSpecs } from './high-family/mesh-status-view.js';
 import { driverSpecs, closeDriverService } from './med-family/drivers.js';
-import { artifactSpecs } from './med-family/artifacts.js';
+import { artifactSpecs, rejectUntrustedArtifactIngress } from './med-family/artifacts.js';
 import { assistantStoreSpecs } from './high-family/assistant-store.js';
 import { assistantWatchSpecs } from './high-family/assistant-watch.js';
 import { assistantActionSpecs } from './high-family/assistant-action.js';
@@ -143,12 +143,10 @@ import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-own
 import {
     COMMAND_SOURCE_ARG,
     COMMAND_SOURCE_STAMPED,
-    issueTrustedOwnerIngressProof,
-    isValidTrustedOwnerIngressProof,
-    markTrustedOwnerIngress,
+    applyRouterCommandIngressProvenance,
+    isTrustedOwnerIngress,
     preserveTrustedOwnerIngress,
     readMeshDirectDispatchFlag,
-    readTrustedOwnerIngressProof,
     withMeshDirectDispatch,
     type TrustedOwnerIngressProof,
 } from './command-args.js';
@@ -843,27 +841,16 @@ export class DaemonCommandRouter {
         const meshRelayed = logSource === 'mesh' && opts?.inProcess !== true;
         if (!meshRelayed && MESH_SENDER_DAEMON_ID_ARG in normalizedArgs) delete normalizedArgs[MESH_SENDER_DAEMON_ID_ARG];
         // The command source is the router's to state, never the caller's.
-        if (COMMAND_SOURCE_ARG in normalizedArgs) delete normalizedArgs[COMMAND_SOURCE_ARG];
+        const hadCommandSourceArg = COMMAND_SOURCE_ARG in normalizedArgs;
+        if (hadCommandSourceArg) delete normalizedArgs[COMMAND_SOURCE_ARG];
         if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
-        if ((logSource === 'p2p' || logSource === 'standalone') && opts?.ownerVerified !== false) {
-            const attachedProof = readTrustedOwnerIngressProof(args, logSource);
-            const explicitProof = isValidTrustedOwnerIngressProof(opts?.ownerProof, logSource)
-                ? opts!.ownerProof
-                : null;
-            const mintedProof = !attachedProof && !explicitProof && opts?.ownerVerified === true
-                ? issueTrustedOwnerIngressProof({
-                    source: logSource,
-                    ownerVerified: true,
-                    peerId: logSource === 'p2p' ? (peerId || 'owner-p2p') : undefined,
-                    verifyCurrent: opts.verifyCurrentOwner,
-                })
-                : null;
-            const resolvedProof = attachedProof ?? explicitProof ?? mintedProof;
-            if (resolvedProof) {
-                markTrustedOwnerIngress(normalizedArgs, resolvedProof);
-            }
-        }
+        applyRouterCommandIngressProvenance(args, normalizedArgs, logSource, peerId, opts, hadCommandSourceArg, cmd);
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
+        const artifactRefusal = rejectUntrustedArtifactIngress(cmd, normalizedArgs);
+        if (artifactRefusal) return artifactRefusal;
+        if (cmd === 'get_command_history' && (logSource !== 'p2p' || !isTrustedOwnerIngress(normalizedArgs, 'p2p'))) {
+            return { success: false, code: 'COMMAND_SOURCE_REJECTED', error: "Command 'get_command_history' requires verified owner ingress" };
+        }
         const interactionId = this.interactionContext.record(normalizedArgs);
 
         // REMOTE-MESH-TOPIC-DISCOVERY: meshes.json is machine-local and is
