@@ -12,9 +12,10 @@ import { recordBlockSource } from '../../chat/message-source-address.js';
 import { oneLine, TOOL_RESULT_SUMMARY_MAX } from '../spec/native-history-tool-blocks.js';
 import {
     firstLenField, decodeProtoFields, AGY_STEP_TYPE_USER, AGY_STEP_TYPE_MODEL, AGY_STATUS_DONE,
-    AGY_STEP_TYPES_NEVER_TOOL, extractUserPrompt, recoverMessageText, topLevelFieldNumbers,
+    AGY_STATUS_WAITING, AGY_STEP_TYPES_NEVER_TOOL, extractUserPrompt, recoverMessageText, topLevelFieldNumbers,
     extractModelToolCalls, summarizeAgyToolCallArgs, extractModelAnswer, extractModelReasoning,
     extractTaskNotification, isSettledToolStatus, extractToolStepResult, fullAgyToolCallArgs, extractUserRequestContent,
+    extractPendingAskQuestionFromStepPayload, type AgyPendingAskQuestion,
 } from './antigravity-proto.js';
 import type { NativeHistoryMessage } from './antigravity-cli-transcript.js';
 import { statMtimeMs } from './fs-utils.js';
@@ -631,4 +632,118 @@ export function readTaskLifecycleSteps(filePath: string): AgyTaskLifecycleStep[]
     }
   }
   return out;
+}
+
+// ─── Pending AskQuestion step reader (WAITING status 9 authority) ────────────
+
+export interface AgyPendingAskQuestionStep extends AgyPendingAskQuestion {
+  conversationId: string;
+  stepIdx: number;
+  stepType: number;
+  status: number;
+}
+
+/**
+ * Read the currently-waiting `AskQuestion` step (`status = 9`, `WAITING`) from
+ * a bound per-session `conversations/<uuid>.db`.
+ *
+ * Strict authority rules:
+ *   1. `filePath` must be a `.db` file whose UUID basename matches
+ *      `expectedConversationId` when supplied.
+ *   2. Only rows with `status = 9` (`CORTEX_STEP_STATUS_WAITING`) are queried
+ *      (`ORDER BY idx DESC LIMIT 4`) — settled (`status = 3`), running (`2`),
+ *      or cancelled/denied (`4/6/7`) steps are never admitted.
+ *   3. No later user/model turn step (`step_type IN (14, 15)`) may exist at
+ *      `idx > row.idx` (guards a stale/abandoned waiting step from an earlier
+ *      turn).
+ */
+export function readPendingAskQuestionStep(
+  filePath: string,
+  expectedConversationId?: string,
+): AgyPendingAskQuestionStep | null {
+  if (!filePath || !filePath.endsWith('.db')) return null;
+  const baseUuid = path.basename(filePath, '.db').trim();
+  if (!baseUuid) return null;
+  if (expectedConversationId && baseUuid.toLowerCase() !== expectedConversationId.trim().toLowerCase()) {
+    return null;
+  }
+
+  let Database: any;
+  try {
+    Database = loadBetterSqlite3();
+  } catch {
+    return null;
+  }
+
+  interface WaitingRow {
+    idx: number;
+    step_type: number;
+    status: number;
+    step_payload: Buffer | null;
+  }
+
+  for (let attempt = 1; attempt <= AGY_DB_MAX_ATTEMPTS; attempt++) {
+    let db: any;
+    try {
+      db = new Database(filePath, { readonly: true, fileMustExist: true });
+      try { db.pragma(`busy_timeout = ${AGY_DB_BUSY_TIMEOUT_MS}`); } catch { /* ignore */ }
+      let columns: Set<string>;
+      try {
+        columns = new Set<string>(
+          (db.prepare('PRAGMA table_info(steps)').all() as Array<{ name?: unknown }>)
+            .map((c) => String(c?.name ?? '')),
+        );
+      } catch {
+        columns = new Set<string>();
+      }
+      if (!columns.has('status') || !columns.has('step_payload')) return null;
+
+      const waitingRows = db
+        .prepare(
+          `SELECT idx, step_type, status, step_payload
+             FROM steps
+            WHERE status = ${AGY_STATUS_WAITING}
+            ORDER BY idx DESC
+            LIMIT 4`,
+        )
+        .all() as WaitingRow[];
+
+      if (!Array.isArray(waitingRows) || waitingRows.length === 0) return null;
+
+      const hasLaterTurnStmt = db.prepare(
+        `SELECT 1 FROM steps WHERE idx > ? AND step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL}) LIMIT 1`,
+      );
+
+      for (const row of waitingRows) {
+        if (row.status !== AGY_STATUS_WAITING || !row.step_payload) continue;
+        const decoded = extractPendingAskQuestionFromStepPayload(row.step_payload);
+        if (!decoded) continue;
+        const laterTurn = hasLaterTurnStmt.get(row.idx);
+        if (laterTurn) continue;
+        return {
+          conversationId: baseUuid,
+          stepIdx: row.idx,
+          stepType: row.step_type,
+          status: row.status,
+          callId: decoded.callId || `step_${row.idx}`,
+          toolName: decoded.toolName,
+          questions: decoded.questions,
+          source: decoded.source,
+        };
+      }
+      return null;
+    } catch (err) {
+      if (isSqliteBusyError(err)) {
+        if (attempt < AGY_DB_MAX_ATTEMPTS) {
+          sleepBusy(AGY_DB_RETRY_BACKOFF_MS[attempt - 1] ?? 150);
+          continue;
+        }
+        return null;
+      }
+      return null;
+    } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+  return null;
 }

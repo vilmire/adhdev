@@ -21,7 +21,7 @@ describe('approvals-only provider Inbox', () => {
     expect(html).toContain('>Yes, proceed</button>')
     expect(html).toContain('>No</button>')
     expect(html).not.toContain('always-approve')
-    expect(html).toContain('/dashboard?activeTab=session%3As')
+    expect(html).toContain('/dashboard?activeTab=session%3Ad%3As')
   })
   it('explicit suppression stays absent; old status-only peers remain non-actionable attention', () => {
     expect(deriveProviderApprovalInbox([worker(null)], { d: 'connected' })).toEqual([])
@@ -35,7 +35,7 @@ describe('approvals-only provider Inbox', () => {
       expect(items).toHaveLength(1)
       expect(items[0]).toMatchObject({ sessionId: 'legacy/s', approvalType: 'unknown', compatibility: 'session_only', actionable: false, waitingSince: null })
       const html = renderToStaticMarkup(createElement(PendingApprovalsInbox, { approvals: items, onResolve: () => { throw new Error('blind action') } }))
-      expect(html).toContain('/dashboard?activeTab=session%3Alegacy%2Fs')
+      expect(html).toContain('/dashboard?activeTab=session%3Ad%3Alegacy%2Fs')
       expect(html).toContain('use session handler')
       expect(html).not.toContain('<button')
     }

@@ -583,3 +583,174 @@ describe('antigravity-cli v4 FSM — background command keeps session generating
     });
 });
 
+describe('antigravity-cli v4 FSM — choice questions (ask_question)', () => {
+    const spec = loadSpec();
+
+    const singleChoiceScreen = makeScreen(
+        [
+            '  ● ask_question',
+            '',
+            '  Question',
+            '  ────────────────────────────────────────',
+            '  Question 1/2: Which database engine should we use?',
+            '  > 1. PostgreSQL',
+            '    2. SQLite',
+            '    3. Write-in...',
+            '',
+            '  ↑/↓ Navigate • Enter Select • <esc> Skip',
+        ],
+        '  ? for shortcuts                                      Gemini 4 Argon · medium',
+    );
+
+    const multiChoiceScreen = makeScreen(
+        [
+            '  ● ask_question',
+            '',
+            '  Question',
+            '  ────────────────────────────────────────',
+            '  Question 2/2: Which features should be enabled?',
+            '  > 1. [x] WAL mode',
+            '    2. [ ] Foreign keys',
+            '    3. [ ] Write-in...',
+            '',
+            '  ↑/↓ Navigate • space Toggle • Enter Submit • <esc> Skip',
+        ],
+        '  ? for shortcuts                                      Gemini 4 Argon · medium',
+    );
+
+    const writeInChoiceScreen = makeScreen(
+        [
+            '  ● ask_question',
+            '',
+            '  Question',
+            '  ────────────────────────────────────────',
+            '  Question 1/1: Provide a custom target path:',
+            '  Your answer:',
+            '  > /tmp/custom',
+            '',
+            '  Enter Submit • <esc> Back',
+        ],
+        '  ? for shortcuts                                      Gemini 4 Argon · medium',
+    );
+
+    const liveAgy142ChoiceScreen = makeScreen(
+        [
+            '  ? Which checks?',
+            '  ? Which runtime?',
+            '',
+            '  Question',
+            '  ────────────────────────────────────────────────────────────────────────',
+            '',
+            '  Question 1/2: Which checks?',
+            '',
+            '    1. [x] Typecheck',
+            '  > 2. [x] UnitTest',
+            '    3. [ ] Lint',
+            '    4. Write-in...',
+            '',
+            '  ↑/↓ Navigate · → Next · space Toggle · enter Submit · esc Skip',
+        ],
+        'esc to cancel                                          Gemini 4 Argon · medium',
+    );
+
+    it('declares interactive_prompts.scheme = antigravity_tui and choice state with waiting_choice', () => {
+        expect(spec.interactive_prompts?.scheme).toBe('antigravity_tui');
+        const choiceState = spec.states.find(s => s.id === 'choice');
+        expect(choiceState).toBeDefined();
+        expect(choiceState?.status).toBe('waiting_choice');
+        expect(choiceState?.modal_kind).toBe('choice');
+    });
+
+    it('transitions from busy or idle to choice on single-select, multi-select, write-in, and live agy 1.4.2 screens', () => {
+        for (const screen of [singleChoiceScreen, multiChoiceScreen, writeInChoiceScreen, liveAgy142ChoiceScreen]) {
+            expect(evaluateFsm(spec, 'busy', screen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('choice');
+            expect(evaluateFsm(spec, 'idle', screen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('choice');
+            expect(evaluateFsm(spec, 'choice', screen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired).toBeNull();
+        }
+    });
+
+    it('holding a choice question past 90s never triggers busy→approval-timeout or false idle', () => {
+        // In choice state for 120s: stays in choice, never transitions to approval or idle.
+        const inChoice = evaluateFsm(spec, 'choice', singleChoiceScreen, { row: 39, col: 4 }, undefined, clk(120000, 0));
+        expect(inChoice.fired).toBeNull();
+
+        // Even if evaluated from busy at 95s without shortcuts footer, section_absent:choice
+        // vetoes busy→approval-timeout while →choice (priority 95) transitions to choice.
+        const noShortcutsChoice = makeScreen(
+            [
+                '  Question',
+                '  ────────────────────────────────────────',
+                '  Question 1/1: Pick an environment:',
+                '  > 1. Staging',
+                '    2. Production',
+                '    3. Write-in...',
+                '',
+                '  ↑/↓ Navigate • Enter Select • <esc> Skip',
+            ],
+            '  Gemini 4 Argon · medium',
+        );
+        const fromBusyAt95s = evaluateFsm(spec, 'busy', noShortcutsChoice, { row: 39, col: 4 }, undefined, clk(95000, 0));
+        expect(fromBusyAt95s.fired?.to).toBe('choice');
+        const approvalTimeout = fromBusyAt95s.transitions.find(t => t.label === 'busy→approval-timeout');
+        expect(approvalTimeout?.fires).toBe(false);
+    });
+
+    it('genuine permission and trust modals outrank choice and preempt choice → approval/trust', () => {
+        const choicePlusApprovalScreen = makeScreenWithModal(
+            [
+                '  Question',
+                '  ────────────────────────────────────────',
+                '  Question 1/1: Which branch?',
+                '  > 1. main',
+                '    2. Write-in...',
+                '  ↑/↓ Navigate • Enter Select • <esc> Skip',
+            ],
+            [
+                '  Do you want to proceed?',
+                '  › 1. Yes, run this',
+                '    2. No, skip',
+            ],
+            '  ? for shortcuts',
+        );
+        expect(evaluateFsm(spec, 'busy', choicePlusApprovalScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('approval');
+        expect(evaluateFsm(spec, 'choice', choicePlusApprovalScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('approval');
+        expect(evaluateFsm(spec, 'choice', trustScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('trust');
+    });
+
+    it('quoted choice output followed by composer box or live spinner never triggers choice or approval', () => {
+        const quotedChoiceThenComposer = makeScreen(
+            [
+                '  ● view_file (testfixture.txt)',
+                '  Question',
+                '  ────────────────────────────────────────',
+                '  Question 1/1: Quoted question from fixture?',
+                '  > 1. Option A',
+                '    2. Write-in...',
+                '  ↑/↓ Navigate • Enter Select • <esc> Skip',
+                '  ────────────────────────────────────────',
+                '  > Type your message or @path/to/file',
+            ],
+            '  ? for shortcuts',
+        );
+        const fromIdle = evaluateFsm(spec, 'idle', quotedChoiceThenComposer, { row: 39, col: 4 }, undefined, clk(10000, 0));
+        expect(fromIdle.fired).toBeNull();
+        const fromBusy = evaluateFsm(spec, 'busy', quotedChoiceThenComposer, { row: 39, col: 4 }, undefined, clk(10000, 0));
+        expect(fromBusy.fired?.to).toBe('idle');
+
+        const numberedProseScreen = makeScreen(
+            [
+                '  Here are the available options:',
+                '  1. First approach',
+                '  2. Second approach',
+                '  3. Write-in...',
+            ],
+            '  ? for shortcuts',
+        );
+        expect(evaluateFsm(spec, 'idle', numberedProseScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired).toBeNull();
+    });
+
+    it('transitions choice → busy when generation resumes and choice → idle when settled', () => {
+        expect(evaluateFsm(spec, 'choice', busyScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('busy');
+        expect(evaluateFsm(spec, 'choice', doneScreen, { row: 39, col: 4 }, undefined, clk(10000, 0)).fired?.to).toBe('idle');
+    });
+});
