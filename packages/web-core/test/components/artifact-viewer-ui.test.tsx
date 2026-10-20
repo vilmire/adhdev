@@ -28,15 +28,20 @@ import {
     getArtifactReadCacheSize,
     readArtifactFetchCommandResponse,
     resolveArtifactSessionTarget,
+    useArtifactRead,
     type ArtifactResolvedPayload,
     type FetchArtifactCommandFn,
+    type UseArtifactReadResult,
 } from '../../src/hooks/useArtifactRead'
 import {
     chatBubbleContentSignature,
     classifyChatMessageForDisplay,
 } from '../../src/components/dashboard/chat-activity-visibility'
 import { getConversationLastMessagePreview } from '../../src/components/dashboard/conversation-selectors'
-import { controllerRegistry } from '../../src/components/dashboard/session-chat-controller'
+import {
+    controllerRegistry,
+    getOrCreateSessionChatController,
+} from '../../src/components/dashboard/session-chat-controller'
 import { BaseDaemonProvider, useBaseDaemonActions } from '../../src/context/BaseDaemonContext'
 import { TransportProvider } from '../../src/context/TransportContext'
 import { resolveChatRow } from '../../src/components/ChatMessageList/chat-row-model'
@@ -1269,6 +1274,284 @@ describe('Task D — Artifact Viewer UI', () => {
             expect(document.body.querySelector('[role="dialog"]')).toBeNull()
             expect(document.activeElement).toBe(openBtn)
             expect(focusSpy).toHaveBeenLastCalledWith({ preventScroll: true })
+        })
+
+        it('D1 (delta2): production BaseDaemonProvider and default ChatMessageList refetch after coordinator authority changes', async () => {
+            const sendCommand = vi.fn(async (_daemonId: string, _cmd: string, _payload: any) => ({
+                success: true,
+                artifactId: 'art_0123456789abcdef',
+                sessionId: 'same',
+                kind: 'text',
+                mime: 'text/plain',
+                filename: 'live.txt',
+                title: 'Live',
+                sizeBytes: 6,
+                sha256: 'a'.repeat(64),
+                registeredSha256: 'a'.repeat(64),
+                sha256Changed: false,
+                encoding: 'utf8',
+                content: `BODY-${sendCommand.mock.calls.length}`,
+            }))
+
+            let injectFn!: (entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => void
+            const artMsg = makeArtifactMessage(makeAttachment({ kind: 'text', mime: 'text/plain' }))
+
+            function Harness() {
+                injectFn = useBaseDaemonActions().injectEntries
+                return <ChatMessageList messages={[artMsg]} contextKey="stable-tab" />
+            }
+
+            mount(
+                <BaseDaemonProvider>
+                    <TransportProvider
+                        value={{
+                            sendCommand,
+                            subscribe: () => () => {},
+                            sendPtyInput: () => false,
+                            requestRuntimeSnapshot: async () => ({ success: false, error: 'noop' }),
+                            onRuntimeEvent: () => () => {},
+                        }}
+                    >
+                        <Harness />
+                    </TransportProvider>
+                </BaseDaemonProvider>,
+            )
+
+            const makeEntry = (coord: string): DaemonData =>
+                ({
+                    id: 'stable-tab',
+                    daemonId: 'host-a',
+                    sessionId: 'same',
+                    transport: 'pty',
+                    type: 'claude-code',
+                    status: 'active',
+                    activeChat: { messages: [] },
+                    settings: { meshCoordinatorDaemonId: coord },
+                }) as any
+
+            act(() => {
+                injectFn([makeEntry('coord-a')], { authoritativeDaemonIds: ['host-a'] })
+            })
+
+            await act(async () => {
+                ;(container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLElement).click()
+            })
+            expect(sendCommand).toHaveBeenCalledTimes(1)
+            expect(sendCommand.mock.calls[0]?.[2]?.meshCoordinatorDaemonId).toBe('coord-a')
+            expect(container.textContent).toContain('BODY-1')
+
+            act(() => {
+                injectFn([makeEntry('coord-b')], { authoritativeDaemonIds: ['host-a'] })
+            })
+            expect(
+                container.querySelector('[data-testid="artifact-view-full-button"]')?.getAttribute('aria-expanded'),
+            ).toBe('false')
+
+            await act(async () => {
+                ;(container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLElement).click()
+            })
+            expect(sendCommand).toHaveBeenCalledTimes(2)
+            expect(sendCommand.mock.calls[1]?.[2]?.meshCoordinatorDaemonId).toBe('coord-b')
+            expect(container.textContent).toContain('BODY-2')
+        })
+
+        it('D1 (delta2): actual controller registry becoming ambiguous in flight fences deferred response in default ChatMessageList', async () => {
+            getOrCreateSessionChatController({ daemonId: 'host-a', sessionId: 'same' })
+            let resolveFetch!: (val: unknown) => void
+            const sendCommand = vi.fn(
+                () =>
+                    new Promise((r) => {
+                        resolveFetch = r
+                    }),
+            )
+            const artMsg = makeArtifactMessage(makeAttachment({ kind: 'text', mime: 'text/plain' }))
+
+            mount(
+                <TransportProvider
+                    value={{
+                        sendCommand,
+                        subscribe: () => () => {},
+                        sendPtyInput: () => false,
+                        requestRuntimeSnapshot: async () => ({ success: false, error: 'noop' }),
+                        onRuntimeEvent: () => () => {},
+                    }}
+                >
+                    <ChatMessageList messages={[artMsg]} contextKey="same" />
+                </TransportProvider>,
+            )
+
+            await act(async () => {
+                ;(container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLElement).click()
+            })
+            expect(sendCommand).toHaveBeenCalledTimes(1)
+
+            await act(async () => {
+                getOrCreateSessionChatController({ daemonId: 'host-b', sessionId: 'same' })
+                await Promise.resolve()
+            })
+            expect(resolveArtifactSessionTarget({ contextKey: 'same' })).toBeNull()
+
+            await act(async () => {
+                resolveFetch({
+                    success: true,
+                    artifactId: 'art_0123456789abcdef',
+                    sessionId: 'same',
+                    kind: 'text',
+                    mime: 'text/plain',
+                    filename: 'live.txt',
+                    title: 'Live',
+                    sizeBytes: 18,
+                    sha256: 'a'.repeat(64),
+                    registeredSha256: 'a'.repeat(64),
+                    sha256Changed: false,
+                    encoding: 'utf8',
+                    content: 'AMBIGUOUS-OLD-BODY',
+                })
+                await Promise.resolve()
+            })
+            expect(container.textContent).not.toContain('AMBIGUOUS-OLD-BODY')
+        })
+
+        it('D1 (delta2): stale inferred hook completion or rejection never clears or overwrites a newer loaded identity result', async () => {
+            let resolveOldSuccess!: (val: unknown) => void
+            let rejectOldError!: (err: unknown) => void
+            const fetchArtifact = vi
+                .fn<FetchArtifactCommandFn>()
+                .mockImplementationOnce(
+                    () =>
+                        new Promise((r) => {
+                            resolveOldSuccess = r
+                        }),
+                )
+                .mockImplementationOnce(
+                    () =>
+                        new Promise((_r, rej) => {
+                            rejectOldError = rej
+                        }),
+                )
+                .mockImplementationOnce(async (_daemonId, _cmd, payload) => ({
+                    success: true,
+                    artifactId: 'art_0123456789abcdef',
+                    sessionId: payload.sessionId,
+                    kind: 'text',
+                    mime: 'text/plain',
+                    filename: 'current.txt',
+                    title: 'Current',
+                    sizeBytes: 12,
+                    sha256: 'a'.repeat(64),
+                    registeredSha256: 'a'.repeat(64),
+                    sha256Changed: false,
+                    encoding: 'utf8',
+                    content: 'CURRENT-BODY',
+                }))
+
+            let hook!: UseArtifactReadResult
+            let injectFn!: (entries: DaemonData[], options?: { authoritativeDaemonIds?: string[] }) => void
+            const attachment = makeAttachment({ kind: 'text', mime: 'text/plain' })
+
+            function HookHarness() {
+                injectFn = useBaseDaemonActions().injectEntries
+                hook = useArtifactRead({ attachment, contextKey: 'stable-tab', fetchArtifact })
+                return <div data-testid="hook-text">{hook.data?.textContent ?? ''}</div>
+            }
+
+            mount(
+                <BaseDaemonProvider>
+                    <HookHarness />
+                </BaseDaemonProvider>,
+            )
+
+            act(() => {
+                injectFn(
+                    [
+                        {
+                            id: 'stable-tab',
+                            daemonId: 'host-a',
+                            sessionId: 'old-session-1',
+                            type: 'claude-code',
+                            transport: 'pty',
+                            status: 'active',
+                            activeChat: { messages: [] },
+                        } as any,
+                    ],
+                    { authoritativeDaemonIds: ['host-a'] },
+                )
+            })
+
+            let pending1!: Promise<ArtifactResolvedPayload | null>
+            await act(async () => {
+                pending1 = hook.openViewer()
+            })
+
+            act(() => {
+                injectFn(
+                    [
+                        {
+                            id: 'stable-tab',
+                            daemonId: 'host-a',
+                            sessionId: 'old-session-2',
+                            type: 'claude-code',
+                            transport: 'pty',
+                            status: 'active',
+                            activeChat: { messages: [] },
+                        } as any,
+                    ],
+                    { authoritativeDaemonIds: ['host-a'] },
+                )
+            })
+
+            let pending2!: Promise<ArtifactResolvedPayload | null>
+            await act(async () => {
+                pending2 = hook.openViewer()
+            })
+
+            act(() => {
+                injectFn(
+                    [
+                        {
+                            id: 'stable-tab',
+                            daemonId: 'host-b',
+                            sessionId: 'new-session',
+                            type: 'claude-code',
+                            transport: 'pty',
+                            status: 'active',
+                            activeChat: { messages: [] },
+                        } as any,
+                    ],
+                    { authoritativeDaemonIds: ['host-a', 'host-b'] },
+                )
+            })
+
+            await act(async () => {
+                await hook.openViewer()
+            })
+            expect(container.querySelector('[data-testid="hook-text"]')?.textContent).toBe('CURRENT-BODY')
+
+            // Resolve stale request 1 and reject stale request 2 -> CURRENT-BODY must remain intact
+            await act(async () => {
+                resolveOldSuccess({
+                    success: true,
+                    artifactId: 'art_0123456789abcdef',
+                    sessionId: 'old-session-1',
+                    kind: 'text',
+                    mime: 'text/plain',
+                    filename: 'old.txt',
+                    title: 'Old',
+                    sizeBytes: 8,
+                    sha256: 'a'.repeat(64),
+                    registeredSha256: 'a'.repeat(64),
+                    sha256Changed: false,
+                    encoding: 'utf8',
+                    content: 'OLD-BODY',
+                })
+                rejectOldError(new Error('Stale network failure'))
+                await pending1
+                await pending2
+            })
+
+            expect(container.querySelector('[data-testid="hook-text"]')?.textContent).toBe('CURRENT-BODY')
+            expect(hook.status).toBe('loaded')
+            expect(hook.error).toBeNull()
         })
     })
 })

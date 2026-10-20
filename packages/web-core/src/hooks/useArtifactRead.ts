@@ -1,12 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ArtifactErrorCode, ArtifactKind, ChatAttachmentMeta } from '@adhdev/daemon-core'
 import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonContext'
 import { useTransport } from '../context/TransportContext'
 import { buildConversations } from '../components/dashboard/buildConversations'
 import { getCoordinatorRoutingHint, getConversationDaemonRouteId } from '../components/dashboard/conversation-selectors'
-import { controllerRegistry } from '../components/dashboard/session-chat-controller'
+import {
+    controllerRegistry,
+    getControllerRegistryGeneration,
+    subscribeControllerRegistry,
+} from '../components/dashboard/session-chat-controller'
 import type { DaemonData } from '../types'
 import { unwrapDaemonCommandBody } from '../utils/daemon-command-envelope'
+
+const subscribeControllerRegistrySafe = (listener: () => void): (() => void) =>
+    typeof subscribeControllerRegistry === 'function' ? subscribeControllerRegistry(listener) : () => {}
+
+const getControllerRegistryGenerationSafe = (): number =>
+    typeof getControllerRegistryGeneration === 'function' ? getControllerRegistryGeneration() : 0
 
 export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
 export const MAX_ARTIFACT_PREVIEW_CHARS = 600
@@ -37,6 +47,7 @@ export interface ArtifactCacheScope {
     origin?: string | null
     daemonId: string
     sessionId: string
+    meshCoordinatorDaemonId?: string | null
     artifactId: string
     sha256: string
     updatedAt?: number | null
@@ -139,7 +150,7 @@ function getRuntimeOrigin(explicitOrigin?: string | null): string {
 
 /**
  * Build a collision-proof JSON-tuple cache key scoped by web origin, owning daemonId,
- * sessionId, artifactId, sha256, and optional updatedAt version.
+ * sessionId, coordinator authority, artifactId, sha256, and optional updatedAt version.
  * Returns null if any required identity part is missing.
  */
 export function buildArtifactCacheKey(scope: ArtifactCacheScope): string | null {
@@ -149,10 +160,20 @@ export function buildArtifactCacheKey(scope: ArtifactCacheScope): string | null 
     const sha256 = typeof scope.sha256 === 'string' ? scope.sha256.trim() : ''
     if (!daemonId || !sessionId || !artifactId || !sha256) return null
     const origin = getRuntimeOrigin(scope.origin)
+    const coordinatorDaemonId =
+        typeof scope.meshCoordinatorDaemonId === 'string' ? scope.meshCoordinatorDaemonId.trim() : ''
     if (typeof scope.updatedAt === 'number' && Number.isFinite(scope.updatedAt)) {
-        return JSON.stringify([origin, daemonId, sessionId, artifactId, sha256, scope.updatedAt])
+        return JSON.stringify([
+            origin,
+            daemonId,
+            sessionId,
+            coordinatorDaemonId,
+            artifactId,
+            sha256,
+            scope.updatedAt,
+        ])
     }
-    return JSON.stringify([origin, daemonId, sessionId, artifactId, sha256])
+    return JSON.stringify([origin, daemonId, sessionId, coordinatorDaemonId, artifactId, sha256])
 }
 
 function setCachedArtifactPayload(key: string, payload: ArtifactResolvedPayload): void {
@@ -545,6 +566,12 @@ export function useArtifactRead({
     const { sendCommand } = useTransport()
     const { ides: contextIdes } = useBaseDaemons()
     const { getIdes } = useBaseDaemonActions()
+    const controllerRegistryGen = useSyncExternalStore(
+        subscribeControllerRegistrySafe,
+        getControllerRegistryGenerationSafe,
+        getControllerRegistryGenerationSafe,
+    )
+    void controllerRegistryGen
 
     const prevContextIdesRef = useRef<readonly DaemonData[]>(contextIdes)
     const liveContextIdesRef = useRef<readonly DaemonData[]>(contextIdes)
@@ -684,6 +711,7 @@ export function useArtifactRead({
                 origin: requestOrigin,
                 daemonId: resolved.daemonId,
                 sessionId: resolved.sessionId,
+                meshCoordinatorDaemonId: resolved.meshCoordinatorDaemonId,
                 artifactId: attachment.artifactId,
                 sha256: attachment.sha256,
                 updatedAt: attachment.updatedAt,
@@ -722,8 +750,13 @@ export function useArtifactRead({
                     ? await customFetchArtifact(resolved.daemonId, 'artifact_fetch', commandPayload)
                     : await sendCommand(resolved.daemonId, 'artifact_fetch', commandPayload)
 
+                // Check request generation obsolescence first so a stale response from an earlier
+                // identity or closed request never clears or overwrites a newer loaded result.
+                if (requestSeqRef.current !== requestSeq) return null
+
                 // Re-verify live authoritative target and origin on completion so deferred replies
-                // after a same-tab session/daemon/coordinator/origin switch are fenced and discarded.
+                // after a same-tab session/daemon/coordinator/origin switch or controller ambiguity
+                // are fenced and discarded even when no ancestor re-render occurred.
                 const postTarget = resolveTarget()
                 const postOrigin = getRuntimeOrigin(origin)
                 const identityChangedInFlight =
@@ -743,8 +776,6 @@ export function useArtifactRead({
                     setIsOpen(false)
                     return null
                 }
-
-                if (requestSeqRef.current !== requestSeq) return null
 
                 const parsed = readArtifactFetchCommandResponse(rawResponse, {
                     artifactId: attachment.artifactId,
@@ -767,6 +798,7 @@ export function useArtifactRead({
                     origin: requestOrigin,
                     daemonId: resolved.daemonId,
                     sessionId: resolved.sessionId,
+                    meshCoordinatorDaemonId: resolved.meshCoordinatorDaemonId,
                     artifactId: attachment.artifactId,
                     sha256: parsed.data.sha256,
                     updatedAt: attachment.updatedAt,
@@ -791,6 +823,24 @@ export function useArtifactRead({
                 return parsed.data
             } catch (err) {
                 if (requestSeqRef.current !== requestSeq) return null
+                const postTarget = resolveTarget()
+                const postOrigin = getRuntimeOrigin(origin)
+                const identityChangedInFlight =
+                    !postTarget
+                    || postTarget.daemonId !== resolved.daemonId
+                    || postTarget.sessionId !== resolved.sessionId
+                    || (postTarget.meshCoordinatorDaemonId ?? '') !== (resolved.meshCoordinatorDaemonId ?? '')
+                    || postOrigin !== requestOrigin
+                if (identityChangedInFlight) {
+                    openedIdentityRef.current = null
+                    replaceObjectUrl(null)
+                    setData(null)
+                    setError(null)
+                    setErrorCode(null)
+                    setStatus('idle')
+                    setIsOpen(false)
+                    return null
+                }
                 replaceObjectUrl(null)
                 setData(null)
                 setStatus('error')

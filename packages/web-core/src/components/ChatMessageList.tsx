@@ -176,9 +176,13 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
             ides: contextIdes.length > 0 ? contextIdes : getIdes(),
         })
         : null;
-    const effectiveDaemonId = daemonId || resolvedArtifactTarget?.daemonId;
-    const effectiveSessionId = sessionId || resolvedArtifactTarget?.sessionId;
-    const effectiveCoordinatorDaemonId = meshCoordinatorDaemonId || resolvedArtifactTarget?.meshCoordinatorDaemonId;
+    const artifactTargetSignature = hasArtifactMessages
+        ? JSON.stringify([
+            resolvedArtifactTarget?.daemonId ?? '',
+            resolvedArtifactTarget?.sessionId ?? '',
+            resolvedArtifactTarget?.meshCoordinatorDaemonId ?? '',
+        ])
+        : '';
     const containerRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -667,6 +671,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
                 const m = item.data as ChatMessage;
                 const row = item.row;
+                const effectiveRow = row.kind === 'artifact' && artifactTargetSignature
+                    ? { ...row, signature: `${row.signature}::${artifactTargetSignature}` }
+                    : row;
                 const messageKey = item.stableKey;
                 // (TOOL-EXPAND) Expansion is keyed by the tool BLOCK when the row
                 // has one: on the replica lane the React key can fall back to a
@@ -677,15 +684,15 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     <ChatMessageRow
                         key={`msg-${messageKey}`}
                         message={m}
-                        row={row}
+                        row={effectiveRow}
                         receivedAt={row.timestamp ?? undefined}
                         agentName={agentName}
                         userName={userName}
                         isCliMode={isCliMode}
                         contextKey={contextKey}
-                        daemonId={effectiveDaemonId}
-                        sessionId={effectiveSessionId}
-                        meshCoordinatorDaemonId={effectiveCoordinatorDaemonId}
+                        daemonId={daemonId}
+                        sessionId={sessionId}
+                        meshCoordinatorDaemonId={meshCoordinatorDaemonId}
                         fetchArtifact={fetchArtifact}
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
