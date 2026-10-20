@@ -30,8 +30,10 @@ describe('authenticated MCP command capability (independent of owner authority)'
         const afterRevocation = preserveTrustedOwnerTransportProof(copy, { ...copy });
         expect(readAuthenticatedMcpCommand(afterRevocation, 'artifact_register')).toEqual({ present: true, valid: false });
         expect(bindAuthenticatedMcpWorkspace(afterRevocation, '/registered')).toBe(false);
+        live = true;
+        expect(readAuthenticatedMcpCommand(afterRevocation, 'artifact_register').valid).toBe(false);
         const invalid = attachAuthenticatedMcpCommand({}, 'artifact_list', () => false);
-        expect(readAuthenticatedMcpCommand(invalid, 'artifact_list').present).toBe(false);
+        expect(readAuthenticatedMcpCommand(invalid, 'artifact_list')).toEqual({ present: true, valid: false });
         const unrelated = attachAuthenticatedMcpCommand({}, 'get_command_history', () => true);
         expect(readAuthenticatedMcpCommand(unrelated, 'get_command_history').present).toBe(false);
     });

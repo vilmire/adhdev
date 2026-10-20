@@ -13,6 +13,7 @@ interface McpCommandCapability {
     readonly command: string;
     readonly argumentsKey: string;
     readonly verifyCurrent: () => boolean;
+    revoked: boolean;
     workspaceRoot?: string;
 }
 
@@ -48,7 +49,9 @@ export function attachAuthenticatedMcpCommand<T extends Record<string, unknown>>
     if (!ARTIFACT_COMMANDS.has(command) || typeof verifyCurrent !== 'function') return args;
     let live = false;
     try { live = verifyCurrent() === true; } catch { /* fail closed */ }
-    if (live) capabilities.set(args, { command, argumentsKey: argumentsKey(args), verifyCurrent });
+    // Retain a denial too: expiry between verification and attachment cannot
+    // erase provenance and turn the request into ordinary IPC.
+    capabilities.set(args, { command, argumentsKey: argumentsKey(args), verifyCurrent, revoked: !live });
     return args;
 }
 
@@ -69,14 +72,16 @@ export function readAuthenticatedMcpCommand(
 ): { present: boolean; valid: boolean } {
     const capability = record(args) ? capabilities.get(args) : undefined;
     if (!capability) return { present: false, valid: false };
+    if (capability.revoked) return { present: true, valid: false };
     try {
+        if (capability.verifyCurrent() !== true) capability.revoked = true;
         return {
             present: true,
             valid: capability.command === command && record(args)
                 && capability.argumentsKey === argumentsKey(args)
-                && capability.verifyCurrent() === true,
+                && !capability.revoked,
         };
-    } catch { return { present: true, valid: false }; }
+    } catch { capability.revoked = true; return { present: true, valid: false }; }
 }
 
 /** Bind the already-authorized registered workspace before any artifact I/O. */

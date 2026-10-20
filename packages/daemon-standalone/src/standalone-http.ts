@@ -893,6 +893,10 @@ export class StandaloneHttpApi {
               res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Artifact arguments must retain the authenticated worker credential and principal.' }));
               return;
             }
+            attachAuthenticatedMcpCommand(commandPayload, type, () =>
+              this.resolveInternalAuthScope(req) === 'worker'
+              && verify(credential, commandPayload) === true,
+            );
           }
           const ownerGuard = this.captureOwnerAuthGuard(req, url);
           const isOwner = Boolean(ownerGuard && ownerGuard());

@@ -73693,7 +73693,7 @@ ${upstream}`;
         live = verifyCurrent() === true;
       } catch {
       }
-      if (live) capabilities.set(args, { command, argumentsKey: argumentsKey(args), verifyCurrent });
+      capabilities.set(args, { command, argumentsKey: argumentsKey(args), verifyCurrent, revoked: !live });
       return args;
     }
     function preserveAuthenticatedMcpCommand(source2, target) {
@@ -73706,12 +73706,15 @@ ${upstream}`;
     function readAuthenticatedMcpCommand(args, command) {
       const capability = record2(args) ? capabilities.get(args) : void 0;
       if (!capability) return { present: false, valid: false };
+      if (capability.revoked) return { present: true, valid: false };
       try {
+        if (capability.verifyCurrent() !== true) capability.revoked = true;
         return {
           present: true,
-          valid: capability.command === command && record2(args) && capability.argumentsKey === argumentsKey(args) && capability.verifyCurrent() === true
+          valid: capability.command === command && record2(args) && capability.argumentsKey === argumentsKey(args) && !capability.revoked
         };
       } catch {
+        capability.revoked = true;
         return { present: true, valid: false };
       }
     }

@@ -391,6 +391,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
     });
     const router = new DaemonCommandRouter(deps);
 
+    let beforeArtifactDispatch: (() => void) | undefined;
     const capturedPayloads: Array<Record<string, unknown>> = [];
     const http = new mod.StandaloneHttpApi({
       isReady: () => true,
@@ -418,6 +419,11 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         const forwardedPayload = coreMod.preserveTrustedOwnerTransportProof(
           payload, { ...payload, _interactionId: 'itx-f1-sa' },
         );
+        if (type === 'artifact_register' && beforeArtifactDispatch) {
+          const hook = beforeArtifactDispatch;
+          beforeArtifactDispatch = undefined;
+          hook();
+        }
         return router.execute(type, forwardedPayload, effectiveSource, {
           ownerVerified: isOwner ? true : opts?.ownerVerified,
           ...(ownerProof ? { ownerProof } : {}),
@@ -659,6 +665,15 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         expect(denied.artifacts).toBeUndefined();
         expect(denied.history).toBeUndefined();
       }
+      // Rotate the actual authenticated token after HTTP admission, retaining
+      // a live same-session bind and a fresh current token. The old header may
+      // not silently fall back to that different credential in the consumer.
+      beforeArtifactDispatch = () => {
+        __resetWorkerTaskTokensForTest();
+        mintWorkerTaskToken({ meshId: 'mesh-sa', taskId: 'task-sa-1', sessionId: 'worker-sa', attemptId: 'att-sa-1' });
+      };
+      const rotatedWorker = await postCmd('artifact_register', { bind: workerBind.bind, token: workerToken.token, path: 'doc.md' }, { [WORKER_HEADER]: workerToken.token });
+      expect(await rotatedWorker.json()).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
     } finally {
       __resetTranscriptProjectionForTests();
       unregisterMeshCoordinator('coord-sa');
