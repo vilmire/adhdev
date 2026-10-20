@@ -149777,6 +149777,32 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_mesh_node_identity();
     init_mesh_refine_gates();
     init_mesh_coordinator_config();
+    init_dist();
+    function buildMemberJoinNode(mesh, args, fallbackDaemonId) {
+      const requestedNodeId = typeof args?.memberNodeId === "string" ? args.memberNodeId.trim() : "";
+      const explicit = args?.memberNode && typeof args.memberNode === "object" && !Array.isArray(args.memberNode) ? args.memberNode : null;
+      const configured = Array.isArray(mesh?.nodes) ? requestedNodeId ? mesh.nodes.find((node) => meshNodeIdMatches7(node, requestedNodeId)) : mesh.nodes[0] : null;
+      const source2 = explicit || configured;
+      const workspace = typeof source2?.workspace === "string" && source2.workspace.trim() ? source2.workspace.trim() : typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
+      if (!workspace) return null;
+      const nodeId = typeof source2?.id === "string" && source2.id.trim() ? source2.id.trim() : typeof source2?.nodeId === "string" && source2.nodeId.trim() ? source2.nodeId.trim() : void 0;
+      const baseOverrides = source2?.userOverrides && typeof source2.userOverrides === "object" && !Array.isArray(source2.userOverrides) ? source2.userOverrides : {};
+      const userOverrides = {
+        ...baseOverrides,
+        ...typeof baseOverrides.platform === "string" && baseOverrides.platform.trim() ? {} : { platform: process.platform },
+        ...typeof baseOverrides.arch === "string" && baseOverrides.arch.trim() ? {} : { arch: process.arch }
+      };
+      return {
+        ...nodeId ? { id: nodeId } : {},
+        workspace,
+        ...typeof source2?.repoRoot === "string" && source2.repoRoot.trim() ? { repoRoot: source2.repoRoot.trim() } : {},
+        ...typeof source2?.daemonId === "string" && source2.daemonId.trim() ? { daemonId: source2.daemonId.trim() } : fallbackDaemonId ? { daemonId: fallbackDaemonId } : {},
+        ...typeof source2?.machineId === "string" && source2.machineId.trim() ? { machineId: source2.machineId.trim() } : {},
+        userOverrides,
+        policy: source2?.policy && typeof source2.policy === "object" && !Array.isArray(source2.policy) ? source2.policy : {},
+        role: "member"
+      };
+    }
     var daemonCommandRegistry;
     function getDaemonCommandRegistry() {
       if (!daemonCommandRegistry) {
@@ -149855,31 +149881,6 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         readStringValue(root.meshCoordinatorFor)
       ].filter((value) => value !== void 0);
       return [...new Set(ids)];
-    }
-    function buildMemberJoinNode(mesh, args, fallbackDaemonId) {
-      const requestedNodeId = typeof args?.memberNodeId === "string" ? args.memberNodeId.trim() : "";
-      const explicit = args?.memberNode && typeof args.memberNode === "object" && !Array.isArray(args.memberNode) ? args.memberNode : null;
-      const configured = Array.isArray(mesh?.nodes) ? requestedNodeId ? mesh.nodes.find((node) => meshNodeIdMatches7(node, requestedNodeId)) : mesh.nodes[0] : null;
-      const source2 = explicit || configured;
-      const workspace = typeof source2?.workspace === "string" && source2.workspace.trim() ? source2.workspace.trim() : typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
-      if (!workspace) return null;
-      const nodeId = typeof source2?.id === "string" && source2.id.trim() ? source2.id.trim() : typeof source2?.nodeId === "string" && source2.nodeId.trim() ? source2.nodeId.trim() : void 0;
-      const baseOverrides = source2?.userOverrides && typeof source2.userOverrides === "object" && !Array.isArray(source2.userOverrides) ? source2.userOverrides : {};
-      const userOverrides = {
-        ...baseOverrides,
-        ...typeof baseOverrides.platform === "string" && baseOverrides.platform.trim() ? {} : { platform: process.platform },
-        ...typeof baseOverrides.arch === "string" && baseOverrides.arch.trim() ? {} : { arch: process.arch }
-      };
-      return {
-        ...nodeId ? { id: nodeId } : {},
-        workspace,
-        ...typeof source2?.repoRoot === "string" && source2.repoRoot.trim() ? { repoRoot: source2.repoRoot.trim() } : {},
-        ...typeof source2?.daemonId === "string" && source2.daemonId.trim() ? { daemonId: source2.daemonId.trim() } : fallbackDaemonId ? { daemonId: fallbackDaemonId } : {},
-        ...typeof source2?.machineId === "string" && source2.machineId.trim() ? { machineId: source2.machineId.trim() } : {},
-        userOverrides,
-        policy: source2?.policy && typeof source2.policy === "object" && !Array.isArray(source2.policy) ? source2.policy : {},
-        role: "member"
-      };
     }
     var DaemonCommandRouter = class {
       /** Public (not private) so the extracted ./router-refine.ts orchestration can reach it via `self`. */
