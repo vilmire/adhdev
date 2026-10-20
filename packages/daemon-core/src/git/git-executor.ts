@@ -74,6 +74,15 @@ export class GitCommandError extends Error {
   }
 }
 
+interface ValidatedRepoPaths {
+  validatedWorkspace: string;
+  validatedRepoRoot: string;
+  canonicalRepoRoot: string;
+  canonicalWorkspace: string;
+}
+
+const resolvedRepoCache = new WeakMap<GitRepoIdentity, ValidatedRepoPaths>();
+
 export async function resolveGitRepository(
   workspace: string,
   options: GitExecutorOptions = {},
@@ -93,11 +102,30 @@ export async function resolveGitRepository(
     });
   }
 
-  return {
+  const identity: GitRepoIdentity = {
     workspace: normalizedWorkspace,
     repoRoot,
     isGitRepo: true,
   };
+
+  try {
+    const [canonicalRepoRoot, canonicalWorkspace] = await Promise.all([
+      realpath(repoRoot),
+      realpath(normalizedWorkspace),
+    ]);
+    if (isPathInside(canonicalRepoRoot, canonicalWorkspace)) {
+      resolvedRepoCache.set(identity, {
+        validatedWorkspace: normalizedWorkspace,
+        validatedRepoRoot: repoRoot,
+        canonicalRepoRoot,
+        canonicalWorkspace,
+      });
+    }
+  } catch {
+    // Defer any realpath failure to runGit's containment check.
+  }
+
+  return identity;
 }
 
 export async function runGit(
@@ -118,14 +146,51 @@ export async function runGit(
     });
   }
 
-  const cwd = options.cwd ? await validateWorkspace(options.cwd) : await validateWorkspace(repo.workspace);
-  const canonicalRepoRoot = await realpath(repo.repoRoot);
-  const canonicalCwd = await realpath(cwd);
-  if (!isPathInside(canonicalRepoRoot, canonicalCwd)) {
-    throw new GitCommandError('path_outside_repo', 'Git cwd is outside the repository root', {
-      argv,
-      cwd,
-    });
+  let cachedPaths = resolvedRepoCache.get(repo);
+  if (
+    cachedPaths &&
+    (cachedPaths.validatedWorkspace !== repo.workspace ||
+      cachedPaths.validatedRepoRoot !== repo.repoRoot)
+  ) {
+    cachedPaths = undefined;
+    resolvedRepoCache.delete(repo);
+  }
+
+  if (!cachedPaths) {
+    const validatedWorkspace = await validateWorkspace(repo.workspace);
+    const validatedRepoRoot = path.resolve(repo.repoRoot);
+    const [canonicalRepoRoot, canonicalWorkspace] = await Promise.all([
+      realpath(validatedRepoRoot),
+      realpath(validatedWorkspace),
+    ]);
+    if (!isPathInside(canonicalRepoRoot, canonicalWorkspace)) {
+      throw new GitCommandError('path_outside_repo', 'Git cwd is outside the repository root', {
+        argv,
+        cwd: validatedWorkspace,
+      });
+    }
+    cachedPaths = {
+      validatedWorkspace: repo.workspace,
+      validatedRepoRoot: repo.repoRoot,
+      canonicalRepoRoot,
+      canonicalWorkspace,
+    };
+    resolvedRepoCache.set(repo, cachedPaths);
+  }
+
+  let cwd: string;
+  if (options.cwd === undefined) {
+    cwd = cachedPaths.canonicalWorkspace;
+  } else {
+    const validatedExplicitCwd = await validateWorkspace(options.cwd);
+    const canonicalCwd = await realpath(validatedExplicitCwd);
+    if (!isPathInside(cachedPaths.canonicalRepoRoot, canonicalCwd)) {
+      throw new GitCommandError('path_outside_repo', 'Git cwd is outside the repository root', {
+        argv,
+        cwd: validatedExplicitCwd,
+      });
+    }
+    cwd = canonicalCwd;
   }
 
   return execGitRaw(cwd, argv, options);

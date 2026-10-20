@@ -23,7 +23,12 @@ export {
 } from './git-executor.js';
 export type { GitCommandResult as GitExecutorCommandResult, GitExecutorOptions, RunGitOptions } from './git-executor.js';
 
-export { getGitRepoStatus, parsePorcelainV2Status } from './git-status.js';
+export {
+  __inFlightStatusReadCountForTests,
+  __resetGitStatusCacheForTests,
+  getGitRepoStatus,
+  parsePorcelainV2Status,
+} from './git-status.js';
 export type { GitStatusOptions } from './git-status.js';
 
 export {

@@ -214,7 +214,12 @@ export function createDefaultGitCommandServices(
   overrides?: Pick<GitCommandServices, 'getReporterProviderVersions'>,
 ): GitCommandServices {
   return {
-    getStatus: ({ workspace, refreshUpstream }) => getGitRepoStatus(workspace, { refreshUpstream }),
+    getStatus: ({ workspace, refreshUpstream, includeSubmodules, submoduleIgnorePaths }) =>
+      getGitRepoStatus(workspace, {
+        refreshUpstream,
+        ...(includeSubmodules !== undefined ? { includeSubmodules } : {}),
+        ...(submoduleIgnorePaths !== undefined ? { submoduleIgnorePaths } : {}),
+      }),
     getDiffSummary: ({ workspace, base }) => getGitDiffSummary(workspace, base ? { baseRef: base } : {}),
     getDiffFile: ({ workspace, path: filePath, base }) => getGitFileDiff(workspace, filePath, base ? { baseRef: base } : {}),
     createSnapshot: ({ workspace, reason, sessionId, turnId }) => defaultSnapshotStore.create({

@@ -47,6 +47,11 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   git_diff_summary: 45_000,
   fast_forward_mesh_node: 120_000,
   mesh_status: 120_000,
+  // mesh_status_view is the daemon-side handler that mesh_status delegates to; it
+  // fans out local + remote node git_status probes (up to 45s) and session-host
+  // reconcile reads, so it needs the same 120s outer budget as mesh_status instead
+  // of falling through to the 15s default.
+  mesh_status_view: 120_000,
   // Heavy repo-mutating worktree ops (relay budgets: clone 90s, remove 60s). A local
   // clone synchronously creates a worktree (~30s) plus a bounded setup-wait (~14s);
   // 120s leaves headroom and matches the relay-wrapped remote path.
@@ -143,6 +148,7 @@ const IPC_PROBE_RETRYABLE_COMMANDS: ReadonlySet<string> = new Set([
   'get_status_metadata',
   'get_mesh',
   'mesh_status',
+  'mesh_status_view',
   'git_status',
   'git_diff_summary',
   'git_log',
@@ -158,6 +164,18 @@ const IPC_PROBE_RETRYABLE_COMMANDS: ReadonlySet<string> = new Set([
   'plan_mesh_onboarding',
   'get_runtime_snapshot',
   'session_host_get_diagnostics',
+  // Pure read-only SQLite / mesh routing queries (mesh-ipc-handlers.ts):
+  // side-effect-free SELECTs and dry-run routing evaluations that can stall behind
+  // an event-loop spike or connection rotation and are safe to retry once.
+  'ledger_query',
+  'mission_list_query',
+  'mission_query',
+  'queue_query',
+  'active_work_query',
+  'recovery_context_query',
+  'task_stats_query',
+  'mesh_node_route',
+  'mesh_dispatch_route',
 ]);
 const IPC_PROBE_RETRY_MAX_ENV = 'ADHDEV_IPC_PROBE_RETRY_MAX';
 const IPC_PROBE_RETRY_BACKOFF_MS_ENV = 'ADHDEV_IPC_PROBE_RETRY_BACKOFF_MS';
@@ -187,8 +205,16 @@ export function resolveProbeRetryBackoffMs(): number {
 }
 
 /** Probe-class allowlist check (exported for tests and for the retry loop). */
-export function isRetryableProbeCommand(type: string): boolean {
-  return IPC_PROBE_RETRYABLE_COMMANDS.has(type);
+export function isRetryableProbeCommand(type: string, args?: Record<string, unknown>): boolean {
+  if (!IPC_PROBE_RETRYABLE_COMMANDS.has(type)) return false;
+  // SAFETY: mesh_status_view is pure read-only UNLESS the caller piggies an inbox
+  // drain (`pendingEvents`) or coordinator rate-limit write (`toolCall`). Never
+  // auto-retry an uncertain inbox drain or write; its 120s outer deadline in
+  // IPC_COMMAND_TIMEOUTS_MS already covers the full local+remote status fan-out.
+  if (type === 'mesh_status_view' && (args?.pendingEvents != null || args?.toolCall != null)) {
+    return false;
+  }
+  return true;
 }
 
 // WS readyState constants (same as browser)
@@ -237,7 +263,8 @@ function pruneTimedOutRequests(now: number): void {
 }
 
 const POOL_IDLE_EVICT_MS = 5 * 60_000;   // evict connections idle for >5 min
-const POOL_MAX_AGE_MS = 10 * 60_000;     // force-refresh connections older than 10 min
+const POOL_MAX_AGE_MS = 10 * 60_000;     // force-refresh connections older than 10 min once quiet
+const POOL_MAX_AGE_IDLE_GRACE_MS = 30_000; // do not tear down an aged socket in the middle of an active turn
 
 interface PooledConnection {
   ws: WebSocket;
@@ -272,7 +299,10 @@ function getOrCreateConnection(
     const now = Date.now();
     const isAlive = readyState === WS_CONNECTING || readyState === WS_OPEN;
     const isIdle = now - existing.lastUsedAt > POOL_IDLE_EVICT_MS && existing.pending.size === 0;
-    const isTooOld = now - existing.createdAt > POOL_MAX_AGE_MS && existing.pending.size === 0;
+    const isTooOld =
+      now - existing.createdAt > POOL_MAX_AGE_MS
+      && existing.pending.size === 0
+      && now - existing.lastUsedAt > POOL_MAX_AGE_IDLE_GRACE_MS;
     if (isAlive && !isIdle && !isTooOld) {
       return existing;
     }
@@ -297,24 +327,28 @@ function getOrCreateConnection(
 
   const drainQueue = () => {
     conn.ready = true;
-    for (const { type, args, requestId } of conn.commandQueue) {
+    const queued = conn.commandQueue.splice(0, conn.commandQueue.length);
+    for (const { type, args, requestId } of queued) {
+      if (!conn.pending.has(requestId)) continue;
       conn.ws.send(JSON.stringify({ type: 'ext:command', payload: { command: type, args, requestId } }));
     }
-    conn.commandQueue = [];
   };
 
   let tornDown = false;
   const teardown = (error: Error) => {
     if (tornDown) return;
     tornDown = true;
-    connectionPool.delete(url);
+    if (connectionPool.get(url) === conn) {
+      connectionPool.delete(url);
+    }
     conn.ready = false;
-    for (const [, req] of conn.pending) {
+    conn.commandQueue.length = 0;
+    const pendingEntries = Array.from(conn.pending.values());
+    conn.pending.clear();
+    for (const req of pendingEntries) {
       clearTimeout(req.timer);
       req.reject(error);
     }
-    conn.pending.clear();
-    conn.commandQueue = [];
   };
 
   conn.ws.addEventListener('open', () => {
@@ -336,10 +370,12 @@ function getOrCreateConnection(
       const raw = typeof event.data === 'string' ? event.data : String(event.data);
       const msg = JSON.parse(raw);
       if (msg?.type === 'daemon:welcome') {
+        conn.lastUsedAt = Date.now();
         drainQueue();
         return;
       }
       if (msg?.type !== 'ext:command_result') return;
+      conn.lastUsedAt = Date.now();
       const requestId = msg?.payload?.requestId;
       const req = conn.pending.get(requestId);
       if (!req) {
@@ -444,7 +480,7 @@ export class IpcTransport {
     // allowlist's safety note). A relayed probe (mesh_relay_command wrapping
     // get_status_metadata) is intentionally NOT retried here: its 120s budget
     // already dwarfs the observed freeze windows.
-    const maxRetries = isRetryableProbeCommand(type) ? resolveProbeRetryMax() : 0;
+    const maxRetries = isRetryableProbeCommand(type, args) ? resolveProbeRetryMax() : 0;
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await this.sendIpcCommandOnce(type, args);
@@ -479,23 +515,44 @@ export class IpcTransport {
     const url = `ws://127.0.0.1:${this.port}${this.path}`;
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const settleResolve = (val: any) => {
+        if (settled) return;
+        settled = true;
+        resolve(val);
+      };
+      const settleReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       let conn: PooledConnection;
       try {
         conn = getOrCreateConnection(WebSocketCtor as typeof WebSocket, url);
       } catch (e: any) {
-        return reject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
+        return settleReject(new Error(`Failed to create IPC connection: ${e?.message || e}`));
       }
 
       const sentAt = Date.now();
       const timer = setTimeout(() => {
         const pendingCountBeforeRemoval = conn.pending.size;
         conn.pending.delete(requestId);
+        const queueIdx = conn.commandQueue.findIndex(item => item.requestId === requestId);
+        if (queueIdx !== -1) {
+          conn.commandQueue.splice(queueIdx, 1);
+        }
         const elapsedMs = Date.now() - sentAt;
         const error = new Error(`Daemon IPC ${diagnosticParts.join(' ')} timed out after ${Math.round(timeoutMs / 1000)}s (requestId=${requestId})`);
         // Tagged so the retry loop in sendIpcCommand can tell a TIMEOUT (the
         // freeze symptom, retryable for read-only probes) apart from a
-        // semantic failure reply or a connection error (neither retried).
+        // semantic failure reply or a connection error (neither retried), and
+        // downstream error classifiers can distinguish local IPC commands from
+        // relayed P2P commands without substring-matching workspace paths.
         (error as any).ipcTimeout = true;
+        (error as any).ipcCommand = type;
+        if (nestedCommand) (error as any).ipcRelayedCommand = nestedCommand;
+        if (targetDaemonId) (error as any).ipcTargetDaemonId = targetDaemonId;
         // UTC ISO timestamp + requestId make this correlatable against the
         // daemon's own local-ipc-server response-write log by requestId, even
         // across separate log files/clocks. pendingCountBeforeRemoval helps
@@ -504,10 +561,10 @@ export class IpcTransport {
         console.error(`[ipc] timeout: command='${type}' requestId=${requestId} elapsedMs=${elapsedMs} pendingBeforeRemoval=${pendingCountBeforeRemoval} ts=${new Date().toISOString()}`);
         pruneTimedOutRequests(Date.now());
         trackTimedOutRequest(requestId, type);
-        reject(error);
+        settleReject(error);
       }, timeoutMs);
 
-      conn.pending.set(requestId, { resolve, reject, timer, command: type, sentAt });
+      conn.pending.set(requestId, { resolve: settleResolve, reject: settleReject, timer, command: type, sentAt });
       conn.lastUsedAt = Date.now();
 
       if (conn.ready) {
