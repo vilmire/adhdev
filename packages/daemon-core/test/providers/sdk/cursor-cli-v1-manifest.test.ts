@@ -27,6 +27,7 @@ import * as path from 'path';
 import { buildDetectStatusFromTui } from '../../../src/providers/sdk/v1/builders/cli/detect-status.js';
 import { buildParseSessionFromTui } from '../../../src/providers/sdk/v1/builders/cli/parse-session.js';
 import { applyMeshCoordinatorSystemPromptInjection, stripCoordinatorWrapperFile } from '../../../src/commands/mesh-coordinator.js';
+import { scheduleInjectionCleanup } from '../../../src/commands/coordinator-injection-cleanup.js';
 
 function loadManifest(): Record<string, any> {
     let current = path.resolve(__dirname, '..', '..');
@@ -167,10 +168,82 @@ describe('cursor-cli mesh coordinator injection (real manifest)', () => {
             expect(written).toContain('COORDINATOR PROMPT BODY');
 
             // Owned cleanup deletes the whole file (no residue in the workspace).
-            stripCoordinatorWrapperFile(mdcPath, true);
+            // Production cleanup passes the writer's sentinels, including MDC frontmatter.
+            expect(effect.contextFileSentinels?.open).toContain('alwaysApply: true');
+            stripCoordinatorWrapperFile(mdcPath, effect.contextFileOwned === true, effect.contextFileSentinels);
             expect(fs.existsSync(mdcPath)).toBe(false);
         } finally {
             fs.rmSync(workspace, { recursive: true, force: true });
         }
     });
+
+    it('production failed-launch cleanup deletes the writer-owned Cursor MDC', async () => {
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-coord-failed-'));
+        try {
+            const effect = applyMeshCoordinatorSystemPromptInjection('BODY', manifest.meshCoordinator.systemPromptInjection, {
+                cliArgs: [], launchEnv: {}, workspace, cliType: 'cursor-cli',
+            });
+            expect(effect.contextFileOwned).toBe(true);
+            await scheduleInjectionCleanup(effect, { launched: false, label: 'Cursor regression' });
+            expect(fs.existsSync(effect.contextFilePath!)).toBe(false);
+        } finally {
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it.each(['\n', '\r\n'])('keeps concurrent user prefix/suffix bytes around an owned Cursor wrapper (%j)', (newline) => {
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-coord-edited-'));
+        try {
+            const effect = applyMeshCoordinatorSystemPromptInjection('BODY', manifest.meshCoordinator.systemPromptInjection, {
+                cliArgs: [], launchEnv: {}, workspace, cliType: 'cursor-cli',
+            });
+            const prefix = `# User header${newline}${newline}`;
+            const suffix = `${newline}${newline}User suffix without final newline`;
+            const target = effect.contextFilePath!;
+            const written = fs.readFileSync(target, 'utf-8');
+            const open = written.indexOf(effect.contextFileSentinels!.open);
+            const close = written.indexOf('<!-- /adhdev-mesh-coordinator-prompt -->') + '<!-- /adhdev-mesh-coordinator-prompt -->'.length;
+            fs.writeFileSync(target, prefix + written + suffix);
+            stripCoordinatorWrapperFile(target, true, effect.contextFileSentinels);
+            expect(fs.readFileSync(target, 'utf-8')).toBe(prefix + written.slice(0, open) + written.slice(close) + suffix);
+        } finally {
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('does not take foreign Cursor frontmatter ownership from forged owned/separator flags', () => {
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-coord-foreign-'));
+        try {
+            const target = path.join(workspace, 'foreign.mdc');
+            const header = '---\r\ndescription: User rule\r\nalwaysApply: true\r\n---\r\n\r\n';
+            fs.writeFileSync(target, header + '<!-- adhdev-mesh-coordinator-prompt -->FOREIGN<!-- /adhdev-mesh-coordinator-prompt -->');
+            stripCoordinatorWrapperFile(target, true, undefined, undefined, { leading: '', trailing: '', createdFile: true });
+            expect(fs.readFileSync(target, 'utf-8')).toBe(header);
+        } finally {
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps a replacement Cursor file user header despite an owned flag', () => {
+        const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-coord-replaced-'));
+        try {
+            const effect = applyMeshCoordinatorSystemPromptInjection('BODY', manifest.meshCoordinator.systemPromptInjection, {
+                cliArgs: [], launchEnv: {}, workspace, cliType: 'cursor-cli',
+            });
+            const target = effect.contextFilePath!;
+            const written = fs.readFileSync(target, 'utf-8');
+            fs.renameSync(target, target + '.original');
+            const header = '# Replacement user rule\r\n\r\n';
+            const suffix = '\r\nUser tail without final newline';
+            fs.writeFileSync(target, header + written + suffix);
+            expect(fs.statSync(target).ino).not.toBe(fs.statSync(target + '.original').ino);
+            stripCoordinatorWrapperFile(target, true, effect.contextFileSentinels);
+            expect(fs.existsSync(target)).toBe(true);
+            expect(fs.readFileSync(target, 'utf-8')).toBe(header + '\n' + suffix);
+            expect(fs.readFileSync(target + '.original', 'utf-8')).toBe(written);
+        } finally {
+            fs.rmSync(workspace, { recursive: true, force: true });
+        }
+    });
+
 });
