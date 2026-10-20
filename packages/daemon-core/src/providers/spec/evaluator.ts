@@ -9,7 +9,7 @@
 
 import type {
     SectionDef, AnchorContext, Condition, RegexCondition,
-    ChangedCondition, AllCondition, AnyCondition,
+    ChangedCondition, SectionAbsentCondition, AllCondition, AnyCondition,
     ExtractTitle, ExtractButtons,
 } from './types.js';
 
@@ -184,6 +184,10 @@ function isChangedCondition(c: Condition): c is ChangedCondition {
     return 'cursor_above' in c && 'changed' in c;
 }
 
+function isSectionAbsentCondition(c: Condition): c is SectionAbsentCondition {
+    return 'section_absent' in c;
+}
+
 function isAllCondition(c: Condition): c is AllCondition {
     return 'all' in c;
 }
@@ -217,6 +221,16 @@ export function evaluateCondition(
             }
         }
         return false;
+    }
+
+    if (isSectionAbsentCondition(cond)) {
+        const hay = sectionText(sections, cond.section_absent, '');
+        const result = hay.trim().length === 0;
+        trace.push({
+            kind: result ? 'state_match' : 'state_skip',
+            text: `state[${stateId}] section_absent ${cond.section_absent} result=${result}`,
+        });
+        return result;
     }
 
     if (isChangedCondition(cond)) {

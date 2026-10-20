@@ -362,6 +362,10 @@ export interface ChangedCondition {
     stable_ms?: number;
 }
 
+export interface SectionAbsentCondition {
+    section_absent: string;
+}
+
 export interface AllCondition {
     all: Condition[];
 }
@@ -370,7 +374,7 @@ export interface AnyCondition {
     any: Condition[];
 }
 
-export type Condition = RegexCondition | ChangedCondition | AllCondition | AnyCondition;
+export type Condition = RegexCondition | ChangedCondition | SectionAbsentCondition | AllCondition | AnyCondition;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extraction helpers

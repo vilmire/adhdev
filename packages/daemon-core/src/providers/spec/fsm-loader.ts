@@ -55,8 +55,8 @@ export function validateFsmSpec(raw: unknown): string[] {
         const ip = spec.interactive_prompts as { scheme?: unknown };
         if (!ip || typeof ip !== 'object' || Array.isArray(ip)) {
             errs.push('interactive_prompts must be an object');
-        } else if (ip.scheme !== 'claude_tui' && ip.scheme !== 'kimi_wire') {
-            errs.push('interactive_prompts.scheme must be "claude_tui" or "kimi_wire"');
+        } else if (ip.scheme !== 'claude_tui' && ip.scheme !== 'kimi_wire' && ip.scheme !== 'antigravity_tui') {
+            errs.push('interactive_prompts.scheme must be "claude_tui", "kimi_wire", or "antigravity_tui"');
         }
     }
 
@@ -275,6 +275,14 @@ function validateCondition(c: FsmCondition, sectionIds: Set<string>, path: strin
     if ('matches' in w) {
         if (w.section && !sectionIds.has(w.section)) errs.push(`${path}.section "${w.section}" unknown`);
         try { new RegExp(w.matches, w.flags ?? 'i'); } catch (e) { errs.push(`${path}.matches invalid regex: ${(e as Error).message}`); }
+        return errs;
+    }
+    if ('section_absent' in w) {
+        if (typeof w.section_absent !== 'string' || !w.section_absent) {
+            errs.push(`${path}.section_absent must be a non-empty string`);
+        } else if (!sectionIds.has(w.section_absent)) {
+            errs.push(`${path}.section_absent "${w.section_absent}" unknown`);
+        }
         return errs;
     }
     if ('cursor_above' in w && 'changed' in w) return errs;

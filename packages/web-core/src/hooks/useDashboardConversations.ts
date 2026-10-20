@@ -329,6 +329,12 @@ export function useDashboardConversations({
         return map
     }, [conversations])
     const conversationBySessionId = useMemo(() => {
+        const reservedPrefixes = new Set(['session', 'tab', 'route', 'provider', 'history', 'native', 'unknown'])
+        const extractPrefix = (value: string | undefined) => {
+            if (!value || !value.includes(':')) return ''
+            const prefix = value.split(':')[0]?.trim() || ''
+            return reservedPrefixes.has(prefix.toLowerCase()) ? '' : prefix
+        }
         const map = new Map<string, ActiveConversation>()
         for (const conversation of conversations) {
             const preferred = preferredConversationByIdeId.get(conversation.routeId)
@@ -337,8 +343,20 @@ export function useDashboardConversations({
                 providerSessionId: conversation.providerSessionId,
                 sessionId: conversation.sessionId,
                 tabKey: conversation.tabKey,
+                routeId: conversation.routeId,
             })) {
                 map.set(lookupKey, sessionTarget)
+            }
+            const machineId = String(
+                conversation.daemonId
+                || extractPrefix(conversation.routeId)
+                || extractPrefix(conversation.tabKey)
+                || '',
+            ).trim()
+            const currentSessionId = typeof conversation.sessionId === 'string' ? conversation.sessionId.trim() : ''
+            if (machineId && currentSessionId) {
+                map.set(`${machineId}:${currentSessionId}`, sessionTarget)
+                map.set(`session:${machineId}:${currentSessionId}`, sessionTarget)
             }
         }
         return map
@@ -349,7 +367,19 @@ export function useDashboardConversations({
 
     const resolveConversationBySessionId = useCallback((sessionId: string | null | undefined) => {
         if (!sessionId) return undefined
-        return conversationBySessionId.get(sessionId)
+        const normalized = sessionId.trim()
+        if (!normalized) return undefined
+        if (normalized.startsWith('session:')) {
+            const rest = normalized.slice('session:'.length).trim()
+            const colonIndex = rest.indexOf(':')
+            if (colonIndex > 0) {
+                const candidateMachineId = rest.slice(0, colonIndex).trim()
+                const candidateSessionId = rest.slice(colonIndex + 1).trim()
+                if (!candidateMachineId || !candidateSessionId) return undefined
+                return conversationBySessionId.get(`session:${candidateMachineId}:${candidateSessionId}`)
+            }
+        }
+        return conversationBySessionId.get(normalized)
     }, [conversationBySessionId])
 
     const resolveConversationByTarget = useCallback((target: string | null | undefined) => {
