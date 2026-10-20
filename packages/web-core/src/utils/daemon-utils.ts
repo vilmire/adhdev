@@ -38,8 +38,18 @@ export function formatUptime(seconds: number): string {
     return `${d}d ${rh}h`
 }
 
-/** Convert bytes to MB/GB format */
+/** Convert bytes to human-readable B/KB/MB/GB format */
 export function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+    if (bytes < 1024) return `${Math.floor(bytes)} B`
+    if (bytes < 1024 * 1024) {
+        const kb = bytes / 1024
+        return `${kb >= 10 || Number.isInteger(kb) ? kb.toFixed(0) : kb.toFixed(1)} KB`
+    }
+    if (bytes < 10 * 1024 * 1024) {
+        const mb = bytes / (1024 * 1024)
+        return `${Number.isInteger(mb) ? mb.toFixed(0) : mb.toFixed(1)} MB`
+    }
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(0)} MB`
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }

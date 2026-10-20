@@ -89,7 +89,58 @@ function ChatCodeBlock(props: ComponentPropsWithoutRef<'pre'>) {
     );
 }
 
+function isSafeArtifactLinkHref(href: string | undefined): href is string {
+    if (typeof href !== 'string') return false;
+    const trimmed = href.trim();
+    if (!trimmed) return false;
+    if (trimmed.startsWith('#')) return true;
+    // Disallow protocol-relative URLs
+    if (trimmed.startsWith('//')) return false;
+    const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(trimmed);
+    if (!schemeMatch) {
+        // Relative path without scheme
+        return true;
+    }
+    const protocol = `${schemeMatch[1].toLowerCase()}:`;
+    return protocol === 'https:' || protocol === 'http:' || protocol === 'mailto:';
+}
+
+function ArtifactSafeLink(props: ComponentPropsWithoutRef<'a'>) {
+    const { href, children } = props;
+    if (!isSafeArtifactLinkHref(href)) {
+        return <span data-testid="artifact-markdown-blocked-link">{children}</span>;
+    }
+    return (
+        <a
+            href={href.trim()}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-accent-primary/60 underline-offset-2 hover:text-accent-primary"
+        >
+            {children}
+        </a>
+    );
+}
+
+function ArtifactBlockedImage(props: ComponentPropsWithoutRef<'img'>) {
+    const label = props.alt ? `[image: ${props.alt}]` : '[image blocked]';
+    return (
+        <span
+            className="inline-flex items-center rounded border border-border-subtle px-1.5 py-0.5 font-mono text-3xs text-text-muted"
+            data-testid="artifact-markdown-blocked-image"
+        >
+            {label}
+        </span>
+    );
+}
+
 const chatMarkdownComponents = { pre: ChatCodeBlock };
+const artifactSafeMarkdownComponents = {
+    pre: ChatCodeBlock,
+    a: ArtifactSafeLink,
+    img: ArtifactBlockedImage,
+    iframe: () => null,
+};
 // `singleTilde:false` keeps numeric ranges (`4~11%`) literal instead of strikethrough.
 const gfmRemarkPlugin: Pluggable = [remarkGfm, { singleTilde: false }];
 const chatRemarkPlugins: PluggableList = [gfmRemarkPlugin, remarkAlert, remarkBreaks, remarkCjkStrong];
@@ -104,15 +155,20 @@ export const ChatMarkdownBody = memo(function ChatMarkdownBody({
     content,
     renderAsPreformatted,
     renderAsMarkdown,
+    artifactSafeMode = false,
 }: {
     content: string;
     renderAsPreformatted: boolean;
     renderAsMarkdown: boolean;
+    artifactSafeMode?: boolean;
 }) {
     if (renderAsPreformatted) return <pre className="chat-preformatted">{content}</pre>;
     if (renderAsMarkdown) {
         return (
-            <ReactMarkdown remarkPlugins={chatRemarkPlugins} components={chatMarkdownComponents}>
+            <ReactMarkdown
+                remarkPlugins={chatRemarkPlugins}
+                components={artifactSafeMode ? artifactSafeMarkdownComponents : chatMarkdownComponents}
+            >
                 {content}
             </ReactMarkdown>
         );

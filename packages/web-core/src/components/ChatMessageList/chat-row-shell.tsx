@@ -19,6 +19,7 @@ import type { ToolExpandAddress } from './chatMessageHelpers';
 import { CopyButton, RowBodyView } from './chat-row-content';
 import type { ChatRowKind, ChatRowModel, RowCollapse, RowIcon, RowLabel } from './chat-row-model';
 import type { ToolExpandState } from './chat-row-expansion';
+import { AttachmentBubble } from '../attachments/AttachmentBubble';
 
 interface RowVariant {
     /** Outer row wrapper (conversation bubbles sit inside an alignment row). */
@@ -43,6 +44,7 @@ const BUBBLE_HEADER = 'chat-bubble-header';
 export const ROW_VARIANTS: Record<Exclude<ChatRowKind, 'injected'>, RowVariant> = {
     user: { outer: 'chat-message-row chat-message-row-user self-end', root: 'chat-bubble chat-bubble-user', header: BUBBLE_HEADER, label: 'chat-sender', meta: 'chat-bubble-header-end', body: 'chat-markdown', expand: 'chat-bubble-expand', showLabel: true },
     assistant: { outer: 'chat-message-row chat-message-row-assistant self-start', root: 'chat-bubble chat-bubble-assistant', header: BUBBLE_HEADER, label: 'chat-sender', meta: 'chat-bubble-header-end', body: 'chat-markdown', expand: 'chat-bubble-expand', showLabel: true },
+    artifact: { outer: 'chat-message-row chat-message-row-assistant self-start', root: 'chat-bubble chat-bubble-assistant chat-msg-artifact', header: BUBBLE_HEADER, label: 'chat-sender', meta: 'chat-bubble-header-end', body: 'chat-markdown', expand: 'chat-bubble-expand', showLabel: true },
     tool: { root: 'self-start chat-msg-tool', header: 'chat-msg-tool-meta', headerAria: 'chat.toolMessageAria', label: 'tool-label', meta: 'chat-bubble-header-end chat-msg-tool-header-end', body: 'tool-text w-full', expand: 'chat-msg-tool-expand', showLabel: true },
     thought: { root: 'self-start chat-msg-thought', header: 'chat-msg-header', label: 'chat-row-label', meta: 'chat-bubble-header-end', body: 'chat-msg-body', expand: 'chat-msg-thought-expand', showLabel: true },
     terminal: { root: 'self-start chat-msg-terminal', header: 'chat-msg-header', label: 'chat-row-label', meta: 'chat-bubble-header-end', body: 'chat-msg-body', bodyPre: true, expand: 'chat-msg-terminal-expand', showLabel: true },
@@ -152,9 +154,12 @@ export interface ChatRowShellProps {
 
 export function ChatRowShell({ model, expanded, onToggle, remoteState, onExpandRemote, onCollapseRemote, children }: ChatRowShellProps) {
     const { t } = useTranslation('common');
+    const label = useRowLabel(model.label);
+    if (model.kind === 'artifact' && model.attachment) {
+        return <AttachmentBubble attachment={model.attachment} timestamp={model.timestamp} />;
+    }
     const kind = model.kind === 'injected' ? 'system' : model.kind;
     const variant = ROW_VARIANTS[kind];
-    const label = useRowLabel(model.label);
     const isActivity = model.surface === 'activity';
     const isBubble = !!variant.outer;
     const hasBody = model.body.type === 'parts' || model.body.text.length > 0;

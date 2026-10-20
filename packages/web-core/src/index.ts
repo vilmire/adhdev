@@ -9,6 +9,10 @@ export type {
     DaemonData,
     BaseDaemonData,
     ChatMessage,
+    ArtifactKind,
+    ArtifactRecord,
+    ChatAttachmentMeta,
+    ArtifactErrorCode,
     ConnectionStatus,
     DashboardBootstrapDaemonEntry,
     DashboardStatusEventPayload,
@@ -67,6 +71,43 @@ export type {
 // ── Components ──
 export { default as ChatMessageList } from './components/ChatMessageList'
 export type { ChatMessageListRef as ChatMessageListHandle } from './components/ChatMessageList'
+export {
+    AttachmentBubble,
+    ArtifactContentRenderer,
+    classifyDiffLine,
+    formatArtifactJson,
+} from './components/attachments'
+export type {
+    AttachmentBubbleProps,
+    ArtifactContentRendererProps,
+    DiffLineKind,
+} from './components/attachments'
+export {
+    useArtifactRead,
+    useArtifactFetch,
+    buildArtifactCacheKey,
+    clearArtifactReadCache,
+    getArtifactReadCacheSize,
+    clampArtifactPreviewText,
+    decodeBase64Bytes,
+    isAllowedArtifactKindAndMime,
+    resolveArtifactSessionTarget,
+    readArtifactFetchCommandResponse,
+    MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_PREVIEW_CHARS,
+    MAX_ARTIFACT_CACHE_ENTRIES,
+    ALLOWED_ARTIFACT_KINDS,
+    ALLOWED_ARTIFACT_MIMES,
+} from './hooks/useArtifactRead'
+export type {
+    ArtifactCacheScope,
+    ResolvedArtifactSessionTarget,
+    ResolveArtifactSessionTargetOptions,
+    ArtifactResolvedPayload,
+    FetchArtifactCommandFn,
+    UseArtifactReadOptions,
+    UseArtifactReadResult,
+} from './hooks/useArtifactRead'
 export { CliTerminal } from './components/CliTerminal'
 export type { CliTerminalHandle } from './components/CliTerminal'
 export { default as ConnectionBadge } from './components/ConnectionBadge'
