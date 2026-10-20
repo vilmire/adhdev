@@ -417,4 +417,3 @@ test('P5: ADHDEV_IPC_COMMAND_TIMEOUT_MS overrides only the default, table entrie
   // Env unset: the documented defaults hold (guards the existing timeout-chain contract).
   assert.equal(getTimeoutMs('some_unknown_command', ''), 15_000);
 });
-
