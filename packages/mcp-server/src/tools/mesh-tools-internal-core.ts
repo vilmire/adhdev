@@ -395,7 +395,7 @@ export function classifyMeshLaunchFailure(error: unknown): MeshLaunchFailureClas
     const message = error instanceof Error ? error.message : String(error || 'launch failed');
     const lower = message.toLowerCase();
     const p2pClassification = classifyP2pRelayFailure(error, { command: 'launch_cli' });
-    if (p2pClassification.recoverable) {
+    if (p2pClassification.recoverable && p2pClassification.transport === 'p2p') {
         return p2pClassification;
     }
     if (lower.includes('cannot connect to daemon ipc') || lower.includes('daemon ipc command')) {
