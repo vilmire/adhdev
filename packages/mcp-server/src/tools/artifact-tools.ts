@@ -58,7 +58,7 @@ const ARTIFACT_REGISTER_BASE_PROPERTIES = {
  * worker MCP server's trusted launch context, so no credential or session/workspace
  * override fields are published in `inputSchema.properties`.
  */
-export const ARTIFACT_REGISTER_TOOL: Tool = {
+export const ARTIFACT_REGISTER_TOOL: Tool & { description: string } = {
     name: 'artifact_register',
     description:
         'Register a workspace file (markdown, image, diff, json, or text; max 4 MiB, max 50 artifacts per session) as a user-visible session artifact and publish an attachment bubble in the session chat.',

@@ -56,7 +56,7 @@ import { WORKER_OUTBOX_MAX_AGE_MS, type WorkerDeliveryKind, type WorkerReportDel
  * trusted. Here the value is meaningless unless the daemon minted it, so a
  * forged one resolves to nothing.
  */
-interface WorkerCredentials {
+export interface WorkerCredentials {
   bind?: string;
   token?: string;
 }
