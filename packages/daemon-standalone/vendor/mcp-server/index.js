@@ -30208,13 +30208,13 @@ ${renderWorkerProtocolFooter2(input)}`;
     function installGlobalInterceptor() {
       if (interceptorInstalled) return;
       interceptorInstalled = true;
-      const stripAnsi2 = (str15) => str15.replace(/\x1B\[[0-9;]*m/g, "");
+      const stripAnsi3 = (str15) => str15.replace(/\x1B\[[0-9;]*m/g, "");
       const isDaemonLogLine = (msg) => /\[(DBG|INF|WRN|ERR)\]/.test(msg);
       console.log = (...args) => {
         origConsoleLog(...args);
         try {
           const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          const clean2 = stripAnsi2(msg);
+          const clean2 = stripAnsi3(msg);
           if (isDaemonLogLine(clean2)) return;
           const line = clean2.startsWith("[20") ? clean2 : `[${fullTs()}] ${clean2}`;
           writeToFile(line);
@@ -30235,7 +30235,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         origConsoleError(...args);
         try {
           const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          const clean2 = stripAnsi2(msg);
+          const clean2 = stripAnsi3(msg);
           if (isDaemonLogLine(clean2)) return;
           const line = `[${fullTs()}] [ERROR] ${clean2}`;
           writeToFile(line);
@@ -30250,7 +30250,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         origConsoleWarn(...args);
         try {
           const msg = args.map((a) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-          const clean2 = stripAnsi2(msg);
+          const clean2 = stripAnsi3(msg);
           if (isDaemonLogLine(clean2)) return;
           const line = `[${fullTs()}] [WARN] ${clean2}`;
           writeToFile(line);
@@ -91159,7 +91159,7 @@ ${body}`;
     var init_fsm_types = __esm2({
       "src/providers/spec/fsm-types.ts"() {
         "use strict";
-        FSM_STATUS_VALUES = ["idle", "generating", "approval", "waiting_external", "owner_attention"];
+        FSM_STATUS_VALUES = ["idle", "generating", "approval", "waiting_external", "owner_attention", "waiting_choice"];
       }
     });
     var fsm_loader_exports = {};
@@ -91205,8 +91205,8 @@ ${body}`;
         const ip = spec.interactive_prompts;
         if (!ip || typeof ip !== "object" || Array.isArray(ip)) {
           errs.push("interactive_prompts must be an object");
-        } else if (ip.scheme !== "claude_tui" && ip.scheme !== "kimi_wire") {
-          errs.push('interactive_prompts.scheme must be "claude_tui" or "kimi_wire"');
+        } else if (ip.scheme !== "claude_tui" && ip.scheme !== "kimi_wire" && ip.scheme !== "antigravity_tui") {
+          errs.push('interactive_prompts.scheme must be "claude_tui", "kimi_wire", or "antigravity_tui"');
         }
       }
       if (spec.startup_dismiss !== void 0) {
@@ -91394,6 +91394,14 @@ ${body}`;
         }
         return errs;
       }
+      if ("section_absent" in w) {
+        if (typeof w.section_absent !== "string" || !w.section_absent) {
+          errs.push(`${path103}.section_absent must be a non-empty string`);
+        } else if (!sectionIds.has(w.section_absent)) {
+          errs.push(`${path103}.section_absent "${w.section_absent}" unknown`);
+        }
+        return errs;
+      }
       if ("cursor_above" in w && "changed" in w) return errs;
       if ("signal" in w) {
         if (typeof w.signal !== "string" || !w.signal.trim()) errs.push(`${path103}.signal must be a non-empty string`);
@@ -91559,6 +91567,9 @@ ${body}`;
     function isChangedCondition(c) {
       return "cursor_above" in c && "changed" in c;
     }
+    function isSectionAbsentCondition(c) {
+      return "section_absent" in c;
+    }
     function isAllCondition(c) {
       return "all" in c;
     }
@@ -91581,6 +91592,15 @@ ${body}`;
           }
         }
         return false;
+      }
+      if (isSectionAbsentCondition(cond)) {
+        const hay = sectionText(sections, cond.section_absent, "");
+        const result = hay.trim().length === 0;
+        trace.push({
+          kind: result ? "state_match" : "state_skip",
+          text: `state[${stateId}] section_absent ${cond.section_absent} result=${result}`
+        });
+        return result;
       }
       if (isChangedCondition(cond)) {
         if (!cursor || !prevLines || prevLines.length === 0) return false;
@@ -91867,6 +91887,9 @@ ${detail.join("\n")}` : stripped;
     function isChanged(c) {
       return "cursor_above" in c && "changed" in c;
     }
+    function isSectionAbsent(c) {
+      return "section_absent" in c;
+    }
     function isElapsed(c) {
       return "elapsed_ms" in c;
     }
@@ -91976,6 +91999,10 @@ ${detail.join("\n")}` : stripped;
         const where = cond.section ? `section=${cond.section}` : cond.cursor_above && cond.cursor_above > 0 ? `cursor_above=${cond.cursor_above}` : "screen";
         const ign = cond.ignore_lines ? " (ignore_lines)" : "";
         return { kind: "stable", result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
+      }
+      if (isSectionAbsent(cond)) {
+        const result = evaluateCondition(cond, sections, fullScreen, cursor, prevLines, legacyTrace, stateId);
+        return { kind: "regex", result, detail: `section_absent=${cond.section_absent}` };
       }
       if (isRegex(cond) || isChanged(cond)) {
         const hayScreen = absence?.inNot && isRegex(cond) && !cond.section ? absence.viewportScreen : fullScreen;
@@ -107901,6 +107928,378 @@ ${tail}` : ""
     });
     module2.exports = __toCommonJS2(index_exports2);
     init_dist();
+    var HEADER_TITLE_RE = /^\s*Question\s*$/;
+    var HEADER_DIVIDER_RE = /^\s*─{10,}\s*$/;
+    var QUESTION_HEADER_RE = /^\s*Question\s+(\d+)\/(\d+):\s+(.+?)\s*$/;
+    var OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX✓✔])\]\s+)?(.+?)\s*$/;
+    var WRITE_IN_LABEL_RE = /^(?:Write-in\.\.\.|.+\(Write-in\))$/i;
+    var OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*[•·].*[•·]\s*(?:<esc>|esc)\s+Skip\s*$/;
+    var WRITE_IN_PROMPT_RE = /^\s*Your answer:\s*$/;
+    var WRITE_IN_NAV_HINTS_RE = /^\s*[Ee]nter Submit.*[•·]\s*(?:<esc>|esc)\s+Back\s*$/;
+    var POST_MODAL_VETO_RE = /^\s*(?:─{10,}|[╭╰┌└│]|>\s+Type your message)|[\u2800-\u28ff]\s+(?:Generating|Running|Thinking)/;
+    function stripAnsi(text4) {
+      return text4.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+    }
+    function normalizeAntigravityPromptText(text4) {
+      return stripAnsi(text4).replace(/\s+/g, " ").trim();
+    }
+    function parseAntigravityChoiceScreen(rawSectionText) {
+      if (!rawSectionText || !rawSectionText.trim()) return null;
+      const cleaned = stripAnsi(rawSectionText).replace(/\r\n/g, "\n");
+      const lines = cleaned.split("\n");
+      let headerIdx = -1;
+      let currentIndex = 0;
+      let totalQuestions = 0;
+      let questionHeaderLineIdx = -1;
+      let questionFirstLine = "";
+      for (let i = 0; i + 2 < lines.length; i++) {
+        if (!HEADER_TITLE_RE.test(lines[i])) continue;
+        if (!HEADER_DIVIDER_RE.test(lines[i + 1])) continue;
+        let qLineIdx = i + 2;
+        if (lines[qLineIdx].trim() === "" && i + 3 < lines.length) {
+          qLineIdx = i + 3;
+        }
+        const qMatch = QUESTION_HEADER_RE.exec(lines[qLineIdx]);
+        if (!qMatch) continue;
+        const m = Number.parseInt(qMatch[1], 10);
+        const n = Number.parseInt(qMatch[2], 10);
+        if (!Number.isFinite(m) || !Number.isFinite(n) || m < 1 || n < 1 || m > n) continue;
+        headerIdx = i;
+        currentIndex = m;
+        totalQuestions = n;
+        questionHeaderLineIdx = qLineIdx;
+        questionFirstLine = qMatch[3].trim();
+      }
+      if (headerIdx < 0 || questionHeaderLineIdx < 0) return null;
+      let footerIdx = -1;
+      let writingIn = false;
+      let multiSelectFromHint = false;
+      for (let i = questionHeaderLineIdx + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (OPTIONS_NAV_HINTS_RE.test(line)) {
+          footerIdx = i;
+          writingIn = false;
+          multiSelectFromHint = /\bToggle\b/i.test(line);
+          break;
+        }
+        if (WRITE_IN_NAV_HINTS_RE.test(line)) {
+          footerIdx = i;
+          writingIn = true;
+          break;
+        }
+      }
+      if (footerIdx < 0) return null;
+      for (let i = footerIdx + 1; i < lines.length; i++) {
+        if (POST_MODAL_VETO_RE.test(lines[i])) {
+          return null;
+        }
+      }
+      if (writingIn) {
+        let yourAnswerIdx = -1;
+        for (let i = questionHeaderLineIdx + 1; i < footerIdx; i++) {
+          if (WRITE_IN_PROMPT_RE.test(lines[i])) {
+            yourAnswerIdx = i;
+            break;
+          }
+        }
+        if (yourAnswerIdx < 0) return null;
+        const questionLines2 = [questionFirstLine];
+        for (let i = questionHeaderLineIdx + 1; i < yourAnswerIdx; i++) {
+          const trimmed2 = lines[i].trim();
+          if (trimmed2) questionLines2.push(trimmed2);
+        }
+        const questionText2 = questionLines2.join(" ");
+        return {
+          currentIndex,
+          totalQuestions,
+          questionText: questionText2,
+          multiSelect: false,
+          options: [],
+          writeInRowIndex: 0,
+          currentCursorRow: 1,
+          writingIn: true,
+          fingerprint: `agy-q:${currentIndex}/${totalQuestions}:writein:${questionText2}`
+        };
+      }
+      const questionLines = [questionFirstLine];
+      const rawRows = [];
+      for (let i = questionHeaderLineIdx + 1; i < footerIdx; i++) {
+        const line = lines[i];
+        const optMatch = OPTION_LINE_RE.exec(line);
+        if (optMatch) {
+          rawRows.push({
+            focused: Boolean(optMatch[1]),
+            index: Number.parseInt(optMatch[2], 10),
+            checkbox: optMatch[3] ?? null,
+            labelParts: [optMatch[4].trim()]
+          });
+          continue;
+        }
+        const trimmed2 = line.trim();
+        if (!trimmed2) continue;
+        if (rawRows.length === 0) {
+          questionLines.push(trimmed2);
+        } else {
+          rawRows[rawRows.length - 1].labelParts.push(trimmed2);
+        }
+      }
+      if (rawRows.length < 2) return null;
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        if (rawRows[idx].index !== idx + 1) return null;
+      }
+      const lastRow = rawRows[rawRows.length - 1];
+      const lastRowLabel = lastRow.labelParts.join(" ");
+      if (!WRITE_IN_LABEL_RE.test(lastRowLabel)) {
+        return null;
+      }
+      let currentCursorRow = 1;
+      for (const row2 of rawRows) {
+        if (row2.focused) {
+          currentCursorRow = row2.index;
+          break;
+        }
+      }
+      const realRows = rawRows.slice(0, -1);
+      const hasCheckboxes = realRows.some((r) => r.checkbox !== null);
+      const multiSelect = hasCheckboxes || multiSelectFromHint;
+      const options = realRows.map((row2) => ({
+        index: row2.index,
+        label: row2.labelParts.join(" "),
+        checked: row2.checkbox !== null && row2.checkbox.trim().length > 0
+      }));
+      const questionText = questionLines.join(" ");
+      const optionSig = options.map((o) => `${o.index}:${o.label}`).join("|");
+      return {
+        currentIndex,
+        totalQuestions,
+        questionText,
+        multiSelect,
+        options,
+        writeInRowIndex: lastRow.index,
+        currentCursorRow,
+        writingIn: false,
+        fingerprint: `agy-q:${currentIndex}/${totalQuestions}:${multiSelect ? "m" : "s"}:${questionText}:${optionSig}`
+      };
+    }
+    function doesAntigravityScreenMatchNativeStep(screen, nativePending) {
+      if (nativePending.questions.length !== screen.totalQuestions) return false;
+      const targetQuestion = nativePending.questions[screen.currentIndex - 1];
+      if (!targetQuestion) return false;
+      const normScreenQ = normalizeAntigravityPromptText(screen.questionText);
+      const normNativeQ = normalizeAntigravityPromptText(targetQuestion.questionText);
+      if (!normScreenQ || !normNativeQ) return false;
+      if (normScreenQ !== normNativeQ && !normScreenQ.includes(normNativeQ) && !normNativeQ.includes(normScreenQ)) {
+        return false;
+      }
+      if (screen.writingIn) {
+        return true;
+      }
+      if (Boolean(targetQuestion.isMultiSelect) !== Boolean(screen.multiSelect)) {
+        return false;
+      }
+      if (targetQuestion.options.length !== screen.options.length) {
+        return false;
+      }
+      for (let i = 0; i < targetQuestion.options.length; i++) {
+        const normNativeOpt = normalizeAntigravityPromptText(targetQuestion.options[i].label);
+        const normScreenOpt = normalizeAntigravityPromptText(screen.options[i].label);
+        if (normNativeOpt !== normScreenOpt && !normScreenOpt.includes(normNativeOpt) && !normNativeOpt.includes(normScreenOpt)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    function buildAntigravityInteractivePrompt(params) {
+      const { screen, nativePending, promptId, createdAt, providerType = "antigravity-cli" } = params;
+      if (!nativePending) return null;
+      if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
+        return null;
+      }
+      const questions = nativePending.questions.map((q, qIdx) => {
+        const options = q.options.map((opt) => ({
+          label: opt.label
+        }));
+        return {
+          questionId: `q${qIdx + 1}`,
+          question: q.questionText,
+          header: `Question ${qIdx + 1}/${nativePending.questions.length}`,
+          options,
+          multiSelect: q.isMultiSelect,
+          allowFreeform: true
+        };
+      });
+      const resolvedPromptId = promptId ?? `agy-ask:${nativePending.conversationId}:${nativePending.stepIdx}:${nativePending.callId || "0"}`;
+      return {
+        promptId: resolvedPromptId,
+        origin: "cli",
+        providerType,
+        createdAt: createdAt ?? Date.now(),
+        questions
+      };
+    }
+    function moveAntigravityCursor(fromRow, toRow2) {
+      if (toRow2 === fromRow) return "";
+      if (toRow2 > fromRow) return "\x1B[B".repeat(toRow2 - fromRow);
+      return "\x1B[A".repeat(fromRow - toRow2);
+    }
+    function resolveSelectedOptionRows(question, selectedLabels) {
+      const rows = [];
+      const seen2 = /* @__PURE__ */ new Set();
+      for (const selected2 of selectedLabels) {
+        let idx = question.options.findIndex((candidate) => candidate.label === selected2);
+        if (idx < 0) {
+          const asNum = Number(selected2);
+          if (Number.isInteger(asNum) && asNum >= 1 && asNum <= question.options.length) {
+            idx = asNum - 1;
+          }
+        }
+        if (idx < 0) {
+          throw new Error(`Unknown option for ${question.questionId}: ${selected2}`);
+        }
+        const rowNumber = idx + 1;
+        if (!seen2.has(rowNumber)) {
+          seen2.add(rowNumber);
+          rows.push(rowNumber);
+        }
+      }
+      return rows;
+    }
+    function computeMultiSelectToggleRows(realOptionCount, desiredRows, currentlyCheckedRows) {
+      const desiredSet = new Set(desiredRows);
+      const checkedSet = /* @__PURE__ */ new Set();
+      for (const row2 of currentlyCheckedRows) {
+        if (!Number.isInteger(row2) || row2 < 1 || row2 > realOptionCount) {
+          throw new Error(`Invalid checked option row ${row2} (expected 1..${realOptionCount})`);
+        }
+        checkedSet.add(row2);
+      }
+      const toggleRows = [];
+      for (let row2 = 1; row2 <= realOptionCount; row2++) {
+        if (checkedSet.has(row2) !== desiredSet.has(row2)) {
+          toggleRows.push(row2);
+        }
+      }
+      return toggleRows;
+    }
+    function appendMultiSelectToggleKeys(toggleRows, initialCursorRow) {
+      let keys = "";
+      let cursorRow = initialCursorRow;
+      for (const targetRow of toggleRows) {
+        if (targetRow <= 9) {
+          keys += String(targetRow);
+          cursorRow = targetRow;
+        } else {
+          keys += moveAntigravityCursor(cursorRow, targetRow);
+          keys += " ";
+          cursorRow = targetRow;
+        }
+      }
+      return { keys, cursorRow };
+    }
+    function buildAntigravityQuestionKeystrokes(question, answer, options) {
+      const realOptionCount = question.options.length;
+      if (realOptionCount < 1) {
+        throw new Error(`Question ${question.questionId} has no options`);
+      }
+      const writeInRow = realOptionCount + 1;
+      let cursorRow = options?.currentCursorRow && options.currentCursorRow >= 1 ? options.currentCursorRow : 1;
+      const freeform = answer.freeformText?.trim() ?? "";
+      if (question.multiSelect && options?.writingIn && options.currentlyCheckedRows === void 0) {
+        throw new Error(
+          `Cannot reconcile multi-select checkboxes for ${question.questionId} while the native Write-in editor is already open`
+        );
+      }
+      if (freeform.length > 0) {
+        if (question.allowFreeform === false) {
+          throw new Error(`Freeform write-in is not supported for ${question.questionId}`);
+        }
+        if (!question.multiSelect && answer.selectedLabels.length > 0) {
+          throw new Error(
+            `Single-select question ${question.questionId} cannot combine option selection with freeform write-in`
+          );
+        }
+        if (!question.multiSelect) {
+          if (options?.writingIn) {
+            return `${freeform}\r`;
+          }
+          let keys2 = "";
+          if (writeInRow <= 9) {
+            keys2 += String(writeInRow);
+          } else {
+            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
+            keys2 += "\r";
+          }
+          keys2 += `${freeform}\r`;
+          return keys2;
+        }
+        const desiredRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+        const toggleRows = computeMultiSelectToggleRows(
+          realOptionCount,
+          desiredRows,
+          options?.currentlyCheckedRows ?? []
+        );
+        if (options?.writingIn) {
+          if (toggleRows.length === 0) {
+            return `${freeform}\r`;
+          }
+          let keys2 = "\x1B";
+          const toggled2 = appendMultiSelectToggleKeys(toggleRows, writeInRow);
+          keys2 += toggled2.keys;
+          cursorRow = toggled2.cursorRow;
+          if (writeInRow <= 9) {
+            keys2 += String(writeInRow);
+          } else {
+            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
+            keys2 += "\r";
+          }
+          keys2 += `${freeform}\r`;
+          return keys2;
+        }
+        let keys = "";
+        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+        keys += toggled.keys;
+        cursorRow = toggled.cursorRow;
+        if (writeInRow <= 9) {
+          keys += String(writeInRow);
+        } else {
+          keys += moveAntigravityCursor(cursorRow, writeInRow);
+          keys += "\r";
+        }
+        keys += `${freeform}\r`;
+        return keys;
+      }
+      const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+      if (treatAsMultiSelect && !question.multiSelect) {
+        throw new Error(`Expected one selected label for ${question.questionId}`);
+      }
+      const selectedRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+      if (question.multiSelect) {
+        if (selectedRows.length === 0) {
+          throw new Error(`Expected at least one selected label for ${question.questionId}`);
+        }
+      } else if (selectedRows.length !== 1) {
+        throw new Error(`Expected one selected label for ${question.questionId}`);
+      }
+      let prefix = "";
+      if (options?.writingIn) {
+        prefix = "\x1B";
+        cursorRow = writeInRow;
+      }
+      if (question.multiSelect) {
+        const toggleRows = computeMultiSelectToggleRows(
+          realOptionCount,
+          selectedRows,
+          options?.currentlyCheckedRows ?? []
+        );
+        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+        return `${prefix}${toggled.keys}\r`;
+      }
+      const targetRow = selectedRows[0];
+      if (targetRow <= 9) {
+        return `${prefix}${String(targetRow)}`;
+      }
+      return `${prefix}${moveAntigravityCursor(cursorRow, targetRow)}\r`;
+    }
     function readStringArray2(value) {
       return Array.isArray(value) ? value.map((item) => readString2(item)).filter((item) => !!item) : [];
     }
@@ -108005,6 +108404,9 @@ ${tail}` : ""
       if (record4.answers && typeof record4.answers === "object" && !Array.isArray(record4.answers)) {
         return normalizeInteractivePromptResponse(record4);
       }
+      if (record4.action === "dismiss" && record4.answers === void 0) {
+        return { promptId, answers: {}, action: "dismiss" };
+      }
       if (!Array.isArray(record4.answers)) throw new Error("answers must be an array or a questionId-keyed object");
       const resolveOneLabel = (question, sel) => {
         if (typeof sel === "number" && Number.isFinite(sel)) {
@@ -108048,7 +108450,11 @@ ${tail}` : ""
           ...freeformText ? { freeformText } : {}
         };
       });
-      return { promptId, answers };
+      return {
+        promptId,
+        answers,
+        ...record4.action === "dismiss" ? { action: "dismiss" } : {}
+      };
     }
     function interactivePromptContentFingerprint(questions) {
       let hash3 = 2166136261;
@@ -123743,6 +124149,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var AGY_STEP_TYPE_USER = 14;
     var AGY_STEP_TYPE_MODEL = 15;
     var AGY_STATUS_DONE = 3;
+    var AGY_STATUS_WAITING = 9;
     function readVarint(buf, offset) {
       let result = 0;
       let shift = 0;
@@ -124036,7 +124443,135 @@ ${output}` : "";
       const raw = content.trim();
       const match = raw.match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i);
       if (match) return match[1].trim();
-      return raw.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, "").replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, "").replace(/<\/?USER_REQUEST>/gi, "").trim();
+      return raw.replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, "").replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>|\s*$/gi, "").replace(/<\/?USER_REQUEST>/gi, "").trim();
+    }
+    function decodeAskQuestionCallHeader(payload) {
+      const header = firstLenField(payload, 5);
+      if (header) {
+        const callBuf = firstLenField(header, 4);
+        if (callBuf) {
+          const name = textField(callBuf, 2)?.trim() ?? "";
+          const callId = textField(callBuf, 1)?.trim() ?? "";
+          const argsJson = textField(callBuf, 3)?.trim() ?? "";
+          if (name || callId || argsJson) return { callId, name, argsJson };
+        }
+        const directName = textField(header, 3)?.trim() ?? "";
+        const directCallId = textField(header, 5)?.trim() ?? "";
+        const directArgs = textField(header, 4)?.trim() ?? "";
+        if (directName || directCallId || directArgs) {
+          return { callId: directCallId, name: directName, argsJson: directArgs };
+        }
+      }
+      const modelInner = firstLenField(payload, 20);
+      if (modelInner) {
+        for (const raw of allLenFields(modelInner, 7)) {
+          const name = textField(raw, 2)?.trim() ?? "";
+          if (name === "ask_question") {
+            return {
+              callId: textField(raw, 1)?.trim() ?? "",
+              name,
+              argsJson: textField(raw, 3)?.trim() ?? ""
+            };
+          }
+        }
+        const directModelName = textField(modelInner, 2)?.trim() ?? "";
+        if (directModelName === "ask_question") {
+          return {
+            callId: textField(modelInner, 1)?.trim() ?? "",
+            name: directModelName,
+            argsJson: textField(modelInner, 7)?.trim() ?? ""
+          };
+        }
+      }
+      return null;
+    }
+    function parseAskQuestionArgsFallback(argsJson) {
+      if (!argsJson) return null;
+      let parsed;
+      try {
+        parsed = JSON.parse(argsJson);
+      } catch {
+        return null;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+      const rawQuestions = parsed.questions;
+      if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) return null;
+      const questions = [];
+      for (const item of rawQuestions) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        const rec5 = item;
+        const questionText = (typeof rec5.question === "string" ? rec5.question : typeof rec5.question_text === "string" ? rec5.question_text : typeof rec5.questionText === "string" ? rec5.questionText : "").trim();
+        if (!questionText) return null;
+        const multiSelect = rec5.is_multi_select === true || rec5.multiSelect === true;
+        const rawOptions = Array.isArray(rec5.options) ? rec5.options : [];
+        const options = [];
+        for (let i = 0; i < rawOptions.length; i++) {
+          const opt = rawOptions[i];
+          if (typeof opt === "string") {
+            const text4 = opt.trim();
+            if (text4) options.push({ id: `opt_${i + 1}`, text: text4, label: text4 });
+          } else if (opt && typeof opt === "object" && !Array.isArray(opt)) {
+            const o = opt;
+            const text4 = (typeof o.text === "string" ? o.text : typeof o.label === "string" ? o.label : "").trim();
+            const id4 = typeof o.id === "string" && o.id.trim() ? o.id.trim() : `opt_${i + 1}`;
+            if (text4) options.push({ id: id4, text: text4, label: text4 });
+          }
+        }
+        if (options.length === 0) return null;
+        questions.push({ questionText, options, multiSelect, isMultiSelect: multiSelect });
+      }
+      return questions.length > 0 ? questions : null;
+    }
+    function extractPendingAskQuestionFromStepPayload(payload) {
+      if (!payload || !Buffer.isBuffer(payload) || payload.length === 0) return null;
+      const callHeader = decodeAskQuestionCallHeader(payload);
+      const callId = callHeader?.callId || "ask_question";
+      const askStep = firstLenField(payload, 154);
+      if (askStep) {
+        if (allLenFields(askStep, 3).length > 0) return null;
+        const questionBufs = allLenFields(askStep, 1);
+        const questions = [];
+        for (const qBuf of questionBufs) {
+          if (allLenFields(qBuf, 4).length > 0) return null;
+          if ((textField(qBuf, 5) ?? "").trim().length > 0) return null;
+          const questionText = (textField(qBuf, 1) ?? "").trim();
+          if (!questionText) continue;
+          let multiSelect = false;
+          let skipped = false;
+          for (const f of decodeProtoFields(qBuf)) {
+            if (f.field === 3 && f.wireType === 0 && typeof f.varint === "number") {
+              multiSelect = f.varint !== 0;
+            } else if (f.field === 6 && f.wireType === 0 && typeof f.varint === "number" && f.varint !== 0) {
+              skipped = true;
+            }
+          }
+          if (skipped) return null;
+          const optionBufs = allLenFields(qBuf, 2);
+          const options = [];
+          for (let i = 0; i < optionBufs.length; i++) {
+            const optBuf = optionBufs[i];
+            const field1 = (textField(optBuf, 1) ?? "").trim();
+            const field22 = (textField(optBuf, 2) ?? "").trim();
+            const text4 = field22 || field1;
+            if (!text4) continue;
+            const id4 = (field22 ? field1 : "") || `opt_${i + 1}`;
+            options.push({ id: id4, text: text4, label: text4 });
+          }
+          if (options.length > 0) {
+            questions.push({ questionText, options, multiSelect, isMultiSelect: multiSelect });
+          }
+        }
+        if (questions.length > 0) {
+          return { callId, toolName: callHeader?.name || "ask_question", questions, source: "field_154" };
+        }
+      }
+      if (callHeader && (!callHeader.name || callHeader.name === "ask_question")) {
+        const fallbackQuestions = parseAskQuestionArgsFallback(callHeader.argsJson);
+        if (fallbackQuestions) {
+          return { callId, toolName: callHeader.name || "ask_question", questions: fallbackQuestions, source: "tool_args" };
+        }
+      }
+      return null;
     }
     var path63 = __toESM2(require("path"));
     init_load_better_sqlite3();
@@ -124397,6 +124932,83 @@ ${output}` : "";
         }
       }
       return out;
+    }
+    function readPendingAskQuestionStep(filePath2, expectedConversationId) {
+      if (!filePath2 || !filePath2.endsWith(".db")) return null;
+      const baseUuid = path63.basename(filePath2, ".db").trim();
+      if (!baseUuid) return null;
+      if (expectedConversationId && baseUuid.toLowerCase() !== expectedConversationId.trim().toLowerCase()) {
+        return null;
+      }
+      let Database;
+      try {
+        Database = loadBetterSqlite3();
+      } catch {
+        return null;
+      }
+      for (let attempt = 1; attempt <= AGY_DB_MAX_ATTEMPTS; attempt++) {
+        let db;
+        try {
+          db = new Database(filePath2, { readonly: true, fileMustExist: true });
+          try {
+            db.pragma(`busy_timeout = ${AGY_DB_BUSY_TIMEOUT_MS}`);
+          } catch {
+          }
+          let columns;
+          try {
+            columns = new Set(
+              db.prepare("PRAGMA table_info(steps)").all().map((c) => String(c?.name ?? ""))
+            );
+          } catch {
+            columns = /* @__PURE__ */ new Set();
+          }
+          if (!columns.has("status") || !columns.has("step_payload")) return null;
+          const waitingRows = db.prepare(
+            `SELECT idx, step_type, status, step_payload
+             FROM steps
+            WHERE status = ${AGY_STATUS_WAITING}
+            ORDER BY idx DESC
+            LIMIT 4`
+          ).all();
+          if (!Array.isArray(waitingRows) || waitingRows.length === 0) return null;
+          const hasLaterTurnStmt = db.prepare(
+            `SELECT 1 FROM steps WHERE idx > ? AND step_type IN (${AGY_STEP_TYPE_USER}, ${AGY_STEP_TYPE_MODEL}) LIMIT 1`
+          );
+          for (const row2 of waitingRows) {
+            if (row2.status !== AGY_STATUS_WAITING || !row2.step_payload) continue;
+            const decoded = extractPendingAskQuestionFromStepPayload(row2.step_payload);
+            if (!decoded) continue;
+            const laterTurn = hasLaterTurnStmt.get(row2.idx);
+            if (laterTurn) continue;
+            return {
+              conversationId: baseUuid,
+              stepIdx: row2.idx,
+              stepType: row2.step_type,
+              status: row2.status,
+              callId: decoded.callId || `step_${row2.idx}`,
+              toolName: decoded.toolName,
+              questions: decoded.questions,
+              source: decoded.source
+            };
+          }
+          return null;
+        } catch (err) {
+          if (isSqliteBusyError(err)) {
+            if (attempt < AGY_DB_MAX_ATTEMPTS) {
+              sleepBusy(AGY_DB_RETRY_BACKOFF_MS[attempt - 1] ?? 150);
+              continue;
+            }
+            return null;
+          }
+          return null;
+        } finally {
+          try {
+            db?.close();
+          } catch {
+          }
+        }
+      }
+      return null;
     }
     function antigravityRoot() {
       return path64.join(os26.homedir(), ".gemini", "antigravity-cli");
@@ -125038,7 +125650,8 @@ ${output}` : "";
         const requestedProviderSid = input.providerSessionId || "";
         const sessionStartedAtMs = typeof input.sessionStartedAtMs === "number" ? input.sessionStartedAtMs : typeof input.args?.sessionStartedAtMs === "number" ? input.args.sessionStartedAtMs : 0;
         const instanceId = typeof input.instanceId === "string" ? input.instanceId : typeof input.args?.instanceId === "string" ? input.args.instanceId : "";
-        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid);
+        const homeDir2 = typeof input.envOverrides?.HOME === "string" && input.envOverrides.HOME.trim() ? input.envOverrides.HOME.trim() : void 0;
+        const resolved = resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, requestedProviderSid, homeDir2);
         const sourcePath = resolved?.path || null;
         if (!sourcePath) return null;
         const ownerConfirmed = reader === "antigravity-cli" ? resolved?.ownerConfirmed === true : void 0;
@@ -125074,7 +125687,7 @@ ${output}` : "";
         };
       };
     }
-    function resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, providerSessionId) {
+    function resolveSourcePath(reader, workspace, sessionId, sessionStartedAtMs, instanceId, providerSessionId, homeDir2) {
       switch (reader) {
         case "claude-cli": {
           const p = resolveClaudePath(workspace, sessionId);
@@ -125085,7 +125698,7 @@ ${output}` : "";
           return p ? { path: p } : null;
         }
         case "antigravity-cli":
-          return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId);
+          return resolveAntigravityPath(workspace, providerSessionId || sessionId, sessionStartedAtMs, instanceId, !providerSessionId, homeDir2);
         // grok stores per-cwd like claude, but keyed by the url-encoded cwd and
         // with the uuid as a DIRECTORY (…/<uuid>/chat_history.jsonl) rather than
         // the filename, so resolution lives in the reader module.
@@ -125095,8 +125708,15 @@ ${output}` : "";
         }
       }
     }
-    function resolveAntigravityConversationPath(workspace, sessionId, sessionStartedAtMs, instanceId) {
-      return resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId);
+    function resolveAntigravityConversationPath(workspace, sessionId, sessionStartedAtMs, instanceId, options) {
+      return resolveAntigravityPath(
+        workspace,
+        sessionId,
+        sessionStartedAtMs,
+        instanceId,
+        options?.allowDiscovery ?? true,
+        options?.homeDir
+      );
     }
     function resolveClaudePath(workspace, sessionId) {
       const dir = path66.join(os28.homedir(), ".claude", "projects", cwdAsDashes(workspace));
@@ -125235,8 +125855,9 @@ ${output}` : "";
       return "";
     }
     var AGY_SPAWN_CLAIM_GRACE_MS = 2e3;
-    function resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId, allowDiscovery = true) {
-      const agyRoot = path66.join(os28.homedir(), ".gemini", "antigravity-cli");
+    function resolveAntigravityPath(workspace, sessionId, sessionStartedAtMs, instanceId, allowDiscovery = true, homeDir2) {
+      const baseHome = typeof homeDir2 === "string" && homeDir2.trim() ? homeDir2.trim() : os28.homedir();
+      const agyRoot = path66.join(baseHome, ".gemini", "antigravity-cli");
       const owner = antigravityOwnerToken(workspace, sessionStartedAtMs, instanceId);
       const brainPath = (uuid) => path66.join(agyRoot, "brain", uuid, ".system_generated", "logs", "transcript.jsonl");
       const accept = (uuid, sourcePath) => {
@@ -157609,7 +158230,7 @@ ${text4}` : text4;
     }
     var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
     var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-    function stripAnsi(text4) {
+    function stripAnsi2(text4) {
       const s2 = String(text4 || "");
       if (s2.indexOf("\x1B") === -1) return s2;
       return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
@@ -157619,7 +158240,7 @@ ${text4}` : text4;
       return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
     }
     function detectProviderFailure(output, _exitCode) {
-      const text4 = stripAnsi(output).replace(/\s+/g, " ").trim().toLowerCase();
+      const text4 = stripAnsi2(output).replace(/\s+/g, " ").trim().toLowerCase();
       if (!text4) return null;
       const quota = hasProviderFailureEnvelope(text4) && [
         /\b(?:usage|quota|credit)\s+limit\b/,
@@ -157712,7 +158333,7 @@ ${text4}` : text4;
     ].join("|") + ")$");
     var AUTH_ONLY_REPLY_MAX_CHARS = 600;
     function detectAuthFailureOnlyReply(reply) {
-      const text4 = stripAnsi(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      const text4 = stripAnsi2(reply).replace(/\s+/g, " ").trim().toLowerCase();
       if (!text4 || text4.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
       const segments = (/^api\s+error:\s*401\b/.test(text4) ? text4.split(/\s*·\s*/) : text4.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
       if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
@@ -157771,7 +158392,7 @@ ${text4}` : text4;
       };
     }
     function extractCodexSessionIdFromScreen(screenText) {
-      const clean2 = stripAnsi(screenText);
+      const clean2 = stripAnsi2(screenText);
       const match = clean2.match(/(?:gpt-|o\d|codex-)[^\n·]*·[^\n·]*·\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       return match?.[1];
     }
@@ -158130,6 +158751,15 @@ ${text4}` : text4;
           activeModal: null,
           activeInteractivePrompt: null,
           ownerAttention: { stateId: state2.id, message: state2.label }
+        };
+      }
+      if (state2.status === "waiting_choice") {
+        return {
+          ...base,
+          status: "waiting_choice",
+          activeModal: null,
+          activeInteractivePrompt: input.activeInteractivePrompt ?? null,
+          ...input.activeInteractivePrompt ? {} : { ownerAttention: { stateId: state2.id, message: state2.label } }
         };
       }
       const readySeen = input.readySeen();
@@ -158640,6 +159270,363 @@ ${text4}` : text4;
       host.interactivePromptTransport = null;
       host.notifyChange("prompt_cleared");
     }
+    var INTERACTIVE_PROMPT_LOST_GRACE_MS2 = 1500;
+    var CAROUSEL_STEP_POLL_INTERVAL_MS = 50;
+    var CAROUSEL_STEP_SETTLE_TIMEOUT_MS = 600;
+    var fallbackConsumedPromptsByHost = /* @__PURE__ */ new WeakMap();
+    function getConsumedPromptSet(host) {
+      if (host.consumedPromptIds instanceof Set) {
+        return host.consumedPromptIds;
+      }
+      let set2 = fallbackConsumedPromptsByHost.get(host);
+      if (!set2) {
+        set2 = /* @__PURE__ */ new Set();
+        fallbackConsumedPromptsByHost.set(host, set2);
+      }
+      return set2;
+    }
+    function isAntigravityPromptConsumed(host, promptId) {
+      if (!promptId) return false;
+      return getConsumedPromptSet(host).has(promptId);
+    }
+    function markAntigravityPromptConsumed(host, promptId) {
+      if (!promptId) return;
+      getConsumedPromptSet(host).add(promptId);
+    }
+    function formatAntigravityPromptId(pending) {
+      return `agy-ask:${pending.conversationId}:${pending.stepIdx}:${pending.callId || "0"}`;
+    }
+    function detectAntigravityNativePendingQuestion(input) {
+      try {
+        const explicitProviderSid = (input.providerSessionId ?? "").trim();
+        const sessionId = (explicitProviderSid || input.sessionId || input.historySessionId || "").trim();
+        const homeDir2 = typeof input.envOverrides?.HOME === "string" && input.envOverrides.HOME.trim() ? input.envOverrides.HOME.trim() : void 0;
+        const resolved = resolveAntigravityConversationPath(
+          input.workspace ?? "",
+          sessionId,
+          typeof input.sessionStartedAtMs === "number" ? input.sessionStartedAtMs : 0,
+          input.instanceId ?? "",
+          {
+            allowDiscovery: !explicitProviderSid,
+            homeDir: homeDir2
+          }
+        );
+        const sourcePath = resolved?.path ?? null;
+        if (!sourcePath || !/\.db$/i.test(sourcePath)) return null;
+        return readPendingAskQuestionStep(sourcePath, explicitProviderSid || void 0);
+      } catch {
+        return null;
+      }
+    }
+    function readActiveAntigravityChoiceScreen(host, screenTextOverride) {
+      if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust" || host.latestModal?.kind === "approval" || host.latestModal?.kind === "confirm") {
+        return null;
+      }
+      let screenText = screenTextOverride;
+      if (screenText === void 0) {
+        try {
+          screenText = host.driver.snapshot();
+        } catch {
+          return null;
+        }
+      }
+      if (!screenText) return null;
+      if (typeof host.driver.getSections === "function") {
+        try {
+          const sections = host.driver.getSections(screenText);
+          if (Array.isArray(sections) && sections.length > 0) {
+            const choiceSection = sections.find((s2) => s2.id === "choice");
+            if (!choiceSection || !choiceSection.text.trim()) {
+              return null;
+            }
+            return parseAntigravityChoiceScreen(choiceSection.text);
+          }
+        } catch {
+          return null;
+        }
+      }
+      return parseAntigravityChoiceScreen(screenText);
+    }
+    function refreshAntigravityTuiPrompt(host, options = {}) {
+      if (!host.isAntigravityTuiScheme() || host.antigravityAnswerInFlight) return;
+      if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust") {
+        if (host.activeInteractivePrompt) {
+          host.activeInteractivePrompt = null;
+          host.interactivePromptTransport = null;
+          host.interactivePromptLostAt = null;
+          host.notifyChange("prompt_cleared");
+        }
+        return;
+      }
+      const screen = readActiveAntigravityChoiceScreen(host, options.screenText);
+      const nativePending = screen ? host.readNativePendingAskQuestion() : null;
+      const candidatePrompt = screen && nativePending ? buildAntigravityInteractivePrompt({
+        screen,
+        nativePending,
+        providerType: host.cliType,
+        createdAt: host.activeInteractivePrompt?.createdAt
+      }) : null;
+      const nextPrompt = candidatePrompt && !isAntigravityPromptConsumed(host, candidatePrompt.promptId) ? candidatePrompt : null;
+      if (nextPrompt) {
+        host.interactivePromptLostAt = null;
+        const prevPromptId = host.activeInteractivePrompt?.promptId ?? null;
+        host.activeInteractivePrompt = nextPrompt;
+        host.interactivePromptTransport = "tui";
+        if (prevPromptId !== nextPrompt.promptId) {
+          host.notifyChange("prompt_captured");
+        }
+        return;
+      }
+      if (!host.activeInteractivePrompt) return;
+      if (isAntigravityPromptConsumed(host, host.activeInteractivePrompt.promptId)) {
+        host.activeInteractivePrompt = null;
+        host.interactivePromptTransport = null;
+        host.interactivePromptLostAt = null;
+        host.notifyChange("prompt_cleared");
+        return;
+      }
+      const latestPending = host.readNativePendingAskQuestion();
+      const nativeStillMatchesHeld = latestPending !== null && formatAntigravityPromptId(latestPending) === host.activeInteractivePrompt.promptId;
+      const leftWaitingChoice = host.latestState !== null && host.latestState.status !== "waiting_choice";
+      if (options.forceImmediateClear || leftWaitingChoice || !nativeStillMatchesHeld) {
+        host.activeInteractivePrompt = null;
+        host.interactivePromptTransport = null;
+        host.interactivePromptLostAt = null;
+        host.notifyChange("prompt_cleared");
+        return;
+      }
+      const lostAt = host.interactivePromptLostAt ?? Date.now();
+      if (host.interactivePromptLostAt === null) {
+        host.interactivePromptLostAt = lostAt;
+      }
+      if (Date.now() - lostAt < INTERACTIVE_PROMPT_LOST_GRACE_MS2) {
+        return;
+      }
+      host.activeInteractivePrompt = null;
+      host.interactivePromptTransport = null;
+      host.interactivePromptLostAt = null;
+      host.notifyChange("prompt_cleared");
+    }
+    function assertChoiceModalStillActiveForStep(host, expectedPromptId, expectedQuestionIndex1Based) {
+      if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust" || host.latestModal?.kind === "approval" || host.latestModal?.kind === "confirm") {
+        throw new Error(
+          "Antigravity permission/trust modal preempted the choice carousel during answer submission."
+        );
+      }
+      if (host.latestState && host.latestState.status !== "waiting_choice") {
+        throw new Error(
+          `Antigravity session left waiting_choice (status=${host.latestState.status}) before question ${expectedQuestionIndex1Based} could be answered.`
+        );
+      }
+      const nativePending = host.readNativePendingAskQuestion();
+      if (!nativePending || formatAntigravityPromptId(nativePending) !== expectedPromptId) {
+        throw new Error(
+          `Antigravity native AskQuestion step resolved or changed before question ${expectedQuestionIndex1Based} could be answered.`
+        );
+      }
+      return nativePending;
+    }
+    async function waitForNextAntigravityCarouselPage(host, expectedPromptId, expectedQuestionIndex1Based) {
+      const deadline = Date.now() + CAROUSEL_STEP_SETTLE_TIMEOUT_MS;
+      while (Date.now() <= deadline) {
+        const nativePending = assertChoiceModalStillActiveForStep(
+          host,
+          expectedPromptId,
+          expectedQuestionIndex1Based
+        );
+        const screen = readActiveAntigravityChoiceScreen(host);
+        if (screen) {
+          if (screen.currentIndex === expectedQuestionIndex1Based) {
+            if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
+              throw new Error(
+                `Antigravity choice screen at Question ${screen.currentIndex}/${screen.totalQuestions} no longer matches bound native step.`
+              );
+            }
+            return screen;
+          }
+          if (screen.currentIndex !== expectedQuestionIndex1Based - 1) {
+            throw new Error(
+              `Antigravity choice carousel jumped to unexpected Question ${screen.currentIndex}/${screen.totalQuestions} (expected ${expectedQuestionIndex1Based}/${screen.totalQuestions}).`
+            );
+          }
+        }
+        await new Promise((resolve48) => setTimeout(resolve48, CAROUSEL_STEP_POLL_INTERVAL_MS));
+      }
+      throw new Error(
+        `Timed out waiting for Antigravity choice carousel to advance to Question ${expectedQuestionIndex1Based}; partial/unconfirmed carousel advancement \u2014 stopped remaining keystrokes.`
+      );
+    }
+    async function waitForAntigravityWriteInExit(host, expectedPromptId, expectedQuestionIndex1Based) {
+      const deadline = Date.now() + CAROUSEL_STEP_SETTLE_TIMEOUT_MS;
+      while (Date.now() <= deadline) {
+        const nativePending = assertChoiceModalStillActiveForStep(
+          host,
+          expectedPromptId,
+          expectedQuestionIndex1Based
+        );
+        const screen = readActiveAntigravityChoiceScreen(host);
+        if (screen) {
+          if (screen.currentIndex !== expectedQuestionIndex1Based) {
+            throw new Error(
+              `Antigravity choice carousel moved to Question ${screen.currentIndex}/${screen.totalQuestions} while exiting Write-in on Question ${expectedQuestionIndex1Based}.`
+            );
+          }
+          if (!screen.writingIn) {
+            if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
+              throw new Error(
+                `Antigravity choice screen at Question ${screen.currentIndex}/${screen.totalQuestions} no longer matches bound native step after exiting Write-in.`
+              );
+            }
+            return screen;
+          }
+        }
+        await new Promise((resolve48) => setTimeout(resolve48, CAROUSEL_STEP_POLL_INTERVAL_MS));
+      }
+      throw new Error(
+        `Timed out waiting for Antigravity Write-in editor to return to options on Question ${expectedQuestionIndex1Based}; stopped remaining keystrokes.`
+      );
+    }
+    function extractScreenKeystrokeOptions(screen) {
+      return {
+        currentCursorRow: screen.currentCursorRow,
+        writingIn: screen.writingIn,
+        currentlyCheckedRows: screen.writingIn ? void 0 : screen.options.filter((opt) => opt.checked).map((opt) => opt.index)
+      };
+    }
+    function clearHeldPromptOnHost(host) {
+      const hadPrompt = host.activeInteractivePrompt !== null;
+      host.activeInteractivePrompt = null;
+      host.interactivePromptTransport = null;
+      host.interactivePromptLostAt = null;
+      if (hadPrompt) {
+        host.notifyChange("prompt_cleared");
+      }
+    }
+    async function answerAntigravityInteractivePrompt(host, prompt, response) {
+      if (host.antigravityAnswerInFlight) {
+        throw new Error(
+          "Another interactive prompt response is already in flight for this Antigravity session."
+        );
+      }
+      if (!response || !response.promptId) {
+        throw new Error("Interactive prompt response is missing promptId");
+      }
+      if (isAntigravityPromptConsumed(host, response.promptId) || prompt?.promptId && isAntigravityPromptConsumed(host, prompt.promptId)) {
+        clearHeldPromptOnHost(host);
+        throw new Error(
+          "Interactive prompt response was already submitted for this native AskQuestion step."
+        );
+      }
+      if (!prompt || !host.activeInteractivePrompt || host.activeInteractivePrompt.promptId !== prompt.promptId) {
+        throw new Error("Interactive prompt response does not match active prompt");
+      }
+      if (response.promptId !== prompt.promptId) {
+        throw new Error("Interactive prompt response does not match active prompt");
+      }
+      if (host.latestState?.status === "approval" || host.latestState?.id === "approval" || host.latestState?.id === "trust" || host.latestModal?.kind === "approval" || host.latestModal?.kind === "confirm") {
+        clearHeldPromptOnHost(host);
+        throw new Error(
+          "Cannot answer Antigravity choice question while a permission/trust approval modal is active."
+        );
+      }
+      if (host.latestState && host.latestState.status !== "waiting_choice") {
+        clearHeldPromptOnHost(host);
+        throw new Error(
+          `Antigravity session is no longer waiting for a choice answer (status=${host.latestState.status}).`
+        );
+      }
+      const initialScreen = readActiveAntigravityChoiceScreen(host);
+      const initialNative = host.readNativePendingAskQuestion();
+      if (!initialScreen || !initialNative || formatAntigravityPromptId(initialNative) !== prompt.promptId || !doesAntigravityScreenMatchNativeStep(initialScreen, initialNative)) {
+        clearHeldPromptOnHost(host);
+        throw new Error(
+          "Antigravity choice prompt is no longer active or no longer matches the bound native step."
+        );
+      }
+      if (response.action === "dismiss") {
+        host.antigravityAnswerInFlight = true;
+        markAntigravityPromptConsumed(host, prompt.promptId);
+        clearHeldPromptOnHost(host);
+        try {
+          let currentScreen = initialScreen;
+          const startQuestionIndex = currentScreen.currentIndex;
+          const totalQuestions = currentScreen.totalQuestions;
+          for (let qNum = startQuestionIndex; qNum <= totalQuestions; qNum++) {
+            if (qNum > startQuestionIndex) {
+              currentScreen = await waitForNextAntigravityCarouselPage(
+                host,
+                prompt.promptId,
+                qNum
+              );
+            }
+            if (currentScreen.writingIn) {
+              host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
+              currentScreen = await waitForAntigravityWriteInExit(
+                host,
+                prompt.promptId,
+                qNum
+              );
+            }
+            host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
+          }
+        } finally {
+          host.antigravityAnswerInFlight = false;
+        }
+        return;
+      }
+      if (initialScreen.currentIndex !== 1) {
+        throw new Error(
+          `Antigravity choice carousel was manually advanced in the terminal to Question ${initialScreen.currentIndex}/${initialScreen.totalQuestions}; refusing to inject answer sequence starting from Question 1.`
+        );
+      }
+      for (let i = 0; i < prompt.questions.length; i++) {
+        const question = prompt.questions[i];
+        const answer = response.answers[question.questionId];
+        if (!answer) {
+          throw new Error(`Missing answer for ${question.questionId}`);
+        }
+        buildAntigravityQuestionKeystrokes(
+          question,
+          answer,
+          i === 0 ? extractScreenKeystrokeOptions(initialScreen) : { currentCursorRow: 1, writingIn: false, currentlyCheckedRows: [] }
+        );
+      }
+      host.antigravityAnswerInFlight = true;
+      markAntigravityPromptConsumed(host, prompt.promptId);
+      clearHeldPromptOnHost(host);
+      try {
+        let activeScreen = initialScreen;
+        for (let i = 0; i < prompt.questions.length; i++) {
+          const qNum = i + 1;
+          if (i > 0) {
+            activeScreen = await waitForNextAntigravityCarouselPage(
+              host,
+              prompt.promptId,
+              qNum
+            );
+          }
+          const question = prompt.questions[i];
+          const answer = response.answers[question.questionId];
+          const hasFreeform = (answer.freeformText?.trim() ?? "").length > 0;
+          if (activeScreen.writingIn && !question.multiSelect && !hasFreeform) {
+            host.driver.dispatch({ kind: "pty_write", data: "\x1B" });
+            activeScreen = await waitForAntigravityWriteInExit(
+              host,
+              prompt.promptId,
+              qNum
+            );
+          }
+          const keys = buildAntigravityQuestionKeystrokes(
+            question,
+            answer,
+            extractScreenKeystrokeOptions(activeScreen)
+          );
+          host.driver.dispatch({ kind: "pty_write", data: keys });
+        }
+      } finally {
+        host.antigravityAnswerInFlight = false;
+      }
+    }
     init_logger();
     var PROVIDER_MARKERS = {
       "codex-cli": /chatgpt\.com|backend-api\/|wham\/usage|\bcodex(?:-cli)?\b|\bopenai\b/i,
@@ -158754,7 +159741,7 @@ ${text4}` : text4;
     }
     function maskForeignProviderText(cliType, text4) {
       if (!(cliType in PROVIDER_MARKERS) || !text4) return text4;
-      const clean2 = stripAnsi(text4);
+      const clean2 = stripAnsi2(text4);
       const foreign = Object.entries(PROVIDER_MARKERS).filter(([provider]) => provider !== cliType);
       if (!foreign.some(([, marker2]) => marker2.test(clean2))) return text4;
       return logicalBlocks(clean2).flatMap((block2) => labelledStatements(cliType, block2)).map((statement) => foreign.some(([, marker2]) => marker2.test(statement)) ? "" : statement).join("\n");
@@ -158901,7 +159888,7 @@ ${text4}` : text4;
        */
       strippedTail(maxBytes) {
         if (this.seqCounter <= this.strippedClearedAtSeq) return "";
-        return stripAnsi(this.buf).slice(-maxBytes);
+        return stripAnsi2(this.buf).slice(-maxBytes);
       }
       /**
        * Mark the stripped-tail view as consumed: `strippedTail()` reports empty
@@ -159016,6 +160003,8 @@ ${text4}` : text4;
       activeInteractivePrompt = null;
       interactivePromptTransport = null;
       claudeTuiPromptCaptureInFlight = false;
+      antigravityAnswerInFlight = false;
+      antigravityConsumedPromptIds = /* @__PURE__ */ new Set();
       /**
        * OWNER-INPUT-WINS latch for the claude TUI capture pass. The multi-question
        * capture injects Tab/Shift-Tab into the PTY to snapshot pages 2..N — the
@@ -159292,6 +160281,7 @@ ${text4}` : text4;
         this.maybeConfirmLiveAuthBillingSuspect();
         if (!this.providerFailure && !this.exited && this.spawned) {
           this.refreshWirePendingQuestion();
+          this.refreshAntigravityTuiPrompt();
         }
         const projected = projectAdapterStatus({
           providerSessionId: this.providerSessionId,
@@ -159557,6 +160547,10 @@ ${text4}` : text4;
           this.notifyChange("prompt_cleared");
           return;
         }
+        if (scheme === "antigravity_tui") {
+          await answerAntigravityInteractivePrompt(this.antigravityTuiHost, prompt, response);
+          return;
+        }
         if (scheme !== "claude_tui") {
           throw new Error(`Provider "${this.spec.id}" declares no answerable interactive-prompt scheme${scheme ? ` (scheme: ${scheme})` : ""} \u2014 the question was NOT answered.`);
         }
@@ -159672,6 +160666,7 @@ ${text4}` : text4;
             this.maybeClearResolvedClaudeTuiPrompt();
             this.maybeCaptureClaudeTuiPrompt();
             this.maybeUpgradeClaudeTuiMultiSelect();
+            this.refreshAntigravityTuiPrompt();
             this.notifyChange("fsm_state");
             return;
           case "pty_data":
@@ -159681,6 +160676,7 @@ ${text4}` : text4;
             this.maybeClearResolvedClaudeTuiPrompt();
             this.maybeCaptureClaudeTuiPrompt();
             this.maybeUpgradeClaudeTuiMultiSelect();
+            this.refreshAntigravityTuiPrompt();
             try {
               this.ptyDataCallback?.(ev.chunk);
             } catch {
@@ -159774,8 +160770,8 @@ ${text4}` : text4;
        */
       interactivePromptScheme() {
         const declared = this.spec.interactive_prompts?.scheme;
-        if (declared === "claude_tui" || declared === "kimi_wire") return declared;
-        return this.cliType === "claude-cli" ? "claude_tui" : null;
+        if (declared === "claude_tui" || declared === "kimi_wire" || declared === "antigravity_tui") return declared;
+        return this.cliType === "claude-cli" ? "claude_tui" : this.cliType === "antigravity-cli" ? "antigravity_tui" : null;
       }
       /**
        * kimi_wire scheme: refresh the held AskUserQuestion / built-in selector
@@ -159922,6 +160918,55 @@ ${text4}` : text4;
           )
         };
       }
+      get antigravityTuiHost() {
+        const self = this;
+        return {
+          get cliType() {
+            return self.cliType;
+          },
+          get driver() {
+            return self.driver;
+          },
+          get latestState() {
+            return self.latestState;
+          },
+          get latestModal() {
+            return self.latestModal;
+          },
+          get activeInteractivePrompt() {
+            return self.activeInteractivePrompt;
+          },
+          set activeInteractivePrompt(v) {
+            self.activeInteractivePrompt = v;
+          },
+          get interactivePromptTransport() {
+            return self.interactivePromptTransport;
+          },
+          set interactivePromptTransport(v) {
+            self.interactivePromptTransport = v;
+          },
+          get interactivePromptLostAt() {
+            return self.interactivePromptLostAt;
+          },
+          set interactivePromptLostAt(v) {
+            self.interactivePromptLostAt = v;
+          },
+          get antigravityAnswerInFlight() {
+            return self.antigravityAnswerInFlight;
+          },
+          set antigravityAnswerInFlight(v) {
+            self.antigravityAnswerInFlight = v;
+          },
+          get consumedPromptIds() {
+            return self.antigravityConsumedPromptIds ??= /* @__PURE__ */ new Set();
+          },
+          isAntigravityTuiScheme: () => self.interactivePromptScheme() === "antigravity_tui",
+          notifyChange: (cause) => self.notifyChange(cause),
+          readNativePendingAskQuestion: () => detectAntigravityNativePendingQuestion(
+            self.nativeHistoryInput({ withOwner: true })
+          )
+        };
+      }
       /**
        * The session→transcript binding every native-history read of this
        * session uses. `withOwner` adds the sidecar-claim owner token — without it
@@ -159937,7 +160982,7 @@ ${text4}` : text4;
           ...opts.withOwner ? { instanceId: this.owningSessionId || void 0 } : {}
         };
       }
-      // Thin delegators into claude-tui-prompt.ts. Kept as adapter methods because
+      // Thin delegators into claude-tui-prompt.ts / antigravity-tui-prompt.ts. Kept as adapter methods because
       // handleEvent calls them per frame and suites stub / drive them directly.
       maybeClearResolvedClaudeTuiPrompt(options = {}) {
         return maybeClearResolvedClaudeTuiPrompt(this.claudeTuiHost, options);
@@ -159947,6 +160992,9 @@ ${text4}` : text4;
       }
       maybeUpgradeClaudeTuiMultiSelect() {
         maybeUpgradeClaudeTuiMultiSelect(this.claudeTuiHost);
+      }
+      refreshAntigravityTuiPrompt() {
+        refreshAntigravityTuiPrompt(this.antigravityTuiHost);
       }
       /** Transcript messages for the debug snapshot/state bundles: native
        *  history when the spec declares a source, else the screen scrape. */
@@ -163735,6 +164783,7 @@ ${buttons.join("\n")}`;
       } catch {
         return null;
       }
+      if (adapterStatus.status === "waiting_choice") return "waiting_choice";
       if (adapterStatus.status === "waiting_approval" && (!host.autoApproveEffectivelyActive(adapterStatus.status) || host.autoApproveMaskStalled())) {
         if (host.isTransientToolConsent()) {
           return null;

@@ -34,7 +34,7 @@ export interface AdapterStatusInputs {
     modal: {
         title: string | null;
         buttons: { index: number; label: string }[];
-        kind?: 'approval' | 'picker' | 'confirm' | null;
+        kind?: 'approval' | 'picker' | 'confirm' | 'choice' | null;
     } | null;
     /**
      * `driver.hasSeenReady?.()` — undefined for stub/legacy drivers with no such
@@ -186,6 +186,23 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
             activeModal: null,
             activeInteractivePrompt: null,
             ownerAttention: { stateId: state.id, message: state.label },
+        };
+    }
+
+    // CHOICE QUESTION PARK (e.g. antigravity-cli `choice` state): when the live
+    // screen AND native pending AskQuestion step are verified and bound, surface
+    // `activeInteractivePrompt` so chat UI and mesh_answer_question can answer
+    // it; when native state is unavailable or not yet bound, report truthful
+    // manual `waiting_choice` fallback (`ownerAttention`) with `activeModal: null`
+    // and `activeInteractivePrompt: null` (never `waiting_approval` or fabricated
+    // options).
+    if (state.status === 'waiting_choice') {
+        return {
+            ...base,
+            status: 'waiting_choice',
+            activeModal: null,
+            activeInteractivePrompt: input.activeInteractivePrompt ?? null,
+            ...(input.activeInteractivePrompt ? {} : { ownerAttention: { stateId: state.id, message: state.label } }),
         };
     }
 

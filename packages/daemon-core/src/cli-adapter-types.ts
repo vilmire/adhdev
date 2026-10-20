@@ -55,7 +55,7 @@ export interface CliAdapterStatus {
          * for adapters that don't classify modals — the auto-approve gate then
          * falls back to its structural heuristic.
          */
-        kind?: 'approval' | 'picker' | 'confirm' | null;
+        kind?: 'approval' | 'picker' | 'confirm' | 'choice' | null;
     } | null;
     providerApproval?: import('@adhdev/mesh-shared').ProviderApproval | null;
     activeInteractivePrompt?: InteractivePrompt | null;

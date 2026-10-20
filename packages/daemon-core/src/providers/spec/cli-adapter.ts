@@ -71,6 +71,12 @@ import {
     maybeUpgradeClaudeTuiMultiSelect,
     type ClaudeTuiPromptHost,
 } from './claude-tui-prompt.js';
+import {
+    answerAntigravityInteractivePrompt,
+    detectAntigravityNativePendingQuestion,
+    refreshAntigravityTuiPrompt,
+    type AntigravityTuiPromptHost,
+} from './antigravity-tui-prompt.js';
 
 import type { ProviderFailure } from './provider-failure-classifier.js';
 import { authBillingLatchLogLine, classifyAuthBillingOutput, createLiveAuthState, exitClassificationAllowed, noteLiveAuthMatch, resolveLiveAuthSuspect, TAIL_BYTES, type LiveAuthContext, type LiveAuthState } from './live-auth-advisory.js';
@@ -119,7 +125,7 @@ export class SpecCliAdapter implements CliAdapter {
     private runtimeSettings: Record<string, unknown> = {};
     private latestState: { id: string; label: string; title: string | null; status: FsmStatus } | null = null;
     private approvalLifecycle = new ProviderApprovalLifecycle();
-    private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | null } | null = null;
+    private latestModal: { title: string | null; buttons: { index: number; label: string }[]; kind?: 'approval' | 'picker' | 'confirm' | 'choice' | null } | null = null;
     private statusCallback: (() => void) | null = null;
     private changeCallback: ((cause: AdapterChangeCause) => void) | null = null;
     private exitCallback: ((report: SpecAdapterExitReport) => void) | null = null;
@@ -129,6 +135,8 @@ export class SpecCliAdapter implements CliAdapter {
     private activeInteractivePrompt: InteractivePrompt | null = null;
     private interactivePromptTransport: 'stream-json' | 'tui' | null = null;
     private claudeTuiPromptCaptureInFlight = false;
+    private antigravityAnswerInFlight = false;
+    private antigravityConsumedPromptIds = new Set<string>();
     /**
      * OWNER-INPUT-WINS latch for the claude TUI capture pass. The multi-question
      * capture injects Tab/Shift-Tab into the PTY to snapshot pages 2..N — the
@@ -463,6 +471,7 @@ export class SpecCliAdapter implements CliAdapter {
         // before the extraction: these ran only after those early returns).
         if (!this.providerFailure && !this.exited && this.spawned) {
             this.refreshWirePendingQuestion();
+            this.refreshAntigravityTuiPrompt();
         }
         const projected = projectAdapterStatus({
             providerSessionId: this.providerSessionId,
@@ -809,6 +818,10 @@ export class SpecCliAdapter implements CliAdapter {
             this.notifyChange('prompt_cleared');
             return;
         }
+        if (scheme === 'antigravity_tui') {
+            await answerAntigravityInteractivePrompt(this.antigravityTuiHost, prompt, response);
+            return;
+        }
         // SILENT-SUCCESS DEFECT (2026-08-20): this used to `return` for any
         // other scheme — no keys pressed, prompt left held, and the caller
         // still reported success. A provider whose spec declares no answerable
@@ -933,6 +946,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
                 this.maybeUpgradeClaudeTuiMultiSelect();
+                this.refreshAntigravityTuiPrompt();
                 this.notifyChange('fsm_state');
                 return;
             case 'pty_data':
@@ -945,6 +959,7 @@ export class SpecCliAdapter implements CliAdapter {
                 this.maybeClearResolvedClaudeTuiPrompt();
                 this.maybeCaptureClaudeTuiPrompt();
                 this.maybeUpgradeClaudeTuiMultiSelect();
+                this.refreshAntigravityTuiPrompt();
                 try { this.ptyDataCallback?.(ev.chunk); } catch { /* ignore */ }
                 return;
             case 'exit':
@@ -1053,8 +1068,8 @@ export class SpecCliAdapter implements CliAdapter {
      */
     private interactivePromptScheme(): InteractivePrompts['scheme'] | null {
         const declared = this.spec.interactive_prompts?.scheme;
-        if (declared === 'claude_tui' || declared === 'kimi_wire') return declared;
-        return this.cliType === 'claude-cli' ? 'claude_tui' : null;
+        if (declared === 'claude_tui' || declared === 'kimi_wire' || declared === 'antigravity_tui') return declared;
+        return this.cliType === 'claude-cli' ? 'claude_tui' : this.cliType === 'antigravity-cli' ? 'antigravity_tui' : null;
     }
 
     /**
@@ -1177,6 +1192,30 @@ export class SpecCliAdapter implements CliAdapter {
         };
     }
 
+    private get antigravityTuiHost(): AntigravityTuiPromptHost {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
+        const self = this;
+        return {
+            get cliType() { return self.cliType; },
+            get driver() { return self.driver; },
+            get latestState() { return self.latestState; },
+            get latestModal() { return self.latestModal; },
+            get activeInteractivePrompt() { return self.activeInteractivePrompt; },
+            set activeInteractivePrompt(v) { self.activeInteractivePrompt = v; },
+            get interactivePromptTransport() { return self.interactivePromptTransport; },
+            set interactivePromptTransport(v) { self.interactivePromptTransport = v; },
+            get interactivePromptLostAt() { return self.interactivePromptLostAt; },
+            set interactivePromptLostAt(v) { self.interactivePromptLostAt = v; },
+            get antigravityAnswerInFlight() { return self.antigravityAnswerInFlight; },
+            set antigravityAnswerInFlight(v) { self.antigravityAnswerInFlight = v; },
+            get consumedPromptIds() { return (self.antigravityConsumedPromptIds ??= new Set<string>()); },
+            isAntigravityTuiScheme: () => self.interactivePromptScheme() === 'antigravity_tui',
+            notifyChange: (cause) => self.notifyChange(cause),
+            readNativePendingAskQuestion: () => detectAntigravityNativePendingQuestion(
+                self.nativeHistoryInput({ withOwner: true })),
+        };
+    }
+
     /**
      * The session→transcript binding every native-history read of this
      * session uses. `withOwner` adds the sidecar-claim owner token — without it
@@ -1193,7 +1232,7 @@ export class SpecCliAdapter implements CliAdapter {
         };
     }
 
-    // Thin delegators into claude-tui-prompt.ts. Kept as adapter methods because
+    // Thin delegators into claude-tui-prompt.ts / antigravity-tui-prompt.ts. Kept as adapter methods because
     // handleEvent calls them per frame and suites stub / drive them directly.
     private maybeClearResolvedClaudeTuiPrompt(options: {
         screenText?: string;
@@ -1204,6 +1243,7 @@ export class SpecCliAdapter implements CliAdapter {
     }
     private maybeCaptureClaudeTuiPrompt(): void { maybeCaptureClaudeTuiPrompt(this.claudeTuiHost); }
     private maybeUpgradeClaudeTuiMultiSelect(): void { maybeUpgradeClaudeTuiMultiSelect(this.claudeTuiHost); }
+    private refreshAntigravityTuiPrompt(): void { refreshAntigravityTuiPrompt(this.antigravityTuiHost); }
 
     /** Transcript messages for the debug snapshot/state bundles: native
      *  history when the spec declares a source, else the screen scrape. */
