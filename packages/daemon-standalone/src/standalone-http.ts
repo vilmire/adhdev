@@ -21,6 +21,7 @@ import {
   attachAuthenticatedMcpCommand,
   issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
+  matchesLiveArtifactWorkerCredential,
   isWorkerMcpDaemonVerb,
   type StatusResponse,
   type TrustedOwnerIngressProof,
@@ -90,6 +91,8 @@ export interface StandaloneHttpDeps {
    * token). Default: daemon-core `isLiveWorkerMcpCredential`.
    */
   verifyWorkerCredential?(credential: string): boolean;
+  /** Same real verifier across source/bundled embedding boundaries. */
+  verifyArtifactWorkerCredential?(credential: string, args: Record<string, unknown>): boolean;
   /** Optional hook notified when owner auth epoch changes (logout, password change/clear). */
   onAuthEpochChanged?(): void;
 }
@@ -880,6 +883,17 @@ export class StandaloneHttpApi {
             return;
           }
           const commandPayload = (payload && typeof payload === 'object' ? { ...payload } : {}) as Record<string, unknown>;
+          if (internalScope === 'worker' && type === 'artifact_register') {
+            const credential = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER) ?? '';
+            const verify = this.deps.verifyArtifactWorkerCredential ?? matchesLiveArtifactWorkerCredential;
+            let matches = false;
+            try { matches = verify(credential, commandPayload) === true; } catch { /* fail closed */ }
+            if (!matches) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Artifact arguments must retain the authenticated worker credential and principal.' }));
+              return;
+            }
+          }
           const ownerGuard = this.captureOwnerAuthGuard(req, url);
           const isOwner = Boolean(ownerGuard && ownerGuard());
           const ownerProof = isOwner && ownerGuard

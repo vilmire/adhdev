@@ -419,7 +419,7 @@ export {
   WORKER_MCP_DAEMON_VERBS,
   isWorkerMcpDaemonVerb,
 } from './standalone-mcp-auth.js';
-export { isLiveWorkerMcpCredential } from './standalone-mcp-auth-verify.js';
+export { isLiveWorkerMcpCredential, matchesLiveArtifactWorkerCredential } from './standalone-mcp-auth-verify.js';
 
 // ── Chat History ──
 export { readChatHistory } from './config/chat-history.js';

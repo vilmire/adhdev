@@ -107840,6 +107840,7 @@ ${tail}` : ""
       mapTranscriptViewToReadChatPayload: () => mapTranscriptViewToReadChatPayload3,
       markSetupComplete: () => markSetupComplete,
       maskDaemonId: () => maskDaemonId,
+      matchesLiveArtifactWorkerCredential: () => matchesLiveArtifactWorkerCredential,
       maxEntryBytes: () => maxEntryBytes,
       maybeInjectIdleActiveMissionReminder: () => maybeInjectIdleActiveMissionReminder,
       maybeRunDaemonUpgradeHelperFromEnv: () => maybeRunDaemonUpgradeHelperFromEnv,
@@ -170796,9 +170797,21 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_standalone_mcp_auth();
     init_worker_session_bind_registry();
     init_worker_mcp_isolation();
+    init_dist();
     function isLiveWorkerMcpCredential(credential) {
       if (typeof credential !== "string" || !credential.trim()) return false;
       return !!verifyWorkerSessionBind(credential) || !!verifyWorkerTaskToken(credential);
+    }
+    function matchesLiveArtifactWorkerCredential(credential, args) {
+      const headerBind = verifyWorkerSessionBind(credential);
+      const headerToken = headerBind ? null : verifyWorkerTaskToken(credential);
+      const principal = headerBind ?? headerToken;
+      if (!principal?.sessionId) return false;
+      if (headerBind ? args.bind !== credential : args.token !== credential) return false;
+      const bind = args.bind == null ? null : verifyWorkerSessionBind(args.bind);
+      const token = args.token == null ? null : verifyWorkerTaskToken(args.token);
+      if (args.bind != null && !bind || args.token != null && !token) return false;
+      return [bind, token].every((value) => !value || value.meshId === principal.meshId && typeof value.sessionId === "string" && sessionIdsEquivalent(value.sessionId, principal.sessionId));
     }
     init_chat_history();
     init_async_batch();

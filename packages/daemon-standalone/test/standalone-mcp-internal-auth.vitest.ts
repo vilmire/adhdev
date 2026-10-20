@@ -276,7 +276,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
     const { MeshRuntimeStore } = await import('../../daemon-core/src/mesh/mesh-runtime-store.js');
     const { SessionRegistry } = await import('../../daemon-core/src/sessions/registry.js');
     const { mintWorkerSessionBind, mintWorkerTaskToken, __resetWorkerSessionBindsForTest, __resetWorkerTaskTokensForTest } = await import('../../daemon-core/src/mesh/worker-mcp-isolation.js');
-    const { isLiveWorkerMcpCredential } = await import('../../daemon-core/src/standalone-mcp-auth-verify.js');
+    const { isLiveWorkerMcpCredential, matchesLiveArtifactWorkerCredential } = await import('../../daemon-core/src/standalone-mcp-auth-verify.js');
     const { seedMeshAttempt } = await import('../../daemon-core/test/helpers/turn-attempt-seed.js');
     const { registerMeshCoordinator, unregisterMeshCoordinator } = await import('../../daemon-core/src/mesh/coordinator-registry.js');
     const { configureTranscriptProjection, __resetTranscriptProjectionForTests } = await import('../../daemon-core/src/seqscribe/transcript-publisher.js');
@@ -352,6 +352,14 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       meshId: 'mesh-sa',
       sessionId: 'worker-sa',
     });
+    meshStore.insertQueueEntry({
+      id: 'foreign-task', meshId: 'foreign-mesh', message: 'foreign fixture task',
+      status: 'assigned', assignedSessionId: 'foreign-sa', attemptId: 'foreign-attempt',
+      workspace: foreignDir, createdAt: now, updatedAt: now,
+    } as any);
+    seedMeshAttempt({ meshId: 'foreign-mesh', taskId: 'foreign-task', sessionId: 'foreign-sa', attemptId: 'foreign-attempt', attemptNo: 0, stage: 'generating' });
+    const foreignWorkerToken = mintWorkerTaskToken({ meshId: 'foreign-mesh', taskId: 'foreign-task', sessionId: 'foreign-sa', attemptId: 'foreign-attempt' });
+
     registerMeshCoordinator({
       meshId: 'mesh-sa',
       sessionId: 'coord-sa',
@@ -421,6 +429,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       isCliSession: () => false,
       createSessionHostClient: async () => ({}) as any,
       verifyWorkerCredential: isLiveWorkerMcpCredential,
+      verifyArtifactWorkerCredential: matchesLiveArtifactWorkerCredential,
     });
     http.configureAuth(DASHBOARD_TOKEN);
     http.passwordConfig = authMod.createPasswordRecord('fixture-password');
@@ -461,6 +470,23 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       const workerRegJson = (await workerRegRes.json()) as any;
       expect(workerRegJson.success).toBe(true);
       const workerArtId = String(workerRegJson.artifactId);
+
+      // A verified worker header is not a standard IPC credential. Missing,
+      // forged or cross-principal body credentials cannot select another session.
+      const deniedWorkerScopes: Array<{ status: number; success: boolean; artifactSession: string | null }> = [];
+      for (const payload of [
+        { sessionId: 'foreign-sa', path: 'foreign.md' },
+        { sessionId: 'coord-sa', path: 'doc.md', bind: 'forged' },
+        { bind: workerBind.bind, token: foreignWorkerToken.token, path: 'foreign.md' },
+      ]) {
+        const response = await postCmd('artifact_register', payload, { [WORKER_HEADER]: workerBind.bind });
+        const denied = await response.json() as any;
+        deniedWorkerScopes.push({ status: response.status, success: denied.success, artifactSession: denied.artifact?.sessionId ?? null });
+      }
+      expect(deniedWorkerScopes).toEqual(Array.from({ length: 3 }, () => ({ status: 403, success: false, artifactSession: null })));
+      const workerTokenPositive = await postCmd('artifact_register', { token: workerToken.token, bind: workerBind.bind, path: 'doc.md' }, { [WORKER_HEADER]: workerToken.token });
+      expect(workerTokenPositive.status).toBe(200);
+      expect(await workerTokenPositive.json()).toMatchObject({ success: true, sessionId: 'worker-sa' });
 
       // The exact recovery regression: real standard helpers over authenticated HTTP.
       const artifactToolsSource = fileURLToPath(new URL('../../mcp-server/src/tools/artifact-tools.ts', import.meta.url));
