@@ -274,25 +274,48 @@ export class StandaloneHttpApi {
 
   /**
    * Capture a per-request / per-WS-upgrade owner authority guard bound to the
-   * current credential state (token, password hash/salt, session cookie, and
-   * auth epoch). Re-evaluated on every command so logout, password change/clear,
-   * or token removal immediately invalidates owner authority.
+   * actual credential mode that authenticated the request (configured token vs
+   * password-session cookie) and the current auth epoch. Re-evaluated on every
+   * command and proof read so logout, password change/clear, session expiry, or
+   * token removal immediately invalidates owner authority while preserving
+   * valid bearer/query token access when password auth is also configured.
    */
   captureOwnerAuthGuard(req: IncomingMessage, rawUrl: string = req.url || '/'): (() => boolean) | null {
     if (!this.isOwnerRequestAuthenticated(req, rawUrl)) return null;
+    const { bearerToken, queryToken } = this.getRequestTokens(req, rawUrl);
+    const authenticatedByToken = Boolean(
+      this.authToken
+      && ((bearerToken && secretsEqual(bearerToken, this.authToken))
+        || (queryToken && secretsEqual(queryToken, this.authToken))),
+    );
+    const capturedSessionId = this.getRequestSessionId(req);
+    const authenticatedByPasswordSession = Boolean(
+      this.passwordConfig
+      && capturedSessionId
+      && this.authSessions.has(capturedSessionId),
+    );
+    if (!authenticatedByToken && !authenticatedByPasswordSession) return null;
+    const credentialMode: 'token' | 'password_session' = authenticatedByToken ? 'token' : 'password_session';
     const capturedEpoch = this.authEpoch;
     const capturedToken = this.authToken;
     const capturedPasswordHash = this.passwordConfig?.passwordHash ?? null;
     const capturedPasswordSalt = this.passwordConfig?.passwordSalt ?? null;
-    const capturedSessionId = this.getRequestSessionId(req);
     return () => {
       if (this.authEpoch !== capturedEpoch) return false;
       if (!this.isOwnerRequestAuthenticated(req, rawUrl)) return false;
-      if (this.authToken !== capturedToken) return false;
+      if (credentialMode === 'token') {
+        if (!capturedToken || !this.authToken || !secretsEqual(this.authToken, capturedToken)) return false;
+        const currentTokens = this.getRequestTokens(req, rawUrl);
+        return Boolean(
+          (currentTokens.bearerToken && secretsEqual(currentTokens.bearerToken, capturedToken))
+          || (currentTokens.queryToken && secretsEqual(currentTokens.queryToken, capturedToken)),
+        );
+      }
+      if (!capturedPasswordHash || !capturedPasswordSalt) return false;
       if ((this.passwordConfig?.passwordHash ?? null) !== capturedPasswordHash) return false;
       if ((this.passwordConfig?.passwordSalt ?? null) !== capturedPasswordSalt) return false;
-      if (capturedPasswordHash && (!capturedSessionId || !this.authSessions.has(capturedSessionId))) return false;
-      return true;
+      if (!capturedSessionId || !this.authSessions.has(capturedSessionId)) return false;
+      return this.getRequestSessionId(req) === capturedSessionId;
     };
   }
 
