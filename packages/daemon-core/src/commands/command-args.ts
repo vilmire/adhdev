@@ -219,6 +219,197 @@ export function readCommandSource(args: unknown): string | undefined {
     return typeof raw === 'string' && raw ? raw : undefined
 }
 
+/**
+ * Non-serializable provenance capability stamped ONLY by `DaemonCommandRouter.execute`
+ * onto `normalizedArgs` when a command entered via a verified owner transport
+ * (`p2p` owner DataChannel or `standalone` HTTP/WS) with explicit positive
+ * non-payload proof (`ownerVerified === true` / valid `TrustedOwnerIngressProof`).
+ *
+ * Because both the transport proof and the router-stamped capability live in
+ * module-private `WeakMap`s bound to a live verification predicate, no JSON
+ * payload field (`_commandSource`, `source`, `ownerVerified`, etc.) can forge it,
+ * object spread (`{ ...args }`) strips it, and auth/channel revocation
+ * invalidates it immediately.
+ */
+export interface TrustedOwnerIngressProof {
+    readonly __trustedOwnerIngressProof: unique symbol
+    readonly source: 'p2p' | 'standalone'
+    readonly peerId?: string
+    readonly channelGeneration?: number
+    readonly authEpoch?: number
+}
+
+export interface TrustedOwnerIngressProofInput {
+    readonly source: 'p2p' | 'standalone'
+    readonly ownerVerified?: boolean
+    readonly peerId?: string
+    readonly channelGeneration?: number
+    readonly authEpoch?: number
+    readonly verifyCurrent?: () => boolean
+}
+
+interface StoredOwnerIngressProof {
+    readonly source: 'p2p' | 'standalone'
+    readonly peerId?: string
+    readonly channelGeneration?: number
+    readonly authEpoch?: number
+    readonly verifyCurrent?: () => boolean
+}
+
+const TRUSTED_OWNER_INGRESS_STATE_KEY = Symbol.for('adhdev.daemon-core.trustedOwnerIngressState')
+
+interface TrustedOwnerIngressState {
+    readonly issuedOwnerIngressProofs: WeakMap<TrustedOwnerIngressProof, StoredOwnerIngressProof>
+    readonly transportAttachedOwnerProofs: WeakMap<Record<string, unknown>, TrustedOwnerIngressProof>
+    readonly trustedOwnerIngressArgs: WeakMap<Record<string, unknown>, StoredOwnerIngressProof>
+}
+
+function getTrustedOwnerIngressState(): TrustedOwnerIngressState {
+    const g = globalThis as Record<symbol, TrustedOwnerIngressState | undefined>
+    let state = g[TRUSTED_OWNER_INGRESS_STATE_KEY]
+    if (!state) {
+        state = Object.freeze({
+            issuedOwnerIngressProofs: new WeakMap<TrustedOwnerIngressProof, StoredOwnerIngressProof>(),
+            transportAttachedOwnerProofs: new WeakMap<Record<string, unknown>, TrustedOwnerIngressProof>(),
+            trustedOwnerIngressArgs: new WeakMap<Record<string, unknown>, StoredOwnerIngressProof>(),
+        })
+        Object.defineProperty(globalThis, TRUSTED_OWNER_INGRESS_STATE_KEY, {
+            value: state,
+            writable: false,
+            enumerable: false,
+            configurable: false,
+        })
+    }
+    return state
+}
+
+const {
+    issuedOwnerIngressProofs,
+    transportAttachedOwnerProofs,
+    trustedOwnerIngressArgs,
+} = getTrustedOwnerIngressState()
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isStoredProofCurrentlyValid(
+    stored: StoredOwnerIngressProof | undefined,
+    expectedSource?: 'p2p' | 'standalone',
+): stored is StoredOwnerIngressProof {
+    if (!stored) return false
+    if (expectedSource && stored.source !== expectedSource) return false
+    if (stored.source === 'p2p' && (!stored.peerId || !stored.peerId.trim())) return false
+    if (typeof stored.verifyCurrent === 'function') {
+        try {
+            if (stored.verifyCurrent() !== true) return false
+        } catch {
+            return false
+        }
+    }
+    return true
+}
+
+export function issueTrustedOwnerIngressProof(input: TrustedOwnerIngressProofInput): TrustedOwnerIngressProof | null {
+    if (!input || typeof input !== 'object' || input.ownerVerified === false) return null
+    if (input.source !== 'p2p' && input.source !== 'standalone') return null
+    const peerId = typeof input.peerId === 'string' ? input.peerId.trim() : undefined
+    if (input.source === 'p2p' && !peerId) return null
+    if (input.source === 'standalone' && input.ownerVerified !== true) return null
+    const stored: StoredOwnerIngressProof = {
+        source: input.source,
+        ...(peerId ? { peerId } : {}),
+        ...(typeof input.channelGeneration === 'number' ? { channelGeneration: input.channelGeneration } : {}),
+        ...(typeof input.authEpoch === 'number' ? { authEpoch: input.authEpoch } : {}),
+        ...(typeof input.verifyCurrent === 'function' ? { verifyCurrent: input.verifyCurrent } : {}),
+    }
+    if (!isStoredProofCurrentlyValid(stored, input.source)) return null
+    const token = Object.freeze(
+        Object.assign(Object.create(null), {
+            source: input.source,
+            ...(peerId ? { peerId } : {}),
+            ...(typeof input.channelGeneration === 'number' ? { channelGeneration: input.channelGeneration } : {}),
+            ...(typeof input.authEpoch === 'number' ? { authEpoch: input.authEpoch } : {}),
+        }),
+    ) as TrustedOwnerIngressProof
+    issuedOwnerIngressProofs.set(token, stored)
+    return token
+}
+
+export function isValidTrustedOwnerIngressProof(
+    proof: unknown,
+    expectedSource?: 'p2p' | 'standalone',
+): proof is TrustedOwnerIngressProof {
+    if (typeof proof !== 'object' || proof === null) return false
+    const stored = issuedOwnerIngressProofs.get(proof as TrustedOwnerIngressProof)
+    return isStoredProofCurrentlyValid(stored, expectedSource)
+}
+
+export function attachTrustedOwnerIngressProof<T extends Record<string, unknown>>(
+    args: T,
+    proof: TrustedOwnerIngressProof | null | undefined,
+): T {
+    if (isPlainRecord(args) && isValidTrustedOwnerIngressProof(proof)) {
+        transportAttachedOwnerProofs.set(args, proof)
+    }
+    return args
+}
+
+export function readTrustedOwnerIngressProof(
+    args: unknown,
+    expectedSource?: 'p2p' | 'standalone',
+): TrustedOwnerIngressProof | null {
+    if (!isPlainRecord(args)) return null
+    const proof = transportAttachedOwnerProofs.get(args)
+    return isValidTrustedOwnerIngressProof(proof, expectedSource) ? proof : null
+}
+
+export function preserveTrustedOwnerTransportProof<T extends Record<string, unknown>>(
+    sourceArgs: unknown,
+    targetArgs: T,
+): T {
+    if (isPlainRecord(sourceArgs) && isPlainRecord(targetArgs)) {
+        const proof = transportAttachedOwnerProofs.get(sourceArgs)
+        if (isValidTrustedOwnerIngressProof(proof)) {
+            transportAttachedOwnerProofs.set(targetArgs, proof)
+        }
+    }
+    return targetArgs
+}
+
+export function markTrustedOwnerIngress<T extends Record<string, unknown>>(
+    args: T,
+    proof: TrustedOwnerIngressProof | null | undefined,
+): T {
+    if (!isPlainRecord(args) || !isValidTrustedOwnerIngressProof(proof)) {
+        return args
+    }
+    const stored = issuedOwnerIngressProofs.get(proof)
+    if (isStoredProofCurrentlyValid(stored)) {
+        trustedOwnerIngressArgs.set(args, stored)
+    }
+    return args
+}
+
+export function preserveTrustedOwnerIngress<T extends Record<string, unknown>>(
+    sourceArgs: unknown,
+    targetArgs: T,
+): T {
+    if (isPlainRecord(sourceArgs) && isPlainRecord(targetArgs)) {
+        const stored = trustedOwnerIngressArgs.get(sourceArgs)
+        if (isStoredProofCurrentlyValid(stored)) {
+            trustedOwnerIngressArgs.set(targetArgs, stored)
+        }
+    }
+    return targetArgs
+}
+
+export function isTrustedOwnerIngress(args: unknown): boolean {
+    if (!isPlainRecord(args)) return false
+    const stored = trustedOwnerIngressArgs.get(args)
+    return isStoredProofCurrentlyValid(stored)
+}
+
 // ─── Refine dry-run/execute precedence ──────────────────────────────────────
 
 /**

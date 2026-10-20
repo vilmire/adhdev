@@ -139,7 +139,18 @@ import {
 } from './router-aggregate-status.js';
 // ─── Remote mesh-session owner resolution (bodies extracted from this file) ───
 import { resolveRemoteMeshSessionOwnerDaemonId } from './router-mesh-session-owner.js';
-import { COMMAND_SOURCE_ARG, COMMAND_SOURCE_STAMPED, readMeshDirectDispatchFlag, withMeshDirectDispatch } from './command-args.js';
+import {
+    COMMAND_SOURCE_ARG,
+    COMMAND_SOURCE_STAMPED,
+    issueTrustedOwnerIngressProof,
+    isValidTrustedOwnerIngressProof,
+    markTrustedOwnerIngress,
+    preserveTrustedOwnerIngress,
+    readMeshDirectDispatchFlag,
+    readTrustedOwnerIngressProof,
+    withMeshDirectDispatch,
+    type TrustedOwnerIngressProof,
+} from './command-args.js';
 import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
@@ -852,10 +863,21 @@ export class DaemonCommandRouter {
      *   in-process caller of the router can set it: the host runtime's
      *   transport entry (`DaemonHostRuntime.execute`) does not carry it.
      */
-    async execute(cmd: string, args: any, source: string = 'internal', opts?: { peerId?: string; inProcess?: boolean }): Promise<CommandRouterResult> {
+    async execute(
+        cmd: string,
+        args: any,
+        source: string = 'internal',
+        opts?: {
+            peerId?: string;
+            inProcess?: boolean;
+            ownerVerified?: boolean;
+            ownerProof?: TrustedOwnerIngressProof | null;
+            verifyCurrentOwner?: () => boolean;
+        },
+    ): Promise<CommandRouterResult> {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source);
-        const peerId = typeof opts?.peerId === 'string' && opts.peerId.length > 0 ? opts.peerId : undefined;
+        const peerId = typeof opts?.peerId === 'string' && opts.peerId.trim().length > 0 ? opts.peerId.trim() : undefined;
         const spec = getDaemonCommandRegistry().get(cmd);
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
         // Only the mesh transport may present a sender identity: drop the
@@ -866,6 +888,24 @@ export class DaemonCommandRouter {
         // The command source is the router's to state, never the caller's.
         if (COMMAND_SOURCE_ARG in normalizedArgs) delete normalizedArgs[COMMAND_SOURCE_ARG];
         if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
+        if ((logSource === 'p2p' || logSource === 'standalone') && opts?.ownerVerified !== false) {
+            const attachedProof = readTrustedOwnerIngressProof(args, logSource);
+            const explicitProof = isValidTrustedOwnerIngressProof(opts?.ownerProof, logSource)
+                ? opts!.ownerProof
+                : null;
+            const mintedProof = !attachedProof && !explicitProof && opts?.ownerVerified === true
+                ? issueTrustedOwnerIngressProof({
+                    source: logSource,
+                    ownerVerified: true,
+                    peerId: logSource === 'p2p' ? (peerId || 'owner-p2p') : undefined,
+                    verifyCurrent: opts.verifyCurrentOwner,
+                })
+                : null;
+            const resolvedProof = attachedProof ?? explicitProof ?? mintedProof;
+            if (resolvedProof) {
+                markTrustedOwnerIngress(normalizedArgs, resolvedProof);
+            }
+        }
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
 
@@ -1055,10 +1095,12 @@ export class DaemonCommandRouter {
     /** Run a spec in the context its family needs. */
     private async runSpec(spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult> {
         if (spec.stripTransportMetadata) {
+            const previousArgs = args;
             args = { ...args };
             delete args._interactionId;
             delete args[MESH_SENDER_DAEMON_ID_ARG];
             delete args[COMMAND_SOURCE_ARG];
+            preserveTrustedOwnerIngress(previousArgs, args);
         }
         switch (spec.family) {
             case 'low': {

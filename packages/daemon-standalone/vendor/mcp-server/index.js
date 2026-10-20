@@ -73690,6 +73690,114 @@ ${upstream}`;
       const raw = args?.[COMMAND_SOURCE_ARG];
       return typeof raw === "string" && raw ? raw : void 0;
     }
+    function getTrustedOwnerIngressState() {
+      const g3 = globalThis;
+      let state2 = g3[TRUSTED_OWNER_INGRESS_STATE_KEY];
+      if (!state2) {
+        state2 = Object.freeze({
+          issuedOwnerIngressProofs: /* @__PURE__ */ new WeakMap(),
+          transportAttachedOwnerProofs: /* @__PURE__ */ new WeakMap(),
+          trustedOwnerIngressArgs: /* @__PURE__ */ new WeakMap()
+        });
+        Object.defineProperty(globalThis, TRUSTED_OWNER_INGRESS_STATE_KEY, {
+          value: state2,
+          writable: false,
+          enumerable: false,
+          configurable: false
+        });
+      }
+      return state2;
+    }
+    function isPlainRecord(value) {
+      return typeof value === "object" && value !== null && !Array.isArray(value);
+    }
+    function isStoredProofCurrentlyValid(stored, expectedSource) {
+      if (!stored) return false;
+      if (expectedSource && stored.source !== expectedSource) return false;
+      if (stored.source === "p2p" && (!stored.peerId || !stored.peerId.trim())) return false;
+      if (typeof stored.verifyCurrent === "function") {
+        try {
+          if (stored.verifyCurrent() !== true) return false;
+        } catch {
+          return false;
+        }
+      }
+      return true;
+    }
+    function issueTrustedOwnerIngressProof(input) {
+      if (!input || typeof input !== "object" || input.ownerVerified === false) return null;
+      if (input.source !== "p2p" && input.source !== "standalone") return null;
+      const peerId = typeof input.peerId === "string" ? input.peerId.trim() : void 0;
+      if (input.source === "p2p" && !peerId) return null;
+      if (input.source === "standalone" && input.ownerVerified !== true) return null;
+      const stored = {
+        source: input.source,
+        ...peerId ? { peerId } : {},
+        ...typeof input.channelGeneration === "number" ? { channelGeneration: input.channelGeneration } : {},
+        ...typeof input.authEpoch === "number" ? { authEpoch: input.authEpoch } : {},
+        ...typeof input.verifyCurrent === "function" ? { verifyCurrent: input.verifyCurrent } : {}
+      };
+      if (!isStoredProofCurrentlyValid(stored, input.source)) return null;
+      const token = Object.freeze(
+        Object.assign(/* @__PURE__ */ Object.create(null), {
+          source: input.source,
+          ...peerId ? { peerId } : {},
+          ...typeof input.channelGeneration === "number" ? { channelGeneration: input.channelGeneration } : {},
+          ...typeof input.authEpoch === "number" ? { authEpoch: input.authEpoch } : {}
+        })
+      );
+      issuedOwnerIngressProofs.set(token, stored);
+      return token;
+    }
+    function isValidTrustedOwnerIngressProof(proof, expectedSource) {
+      if (typeof proof !== "object" || proof === null) return false;
+      const stored = issuedOwnerIngressProofs.get(proof);
+      return isStoredProofCurrentlyValid(stored, expectedSource);
+    }
+    function attachTrustedOwnerIngressProof(args, proof) {
+      if (isPlainRecord(args) && isValidTrustedOwnerIngressProof(proof)) {
+        transportAttachedOwnerProofs.set(args, proof);
+      }
+      return args;
+    }
+    function readTrustedOwnerIngressProof(args, expectedSource) {
+      if (!isPlainRecord(args)) return null;
+      const proof = transportAttachedOwnerProofs.get(args);
+      return isValidTrustedOwnerIngressProof(proof, expectedSource) ? proof : null;
+    }
+    function preserveTrustedOwnerTransportProof(sourceArgs, targetArgs) {
+      if (isPlainRecord(sourceArgs) && isPlainRecord(targetArgs)) {
+        const proof = transportAttachedOwnerProofs.get(sourceArgs);
+        if (isValidTrustedOwnerIngressProof(proof)) {
+          transportAttachedOwnerProofs.set(targetArgs, proof);
+        }
+      }
+      return targetArgs;
+    }
+    function markTrustedOwnerIngress(args, proof) {
+      if (!isPlainRecord(args) || !isValidTrustedOwnerIngressProof(proof)) {
+        return args;
+      }
+      const stored = issuedOwnerIngressProofs.get(proof);
+      if (isStoredProofCurrentlyValid(stored)) {
+        trustedOwnerIngressArgs.set(args, stored);
+      }
+      return args;
+    }
+    function preserveTrustedOwnerIngress(sourceArgs, targetArgs) {
+      if (isPlainRecord(sourceArgs) && isPlainRecord(targetArgs)) {
+        const stored = trustedOwnerIngressArgs.get(sourceArgs);
+        if (isStoredProofCurrentlyValid(stored)) {
+          trustedOwnerIngressArgs.set(targetArgs, stored);
+        }
+      }
+      return targetArgs;
+    }
+    function isTrustedOwnerIngress(args) {
+      if (!isPlainRecord(args)) return false;
+      const stored = trustedOwnerIngressArgs.get(args);
+      return isStoredProofCurrentlyValid(stored);
+    }
     function resolveDryRunVeto(args) {
       const a = args;
       const dryRun = a?.dryRun;
@@ -73709,12 +73817,22 @@ ${upstream}`;
     }
     var COMMAND_SOURCE_ARG;
     var COMMAND_SOURCE_STAMPED;
+    var TRUSTED_OWNER_INGRESS_STATE_KEY;
+    var issuedOwnerIngressProofs;
+    var transportAttachedOwnerProofs;
+    var trustedOwnerIngressArgs;
     var init_command_args = __esm2({
       "src/commands/command-args.ts"() {
         "use strict";
         init_dist();
         COMMAND_SOURCE_ARG = "_commandSource";
         COMMAND_SOURCE_STAMPED = /* @__PURE__ */ new Set(["send_chat", "pty_input", "interactive_prompt_response", "assistant_staged_resolve"]);
+        TRUSTED_OWNER_INGRESS_STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.trustedOwnerIngressState");
+        ({
+          issuedOwnerIngressProofs,
+          transportAttachedOwnerProofs,
+          trustedOwnerIngressArgs
+        } = getTrustedOwnerIngressState());
       }
     });
     function resolveTunedReconcileMs(envName, def, min, max) {
@@ -107152,6 +107270,7 @@ ${tail}` : ""
       assertNoDependencyCycle: () => assertNoDependencyCycle,
       assertWorkerBridgeLifecycleAdmission: () => assertWorkerBridgeLifecycleAdmission,
       assessQuotaFreshness: () => assessQuotaFreshness2,
+      attachTrustedOwnerIngressProof: () => attachTrustedOwnerIngressProof,
       baseTopicDefinitions: () => baseTopicDefinitions,
       beginLifecycleSource: () => beginLifecycleSource,
       bindMeshNoticeRuntime: () => bindMeshNoticeRuntime,
@@ -107446,10 +107565,13 @@ ${tail}` : ""
       isSyntheticTestMeshId: () => isSyntheticTestMeshId,
       isTaskBoundToWorktree: () => isTaskBoundToWorktree,
       isTaskReadonly: () => isTaskReadonly3,
+      isTrustedOwnerIngress: () => isTrustedOwnerIngress,
       isUserFacingChatMessage: () => isUserFacingChatMessage,
+      isValidTrustedOwnerIngressProof: () => isValidTrustedOwnerIngressProof,
       isWeakCompletionEvidence: () => isWeakCompletionEvidence,
       isWorkerMcpDaemonVerb: () => isWorkerMcpDaemonVerb,
       isWorkerMcpEnabled: () => isWorkerMcpEnabled,
+      issueTrustedOwnerIngressProof: () => issueTrustedOwnerIngressProof,
       killIdeProcess: () => killIdeProcess,
       launchIDE: () => launchIDE,
       launchModelSelectionValue: () => launchModelSelectionValue,
@@ -107565,6 +107687,7 @@ ${tail}` : ""
       planMeshOnboarding: () => planMeshOnboarding,
       preflightDiskSpace: () => preflightDiskSpace,
       presentationFromAttemptRow: () => presentationFromAttemptRow,
+      preserveTrustedOwnerTransportProof: () => preserveTrustedOwnerTransportProof,
       printClaudeInstallResult: () => printClaudeInstallResult,
       printClaudeStatuslineStatus: () => printClaudeStatuslineStatus,
       printClaudeUninstallResult: () => printClaudeUninstallResult,
@@ -107612,6 +107735,7 @@ ${tail}` : ""
       readStatuslineStatus: () => readStatuslineStatus,
       readTimeoutEnv: () => readTimeoutEnv,
       readTokenCount: () => readTokenCount,
+      readTrustedOwnerIngressProof: () => readTrustedOwnerIngressProof,
       readTurnTerminalViews: () => readTurnTerminalViews,
       readWorktreeNodeBranch: () => readWorktreeNodeBranch2,
       recordDebugTrace: () => recordDebugTrace,
@@ -149505,13 +149629,27 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       async execute(cmd, args, source2 = "internal", opts) {
         const cmdStart = Date.now();
         const logSource = normalizeCommandSource(source2);
-        const peerId = typeof opts?.peerId === "string" && opts.peerId.length > 0 ? opts.peerId : void 0;
+        const peerId = typeof opts?.peerId === "string" && opts.peerId.trim().length > 0 ? opts.peerId.trim() : void 0;
         const spec = getDaemonCommandRegistry().get(cmd);
         const normalizedArgs = normalizeCommandArgsWithInteractionId(args);
         const meshRelayed = logSource === "mesh" && opts?.inProcess !== true;
         if (!meshRelayed && MESH_SENDER_DAEMON_ID_ARG in normalizedArgs) delete normalizedArgs[MESH_SENDER_DAEMON_ID_ARG];
         if (COMMAND_SOURCE_ARG in normalizedArgs) delete normalizedArgs[COMMAND_SOURCE_ARG];
         if (COMMAND_SOURCE_STAMPED.has(cmd)) normalizedArgs[COMMAND_SOURCE_ARG] = logSource;
+        if ((logSource === "p2p" || logSource === "standalone") && opts?.ownerVerified !== false) {
+          const attachedProof = readTrustedOwnerIngressProof(args, logSource);
+          const explicitProof = isValidTrustedOwnerIngressProof(opts?.ownerProof, logSource) ? opts.ownerProof : null;
+          const mintedProof = !attachedProof && !explicitProof && opts?.ownerVerified === true ? issueTrustedOwnerIngressProof({
+            source: logSource,
+            ownerVerified: true,
+            peerId: logSource === "p2p" ? peerId || "owner-p2p" : void 0,
+            verifyCurrent: opts.verifyCurrentOwner
+          }) : null;
+          const resolvedProof = attachedProof ?? explicitProof ?? mintedProof;
+          if (resolvedProof) {
+            markTrustedOwnerIngress(normalizedArgs, resolvedProof);
+          }
+        }
         if (spec?.session?.aliasSessionId) applySessionIdAlias(normalizedArgs);
         const interactionId = this.interactionContext.record(normalizedArgs);
         const revealedMeshIds = meshIdsRevealedByCommandArgs(normalizedArgs);
@@ -149682,10 +149820,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       /** Run a spec in the context its family needs. */
       async runSpec(spec, args) {
         if (spec.stripTransportMetadata) {
+          const previousArgs = args;
           args = { ...args };
           delete args._interactionId;
           delete args[MESH_SENDER_DAEMON_ID_ARG];
           delete args[COMMAND_SOURCE_ARG];
+          preserveTrustedOwnerIngress(previousArgs, args);
         }
         switch (spec.family) {
           case "low": {
@@ -179995,6 +180135,7 @@ ${notice.notice}${supersededHint}`;
     init_logger();
     init_debug_trace();
     init_command_registry();
+    init_command_args();
     init_snapshot3();
     init_logger();
     init_builders();
@@ -180561,7 +180702,9 @@ ${notice.notice}${supersededHint}`;
       };
     }
     function toArgsRecord(args) {
-      return args && typeof args === "object" ? { ...args } : {};
+      if (!args || typeof args !== "object") return {};
+      const copy = { ...args };
+      return preserveTrustedOwnerTransportProof(args, copy);
     }
     function createDaemonHostRuntime(runtime, transport) {
       const { components, bus } = runtime;

@@ -192,3 +192,76 @@ describe('per-boot MCP auth file', () => {
     }
   });
 });
+
+describe('captureOwnerAuthGuard — bearer token + password auth coexistence and live revocation', () => {
+  it('binds live owner proof to the actual credential mode (token vs password session) and revokes on logout or credential change', async () => {
+    const authMod = await import('../src/standalone-auth.js');
+    const coreMod = await import('@adhdev/daemon-core');
+    const seenArgs: Array<Record<string, unknown>> = [];
+    const http = new mod.StandaloneHttpApi({
+      isReady: () => true,
+      getStatus: () => ({ ok: true }) as any,
+      executeCommand: async (_type, payload) => {
+        seenArgs.push(payload);
+        const proof = coreMod.readTrustedOwnerIngressProof(payload, 'standalone');
+        return { success: true, trusted: Boolean(proof) };
+      },
+      rawTerminalService: () => ({}) as any,
+      interactivePromptService: () => ({}) as any,
+      isCliSession: () => false,
+      createSessionHostClient: async () => ({}) as any,
+      verifyWorkerCredential: (credential) => credential === LIVE_BIND,
+    });
+    http.configureAuth(DASHBOARD_TOKEN);
+    http.passwordConfig = authMod.createPasswordRecord('fixture-password');
+    http.internalAuthToken = INTERNAL;
+
+    const server = createServer((req, res) => http.handle(req, res));
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no port');
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    // Configured bearer token succeeds as owner even when passwordConfig also exists
+    const tokenRes = await command(base, 'select_session', { Authorization: `Bearer ${DASHBOARD_TOKEN}` });
+    expect(tokenRes.status).toBe(200);
+    expect(await tokenRes.json()).toMatchObject({ success: true, trusted: true });
+    const tokenArgs = seenArgs.at(-1)!;
+    expect(coreMod.readTrustedOwnerIngressProof(tokenArgs, 'standalone')).toBeTruthy();
+
+    // Internal MCP header cannot inherit owner proof even when bearer token is also supplied
+    const internalRes = await command(base, 'select_session', {
+      Authorization: `Bearer ${DASHBOARD_TOKEN}`,
+      [INTERNAL_HEADER]: INTERNAL,
+    });
+    expect(internalRes.status).toBe(200);
+    expect(await internalRes.json()).toMatchObject({ success: true, trusted: false });
+
+    // Password-session cookie also succeeds as owner and revokes on logout
+    const loginRes = await fetch(`${base}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'fixture-password' }),
+    });
+    expect(loginRes.status).toBe(200);
+    // Login bumps authEpoch, revoking the earlier token-mode proof
+    expect(coreMod.readTrustedOwnerIngressProof(tokenArgs, 'standalone')).toBeNull();
+
+    const setCookie = loginRes.headers.get('set-cookie') || '';
+    const cookiePair = setCookie.split(';')[0] || '';
+    const cookieCmdRes = await command(base, 'select_session', { Cookie: cookiePair });
+    expect(cookieCmdRes.status).toBe(200);
+    expect(await cookieCmdRes.json()).toMatchObject({ success: true, trusted: true });
+    const cookieArgs = seenArgs.at(-1)!;
+    expect(coreMod.readTrustedOwnerIngressProof(cookieArgs, 'standalone')).toBeTruthy();
+
+    // Logout revokes the active password-session proof immediately
+    const logoutRes = await fetch(`${base}/auth/logout`, {
+      method: 'POST',
+      headers: { Cookie: cookiePair },
+    });
+    expect(logoutRes.status).toBe(200);
+    expect(coreMod.readTrustedOwnerIngressProof(cookieArgs, 'standalone')).toBeNull();
+  });
+});

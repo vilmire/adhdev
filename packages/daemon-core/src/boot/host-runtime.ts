@@ -23,6 +23,7 @@ import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
 import { getDaemonCommandRegistry, type CommandRouterResult } from '../commands/router.js';
 import { normalizeCommandSource, type CommandSource, type CommandSpec } from '../commands/command-registry.js';
+import { preserveTrustedOwnerTransportProof } from '../commands/command-args.js';
 import { createGitWorkspaceMonitor, type GitWorkspaceMonitor } from '../git/git-monitor.js';
 import type { DaemonStatusEventPayload, P2PStatusEventPayload, SessionHostDiagnosticsSnapshot } from '../shared-types.js';
 import type { EventOf } from '../sessions/lifecycle-events.js';
@@ -112,7 +113,12 @@ export interface DaemonHostRuntime {
         cmd: string,
         args: unknown,
         source: CommandSource | string,
-        opts?: { peerId?: string },
+        opts?: {
+            peerId?: string;
+            ownerVerified?: boolean;
+            ownerProof?: import('../commands/command-args.js').TrustedOwnerIngressProof | null;
+            verifyCurrentOwner?: () => boolean;
+        },
     ): Promise<CommandRouterResult & { interactionId: string }>;
     /** Latest interaction id recorded for a session (router-owned, bounded). */
     interactionId(sessionId: string | undefined): string | undefined;
@@ -128,7 +134,9 @@ export interface DaemonHostRuntime {
 }
 
 function toArgsRecord(args: unknown): Record<string, unknown> {
-    return args && typeof args === 'object' ? { ...(args as Record<string, unknown>) } : {};
+    if (!args || typeof args !== 'object') return {};
+    const copy = { ...(args as Record<string, unknown>) };
+    return preserveTrustedOwnerTransportProof(args, copy);
 }
 
 export function createDaemonHostRuntime(runtime: DaemonRuntime, transport: DaemonHostTransport): DaemonHostRuntime {
