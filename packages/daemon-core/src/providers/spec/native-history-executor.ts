@@ -40,8 +40,9 @@ import {
     pickExactSessionFileAcrossGlob, pickDirUuidFileAcrossGlob, pickExactSessionFileAcrossDateWindow,
     listMatchingFiles, pickSessionBoundFile, pickSessionBoundFileAcrossGlob,
     pickSessionBoundFileAcrossDateWindow, UUID_RE, recentFiles, recentFilesAcrossGlob,
-    readCandidateSessionMeta, recentFilesAcrossDateWindow,
+    readCandidateSessionMeta, recentFilesAcrossDateWindow, claimKeyForPath,
 } from './native-history-paths.js';
+export { claimKeyForPath } from './native-history-paths.js';
 import {
     containsSentPrompt, hasExclusiveSentInput, hasRecordedSentInput, sentPromptSnippets,
 } from '../native-history/sent-prompt-registry.js';
@@ -800,26 +801,6 @@ function resolveCodexInstanceSource(
         : unclaimed;
     const fallback = wsFiltered[0] ?? (!wsKey ? unclaimed[0] : null) ?? null;
     return { path: fallback, ...(fallback ? { outcome: { attribution: 'legacy', ownerConfirmed: false } } : {}) };
-}
-
-/** Canonical claim/workspace key for a filesystem path: best-effort native
- *  realpath (/tmp ↔ /private/tmp aliases share one key) plus case-insensitive
- *  normalization on win32 so drive-letter or directory casing differences
- *  (e.g. `c:\Users\...` vs `C:\Users\...`) never break workspace matching. */
-export function claimKeyForPath(p: string, platform: NodeJS.Platform = process.platform): string {
-    let resolved = p;
-    try {
-        resolved = typeof fs.realpathSync.native === 'function'
-            ? fs.realpathSync.native(p)
-            : fs.realpathSync(p);
-    } catch {
-        resolved = p;
-    }
-    if (platform === 'win32') {
-        const normalized = path.win32.normalize(resolved).replace(/^\\\\\?\\/, '');
-        return normalized.replace(/(?<![A-Za-z]:)[\\/]+$/, '').toLowerCase();
-    }
-    return resolved;
 }
 
 function failClosedResolution(attribution: 'ambiguous' | 'already_claimed', workspaceHint: string, owner: string): JsonlSourceResolution {

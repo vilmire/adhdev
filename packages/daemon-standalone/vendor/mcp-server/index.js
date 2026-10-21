@@ -126116,23 +126116,27 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         return null;
       }
     }
+    function claimKeyForPath(p, platform10 = process.platform) {
+      let resolved = p;
+      try {
+        resolved = typeof fs50.realpathSync.native === "function" ? fs50.realpathSync.native(p) : fs50.realpathSync(p);
+      } catch {
+        resolved = p;
+      }
+      if (platform10 === "win32") {
+        const normalized = path58.win32.normalize(resolved).replace(/^\\\\\?\\/, "");
+        return normalized.replace(/(?<![A-Za-z]:)[\\/]+$/, "").toLowerCase();
+      }
+      return resolved;
+    }
     function pickBoundFromEntries(candidatePaths, sessionFloorMs, workspaceHint) {
       if (!sessionFloorMs || !workspaceHint || candidatePaths.length === 0) return null;
-      let workspaceResolved = workspaceHint;
-      try {
-        workspaceResolved = fs50.realpathSync(workspaceHint);
-      } catch {
-      }
+      const workspaceKey = claimKeyForPath(workspaceHint);
       let best = null;
       for (const p of candidatePaths) {
         const meta = readCandidateSessionMeta(p);
         if (!meta || !meta.cwd || meta.sessionTimestampMs == null) continue;
-        let candidateCwd = meta.cwd;
-        try {
-          candidateCwd = fs50.realpathSync(meta.cwd);
-        } catch {
-        }
-        if (candidateCwd !== workspaceResolved && meta.cwd !== workspaceHint) continue;
+        if (claimKeyForPath(meta.cwd) !== workspaceKey) continue;
         const diff = Math.abs(meta.sessionTimestampMs - sessionFloorMs);
         if (diff > SPAWN_BIND_GRACE_MS) continue;
         if (!best || diff < best.diff) best = { p, diff };
@@ -127186,19 +127190,6 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }) : unclaimed;
       const fallback = wsFiltered[0] ?? (!wsKey ? unclaimed[0] : null) ?? null;
       return { path: fallback, ...fallback ? { outcome: { attribution: "legacy", ownerConfirmed: false } } : {} };
-    }
-    function claimKeyForPath(p, platform10 = process.platform) {
-      let resolved = p;
-      try {
-        resolved = typeof fs52.realpathSync.native === "function" ? fs52.realpathSync.native(p) : fs52.realpathSync(p);
-      } catch {
-        resolved = p;
-      }
-      if (platform10 === "win32") {
-        const normalized = path59.win32.normalize(resolved).replace(/^\\\\\?\\/, "");
-        return normalized.replace(/(?<![A-Za-z]:)[\\/]+$/, "").toLowerCase();
-      }
-      return resolved;
     }
     function failClosedResolution(attribution, workspaceHint, owner) {
       LOG.info("TranscriptClaim", `decision=${attribution} provider=kimi workspace=${JSON.stringify(workspaceHint)} owner=${owner || "(none)"} \u2192 attribution_unknown (fail closed, no pin)`);

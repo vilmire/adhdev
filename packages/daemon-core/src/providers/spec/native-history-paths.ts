@@ -734,25 +734,40 @@ export function readCandidateSessionMeta(filePath: string): CandidateMeta | null
     }
 }
 
+/** Canonical claim/workspace key for a filesystem path: best-effort native
+ *  realpath (/tmp ↔ /private/tmp aliases share one key) plus case-insensitive
+ *  normalization on win32 so drive-letter or directory casing differences
+ *  (e.g. `c:\Users\...` vs `C:\Users\...`) never break workspace matching. */
+export function claimKeyForPath(p: string, platform: NodeJS.Platform = process.platform): string {
+    let resolved = p;
+    try {
+        resolved = typeof fs.realpathSync.native === 'function'
+            ? fs.realpathSync.native(p)
+            : fs.realpathSync(p);
+    } catch {
+        resolved = p;
+    }
+    if (platform === 'win32') {
+        const normalized = path.win32.normalize(resolved).replace(/^\\\\\?\\/, '');
+        return normalized.replace(/(?<![A-Za-z]:)[\\/]+$/, '').toLowerCase();
+    }
+    return resolved;
+}
+
 function pickBoundFromEntries(
     candidatePaths: string[],
     sessionFloorMs: number,
     workspaceHint: string,
 ): string | null {
     if (!sessionFloorMs || !workspaceHint || candidatePaths.length === 0) return null;
-    // Resolve workspaceHint to handle macOS /tmp → /private/tmp aliasing, the
-    // same way expandPath does for the template substitution. Without this
-    // the daemon's `/Users/foo/repo` and codex's `/private/Users/foo/repo`
-    // never compare equal and disambiguation silently fails.
-    let workspaceResolved = workspaceHint;
-    try { workspaceResolved = fs.realpathSync(workspaceHint); } catch { /* keep raw */ }
+    // Resolve workspaceHint to handle macOS /tmp → /private/tmp aliasing and
+    // Windows drive-letter/path casing differences via claimKeyForPath.
+    const workspaceKey = claimKeyForPath(workspaceHint);
     let best: { p: string; diff: number } | null = null;
     for (const p of candidatePaths) {
         const meta = readCandidateSessionMeta(p);
         if (!meta || !meta.cwd || meta.sessionTimestampMs == null) continue;
-        let candidateCwd = meta.cwd;
-        try { candidateCwd = fs.realpathSync(meta.cwd); } catch { /* keep raw */ }
-        if (candidateCwd !== workspaceResolved && meta.cwd !== workspaceHint) continue;
+        if (claimKeyForPath(meta.cwd) !== workspaceKey) continue;
         const diff = Math.abs(meta.sessionTimestampMs - sessionFloorMs);
         if (diff > SPAWN_BIND_GRACE_MS) continue;
         if (!best || diff < best.diff) best = { p, diff };
