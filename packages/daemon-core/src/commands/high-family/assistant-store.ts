@@ -163,10 +163,15 @@ async function resolveNoteProject(ctx: HighFamilyContext, svc: AssistantServices
     return { ok: true, mesh: r.mesh, slug: r.slug };
 }
 
-/** Apply an already-checked note write on the project's host (`assistant_remote_project {op:'note'}`). */
+export type ProjectNoteCommandOp =
+    | ProjectNoteOp
+    | { action: 'list' }
+    | { action: 'read'; noteId: string };
+
+/** Apply an already-checked note op on the project's host (`assistant_remote_project {op:'note'}`). */
 async function applyRemoteNote(
     project: Extract<ProjectResolution, { ok: true }>,
-    op: ProjectNoteOp,
+    op: ProjectNoteCommandOp,
     origin: 'human' | 'owner',
     callerSessionId?: string,
 ): Promise<{ result: string } & Record<string, unknown>> {
@@ -176,13 +181,30 @@ async function applyRemoteNote(
         : { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: remote.host.reason ?? 'relay_failed', error: 'host unreachable' };
     if (out.ok) {
         const r = out.result;
-        return { result: 'applied', ...(typeof r.noteId === 'string' ? { noteId: r.noteId } : {}), ...(typeof r.matched === 'number' ? { matched: r.matched } : {}), host: remote.host.label, via: 'relay' };
+        return {
+            result: typeof r.result === 'string' ? r.result : 'applied',
+            ...(typeof r.noteId === 'string' ? { noteId: r.noteId } : {}),
+            ...(typeof r.id === 'string' ? { id: r.id } : {}),
+            ...(typeof r.matched === 'number' ? { matched: r.matched } : {}),
+            ...(typeof r.count === 'number' ? { count: r.count } : {}),
+            ...(Array.isArray(r.notes) ? { notes: r.notes } : {}),
+            ...(r.note && typeof r.note === 'object' ? { note: r.note } : {}),
+            ...(typeof r.text === 'string' ? { text: r.text } : {}),
+            ...(typeof r.scope === 'string' ? { scope: r.scope } : {}),
+            ...(typeof r.pinned === 'boolean' ? { pinned: r.pinned } : {}),
+            ...(r.category !== undefined ? { category: r.category } : {}),
+            ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
+            ...(typeof r.updatedAt === 'string' ? { updatedAt: r.updatedAt } : {}),
+            ...(typeof r.expired === 'boolean' ? { expired: r.expired } : {}),
+            host: remote.host.label,
+            via: 'relay',
+        };
     }
     if (out.kind === 'unreachable') return { result: 'project_unreachable', reason: out.reason, host: remote.host.label, error: out.error };
     return { result: out.code, host: remote.host.label, error: out.error };
 }
 
-export function parseNoteOp(args: any): ProjectNoteOp | string {
+export function parseNoteOp(args: any): ProjectNoteCommandOp | string {
     const action = str(args?.action);
     const text = str(args?.text);
     if (action === 'record') {
@@ -198,10 +220,24 @@ export function parseNoteOp(args: any): ProjectNoteOp | string {
         if (!noteId && !text) return 'note_id or text required for forget';
         return { action, ...(noteId ? { noteId } : {}), ...(text ? { text } : {}) };
     }
-    return 'action must be record or forget';
+    if (action === 'list') {
+        return { action };
+    }
+    if (action === 'read') {
+        const noteId = str(args?.note_id) || str(args?.noteId);
+        if (!noteId) return 'note_id required for read';
+        return { action, noteId };
+    }
+    return 'action must be record, forget, list or read';
 }
 
-export async function applyNote(svc: AssistantServices, meshId: string, op: ProjectNoteOp, origin: StoreWriteOrigin, callerSessionId?: string): Promise<{ result: 'applied'; noteId?: string; matched?: number }> {
+export async function applyNote(
+    svc: AssistantServices,
+    meshId: string,
+    op: ProjectNoteCommandOp,
+    origin: StoreWriteOrigin,
+    callerSessionId?: string,
+): Promise<{ result: string } & Record<string, unknown>> {
     if (op.action === 'record') {
         const entry = await svc.operatingNotes.record(meshId, {
             text: op.text,
@@ -211,8 +247,93 @@ export async function applyNote(svc: AssistantServices, meshId: string, op: Proj
         });
         return { result: 'applied', noteId: entry.id };
     }
-    const r = await svc.operatingNotes.forget(meshId, { ...(op.noteId ? { noteId: op.noteId } : {}), ...(op.text ? { text: op.text } : {}), reason: 'assistant' });
-    return { result: 'applied', matched: r.matched };
+    if (op.action === 'forget') {
+        const r = await svc.operatingNotes.forget(meshId, { ...(op.noteId ? { noteId: op.noteId } : {}), ...(op.text ? { text: op.text } : {}), reason: 'assistant' });
+        return { result: 'applied', matched: r.matched };
+    }
+    const {
+        readOperatingNotes,
+        readOperatingNoteById,
+        resolveNoteExpiry,
+        previewOperatingNoteText,
+        resolveOperatingNoteScope,
+    } = await import('../../mesh/mesh-operating-notes.js');
+    const nowMs = Date.now();
+    if (op.action === 'list') {
+        const entries = svc.operatingNotes.list
+            ? await svc.operatingNotes.list(meshId, { tail: 100 })
+            : readOperatingNotes(meshId, { tail: 100 });
+        const notes = entries.map((e) => {
+            const p = (e.payload || {}) as Record<string, unknown>;
+            const text = typeof p.text === 'string' ? p.text : '';
+            const createdAt = typeof p.createdAt === 'string' ? p.createdAt : e.timestamp;
+            const pinned = p.pinned === true;
+            const category = typeof p.category === 'string' ? p.category : undefined;
+            const sourceCoordinator = typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined;
+            const explicitExpiry = typeof p.expiresAt === 'string' ? p.expiresAt : undefined;
+            const lifetime = resolveNoteExpiry({ category, pinned, createdAt, ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}) }, nowMs);
+            const { preview, truncated } = previewOperatingNoteText(text);
+            const scope = resolveOperatingNoteScope({ pinned, sourceCoordinator }, 'project');
+            return {
+                id: e.id,
+                noteId: e.id,
+                scope,
+                pinned,
+                category: category ?? null,
+                createdAt,
+                updatedAt: createdAt,
+                preview,
+                truncated,
+                expired: lifetime.expired,
+                ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}),
+                ...(lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {}),
+                ...(typeof p.subjectKey === 'string' ? { subjectKey: p.subjectKey } : {}),
+                ...(sourceCoordinator ? { sourceCoordinator } : {}),
+            };
+        });
+        return { result: 'list', count: notes.length, notes };
+    }
+    // op.action === 'read'
+    const entry = svc.operatingNotes.read
+        ? await svc.operatingNotes.read(meshId, op.noteId)
+        : readOperatingNoteById(meshId, op.noteId);
+    if (!entry) {
+        return {
+            result: 'note_not_found',
+            noteId: op.noteId,
+            error: `No live operating note matched note_id '${op.noteId}'.`,
+        };
+    }
+    const p = (entry.payload || {}) as Record<string, unknown>;
+    const text = typeof p.text === 'string' ? p.text : '';
+    const createdAt = typeof p.createdAt === 'string' ? p.createdAt : entry.timestamp;
+    const pinned = p.pinned === true;
+    const category = typeof p.category === 'string' ? p.category : undefined;
+    const sourceCoordinator = typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined;
+    const explicitExpiry = typeof p.expiresAt === 'string' ? p.expiresAt : undefined;
+    const lifetime = resolveNoteExpiry({ category, pinned, createdAt, ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}) }, nowMs);
+    const scope = resolveOperatingNoteScope({ pinned, sourceCoordinator }, 'project');
+    const detail = {
+        id: entry.id,
+        noteId: entry.id,
+        scope,
+        text,
+        pinned,
+        category: category ?? null,
+        createdAt,
+        updatedAt: createdAt,
+        expired: lifetime.expired,
+        ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}),
+        ...(lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {}),
+        ...(typeof p.subjectKey === 'string' ? { subjectKey: p.subjectKey } : {}),
+        ...(typeof p.supersedes === 'string' ? { supersedes: p.supersedes } : {}),
+        ...(sourceCoordinator ? { sourceCoordinator } : {}),
+    };
+    return {
+        result: 'ok',
+        ...detail,
+        note: detail,
+    };
 }
 
 // ── tool verbs ──────────────────────────────────────────────────────────────
@@ -292,9 +413,13 @@ export const assistantStoreHandlers: Record<string, HighFamilyHandler> = {
         const project = await resolveNoteProject(ctx, svc, args?.project);
         if (!project.ok) return project.result;
         const wrap = { project: project.slug, meshId: project.mesh.id };
+        const sid = readAssistantSessionId(args);
+        if (op.action === 'list' || op.action === 'read') {
+            if (project.remote) return respond(await applyRemoteNote(project, op, 'human', sid || undefined), wrap);
+            return respond(await applyNote(svc, project.mesh.id, op, 'human', sid || undefined), wrap);
+        }
         const refusal = noteTextRefusal(op.text);
         if (refusal) return respond(refusal, wrap);
-        const sid = readAssistantSessionId(args);
         const { origin, reviewTurnId } = svc.inputLog.writeContext(sid);
         // A note written in a review turn is always held, clean window or not (note-staging.ts).
         if (mustStage(origin) || isReviewOrigin(origin)) {

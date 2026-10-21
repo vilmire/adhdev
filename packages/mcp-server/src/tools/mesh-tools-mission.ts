@@ -340,6 +340,123 @@ export async function meshForgetNote(
     }
 }
 
+export async function meshListNotes(
+    ctx: MeshContext,
+    args: { tail?: number } = {},
+): Promise<string> {
+    const { mesh } = ctx;
+    const tail = typeof args.tail === 'number' && Number.isFinite(args.tail) && args.tail > 0
+        ? Math.floor(args.tail)
+        : 100;
+    try {
+        const raw = unwrapCommandPayload(await ctx.transport.command('list_mesh_notes', { meshId: mesh.id, tail }));
+        if (raw?.success === false) {
+            return JSON.stringify({ success: false, error: raw.error || 'list_mesh_notes failed' }, null, 2);
+        }
+        const rawNotes: any[] = Array.isArray(raw?.notes) ? raw.notes : [];
+        const notes = rawNotes.map((n) => {
+            const id = typeof n?.id === 'string' ? n.id : '';
+            const text = typeof n?.text === 'string' ? n.text : '';
+            const normalized = text.replace(/\s+/g, ' ').trim();
+            const preview = typeof n?.preview === 'string'
+                ? n.preview
+                : (normalized.length <= 160 ? normalized : `${normalized.slice(0, 160).trimEnd()}…`);
+            const truncated = typeof n?.truncated === 'boolean' ? n.truncated : normalized.length > 160;
+            const pinned = n?.pinned === true;
+            const sourceCoordinator = typeof n?.sourceCoordinator === 'string' ? n.sourceCoordinator : undefined;
+            const scope = typeof n?.scope === 'string'
+                ? n.scope
+                : (pinned ? 'pinned' : (sourceCoordinator?.startsWith('assistant') ? 'project' : 'mesh'));
+            const createdAt = typeof n?.createdAt === 'string' ? n.createdAt : '';
+            const updatedAt = typeof n?.updatedAt === 'string' ? n.updatedAt : createdAt;
+            return {
+                id,
+                noteId: id,
+                scope,
+                pinned,
+                category: typeof n?.category === 'string' ? n.category : null,
+                createdAt,
+                updatedAt,
+                preview,
+                truncated,
+                expired: n?.expired === true,
+                ...(typeof n?.expiresAt === 'string' ? { expiresAt: n.expiresAt } : {}),
+                ...(typeof n?.effectiveExpiresAt === 'string' ? { effectiveExpiresAt: n.effectiveExpiresAt } : {}),
+                ...(typeof n?.subjectKey === 'string' ? { subjectKey: n.subjectKey } : {}),
+                ...(sourceCoordinator ? { sourceCoordinator } : {}),
+            };
+        });
+        return JSON.stringify({
+            success: true,
+            meshId: mesh.id,
+            scope: 'mesh',
+            count: notes.length,
+            notes,
+        }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
+    }
+}
+
+export async function meshReadNote(
+    ctx: MeshContext,
+    args: { note_id?: string; noteId?: string },
+): Promise<string> {
+    const { mesh } = ctx;
+    const noteId = readString(args.note_id) || readString(args.noteId) || '';
+    if (!noteId) {
+        return JSON.stringify({ success: false, code: 'note_id_required', error: 'note_id required' }, null, 2);
+    }
+    try {
+        const raw = unwrapCommandPayload(await ctx.transport.command('list_mesh_notes', { meshId: mesh.id, noteId }));
+        if (raw?.success === false) {
+            return JSON.stringify({ success: false, error: raw.error || 'list_mesh_notes failed' }, null, 2);
+        }
+        const rawNotes: any[] = Array.isArray(raw?.notes) ? raw.notes : [];
+        const found = rawNotes.find((n) => n && typeof n.id === 'string' && n.id === noteId);
+        if (!found) {
+            return JSON.stringify({
+                success: false,
+                code: 'note_not_found',
+                meshId: mesh.id,
+                noteId,
+                error: `No live operating note matched note_id '${noteId}' in mesh '${mesh.id}'.`,
+            }, null, 2);
+        }
+        const pinned = found.pinned === true;
+        const sourceCoordinator = typeof found.sourceCoordinator === 'string' ? found.sourceCoordinator : undefined;
+        const scope = typeof found.scope === 'string'
+            ? found.scope
+            : (pinned ? 'pinned' : (sourceCoordinator?.startsWith('assistant') ? 'project' : 'mesh'));
+        const createdAt = typeof found.createdAt === 'string' ? found.createdAt : '';
+        const updatedAt = typeof found.updatedAt === 'string' ? found.updatedAt : createdAt;
+        const detail = {
+            id: found.id,
+            noteId: found.id,
+            scope,
+            text: typeof found.text === 'string' ? found.text : '',
+            pinned,
+            category: typeof found.category === 'string' ? found.category : null,
+            createdAt,
+            updatedAt,
+            expired: found.expired === true,
+            ...(typeof found.expiresAt === 'string' ? { expiresAt: found.expiresAt } : {}),
+            ...(typeof found.effectiveExpiresAt === 'string' ? { effectiveExpiresAt: found.effectiveExpiresAt } : {}),
+            ...(typeof found.subjectKey === 'string' ? { subjectKey: found.subjectKey } : {}),
+            ...(typeof found.supersedes === 'string' ? { supersedes: found.supersedes } : {}),
+            ...(sourceCoordinator ? { sourceCoordinator } : {}),
+        };
+        return JSON.stringify({
+            success: true,
+            meshId: mesh.id,
+            ...detail,
+            note: detail,
+        }, null, 2);
+    } catch (e: any) {
+        return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
+    }
+}
+
 export async function meshReconcileLedger(
     ctx: MeshContext,
     args: { node_ids?: string[]; limit?: number; after_id?: string; since?: string; import_entries?: boolean },

@@ -29,6 +29,7 @@
  */
 
 import { turnLedgerIpcHandlers } from '../../daemon-core/src/commands/low-family/turn-ledger-ipc.js';
+import { meshLedgerHandlers } from '../../daemon-core/src/commands/low-family/mesh-ledger.js';
 import type { LowFamilyContext } from '../../daemon-core/src/commands/low-family/types.js';
 import type { CommandTransport } from '../src/transports/mode.js';
 const EMPTY_LOW_FAMILY_CONTEXT: LowFamilyContext = {
@@ -51,7 +52,8 @@ const EMPTY_LOW_FAMILY_CONTEXT: LowFamilyContext = {
 export function makeFakeTurnIpcTransport(): CommandTransport {
     const fake = {
         async command(type: string, args: Record<string, unknown> = {}): Promise<any> {
-            const handler = turnLedgerIpcHandlers[type];
+            const handler = turnLedgerIpcHandlers[type]
+                ?? (type === 'list_mesh_notes' ? meshLedgerHandlers.list_mesh_notes : undefined);
             if (handler) return handler(EMPTY_LOW_FAMILY_CONTEXT, args);
             throw new Error(`makeFakeTurnIpcTransport: no turn-ipc handler registered for '${type}'`);
         },

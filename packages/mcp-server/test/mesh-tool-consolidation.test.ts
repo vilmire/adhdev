@@ -84,7 +84,9 @@ test('an unrelated unknown tool name still falls through to the dispatcher (null
 const STRAY_CASES: Array<{ tool: string; args: Record<string, unknown>; stray: string; owner: string }> = [
     { tool: 'mesh_node_slots', args: { action: 'list', node_id: 'n', slots: [] }, stray: 'slots', owner: 'action=set' },
     { tool: 'mesh_note', args: { action: 'forget', note_id: 'n', pinned: true }, stray: 'pinned', owner: 'action=record' },
-    { tool: 'mesh_note', args: { action: 'record', text: 't', note_id: 'n' }, stray: 'note_id', owner: 'action=forget' },
+    { tool: 'mesh_note', args: { action: 'record', text: 't', note_id: 'n' }, stray: 'note_id', owner: 'action=forget | read' },
+    { tool: 'mesh_note', args: { action: 'list', note_id: 'n' }, stray: 'note_id', owner: 'action=forget | read' },
+    { tool: 'mesh_note', args: { action: 'read', note_id: 'n', text: 't' }, stray: 'text', owner: 'action=record | forget' },
     { tool: 'mesh_config', args: { kind: 'mesh_json', mode: 'schema' }, stray: 'mode', owner: 'kind=refine | change_impact' },
     { tool: 'mesh_config', args: { kind: 'refine', mode: 'validate', write: true }, stray: 'write', owner: 'kind=mesh_json' },
     { tool: 'mesh_create', args: { mode: 'plan', workspace: '/w', add_current: true }, stray: 'add_current', owner: 'mode=create' },
@@ -107,6 +109,7 @@ test('each action enforces its own required arguments', () => {
     const cases: Array<[string, Record<string, unknown>, RegExp]> = [
         ['mesh_node_slots', { action: 'set', node_id: 'n' }, /mesh_node_slots action="set": "slots"/],
         ['mesh_note', { action: 'record' }, /mesh_note action="record": "text"/],
+        ['mesh_note', { action: 'read' }, /mesh_note action="read": "note_id"/],
         ['mesh_config', { kind: 'change_impact' }, /mesh_config kind="change_impact": "mode"/],
         ['mesh_cleanup_sessions', { mode: 'delete_stopped' }, /mesh_cleanup_sessions mode="delete_stopped": "node_id"/],
     ];
@@ -124,6 +127,9 @@ test('well-formed calls for every action pass validation (camelCase aliases incl
         ['mesh_node_slots', { action: 'propose', nodeId: 'n' }],
         ['mesh_node_slots', { action: 'set', node_id: 'n', slots: [{ provider: 'claude-cli' }], write: false, reason: 'r' }],
         ['mesh_note', { action: 'forget', text: 'stale' }],
+        ['mesh_note', { action: 'list' }],
+        ['mesh_note', { action: 'read', note_id: 'n' }],
+        ['mesh_note', { action: 'read', noteId: 'n' }],
         ['mesh_config', { kind: 'refine', mode: 'schema' }],
         ['mesh_config', { kind: 'mesh_json', node_id: 'n', write: true, overwrite: false, workspace: '/w' }],
         ['mesh_init', {}],

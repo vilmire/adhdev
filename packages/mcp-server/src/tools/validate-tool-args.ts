@@ -568,6 +568,8 @@ export const MESH_TOOL_ACTIONS: Readonly<Record<string, MeshActionSpec>> = {
         actions: {
             record: { args: ['text', 'category', 'pinned', 'ttl_days', 'expiresAt', 'supersedes', 'subject_key'], required: ['text'] },
             forget: { args: ['note_id', 'text', 'reason'] },
+            list: { args: [] },
+            read: { args: ['note_id'], required: ['note_id'] },
         },
     },
     mesh_config: {

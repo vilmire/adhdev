@@ -65248,13 +65248,29 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       OPERATING_NOTE_DEDUPE_WINDOW: () => OPERATING_NOTE_DEDUPE_WINDOW,
       OPERATING_NOTE_KEEP_LATEST: () => OPERATING_NOTE_KEEP_LATEST,
       OPERATING_NOTE_KIND: () => OPERATING_NOTE_KIND,
+      OPERATING_NOTE_PREVIEW_MAX_CHARS: () => OPERATING_NOTE_PREVIEW_MAX_CHARS,
       forgetOperatingNote: () => forgetOperatingNote,
       isNoteExpired: () => isNoteExpired,
+      previewOperatingNoteText: () => previewOperatingNoteText,
       pruneOperatingNotes: () => pruneOperatingNotes,
+      readOperatingNoteById: () => readOperatingNoteById,
       readOperatingNotes: () => readOperatingNotes,
       recordOperatingNote: () => recordOperatingNote,
-      resolveNoteExpiry: () => resolveNoteExpiry
+      resolveNoteExpiry: () => resolveNoteExpiry,
+      resolveOperatingNoteScope: () => resolveOperatingNoteScope
     });
+    function previewOperatingNoteText(text4, maxChars = OPERATING_NOTE_PREVIEW_MAX_CHARS) {
+      const normalized = typeof text4 === "string" ? text4.replace(/\s+/g, " ").trim() : "";
+      if (normalized.length <= maxChars) return { preview: normalized, truncated: false };
+      return { preview: `${normalized.slice(0, maxChars).trimEnd()}\u2026`, truncated: true };
+    }
+    function resolveOperatingNoteScope(note2, defaultScope = "mesh") {
+      if (note2.pinned === true) return "pinned";
+      if (typeof note2.sourceCoordinator === "string" && note2.sourceCoordinator.startsWith("assistant")) {
+        return "project";
+      }
+      return defaultScope;
+    }
     function toEntry(row2) {
       const meta = row2.meta;
       const createdAt = new Date(row2.createdAt).toISOString();
@@ -65283,6 +65299,12 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       let rows = turnStore().listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
       if (opts.tail && opts.tail > 0 && rows.length > opts.tail) rows = rows.slice(-opts.tail);
       return rows.map(toEntry);
+    }
+    function readOperatingNoteById(meshId, noteId) {
+      const targetId = typeof noteId === "string" ? noteId.trim() : "";
+      if (!targetId) return null;
+      const row2 = turnStore().listOperatingNotes(meshId).find((r) => !r.meta.textTombstone && r.noteId === targetId);
+      return row2 ? toEntry(row2) : null;
     }
     function recordOperatingNote(meshId, input) {
       const text4 = input.text.trim();
@@ -65379,6 +65401,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     var OPERATING_NOTE_KIND;
     var OPERATING_NOTE_DEDUPE_WINDOW;
     var OPERATING_NOTE_KEEP_LATEST;
+    var OPERATING_NOTE_PREVIEW_MAX_CHARS;
     var OPERATING_NOTE_CATEGORY_TTL_DAYS;
     var MS_PER_DAY;
     var init_mesh_operating_notes = __esm2({
@@ -65389,6 +65412,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         OPERATING_NOTE_KIND = "coordinator_operating_note";
         OPERATING_NOTE_DEDUPE_WINDOW = 40;
         OPERATING_NOTE_KEEP_LATEST = 100;
+        OPERATING_NOTE_PREVIEW_MAX_CHARS = 160;
         OPERATING_NOTE_CATEGORY_TTL_DAYS = {
           recovery_lesson: 14,
           pattern_to_avoid: 30
@@ -65746,9 +65770,11 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
         recovery_lesson: "recovery lesson"
       };
       const pin = n.pinned ? "\u{1F4CC} " : "";
+      const noteId = typeof n.noteId === "string" && n.noteId.trim() ? n.noteId.trim() : typeof n.id === "string" && n.id.trim() ? n.id.trim() : "";
+      const idTag = noteId ? `[id: ${noteId}] ` : "";
       const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : "";
       const fold = folded.subsumedCount > 0 ? ` _(+${folded.subsumedCount} earlier same-subject note${folded.subsumedCount === 1 ? "" : "s"} folded${folded.subsumedIds.length ? `: ${folded.subsumedIds.join(", ")}` : ""})_` : "";
-      return `- ${pin}${cat}${truncateNote(n.text.trim())}${fold}`;
+      return `- ${pin}${idTag}${cat}${truncateNote(n.text.trim())}${fold}`;
     }
     function buildOperatingNotesSection(notes, now = Date.now()) {
       const hasAny = Array.isArray(notes) ? notes.some((n) => n && typeof n.text === "string" && n.text.trim()) : false;
@@ -65756,7 +65782,7 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       const { shown, omittedCount } = selectOperatingNotesForPrompt(notes ?? [], now);
       if (shown.length === 0) return "";
       const lines = ["## Operating Notes", ""];
-      lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_note` (action "record"). Treat them as accumulated operating knowledge \u2014 apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_note` (action "record") so future coordinators inherit it.');
+      lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_note` (action "record"). Treat them as accumulated operating knowledge \u2014 apply them; use `mesh_note` action "read" with a note\'s `id` to inspect full text when truncated, or action "list" / "forget" to audit or retract notes. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_note` (action "record") so future coordinators inherit it.');
       lines.push("");
       for (const entry of shown) {
         lines.push(renderOperatingNoteLine(entry));
@@ -93413,6 +93439,14 @@ ${body}`;
           async forget(meshId, target) {
             const { forgetOperatingNote: forgetOperatingNote2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
             return forgetOperatingNote2(meshId, target);
+          },
+          async list(meshId, opts) {
+            const { readOperatingNotes: readOperatingNotes2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
+            return readOperatingNotes2(meshId, opts);
+          },
+          async read(meshId, noteId) {
+            const { readOperatingNoteById: readOperatingNoteById2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
+            return readOperatingNoteById2(meshId, noteId);
           }
         };
         current = null;
@@ -101120,7 +101154,24 @@ ${asText(streams.stderr)}
       const out = remote.host.reachable ? await remote.ports.callHost(remote.host, "note", { ...op, origin, ...callerSessionId ? { callerSessionId } : {} }) : { ok: false, kind: "unreachable", code: "project_unreachable", reason: remote.host.reason ?? "relay_failed", error: "host unreachable" };
       if (out.ok) {
         const r = out.result;
-        return { result: "applied", ...typeof r.noteId === "string" ? { noteId: r.noteId } : {}, ...typeof r.matched === "number" ? { matched: r.matched } : {}, host: remote.host.label, via: "relay" };
+        return {
+          result: typeof r.result === "string" ? r.result : "applied",
+          ...typeof r.noteId === "string" ? { noteId: r.noteId } : {},
+          ...typeof r.id === "string" ? { id: r.id } : {},
+          ...typeof r.matched === "number" ? { matched: r.matched } : {},
+          ...typeof r.count === "number" ? { count: r.count } : {},
+          ...Array.isArray(r.notes) ? { notes: r.notes } : {},
+          ...r.note && typeof r.note === "object" ? { note: r.note } : {},
+          ...typeof r.text === "string" ? { text: r.text } : {},
+          ...typeof r.scope === "string" ? { scope: r.scope } : {},
+          ...typeof r.pinned === "boolean" ? { pinned: r.pinned } : {},
+          ...r.category !== void 0 ? { category: r.category } : {},
+          ...typeof r.createdAt === "string" ? { createdAt: r.createdAt } : {},
+          ...typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {},
+          ...typeof r.expired === "boolean" ? { expired: r.expired } : {},
+          host: remote.host.label,
+          via: "relay"
+        };
       }
       if (out.kind === "unreachable") return { result: "project_unreachable", reason: out.reason, host: remote.host.label, error: out.error };
       return { result: out.code, host: remote.host.label, error: out.error };
@@ -101141,20 +101192,108 @@ ${asText(streams.stderr)}
         if (!noteId && !text4) return "note_id or text required for forget";
         return { action: action2, ...noteId ? { noteId } : {}, ...text4 ? { text: text4 } : {} };
       }
-      return "action must be record or forget";
+      if (action2 === "list") {
+        return { action: action2 };
+      }
+      if (action2 === "read") {
+        const noteId = str8(args?.note_id) || str8(args?.noteId);
+        if (!noteId) return "note_id required for read";
+        return { action: action2, noteId };
+      }
+      return "action must be record, forget, list or read";
     }
     async function applyNote(svc, meshId, op, origin, callerSessionId) {
       if (op.action === "record") {
-        const entry = await svc.operatingNotes.record(meshId, {
+        const entry2 = await svc.operatingNotes.record(meshId, {
           text: op.text,
           ...op.category ? { category: op.category } : {},
           sourceCoordinator: origin === "owner" ? "assistant:owner" : "assistant",
           ...callerSessionId ? { callerSessionId } : {}
         });
-        return { result: "applied", noteId: entry.id };
+        return { result: "applied", noteId: entry2.id };
       }
-      const r = await svc.operatingNotes.forget(meshId, { ...op.noteId ? { noteId: op.noteId } : {}, ...op.text ? { text: op.text } : {}, reason: "assistant" });
-      return { result: "applied", matched: r.matched };
+      if (op.action === "forget") {
+        const r = await svc.operatingNotes.forget(meshId, { ...op.noteId ? { noteId: op.noteId } : {}, ...op.text ? { text: op.text } : {}, reason: "assistant" });
+        return { result: "applied", matched: r.matched };
+      }
+      const {
+        readOperatingNotes: readOperatingNotes2,
+        readOperatingNoteById: readOperatingNoteById2,
+        resolveNoteExpiry: resolveNoteExpiry2,
+        previewOperatingNoteText: previewOperatingNoteText2,
+        resolveOperatingNoteScope: resolveOperatingNoteScope2
+      } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
+      const nowMs2 = Date.now();
+      if (op.action === "list") {
+        const entries = svc.operatingNotes.list ? await svc.operatingNotes.list(meshId, { tail: 100 }) : readOperatingNotes2(meshId, { tail: 100 });
+        const notes = entries.map((e) => {
+          const p2 = e.payload || {};
+          const text5 = typeof p2.text === "string" ? p2.text : "";
+          const createdAt2 = typeof p2.createdAt === "string" ? p2.createdAt : e.timestamp;
+          const pinned2 = p2.pinned === true;
+          const category2 = typeof p2.category === "string" ? p2.category : void 0;
+          const sourceCoordinator2 = typeof p2.sourceCoordinator === "string" ? p2.sourceCoordinator : void 0;
+          const explicitExpiry2 = typeof p2.expiresAt === "string" ? p2.expiresAt : void 0;
+          const lifetime2 = resolveNoteExpiry2({ category: category2, pinned: pinned2, createdAt: createdAt2, ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {} }, nowMs2);
+          const { preview, truncated } = previewOperatingNoteText2(text5);
+          const scope2 = resolveOperatingNoteScope2({ pinned: pinned2, sourceCoordinator: sourceCoordinator2 }, "project");
+          return {
+            id: e.id,
+            noteId: e.id,
+            scope: scope2,
+            pinned: pinned2,
+            category: category2 ?? null,
+            createdAt: createdAt2,
+            updatedAt: createdAt2,
+            preview,
+            truncated,
+            expired: lifetime2.expired,
+            ...explicitExpiry2 ? { expiresAt: explicitExpiry2 } : {},
+            ...lifetime2.effectiveExpiresAt ? { effectiveExpiresAt: lifetime2.effectiveExpiresAt } : {},
+            ...typeof p2.subjectKey === "string" ? { subjectKey: p2.subjectKey } : {},
+            ...sourceCoordinator2 ? { sourceCoordinator: sourceCoordinator2 } : {}
+          };
+        });
+        return { result: "list", count: notes.length, notes };
+      }
+      const entry = svc.operatingNotes.read ? await svc.operatingNotes.read(meshId, op.noteId) : readOperatingNoteById2(meshId, op.noteId);
+      if (!entry) {
+        return {
+          result: "note_not_found",
+          noteId: op.noteId,
+          error: `No live operating note matched note_id '${op.noteId}'.`
+        };
+      }
+      const p = entry.payload || {};
+      const text4 = typeof p.text === "string" ? p.text : "";
+      const createdAt = typeof p.createdAt === "string" ? p.createdAt : entry.timestamp;
+      const pinned = p.pinned === true;
+      const category = typeof p.category === "string" ? p.category : void 0;
+      const sourceCoordinator = typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0;
+      const explicitExpiry = typeof p.expiresAt === "string" ? p.expiresAt : void 0;
+      const lifetime = resolveNoteExpiry2({ category, pinned, createdAt, ...explicitExpiry ? { expiresAt: explicitExpiry } : {} }, nowMs2);
+      const scope = resolveOperatingNoteScope2({ pinned, sourceCoordinator }, "project");
+      const detail = {
+        id: entry.id,
+        noteId: entry.id,
+        scope,
+        text: text4,
+        pinned,
+        category: category ?? null,
+        createdAt,
+        updatedAt: createdAt,
+        expired: lifetime.expired,
+        ...explicitExpiry ? { expiresAt: explicitExpiry } : {},
+        ...lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {},
+        ...typeof p.subjectKey === "string" ? { subjectKey: p.subjectKey } : {},
+        ...typeof p.supersedes === "string" ? { supersedes: p.supersedes } : {},
+        ...sourceCoordinator ? { sourceCoordinator } : {}
+      };
+      return {
+        result: "ok",
+        ...detail,
+        note: detail
+      };
     }
     function parseMemoryOp(args) {
       const action2 = str8(args?.action);
@@ -101386,9 +101525,13 @@ ${asText(streams.stderr)}
             const project = await resolveNoteProject(ctx, svc, args?.project);
             if (!project.ok) return project.result;
             const wrap2 = { project: project.slug, meshId: project.mesh.id };
+            const sid = readAssistantSessionId(args);
+            if (op.action === "list" || op.action === "read") {
+              if (project.remote) return respond(await applyRemoteNote(project, op, "human", sid || void 0), wrap2);
+              return respond(await applyNote(svc, project.mesh.id, op, "human", sid || void 0), wrap2);
+            }
             const refusal2 = noteTextRefusal(op.text);
             if (refusal2) return respond(refusal2, wrap2);
-            const sid = readAssistantSessionId(args);
             const { origin, reviewTurnId } = svc.inputLog.writeContext(sid);
             if (mustStage(origin) || isReviewOrigin(origin)) {
               const stagedId = svc.notes.write({
@@ -110772,6 +110915,7 @@ ${tail}` : ""
       OPERATING_NOTE_DEDUPE_WINDOW: () => OPERATING_NOTE_DEDUPE_WINDOW,
       OPERATING_NOTE_KEEP_LATEST: () => OPERATING_NOTE_KEEP_LATEST,
       OPERATING_NOTE_KIND: () => OPERATING_NOTE_KIND,
+      OPERATING_NOTE_PREVIEW_MAX_CHARS: () => OPERATING_NOTE_PREVIEW_MAX_CHARS,
       ORPHANED_UNCORRELATED_DISPATCH_REASON: () => ORPHANED_UNCORRELATED_DISPATCH_REASON,
       P2pRelayFailureError: () => P2pRelayFailureError,
       PARKED_SKIP_REASON: () => PARKED_SKIP_REASON,
@@ -111220,6 +111364,7 @@ ${tail}` : ""
       meshEventsTopic: () => meshEventsTopic,
       meshHostHttpUrl: () => meshHostHttpUrl,
       meshHostWsUrl: () => meshHostWsUrl,
+      meshLedgerHandlers: () => meshLedgerHandlers,
       meshNodeIdMatches: () => meshNodeIdMatches7,
       meshNoticeRuntime: () => meshNoticeRuntime,
       meshPublisherCounters: () => meshPublisherCounters,
@@ -111295,6 +111440,7 @@ ${tail}` : ""
       presentationFromAttemptRow: () => presentationFromAttemptRow,
       preserveAuthenticatedMcpCommand: () => preserveAuthenticatedMcpCommand,
       preserveTrustedOwnerTransportProof: () => preserveTrustedOwnerTransportProof,
+      previewOperatingNoteText: () => previewOperatingNoteText,
       printClaudeInstallResult: () => printClaudeInstallResult,
       printClaudeStatuslineStatus: () => printClaudeStatuslineStatus,
       printClaudeUninstallResult: () => printClaudeUninstallResult,
@@ -111336,6 +111482,7 @@ ${tail}` : ""
       readMeshCompletionSummary: () => readMeshCompletionSummary,
       readMeshDirectDispatchFlag: () => readMeshDirectDispatchFlag,
       readMeshSender: () => readMeshSender,
+      readOperatingNoteById: () => readOperatingNoteById,
       readOperatingNotes: () => readOperatingNotes,
       readOwnTaskLifecycle: () => readOwnTaskLifecycle,
       readRouterCommandIngress: () => readRouterCommandIngress,
@@ -111398,6 +111545,7 @@ ${tail}` : ""
       resolveNoteExpiry: () => resolveNoteExpiry,
       resolveNpmPublishedVersion: () => resolveNpmPublishedVersion,
       resolveOnDependencyFailurePolicy: () => resolveOnDependencyFailurePolicy,
+      resolveOperatingNoteScope: () => resolveOperatingNoteScope,
       resolvePeerSecretsPath: () => resolvePeerSecretsPath,
       resolveProviderChannel: () => resolveProviderChannel,
       resolveProviderDefaultModel: () => resolveProviderDefaultModel,
@@ -143135,28 +143283,48 @@ ${output}` : "";
         const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
         if (!meshId) return { success: false, error: "meshId required" };
         try {
-          const { readOperatingNotes: readOperatingNotes2, resolveNoteExpiry: resolveNoteExpiry2 } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
+          const {
+            readOperatingNotes: readOperatingNotes2,
+            readOperatingNoteById: readOperatingNoteById2,
+            resolveNoteExpiry: resolveNoteExpiry2,
+            previewOperatingNoteText: previewOperatingNoteText2,
+            resolveOperatingNoteScope: resolveOperatingNoteScope2
+          } = await Promise.resolve().then(() => (init_mesh_operating_notes(), mesh_operating_notes_exports));
+          const exactNoteId = typeof args?.noteId === "string" && args.noteId.trim() ? args.noteId.trim() : typeof args?.note_id === "string" && args.note_id.trim() ? args.note_id.trim() : "";
           const tail = typeof args?.tail === "number" ? args.tail : 100;
-          const entries = readOperatingNotes2(meshId, { tail });
+          const entries = exactNoteId ? (() => {
+            const one = readOperatingNoteById2(meshId, exactNoteId);
+            return one ? [one] : [];
+          })() : readOperatingNotes2(meshId, { tail });
           const nowMs2 = Date.now();
           const notes = entries.map((e) => {
             const p = e.payload || {};
+            const text4 = typeof p.text === "string" ? p.text : "";
             const createdAt = typeof p.createdAt === "string" ? p.createdAt : e.timestamp;
             const pinned = p.pinned === true;
             const category = typeof p.category === "string" ? p.category : void 0;
+            const sourceCoordinator = typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0;
             const explicitExpiry = typeof p.expiresAt === "string" ? p.expiresAt : void 0;
             const lifetime = resolveNoteExpiry2({ category, pinned, createdAt, ...explicitExpiry ? { expiresAt: explicitExpiry } : {} }, nowMs2);
+            const { preview, truncated } = previewOperatingNoteText2(text4);
+            const scope = resolveOperatingNoteScope2({ pinned, sourceCoordinator });
             return {
               id: e.id,
-              text: typeof p.text === "string" ? p.text : "",
+              noteId: e.id,
+              scope,
+              text: text4,
+              preview,
+              truncated,
               category,
               createdAt,
-              sourceCoordinator: typeof p.sourceCoordinator === "string" ? p.sourceCoordinator : void 0,
+              updatedAt: createdAt,
+              sourceCoordinator,
               pinned,
               ...explicitExpiry ? { expiresAt: explicitExpiry } : {},
               ...lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {},
               expired: lifetime.expired,
-              ...typeof p.subjectKey === "string" ? { subjectKey: p.subjectKey } : {}
+              ...typeof p.subjectKey === "string" ? { subjectKey: p.subjectKey } : {},
+              ...typeof p.supersedes === "string" ? { supersedes: p.supersedes } : {}
             };
           });
           return { success: true, notes };
@@ -148819,6 +148987,7 @@ ${output}` : "";
                   // Phase 2 (b)/(c): thread the ledger id + supersedes/subjectKey
                   // so version-supersede targeting and same-class folding work.
                   // Legacy notes lack them → no supersede, fold by leading [tag].
+                  id: e.id,
                   noteId: e.id,
                   ...typeof p.supersedes === "string" ? { supersedes: p.supersedes } : {},
                   ...typeof p.subjectKey === "string" ? { subjectKey: p.subjectKey } : {}
@@ -152875,11 +153044,20 @@ ${ptyResult.output.slice(-2e3)}`);
     async function note(meshId, args) {
       const op = parseNoteOp(args);
       if (typeof op === "string") return fail5("invalid_args", op);
+      const callerSessionId = str14(args.callerSessionId);
+      if (op.action === "list" || op.action === "read") {
+        const out = await applyNote(getAssistantServices(), meshId, op, "human", callerSessionId || void 0);
+        if (out.result === "note_not_found") {
+          return fail5("note_not_found", String(out.error || "note_not_found"), {
+            ...typeof out.noteId === "string" ? { noteId: out.noteId } : {}
+          });
+        }
+        return { success: true, ...out };
+      }
       const origin = str14(args.origin);
       if (origin !== "human" && origin !== "owner") return fail5("invalid_args", "origin must be human or owner");
       const refusal2 = noteTextRefusal(op.text);
       if (refusal2) return fail5(refusal2.result, refusal2.result, refusal2.pattern ? { pattern: refusal2.pattern } : {});
-      const callerSessionId = str14(args.callerSessionId);
       const applied = await applyNote(getAssistantServices(), meshId, op, origin, callerSessionId || void 0);
       return { success: true, ...applied };
     }
@@ -193855,14 +194033,14 @@ var MESH_LEDGER_QUERY_TOOL = {
 };
 var MESH_NOTE_TOOL = {
   name: "mesh_note",
-  description: "Record or retract a durable operating note: a lesson persisted in the mesh ledger and injected into every future coordinator's system prompt at launch, whatever its provider. `action` (REQUIRED):\n\u2022 record \u2014 when you learn something durable (provider quirk, pattern to avoid, recovery lesson), and before closing a mission that taught one. One concrete, reusable fact per note; not for transient task status (use missions/checkpoints).\n\u2022 forget \u2014 when an injected note is stale or wrong: appends a tombstone so it stops riding into prompts (append-only, history kept). Target by note_id or exact text.",
+  description: "Record, retract, list, or read a durable operating note: a lesson persisted in the mesh ledger and injected into every future coordinator's system prompt at launch, whatever its provider. `action` (REQUIRED):\n\u2022 record \u2014 when you learn something durable (provider quirk, pattern to avoid, recovery lesson), and before closing a mission that taught one. One concrete, reusable fact per note; not for transient task status (use missions/checkpoints).\n\u2022 forget \u2014 when an injected note is stale or wrong: appends a tombstone so it stops riding into prompts (append-only, history kept). Target by note_id or exact text.\n\u2022 list \u2014 list live operating notes for this mesh with id, scope, pinned, createdAt/updatedAt, and a short preview.\n\u2022 read \u2014 read the full untruncated text and metadata for one exact note_id.",
   inputSchema: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["record", "forget"],
-        description: "record = add a note; forget = retract one. Each action takes only its own arguments."
+        enum: ["record", "forget", "list", "read"],
+        description: "record = add a note; forget = retract one; list = list live notes with previews; read = read full text for one note_id. Each action takes only its own arguments."
       },
       text: { type: "string", description: "record (required): the fact, actionable without this conversation. forget: retract notes whose trimmed text matches exactly." },
       category: {
@@ -193890,7 +194068,7 @@ var MESH_NOTE_TOOL = {
         type: "string",
         description: "record: drives supersede and folding (same category + subject_key \u2192 newest one injected); default = leading [tag] in text."
       },
-      note_id: { type: "string", description: "forget: exact note id (record's noteId; also in mesh_task_history) \u2014 no prefix match; unknown \u2192 note_not_found." },
+      note_id: { type: "string", description: "read (required) / forget: exact note id (from prompt [id: \u2026], list, or record's noteId) \u2014 no prefix match; unknown \u2192 note_not_found." },
       reason: { type: "string", description: "forget: optional reason, kept on the tombstone." }
     },
     required: ["action"]
@@ -196213,7 +196391,9 @@ var MESH_TOOL_ACTIONS = {
     key: "action",
     actions: {
       record: { args: ["text", "category", "pinned", "ttl_days", "expiresAt", "supersedes", "subject_key"], required: ["text"] },
-      forget: { args: ["note_id", "text", "reason"] }
+      forget: { args: ["note_id", "text", "reason"] },
+      list: { args: [] },
+      read: { args: ["note_id"], required: ["note_id"] }
     }
   },
   mesh_config: {
@@ -197472,6 +197652,107 @@ async function meshForgetNote(ctx, args) {
       forgot: { noteId: noteId ?? null, text: text || null, matched },
       ...idTargetMissed ? { code: "note_not_found" } : {},
       note: matched > 0 ? `Retracted ${matched} operating note(s). Future coordinators on this mesh will no longer see them at launch. History is preserved (append-only tombstone).` : idTargetMissed ? `No live operating note matched note_id '${noteId}' \u2014 likely a truncated/wrong id (this tool requires an exact match). A tombstone was still recorded so any matching note appended later is also suppressed, but nothing was actually retracted. Use mesh_task_history or the noteId returned by mesh_note action="record" to get the full id.` : "No live operating note matched \u2014 recorded a tombstone anyway so any matching note appended later is also suppressed."
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
+  }
+}
+async function meshListNotes(ctx, args = {}) {
+  const { mesh } = ctx;
+  const tail = typeof args.tail === "number" && Number.isFinite(args.tail) && args.tail > 0 ? Math.floor(args.tail) : 100;
+  try {
+    const raw = unwrapCommandPayload(await ctx.transport.command("list_mesh_notes", { meshId: mesh.id, tail }));
+    if (raw?.success === false) {
+      return JSON.stringify({ success: false, error: raw.error || "list_mesh_notes failed" }, null, 2);
+    }
+    const rawNotes = Array.isArray(raw?.notes) ? raw.notes : [];
+    const notes = rawNotes.map((n) => {
+      const id2 = typeof n?.id === "string" ? n.id : "";
+      const text = typeof n?.text === "string" ? n.text : "";
+      const normalized = text.replace(/\s+/g, " ").trim();
+      const preview = typeof n?.preview === "string" ? n.preview : normalized.length <= 160 ? normalized : `${normalized.slice(0, 160).trimEnd()}\u2026`;
+      const truncated = typeof n?.truncated === "boolean" ? n.truncated : normalized.length > 160;
+      const pinned = n?.pinned === true;
+      const sourceCoordinator = typeof n?.sourceCoordinator === "string" ? n.sourceCoordinator : void 0;
+      const scope = typeof n?.scope === "string" ? n.scope : pinned ? "pinned" : sourceCoordinator?.startsWith("assistant") ? "project" : "mesh";
+      const createdAt = typeof n?.createdAt === "string" ? n.createdAt : "";
+      const updatedAt = typeof n?.updatedAt === "string" ? n.updatedAt : createdAt;
+      return {
+        id: id2,
+        noteId: id2,
+        scope,
+        pinned,
+        category: typeof n?.category === "string" ? n.category : null,
+        createdAt,
+        updatedAt,
+        preview,
+        truncated,
+        expired: n?.expired === true,
+        ...typeof n?.expiresAt === "string" ? { expiresAt: n.expiresAt } : {},
+        ...typeof n?.effectiveExpiresAt === "string" ? { effectiveExpiresAt: n.effectiveExpiresAt } : {},
+        ...typeof n?.subjectKey === "string" ? { subjectKey: n.subjectKey } : {},
+        ...sourceCoordinator ? { sourceCoordinator } : {}
+      };
+    });
+    return JSON.stringify({
+      success: true,
+      meshId: mesh.id,
+      scope: "mesh",
+      count: notes.length,
+      notes
+    }, null, 2);
+  } catch (e) {
+    return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
+  }
+}
+async function meshReadNote(ctx, args) {
+  const { mesh } = ctx;
+  const noteId = readString(args.note_id) || readString(args.noteId) || "";
+  if (!noteId) {
+    return JSON.stringify({ success: false, code: "note_id_required", error: "note_id required" }, null, 2);
+  }
+  try {
+    const raw = unwrapCommandPayload(await ctx.transport.command("list_mesh_notes", { meshId: mesh.id, noteId }));
+    if (raw?.success === false) {
+      return JSON.stringify({ success: false, error: raw.error || "list_mesh_notes failed" }, null, 2);
+    }
+    const rawNotes = Array.isArray(raw?.notes) ? raw.notes : [];
+    const found = rawNotes.find((n) => n && typeof n.id === "string" && n.id === noteId);
+    if (!found) {
+      return JSON.stringify({
+        success: false,
+        code: "note_not_found",
+        meshId: mesh.id,
+        noteId,
+        error: `No live operating note matched note_id '${noteId}' in mesh '${mesh.id}'.`
+      }, null, 2);
+    }
+    const pinned = found.pinned === true;
+    const sourceCoordinator = typeof found.sourceCoordinator === "string" ? found.sourceCoordinator : void 0;
+    const scope = typeof found.scope === "string" ? found.scope : pinned ? "pinned" : sourceCoordinator?.startsWith("assistant") ? "project" : "mesh";
+    const createdAt = typeof found.createdAt === "string" ? found.createdAt : "";
+    const updatedAt = typeof found.updatedAt === "string" ? found.updatedAt : createdAt;
+    const detail = {
+      id: found.id,
+      noteId: found.id,
+      scope,
+      text: typeof found.text === "string" ? found.text : "",
+      pinned,
+      category: typeof found.category === "string" ? found.category : null,
+      createdAt,
+      updatedAt,
+      expired: found.expired === true,
+      ...typeof found.expiresAt === "string" ? { expiresAt: found.expiresAt } : {},
+      ...typeof found.effectiveExpiresAt === "string" ? { effectiveExpiresAt: found.effectiveExpiresAt } : {},
+      ...typeof found.subjectKey === "string" ? { subjectKey: found.subjectKey } : {},
+      ...typeof found.supersedes === "string" ? { supersedes: found.supersedes } : {},
+      ...sourceCoordinator ? { sourceCoordinator } : {}
+    };
+    return JSON.stringify({
+      success: true,
+      meshId: mesh.id,
+      ...detail,
+      note: detail
     }, null, 2);
   } catch (e) {
     return JSON.stringify({ success: false, error: e?.message || String(e) }, null, 2);
@@ -200716,8 +200997,12 @@ async function meshNote(ctx, args = {}) {
       return meshRecordNote(ctx, rest);
     case "forget":
       return meshForgetNote(ctx, rest);
+    case "list":
+      return meshListNotes(ctx, rest);
+    case "read":
+      return meshReadNote(ctx, rest);
     default:
-      return invalidDiscriminator("mesh_note", "action", args.action, ["record", "forget"]);
+      return invalidDiscriminator("mesh_note", "action", args.action, ["record", "forget", "list", "read"]);
   }
 }
 async function meshConfig(ctx, args = {}) {
@@ -203181,15 +203466,15 @@ var SKILL_MANAGE_TOOL = {
 };
 var PROJECT_NOTE_TOOL = {
   name: "project_note",
-  description: "Record or forget an operating note for ONE project \u2014 the rule reaches every coordinator of that project. Use memory instead for rules that span projects, and for the user's preferences. Not available for projects hosted on another machine.",
+  description: "Record, forget, list, or read an operating note for ONE project \u2014 the rule reaches every coordinator of that project. list returns id, scope, pinned, createdAt/updatedAt, and a short preview; read returns the full text for one exact note_id. Use memory instead for rules that span projects, and for the user's preferences.",
   inputSchema: {
     type: "object",
     properties: {
       ...PROJECT_PROP,
-      action: enumOf(["record", "forget"], "Required."),
+      action: enumOf(["record", "forget", "list", "read"], "Required."),
       text: { type: "string", description: "record: the note (required). forget: retract notes with exactly this text." },
       category: enumOf(ASSISTANT_NOTE_CATEGORIES, "record: optional classification (governs prompt retention)."),
-      note_id: { type: "string", description: "forget: the note id to retract." }
+      note_id: { type: "string", description: "read (required) / forget: the exact note id to read or retract." }
     },
     required: ["project", "action"]
   }

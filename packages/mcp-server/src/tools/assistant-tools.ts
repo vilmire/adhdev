@@ -252,17 +252,17 @@ const SKILL_MANAGE_TOOL: AssistantToolSchema = {
 const PROJECT_NOTE_TOOL: AssistantToolSchema = {
   name: 'project_note',
   description:
-    'Record or forget an operating note for ONE project — the rule reaches every coordinator of that project. '
-    + 'Use memory instead for rules that span projects, and for the user\'s preferences. Not available for projects '
-    + 'hosted on another machine.',
+    'Record, forget, list, or read an operating note for ONE project — the rule reaches every coordinator of that project. '
+    + 'list returns id, scope, pinned, createdAt/updatedAt, and a short preview; read returns the full text for one exact note_id. '
+    + 'Use memory instead for rules that span projects, and for the user\'s preferences.',
   inputSchema: {
     type: 'object',
     properties: {
       ...PROJECT_PROP,
-      action: enumOf(['record', 'forget'] as const, 'Required.'),
+      action: enumOf(['record', 'forget', 'list', 'read'] as const, 'Required.'),
       text: { type: 'string', description: 'record: the note (required). forget: retract notes with exactly this text.' },
       category: enumOf(ASSISTANT_NOTE_CATEGORIES, 'record: optional classification (governs prompt retention).'),
-      note_id: { type: 'string', description: 'forget: the note id to retract.' },
+      note_id: { type: 'string', description: 'read (required) / forget: the exact note id to read or retract.' },
     },
     required: ['project', 'action'],
   },

@@ -16,7 +16,7 @@ import type { CommandTransport } from '../transports/mode.js';
 import type { MeshContext } from './mesh-tools-internal.js';
 import { meshNodeSlotsList, meshNodeSlotsSet } from './mesh-tools-slots.js';
 import { meshNodeSlotsPropose } from './mesh-tools-slot-autodetect.js';
-import { meshForgetNote, meshRecordNote } from './mesh-tools-mission.js';
+import { meshForgetNote, meshListNotes, meshReadNote, meshRecordNote } from './mesh-tools-mission.js';
 import { meshChangeImpactConfig, meshInit, meshRefineConfig, meshReinit, meshWriteMeshJsonConfig } from './mesh-tools-refine.js';
 import { meshCreate, meshPlanOnboarding } from './mesh-tools-crud.js';
 import { meshCleanupSessions, meshPruneStaleDirect } from './mesh-tools-session.js';
@@ -53,7 +53,7 @@ export async function meshNodeSlots(ctx: MeshContext, args: Args = {}): Promise<
     }
 }
 
-/** `mesh_note` — record / forget a mesh operating note. */
+/** `mesh_note` — record / forget / list / read a mesh operating note. */
 export async function meshNote(ctx: MeshContext, args: Args = {}): Promise<string> {
     const rest = without(args, 'action');
     switch (args.action) {
@@ -61,8 +61,12 @@ export async function meshNote(ctx: MeshContext, args: Args = {}): Promise<strin
             return meshRecordNote(ctx, rest);
         case 'forget':
             return meshForgetNote(ctx, rest);
+        case 'list':
+            return meshListNotes(ctx, rest);
+        case 'read':
+            return meshReadNote(ctx, rest);
         default:
-            return invalidDiscriminator('mesh_note', 'action', args.action, ['record', 'forget']);
+            return invalidDiscriminator('mesh_note', 'action', args.action, ['record', 'forget', 'list', 'read']);
     }
 }
 

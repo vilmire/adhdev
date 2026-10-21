@@ -228,7 +228,7 @@ function handlerNeed(argType: string, key: string): Need {
  */
 const MERGED_ACTION_HANDLERS: Record<string, Record<string, string>> = {
     mesh_node_slots: { list: 'meshNodeSlotsList', propose: 'meshNodeSlotsPropose', set: 'meshNodeSlotsSet' },
-    mesh_note: { record: 'meshRecordNote', forget: 'meshForgetNote' },
+    mesh_note: { record: 'meshRecordNote', forget: 'meshForgetNote', list: 'meshListNotes', read: 'meshReadNote' },
     mesh_config: { refine: 'meshRefineConfig', change_impact: 'meshChangeImpactConfig', mesh_json: 'meshWriteMeshJsonConfig' },
     mesh_init: { init: 'meshInit', reinit: 'meshReinit' },
     mesh_create: { create: 'meshCreate', plan: 'meshPlanOnboarding' },

@@ -794,19 +794,25 @@ export { migrateTurnLedgerV3, formatTurnLedgerMigrationV3Line, V3_RETIRED_TABLE,
 // transport's turn_observe / turn_cancel through the real handlers).
 export { getActiveTurnLedger } from './mesh/turn-ledger/active-ledger.js';
 export { setActiveTurnLedgerForIpc, turnLedgerIpcHandlers } from './commands/low-family/turn-ledger-ipc.js';
+export { meshLedgerHandlers } from './commands/low-family/mesh-ledger.js';
 // C-W8: operating notes on mesh_operating_notes (the ledger no longer holds them).
 export {
   readOperatingNotes,
+  readOperatingNoteById,
   recordOperatingNote,
   forgetOperatingNote,
   pruneOperatingNotes,
   isNoteExpired,
   resolveNoteExpiry,
+  previewOperatingNoteText,
+  resolveOperatingNoteScope,
   OPERATING_NOTE_KIND,
   OPERATING_NOTE_DEDUPE_WINDOW,
   OPERATING_NOTE_KEEP_LATEST,
+  OPERATING_NOTE_PREVIEW_MAX_CHARS,
   OPERATING_NOTE_CATEGORY_TTL_DAYS,
   type OperatingNoteEntry,
+  type OperatingNoteScope,
   type RecordOperatingNoteInput,
 } from './mesh/mesh-operating-notes.js';
 // C4 (C-W4): the one turn-lifecycle timer — started by boot/stages/loops.ts.

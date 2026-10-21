@@ -231,12 +231,21 @@ async function poll(ports: AssistantProjectPorts, meshId: string, args: Record<s
 async function note(meshId: string, args: Record<string, unknown>): Promise<CommandRouterResult> {
     const op = parseNoteOp(args);
     if (typeof op === 'string') return fail('invalid_args', op);
+    const callerSessionId = str(args.callerSessionId);
+    if (op.action === 'list' || op.action === 'read') {
+        const out = await applyNote(getAssistantServices(), meshId, op, 'human', callerSessionId || undefined);
+        if (out.result === 'note_not_found') {
+            return fail('note_not_found', String(out.error || 'note_not_found'), {
+                ...(typeof out.noteId === 'string' ? { noteId: out.noteId } : {}),
+            });
+        }
+        return { success: true, ...out };
+    }
     // Only the origins that APPLY reach the host (staging stays with the caller).
     const origin = str(args.origin);
     if (origin !== 'human' && origin !== 'owner') return fail('invalid_args', 'origin must be human or owner');
     const refusal = noteTextRefusal(op.text);
     if (refusal) return fail(refusal.result, refusal.result, refusal.pattern ? { pattern: refusal.pattern } : {});
-    const callerSessionId = str(args.callerSessionId);
     const applied = await applyNote(getAssistantServices(), meshId, op, origin, callerSessionId || undefined);
     return { success: true, ...applied };
 }

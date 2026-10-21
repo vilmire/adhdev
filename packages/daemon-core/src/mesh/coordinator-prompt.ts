@@ -99,6 +99,8 @@ export interface CoordinatorOperatingNote {
      * one; absent is fine (folding/supersede fall back to the subject key).
      */
     noteId?: string;
+    /** Optional alias for `noteId` when callers construct note records with `id`. */
+    id?: string;
     /**
      * Phase 2 (b) version-supersede — an optional note-id or stable subject-key
      * this note replaces. At injection, any earlier LIVE note whose `noteId` or
@@ -823,11 +825,17 @@ function renderOperatingNoteLine(folded: FoldedNote): string {
         recovery_lesson: 'recovery lesson',
     };
     const pin = n.pinned ? '📌 ' : '';
+    const noteId = typeof n.noteId === 'string' && n.noteId.trim()
+        ? n.noteId.trim()
+        : typeof n.id === 'string' && n.id.trim()
+            ? n.id.trim()
+            : '';
+    const idTag = noteId ? `[id: ${noteId}] ` : '';
     const cat = n.category && categoryLabel[n.category] ? `[${categoryLabel[n.category]}] ` : '';
     const fold = folded.subsumedCount > 0
         ? ` _(+${folded.subsumedCount} earlier same-subject note${folded.subsumedCount === 1 ? '' : 's'} folded${folded.subsumedIds.length ? `: ${folded.subsumedIds.join(', ')}` : ''})_`
         : '';
-    return `- ${pin}${cat}${truncateNote(n.text.trim())}${fold}`;
+    return `- ${pin}${idTag}${cat}${truncateNote(n.text.trim())}${fold}`;
 }
 
 function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[], now: number = Date.now()): string {
@@ -845,7 +853,7 @@ function buildOperatingNotesSection(notes?: CoordinatorOperatingNote[], now: num
     if (shown.length === 0) return '';
 
     const lines: string[] = ['## Operating Notes', ''];
-    lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_note` (action "record"). Treat them as accumulated operating knowledge — apply them. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_note` (action "record") so future coordinators inherit it.');
+    lines.push('Lessons earlier coordinators on this mesh recorded via `mesh_note` (action "record"). Treat them as accumulated operating knowledge — apply them; use `mesh_note` action "read" with a note\'s `id` to inspect full text when truncated, or action "list" / "forget" to audit or retract notes. When you learn a durable lesson (a provider quirk, a pattern to avoid, a recovery lesson), record it with `mesh_note` (action "record") so future coordinators inherit it.');
     lines.push('');
     for (const entry of shown) {
         lines.push(renderOperatingNoteLine(entry));

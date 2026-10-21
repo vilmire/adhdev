@@ -45,6 +45,8 @@ export {
     meshReconcileLedger,
     meshRecordNote,
     meshForgetNote,
+    meshListNotes,
+    meshReadNote,
     meshReviewInbox,
     meshTaskHistory,
     meshLedgerQuery,

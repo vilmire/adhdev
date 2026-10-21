@@ -52,9 +52,25 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
         const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
         if (!meshId) return { success: false, error: 'meshId required' };
         try {
-            const { readOperatingNotes, resolveNoteExpiry } = await import('../../mesh/mesh-operating-notes.js');
+            const {
+                readOperatingNotes,
+                readOperatingNoteById,
+                resolveNoteExpiry,
+                previewOperatingNoteText,
+                resolveOperatingNoteScope,
+            } = await import('../../mesh/mesh-operating-notes.js');
+            const exactNoteId = typeof args?.noteId === 'string' && args.noteId.trim()
+                ? args.noteId.trim()
+                : typeof args?.note_id === 'string' && args.note_id.trim()
+                    ? args.note_id.trim()
+                    : '';
             const tail = typeof args?.tail === 'number' ? args.tail : 100;
-            const entries = readOperatingNotes(meshId, { tail });
+            const entries = exactNoteId
+                ? (() => {
+                    const one = readOperatingNoteById(meshId, exactNoteId);
+                    return one ? [one] : [];
+                })()
+                : readOperatingNotes(meshId, { tail });
             /* Flatten to the shape the notes tab renders: id + note payload fields.
              *
              * `pinned` and the expiry axis were MISSING here (2026-09-02): the tab
@@ -71,23 +87,33 @@ export const meshLedgerHandlers: Record<string, LowFamilyHandler> = {
             const nowMs = Date.now();
             const notes = entries.map(e => {
                 const p = (e.payload || {}) as Record<string, unknown>;
+                const text = typeof p.text === 'string' ? p.text : '';
                 const createdAt = typeof p.createdAt === 'string' ? p.createdAt : e.timestamp;
                 const pinned = p.pinned === true;
                 const category = typeof p.category === 'string' ? p.category : undefined;
+                const sourceCoordinator = typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined;
                 const explicitExpiry = typeof p.expiresAt === 'string' ? p.expiresAt : undefined;
                 // Policy lives in mesh-ledger; this only projects it.
                 const lifetime = resolveNoteExpiry({ category, pinned, createdAt, ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}) }, nowMs);
+                const { preview, truncated } = previewOperatingNoteText(text);
+                const scope = resolveOperatingNoteScope({ pinned, sourceCoordinator });
                 return {
                     id: e.id,
-                    text: typeof p.text === 'string' ? p.text : '',
+                    noteId: e.id,
+                    scope,
+                    text,
+                    preview,
+                    truncated,
                     category,
                     createdAt,
-                    sourceCoordinator: typeof p.sourceCoordinator === 'string' ? p.sourceCoordinator : undefined,
+                    updatedAt: createdAt,
+                    sourceCoordinator,
                     pinned,
                     ...(explicitExpiry ? { expiresAt: explicitExpiry } : {}),
                     ...(lifetime.effectiveExpiresAt ? { effectiveExpiresAt: lifetime.effectiveExpiresAt } : {}),
                     expired: lifetime.expired,
                     ...(typeof p.subjectKey === 'string' ? { subjectKey: p.subjectKey } : {}),
+                    ...(typeof p.supersedes === 'string' ? { supersedes: p.supersedes } : {}),
                 };
             });
             return { success: true, notes };

@@ -21,10 +21,12 @@ import { withMemberMeshes } from './member-meshes.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { RecordOperatingNoteInput, OperatingNoteEntry } from '../mesh/mesh-operating-notes.js';
 
-/** The two existing operating-note entry points `project_note` calls (§4.10.3). */
+/** The operating-note entry points `project_note` calls (§4.10.3). */
 export interface AssistantOperatingNotesPort {
     record(meshId: string, input: RecordOperatingNoteInput): Promise<OperatingNoteEntry>;
     forget(meshId: string, target: { noteId?: string; text?: string; reason?: string }): Promise<{ matched: number }>;
+    list?(meshId: string, opts?: { tail?: number }): Promise<OperatingNoteEntry[]>;
+    read?(meshId: string, noteId: string): Promise<OperatingNoteEntry | null>;
 }
 
 /**
@@ -71,6 +73,14 @@ const defaultOperatingNotes: AssistantOperatingNotesPort = {
     async forget(meshId, target) {
         const { forgetOperatingNote } = await import('../mesh/mesh-operating-notes.js');
         return forgetOperatingNote(meshId, target);
+    },
+    async list(meshId, opts) {
+        const { readOperatingNotes } = await import('../mesh/mesh-operating-notes.js');
+        return readOperatingNotes(meshId, opts);
+    },
+    async read(meshId, noteId) {
+        const { readOperatingNoteById } = await import('../mesh/mesh-operating-notes.js');
+        return readOperatingNoteById(meshId, noteId);
     },
 };
 

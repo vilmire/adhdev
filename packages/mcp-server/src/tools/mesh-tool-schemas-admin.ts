@@ -311,19 +311,21 @@ export const MESH_LEDGER_QUERY_TOOL = {
     },
 };
 
-// 2026-09-26 tool consolidation: record / forget operating notes as one tool.
+// 2026-09-26 tool consolidation: record / forget / list / read operating notes as one tool.
 export const MESH_NOTE_TOOL = {
     name: 'mesh_note',
-    description: 'Record or retract a durable operating note: a lesson persisted in the mesh ledger and injected into every future coordinator\'s system prompt at launch, whatever its provider. `action` (REQUIRED):\n'
+    description: 'Record, retract, list, or read a durable operating note: a lesson persisted in the mesh ledger and injected into every future coordinator\'s system prompt at launch, whatever its provider. `action` (REQUIRED):\n'
         + '• record — when you learn something durable (provider quirk, pattern to avoid, recovery lesson), and before closing a mission that taught one. One concrete, reusable fact per note; not for transient task status (use missions/checkpoints).\n'
-        + '• forget — when an injected note is stale or wrong: appends a tombstone so it stops riding into prompts (append-only, history kept). Target by note_id or exact text.',
+        + '• forget — when an injected note is stale or wrong: appends a tombstone so it stops riding into prompts (append-only, history kept). Target by note_id or exact text.\n'
+        + '• list — list live operating notes for this mesh with id, scope, pinned, createdAt/updatedAt, and a short preview.\n'
+        + '• read — read the full untruncated text and metadata for one exact note_id.',
     inputSchema: {
         type: 'object' as const,
         properties: {
             action: {
                 type: 'string',
-                enum: ['record', 'forget'],
-                description: 'record = add a note; forget = retract one. Each action takes only its own arguments.',
+                enum: ['record', 'forget', 'list', 'read'],
+                description: 'record = add a note; forget = retract one; list = list live notes with previews; read = read full text for one note_id. Each action takes only its own arguments.',
             },
             text: { type: 'string', description: 'record (required): the fact, actionable without this conversation. forget: retract notes whose trimmed text matches exactly.' },
             category: {
@@ -351,7 +353,7 @@ export const MESH_NOTE_TOOL = {
                 type: 'string',
                 description: 'record: drives supersede and folding (same category + subject_key → newest one injected); default = leading [tag] in text.',
             },
-            note_id: { type: 'string', description: 'forget: exact note id (record\'s noteId; also in mesh_task_history) — no prefix match; unknown → note_not_found.' },
+            note_id: { type: 'string', description: 'read (required) / forget: exact note id (from prompt [id: …], list, or record\'s noteId) — no prefix match; unknown → note_not_found.' },
             reason: { type: 'string', description: 'forget: optional reason, kept on the tombstone.' },
         },
         required: ['action'],

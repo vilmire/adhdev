@@ -8,6 +8,7 @@
 import {
     createMeshRuntimeTurnLedger,
     getActiveTurnLedger,
+    meshLedgerHandlers,
     setActiveTurnLedgerForIpc,
     turnLedgerIpcHandlers,
 } from '@adhdev/daemon-core';
@@ -41,14 +42,16 @@ export function closeOpenTestAttempts(): void {
     }
 }
 
-/** True for a command the helper answers (every daemon-side turn IPC command). */
+/** True for a command the helper answers (every daemon-side turn IPC command plus list_mesh_notes). */
 export function isTurnIpcCommand(command: string): boolean {
-    return Object.prototype.hasOwnProperty.call(turnLedgerIpcHandlers, command);
+    return Object.prototype.hasOwnProperty.call(turnLedgerIpcHandlers, command)
+        || command === 'list_mesh_notes';
 }
 
 /** Answer one turn IPC command through the real daemon handler. */
 export async function answerTurnIpc(command: string, args: Record<string, unknown> = {}): Promise<any> {
-    const handler = (turnLedgerIpcHandlers as Record<string, (ctx: unknown, args: unknown) => Promise<unknown>>)[command];
+    const handler = (turnLedgerIpcHandlers as Record<string, (ctx: unknown, args: unknown) => Promise<unknown>>)[command]
+        ?? (command === 'list_mesh_notes' ? (meshLedgerHandlers as Record<string, (ctx: unknown, args: unknown) => Promise<unknown>>).list_mesh_notes : undefined);
     if (handler) return handler({ deps: { statusInstanceId: 'daemon-coordinator' } }, args);
     throw new Error(`answerTurnIpc: no handler registered for '${command}'`);
 }

@@ -36,6 +36,33 @@ export const OPERATING_NOTE_DEDUPE_WINDOW = 40;
 /** Keep-latest-N bound on live notes (the prompt reads a much smaller budget). */
 export const OPERATING_NOTE_KEEP_LATEST = 100;
 
+/** Max characters in a `list` preview before ellipsis truncation. */
+export const OPERATING_NOTE_PREVIEW_MAX_CHARS = 160;
+
+export type OperatingNoteScope = 'mesh' | 'project' | 'pinned';
+
+/** Build a compact single-line preview for `mesh_note` / `project_note` list responses. */
+export function previewOperatingNoteText(
+    text: string,
+    maxChars: number = OPERATING_NOTE_PREVIEW_MAX_CHARS,
+): { preview: string; truncated: boolean } {
+    const normalized = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
+    if (normalized.length <= maxChars) return { preview: normalized, truncated: false };
+    return { preview: `${normalized.slice(0, maxChars).trimEnd()}…`, truncated: true };
+}
+
+/** Resolve the logical scope label of an operating note (`pinned` vs `project` vs `mesh`). */
+export function resolveOperatingNoteScope(
+    note: { pinned?: boolean; sourceCoordinator?: string },
+    defaultScope: 'mesh' | 'project' = 'mesh',
+): OperatingNoteScope {
+    if (note.pinned === true) return 'pinned';
+    if (typeof note.sourceCoordinator === 'string' && note.sourceCoordinator.startsWith('assistant')) {
+        return 'project';
+    }
+    return defaultScope;
+}
+
 /** Content-free lifecycle fields kept beside the text (`mesh_operating_notes.meta_json`). */
 interface OperatingNoteMeta {
     pinned?: boolean;
@@ -113,6 +140,19 @@ export function readOperatingNotes(meshId: string, opts: { tail?: number } = {})
     let rows = turnStore().listOperatingNotes(meshId).filter((r) => !r.meta.textTombstone);
     if (opts.tail && opts.tail > 0 && rows.length > opts.tail) rows = rows.slice(-opts.tail);
     return rows.map(toEntry);
+}
+
+/**
+ * Read a single live (non-tombstoned, non-marker) operating note by exact `noteId`
+ * within `meshId`. Returns `null` when unknown, tombstoned, or belonging to another mesh.
+ */
+export function readOperatingNoteById(meshId: string, noteId: string): OperatingNoteEntry | null {
+    const targetId = typeof noteId === 'string' ? noteId.trim() : '';
+    if (!targetId) return null;
+    const row = turnStore()
+        .listOperatingNotes(meshId)
+        .find((r) => !r.meta.textTombstone && r.noteId === targetId);
+    return row ? toEntry(row) : null;
 }
 
 /**

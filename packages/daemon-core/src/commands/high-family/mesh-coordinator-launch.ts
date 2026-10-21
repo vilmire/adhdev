@@ -307,6 +307,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                                         // Phase 2 (b)/(c): thread the ledger id + supersedes/subjectKey
                                         // so version-supersede targeting and same-class folding work.
                                         // Legacy notes lack them → no supersede, fold by leading [tag].
+                                        id: e.id,
                                         noteId: e.id,
                                         ...(typeof p.supersedes === 'string' ? { supersedes: p.supersedes } : {}),
                                         ...(typeof p.subjectKey === 'string' ? { subjectKey: p.subjectKey } : {}),
