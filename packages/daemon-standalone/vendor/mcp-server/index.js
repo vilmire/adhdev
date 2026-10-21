@@ -90779,8 +90779,9 @@ ${result.stderr}`, result.code);
           /**
            * Explicit owner reconciliation of the local `personal` assistant slot
            * binding on this Mac. Preserves the existing `bindingRevision` when already
-           * bound to this daemon unless `opts.bumpRevision` / `opts.forceNewRevision`
-           * is true or the bound daemonId changed.
+           * bound to this daemon, or reuses `maxFollowedRevision` across followed
+           * remote projects when the receipt is missing or the bound `daemonId`
+           * changed, unless `opts.bumpRevision` / `opts.forceNewRevision` is true.
            */
           reconcileOwnerBinding(selfDaemonId, opts) {
             const canonicalSelf = canonicalDaemonId2(selfDaemonId);
@@ -104658,30 +104659,21 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const revokedReason = entry.revokedReason ?? entry.lastErrorCode;
           if (isLocalOwnerBindingRefusalCode(revokedReason)) {
             const verify2 = ports.verifyOwnerBinding?.();
-            if (!verify2 || !verify2.ok) {
-              const code = verify2 && !verify2.ok ? verify2.code : revokedReason;
-              const error = verify2 && !verify2.ok ? verify2.error : "Local assistant owner binding receipt is missing or mismatched; explicit owner reconciliation is required.";
-              return {
-                ok: false,
-                result: fail4(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
-              };
-            }
-            ports.updateFollowedRemoteObservation?.(entry.key, {
-              state: "followed",
-              revokedAt: void 0,
-              revokedReason: void 0,
-              lastErrorCode: void 0
-            });
-          } else {
+            const code = verify2 && !verify2.ok ? verify2.code : revokedReason === "local_owner_binding_mismatch" ? "local_owner_binding_mismatch" : "local_owner_binding_missing";
+            const error = verify2 && !verify2.ok ? verify2.error : "Local assistant owner binding requires explicit owner reconciliation (ensure_binding) before this followed project can resume.";
             return {
               ok: false,
-              result: fail4(
-                "host_revoked",
-                "Remote host access for this project has been revoked.",
-                { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
-              )
+              result: fail4(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
             };
           }
+          return {
+            ok: false,
+            result: fail4(
+              "host_revoked",
+              "Remote host access for this project has been revoked.",
+              { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
+            )
+          };
         }
         const verify = ports.verifyOwnerBinding?.();
         if (verify && !verify.ok) {
