@@ -34,14 +34,22 @@
 // Stamps live in <oss>/node_modules/.cache/adhdev-build-freshness/ — never in
 // dist/, which is npm-packed and vendored.
 //
-// Concurrency (review P1-3): the whole check → build → digest → publish runs
-// under ONE exclusive lock (O_EXCL lockfile in the stamp dir). Owner liveness
-// is a heartbeat — the holder re-touches the lockfile every few seconds while
-// it works — never a pid check; a lock whose heartbeat is older than
-// LOCK_STALE_MS is broken by an atomic rename-aside. Stamps are published
-// atomically (tmp + rename). A build is stamped only if its input key and its
-// output digest are unchanged across the build (nothing else touched the
-// inputs or the dist mid-operation); otherwise no stamp is written.
+// Concurrency (re-review P1-3): there is NO cross-process lock and nothing is
+// ever broken by time. Within a Refinery run build-if-stale is only invoked
+// from serial phases (typecheck in p1b, the vendor gates in p3 — enforced by
+// packages/daemon-cloud/test/refine-schedule-coverage.test.ts), and every
+// refine runs in its own worktree with its own dist and stamp dir. As defence
+// in depth against a concurrent manual run in the same worktree, each build
+// claims its package with an O_EXCL marker holding a random owner token:
+//   - a marker already present (another run, or a crashed one) → the build
+//     still runs but is NOT stamped, and the foreign marker is left alone
+//     (delete it by hand only when no build is running);
+//   - before publishing, the token is re-read; a displaced owner publishes
+//     nothing; release deletes the marker only if it still holds our token.
+// Stamps are published atomically (tmp + rename), and a build is stamped only
+// if its input key is identical before and after the build and the dist
+// digest is stable. Correctness never depends on the marker: a stamp is
+// trusted only while the dist on disk hashes to the stamped digest.
 //
 // Dependency inputs (review P2-4): for every workspace dependency in the
 // transitive closure, the key hashes its package.json plus everything it can
@@ -50,8 +58,9 @@
 //
 // Stamped values (review P2-5): the key also includes the RESOLVED build stamp
 // daemon-core's build-stamp.mjs would inject (commit, short commit, version,
-// channel) — so anything that changes those values (GIT_CONFIG_* altering
-// core.abbrev, a different HEAD, ...) changes the key without enumerating env.
+// channel), computed in a child process under the SAME env the build gets —
+// so anything that changes those values (GIT_CONFIG_* altering core.abbrev, a
+// different HEAD, the channel) changes the key without enumerating env.
 //
 // ADHDEV_BUILD_IF_STALE=0 forces every build (and is itself excluded from the key).
 //
@@ -59,8 +68,8 @@
 //      workspace root the specs are relative to)
 
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -69,13 +78,15 @@ import { PINNED_SEQSCRIBE_DEPS, resolvePinnedDepBase } from './pinned-dep-base.m
 const OSS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STAMP_DIR = path.join(OSS_ROOT, 'node_modules', '.cache', 'adhdev-build-freshness');
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.vitest']);
+// Whole-package dependency hashing keeps dist/: it is what the consumer imports.
+const WHOLE_PACKAGE_SKIP_DIRS = new Set(['node_modules', '.git']);
 const KEY_ENV_RE = /^(ADHDEV_|NODE_|TSUP_|ESBUILD_)/;
 const FORCE_ENV = 'ADHDEV_BUILD_IF_STALE';
 // Run bookkeeping the Refinery sets on every gate; provably not a build input.
 const RUN_SCOPED_ENV = new Set(['ADHDEV_REFINE_RUN_ID', 'ADHDEV_REFINE_VITEST_MAX_WORKERS']);
 const SCHEMA = 'adhdev-build-freshness/v1';
 
-function hashTree(dir, hash, rel = '') {
+function hashTree(dir, hash, rel = '', skipDirs = SKIP_DIRS) {
   let entries;
   try {
     entries = readdirSync(path.join(dir, rel), { withFileTypes: true });
@@ -87,8 +98,8 @@ function hashTree(dir, hash, rel = '') {
   for (const entry of entries) {
     const child = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      hashTree(dir, hash, child);
+      if (skipDirs.has(entry.name)) continue;
+      hashTree(dir, hash, child, skipDirs);
     } else if (entry.isFile()) {
       if (entry.name.endsWith('.tsbuildinfo')) continue;
       hash.update(`f:${child}\0`);
@@ -169,16 +180,18 @@ function hashDependencySurface(depDir, hash) {
   for (const field of ['main', 'module', 'types', 'typings', 'browser']) if (typeof pkg[field] === 'string') entries.add(pkg[field]);
   collectExportTargets(pkg.exports, entries);
   if (!Array.isArray(pkg.files)) {
-    // No `files` allow-list: the whole package may be consumed — hash it all.
+    // No `files` allow-list: the whole package may be consumed — hash it all,
+    // INCLUDING its published output (dist/, main, exports targets). The
+    // source walker skips dist, so it is not reused here (re-review P2-5).
     hash.update('whole-package\0');
-    hashTree(depDir, hash);
+    hashTree(depDir, hash, '', WHOLE_PACKAGE_SKIP_DIRS);
     return;
   }
   for (const entry of [...entries].map(e => e.replace(/^\.\//, '').replace(/\/+$/, '')).sort()) {
     if (!entry || entry.includes('*')) {
       // Globs are not expanded here: fall back to hashing the whole package.
       hash.update('whole-package\0');
-      hashTree(depDir, hash);
+      hashTree(depDir, hash, '', WHOLE_PACKAGE_SKIP_DIRS);
       return;
     }
     const target = path.join(depDir, entry);
@@ -190,14 +203,20 @@ function hashDependencySurface(depDir, hash) {
   }
 }
 
-/** The values daemon-core's build-stamp.mjs would inject, minus the build time. */
-async function resolvedBuildStamp(pkgDir) {
+/**
+ * The values daemon-core's build-stamp.mjs would inject (minus the build time),
+ * resolved in a child process under the SAME env the build will get — so git
+ * config, HEAD and channel are read exactly as the build reads them.
+ */
+function resolvedBuildStamp(pkgDir, env) {
+  const stampModule = pathToFileURL(path.join(OSS_ROOT, 'packages', 'daemon-core', 'build-stamp.mjs')).href;
+  const pkg = readJson(path.join(pkgDir, 'package.json')) ?? {};
+  const code = `import { daemonBuildDefine } from ${JSON.stringify(stampModule)};
+const d = daemonBuildDefine({ cwd: process.cwd(), version: ${JSON.stringify(String(pkg.version ?? ''))} });
+delete d.__DAEMON_BUILD_AT__;
+process.stdout.write(JSON.stringify(d, Object.keys(d).sort()));`;
   try {
-    const { daemonBuildDefine } = await import(pathToFileURL(path.join(OSS_ROOT, 'packages', 'daemon-core', 'build-stamp.mjs')).href);
-    const pkg = readJson(path.join(pkgDir, 'package.json')) ?? {};
-    const define = daemonBuildDefine({ cwd: pkgDir, version: pkg.version });
-    delete define.__DAEMON_BUILD_AT__;
-    return JSON.stringify(define, Object.keys(define).sort());
+    return execFileSync(process.execPath, ['--input-type=module', '-e', code], { cwd: pkgDir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 30_000 });
   } catch (error) {
     return `unavailable:${error?.message}`;
   }
@@ -232,7 +251,7 @@ export async function computeBuildKey(pkgDir, env, { ossRoot = OSS_ROOT } = {}) 
     hash.update(`env:${name}=${env[name]}\0`);
   }
   hash.update(`head:${gitHead(pkgDir)}\0`);
-  hash.update(`stamp:${await resolvedBuildStamp(pkgDir)}\0`);
+  hash.update(`stamp:${resolvedBuildStamp(pkgDir, env)}\0`);
   hash.update(`toolchain:${toolchain(pkgDir)}\0`);
   for (const spec of PINNED_SEQSCRIBE_DEPS) {
     let base;
@@ -268,42 +287,27 @@ export async function staleReason(pkgDir, env) {
   return null;
 }
 
-const LOCK_PATH = path.join(STAMP_DIR, '.lock');
-const LOCK_HEARTBEAT_MS = 2_000;
-const LOCK_STALE_MS = 30_000;
-const LOCK_WAIT_MS = 30 * 60_000;
+function claimPathFor(pkgDir) {
+  return `${stampPathFor(pkgDir)}.building`;
+}
 
-/**
- * Exclusive lock for the whole check → build → digest → publish sequence.
- * O_EXCL create; liveness = heartbeat mtime (never a pid). Returns release().
- */
-export async function acquireBuildLock({ lockPath = LOCK_PATH, staleMs = LOCK_STALE_MS, heartbeatMs = LOCK_HEARTBEAT_MS, waitMs = LOCK_WAIT_MS, log = console.log } = {}) {
-  mkdirSync(path.dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + waitMs;
-  let announced = false;
-  for (;;) {
-    try {
-      const fd = openSync(lockPath, 'wx');
-      closeSync(fd);
-      break;
-    } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
-      let age = 0;
-      try { age = Date.now() - statSync(lockPath).mtimeMs; } catch { continue; }
-      if (age > staleMs) {
-        // Break a dead holder's lock atomically: only one breaker wins the rename.
-        const aside = `${lockPath}.stale.${process.pid}.${Date.now()}`;
-        try { renameSync(lockPath, aside); rmSync(aside, { force: true }); log(`[build-if-stale] broke stale lock (heartbeat ${Math.round(age / 1000)}s old)`); } catch { /* someone else broke it */ }
-        continue;
-      }
-      if (Date.now() > deadline) throw new Error(`build-if-stale: lock ${lockPath} still held after ${waitMs}ms`);
-      if (!announced) { log('[build-if-stale] waiting for another build-if-stale run to finish'); announced = true; }
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-  }
-  const timer = setInterval(() => { try { const now = new Date(); utimesSync(lockPath, now, now); } catch { /* lock broken under us */ } }, heartbeatMs);
-  timer.unref?.();
-  return () => { clearInterval(timer); rmSync(lockPath, { force: true }); };
+/** O_EXCL claim with a random owner token; null when someone else holds it. */
+export function claimPackage(pkgDir) {
+  mkdirSync(STAMP_DIR, { recursive: true });
+  const token = randomUUID();
+  let fd;
+  try { fd = openSync(claimPathFor(pkgDir), 'wx'); } catch (error) { if (error?.code === 'EEXIST') return null; throw error; }
+  try { writeSync(fd, token); } finally { closeSync(fd); }
+  return token;
+}
+
+function ownsClaim(pkgDir, token) {
+  try { return readFileSync(claimPathFor(pkgDir), 'utf8') === token; } catch { return false; }
+}
+
+function releaseClaim(pkgDir, token) {
+  // Only our own token is ever removed; a foreign or replaced claim stays.
+  if (ownsClaim(pkgDir, token)) rmSync(claimPathFor(pkgDir), { force: true });
 }
 
 function runBuild(npm, spec, cwd, env) {
@@ -324,22 +328,28 @@ function publishStamp(pkgDir, stamp) {
 }
 
 /**
- * Build each workspace spec (relative to `cwd`) unless it is fresh, holding the
- * build lock for the whole sequence. Throws on a failed build (that package's
- * stamp is removed first, so a failure never leaves a stale "fresh" stamp).
+ * Build each workspace spec (relative to `cwd`) unless it is fresh. Throws on a
+ * failed build (that package's stamp is removed first when we own the claim,
+ * so a failure never leaves a stale "fresh" stamp).
  */
-export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, npm = process.platform === 'win32' ? 'npm.cmd' : 'npm', log = console.log, lockPath } = {}) {
-  const release = await acquireBuildLock({ log, ...(lockPath ? { lockPath } : {}) });
-  try {
-    const results = [];
-    for (const spec of specs) {
-      const pkgDir = path.resolve(cwd, spec);
-      const reason = await staleReason(pkgDir, env);
-      if (!reason) {
-        log(`[build-if-stale] skip ${spec} (fresh: same inputs/env/stamp values, dist unchanged since its stamp)`);
-        results.push({ spec, built: false });
-        continue;
-      }
+export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, npm = process.platform === 'win32' ? 'npm.cmd' : 'npm', log = console.log } = {}) {
+  const results = [];
+  for (const spec of specs) {
+    const pkgDir = path.resolve(cwd, spec);
+    const reason = await staleReason(pkgDir, env);
+    if (!reason) {
+      log(`[build-if-stale] skip ${spec} (fresh: same inputs/env/stamp values, dist unchanged since its stamp)`);
+      results.push({ spec, built: false });
+      continue;
+    }
+    const token = claimPackage(pkgDir);
+    if (!token) {
+      log(`[build-if-stale] build ${spec} WITHOUT stamping: ${claimPathFor(pkgDir)} is held by another build-if-stale run (or a crashed one — remove it by hand only when no build is running)`);
+      await runBuild(npm, spec, cwd, env);
+      results.push({ spec, built: true, reason, stamped: false, contended: true });
+      continue;
+    }
+    try {
       log(`[build-if-stale] build ${spec} (${reason})`);
       const keyBefore = await computeBuildKey(pkgDir, env);
       rmSync(stampPathFor(pkgDir), { force: true });
@@ -348,20 +358,22 @@ export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, np
       const digestAfterBuild = digestDist(distDir);
       const keyAfter = await computeBuildKey(pkgDir, env);
       const digestSettled = digestDist(distDir);
-      if (keyAfter !== keyBefore || digestSettled !== digestAfterBuild) {
-        // Inputs or the dist moved while we built (an unlocked writer): the
-        // output cannot be attributed to keyBefore. Build stays, no stamp.
-        log(`[build-if-stale] NOT stamping ${spec}: ${keyAfter !== keyBefore ? 'inputs changed during the build' : 'dist changed after the build'}`);
+      let refuse = null;
+      if (keyAfter !== keyBefore) refuse = 'inputs changed during the build';
+      else if (digestSettled !== digestAfterBuild) refuse = 'dist changed after the build';
+      else if (!ownsClaim(pkgDir, token)) refuse = 'our claim was displaced during the build';
+      if (refuse) {
+        log(`[build-if-stale] NOT stamping ${spec}: ${refuse}`);
         results.push({ spec, built: true, reason, stamped: false });
         continue;
       }
       publishStamp(pkgDir, { key: keyBefore, outputDigest: digestSettled, spec, at: new Date().toISOString() });
       results.push({ spec, built: true, reason, stamped: true });
+    } finally {
+      releaseClaim(pkgDir, token);
     }
-    return results;
-  } finally {
-    release();
   }
+  return results;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
