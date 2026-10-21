@@ -23,7 +23,9 @@
 //   - every validation command must carry an `id` and appear in EXACTLY ONE
 //     lane — a schedule cannot drop or duplicate a gate (coverage invariant);
 //   - in a phase where lanes can overlap, every command must declare `writes`
-//     (the dist/ trees it may rebuild, [] when none). `reads` defaults to '*'
+//     — EVERY repo path it may mutate, [] when none: rebuilt dist/ trees, and
+//     also sources a test rewrites and restores (a "--dry-run" that pins
+//     package.json versions in place is still a writer while it runs). `reads` defaults to '*'
 //     (reads everything) when undeclared. Two commands in different lanes of the
 //     same overlapping phase may not share a written path with the other's
 //     reads or writes.

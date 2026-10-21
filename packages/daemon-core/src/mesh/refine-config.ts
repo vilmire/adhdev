@@ -46,7 +46,7 @@ export interface RepoMeshRefineValidationCommandConfig {
     id?: string;
     /** REFINE-LANES: dist/ trees this command reads (undeclared = reads everything). */
     reads?: string[];
-    /** REFINE-LANES: dist/ trees this command may rebuild ([] = none). Required in overlapping phases. */
+    /** REFINE-LANES: repo paths this command may mutate — rebuilt dist/ trees AND temporarily rewritten sources ([] = none). Required in overlapping phases. */
     writes?: string[];
 }
 
@@ -234,7 +234,7 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                             },
                             id: { type: 'string', description: 'REFINE-LANES: stable id referenced by validation.schedule; required (and unique) when a schedule is set.' },
                             reads: { type: 'array', items: { type: 'string' }, description: "REFINE-LANES: dist/ trees this command reads. Undeclared = reads everything ('*')." },
-                            writes: { type: 'array', items: { type: 'string' }, description: 'REFINE-LANES: dist/ trees this command may rebuild. Required ([] when none) for commands in a phase whose lanes overlap.' },
+                            writes: { type: 'array', items: { type: 'string' }, description: 'REFINE-LANES: repo paths this command may mutate (rebuilt dist/ trees and temporarily rewritten sources). Required ([] when none) for commands in a phase whose lanes overlap.' },
                         },
                     },
                 },
