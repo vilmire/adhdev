@@ -26,6 +26,10 @@ import * as fs from 'fs';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
+import { killRefineProcessTree, runScheduledRefinePhases, spawnRefineProcessGroup } from './mesh-refine-lanes.js';
+import type { RefineLaneCommandHandle, RefineLaneCommandOutcome, ScheduledRefineRunReport } from './mesh-refine-lanes.js';
+import { planScheduledRefineRun } from './refine-schedule.js';
+import { randomUUID } from 'crypto';
 // ★B1: type-only — the gate never emits, it only carries the caller's channel.
 import type { RefineProgressContext } from './mesh-refine-progress.js';
 import type { MeshRefineStageStatus } from './mesh-refine-gitlink-utils.js';
@@ -112,6 +116,19 @@ type MeshRefineValidationSummary = {
         skippedDaemonCommands?: string[];
         /** DOCS-ROOT: displayCommands skipped because the change-area scope excluded them. */
         skippedScopeCommands?: string[];
+    };
+    /**
+     * REFINE-LANES: present when the config declared validation.schedule. Gate
+     * records still land in `commandsRun` (completion order; the first
+     * `passed:false` record is always the first real failure). `prepareRun`
+     * holds the schedule's prepare commands, which are not gate commands.
+     */
+    schedule?: {
+        mode: 'lanes';
+        runId: string;
+        wallMs: number;
+        prepareRun: Array<Record<string, unknown>>;
+        report?: ScheduledRefineRunReport;
     };
 };
 
@@ -514,12 +531,20 @@ export function buildMeshRefineValidationPlan(mesh: any, workspace: string, conf
         // DOCS-ROOT: surface the change-impact scopes so `mesh_config` kind=refine shows which
         // area(s) each command runs in (absent → every area).
         ...(command.scopes ? { scopes: command.scopes } : {}),
+        ...(command.id ? { id: command.id } : {}),
     });
     return {
         source: plan.source,
         sourceType: plan.sourceType,
         bootstrapCommands: plan.bootstrapCommands.map(mapCommand),
         commands: plan.commands.map(mapCommand),
+        // REFINE-LANES: the parallel schedule, when the config declares one.
+        ...(plan.schedule ? {
+            schedule: {
+                prepare: plan.schedule.prepare.map(c => c.displayCommand),
+                phases: plan.schedule.phases,
+            },
+        } : {}),
         unavailableReason: plan.unavailableReason,
         rejectedCommands: plan.rejectedCommands,
         suggestions: plan.suggestions,
@@ -781,7 +806,21 @@ function selectRefineCommandsToRun(
  * same helper the PTY path uses, and a .cmd/.bat shim is wrapped in cmd.exe /c
  * (no-ops off win32 / for a real .exe).
  */
-async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: MeshRefineValidationCommand, cwd: string, resolvedCommand: string): Promise<{ stdout?: string; stderr?: string }> {
+/**
+ * REFINE-LANES: extra spawn behaviour for scheduled (lane) runs. Serial runs pass
+ * none and behave exactly as before.
+ *   - processGroup: spawn as its own process group (POSIX) so cancel / idle
+ *     timeout can kill the whole tree, not just npm;
+ *   - env: run-scoped + lane env, merged BEFORE the command's own env;
+ *   - onSpawn: hands the child to the lane executor for cancellation.
+ */
+interface RefineCommandControl {
+    processGroup?: boolean;
+    env?: Record<string, string>;
+    onSpawn?: (child: { pid?: number } | undefined) => void;
+}
+
+async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: MeshRefineValidationCommand, cwd: string, resolvedCommand: string, control?: RefineCommandControl): Promise<{ stdout?: string; stderr?: string }> {
     const spawn = buildWin32ExecFileSpawn(resolvedCommand, candidate.args);
     const idleTimeoutMs = candidate.timeoutMs || REFINE_VALIDATION_TIMEOUT_MS;
     const execOptions: Record<string, unknown> = {
@@ -790,7 +829,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
         windowsHide: true,
         timeout: 0,
         maxBuffer: candidate.outputLimitBytes || REFINE_VALIDATION_OUTPUT_LIMIT_BYTES,
-        env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(candidate.env || {}) },
+        env: { ...sanitizeRefineGateChildEnv(), CI: process.env.CI || '1', ...refineGateChildEnv(), ...(control?.env || {}), ...(candidate.env || {}) },
         ...(spawn.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     };
     return new Promise((resolve, reject) => {
@@ -802,11 +841,12 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
             if (idleTimeoutMs > 0) {
                 timer = setTimeout(() => {
                     idleTimedOut = true;
+                    if (control?.processGroup && childRef?.pid) { void killRefineProcessTree(childRef.pid); return; }
                     try { childRef?.kill?.('SIGTERM'); } catch { /* ignore */ }
                 }, idleTimeoutMs);
             }
         };
-        const child = execFileFn(spawn.file, spawn.args, execOptions, (error: any, stdout: string, stderr: string) => {
+        const child = (control?.processGroup ? spawnRefineProcessGroup : execFileFn)(spawn.file, spawn.args, execOptions, (error: any, stdout: string, stderr: string) => {
             if (timer) clearTimeout(timer);
             if (error || idleTimedOut) {
                 const err: any = error || new Error(`TIMEOUT: validation command exceeded ${idleTimeoutMs}ms without output`);
@@ -827,6 +867,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
         });
         execOptions.timeout = idleTimeoutMs;
         childRef = child;
+        control?.onSpawn?.(child);
         if (child && (child.stdout || child.stderr)) {
             resetTimer();
             child.stdout?.on?.('data', resetTimer);
@@ -1007,6 +1048,52 @@ function recordRefineCommandFailure(
     }
 }
 
+/**
+ * REFINE-LANES: run the schedule's prepare commands, then its phases. Returns
+ * false when validation already failed (the summary carries the failure).
+ * Every scheduled command gets ADHDEV_REFINE_RUN_ID so run-scoped preflight
+ * stamps (scripts/check-submodule-sync.mjs) can tell "already verified in THIS
+ * run" from a stale stamp of an earlier one.
+ */
+async function runScheduledRefineValidation(
+    schedule: NonNullable<RefineValidationSelection['schedule']>,
+    commandsToRun: MeshRefineValidationCommand[],
+    summary: MeshRefineValidationSummary,
+    runOne: (candidate: MeshRefineValidationCommand, control?: RefineCommandControl, handle?: RefineLaneCommandHandle) => Promise<RefineLaneCommandOutcome>,
+): Promise<boolean> {
+    const runId = randomUUID();
+    const started = Date.now();
+    const runEnv = { ADHDEV_REFINE_RUN_ID: runId };
+    summary.schedule = { mode: 'lanes', runId, wallMs: 0, prepareRun: [] };
+    for (const candidate of schedule.prepare) {
+        const before = summary.commandsRun.length;
+        const outcome = await runOne(candidate, { processGroup: true, env: runEnv });
+        // A prepare command is not a gate: move its record off commandsRun unless
+        // it failed (then it IS the first failed command and must stay visible).
+        const records = summary.commandsRun.splice(before).map(record => ({ ...record, schedulePrepare: true }));
+        summary.schedule.prepareRun.push(...records);
+        if (outcome !== 'passed') {
+            summary.commandsRun.push(...records);
+            if (outcome === 'blocked') {
+                summary.status = 'failed';
+                summary.failureKind = 'missing_dependencies';
+                summary.failureCode = 'missing_dependencies';
+            }
+            summary.schedule.wallMs = Date.now() - started;
+            return false;
+        }
+    }
+    const phases = planScheduledRefineRun(schedule, commandsToRun);
+    const report = await runScheduledRefinePhases(phases, (candidate, laneEnv, handle) => runOne(candidate, {
+        processGroup: true,
+        env: { ...runEnv, ...(laneEnv || {}) },
+        onSpawn: child => handle.attach(child),
+    }, handle));
+    summary.schedule.report = report;
+    summary.schedule.wallMs = Date.now() - started;
+    return !report.aborted;
+}
+
 export async function runMeshRefineValidationGate(
     mesh: any,
     workspace: string,
@@ -1052,7 +1139,14 @@ export async function runMeshRefineValidationGate(
     // gate failure if at least one command that truly needed deps could not run.
     let missingDepsBlocked = false;
     const bootstrapProvidedDependencies = summary.bootstrap?.stage === 'cached' || summary.bootstrap?.stage === 'ran' || summary.bootstrap?.stage === 'legacy';
-    for (const candidate of commandsToRun) {
+    /**
+     * Run + record one gate command. Shared by the serial loop and the lane
+     * executor so both record identically. In lane mode a command killed because
+     * ANOTHER lane failed is recorded as cancelled (after the real failure), and
+     * a second genuine failure racing the first is recorded without overwriting
+     * the summary-level failure classification of the first.
+     */
+    const runOne = async (candidate: MeshRefineValidationCommand, control?: RefineCommandControl, handle?: RefineLaneCommandHandle): Promise<RefineLaneCommandOutcome> => {
         const startedAt = Date.now();
         const cwd = candidate.cwd ? pathResolve(workspace, candidate.cwd) : workspace;
         if (!bootstrapProvidedDependencies && refineCommandNeedsMissingNodeModules(candidate, cwd)) {
@@ -1067,16 +1161,49 @@ export async function runMeshRefineValidationGate(
                 failureKind: 'missing_dependencies',
             }));
             missingDepsBlocked = true;
-            continue;
+            return 'blocked';
         }
         const resolvedCommand = resolveWin32Executable(candidate.command);
         try {
-            const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand);
+            const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand, control);
             summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
             reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, true);
+            return 'passed';
         } catch (error: any) {
+            if (handle?.aborted) {
+                summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, error, false, {
+                    ...refineExecFailureExtras(error),
+                    skipped: true,
+                    cancelled: true,
+                    failureKind: 'cancelled_by_lane_failure',
+                }));
+                return 'cancelled';
+            }
+            if (summary.status === 'failed') {
+                const failureLogPath = writeValidationFailureLog(
+                    workspace,
+                    summary.commandsRun.length,
+                    { command: candidate.command, args: candidate.args, displayCommand: candidate.displayCommand, cwd },
+                    { stdout: error?.stdout, stderr: error?.stderr || error?.message },
+                );
+                summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, error, false, {
+                    ...refineExecFailureExtras(error),
+                    ...(failureLogPath ? { failureLogPath } : {}),
+                    concurrentFailure: true,
+                }));
+                reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, false);
+                return 'failed';
+            }
             recordRefineCommandFailure(summary, workspace, candidate, cwd, startedAt, resolvedCommand, error, opts);
-            return summary;
+            return 'failed';
+        }
+    };
+
+    if (selection.schedule) {
+        if (!(await runScheduledRefineValidation(selection.schedule, commandsToRun, summary, runOne))) return summary;
+    } else {
+        for (const candidate of commandsToRun) {
+            if (await runOne(candidate) === 'failed') return summary;
         }
     }
 

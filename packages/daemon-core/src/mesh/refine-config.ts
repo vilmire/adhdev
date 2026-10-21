@@ -4,6 +4,8 @@ import { join } from 'path';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { parseConfigText } from '../config/config-text.js';
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS } from '../git/git-locale.js';
+import { normalizeRefineDistList, validateMeshRefineSchedule } from './refine-schedule.js';
+import type { MeshRefineSchedulePlan } from './refine-schedule.js';
 
 export const MESH_REFINE_VALIDATION_CATEGORIES = ['typecheck', 'test', 'lint', 'build'] as const;
 export type MeshRefineValidationCategory = typeof MESH_REFINE_VALIDATION_CATEGORIES[number];
@@ -40,6 +42,12 @@ export interface RepoMeshRefineValidationCommandConfig {
      * same as omitted (runs everywhere) rather than "runs nowhere".
      */
     scopes?: MeshRefineValidationScope[];
+    /** REFINE-LANES: stable id referenced by validation.schedule (required when a schedule is set). */
+    id?: string;
+    /** REFINE-LANES: dist/ trees this command reads (undeclared = reads everything). */
+    reads?: string[];
+    /** REFINE-LANES: dist/ trees this command may rebuild ([] = none). Required in overlapping phases. */
+    writes?: string[];
 }
 
 export interface RepoMeshRefineConfig {
@@ -69,6 +77,14 @@ export interface RepoMeshRefineConfig {
          */
         bootstrapCommands?: RepoMeshRefineValidationCommandConfig[];
         commands?: RepoMeshRefineValidationCommandConfig[];
+        /**
+         * REFINE-LANES: optional parallel-lane schedule (see refine-schedule.ts).
+         * Absent → commands run serially in array order, exactly as before.
+         */
+        schedule?: {
+            prepare?: RepoMeshRefineValidationCommandConfig[];
+            phases: Array<{ id: string; concurrency?: number; lanes: Array<{ id: string; commands: string[]; env?: Record<string, string> }> }>;
+        };
     };
 }
 
@@ -84,6 +100,10 @@ export interface MeshRefineValidationCommandPlan {
     env?: Record<string, string>;
     /** DOCS-ROOT: normalized change-impact scopes; absent → runs in every area. */
     scopes?: MeshRefineValidationScope[];
+    /** REFINE-LANES: see RepoMeshRefineValidationCommandConfig. */
+    id?: string;
+    reads?: string[];
+    writes?: string[];
 }
 
 export interface MeshRefineConfigLoadResult {
@@ -133,6 +153,8 @@ export interface MeshRefineValidationPlan {
     bootstrapMode: 'inherit' | 'skip';
     bootstrapCommands: MeshRefineValidationCommandPlan[];
     commands: MeshRefineValidationCommandPlan[];
+    /** REFINE-LANES: the validated lane schedule; absent → serial in array order. */
+    schedule?: MeshRefineSchedulePlan;
     rejectedCommands: Array<Record<string, unknown>>;
     /** M2-2: deprecation notices (e.g. validation.bootstrapCommands present). */
     deprecationWarnings: string[];
@@ -159,6 +181,9 @@ export const MESH_REFINE_CONFIG_LOCATIONS = [
 // It enforces: version === 1, validation.bootstrap in ('inherit'|'skip'), each command's
 // `command` (non-empty after tokenizing), args (string[]), cwd (string), timeoutMs
 // (1000-1800000 for validation, 1000-600000 for bootstrap), outputLimitBytes (1024-1048576), env (string map), scopes (enum set).
+// It also enforces validation.schedule (refine-schedule.ts): command ids unique, every command placed
+// exactly once, and no dist writer able to overlap a reader in another lane — a refused schedule
+// makes the whole config invalid.
 // It does NOT enforce: array length bounds (commands/bootstrapCommands accept any count,
 // including zero), additionalProperties:false (unknown keys pass through silently), or
 // the `category` enum (an unrecognized value is coerced to 'custom' rather than rejected).
@@ -206,6 +231,39 @@ export const MESH_REFINE_CONFIG_SCHEMA = {
                                 type: 'array',
                                 items: { enum: [...MESH_REFINE_VALIDATION_SCOPES] },
                                 description: "DOCS-ROOT: change-impact scopes this command runs in ('none'=docs-only, 'web', 'daemon'). Omitted/empty → runs in every area.",
+                            },
+                            id: { type: 'string', description: 'REFINE-LANES: stable id referenced by validation.schedule; required (and unique) when a schedule is set.' },
+                            reads: { type: 'array', items: { type: 'string' }, description: "REFINE-LANES: dist/ trees this command reads. Undeclared = reads everything ('*')." },
+                            writes: { type: 'array', items: { type: 'string' }, description: 'REFINE-LANES: dist/ trees this command may rebuild. Required ([] when none) for commands in a phase whose lanes overlap.' },
+                        },
+                    },
+                },
+                schedule: {
+                    type: 'object',
+                    description: 'REFINE-LANES: optional parallel schedule. Phases run in order; lanes inside a phase run concurrently (up to concurrency); commands in a lane run in order. Every command id must be placed exactly once, and a schedule that could overlap a dist writer with a reader of that dist in another lane is refused. Absent → serial in array order.',
+                    properties: {
+                        prepare: { type: 'array', description: 'Commands run serially before phase 0 (shared preconditions such as prebuilding the dists lanes read). Not gate commands.' },
+                        phases: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                required: ['id', 'lanes'],
+                                properties: {
+                                    id: { type: 'string' },
+                                    concurrency: { type: 'number', minimum: 1 },
+                                    lanes: {
+                                        type: 'array',
+                                        items: {
+                                            type: 'object',
+                                            required: ['id', 'commands'],
+                                            properties: {
+                                                id: { type: 'string' },
+                                                commands: { type: 'array', items: { type: 'string' } },
+                                                env: { type: 'object', additionalProperties: { type: 'string' }, description: 'Env merged into every command of the lane (before the command env) — e.g. a VITEST_MAX_WORKERS cap so lanes do not starve each other.' },
+                                            },
+                                        },
+                                    },
+                                },
                             },
                         },
                     },
@@ -328,6 +386,14 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string, conte
         const deduped = [...new Set(entry.scopes as MeshRefineValidationScope[])];
         scopes = deduped.length ? deduped : undefined;
     }
+    // REFINE-LANES: optional schedule metadata.
+    if (entry.id !== undefined && (typeof entry.id !== 'string' || !/^[A-Za-z0-9_.:-]{1,80}$/.test(entry.id))) {
+        return { rejected: { source, command: commandText, reason: 'id must be 1-80 chars of [A-Za-z0-9_.:-]' } };
+    }
+    const reads = normalizeRefineDistList(entry.reads);
+    if (reads.error) return { rejected: { source, command: commandText, reason: `reads ${reads.error}` } };
+    const writes = normalizeRefineDistList(entry.writes);
+    if (writes.error) return { rejected: { source, command: commandText, reason: `writes ${writes.error}` } };
 
     return {
         command: {
@@ -341,13 +407,16 @@ export function normalizeMeshCommandConfig(entry: unknown, source: string, conte
             ...(typeof entry.outputLimitBytes === 'number' ? { outputLimitBytes: entry.outputLimitBytes } : {}),
             ...(isMeshConfigRecord(entry.env) ? { env: entry.env as Record<string, string> } : {}),
             ...(scopes ? { scopes } : {}),
+            ...(typeof entry.id === 'string' ? { id: entry.id } : {}),
+            ...(reads.list ? { reads: reads.list } : {}),
+            ...(writes.list ? { writes: writes.list } : {}),
         },
     };
 }
 
 const isRecord = isMeshConfigRecord;
 
-export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; rejectedCommands: Array<Record<string, unknown>>; bootstrapMode: 'inherit' | 'skip'; deprecationWarnings: string[] } {
+export function validateMeshRefineConfig(config: unknown, source = 'inline'): { valid: boolean; errors: string[]; bootstrapCommands: MeshRefineValidationCommandPlan[]; commands: MeshRefineValidationCommandPlan[]; schedule?: MeshRefineSchedulePlan; rejectedCommands: Array<Record<string, unknown>>; bootstrapMode: 'inherit' | 'skip'; deprecationWarnings: string[] } {
     const errors: string[] = [];
     const bootstrapCommands: MeshRefineValidationCommandPlan[] = [];
     const commands: MeshRefineValidationCommandPlan[] = [];
@@ -392,7 +461,18 @@ export function validateMeshRefineConfig(config: unknown, source = 'inline'): { 
         });
     }
     if (rejectedCommands.length) errors.push('one or more validation commands are invalid');
-    return { valid: errors.length === 0, errors, bootstrapCommands, commands, rejectedCommands, bootstrapMode, deprecationWarnings };
+    // REFINE-LANES: a schedule is validated against the normalized commands. Any
+    // schedule error (dropped/duplicated gate, dist writer/reader overlap)
+    // invalidates the whole config — a refused schedule never silently degrades.
+    let schedule: MeshRefineSchedulePlan | undefined;
+    const rawSchedule = isRecord(validation) ? validation.schedule : undefined;
+    if (rawSchedule !== undefined && !rejectedCommands.length) {
+        const result = validateMeshRefineSchedule(rawSchedule, commands, (entry, index) =>
+            normalizeMeshCommandConfig(entry, `${source}:validation.schedule.prepare[${index}]`, 'validation'));
+        errors.push(...result.errors);
+        schedule = result.schedule;
+    }
+    return { valid: errors.length === 0, errors, bootstrapCommands, commands, ...(schedule ? { schedule } : {}), rejectedCommands, bootstrapMode, deprecationWarnings };
 }
 
 function readConfigFromBaseRef(gitCwd: string, ref: string, relative: string): string | undefined {
@@ -566,6 +646,7 @@ export function resolveMeshRefineValidationPlan(mesh: any, workspace: string, op
         bootstrapMode: validation.bootstrapMode,
         bootstrapCommands: validation.bootstrapCommands,
         commands: validation.commands,
+        ...(validation.schedule ? { schedule: validation.schedule } : {}),
         rejectedCommands: validation.rejectedCommands,
         deprecationWarnings: validation.deprecationWarnings,
         suggestions: suggestion.suggestions,

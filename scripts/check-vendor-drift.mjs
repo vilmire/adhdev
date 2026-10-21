@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { vendorBuildChainFor } from './vendor-build-chain.mjs';
+import { buildWorkspacesIfStale } from './build-if-stale.mjs';
 import { VENDOR_COMMIT_BUILD_ENV } from './pinned-dep-base.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -60,9 +61,10 @@ function run(cmd, args) {
 // omitted daemon-core, which mcp-server INLINES, so this gate re-bundled whatever
 // daemon-core dist happened to be on disk and could report "in sync" against bytes
 // that did not match daemon-core's source.
-for (const spec of vendorBuildChainFor('oss')) {
-  run(npm, ['run', 'build', '-w', spec]);
-}
+// build-if-stale skips a package only when its dist is the product of exactly
+// these sources under exactly this env (see ./build-if-stale.mjs) — e.g. right
+// after the root vendor gate built the same chain. Any doubt rebuilds.
+buildWorkspacesIfStale(vendorBuildChainFor('oss'), { cwd: root, env: ENV, npm });
 run(npm, ['run', 'bundle:vendor', '-w', 'packages/daemon-standalone']);
 
 // ★Compare against HEAD, not the index. A bare `git diff` is worktree-vs-index, which
