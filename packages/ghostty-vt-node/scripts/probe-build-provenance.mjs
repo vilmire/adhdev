@@ -84,12 +84,21 @@ probe('dev-override', configured.status === 0 && releaseFlag(configured.out) ===
 configured = configure('ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=OFF');
 probe('dev-override-off', configured.status === 0 && releaseFlag(configured.out) === '1', `release=${releaseFlag(configured.out)}`);
 
+// The fake zig prints EXACT bytes on every platform: a node script copies a
+// data file to stdout, behind a shell (POSIX) or .cmd (Windows) wrapper. A
+// cmd.exe `set /p` stub cannot emit a CR/LF or leading whitespace verbatim.
 const fakeDir = mkdtempSync(join(tmpdir(), 'ghostty-fake-zig-'));
+const fakeOutput = join(fakeDir, 'version-output.txt');
+const fakeScript = join(fakeDir, 'fake-zig.cjs');
+writeFileSync(fakeScript, `process.stdout.write(require('node:fs').readFileSync(${JSON.stringify(fakeOutput)}));\n`);
+const fake = join(fakeDir, isWin ? 'zig.cmd' : 'zig');
+writeFileSync(fake, isWin
+    ? `@"${process.execPath}" "${fakeScript}" %*\r\n`
+    : `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${fakeScript.replace(/'/g, "'\\''")}' "$@"\n`);
+chmodSync(fake, 0o755);
 const pin = pinnedZigVersion();
 for (const [output, accept] of [[`${pin}!`, false], [pin.replace(/\.(\d+)$/, ' .$1'), false], [`${pin}\nextra`, false], [` ${pin}\r\n`, true]]) {
-    const fake = join(fakeDir, isWin ? 'zig.cmd' : 'zig');
-    writeFileSync(fake, isWin ? `@echo off\r\n<nul set /p="${output}"\r\n` : `#!/bin/sh\nprintf '%s' '${output.replace(/'/g, "'\\''")}'\n`);
-    chmodSync(fake, 0o755);
+    writeFileSync(fakeOutput, output);
     configured = configure(`ZIG_EXECUTABLE=${fake}`);
     const accepted = configured.status === 0 && releaseFlag(configured.out) === '1';
     probe(`zig-strict ${JSON.stringify(output)}`, accepted === accept, accept ? 'accepted' : `refused (exit ${configured.status})`);
