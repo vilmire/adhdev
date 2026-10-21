@@ -4,19 +4,19 @@ import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonConte
 import { useTransport } from '../context/TransportContext'
 import { buildConversations } from '../components/dashboard/buildConversations'
 import { getCoordinatorRoutingHint, getConversationDaemonRouteId } from '../components/dashboard/conversation-selectors'
-import * as sessionChatControllerModule from '../components/dashboard/session-chat-controller'
+import {
+    controllerRegistry,
+    getControllerRegistryGeneration,
+    subscribeControllerRegistry,
+} from '../components/dashboard/session-chat-controller'
 import type { DaemonData } from '../types'
 import { unwrapDaemonCommandBody } from '../utils/daemon-command-envelope'
 
 const subscribeControllerRegistrySafe = (listener: () => void): (() => void) =>
-    typeof sessionChatControllerModule.subscribeControllerRegistry === 'function'
-        ? sessionChatControllerModule.subscribeControllerRegistry(listener)
-        : () => {}
+    typeof subscribeControllerRegistry === 'function' ? subscribeControllerRegistry(listener) : () => {}
 
 const getControllerRegistryGenerationSafe = (): number =>
-    typeof sessionChatControllerModule.getControllerRegistryGeneration === 'function'
-        ? sessionChatControllerModule.getControllerRegistryGeneration()
-        : 0
+    typeof getControllerRegistryGeneration === 'function' ? getControllerRegistryGeneration() : 0
 
 export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
 export const MAX_ARTIFACT_PREVIEW_CHARS = 600
@@ -360,27 +360,24 @@ export function resolveArtifactSessionTarget(
 
     const exactControllerMatches = new Map<string, ResolvedArtifactSessionTarget>()
     const bareControllerMatches = new Map<string, ResolvedArtifactSessionTarget>()
-    const registry = sessionChatControllerModule.controllerRegistry
-    if (registry && typeof registry.values === 'function') {
-        for (const controller of registry.values()) {
-            const id = controller.getIdentity()
-            const cDaemonId = typeof id.daemonId === 'string' ? id.daemonId.trim() : ''
-            const cSessionId = typeof id.sessionId === 'string' ? id.sessionId.trim() : ''
-            if (!cDaemonId || !cSessionId) continue
-            const pairKey = JSON.stringify([cDaemonId, cSessionId])
-            if (`${cDaemonId}:${cSessionId}` === contextKey) {
-                exactControllerMatches.set(pairKey, {
-                    daemonId: cDaemonId,
-                    sessionId: cSessionId,
-                    ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
-                })
-            } else if (cSessionId === contextKey) {
-                bareControllerMatches.set(pairKey, {
-                    daemonId: cDaemonId,
-                    sessionId: cSessionId,
-                    ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
-                })
-            }
+    for (const controller of controllerRegistry.values()) {
+        const id = controller.getIdentity()
+        const cDaemonId = typeof id.daemonId === 'string' ? id.daemonId.trim() : ''
+        const cSessionId = typeof id.sessionId === 'string' ? id.sessionId.trim() : ''
+        if (!cDaemonId || !cSessionId) continue
+        const pairKey = JSON.stringify([cDaemonId, cSessionId])
+        if (`${cDaemonId}:${cSessionId}` === contextKey) {
+            exactControllerMatches.set(pairKey, {
+                daemonId: cDaemonId,
+                sessionId: cSessionId,
+                ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+            })
+        } else if (cSessionId === contextKey) {
+            bareControllerMatches.set(pairKey, {
+                daemonId: cDaemonId,
+                sessionId: cSessionId,
+                ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+            })
         }
     }
 

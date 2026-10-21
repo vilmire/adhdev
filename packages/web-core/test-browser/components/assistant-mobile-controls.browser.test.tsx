@@ -13,7 +13,13 @@ import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { DashboardConversationCommands } from '../../src/hooks/useDashboardConversationCommands'
 
 // All state is public-neutral and local to the browser. No daemon or live transcript transport.
-vi.mock('../../src/components/dashboard/session-chat-controller', () => ({
+vi.mock('../../src/components/dashboard/session-chat-hooks', () => ({
+    useSessionChatController: () => null,
+    useWarmSessionChatControllers: () => {},
+    useWarmSessionChatSnapshotVersion: () => 0,
+}))
+vi.mock('../../src/components/dashboard/session-chat-controller', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../src/components/dashboard/session-chat-controller')>()),
     useSessionChatController: (conversation: ActiveConversation) => ({
         liveMessages: conversation.messages, hasLiveSnapshot: true, historyMessages: [],
         hasMoreHistory: false, historyError: null, loadHistoryPage: async () => {},
