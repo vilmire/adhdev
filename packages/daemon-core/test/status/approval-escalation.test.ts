@@ -166,7 +166,8 @@ describe('coordinator-first owner escalation', () => {
         vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
         expect(w.server).toHaveLength(1);
 
-        // A new approval episode 10s later (still inside the 120s cooldown) must be held/suppressed.
+        // A new approval episode 10s later (still inside the 120s cooldown) must be held during the cooldown window
+        // and then escalate automatically once the cooldown expires without needing a new provider event.
         vi.advanceTimersByTime(10_000);
         state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:second-episode') } };
         w.ask();
@@ -174,12 +175,33 @@ describe('coordinator-first owner escalation', () => {
         vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
         expect(w.server).toHaveLength(1);
 
-        // Once the cooldown window has elapsed from the first escalation, a fresh episode can escalate.
-        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS);
-        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:third-episode') } };
-        w.ask();
-        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        // Once the remaining cooldown window elapses from the first escalation, the held second episode escalates automatically.
+        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS - OWNER_APPROVAL_ESCALATION_MS - 10_000);
         expect(w.server).toHaveLength(2);
+        w.stop();
+    });
+
+    it('escalates an approval that was momentarily unavailable at event time once live evidence settles without a new provider event', () => {
+        const w = world({
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval('', { evidence: 'unavailable', modalKey: null }),
+            },
+        });
+        w.ask();
+        expect(w.server).toHaveLength(0);
+        // Settles to live evidence 500ms later with no second provider_event
+        vi.advanceTimersByTime(500);
+        state = {
+            ...state,
+            activeChat: {
+                ...state.activeChat,
+                providerApproval: approval('modal:recovered-after-repaint'),
+            },
+        };
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
         w.stop();
     });
 });

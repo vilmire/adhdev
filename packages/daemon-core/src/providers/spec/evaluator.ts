@@ -253,20 +253,9 @@ export function evaluateCondition(
     if (isRegexCondition(cond)) {
         const haystack = sectionText(sections, cond.section, fullScreen);
         let matched = false;
-        let lastMatchEnd = -1;
         try {
-            const baseFlags = cond.flags ?? 'i';
-            const re = new RegExp(cond.matches, baseFlags);
+            const re = new RegExp(cond.matches, cond.flags ?? 'i');
             matched = re.test(haystack);
-            if (matched && cond.cursor_above === true && cursor !== undefined) {
-                const gFlags = baseFlags.includes('g') ? baseFlags : `${baseFlags}g`;
-                const gre = new RegExp(cond.matches, gFlags);
-                let m: RegExpExecArray | null;
-                while ((m = gre.exec(haystack)) !== null) {
-                    lastMatchEnd = m.index + m[0].length;
-                    if (m[0].length === 0) gre.lastIndex++;
-                }
-            }
         } catch { matched = false; }
 
         if (!matched) {
@@ -290,17 +279,6 @@ export function evaluateCondition(
             if (cond.cursor_col_max !== undefined && cursor.col > cond.cursor_col_max) {
                 trace.push({ kind: 'state_skip', text: `state[${stateId}] cursor col ${cursor.col} > cursor_col_max ${cond.cursor_col_max}` });
                 return false;
-            }
-            if (cond.cursor_above === true && lastMatchEnd !== -1) {
-                const sec = cond.section ? sections.find(s => s.id === cond.section) : undefined;
-                const baseRow = sec ? sec.fromLine : 0;
-                const relRow = (haystack.slice(0, lastMatchEnd).replace(/\n+$/, '').match(/\n/g) ?? []).length;
-                const matchRow = baseRow + relRow;
-                const tolerance = typeof cond.cursor_above_tolerance === 'number' ? cond.cursor_above_tolerance : 0;
-                if (cursor.row > matchRow + tolerance) {
-                    trace.push({ kind: 'state_skip', text: `state[${stateId}] cursor row ${cursor.row} > matchRow ${matchRow} + tolerance ${tolerance}` });
-                    return false;
-                }
             }
         }
 

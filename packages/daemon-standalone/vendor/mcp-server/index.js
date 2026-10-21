@@ -94241,20 +94241,9 @@ ${body}`;
       if (isRegexCondition(cond)) {
         const haystack = sectionText(sections, cond.section, fullScreen);
         let matched = false;
-        let lastMatchEnd = -1;
         try {
-          const baseFlags = cond.flags ?? "i";
-          const re = new RegExp(cond.matches, baseFlags);
+          const re = new RegExp(cond.matches, cond.flags ?? "i");
           matched = re.test(haystack);
-          if (matched && cond.cursor_above === true && cursor !== void 0) {
-            const gFlags = baseFlags.includes("g") ? baseFlags : `${baseFlags}g`;
-            const gre = new RegExp(cond.matches, gFlags);
-            let m;
-            while ((m = gre.exec(haystack)) !== null) {
-              lastMatchEnd = m.index + m[0].length;
-              if (m[0].length === 0) gre.lastIndex++;
-            }
-          }
         } catch {
           matched = false;
         }
@@ -94278,17 +94267,6 @@ ${body}`;
           if (cond.cursor_col_max !== void 0 && cursor.col > cond.cursor_col_max) {
             trace.push({ kind: "state_skip", text: `state[${stateId}] cursor col ${cursor.col} > cursor_col_max ${cond.cursor_col_max}` });
             return false;
-          }
-          if (cond.cursor_above === true && lastMatchEnd !== -1) {
-            const sec = cond.section ? sections.find((s2) => s2.id === cond.section) : void 0;
-            const baseRow = sec ? sec.fromLine : 0;
-            const relRow = (haystack.slice(0, lastMatchEnd).replace(/\n+$/, "").match(/\n/g) ?? []).length;
-            const matchRow = baseRow + relRow;
-            const tolerance = typeof cond.cursor_above_tolerance === "number" ? cond.cursor_above_tolerance : 0;
-            if (cursor.row > matchRow + tolerance) {
-              trace.push({ kind: "state_skip", text: `state[${stateId}] cursor row ${cursor.row} > matchRow ${matchRow} + tolerance ${tolerance}` });
-              return false;
-            }
           }
         }
         trace.push({ kind: "state_match", text: `state[${stateId}] regex cond ${cond.section ?? "*"}~/${cond.matches}/ matched${cursor !== void 0 ? ` cursor=(${cursor.row},${cursor.col})` : ""}` });
@@ -94648,7 +94626,7 @@ ${detail.join("\n")}` : stripped;
       }
       if (isRegex(cond) || isChanged(cond)) {
         const useViewport = Boolean(
-          absence && isRegex(cond) && (cond.section === "modal" || absence.inNot && !cond.section)
+          absence && isRegex(cond) && (cond.section === "modal" || cond.section === "footer" || cond.section === "StatusLine" || absence.inNot && !cond.section)
         );
         const hayScreen = useViewport ? absence.viewportScreen : fullScreen;
         const haySections = useViewport ? absence.viewportSections : sections;
@@ -161157,8 +161135,15 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             buttons: modal.buttons.map((b) => b.label.slice(0, 120)),
             actionable: !setup
           };
-        } else if (this.current?.lifecycle === "pending") {
-          this.current = { ...this.current, evidence: "live", actionable: !setup };
+        } else if (this.current) {
+          this.current = {
+            ...this.current,
+            lifecycle: "pending",
+            resolvedAt: null,
+            evidence: "live",
+            actionable: !setup,
+            buttons: modal.buttons.map((b) => b.label.slice(0, 120))
+          };
         }
         this.signature = signature;
         this.inApproval = true;
@@ -164210,9 +164195,12 @@ trust_level = "trusted"
         const screen = this.adapter.snapshot();
         const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
-        const modal = deriveModal(state2, sections, screen, (id4, reason) => this.warnModalParseMiss(id4, reason));
+        const modalLines = state2.modal ? this.scrollbackLines() : lines;
+        const modalSections = state2.modal ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
+        const modalFullScreen = modalLines.join("\n");
+        const modal = deriveModal(state2, modalSections, modalFullScreen, (id4, reason) => this.warnModalParseMiss(id4, reason));
         const controls = this.deriveControls(state2.id);
-        const title = modal?.title ?? deriveTitle(state2, sections, screen);
+        const title = modal?.title ?? deriveTitle(state2, modalSections, modalFullScreen);
         const next = {
           // status is derived from the FSM state itself (statusForState), NOT from
           // whether a modal was parsed this frame. A modal state whose buttons briefly
@@ -167441,7 +167429,8 @@ ${text4}` : text4;
           lastScreenChangeAt: this.driver?.getLastScreenChangeAt?.(),
           attachedExistingRuntime: this.attachedExistingRuntime
         });
-        if (projected.status !== "waiting_approval" && this.approvalLifecycle?.read()?.lifecycle === "pending") {
+        const stillInApprovalState = !this.providerFailure && !this.exited && this.spawned && this.latestState?.status === "approval";
+        if (projected.status !== "waiting_approval" && !stillInApprovalState && this.approvalLifecycle?.read()?.lifecycle === "pending") {
           this.approvalLifecycle.resolve(Date.now());
           try {
             this.driver?.updateMeta({ providerApproval: providerApprovalSnapshot(bindProviderApprovalAssignment(this.approvalLifecycle.read(), this.runtimeSettings)) });
@@ -170230,12 +170219,16 @@ ${buttons.join("\n")}`;
               `approval_request:${now}`,
               now
             );
+            const approvalModalKey = adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto36.createHash)("sha256").update(approvalFingerprint).digest("hex")}`;
+            const approvalEvidence = adapterStatus?.providerApproval?.evidence;
             host.pushEvent({
               event: "agent:waiting_approval",
               chatTitle,
               timestamp: now,
               modalMessage: modal?.message,
-              modalButtons: modal?.buttons
+              modalButtons: modal?.buttons,
+              modalKey: approvalModalKey,
+              ...approvalEvidence ? { approvalEvidence } : {}
             });
             if (host.turnEvidencePort) {
               emitSuspension(host.turnEvidencePort, {
@@ -170245,9 +170238,7 @@ ${buttons.join("\n")}`;
                 attemptRef: host.currentAttemptRef?.() ?? void 0,
                 at: adapterStatus?.providerApproval?.createdAt ?? now,
                 modal: "approval",
-                // Legacy adapters have no modal identity; persist only a digest of
-                // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto36.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: approvalModalKey,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -188583,12 +188574,20 @@ ${notice.notice}${supersededHint}`;
           LOG.info("StatusEvent", `approval escalation retired session=${sessionId} (resolved before escalation)`);
           return;
         }
-        held.delete(sessionId);
-        if (escalated.has(`${sessionId}\0${currentKey}`)) return;
+        if (escalated.has(`${sessionId}\0${currentKey}`)) {
+          held.delete(sessionId);
+          return;
+        }
         const nowMs2 = now();
         const lastAt = lastEscalatedAt.get(sessionId);
-        if (lastAt !== void 0 && nowMs2 - lastAt < cooldownMs) return;
-        escalated.add(`${sessionId}\0${entry.key}`);
+        if (lastAt !== void 0 && nowMs2 - lastAt < cooldownMs) {
+          const cooldownRemaining = Math.max(1, cooldownMs - (nowMs2 - lastAt));
+          entry.key = currentKey;
+          entry.timer = setTimer(() => fire(sessionId), cooldownRemaining);
+          return;
+        }
+        held.delete(sessionId);
+        if (entry.key) escalated.add(`${sessionId}\0${entry.key}`);
         escalated.add(`${sessionId}\0${currentKey}`);
         lastEscalatedAt.set(sessionId, nowMs2);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
@@ -188612,19 +188611,33 @@ ${notice.notice}${supersededHint}`;
           }
           if (!state2 || !isCoordinatorFirstSession(state2.settings ?? null)) return false;
           const key4 = currentApprovalEpisodeKey(state2);
-          if (!key4) return true;
-          if (escalated.has(`${sessionId}\0${key4}`)) return true;
-          const lastAt = lastEscalatedAt.get(sessionId);
-          if (lastAt !== void 0 && now() - lastAt < cooldownMs) return true;
+          if (key4 && escalated.has(`${sessionId}\0${key4}`)) return true;
           const existing = held.get(sessionId);
-          if (existing?.key === key4) {
-            existing.raw = rawEvent;
-            return true;
+          if (existing) {
+            if (!key4 || existing.key === key4) {
+              existing.raw = rawEvent;
+              return true;
+            }
+            if (!existing.key && key4) {
+              existing.key = key4;
+              existing.raw = rawEvent;
+              return true;
+            }
           }
-          const firstHeldAt = existing?.firstHeldAt ?? now();
+          const nowMs2 = now();
+          const firstHeldAt = existing?.firstHeldAt ?? nowMs2;
           if (existing) clearTimer(existing.timer);
-          const remaining = Math.max(0, firstHeldAt + delayMs - now());
-          held.set(sessionId, { key: key4, raw: rawEvent, firstHeldAt, rechecks: 0, timer: setTimer(() => fire(sessionId), remaining) });
+          const lastAt = lastEscalatedAt.get(sessionId);
+          const cooldownRemaining = lastAt !== void 0 ? Math.max(0, lastAt + cooldownMs - nowMs2) : 0;
+          const holdRemaining = Math.max(0, firstHeldAt + delayMs - nowMs2);
+          const waitMs = Math.max(holdRemaining, cooldownRemaining);
+          held.set(sessionId, {
+            key: key4 ?? "",
+            raw: rawEvent,
+            firstHeldAt,
+            rechecks: 0,
+            timer: setTimer(() => fire(sessionId), waitMs)
+          });
           return true;
         },
         retire(sessionId) {
@@ -188814,6 +188827,12 @@ ${notice.notice}${supersededHint}`;
         if (modalButtons.length > 0) {
           payload.modalButtons = modalButtons;
         }
+      }
+      if (typeof event.modalKey === "string" && event.modalKey.trim()) {
+        payload.modalKey = event.modalKey.trim().slice(0, 128);
+      }
+      if (event.approvalEvidence === "live" || event.approvalEvidence === "cached" || event.approvalEvidence === "unavailable") {
+        payload.approvalEvidence = event.approvalEvidence;
       }
       if (payload.targetSessionId && resolveHideMute) {
         const hideMute = resolveHideMute(payload.targetSessionId);

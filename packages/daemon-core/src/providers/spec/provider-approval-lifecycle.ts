@@ -44,8 +44,15 @@ export class ProviderApprovalLifecycle {
                 ...(setup && directories ? directories : {}),
                 description: '', buttons: modal.buttons.map(b => b.label.slice(0, 120)), actionable: !setup,
             };
-        } else if (this.current?.lifecycle === 'pending') {
-            this.current = { ...this.current, evidence: 'live', actionable: !setup };
+        } else if (this.current) {
+            this.current = {
+                ...this.current,
+                lifecycle: 'pending',
+                resolvedAt: null,
+                evidence: 'live',
+                actionable: !setup,
+                buttons: modal.buttons.map(b => b.label.slice(0, 120)),
+            };
         }
         this.signature = signature;
         this.inApproval = true;

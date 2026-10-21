@@ -127,14 +127,22 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             LOG.info('StatusEvent', `approval escalation retired session=${sessionId} (resolved before escalation)`);
             return;
         }
-        held.delete(sessionId);
-        if (escalated.has(`${sessionId}\u0000${currentKey}`)) return;
+        if (escalated.has(`${sessionId}\u0000${currentKey}`)) {
+            held.delete(sessionId);
+            return;
+        }
         const nowMs = now();
         const lastAt = lastEscalatedAt.get(sessionId);
-        if (lastAt !== undefined && nowMs - lastAt < cooldownMs) return;
+        if (lastAt !== undefined && nowMs - lastAt < cooldownMs) {
+            const cooldownRemaining = Math.max(1, cooldownMs - (nowMs - lastAt));
+            entry.key = currentKey;
+            entry.timer = setTimer(() => fire(sessionId), cooldownRemaining);
+            return;
+        }
+        held.delete(sessionId);
         // A replaced but still-pending episode is still an unanswered request
         // from the same worker: escalate it rather than retiring silently.
-        escalated.add(`${sessionId}\u0000${entry.key}`);
+        if (entry.key) escalated.add(`${sessionId}\u0000${entry.key}`);
         escalated.add(`${sessionId}\u0000${currentKey}`);
         lastEscalatedAt.set(sessionId, nowMs);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
@@ -155,17 +163,33 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             try { state = deps.readState(sessionId); } catch { return false; }
             if (!state || !isCoordinatorFirstSession(state.settings ?? null)) return false;
             const key = currentApprovalEpisodeKey(state);
-            // Fail closed for coordinator-first sessions when masked or lacking live modalKey evidence.
-            if (!key) return true;
-            if (escalated.has(`${sessionId}\u0000${key}`)) return true;
-            const lastAt = lastEscalatedAt.get(sessionId);
-            if (lastAt !== undefined && now() - lastAt < cooldownMs) return true;
+            if (key && escalated.has(`${sessionId}\u0000${key}`)) return true;
             const existing = held.get(sessionId);
-            if (existing?.key === key) { existing.raw = rawEvent; return true; }
-            const firstHeldAt = existing?.firstHeldAt ?? now();
+            if (existing) {
+                if (!key || existing.key === key) {
+                    existing.raw = rawEvent;
+                    return true;
+                }
+                if (!existing.key && key) {
+                    existing.key = key;
+                    existing.raw = rawEvent;
+                    return true;
+                }
+            }
+            const nowMs = now();
+            const firstHeldAt = existing?.firstHeldAt ?? nowMs;
             if (existing) clearTimer(existing.timer);
-            const remaining = Math.max(0, firstHeldAt + delayMs - now());
-            held.set(sessionId, { key, raw: rawEvent, firstHeldAt, rechecks: 0, timer: setTimer(() => fire(sessionId), remaining) });
+            const lastAt = lastEscalatedAt.get(sessionId);
+            const cooldownRemaining = lastAt !== undefined ? Math.max(0, lastAt + cooldownMs - nowMs) : 0;
+            const holdRemaining = Math.max(0, firstHeldAt + delayMs - nowMs);
+            const waitMs = Math.max(holdRemaining, cooldownRemaining);
+            held.set(sessionId, {
+                key: key ?? '',
+                raw: rawEvent,
+                firstHeldAt,
+                rechecks: 0,
+                timer: setTimer(() => fire(sessionId), waitMs),
+            });
             return true;
         },
         retire(sessionId) {

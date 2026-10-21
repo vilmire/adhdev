@@ -833,12 +833,17 @@ export class FsmDriver implements ISpecDriver {
         // and auto-approve never fires (the "long prompts never auto-approve"
         // bug). The viewport stays authoritative for transitions / cursor
         // conditions; only this content-pattern extraction reads scrollback.
-        // Modal extraction reads the live viewport (not 5,000 lines of scrollback)
-        // so nested or already-scrolled-off approval text in tool output cannot
-        // synthesize a live modal with stale numbered lists.
-        const modal = deriveModal(state, sections, screen, (id, reason) => this.warnModalParseMiss(id, reason));
+        const modalLines = state.modal
+            ? this.scrollbackLines()
+            : lines;
+        const modalSections = state.modal
+            ? resolveSections(this.spec.sections ?? {}, modalLines)
+            : sections;
+        const modalFullScreen = modalLines.join('\n');
+
+        const modal = deriveModal(state, modalSections, modalFullScreen, (id, reason) => this.warnModalParseMiss(id, reason));
         const controls = this.deriveControls(state.id);
-        const title = modal?.title ?? deriveTitle(state, sections, screen);
+        const title = modal?.title ?? deriveTitle(state, modalSections, modalFullScreen);
 
         const next: CurrentEval = {
             // status is derived from the FSM state itself (statusForState), NOT from

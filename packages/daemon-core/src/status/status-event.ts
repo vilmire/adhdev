@@ -333,6 +333,12 @@ export function projectServerStatusEvent(
             payload.modalButtons = modalButtons;
         }
     }
+    if (typeof event.modalKey === 'string' && event.modalKey.trim()) {
+        payload.modalKey = event.modalKey.trim().slice(0, 128);
+    }
+    if (event.approvalEvidence === 'live' || event.approvalEvidence === 'cached' || event.approvalEvidence === 'unavailable') {
+        payload.approvalEvidence = event.approvalEvidence;
+    }
 
     // Stamp the target session's visibility so the server's push-suppression
     // gate does not have to join against a snapshot that may not have arrived

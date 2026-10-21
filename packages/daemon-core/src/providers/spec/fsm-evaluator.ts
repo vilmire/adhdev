@@ -299,6 +299,8 @@ function evalCond(
         const useViewport = Boolean(
             absence && isRegex(cond) && (
                 (cond as any).section === 'modal'
+                || (cond as any).section === 'footer'
+                || (cond as any).section === 'StatusLine'
                 || (absence.inNot && !(cond as any).section)
             ),
         );

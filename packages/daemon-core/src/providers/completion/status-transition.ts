@@ -506,10 +506,17 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     `approval_request:${now}`,
                     now,
                 );
+                // Legacy adapters have no modal identity; persist only a digest of
+                // their live fingerprint, never prompt text or button labels.
+                const approvalModalKey = adapterStatus?.providerApproval?.modalKey
+                    ?? `modal-digest:${createHash('sha256').update(approvalFingerprint).digest('hex')}`;
+                const approvalEvidence = adapterStatus?.providerApproval?.evidence;
                 host.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now,
                     modalMessage: modal?.message,
                     modalButtons: modal?.buttons,
+                    modalKey: approvalModalKey,
+                    ...(approvalEvidence ? { approvalEvidence } : {}),
                 });
                 if (host.turnEvidencePort) {
                     emitSuspension(host.turnEvidencePort, {
@@ -519,9 +526,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                         attemptRef: host.currentAttemptRef?.() ?? undefined,
                         at: adapterStatus?.providerApproval?.createdAt ?? now,
                         modal: 'approval',
-                        // Legacy adapters have no modal identity; persist only a digest of
-                        // their live fingerprint, never prompt text or button labels.
-                        modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${createHash('sha256').update(approvalFingerprint).digest('hex')}`,
+                        modalKey: approvalModalKey,
                         clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                         providerSetup: adapterStatus?.providerApproval?.type === 'provider_setup' && adapterStatus.providerApproval.evidence === 'live',
                     });
