@@ -3,7 +3,7 @@
   "platform": "linux",
   "arch": "x64",
   "apiLevel": 2,
-  "sourceDigest": "d8093f470cde5a2281a086f08cf966c98ae37702b110ffb747c2f90877bed4b1",
+  "sourceDigest": "e4ca3372235a1289373e172996a5e7804bc4d5f3eac630d91d9160dd932e0627",
   "ghosttyRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
   "napiVersion": 8,
   "builtWithNode": "v22.22.0",
@@ -19,20 +19,20 @@
   },
   "files": {
     "ghostty_vt_node.node": {
-      "sha256": "68ef57b2b84e777db8112d391551f017a8e0fdc852398e66c89fd3cb109d5b01",
+      "sha256": "aefc9e332147bc2980f3810558d4f80ad3d407dfb3b19fcd9dd0d416e62c38bc",
       "size": 130096
     },
     "libghostty-vt.so": {
-      "sha256": "c1537302ab50755965ac17dddadc3a50569c38bf147af8e9cffefa6ca2502b3f",
-      "size": 7496136
+      "sha256": "2dc10d68318c378a35584ee36580f836c91d64428fcd5bf4466b08f3716c3c23",
+      "size": 7496328
     },
     "libghostty-vt.so.0": {
-      "sha256": "c1537302ab50755965ac17dddadc3a50569c38bf147af8e9cffefa6ca2502b3f",
-      "size": 7496136
+      "sha256": "2dc10d68318c378a35584ee36580f836c91d64428fcd5bf4466b08f3716c3c23",
+      "size": 7496328
     },
     "libghostty-vt.so.0.1.0": {
-      "sha256": "c1537302ab50755965ac17dddadc3a50569c38bf147af8e9cffefa6ca2502b3f",
-      "size": 7496136
+      "sha256": "2dc10d68318c378a35584ee36580f836c91d64428fcd5bf4466b08f3716c3c23",
+      "size": 7496328
     }
   }
 }
