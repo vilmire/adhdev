@@ -97,8 +97,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Always compile from source. Plain `npm run build` copies the tracked
+      # prebuilt in a fresh checkout (sources are never "locally modified"
+      # there), so a binary that predates the current bridge/addon sources
+      # would be staged and shipped as if it had just been built.
       - name: Build ghostty-vt-node
+        env:
+          ADHDEV_GHOSTTY_VT_FORCE_COMPILE: '1'
         run: npm run build -w packages/ghostty-vt-node
+
+      - name: Test ghostty-vt-node
+        run: node --test packages/ghostty-vt-node/test/*.test.mjs
 
       - name: Compute artifact triplet
         run: echo "GHOSTTY_TRIPLET=${{ matrix.platform }}-${{ matrix.arch }}-node$(node -p 'process.versions.modules')" >> "$GITHUB_ENV"
@@ -124,6 +133,10 @@ jobs:
             echo "No native artifacts were staged for ${GHOSTTY_TRIPLET}."
             exit 1
           fi
+          # Stamp the manifest from the binary itself (embedded source digest,
+          # file hashes), then exercise exactly the staged files.
+          node packages/ghostty-vt-node/scripts/prebuilt-manifest.mjs write "dist-prebuilt/${GHOSTTY_TRIPLET}"
+          node packages/ghostty-vt-node/scripts/verify-prebuilt.mjs "dist-prebuilt/${GHOSTTY_TRIPLET}"
 
       - name: Upload native artifact
         uses: actions/upload-artifact@v7

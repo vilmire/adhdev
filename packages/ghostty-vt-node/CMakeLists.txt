@@ -39,9 +39,34 @@ target_include_directories(${PROJECT_NAME} PRIVATE
   ${NODE_ADDON_API_DIR}
 )
 
+# Binding source digest, embedded so a compiled binary can be matched against
+# the sources it was built from. scripts/binding-digest.mjs implements the same
+# algorithm: per file "<path>:<sha256 of LF-normalized content>\n", in this
+# order, then sha256 of the concatenation. Reconfigure whenever an input
+# changes so an incremental compile never embeds a stale digest.
+set(ADHDEV_BINDING_DIGEST_INPUTS
+  CMakeLists.txt
+  src/addon.cc
+  src/ghostty_bridge.c
+  src/ghostty_bridge.h
+)
+set(ADHDEV_BINDING_DIGEST_MANIFEST "")
+foreach(input IN LISTS ADHDEV_BINDING_DIGEST_INPUTS)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${input}" input_content)
+  string(REPLACE "\r\n" "\n" input_content "${input_content}")
+  string(SHA256 input_hash "${input_content}")
+  string(APPEND ADHDEV_BINDING_DIGEST_MANIFEST "${input}:${input_hash}\n")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${input}")
+endforeach()
+string(SHA256 ADHDEV_BINDING_SOURCE_DIGEST "${ADHDEV_BINDING_DIGEST_MANIFEST}")
+message(STATUS "ghostty-vt-node binding source digest: ${ADHDEV_BINDING_SOURCE_DIGEST}")
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE
   NAPI_DISABLE_CPP_EXCEPTIONS
+  NAPI_VERSION=8
   GHOSTTY_STATIC
+  ADHDEV_GHOSTTY_SOURCE_DIGEST="${ADHDEV_BINDING_SOURCE_DIGEST}"
+  ADHDEV_GHOSTTY_GIT_TAG="${GHOSTTY_GIT_TAG}"
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

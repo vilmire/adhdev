@@ -380,6 +380,14 @@ jobs:
         if: steps.ghostty_release.outputs.publish == 'true'
         run: node packages/ghostty-vt-node/scripts/ensure-prebuilt-sonames.mjs --check --load
 
+      # Loading is not enough: a prebuilt built from older binding sources (e.g.
+      # the newest-main-run fallback above) loads fine and lacks the current
+      # API. Every prebuilt about to be published must carry a manifest that
+      # matches these sources, and the Linux one is exercised by path.
+      - name: Verify ghostty prebuilts match the binding sources (release gate)
+        if: steps.ghostty_release.outputs.publish == 'true'
+        run: node packages/ghostty-vt-node/scripts/check-prebuilts.mjs --all-present
+
       - name: Download publish artifacts
         uses: actions/download-artifact@v8
         with:

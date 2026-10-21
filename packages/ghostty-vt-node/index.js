@@ -108,4 +108,43 @@ function loadBinding() {
     );
 }
 
-module.exports = loadBinding();
+// Surface added at API level 2. A binary built before it (an older prebuilt or
+// a stale build/ output that shadows the prebuilt) still loads and still
+// serves the legacy methods; it simply lacks these. Consumers feature-detect
+// via `capabilities.viewport` (or `typeof handle.getViewport === 'function'`)
+// and must treat the exact-read path as unavailable rather than falling back
+// to formatter output.
+const VIEWPORT_METHODS = ['getViewport', 'readRow', 'scrollViewport'];
+
+function describeBinding(binding) {
+    if (typeof binding.getBindingInfo === 'function') {
+        const info = binding.getBindingInfo();
+        return {
+            apiLevel: info.apiLevel,
+            sourceDigest: info.sourceDigest || null,
+            ghosttyRevision: info.ghosttyRevision || null,
+            napiVersion: info.napiVersion ?? null,
+        };
+    }
+    return { apiLevel: 1, sourceDigest: null, ghosttyRevision: null, napiVersion: null };
+}
+
+function probeViewportSupport(binding, info) {
+    if (info.apiLevel < 2 || typeof binding.createTerminal !== 'function') return false;
+    let terminal;
+    try {
+        terminal = binding.createTerminal({ cols: 1, rows: 1, scrollback: 0 });
+        return VIEWPORT_METHODS.every((name) => typeof terminal[name] === 'function');
+    } catch {
+        return false;
+    } finally {
+        try { terminal?.dispose(); } catch { /* best effort */ }
+    }
+}
+
+const binding = loadBinding();
+const bindingInfo = describeBinding(binding);
+binding.bindingInfo = bindingInfo;
+binding.capabilities = Object.freeze({ viewport: probeViewportSupport(binding, bindingInfo) });
+
+module.exports = binding;

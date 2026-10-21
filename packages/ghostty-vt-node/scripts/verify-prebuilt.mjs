@@ -1,0 +1,91 @@
+#!/usr/bin/env node
+// Exercise the EXACT addon in a directory — require()d by path, so neither the
+// package loader's build/Release preference nor its same-platform fallback can
+// substitute a different binary — and fail unless it is built from the binding
+// sources in this checkout and its viewport API behaves. Loading alone proves
+// nothing about the API: a stale binary loads fine.
+//
+//   node scripts/verify-prebuilt.mjs <dir>     # e.g. prebuilt/darwin-arm64-node137
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { computeBindingDigest, pinnedGhosttyRevision } from './binding-digest.mjs';
+import { ADDON_FILE, expectedApiLevel } from './prebuilt-manifest.mjs';
+
+const requireNative = createRequire(import.meta.url);
+
+function expect(checks, name, actual, expected) {
+    const ok = JSON.stringify(actual) === JSON.stringify(expected);
+    checks.push({ name, ok, detail: ok ? JSON.stringify(actual) : `got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}` });
+    return ok;
+}
+
+export function verifyPrebuilt(dir) {
+    const checks = [];
+    const file = resolve(dir, ADDON_FILE);
+    let addon;
+    try {
+        addon = requireNative(file);
+    } catch (error) {
+        checks.push({ name: 'load', ok: false, detail: error.message });
+        return { file, checks };
+    }
+    if (typeof addon.getBindingInfo !== 'function') {
+        checks.push({ name: 'getBindingInfo', ok: false, detail: 'missing: binary predates API level 2 (rebuild it)' });
+        return { file, checks };
+    }
+    const info = addon.getBindingInfo();
+    expect(checks, 'apiLevel', info.apiLevel, expectedApiLevel());
+    expect(checks, 'sourceDigest matches sources', info.sourceDigest, computeBindingDigest());
+    expect(checks, 'ghosttyRevision is the pin', info.ghosttyRevision, pinnedGhosttyRevision());
+
+    const terminal = addon.createTerminal({ cols: 12, rows: 4, scrollback: 100000 });
+    try {
+        for (const name of ['getViewport', 'readRow', 'scrollViewport']) {
+            expect(checks, `${name} present`, typeof terminal[name], 'function');
+        }
+        if (checks.some((check) => !check.ok)) return { file, info, checks };
+
+        terminal.write('old\r\n'.repeat(40) + '> FINAL');
+        const view = terminal.getViewport({ includeRows: 'all', cells: true });
+        expect(checks, 'scrollbar', view.scrollbar, { total: 41, offset: 37, len: 4 });
+        expect(checks, 'cursor (active)', [view.cursorRow, view.cursorCol, view.cursorViewportRow], [3, 7, 3]);
+        expect(checks, 'cursor row text', view.lines[view.cursorRow].text, '> FINAL');
+        terminal.write('Z');
+        const marked = terminal.getViewport({ includeRows: 'cursor' });
+        expect(checks, 'marker lands on cursor row', marked.lines[0].text, '> FINALZ');
+        terminal.scrollViewport('top');
+        expect(checks, 'ACTIVE row survives viewport scroll', terminal.readRow(3).text, '> FINALZ');
+        expect(checks, 'VIEWPORT row is history', terminal.readRow(3, { space: 'viewport' }).text, 'old');
+        terminal.write('\x1bc\x1b[?1049hA한é');
+        const alt = terminal.getViewport({ includeRows: 'cursor', cells: true });
+        expect(checks, 'alternate screen', alt.activeScreen, 'alternate');
+        expect(checks, 'cells', alt.lines[0].cells.slice(0, 4).map((cell) => [cell.text, cell.width, cell.wideKind]), [
+            ['A', 1, 'narrow'], ['한', 2, 'wide'], ['', 0, 'spacer-tail'], ['é', 1, 'narrow'],
+        ]);
+        expect(checks, 'legacy formatter still works', terminal.formatPlainText({ trim: true }), 'A한é');
+    } catch (error) {
+        checks.push({ name: 'exercise', ok: false, detail: error.stack || String(error) });
+    } finally {
+        terminal.dispose();
+    }
+    return { file, info, checks };
+}
+
+export function printVerifyReport({ file, checks }, log = console.log) {
+    log(`[ghostty-vt] exercising ${file}`);
+    for (const check of checks) log(`  ${check.ok ? '✓' : '✗'} ${check.name}: ${check.detail}`);
+    const ok = checks.length > 0 && checks.every((check) => check.ok);
+    log(`[ghostty-vt] ${ok ? 'exact prebuilt verified' : 'exact prebuilt FAILED'}`);
+    return ok;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+    const dir = process.argv[2];
+    if (!dir) {
+        console.error('usage: verify-prebuilt.mjs <dir containing ghostty_vt_node.node>');
+        process.exit(2);
+    }
+    if (!printVerifyReport(verifyPrebuilt(resolve(dir)))) process.exit(1);
+}

@@ -52,27 +52,81 @@ Unable to load @adhdev/ghostty-vt-node native binding for running triplet
 linux-x64-node137, win32-x64-node137]. ...
 ```
 
+## Viewport / cursor / cell reads (API level 2)
+
+Each terminal handle also exposes an exact-read API. All rows and the cursor are
+in an explicit coordinate space; nothing is derived from formatter strings.
+
+- `getViewport({ includeRows: 'none' | 'cursor' | 'all', cells })` — one native
+  snapshot: `cursorRow`/`cursorCol` (ACTIVE space), `activeScreen`
+  (`'primary'`/`'alternate'`), `scrollbar` (`total`/`offset`/`len`), the derived
+  `scrollbackRows` / `activeOriginRow` / `viewportOriginRow` /
+  `viewportScrollbackOffset` / `cursorViewportRow`, a per-terminal `revision`,
+  and the requested ACTIVE rows. Metadata and rows come from the same call.
+- `readRow(row, { space: 'active' | 'viewport', cells, expectedRevision })` — one
+  row with `wrapped` / `wrapContinuation`; with `cells`, exactly `cols` cells of
+  `{ col, text, width, wideKind }` (`text` is the full stored grapheme).
+- `scrollViewport('top' | 'bottom' | delta)` — moves the VIEWPORT only; ACTIVE
+  rows and `cursorRow` do not change.
+
+**ACTIVE vs VIEWPORT.** ACTIVE is the rows x cols area the cursor moves in.
+VIEWPORT is what is visible and differs only while scrolled into history.
+`formatPlainText()` output is SCREEN-origin (history + active, trailing blank
+rows dropped): the cursor's row is at index `activeOriginRow + cursorRow` there,
+not at `cursorRow`. The legacy `formatPlainText` / `formatVT` /
+`getCursorPosition` outputs are unchanged (see `test/fixtures/legacy-golden.json`).
+
+**Feature detection.** A binary built before API level 2 still loads and serves
+the legacy methods but has no `getViewport`/`readRow`/`scrollViewport`. Check
+`require('@adhdev/ghostty-vt-node').capabilities.viewport` (or `typeof
+handle.getViewport === 'function'`) and treat exact reads as unavailable —
+never fall back to guessing from formatter output. `bindingInfo` reports the
+loaded binary's `apiLevel`, embedded `sourceDigest` and `ghosttyRevision`.
+
 ## Producing / refreshing a prebuilt
 
 Build on the **target platform/arch** (cross-builds are not wired here) with the
-toolchain present (`cmake`, a C/C++ compiler, and `zig` for `libghostty`; set
-`ZIG_EXECUTABLE` if zig is not on `PATH`):
+toolchain present (`cmake`, a C/C++ compiler, and `zig` 0.15.2 for `libghostty`;
+set `ZIG_EXECUTABLE` if zig is not on `PATH`):
 
 ```bash
-# Build for the running platform-arch and emit it into prebuilt/<triplet>/
-ADHDEV_GHOSTTY_VT_EMIT_PREBUILT=1 npm run build -w oss/packages/ghostty-vt-node
+# Compile from source and emit into the committed prebuilt for this
+# platform-arch (prebuilt/<platform>-<arch>-node137/, whatever Node version runs
+# the build), stamping prebuilt/<triplet>/manifest.json from the built binary:
+ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1 ADHDEV_GHOSTTY_VT_EMIT_PREBUILT=1 npm run build -w oss/packages/ghostty-vt-node
 
-# Then keep the node137-named dir (per ABI-portability) and commit it:
-#   git add oss/packages/ghostty-vt-node/prebuilt/<platform>-<arch>-node137/
+# Or, after any build: copy build/Release into the committed triplet + stamp
+node oss/packages/ghostty-vt-node/scripts/prebuilt-manifest.mjs emit
+
+# Verify exactly that directory, then the whole set
+node oss/packages/ghostty-vt-node/scripts/verify-prebuilt.mjs oss/packages/ghostty-vt-node/prebuilt/<triplet>
+node oss/packages/ghostty-vt-node/scripts/check-prebuilts.mjs
 ```
 
-Because the output is ABI-portable, you only need to build **once per
-platform/arch**; rename/keep the directory as the `node137` triplet and the
-runtime fallback covers all other Node versions on that platform.
+Without `ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1`, `npm run build` keeps an existing
+local build or copies a usable prebuilt instead of compiling (`--plan` prints
+which it would do).
 
 - macOS arm64 and Linux x64 can be produced on the corresponding native runner.
 - Windows x64 must be built on a Windows runner (MSVC; see the `if(MSVC)` block in
   `CMakeLists.txt` for the required dynamic-CRT link flags).
+
+### Release-safety gate (`scripts/check-prebuilts.mjs`)
+
+CMake embeds a **binding source digest** (sha256 over `CMakeLists.txt` and
+`src/*`, LF-normalized; `scripts/binding-digest.mjs` reproduces it) into the
+addon. Each shipped prebuilt carries a `manifest.json` stamped from the binary
+itself plus file hashes. The gate fails unless:
+
+- (a) all three shipped triplets carry a manifest matching the current digest,
+  API level and ghostty pin, with matching file hashes. A triplet built from
+  older sources reports **pending-rebuild**: after any bridge/addon change the
+  tree is not shippable until every platform is rebuilt and re-stamped.
+- (b) the host platform's committed prebuilt, loaded by path, embeds the
+  current digest and its viewport API behaves.
+- (c) the native CI build compiles from source (`ADHDEV_GHOSTTY_VT_FORCE_COMPILE`)
+  and verifies + stamps the exact staged artifact, and the release job checks
+  every prebuilt it publishes (`--all-present`).
 
 ## Skipping the native build
 

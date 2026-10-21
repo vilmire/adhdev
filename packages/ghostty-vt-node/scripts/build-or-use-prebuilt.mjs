@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { emitPrebuilt } from './prebuilt-manifest.mjs';
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageDir = path.resolve(scriptDir, '..');
 const outputDir = path.join(packageDir, 'build', 'Release');
@@ -117,35 +119,51 @@ function installPrebuilt(candidateFile) {
   if (!fs.existsSync(outputFile)) fs.copyFileSync(candidateFile, outputFile);
 }
 
-function installPrebuiltIfPresent(sourceMtime) {
+// ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1 always compiles from source: no existing
+// build output, no prebuilt. The native CI build uses it — in a fresh checkout
+// the sources are never "locally modified", so without it the tracked
+// prebuilt is copied and a binary that predates the current sources ships.
+// `--plan` prints the decision and exits without touching anything.
+const forceCompile = process.env.ADHDEV_GHOSTTY_VT_FORCE_COMPILE === '1';
+const planOnly = process.argv.includes('--plan');
+
+function decide() {
+  if (forceCompile) return { action: 'compile', reason: 'ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1' };
+  const sourceMtime = latestSourceMtime();
+  const outputMtime = safeMtime(outputFile);
+  // A local build output is something this machine compiled, so its mtime
+  // against the sources is meaningful: keep it while it is not older.
+  if (outputMtime >= sourceMtime && outputMtime > 0) return { action: 'keep-local', file: outputFile };
   for (const candidate of candidatePrebuiltPaths()) {
     if (!fs.existsSync(candidate.file)) continue;
     if (!isUsablePrebuilt(candidate, sourceMtime)) {
       console.log(`[ghostty-vt-node] skipping prebuilt ${candidate.file}: sources were modified locally after it was built`);
       continue;
     }
-    installPrebuilt(candidate.file);
-    console.log(`[ghostty-vt-node] using prebuilt native binding from ${candidate.file}`);
-    return true;
+    return { action: 'use-prebuilt', file: candidate.file };
   }
-  return false;
+  if (process.env.ADHDEV_SKIP_GHOSTTY_VT_BUILD === '1') return { action: 'skip', reason: 'ADHDEV_SKIP_GHOSTTY_VT_BUILD=1' };
+  return { action: 'compile', reason: 'no usable local build or prebuilt' };
 }
 
-const sourceMtime = latestSourceMtime();
-const outputMtime = safeMtime(outputFile);
+const decision = decide();
+if (planOnly) {
+  console.log(`[ghostty-vt-node] plan: ${decision.action}${decision.file ? ` ${decision.file}` : ''}${decision.reason ? ` (${decision.reason})` : ''}`);
+  process.exit(0);
+}
 
-// A local build output is something this machine compiled, so its mtime
-// against the sources is meaningful: keep it while it is not older.
-if (outputMtime >= sourceMtime && outputMtime > 0) {
+if (decision.action === 'keep-local') {
   console.log(`[ghostty-vt-node] keeping existing local build at ${outputFile}`);
   process.exit(0);
 }
 
-if (installPrebuiltIfPresent(sourceMtime)) {
+if (decision.action === 'use-prebuilt') {
+  installPrebuilt(decision.file);
+  console.log(`[ghostty-vt-node] using prebuilt native binding from ${decision.file}`);
   process.exit(0);
 }
 
-if (process.env.ADHDEV_SKIP_GHOSTTY_VT_BUILD === '1') {
+if (decision.action === 'skip') {
   console.log(`[ghostty-vt-node] skipping native build for ${triplet} (ADHDEV_SKIP_GHOSTTY_VT_BUILD=1)`);
   process.exit(0);
 }
@@ -155,7 +173,7 @@ const command = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
 const args = isWindows
   ? ['/d', '/s', '/c', 'npm exec -- cmake-js compile']
   : ['exec', '--', 'cmake-js', 'compile'];
-console.log(`[ghostty-vt-node] compiling ${triplet} via ${command} ${args.join(' ')}`);
+console.log(`[ghostty-vt-node] compiling ${triplet} (${decision.reason}) via ${command} ${args.join(' ')}`);
 const result = spawnSync(command, args, {
   cwd: packageDir,
   env: process.env,
@@ -166,26 +184,20 @@ if (result.error) {
   console.error(`[ghostty-vt-node] failed to launch native build for ${triplet}:`, result.error);
 }
 
-// Mirror a successful local build into prebuilt/<triplet>/ so CI (or a developer)
-// can produce a shippable prebuilt reproducibly: build once on the target
-// platform, then commit prebuilt/<triplet>/. Set ADHDEV_GHOSTTY_VT_EMIT_PREBUILT=1
-// to enable (off by default so ordinary `npm run build` does not churn the dir).
-// The binding is Node-API (ABI-stable), so a single emitted triplet is enough for
-// the running platform-arch; the runtime loader (index.js) falls back across ABIs.
+// Mirror a successful local build into the committed prebuilt for this
+// platform-arch (prebuilt/<platform>-<arch>-node137, whatever Node runs the
+// build — the binding is Node-API, so the ABI in the name is only an address)
+// and stamp its manifest.json from the compiled binary. Set
+// ADHDEV_GHOSTTY_VT_EMIT_PREBUILT=1 to enable (off by default so ordinary
+// `npm run build` does not churn the dir). Combine with
+// ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1 to rebuild a prebuilt from source.
 if ((result.status ?? 1) === 0 && process.env.ADHDEV_GHOSTTY_VT_EMIT_PREBUILT === '1') {
   try {
-    const prebuiltDir = path.join(packageDir, 'prebuilt', triplet);
-    fs.mkdirSync(prebuiltDir, { recursive: true });
-    for (const entry of fs.readdirSync(outputDir)) {
-      // Ship the addon plus its co-located runtime libs (.dylib/.so/.dll),
-      // skip intermediate build artifacts.
-      if (/\.(node|dylib|so|so\.\d.*|dll)$/.test(entry)) {
-        fs.copyFileSync(path.join(outputDir, entry), path.join(prebuiltDir, entry));
-      }
-    }
-    console.log(`[ghostty-vt-node] emitted prebuilt for ${triplet} → ${prebuiltDir}`);
+    const { target, manifest } = emitPrebuilt(outputDir);
+    console.log(`[ghostty-vt-node] emitted prebuilt → ${target} (source digest ${manifest.sourceDigest})`);
   } catch (emitError) {
     console.error(`[ghostty-vt-node] failed to emit prebuilt for ${triplet}:`, emitError);
+    process.exit(1);
   }
 }
 
