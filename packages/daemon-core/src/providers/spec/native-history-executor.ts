@@ -802,10 +802,24 @@ function resolveCodexInstanceSource(
     return { path: fallback, ...(fallback ? { outcome: { attribution: 'legacy', ownerConfirmed: false } } : {}) };
 }
 
-/** Canonical claim key for a transcript path: best-effort realpath so
- *  /tmp ↔ /private/tmp aliases of the same wire.jsonl share one claim. */
-function claimKeyForPath(p: string): string {
-    try { return fs.realpathSync(p); } catch { return p; }
+/** Canonical claim/workspace key for a filesystem path: best-effort native
+ *  realpath (/tmp ↔ /private/tmp aliases share one key) plus case-insensitive
+ *  normalization on win32 so drive-letter or directory casing differences
+ *  (e.g. `c:\Users\...` vs `C:\Users\...`) never break workspace matching. */
+export function claimKeyForPath(p: string, platform: NodeJS.Platform = process.platform): string {
+    let resolved = p;
+    try {
+        resolved = typeof fs.realpathSync.native === 'function'
+            ? fs.realpathSync.native(p)
+            : fs.realpathSync(p);
+    } catch {
+        resolved = p;
+    }
+    if (platform === 'win32') {
+        const normalized = path.win32.normalize(resolved).replace(/^\\\\\?\\/, '');
+        return normalized.replace(/(?<![A-Za-z]:)[\\/]+$/, '').toLowerCase();
+    }
+    return resolved;
 }
 
 function failClosedResolution(attribution: 'ambiguous' | 'already_claimed', workspaceHint: string, owner: string): JsonlSourceResolution {

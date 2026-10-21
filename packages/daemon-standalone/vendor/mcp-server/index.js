@@ -126003,6 +126003,22 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       collectRecentFiles(dir, pattern, windowMs, sessionFloorMs, out);
       return out.sort((a, b) => b.mtime - a.mtime).map((c) => c.p);
     }
+    function recentFilesAcrossDateWindow(template, input, pattern, windowMs, sessionFloorMs = 0) {
+      const out = [];
+      const seenDirs = /* @__PURE__ */ new Set();
+      const anchors = sessionFloorMs > 0 ? [Date.now(), sessionFloorMs] : [Date.now()];
+      for (const anchorMs of anchors) {
+        for (const dayOffset of [0, -1, 1, -2, 2]) {
+          const dayMs = anchorMs + dayOffset * 24 * 60 * 60 * 1e3;
+          const dayInput = { ...input, sessionStartedAtMs: sessionFloorMs };
+          const resolved = expandPathForDate(template, dayInput, new Date(dayMs));
+          if (!resolved || seenDirs.has(resolved)) continue;
+          seenDirs.add(resolved);
+          collectRecentFiles(resolved, pattern, windowMs, sessionFloorMs, out);
+        }
+      }
+      return out.sort((a, b) => b.mtime - a.mtime).map((c) => c.p);
+    }
     function safeMtimeMs(p) {
       try {
         return Math.floor(fs50.statSync(p).mtimeMs);
@@ -126235,6 +126251,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     function sentPromptSnippets(instanceId) {
       const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
       return id4 ? (promptsByInstance.get(id4) ?? []).slice() : [];
+    }
+    function hasRecordedSentInput(instanceId) {
+      const id4 = typeof instanceId === "string" ? instanceId.trim() : "";
+      if (!id4) return false;
+      return (inputsByInstance.get(id4)?.length ?? 0) > 0 || (shortInputsByInstance.get(id4)?.length ?? 0) > 0 || (promptsByInstance.get(id4)?.length ?? 0) > 0;
     }
     function containsSentPrompt(haystack, snippets) {
       if (!haystack || snippets.length === 0) return false;
@@ -126892,6 +126913,20 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
       const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
       if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
+      const workspaceHint = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : "";
+      const workspaceMatches = !workspaceHint || !transcriptWorkspace || claimKeyForPath(transcriptWorkspace) === claimKeyForPath(workspaceHint);
+      const codexExactConfirmed = Boolean(
+        requested && providerSessionId && sameSessionUuid(providerSessionId, requested) && workspaceMatches
+      );
+      if (input.agentType === "codex-cli" && codexExactConfirmed) {
+        claimOwnTranscript(sourcePath, input);
+      }
+      const codexPromptConfirmed = outcome?.ownerConfirmed === true && workspaceMatches && Boolean(
+        input.instanceId && hasExclusiveSentInput(
+          input.instanceId,
+          messages.filter((m) => m.role === "user").map((m) => m.content)
+        )
+      );
       return {
         messages,
         providerSessionId,
@@ -126901,7 +126936,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         workspace: transcriptWorkspace,
         attribution: outcome?.attribution,
         // A timestamp/mtime pick is a candidate, not runtime ownership proof.
-        ownerConfirmed: input.agentType === "codex-cli" ? Boolean(requested && providerSessionId && sameSessionUuid(providerSessionId, requested)) || outcome?.ownerConfirmed === true : outcome?.ownerConfirmed,
+        ownerConfirmed: input.agentType === "codex-cli" ? codexExactConfirmed || codexPromptConfirmed : outcome?.ownerConfirmed,
         ...usageRecords.length > 0 ? {
           usage: foldUsageRecords(usageRecords, {
             providerSessionId: providerSessionId || "",
@@ -127006,9 +127041,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         }
         if (stat2 && stat2.isFile()) {
           sourcePath = resolved;
+        } else if (input.agentType === "codex-cli" && !requestedSessionId && transcriptClaimOwnerToken(input.instanceId)) {
+          return resolveCodexInstanceSource(src, resolved, stat2?.isDirectory() ? resolved : null, filePat, windowMs, sessionFloor, workspaceHint, input);
         } else if (stat2 && stat2.isDirectory()) {
           const exact = pickExactSessionFile(resolved, filePat, requestedSessionId);
-          if (exact) claimOwnTranscript(exact, input);
+          if (exact) {
+            const owner = transcriptClaimOwnerToken(input.instanceId);
+            if (owner && isTranscriptClaimedByOther(claimKeyForPath(exact), owner)) {
+              return failClosedResolution("already_claimed", workspaceHint, owner);
+            }
+            if (input.agentType !== "codex-cli") claimOwnTranscript(exact, input);
+          }
           sourcePath = exact || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint));
           if (!sourcePath && !requestedSessionId) {
             const pick = pickRecentByPromptEvidence(recentFiles(resolved, filePat, windowMs, sessionFloor), input);
@@ -127016,7 +127059,14 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           }
         }
         if (!sourcePath && hasDateTemplateSegment(src.path)) {
-          sourcePath = pickExactSessionFileAcrossDateWindow(src.path, input, filePat, requestedSessionId) || (requestedSessionId ? null : pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint)) || (requestedSessionId ? null : newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor));
+          const exactDate = pickExactSessionFileAcrossDateWindow(src.path, input, filePat, requestedSessionId);
+          if (exactDate) {
+            const owner = transcriptClaimOwnerToken(input.instanceId);
+            if (owner && isTranscriptClaimedByOther(claimKeyForPath(exactDate), owner)) {
+              return failClosedResolution("already_claimed", workspaceHint, owner);
+            }
+          }
+          sourcePath = exactDate || (requestedSessionId ? null : pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint)) || (requestedSessionId ? null : newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor));
         }
         if (!sourcePath && !hasDateTemplateSegment(src.path)) {
           const resolvedRaw = expandPath2(src.path, input, { skipWorkspaceRealpath: true });
@@ -127075,12 +127125,80 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (verdict === "denied") return { path: null };
       return { path: own, outcome: { attribution: "claimed", ownerConfirmed: true } };
     }
-    function claimKeyForPath(p) {
-      try {
-        return fs52.realpathSync(p);
-      } catch {
-        return p;
+    function resolveCodexInstanceSource(src, _resolved, dir, filePat, windowMs, sessionFloor, workspaceHint, input) {
+      const owner = transcriptClaimOwnerToken(input.instanceId);
+      if (!owner) return { path: null };
+      const effectiveFloor = sessionFloor > 0 ? Math.max(0, sessionFloor - SPAWN_BIND_GRACE_MS) : 0;
+      const rawCandidates = [];
+      const seen2 = /* @__PURE__ */ new Set();
+      const addCandidate = (p) => {
+        if (!p || seen2.has(p)) return;
+        seen2.add(p);
+        rawCandidates.push(p);
+      };
+      if (dir) {
+        for (const p of recentFiles(dir, filePat, windowMs, effectiveFloor)) addCandidate(p);
       }
+      if (hasDateTemplateSegment(src.path)) {
+        for (const p of recentFilesAcrossDateWindow(src.path, input, filePat, windowMs, effectiveFloor)) addCandidate(p);
+      }
+      const unclaimed = rawCandidates.filter((p) => !isTranscriptClaimedByOther(claimKeyForPath(p), owner));
+      const wsKey = workspaceHint ? claimKeyForPath(workspaceHint) : "";
+      if (hasRecordedSentInput(input.instanceId)) {
+        const shapes = compileRecordShapes(src);
+        const matches = unclaimed.filter((p) => {
+          const meta = readCandidateSessionMeta(p);
+          if (wsKey && (!meta?.cwd || claimKeyForPath(meta.cwd) !== wsKey)) return false;
+          if (sessionFloor > 0 && meta?.sessionTimestampMs != null && meta.sessionTimestampMs < sessionFloor - SPAWN_BIND_GRACE_MS) {
+            return false;
+          }
+          const lines = readJsonlLines(p);
+          if (lines.length === 0) return false;
+          const userTexts = [];
+          for (let i = 0; i < lines.length; i += 1) {
+            const rec5 = lines[i];
+            const shape = shapes.pick(rec5);
+            if (!shape) continue;
+            for (const msg of projectMessages(rec5, shape.map, i, lines.length, 0)) {
+              if (msg.role === "user" && msg.content) userTexts.push(msg.content);
+            }
+          }
+          return Boolean(input.instanceId && hasExclusiveSentInput(input.instanceId, userTexts));
+        });
+        if (matches.length > 1) return failClosedResolution("ambiguous", workspaceHint, owner);
+        if (matches.length === 1) {
+          const verdict = claimTranscript(claimKeyForPath(matches[0]), owner);
+          if (verdict === "denied") return failClosedResolution("already_claimed", workspaceHint, owner);
+          return {
+            path: matches[0],
+            outcome: { attribution: verdict === "stale_reclaimed" ? "stale_reclaimed" : "claimed", ownerConfirmed: true }
+          };
+        }
+        return { path: null };
+      }
+      const bound = (dir ? pickSessionBoundFile(dir, filePat, windowMs, sessionFloor, workspaceHint) : null) || (hasDateTemplateSegment(src.path) ? pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint) : null);
+      if (bound && !isTranscriptClaimedByOther(claimKeyForPath(bound), owner)) {
+        return { path: bound, outcome: { attribution: "legacy", ownerConfirmed: false } };
+      }
+      const wsFiltered = wsKey ? unclaimed.filter((p) => {
+        const meta = readCandidateSessionMeta(p);
+        return Boolean(meta?.cwd && claimKeyForPath(meta.cwd) === wsKey);
+      }) : unclaimed;
+      const fallback = wsFiltered[0] ?? (!wsKey ? unclaimed[0] : null) ?? null;
+      return { path: fallback, ...fallback ? { outcome: { attribution: "legacy", ownerConfirmed: false } } : {} };
+    }
+    function claimKeyForPath(p, platform10 = process.platform) {
+      let resolved = p;
+      try {
+        resolved = typeof fs52.realpathSync.native === "function" ? fs52.realpathSync.native(p) : fs52.realpathSync(p);
+      } catch {
+        resolved = p;
+      }
+      if (platform10 === "win32") {
+        const normalized = path59.win32.normalize(resolved).replace(/^\\\\\?\\/, "");
+        return normalized.replace(/(?<![A-Za-z]:)[\\/]+$/, "").toLowerCase();
+      }
+      return resolved;
     }
     function failClosedResolution(attribution, workspaceHint, owner) {
       LOG.info("TranscriptClaim", `decision=${attribution} provider=kimi workspace=${JSON.stringify(workspaceHint)} owner=${owner || "(none)"} \u2192 attribution_unknown (fail closed, no pin)`);
@@ -137250,9 +137368,9 @@ ${output}` : "";
       return current4 || parsed || void 0;
     }
     function shouldSkipLiveCliNativeHistoryWithoutProviderSession(args) {
-      const explicit = getExplicitHistorySessionId(args.readChatArgs);
-      if (explicit) return false;
       const targetSessionId = typeof args.readChatArgs?.targetSessionId === "string" ? args.readChatArgs.targetSessionId.trim() : "";
+      const explicit = getExplicitHistorySessionId(args.readChatArgs);
+      if (explicit && !isRuntimeFallbackHistorySessionId(explicit, targetSessionId)) return false;
       if (!targetSessionId) return false;
       const resolved = typeof args.nativeHistorySessionId === "string" ? args.nativeHistorySessionId.trim() : "";
       if (!resolved || resolved !== targetSessionId) return false;
@@ -137515,7 +137633,7 @@ ${output}` : "";
       });
       const nativeHistoryReadSessionId = skipLiveNativeHistoryWithoutProviderSession ? void 0 : nativeHistorySessionId;
       const exactNativeHistoryScope = Boolean(
-        typeof args?.historySessionId === "string" && args.historySessionId.trim() || typeof args?.providerSessionId === "string" && args.providerSessionId.trim() || snap.providerSessionId || nativeHistoryReadSessionId && nativeHistoryReadSessionId !== targetSessionId || h.currentSession?.sessionId === args?.targetSessionId && typeof h.currentSession?.providerSessionId === "string" && h.currentSession.providerSessionId.trim()
+        typeof args?.historySessionId === "string" && args.historySessionId.trim() && args.historySessionId.trim() !== targetSessionId || typeof args?.providerSessionId === "string" && args.providerSessionId.trim() && args.providerSessionId.trim() !== targetSessionId || snap.providerSessionId || nativeHistoryReadSessionId && nativeHistoryReadSessionId !== targetSessionId || h.currentSession?.sessionId === args?.targetSessionId && typeof h.currentSession?.providerSessionId === "string" && h.currentSession.providerSessionId.trim()
       );
       const readOpts = {
         canonicalHistory: provider?.nativeHistory,
@@ -137566,7 +137684,7 @@ ${output}` : "";
         ptyMessages: snap.returnedMessages,
         requireWorkspaceContentOverlap: lookup === "workspace" && !exactNativeHistoryScope && !ownerConfirmedUuid
       }) : false;
-      if (skipLiveNativeHistoryWithoutProviderSession && (!safeMapping || snap.returnedMessages.length === 0)) {
+      if (skipLiveNativeHistoryWithoutProviderSession && (!safeMapping || !ownerConfirmedUuid && snap.returnedMessages.length === 0)) {
         nativeHistory = null;
         nativeMessages = [];
         historyProviderSessionId = void 0;
@@ -137611,7 +137729,7 @@ ${output}` : "";
         nativeHistoryError,
         historyProviderSessionId,
         safeMapping,
-        trustedExactNativeIdentity: lookup !== "workspace" && Boolean(nativeHistoryReadSessionId) && Boolean(historyProviderSessionId) && nativeHistoryReadSessionId === historyProviderSessionId
+        trustedExactNativeIdentity: (lookup !== "workspace" || Boolean(ownerConfirmedUuid)) && Boolean(nativeHistorySessionForMapping) && Boolean(historyProviderSessionId) && nativeHistorySessionForMapping === historyProviderSessionId
       };
     }
     function maybePinResolvedProviderSessionId(h, targetSessionId, nativeHistory) {
@@ -167185,6 +167303,8 @@ ${text4}` : text4;
         const outcome = this.driver.sendMessageDuringGeneration(text4, bracketedPaste, messageId);
         if (!outcome.accepted) {
           LOG.info("SpecAdapter", `[${this.cliType}] mid-generation send refused \u2014 ${outcome.reason} (len=${text4.length})`);
+        } else {
+          recordSentPrompt(this.owningSessionId, text4);
         }
         return outcome;
       }
@@ -169764,6 +169884,12 @@ ${buttons.join("\n")}`;
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
       });
+      if (host.type === "codex-cli" && !resolvedHandle && restoredHistory.ownerConfirmed !== true) {
+        host.lastNativeTurnTerminalMarkers = null;
+        host.lastExternalCompletionProbe = null;
+        host.publishTranscriptSignalObservation(null);
+        return null;
+      }
       host.lastNativeTurnTerminalMarkers = Array.isArray(restoredHistory.turnTerminalMarkers) ? restoredHistory.turnTerminalMarkers : null;
       if (restoredHistory.source !== "provider-native") {
         host.lastExternalCompletionProbe = null;

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { executeNativeHistory } from '../../src/providers/spec/native-history-executor.js';
+import { claimKeyForPath, executeNativeHistory } from '../../src/providers/spec/native-history-executor.js';
 import { __resetSentPromptRegistry, recordSentPrompt } from '../../src/providers/native-history/sent-prompt-registry.js';
 import { __resetTranscriptClaimRegistry } from '../../src/providers/native-history/transcript-claim-registry.js';
 import { readCliProviderNativeHistory } from '../../src/commands/chat-commands-read-native.js';
@@ -290,15 +290,20 @@ describe('targeted Codex native identity through real JSONL read consumer', () =
     const verifierPrompt = `${sharedHeader}\nTask: verify the previous worker output and inspect git diff.`;
     const workerPrompt = `${sharedHeader}\nTask: fix the three CLI/tooling defects in the dedicated worktree.`;
     const workerUuid = '019ea15f-eeee-7dd2-861e-e81c2ff13ae2';
-    const born = new Date(spawn).toISOString();
+    // Verifier session spawned > SPAWN_BIND_GRACE_MS (60s) before the worker, so on base
+    // pickSessionBoundFile returns null and execution reaches pickRecentByPromptEvidence
+    // (because verifierFile mtime is updated after worker spawn as the verifier actively runs).
+    // On base 99d55c6a3, pickRecentByPromptEvidence matched the shared 80-char header prefix
+    // (or assistant text quoting workerPrompt) and returned ownerConfirmed: true, cross-binding
+    // and pinning the worker session to the verifier's UUID!
+    const verifierBorn = new Date(spawn - 120_000).toISOString();
+    const workerBorn = new Date(spawn).toISOString();
 
-    // Verifier rollout spawned in the same workspace within the grace window, sharing the first line
-    // and even quoting the worker prompt inside assistant/tool output.
     const verifierFile = path.join(root, `rollout-${UUID}.jsonl`);
     fs.writeFileSync(verifierFile, [
-      { type: 'session_meta', payload: { id: UUID, cwd: workspace, timestamp: born } },
-      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'user', content: [{ text: verifierPrompt }] } },
-      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'assistant', content: [{ text: `VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}` }] } },
+      { type: 'session_meta', payload: { id: UUID, cwd: workspace, timestamp: verifierBorn } },
+      { type: 'response_item', timestamp: verifierBorn, payload: { type: 'message', role: 'user', content: [{ text: verifierPrompt }] } },
+      { type: 'response_item', timestamp: verifierBorn, payload: { type: 'message', role: 'assistant', content: [{ text: `VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}` }] } },
     ].map(x => JSON.stringify(x)).join('\n') + '\n');
     fs.utimesSync(verifierFile, new Date(), new Date());
 
@@ -306,7 +311,8 @@ describe('targeted Codex native identity through real JSONL read consumer', () =
     recordSentPrompt(RUNTIME, workerPrompt);
 
     const h = helpers(true);
-    // Even if caller passes runtimeId as historySessionId fallback or omits it, worker must not map to verifier.
+    // Both omitted historySessionId (which reaches pickRecentByPromptEvidence on base) and
+    // runtimeId fallback must refuse the verifier transcript and leave the worker unpinned.
     for (const extraArgs of [{}, { historySessionId: RUNTIME }]) {
       const beforeOwnRollout = await read(h, extraArgs);
       expect((beforeOwnRollout.messages as any[]).map(m => m.content)).not.toContain(`VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}`);
@@ -318,19 +324,43 @@ describe('targeted Codex native identity through real JSONL read consumer', () =
     // Now the worker's own rollout is written (even with an older mtime than the verifier's rollout).
     const workerFile = path.join(root, `rollout-${workerUuid}.jsonl`);
     fs.writeFileSync(workerFile, [
-      { type: 'session_meta', payload: { id: workerUuid, cwd: workspace, timestamp: born } },
-      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'user', content: [{ text: workerPrompt }] } },
-      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'assistant', content: [{ text: 'WORKER_OWN_ANSWER' }] } },
+      { type: 'session_meta', payload: { id: workerUuid, cwd: workspace, timestamp: workerBorn } },
+      { type: 'response_item', timestamp: workerBorn, payload: { type: 'message', role: 'user', content: [{ text: workerPrompt }] } },
+      { type: 'response_item', timestamp: workerBorn, payload: { type: 'message', role: 'assistant', content: [{ text: 'WORKER_OWN_ANSWER' }] } },
     ].map(x => JSON.stringify(x)).join('\n') + '\n');
     const now = Date.now();
     fs.utimesSync(workerFile, (now - 500) / 1000, (now - 500) / 1000);
     fs.utimesSync(verifierFile, now / 1000, now / 1000);
 
-    const afterOwnRollout = await read(h, { historySessionId: RUNTIME });
+    const afterOwnRollout = await read(h);
     expect((afterOwnRollout.messages as any[]).map(m => m.content)).toContain('WORKER_OWN_ANSWER');
     expect((afterOwnRollout.messages as any[]).map(m => m.content)).not.toContain(`VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}`);
     expect(afterOwnRollout.providerSessionId).toBe(workerUuid);
     expect(__getProviderSessionPinForTest(RUNTIME)).toBe(workerUuid);
     expect(writes).toHaveBeenCalledWith(RUNTIME, workerUuid);
+  });
+  it('matches workspace paths case-insensitively on win32 when binding a Codex rollout', async () => {
+    expect(claimKeyForPath('c:\\Users\\Example\\Project\\', 'win32')).toBe(
+      claimKeyForPath('C:\\users\\example\\project', 'win32'),
+    );
+    const workerPrompt = 'WIN32_CASE_VARIATION_WORKER_PROMPT';
+    const workerUuid = '019ea15f-ffff-7dd2-861e-e81c2ff13ae3';
+    const workerBorn = new Date(spawn).toISOString();
+    // Flip drive/path case when running on a case-insensitive filesystem (win32/darwin)
+    const cwdInMeta = process.platform === 'win32'
+      ? workspace.replace(/^[A-Za-z]:/, (m) => (m === m.toLowerCase() ? m.toUpperCase() : m.toLowerCase()))
+      : workspace;
+    const workerFile = path.join(root, `rollout-${workerUuid}.jsonl`);
+    fs.writeFileSync(workerFile, [
+      { type: 'session_meta', payload: { id: workerUuid, cwd: cwdInMeta, timestamp: workerBorn } },
+      { type: 'response_item', timestamp: workerBorn, payload: { type: 'message', role: 'user', content: [{ text: workerPrompt }] } },
+      { type: 'response_item', timestamp: workerBorn, payload: { type: 'message', role: 'assistant', content: [{ text: 'WIN32_CASE_MATCHED_ANSWER' }] } },
+    ].map(x => JSON.stringify(x)).join('\n') + '\n');
+    fs.utimesSync(workerFile, new Date(), new Date());
+
+    recordSentPrompt(RUNTIME, workerPrompt);
+    const res = await read(helpers(true));
+    expect((res.messages as any[]).map(m => m.content)).toContain('WIN32_CASE_MATCHED_ANSWER');
+    expect(res.providerSessionId).toBe(workerUuid);
   });
 });
