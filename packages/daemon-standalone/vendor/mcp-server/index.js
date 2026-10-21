@@ -180144,7 +180144,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               birth,
               nodePath,
               socketOwnerPid: Number(ownerText),
-              entryPath: getRunningSessionHostScriptPath(h.pid),
+              entryPath: parseNodeScriptPath(getProcessCommandLine(h.pid)),
               endpoint: endpoint.path,
               hostEntryPath: reply.result.hostEntryPath,
               hostStartedAt: reply.result.hostStartedAt

@@ -500,8 +500,12 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 await client.connect();
                 const reply = await client.request<SessionHostDiagnostics>({ type: 'get_host_diagnostics', payload: { includeSessions: false } });
                 if (!reply.success || !reply.result) throw new Error('maintenance_retained_host_unreachable');
+                // The pid is pinned by the record (birth, socket owner, RPC entry), and the
+                // verifier demands the exact pinned entry path, so read the script path raw:
+                // the kill-safety classifier (isManagedSessionHostCommandLine) would refuse a
+                // genuine retained host whose node binary is not literally named `node`.
                 verifyRetainedMaintenanceHost(maintenance, { pid: getPid(), birth, nodePath, socketOwnerPid: Number(ownerText),
-                    entryPath: getRunningSessionHostScriptPath(h.pid), endpoint: endpoint.path,
+                    entryPath: parseNodeScriptPath(getProcessCommandLine(h.pid)), endpoint: endpoint.path,
                     hostEntryPath: reply.result.hostEntryPath, hostStartedAt: reply.result.hostStartedAt });
                 const supported = reply.result.supportedRequestTypes ?? [];
                 if (options.requiredRequestTypes.some(t => !supported.includes(t))) throw new Error('maintenance_retained_host_incompatible');
