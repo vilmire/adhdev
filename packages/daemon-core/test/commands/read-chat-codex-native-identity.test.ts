@@ -3,6 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { executeNativeHistory } from '../../src/providers/spec/native-history-executor.js';
+import { __resetSentPromptRegistry, recordSentPrompt } from '../../src/providers/native-history/sent-prompt-registry.js';
+import { __resetTranscriptClaimRegistry } from '../../src/providers/native-history/transcript-claim-registry.js';
 import { readCliProviderNativeHistory } from '../../src/commands/chat-commands-read-native.js';
 import { handleChatHistory, handleReadChat, __getProviderSessionPinForTest, __resetProviderSessionPinsForTest } from '../../src/commands/chat-commands.js';
 const RUNTIME = 'synthetic-runtime-codex-identity';
@@ -52,9 +54,16 @@ beforeEach(() => {
     message_map: { role: '$.payload.role', content: '$.payload.content[0].text', timestamp_ms: '$.timestamp' } } };
   provider = { type: 'codex-cli', category: 'cli', nativeHistory: { mode: 'canonical', scripts: { readSession: 'readNativeHistory' } },
     historyBehavior: {}, scripts: { readNativeHistory: (input: any) => executeNativeHistory(source, input) } };
-  __resetProviderSessionPinsForTest(); rollout();
+  __resetProviderSessionPinsForTest();
+  __resetSentPromptRegistry();
+  __resetTranscriptClaimRegistry();
+  rollout();
 });
-afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  __resetSentPromptRegistry();
+  __resetTranscriptClaimRegistry();
+  fs.rmSync(root, { recursive: true, force: true });
+});
 describe('targeted Codex native identity through real JSONL read consumer', () => {
   it.each(['no-owner', 'unrelated-current', 'fallback-adapter', 'inactive_record', 'recovery_snapshot'] as const)(
     'refuses unknown targeted ownership in %s mode across both consumers and subsequent reads', async (mode) => {
@@ -275,5 +284,53 @@ describe('targeted Codex native identity through real JSONL read consumer', () =
     rollout(path.join(root, 'other-workspace')); const result = await read(helpers(), { providerSessionId: UUID });
     expect(result.pending).toBe(true); expect(result.messages).toEqual([]); expect(writes).not.toHaveBeenCalled();
     expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined();
+  });
+  it('never maps a new worker session to a same-workspace verifier transcript sharing the prompt header, and binds its own rollout on positive full-prompt match', async () => {
+    const sharedHeader = '--- adhdev worker protocol --- You are a delegated worker in mission 19f46133 with a shared first line';
+    const verifierPrompt = `${sharedHeader}\nTask: verify the previous worker output and inspect git diff.`;
+    const workerPrompt = `${sharedHeader}\nTask: fix the three CLI/tooling defects in the dedicated worktree.`;
+    const workerUuid = '019ea15f-eeee-7dd2-861e-e81c2ff13ae2';
+    const born = new Date(spawn).toISOString();
+
+    // Verifier rollout spawned in the same workspace within the grace window, sharing the first line
+    // and even quoting the worker prompt inside assistant/tool output.
+    const verifierFile = path.join(root, `rollout-${UUID}.jsonl`);
+    fs.writeFileSync(verifierFile, [
+      { type: 'session_meta', payload: { id: UUID, cwd: workspace, timestamp: born } },
+      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'user', content: [{ text: verifierPrompt }] } },
+      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'assistant', content: [{ text: `VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}` }] } },
+    ].map(x => JSON.stringify(x)).join('\n') + '\n');
+    fs.utimesSync(verifierFile, new Date(), new Date());
+
+    recordSentPrompt('verifier-runtime', verifierPrompt);
+    recordSentPrompt(RUNTIME, workerPrompt);
+
+    const h = helpers(true);
+    // Even if caller passes runtimeId as historySessionId fallback or omits it, worker must not map to verifier.
+    for (const extraArgs of [{}, { historySessionId: RUNTIME }]) {
+      const beforeOwnRollout = await read(h, extraArgs);
+      expect((beforeOwnRollout.messages as any[]).map(m => m.content)).not.toContain(`VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}`);
+      expect(beforeOwnRollout.providerSessionId).not.toBe(UUID);
+      expect(__getProviderSessionPinForTest(RUNTIME)).toBeUndefined();
+      expect(writes).not.toHaveBeenCalled();
+    }
+
+    // Now the worker's own rollout is written (even with an older mtime than the verifier's rollout).
+    const workerFile = path.join(root, `rollout-${workerUuid}.jsonl`);
+    fs.writeFileSync(workerFile, [
+      { type: 'session_meta', payload: { id: workerUuid, cwd: workspace, timestamp: born } },
+      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'user', content: [{ text: workerPrompt }] } },
+      { type: 'response_item', timestamp: born, payload: { type: 'message', role: 'assistant', content: [{ text: 'WORKER_OWN_ANSWER' }] } },
+    ].map(x => JSON.stringify(x)).join('\n') + '\n');
+    const now = Date.now();
+    fs.utimesSync(workerFile, (now - 500) / 1000, (now - 500) / 1000);
+    fs.utimesSync(verifierFile, now / 1000, now / 1000);
+
+    const afterOwnRollout = await read(h, { historySessionId: RUNTIME });
+    expect((afterOwnRollout.messages as any[]).map(m => m.content)).toContain('WORKER_OWN_ANSWER');
+    expect((afterOwnRollout.messages as any[]).map(m => m.content)).not.toContain(`VERIFIER_TRANSCRIPT inspecting: ${workerPrompt}`);
+    expect(afterOwnRollout.providerSessionId).toBe(workerUuid);
+    expect(__getProviderSessionPinForTest(RUNTIME)).toBe(workerUuid);
+    expect(writes).toHaveBeenCalledWith(RUNTIME, workerUuid);
   });
 });

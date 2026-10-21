@@ -252,12 +252,12 @@ export function shouldSkipLiveCliNativeHistoryWithoutProviderSession(args: {
     nativeHistorySessionId?: string;
     parsedProviderSessionId?: string;
 }): boolean {
-    const explicit = getExplicitHistorySessionId(args.readChatArgs);
-    if (explicit) return false;
-
     const targetSessionId = typeof args.readChatArgs?.targetSessionId === 'string'
         ? args.readChatArgs.targetSessionId.trim()
         : '';
+    const explicit = getExplicitHistorySessionId(args.readChatArgs);
+    if (explicit && !isRuntimeFallbackHistorySessionId(explicit, targetSessionId)) return false;
+
     if (!targetSessionId) return false;
 
     const resolved = typeof args.nativeHistorySessionId === 'string'

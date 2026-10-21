@@ -513,6 +513,12 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
     // (NATIVE-TURN-SIGNAL) Capture the provider's own turn-terminal records from THIS read,
     // before the source check below can early-return. Refreshed on every probe so a stale
     // marker from a previous read can never satisfy a later turn's gate.
+    if (host.type === 'codex-cli' && !resolvedHandle && restoredHistory.ownerConfirmed !== true) {
+        host.lastNativeTurnTerminalMarkers = null;
+        host.lastExternalCompletionProbe = null;
+        host.publishTranscriptSignalObservation(null);
+        return null;
+    }
     host.lastNativeTurnTerminalMarkers = Array.isArray((restoredHistory as any).turnTerminalMarkers)
         ? (restoredHistory as any).turnTerminalMarkers as NativeTurnTerminalMarker[]
         : null;

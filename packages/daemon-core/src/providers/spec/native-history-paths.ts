@@ -567,6 +567,30 @@ export function recentFiles(dir: string, pattern: RegExp, windowMs: number, sess
     return out.sort((a, b) => b.mtime - a.mtime).map(c => c.p);
 }
 
+/** Every matching file across nearby date directories inside the recency window, newest first. */
+export function recentFilesAcrossDateWindow(
+    template: string,
+    input: NativeHistoryInput,
+    pattern: RegExp,
+    windowMs: number,
+    sessionFloorMs = 0,
+): string[] {
+    const out: { p: string; mtime: number }[] = [];
+    const seenDirs = new Set<string>();
+    const anchors = sessionFloorMs > 0 ? [Date.now(), sessionFloorMs] : [Date.now()];
+    for (const anchorMs of anchors) {
+        for (const dayOffset of [0, -1, 1, -2, 2]) {
+            const dayMs = anchorMs + dayOffset * 24 * 60 * 60 * 1000;
+            const dayInput: NativeHistoryInput = { ...input, sessionStartedAtMs: sessionFloorMs };
+            const resolved = expandPathForDate(template, dayInput, new Date(dayMs));
+            if (!resolved || seenDirs.has(resolved)) continue;
+            seenDirs.add(resolved);
+            collectRecentFiles(resolved, pattern, windowMs, sessionFloorMs, out);
+        }
+    }
+    return out.sort((a, b) => b.mtime - a.mtime).map(c => c.p);
+}
+
 export function safeMtimeMs(p: string): number {
     try { return Math.floor(fs.statSync(p).mtimeMs); } catch { return 0; }
 }
@@ -667,12 +691,12 @@ export function pickExactSessionFileAcrossDateWindow(
 // return null and fall back to the mtime-based picker.
 // ────────────────────────────────────────────────────────────────────────────
 
-interface CandidateMeta {
+export interface CandidateMeta {
     cwd?: string;
     sessionTimestampMs?: number;
 }
 
-function readCandidateSessionMeta(filePath: string): CandidateMeta | null {
+export function readCandidateSessionMeta(filePath: string): CandidateMeta | null {
     try {
         // Read only the first line — meta is always the first JSONL record
         // and full file reads here would scale O(files × file_size).

@@ -500,8 +500,8 @@ function readCliNativeHistoryForReadChat(
         ? undefined
         : nativeHistorySessionId;
     const exactNativeHistoryScope = Boolean(
-        (typeof args?.historySessionId === 'string' && args.historySessionId.trim())
-        || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
+        (typeof args?.historySessionId === 'string' && args.historySessionId.trim() && args.historySessionId.trim() !== targetSessionId)
+        || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim() && args.providerSessionId.trim() !== targetSessionId)
         || snap.providerSessionId
         || (nativeHistoryReadSessionId && nativeHistoryReadSessionId !== targetSessionId)
         || ((h.currentSession as any)?.sessionId === args?.targetSessionId && typeof (h.currentSession as any)?.providerSessionId === 'string' && (h.currentSession as any).providerSessionId.trim())
@@ -607,7 +607,7 @@ function readCliNativeHistoryForReadChat(
             requireWorkspaceContentOverlap: lookup === 'workspace' && !exactNativeHistoryScope && !ownerConfirmedUuid,
         })
         : false;
-    if (skipLiveNativeHistoryWithoutProviderSession && (!safeMapping || snap.returnedMessages.length === 0)) {
+    if (skipLiveNativeHistoryWithoutProviderSession && (!safeMapping || (!ownerConfirmedUuid && snap.returnedMessages.length === 0))) {
         nativeHistory = null;
         nativeMessages = [];
         historyProviderSessionId = undefined;
@@ -663,10 +663,10 @@ function readCliNativeHistoryForReadChat(
         nativeHistoryError,
         historyProviderSessionId,
         safeMapping,
-        trustedExactNativeIdentity: lookup !== 'workspace'
-            && Boolean(nativeHistoryReadSessionId)
+        trustedExactNativeIdentity: (lookup !== 'workspace' || Boolean(ownerConfirmedUuid))
+            && Boolean(nativeHistorySessionForMapping)
             && Boolean(historyProviderSessionId)
-            && nativeHistoryReadSessionId === historyProviderSessionId,
+            && nativeHistorySessionForMapping === historyProviderSessionId,
     };
 }
 

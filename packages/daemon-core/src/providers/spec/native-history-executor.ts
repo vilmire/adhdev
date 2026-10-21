@@ -40,8 +40,11 @@ import {
     pickExactSessionFileAcrossGlob, pickDirUuidFileAcrossGlob, pickExactSessionFileAcrossDateWindow,
     listMatchingFiles, pickSessionBoundFile, pickSessionBoundFileAcrossGlob,
     pickSessionBoundFileAcrossDateWindow, UUID_RE, recentFiles, recentFilesAcrossGlob,
+    readCandidateSessionMeta, recentFilesAcrossDateWindow,
 } from './native-history-paths.js';
-import { containsSentPrompt, sentPromptSnippets } from '../native-history/sent-prompt-registry.js';
+import {
+    containsSentPrompt, hasExclusiveSentInput, hasRecordedSentInput, sentPromptSnippets,
+} from '../native-history/sent-prompt-registry.js';
 import { executeSqlite } from './native-history-sqlite.js';
 import {
     compileRecordShapes, compileUsageShapes, projectUsageRecord, projectMessages,
@@ -354,6 +357,26 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
     if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
 
+    const workspaceHint = typeof input.workspace === 'string' && input.workspace.trim() ? input.workspace.trim() : '';
+    const workspaceMatches = !workspaceHint
+        || !transcriptWorkspace
+        || claimKeyForPath(transcriptWorkspace) === claimKeyForPath(workspaceHint);
+    const codexExactConfirmed = Boolean(
+        requested && providerSessionId && sameSessionUuid(providerSessionId, requested) && workspaceMatches,
+    );
+    if (input.agentType === 'codex-cli' && codexExactConfirmed) {
+        claimOwnTranscript(sourcePath, input);
+    }
+    const codexPromptConfirmed = outcome?.ownerConfirmed === true
+        && workspaceMatches
+        && Boolean(
+            input.instanceId
+            && hasExclusiveSentInput(
+                input.instanceId,
+                messages.filter(m => m.role === 'user').map(m => m.content),
+            ),
+        );
+
     return {
         messages,
         providerSessionId,
@@ -364,7 +387,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         attribution: outcome?.attribution,
         // A timestamp/mtime pick is a candidate, not runtime ownership proof.
         ownerConfirmed: input.agentType === 'codex-cli'
-            ? Boolean(requested && providerSessionId && sameSessionUuid(providerSessionId, requested)) || outcome?.ownerConfirmed === true
+            ? (codexExactConfirmed || codexPromptConfirmed)
             : outcome?.ownerConfirmed,
         ...(usageRecords.length > 0
             ? {
@@ -557,9 +580,17 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
         try { stat = fs.statSync(resolved); } catch { /* fall through to date-walk fallback */ }
         if (stat && stat.isFile()) {
             sourcePath = resolved;
+        } else if (input.agentType === 'codex-cli' && !requestedSessionId && transcriptClaimOwnerToken(input.instanceId)) {
+            return resolveCodexInstanceSource(src, resolved, stat?.isDirectory() ? resolved : null, filePat, windowMs, sessionFloor, workspaceHint, input);
         } else if (stat && stat.isDirectory()) {
             const exact = pickExactSessionFile(resolved, filePat, requestedSessionId);
-            if (exact) claimOwnTranscript(exact, input);
+            if (exact) {
+                const owner = transcriptClaimOwnerToken(input.instanceId);
+                if (owner && isTranscriptClaimedByOther(claimKeyForPath(exact), owner)) {
+                    return failClosedResolution('already_claimed', workspaceHint, owner);
+                }
+                if (input.agentType !== 'codex-cli') claimOwnTranscript(exact, input);
+            }
             sourcePath = exact
                 || (requestedSessionId ? null : pickSessionBoundFile(resolved, filePat, windowMs, sessionFloor, workspaceHint));
             if (!sourcePath && !requestedSessionId) {
@@ -572,7 +603,14 @@ function resolveJsonlSourcePathDetailed(src: NativeHistoryJsonlSource, input: Na
         // disagree on local-vs-UTC date buckets. Search nearby date dirs
         // before falling back to non-exact matching.
         if (!sourcePath && hasDateTemplateSegment(src.path)) {
-            sourcePath = pickExactSessionFileAcrossDateWindow(src.path, input, filePat, requestedSessionId)
+            const exactDate = pickExactSessionFileAcrossDateWindow(src.path, input, filePat, requestedSessionId);
+            if (exactDate) {
+                const owner = transcriptClaimOwnerToken(input.instanceId);
+                if (owner && isTranscriptClaimedByOther(claimKeyForPath(exactDate), owner)) {
+                    return failClosedResolution('already_claimed', workspaceHint, owner);
+                }
+            }
+            sourcePath = exactDate
                 || (requestedSessionId ? null : pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint))
                 || (requestedSessionId ? null : newestRecentFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor));
         }
@@ -685,6 +723,83 @@ function pickRecentByPromptEvidence(candidates: string[], input: NativeHistoryIn
     const verdict = claimTranscript(claimKeyForPath(own), owner);
     if (verdict === 'denied') return { path: null };
     return { path: own, outcome: { attribution: 'claimed', ownerConfirmed: true } };
+}
+
+function resolveCodexInstanceSource(
+    src: NativeHistoryJsonlSource,
+    _resolved: string,
+    dir: string | null,
+    filePat: RegExp,
+    windowMs: number,
+    sessionFloor: number,
+    workspaceHint: string,
+    input: NativeHistoryInput,
+): JsonlSourceResolution {
+    const owner = transcriptClaimOwnerToken(input.instanceId);
+    if (!owner) return { path: null };
+    const effectiveFloor = sessionFloor > 0 ? Math.max(0, sessionFloor - SPAWN_BIND_GRACE_MS) : 0;
+    const rawCandidates: string[] = [];
+    const seen = new Set<string>();
+    const addCandidate = (p: string | null | undefined) => {
+        if (!p || seen.has(p)) return;
+        seen.add(p);
+        rawCandidates.push(p);
+    };
+    if (dir) {
+        for (const p of recentFiles(dir, filePat, windowMs, effectiveFloor)) addCandidate(p);
+    }
+    if (hasDateTemplateSegment(src.path)) {
+        for (const p of recentFilesAcrossDateWindow(src.path, input, filePat, windowMs, effectiveFloor)) addCandidate(p);
+    }
+    const unclaimed = rawCandidates.filter(p => !isTranscriptClaimedByOther(claimKeyForPath(p), owner));
+    const wsKey = workspaceHint ? claimKeyForPath(workspaceHint) : '';
+
+    if (hasRecordedSentInput(input.instanceId)) {
+        const shapes = compileRecordShapes(src);
+        const matches = unclaimed.filter((p) => {
+            const meta = readCandidateSessionMeta(p);
+            if (wsKey && (!meta?.cwd || claimKeyForPath(meta.cwd) !== wsKey)) return false;
+            if (sessionFloor > 0 && meta?.sessionTimestampMs != null && meta.sessionTimestampMs < sessionFloor - SPAWN_BIND_GRACE_MS) {
+                return false;
+            }
+            const lines = readJsonlLines(p);
+            if (lines.length === 0) return false;
+            const userTexts: string[] = [];
+            for (let i = 0; i < lines.length; i += 1) {
+                const rec = lines[i];
+                const shape = shapes.pick(rec);
+                if (!shape) continue;
+                for (const msg of projectMessages(rec, shape.map, i, lines.length, 0)) {
+                    if (msg.role === 'user' && msg.content) userTexts.push(msg.content);
+                }
+            }
+            return Boolean(input.instanceId && hasExclusiveSentInput(input.instanceId, userTexts));
+        });
+        if (matches.length > 1) return failClosedResolution('ambiguous', workspaceHint, owner);
+        if (matches.length === 1) {
+            const verdict = claimTranscript(claimKeyForPath(matches[0]), owner);
+            if (verdict === 'denied') return failClosedResolution('already_claimed', workspaceHint, owner);
+            return {
+                path: matches[0],
+                outcome: { attribution: verdict === 'stale_reclaimed' ? 'stale_reclaimed' : 'claimed', ownerConfirmed: true },
+            };
+        }
+        return { path: null };
+    }
+
+    const bound = (dir ? pickSessionBoundFile(dir, filePat, windowMs, sessionFloor, workspaceHint) : null)
+        || (hasDateTemplateSegment(src.path) ? pickSessionBoundFileAcrossDateWindow(src.path, input, filePat, windowMs, sessionFloor, workspaceHint) : null);
+    if (bound && !isTranscriptClaimedByOther(claimKeyForPath(bound), owner)) {
+        return { path: bound, outcome: { attribution: 'legacy', ownerConfirmed: false } };
+    }
+    const wsFiltered = wsKey
+        ? unclaimed.filter((p) => {
+            const meta = readCandidateSessionMeta(p);
+            return Boolean(meta?.cwd && claimKeyForPath(meta.cwd) === wsKey);
+        })
+        : unclaimed;
+    const fallback = wsFiltered[0] ?? (!wsKey ? unclaimed[0] : null) ?? null;
+    return { path: fallback, ...(fallback ? { outcome: { attribution: 'legacy', ownerConfirmed: false } } : {}) };
 }
 
 /** Canonical claim key for a transcript path: best-effort realpath so

@@ -378,6 +378,8 @@ export class SpecCliAdapter implements CliAdapter {
         const outcome = this.driver.sendMessageDuringGeneration(text, bracketedPaste, messageId);
         if (!outcome.accepted) {
             LOG.info('SpecAdapter', `[${this.cliType}] mid-generation send refused — ${outcome.reason} (len=${text.length})`);
+        } else {
+            recordSentPrompt(this.owningSessionId, text);
         }
         return outcome;
     }

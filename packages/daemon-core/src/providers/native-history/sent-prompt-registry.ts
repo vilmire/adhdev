@@ -98,6 +98,14 @@ export function sentPromptSnippets(instanceId: string | undefined): string[] {
     return id ? (promptsByInstance.get(id) ?? []).slice() : [];
 }
 
+export function hasRecordedSentInput(instanceId: string | undefined): boolean {
+    const id = typeof instanceId === 'string' ? instanceId.trim() : '';
+    if (!id) return false;
+    return (inputsByInstance.get(id)?.length ?? 0) > 0
+        || (shortInputsByInstance.get(id)?.length ?? 0) > 0
+        || (promptsByInstance.get(id)?.length ?? 0) > 0;
+}
+
 /** True when `haystack` (raw transcript text or projected user messages)
  *  contains any of the snippets, as written or JSON-escaped. */
 export function containsSentPrompt(haystack: string, snippets: string[]): boolean {
