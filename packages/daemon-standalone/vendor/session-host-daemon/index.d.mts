@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { EventEmitter } from 'events';
+import * as net from 'net';
 import { SessionHostEndpoint, SessionHostRegistry, SessionHostRequest, SessionHostResponse } from '@adhdev/session-host-core';
 
 interface HostUpgradeBinding {
@@ -18,6 +19,10 @@ interface SessionHostServerOptions {
     appName?: string;
     /** Explicit session-host state root (runtime records + tombstones). */
     storageRootDir?: string;
+    /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
+    pidFilePath?: string;
+    /** Optional predicate override for testing whether a prior pid is a managed session-host. */
+    isManagedOwnerPid?: (pid: number) => boolean;
 }
 declare class SessionHostServer extends EventEmitter {
     readonly endpoint: SessionHostEndpoint;
@@ -25,6 +30,8 @@ declare class SessionHostServer extends EventEmitter {
     private runtimes;
     private readonly storage;
     private readonly upgradeLease;
+    private readonly pidFilePath;
+    private readonly isManagedOwnerPid?;
     private restorePending;
     private mutatingRequests;
     private endpointInode;
@@ -41,10 +48,13 @@ declare class SessionHostServer extends EventEmitter {
     private stopRequests;
     private stopPromise;
     constructor(options?: SessionHostServerOptions);
+    private isPidAlive;
+    private isManagedSessionHostPid;
+    private evictPriorEndpointOwners;
     start(): Promise<void>;
     stop(): Promise<void>;
     private runStop;
-    handleRequest(request: SessionHostRequest): Promise<SessionHostResponse>;
+    handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse>;
     private requireRuntime;
     private getAttachedClient;
     private emitEvent;

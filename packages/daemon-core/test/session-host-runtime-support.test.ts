@@ -87,4 +87,56 @@ describe('session host runtime support compatibility', () => {
 
     expect(spawnHost).toHaveBeenCalledTimes(1)
   })
+
+  it('does NOT stop or replace a live existing host on a transient canConnect failure when retry succeeds', async () => {
+    const events: string[] = []
+    const spawnHost = vi.fn(() => events.push('spawn'))
+    const beforeSpawnHost = vi.fn(() => events.push('stop-existing'))
+    mocks.state.connectResults = ['fail', 'ok']
+    mocks.state.diagnosticsResults = [{ success: true, result: { supportedRequestTypes: ['delete_session'] } }]
+
+    await expect(ensureSessionHostReady({
+      appName: 'adhdev-transient-stall',
+      spawnHost,
+      isExistingHostAlive: () => true,
+      beforeSpawnHost,
+      verifyRetries: 2,
+      verifyRetryDelayMs: 5,
+      requiredRequestTypes: ['delete_session'],
+      timeoutMs: 50,
+    } as any)).resolves.toEqual({ kind: 'unix', path: '/tmp/adhdev-transient-stall-session-host.sock' })
+
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(events).toEqual([])
+  })
+
+  it('stops the existing host before spawning a replacement when canConnect persistently fails (no split-brain)', async () => {
+    const events: string[] = []
+    let existingAlive = true
+    const beforeSpawnHost = vi.fn(() => {
+      events.push('stop-existing')
+      existingAlive = false
+    })
+    const spawnHost = vi.fn(() => {
+      // At spawn time the old host must already be stopped so two hosts never coexist.
+      expect(existingAlive).toBe(false)
+      events.push('spawn')
+    })
+    mocks.state.connectResults = ['fail', 'fail', 'fail', 'ok']
+    mocks.state.diagnosticsResults = [{ success: true, result: { supportedRequestTypes: ['delete_session'] } }]
+
+    await expect(ensureSessionHostReady({
+      appName: 'adhdev-persistent-wedge',
+      spawnHost,
+      isExistingHostAlive: () => existingAlive,
+      beforeSpawnHost,
+      verifyRetries: 2,
+      verifyRetryDelayMs: 5,
+      requiredRequestTypes: ['delete_session'],
+      timeoutMs: 50,
+    } as any)).resolves.toEqual({ kind: 'unix', path: '/tmp/adhdev-persistent-wedge-session-host.sock' })
+
+    expect(events).toEqual(['stop-existing', 'spawn'])
+  })
 })

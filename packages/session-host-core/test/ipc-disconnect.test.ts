@@ -236,3 +236,65 @@ test('stops signalling after the listener unsubscribes', async () => {
     await h.cleanup()
   }
 })
+
+test('request timeout destroys the wedged socket, rejects concurrent waiters, and reconnects on a fresh socket for the next request', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-timeout-reconnect-'))
+  const sockPath = path.join(dir, 'host.sock')
+  let connectionCount = 0
+  let dropRequestsOnCurrentSocket = true
+
+  const server = net.createServer((socket) => {
+    connectionCount += 1
+    const connId = connectionCount
+    socket.on('data', (chunk) => {
+      if (connId === 1 && dropRequestsOnCurrentSocket) {
+        // Simulate a wedged/split-brain socket (Recv-Q saturated or orphaned host):
+        // connection stays open at the TCP/UDS level, but never replies.
+        return
+      }
+      const lines = chunk.toString('utf8').split('\n').filter((line) => line.trim().length > 0)
+      for (const line of lines) {
+        const env = JSON.parse(line)
+        socket.write(
+          `${JSON.stringify({
+            kind: 'response',
+            requestId: env.requestId,
+            response: { success: true, result: [{ sessionId: `from-conn-${connId}` }] },
+          })}\n`,
+        )
+      }
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(sockPath, resolve))
+
+  const client = new SessionHostClient({ endpoint: { kind: 'unix', path: sockPath } })
+  const realSetTimeout = globalThis.setTimeout
+  ;(globalThis as any).setTimeout = (fn: (...args: any[]) => void, ms?: number, ...args: any[]) => {
+    const adjustedMs = ms === 30_000 ? 30 : ms
+    return realSetTimeout(fn, adjustedMs, ...args)
+  }
+
+  try {
+    const firstReq = client.request({ type: 'list_sessions', payload: {} })
+    const concurrentReq = client.request({ type: 'get_host_diagnostics', payload: {} })
+
+    await assert.rejects(firstReq, /Session host request timed out/)
+    await assert.rejects(concurrentReq, /Session host request timed out/)
+    assert.equal(connectionCount, 1)
+
+    // Subsequent request must open a new UDS connection (connId === 2) instead of reusing wedged connId === 1
+    dropRequestsOnCurrentSocket = false
+    const recovery = await client.request<Array<{ sessionId: string }>>({
+      type: 'list_sessions',
+      payload: {},
+    })
+    assert.equal(recovery.success, true)
+    assert.deepEqual(recovery.result, [{ sessionId: 'from-conn-2' }])
+    assert.equal(connectionCount, 2)
+  } finally {
+    globalThis.setTimeout = realSetTimeout
+    await client.close().catch(() => {})
+    if (server.listening) await new Promise<void>((r) => server.close(() => r()))
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
+  }
+})

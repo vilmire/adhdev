@@ -633,20 +633,54 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             }
         }
 
+        const isExistingHostAlive = (): boolean => {
+            const existingPid = getPid();
+            return existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid);
+        };
+
+        const disconnectEndpointClients = (endpoint: SessionHostEndpoint): void => {
+            (SessionHostClient as { disconnectClients?: (ep?: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
+        };
+
+        const beforeSpawnHost = async (endpoint: SessionHostEndpoint): Promise<void> => {
+            disconnectEndpointClients(endpoint);
+            const existingPid = getPid();
+            if (existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid)) {
+                stopManagedSessionHostProcess();
+                if (process.platform !== 'win32' && isPidAlive(existingPid) && isManagedPid(existingPid)) {
+                    const deadline = Date.now() + 300;
+                    while (Date.now() < deadline && isPidAlive(existingPid)) {
+                        await new Promise((resolve) => setTimeout(resolve, 25));
+                    }
+                    if (isPidAlive(existingPid)) {
+                        try { process.kill(existingPid, 'SIGKILL'); } catch { /* noop */ }
+                        try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
+                    }
+                }
+            } else if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                options.extraStop?.(endpoint);
+            }
+        };
+
         try {
             return await ensureSharedSessionHostReady({
                 appName,
                 endpoint: getEndpoint(),
                 spawnHost,
+                beforeSpawnHost,
+                isExistingHostAlive,
                 timeoutMs,
                 requiredRequestTypes: options.requiredRequestTypes,
             });
         } catch (error) {
             stopManagedSessionHostProcess();
+            disconnectEndpointClients(getEndpoint());
             return ensureSharedSessionHostReady({
                 appName,
                 endpoint: getEndpoint(),
                 spawnHost,
+                beforeSpawnHost,
+                isExistingHostAlive,
                 timeoutMs,
                 requiredRequestTypes: options.requiredRequestTypes,
             }).catch((retryError) => {

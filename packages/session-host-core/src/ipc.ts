@@ -138,6 +138,20 @@ export type SessionHostDisconnectReason = 'error' | 'ended' | 'closed';
  * (host not up yet) — only the former is a session-host death signal.
  */
 const establishedSockets = new WeakSet<net.Socket>();
+const activeClientRefs = new Set<WeakRef<SessionHostClient>>();
+
+export function disconnectSessionHostClients(endpoint?: SessionHostEndpoint, error?: Error): void {
+  for (const ref of activeClientRefs) {
+    const client = ref.deref();
+    if (!client) {
+      activeClientRefs.delete(ref);
+      continue;
+    }
+    if (!endpoint || client.endpoint.path === endpoint.path) {
+      client.disconnect(error);
+    }
+  }
+}
 
 export interface SessionHostDisconnectInfo {
   reason: SessionHostDisconnectReason;
@@ -161,6 +175,7 @@ export class SessionHostClient {
   readonly endpoint: SessionHostEndpoint;
 
   private socket: net.Socket | null = null;
+  private requestTimeoutMs = 30_000;
   private requestWaiters = new Map<string, { resolve: (value: SessionHostResponse) => void; reject: (error: Error) => void }>();
   private eventListeners = new Set<(event: SessionHostEvent) => void>();
   private disconnectListeners = new Set<(info: SessionHostDisconnectInfo) => void>();
@@ -169,6 +184,11 @@ export class SessionHostClient {
 
   constructor(options: SessionHostClientOptions = {}) {
     this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || 'adhdev');
+    activeClientRefs.add(new WeakRef(this));
+  }
+
+  static disconnectClients(endpoint?: SessionHostEndpoint, error?: Error): void {
+    disconnectSessionHostClients(endpoint, error);
   }
 
   /**
@@ -332,7 +352,8 @@ export class SessionHostClient {
 
   async request<T = unknown>(request: SessionHostRequest): Promise<SessionHostResponse<T>> {
     await this.connect();
-    if (!this.socket) throw new Error('Session host socket unavailable');
+    const requestSocket = this.socket;
+    if (!requestSocket) throw new Error('Session host socket unavailable');
 
     const requestId = generateUUID();
     const envelope: SessionHostRequestEnvelope = {
@@ -341,19 +362,41 @@ export class SessionHostClient {
       request,
     };
 
+    const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 30_000;
     const response = await new Promise<SessionHostResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.requestWaiters.delete(requestId);
-        reject(new Error(`Session host request timed out after 30s (${request.type})`));
-      }, 30_000);
+        const timeoutError = new Error(`Session host request timed out after 30s (${request.type})`);
+        if (this.socket === requestSocket) {
+          this.disconnect(timeoutError);
+        } else {
+          this.disconnectedSockets.add(requestSocket);
+          try { requestSocket.destroy(); } catch { /* noop */ }
+        }
+        reject(timeoutError);
+      }, timeoutMs);
       this.requestWaiters.set(requestId, {
         resolve: (value) => { clearTimeout(timeout); resolve(value); },
         reject: (error) => { clearTimeout(timeout); reject(error); },
       });
-      this.socket?.write(serializeEnvelope(envelope));
+      requestSocket.write(serializeEnvelope(envelope));
     });
 
     return response as SessionHostResponse<T>;
+  }
+
+  disconnect(error?: Error): void {
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
+      this.disconnectedSockets.add(socket);
+      try { socket.destroy(); } catch { /* noop */ }
+    }
+    const failure = error || new Error(`Session host client disconnected (${this.endpoint.path})`);
+    for (const waiter of this.requestWaiters.values()) {
+      waiter.reject(failure);
+    }
+    this.requestWaiters.clear();
   }
 
   async close(): Promise<void> {

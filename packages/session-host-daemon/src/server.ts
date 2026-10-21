@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -51,6 +52,10 @@ export interface SessionHostServerOptions {
   appName?: string;
   /** Explicit session-host state root (runtime records + tombstones). */
   storageRootDir?: string;
+  /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
+  pidFilePath?: string;
+  /** Optional predicate override for testing whether a prior pid is a managed session-host. */
+  isManagedOwnerPid?: (pid: number) => boolean;
 }
 
 export class SessionHostServer extends EventEmitter {
@@ -59,6 +64,8 @@ export class SessionHostServer extends EventEmitter {
   private runtimes = new Map<string, PtySessionRuntime>();
   private readonly storage: SessionHostStorage;
   private readonly upgradeLease: HostUpgradeLease | null;
+  private readonly pidFilePath: string | null;
+  private readonly isManagedOwnerPid?: (pid: number) => boolean;
   private restorePending = true;
   private mutatingRequests = 0;
   private endpointInode: bigint | null = null;
@@ -94,10 +101,97 @@ export class SessionHostServer extends EventEmitter {
     }
     this.upgradeLease = options.upgradeBinding
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
+    this.pidFilePath = options.pidFilePath || null;
+    this.isManagedOwnerPid = options.isManagedOwnerPid;
     this.storage = new SessionHostStorage({
       appName: options.appName || 'adhdev',
       rootDir: options.storageRootDir,
     });
+  }
+
+  private isPidAlive(pid: number): boolean {
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error: any) {
+      return error?.code === 'EPERM';
+    }
+  }
+
+  private isManagedSessionHostPid(pid: number): boolean {
+    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
+    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
+    if (process.platform === 'win32') return false;
+    try {
+      const cmd = String(
+        execFileSync('/bin/ps', ['-o', 'args=', '-p', String(pid)], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 2_000,
+          windowsHide: true,
+        }),
+      ).trim();
+      return /session-host-daemon|adhdev-sessiond/i.test(cmd);
+    } catch {
+      return false;
+    }
+  }
+
+  private async evictPriorEndpointOwners(): Promise<void> {
+    if (this.endpoint.kind !== 'unix') return;
+    const candidatePids = new Set<number>();
+    if (this.pidFilePath && fs.existsSync(this.pidFilePath)) {
+      try {
+        const pid = Number.parseInt(fs.readFileSync(this.pidFilePath, 'utf8').trim(), 10);
+        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
+          candidatePids.add(pid);
+        }
+      } catch {
+        // noop
+      }
+    }
+    if (process.platform !== 'win32' && fs.existsSync(this.endpoint.path)) {
+      const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
+      try {
+        const out = String(
+          execFileSync(lsofBin, ['-n', '-t', '-U', '--', this.endpoint.path], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 2_000,
+            windowsHide: true,
+          }),
+        );
+        for (const line of out.split(/\r?\n/)) {
+          const pid = Number.parseInt(line.trim(), 10);
+          if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
+            candidatePids.add(pid);
+          }
+        }
+      } catch {
+        // noop
+      }
+    }
+
+    for (const pid of candidatePids) {
+      if (!this.isPidAlive(pid) || !this.isManagedSessionHostPid(pid)) continue;
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        continue;
+      }
+      const deadline = Date.now() + 300;
+      while (Date.now() < deadline && this.isPidAlive(pid)) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      if (this.isPidAlive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // noop
+        }
+      }
+    }
   }
 
   async start(): Promise<void> {
@@ -110,6 +204,7 @@ export class SessionHostServer extends EventEmitter {
       }
     }
     if (!this.upgradeLease && this.endpoint.kind === 'unix') {
+      await this.evictPriorEndpointOwners();
       try {
         fs.unlinkSync(this.endpoint.path);
       } catch {
@@ -186,9 +281,15 @@ export class SessionHostServer extends EventEmitter {
       throw error;
     }
 
-    if (this.upgradeLease && this.endpoint.kind === 'unix') {
-      fs.chmodSync(this.endpoint.path, 0o600);
-      this.endpointInode = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
+    if (this.endpoint.kind === 'unix') {
+      if (this.upgradeLease) {
+        fs.chmodSync(this.endpoint.path, 0o600);
+      }
+      try {
+        this.endpointInode = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
+      } catch {
+        this.endpointInode = null;
+      }
     }
     this.recordHostLog('info', `session host endpoint ready: ${this.endpoint.path}`);
     // Do not block readiness on restoring/resuming persisted runtimes.
@@ -230,11 +331,36 @@ export class SessionHostServer extends EventEmitter {
     if (this.ipcServer) {
       const server = this.ipcServer;
       this.ipcServer = null;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      let preservePath: string | null = null;
+      if (this.endpoint.kind === 'unix' && this.endpointInode !== null) {
+        try {
+          const currentIno = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
+          if (currentIno !== this.endpointInode) {
+            preservePath = `${this.endpoint.path}.preserve-${process.pid}-${Date.now()}`;
+            fs.renameSync(this.endpoint.path, preservePath);
+          }
+        } catch {
+          preservePath = null;
+        }
+      }
+      await new Promise<void>((resolve) =>
+        server.close(() => {
+          if (preservePath) {
+            try {
+              fs.renameSync(preservePath, this.endpoint.path);
+            } catch {
+              // noop
+            }
+          }
+          resolve();
+        }),
+      );
     }
     if (this.endpoint.kind === 'unix') {
       try {
-        if (!this.upgradeLease || fs.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) fs.unlinkSync(this.endpoint.path);
+        if (this.endpointInode !== null && fs.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
+          fs.unlinkSync(this.endpoint.path);
+        }
       } catch {
         // A replacement endpoint belongs to someone else.
       }
@@ -243,7 +369,7 @@ export class SessionHostServer extends EventEmitter {
     this.removeAllListeners();
   }
 
-  async handleRequest(request: SessionHostRequest): Promise<SessionHostResponse> {
+  async handleRequest(request: SessionHostRequest, sourceSocket?: net.Socket): Promise<SessionHostResponse> {
     const readOnly = ['get_upgrade_lease', 'acquire_upgrade_lease', 'release_upgrade_lease', 'get_host_diagnostics', 'list_sessions', 'get_snapshot', 'get_terminal_snapshot'].includes(request.type);
     let counted = false;
     try {
@@ -266,6 +392,9 @@ export class SessionHostServer extends EventEmitter {
           return { success: true, result: this.upgradeLease.release(request.payload) };
         case 'create_session': {
           const record = this.registry.createSession(request.payload);
+          if (sourceSocket) {
+            this.subscribeSocketToSession(sourceSocket, record.sessionId);
+          }
           this.schedulePersist(record.sessionId);
           this.emitEvent({ type: 'session_created', sessionId: record.sessionId, record });
           this.recordRuntimeTransition(record.sessionId, 'create_session', 'starting', `provider=${record.providerType}`, true);
@@ -488,13 +617,12 @@ export class SessionHostServer extends EventEmitter {
     if (!diagnosticOnly) {
       const targetSessionId = 'sessionId' in event ? (event as { sessionId: string }).sessionId : null;
       for (const socket of [...this.sockets]) {
-        // If the event is session-specific, only send to sockets subscribed to that session.
-        if (targetSessionId && event.type === 'session_output') {
+        // Session-scoped output and lifecycle events are only delivered to sockets
+        // subscribed to that session; unsubscribed request/response control sockets
+        // must not receive unsolicited lifecycle broadcasts that fill their Recv-Q.
+        if (targetSessionId) {
           const sessions = this.socketSessions.get(socket);
           if (!sessions?.has(targetSessionId)) continue;
-        } else if (targetSessionId && this.socketSessions.size > 0) {
-          const sessions = this.socketSessions.get(socket);
-          if (sessions && !sessions.has(targetSessionId)) continue;
         }
         this.writeEnvelopeSafely(socket, {
           kind: 'event',
@@ -520,7 +648,7 @@ export class SessionHostServer extends EventEmitter {
       this.subscribeSocketToSession(socket, sessionId);
     }
     const startedAt = Date.now();
-    const response = await this.handleRequest(envelope.request);
+    const response = await this.handleRequest(envelope.request, socket);
     if (sessionId && envelope.request.type === 'create_session' && response.success) {
       // sessionId may have been auto-generated — subscribe to whatever was actually created
       const createdId = (response.result as { sessionId?: string } | undefined)?.sessionId;

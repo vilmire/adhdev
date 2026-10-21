@@ -37,6 +37,7 @@ export class SessionHostController implements SessionHostControlPlane {
     private unsubscribeDisconnect: (() => void) | null = null;
     private wasConnected = false;
     private consecutiveConnectFailures = 0;
+    private consecutiveFailureCount = 0;
     /** Every Nth consecutive 2s connect failure gets a warn line (30 → ~1/min). */
     private static readonly CONNECT_FAILURE_LOG_EVERY = 30;
     /** First respawn after this many consecutive failures (~6s), then every RESPAWN_RETRY_EVERY (~30s). */
@@ -109,6 +110,7 @@ export class SessionHostController implements SessionHostControlPlane {
         }
         this.wasConnected = false;
         this.consecutiveConnectFailures = 0;
+        this.consecutiveFailureCount = 0;
         await this.client.close().catch(() => {});
     }
 
@@ -166,18 +168,34 @@ export class SessionHostController implements SessionHostControlPlane {
     }): Promise<T> {
         const readOnly = ['list_sessions', 'get_host_diagnostics'].includes(request.type);
         const execute = async () => {
-        await this.ensureConnected();
-        const response = await this.client.request<T>(request as any);
-        if (!response.success) {
-            throw new Error(response.error || `Session host request failed: ${request.type}`);
-        }
-        return (response.result ?? null) as T;
+            if (this.consecutiveFailureCount >= 2) {
+                this.client.disconnect();
+            }
+            await this.ensureConnected();
+            let response;
+            try {
+                response = await this.client.request<T>(request as any);
+            } catch (error) {
+                this.consecutiveFailureCount += 1;
+                if (this.consecutiveFailureCount >= 2) {
+                    this.client.disconnect();
+                }
+                throw error;
+            }
+            if (!response.success) {
+                throw new Error(response.error || `Session host request failed: ${request.type}`);
+            }
+            this.consecutiveFailureCount = 0;
+            return (response.result ?? null) as T;
         };
         return readOnly ? execute() : withMaintenanceAdmission(execute);
     }
 
     private async ensureConnected(): Promise<void> {
         try {
+            if (this.consecutiveFailureCount >= 2 || this.consecutiveConnectFailures >= 2) {
+                this.client.disconnect();
+            }
             await this.client.connect();
             if (!this.wasConnected) {
                 this.wasConnected = true;

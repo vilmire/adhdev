@@ -73,3 +73,70 @@ test('uncaught-exception limiter counts correctly from a zero timestamp', () => 
   assert.equal(shouldExit(2).exit, false)
   assert.equal(shouldExit(3).exit, true)
 })
+
+test('start() evicts a prior managed host process recorded in pidFilePath before rebinding and old stop() never unlinks replacement socket', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-split-brain-'))
+  const sockPath = path.join(tmp, 'host.sock')
+  const pidFilePath = path.join(tmp, 'host.pid')
+  const priorPid = 49151
+  fs.writeFileSync(pidFilePath, `${priorPid}\n`, 'utf8')
+
+  const killCalls: Array<[number, string | number | undefined]> = []
+  let priorAlive = true
+  const realKill = process.kill.bind(process)
+  ;(process as any).kill = (pid: number, signal?: string | number) => {
+    if (pid === priorPid) {
+      killCalls.push([pid, signal])
+      if (signal === 0 || signal === undefined) {
+        if (priorAlive) return true
+        const err = new Error('kill ESRCH') as NodeJS.ErrnoException
+        err.code = 'ESRCH'
+        throw err
+      }
+      priorAlive = false
+      return true
+    }
+    return realKill(pid, signal as any)
+  }
+
+  let firstServer: SessionHostServer | null = null
+  let secondServer: SessionHostServer | null = null
+  try {
+    firstServer = new SessionHostServer({
+      appName: `adhdev-split-brain-first-${process.pid}`,
+      endpoint: { kind: 'unix', path: sockPath },
+      storageRootDir: path.join(tmp, 'storage-1'),
+    })
+    await firstServer.start()
+
+    secondServer = new SessionHostServer({
+      appName: `adhdev-split-brain-second-${process.pid}`,
+      endpoint: { kind: 'unix', path: sockPath },
+      storageRootDir: path.join(tmp, 'storage-2'),
+      pidFilePath,
+      isManagedOwnerPid: (pid: number) => pid === priorPid,
+    } as any)
+    await secondServer.start()
+
+    assert.equal(
+      killCalls.some(([pid, sig]) => pid === priorPid && sig === 'SIGTERM'),
+      true,
+      'new host start() must stop prior managed host before rebinding socket',
+    )
+    const secondIno = fs.lstatSync(sockPath, { bigint: true }).ino
+
+    // Old host stopping late must NOT unlink the replacement host's bound socket inode
+    await firstServer.stop()
+    firstServer = null
+    assert.equal(fs.existsSync(sockPath), true, 'late stop() of old host unlinked replacement socket')
+    assert.equal(fs.lstatSync(sockPath, { bigint: true }).ino, secondIno)
+
+    await secondServer.stop()
+    secondServer = null
+  } finally {
+    process.kill = realKill
+    await firstServer?.stop().catch(() => {})
+    await secondServer?.stop().catch(() => {})
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})

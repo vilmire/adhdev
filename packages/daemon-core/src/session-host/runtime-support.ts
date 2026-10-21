@@ -98,12 +98,30 @@ export async function ensureSessionHostReady(options: {
      */
     endpoint?: SessionHostEndpoint;
     spawnHost: () => void;
+    beforeSpawnHost?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
+    isExistingHostAlive?: () => boolean;
+    canConnectRetries?: number;
+    canConnectRetryDelayMs?: number;
     timeoutMs?: number;
     requiredRequestTypes?: readonly SessionHostRequestType[];
 }): Promise<SessionHostEndpoint> {
     const endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || resolveSessionHostAppName());
     const requiredRequestTypes = options.requiredRequestTypes || [];
     if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
+
+    if (options.isExistingHostAlive?.()) {
+        const retries = Math.max(1, options.canConnectRetries ?? 2);
+        const defaultDelay = Math.min(150, Math.max(10, Math.floor((options.timeoutMs ?? STARTUP_TIMEOUT_MS) / 6)));
+        const retryDelayMs = options.canConnectRetryDelayMs ?? defaultDelay;
+        for (let attempt = 0; attempt < retries; attempt += 1) {
+            if (!options.isExistingHostAlive()) break;
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+            if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
+        }
+    }
+
+    (SessionHostClient as { disconnectClients?: (ep?: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
+    await options.beforeSpawnHost?.(endpoint);
     options.spawnHost();
     await waitForReady(endpoint, options.timeoutMs, requiredRequestTypes);
     return endpoint;

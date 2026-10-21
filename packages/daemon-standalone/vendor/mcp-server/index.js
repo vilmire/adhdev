@@ -2882,6 +2882,7 @@ var require_dist = __commonJS({
       createLineParser: () => createLineParser,
       createResponseEnvelope: () => createResponseEnvelope,
       createSessionHostControlPlane: () => createSessionHostControlPlane,
+      disconnectSessionHostClients: () => disconnectSessionHostClients,
       ensureNodePtySpawnHelperPermissions: () => ensureNodePtySpawnHelperPermissions,
       formatRuntimeOwner: () => formatRuntimeOwner,
       getDefaultSessionHostEndpoint: () => getDefaultSessionHostEndpoint,
@@ -3614,9 +3615,23 @@ var require_dist = __commonJS({
       return parser;
     }
     var establishedSockets = /* @__PURE__ */ new WeakSet();
+    var activeClientRefs = /* @__PURE__ */ new Set();
+    function disconnectSessionHostClients(endpoint, error) {
+      for (const ref of activeClientRefs) {
+        const client = ref.deref();
+        if (!client) {
+          activeClientRefs.delete(ref);
+          continue;
+        }
+        if (!endpoint || client.endpoint.path === endpoint.path) {
+          client.disconnect(error);
+        }
+      }
+    }
     var SessionHostClient = class {
       endpoint;
       socket = null;
+      requestTimeoutMs = 3e4;
       requestWaiters = /* @__PURE__ */ new Map();
       eventListeners = /* @__PURE__ */ new Set();
       disconnectListeners = /* @__PURE__ */ new Set();
@@ -3624,6 +3639,10 @@ var require_dist = __commonJS({
       disconnectedSockets = /* @__PURE__ */ new WeakSet();
       constructor(options = {}) {
         this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || "adhdev");
+        activeClientRefs.add(new WeakRef(this));
+      }
+      static disconnectClients(endpoint, error) {
+        disconnectSessionHostClients(endpoint, error);
       }
       /**
        * Fires when an established connection to the session host goes away.
@@ -3743,18 +3762,30 @@ var require_dist = __commonJS({
       }
       async request(request) {
         await this.connect();
-        if (!this.socket) throw new Error("Session host socket unavailable");
+        const requestSocket = this.socket;
+        if (!requestSocket) throw new Error("Session host socket unavailable");
         const requestId = generateUUID();
         const envelope = {
           kind: "request",
           requestId,
           request
         };
+        const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 3e4;
         const response = await new Promise((resolve3, reject) => {
           const timeout = setTimeout(() => {
             this.requestWaiters.delete(requestId);
-            reject(new Error(`Session host request timed out after 30s (${request.type})`));
-          }, 3e4);
+            const timeoutError = new Error(`Session host request timed out after 30s (${request.type})`);
+            if (this.socket === requestSocket) {
+              this.disconnect(timeoutError);
+            } else {
+              this.disconnectedSockets.add(requestSocket);
+              try {
+                requestSocket.destroy();
+              } catch {
+              }
+            }
+            reject(timeoutError);
+          }, timeoutMs);
           this.requestWaiters.set(requestId, {
             resolve: (value) => {
               clearTimeout(timeout);
@@ -3765,9 +3796,25 @@ var require_dist = __commonJS({
               reject(error);
             }
           });
-          this.socket?.write(serializeEnvelope(envelope));
+          requestSocket.write(serializeEnvelope(envelope));
         });
         return response;
+      }
+      disconnect(error) {
+        const socket = this.socket;
+        this.socket = null;
+        if (socket) {
+          this.disconnectedSockets.add(socket);
+          try {
+            socket.destroy();
+          } catch {
+          }
+        }
+        const failure = error || new Error(`Session host client disconnected (${this.endpoint.path})`);
+        for (const waiter of this.requestWaiters.values()) {
+          waiter.reject(failure);
+        }
+        this.requestWaiters.clear();
       }
       async close() {
         if (!this.socket) return;
@@ -179617,6 +179664,18 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const endpoint = options.endpoint || (0, import_session_host_core15.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const requiredRequestTypes = options.requiredRequestTypes || [];
       if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
+      if (options.isExistingHostAlive?.()) {
+        const retries = Math.max(1, options.canConnectRetries ?? 2);
+        const defaultDelay = Math.min(150, Math.max(10, Math.floor((options.timeoutMs ?? STARTUP_TIMEOUT_MS) / 6)));
+        const retryDelayMs = options.canConnectRetryDelayMs ?? defaultDelay;
+        for (let attempt = 0; attempt < retries; attempt += 1) {
+          if (!options.isExistingHostAlive()) break;
+          await new Promise((resolve54) => setTimeout(resolve54, retryDelayMs));
+          if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
+        }
+      }
+      import_session_host_core15.SessionHostClient.disconnectClients?.(endpoint);
+      await options.beforeSpawnHost?.(endpoint);
       options.spawnHost();
       await waitForReady(endpoint, options.timeoutMs, requiredRequestTypes);
       return endpoint;
@@ -179959,20 +180018,57 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             stopManagedSessionHostProcess();
           }
         }
+        const isExistingHostAlive = () => {
+          const existingPid = getPid();
+          return existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid);
+        };
+        const disconnectEndpointClients = (endpoint) => {
+          import_session_host_core16.SessionHostClient.disconnectClients?.(endpoint);
+        };
+        const beforeSpawnHost = async (endpoint) => {
+          disconnectEndpointClients(endpoint);
+          const existingPid = getPid();
+          if (existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid)) {
+            stopManagedSessionHostProcess();
+            if (process.platform !== "win32" && isPidAlive(existingPid) && isManagedPid(existingPid)) {
+              const deadline = Date.now() + 300;
+              while (Date.now() < deadline && isPidAlive(existingPid)) {
+                await new Promise((resolve54) => setTimeout(resolve54, 25));
+              }
+              if (isPidAlive(existingPid)) {
+                try {
+                  process.kill(existingPid, "SIGKILL");
+                } catch {
+                }
+                try {
+                  fs113.unlinkSync(getPidFile());
+                } catch {
+                }
+              }
+            }
+          } else if (endpoint.kind === "unix" && fs113.existsSync(endpoint.path)) {
+            options.extraStop?.(endpoint);
+          }
+        };
         try {
           return await ensureSessionHostReady({
             appName,
             endpoint: getEndpoint(),
             spawnHost,
+            beforeSpawnHost,
+            isExistingHostAlive,
             timeoutMs,
             requiredRequestTypes: options.requiredRequestTypes
           });
         } catch (error) {
           stopManagedSessionHostProcess();
+          disconnectEndpointClients(getEndpoint());
           return ensureSessionHostReady({
             appName,
             endpoint: getEndpoint(),
             spawnHost,
+            beforeSpawnHost,
+            isExistingHostAlive,
             timeoutMs,
             requiredRequestTypes: options.requiredRequestTypes
           }).catch((retryError) => {
@@ -187638,6 +187734,7 @@ ${notice.notice}${supersededHint}`;
       unsubscribeDisconnect = null;
       wasConnected = false;
       consecutiveConnectFailures = 0;
+      consecutiveFailureCount = 0;
       /** Every Nth consecutive 2s connect failure gets a warn line (30 → ~1/min). */
       static CONNECT_FAILURE_LOG_EVERY = 30;
       /** First respawn after this many consecutive failures (~6s), then every RESPAWN_RETRY_EVERY (~30s). */
@@ -187678,6 +187775,7 @@ ${notice.notice}${supersededHint}`;
         }
         this.wasConnected = false;
         this.consecutiveConnectFailures = 0;
+        this.consecutiveFailureCount = 0;
         await this.client.close().catch(() => {
         });
       }
@@ -187720,17 +187818,33 @@ ${notice.notice}${supersededHint}`;
       async request(request) {
         const readOnly = ["list_sessions", "get_host_diagnostics"].includes(request.type);
         const execute = async () => {
+          if (this.consecutiveFailureCount >= 2) {
+            this.client.disconnect();
+          }
           await this.ensureConnected();
-          const response = await this.client.request(request);
+          let response;
+          try {
+            response = await this.client.request(request);
+          } catch (error) {
+            this.consecutiveFailureCount += 1;
+            if (this.consecutiveFailureCount >= 2) {
+              this.client.disconnect();
+            }
+            throw error;
+          }
           if (!response.success) {
             throw new Error(response.error || `Session host request failed: ${request.type}`);
           }
+          this.consecutiveFailureCount = 0;
           return response.result ?? null;
         };
         return readOnly ? execute() : withMaintenanceAdmission(execute);
       }
       async ensureConnected() {
         try {
+          if (this.consecutiveFailureCount >= 2 || this.consecutiveConnectFailures >= 2) {
+            this.client.disconnect();
+          }
           await this.client.connect();
           if (!this.wasConnected) {
             this.wasConnected = true;

@@ -71,4 +71,36 @@ describe('SessionHostController dead-host respawn', () => {
         await Promise.all([a, b]);
         expect(handle.endpoint()).toEqual({ kind: 'unix', path: '/tmp/b.sock' });
     });
+
+    it('forces client.disconnect() after 2 consecutive request failures before reconnecting', async () => {
+        const controller = new SessionHostController(deadEndpoint());
+        const disconnectSpy = vi.fn();
+        let connectCalls = 0;
+        let requestCalls = 0;
+        (controller as any).client = {
+            connect: vi.fn(async () => {
+                connectCalls += 1;
+            }),
+            disconnect: disconnectSpy,
+            close: vi.fn(async () => {}),
+            request: vi.fn(async () => {
+                requestCalls += 1;
+                if (requestCalls <= 2) {
+                    throw new Error('Session host request timed out after 30s (list_sessions)');
+                }
+                return { success: true, result: [{ sessionId: 'recovered-after-disconnect' }] };
+            }),
+        };
+
+        await expect(controller.listSessions()).rejects.toThrow(/timed out/);
+        expect(disconnectSpy).not.toHaveBeenCalled();
+
+        await expect(controller.listSessions()).rejects.toThrow(/timed out/);
+        expect(disconnectSpy).toHaveBeenCalled();
+
+        const sessions = await controller.listSessions();
+        expect(sessions).toEqual([{ sessionId: 'recovered-after-disconnect' }]);
+        expect(connectCalls).toBe(3);
+        await controller.stop();
+    });
 });

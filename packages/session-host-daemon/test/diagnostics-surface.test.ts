@@ -136,6 +136,42 @@ test('session-scoped output events are only written to sockets subscribed to tha
   assert.equal(writes.c.length, 0)
 })
 
+test('unsubscribed control sockets do not receive session lifecycle broadcast events', () => {
+  const server = new SessionHostServer({ appName: 'adhdev-test-control-socket-isolation' }) as any
+  const writes: Record<string, string[]> = { attachedA: [], attachedB: [], controlOnly: [] }
+  const makeSocket = (id: 'attachedA' | 'attachedB' | 'controlOnly') => ({
+    destroyed: false,
+    writable: true,
+    writableEnded: false,
+    write: (payload: string, cb?: (error?: Error | null) => void) => {
+      writes[id].push(payload)
+      cb?.(null)
+      return true
+    },
+    destroy: () => {},
+  })
+  const attachedA = makeSocket('attachedA')
+  const attachedB = makeSocket('attachedB')
+  const controlOnly = makeSocket('controlOnly')
+  server.sockets.add(attachedA)
+  server.sockets.add(attachedB)
+  server.sockets.add(controlOnly)
+  server.subscribeSocketToSession(attachedA, 'session-a')
+  server.subscribeSocketToSession(attachedB, 'session-b')
+
+  const recordA = buildRecord({ sessionId: 'session-a', lifecycle: 'running' })
+  server.emitEvent({ type: 'session_created', sessionId: 'session-a', record: recordA })
+  server.emitEvent({ type: 'session_started', sessionId: 'session-a', pid: 1234 })
+  server.emitEvent({ type: 'write_owner_changed', sessionId: 'session-a', owner: null })
+  server.emitEvent({ type: 'session_resized', sessionId: 'session-a', cols: 120, rows: 40 })
+  server.emitEvent({ type: 'session_stopped', sessionId: 'session-a' })
+  server.emitEvent({ type: 'session_exit', sessionId: 'session-a', exitCode: 0, signal: null })
+
+  assert.equal(writes.attachedA.length, 6)
+  assert.equal(writes.attachedB.length, 0)
+  assert.equal(writes.controlOnly.length, 0)
+})
+
 test('getHostDiagnostics strips launch env from diagnostics records to keep payloads lightweight', () => {
   const server = new SessionHostServer({ appName: 'adhdev-test-surface-sanitized' })
   const record = buildRecord({

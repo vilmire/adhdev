@@ -274,4 +274,64 @@ describe('managed session-host prefix guard', () => {
       process.env.HOME = originalHome
     })
   })
+
+  it('stops a live unresponsive session-host PID before spawning a replacement on POSIX (preventing split-brain)', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    const homeDir = makeTempHome()
+    const originalHome = process.env.HOME
+    process.env.HOME = homeDir
+    process.env.ADHDEV_CONFIG_DIR = path.join(homeDir, '.adhdev')
+    const appName = `adhdev-wedged-${process.pid}-${Date.now()}`
+    const wedgedPid = 54321
+    const pidFile = path.join(homeDir, '.adhdev', `${appName}-session-host.pid`)
+    fs.mkdirSync(path.dirname(pidFile), { recursive: true })
+    fs.writeFileSync(pidFile, String(wedgedPid), 'utf8')
+
+    const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 120 })
+    const currentEntry = host.resolveEntry()
+
+    const events: string[] = []
+    let wedgedAlive = true
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid === wedgedPid) {
+        if (signal === 0 || signal === undefined) {
+          if (wedgedAlive) return true
+          const err = new Error('kill ESRCH') as NodeJS.ErrnoException
+          err.code = 'ESRCH'
+          throw err
+        }
+        events.push(`kill:${signal}`)
+        wedgedAlive = false
+        return true
+      }
+      return true
+    }) as any)
+
+    cp.execFileSync.mockImplementation((file: string) => {
+      if (file === 'ps') {
+        return `node ${currentEntry}`
+      }
+      return ''
+    })
+    cp.spawn.mockImplementation(() => {
+      events.push(wedgedAlive ? 'spawn-while-old-alive' : 'spawn')
+      return { unref: vi.fn(), pid: 4242 }
+    })
+
+    try {
+      await host.ensureReady()
+    } catch {
+      // Spawned mock host does not bind a real socket; we assert pre-spawn teardown order.
+    } finally {
+      killSpy.mockRestore()
+      process.env.HOME = originalHome
+    }
+
+    expect(events).not.toContain('spawn-while-old-alive')
+    const firstKill = events.findIndex((e) => e.startsWith('kill:'))
+    const firstSpawn = events.indexOf('spawn')
+    expect(firstKill).toBeGreaterThan(-1)
+    expect(firstSpawn).toBeGreaterThan(-1)
+    expect(firstKill).toBeLessThan(firstSpawn)
+  })
 })

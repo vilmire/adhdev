@@ -58,7 +58,11 @@ function writeSessionHostPid(appName: string): void {
 
 function removeSessionHostPid(appName: string): void {
   try {
-    fs.unlinkSync(getSessionHostPidFile(appName));
+    const pidFile = getSessionHostPidFile(appName);
+    if (!fs.existsSync(pidFile)) return;
+    const recordedPid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+    if (Number.isFinite(recordedPid) && recordedPid !== process.pid) return;
+    fs.unlinkSync(pidFile);
   } catch {
     // noop
   }
@@ -95,10 +99,10 @@ async function runServer(): Promise<void> {
     upgradeBinding,
     endpoint: getSessionHostEndpoint(),
     storageRootDir: getSessionHostStorageRoot(),
+    pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
   });
-  if (!upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
-  if (upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
+  writeSessionHostPid(SESSION_HOST_APP_NAME);
 
   const shutdown = async () => {
     // A wedged thread pool can leave stop() pending forever; the 2026-10-21
