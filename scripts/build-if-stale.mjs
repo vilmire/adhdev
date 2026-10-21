@@ -64,6 +64,26 @@
 // so anything that changes those values (GIT_CONFIG_* altering core.abbrev, a
 // different HEAD, the channel) changes the key without enumerating env.
 //
+// Selectors (round-4 P1): `npm run build -w <x>` accepts a workspace NAME or a
+// path, so two spellings of one package (`@adhdev/mesh-shared` vs
+// `oss/packages/mesh-shared`, a symlinked path, a case variant on a
+// case-insensitive FS) would otherwise take different claims while npm writes
+// the same dist. Only DIRECTORY selectors are accepted: each is realpath'ed
+// (fs.realpathSync.native — resolves symlinks and canonicalizes case), must be
+// an existing directory with a package.json, and must be one of the workspaces
+// npm resolves for this cwd (realpaths of the root package.json `workspaces`
+// globs). Names, globs, multiple selectors and non-workspace dirs are rejected
+// BEFORE any claim or spawn. The canonical relative directory is what npm gets,
+// and the claim, key and dist all derive from that one realpath.
+//
+// Recovery (stale claim): a crashed run leaves
+// <oss>/node_modules/.cache/adhdev-build-freshness/<pkg>.json.building and the
+// next run fails naming it. Remove that file ONLY after confirming that no
+// build-if-stale run AND no npm / tsup / esbuild build for that package is
+// still running (an orphaned build process can still be writing its dist;
+// the owner's absence alone is not proof). There is deliberately no automatic
+// recovery: nothing here breaks a claim by time or probes pids.
+//
 // ADHDEV_BUILD_IF_STALE=0 forces every build (and is itself excluded from the key).
 //
 // CLI: node oss/scripts/build-if-stale.mjs <workspace-spec>...   (cwd = the npm
@@ -71,13 +91,14 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PINNED_SEQSCRIBE_DEPS, resolvePinnedDepBase } from './pinned-dep-base.mjs';
 
-const OSS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Canonical (realpath) so every derived identity is computed from one spelling.
+const OSS_ROOT = (() => { const p = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); try { return realpathSync.native(p); } catch { return p; } })();
 const STAMP_DIR = path.join(OSS_ROOT, 'node_modules', '.cache', 'adhdev-build-freshness');
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.vitest']);
 // Whole-package dependency hashing keeps dist/: it is what the consumer imports.
@@ -244,8 +265,62 @@ function gitHead(dir) {
   }
 }
 
+/** Canonical identity of a directory: symlinks resolved, case canonicalized. */
+export function canonicalDir(dir) {
+  try { return realpathSync.native(dir); } catch { return path.resolve(dir); }
+}
+
+function workspaceDirs(cwd) {
+  const pkg = readJson(path.join(cwd, 'package.json'));
+  const patterns = Array.isArray(pkg?.workspaces) ? pkg.workspaces : Array.isArray(pkg?.workspaces?.packages) ? pkg.workspaces.packages : [];
+  const out = new Set();
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string') continue;
+    // Expand one path segment at a time; only a whole-segment `*` is supported
+    // (all this repo uses). Anything fancier is skipped — conservative: its
+    // packages are simply not accepted as selectors.
+    let dirs = [cwd];
+    let supported = true;
+    for (const segment of pattern.replace(/\/+$/, '').split('/')) {
+      if (segment === '*') {
+        dirs = dirs.flatMap((d) => { try { return readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => path.join(d, e.name)); } catch { return []; } });
+      } else if (/[*?[\]{}!]/.test(segment)) {
+        supported = false;
+        break;
+      } else {
+        dirs = dirs.map((d) => path.join(d, segment));
+      }
+    }
+    if (!supported) continue;
+    for (const dir of dirs) if (existsSync(path.join(dir, 'package.json'))) out.add(canonicalDir(dir));
+  }
+  return out;
+}
+
+/**
+ * Resolve ONE directory selector to its canonical workspace directory, or
+ * throw. Returns { pkgDir: realpath, npmSpec: canonical path relative to cwd }.
+ */
+export function resolveWorkspaceSelector(spec, cwd) {
+  const reject = (why) => new Error(`build-if-stale: unsupported selector ${JSON.stringify(spec)}: ${why}. Pass exactly one workspace DIRECTORY relative to ${cwd} (e.g. oss/packages/mesh-shared).`);
+  if (typeof spec !== 'string' || !spec.trim()) throw reject('empty');
+  if (/[*?[\]{}!,\s]/.test(spec)) throw reject('globs, lists and whitespace are not accepted');
+  if (spec.startsWith('@') || !/[\\/]/.test(spec) && !existsSync(path.resolve(cwd, spec))) throw reject('workspace names are not accepted, only directories');
+  const abs = path.resolve(cwd, spec);
+  let real;
+  try { real = realpathSync.native(abs); } catch { throw reject('no such directory'); }
+  let stat;
+  try { stat = statSync(real); } catch { throw reject('no such directory'); }
+  if (!stat.isDirectory()) throw reject('not a directory');
+  if (!existsSync(path.join(real, 'package.json'))) throw reject('no package.json');
+  const cwdReal = canonicalDir(cwd);
+  if (!workspaceDirs(cwdReal).has(real)) throw reject(`not one of the workspaces npm resolves for ${cwdReal}`);
+  return { pkgDir: real, npmSpec: path.relative(cwdReal, real).split(path.sep).join('/') };
+}
+
 /** The freshness key for building `pkgDir` under `env`. */
 export async function computeBuildKey(pkgDir, env, { ossRoot = OSS_ROOT } = {}) {
+  pkgDir = canonicalDir(pkgDir);
   const hash = createHash('sha256');
   hash.update(`${SCHEMA}\0${path.relative(OSS_ROOT, pkgDir).split(path.sep).join('/')}\0`);
   hash.update(`${process.version}|${process.platform}|${process.arch}\0`);
@@ -275,11 +350,13 @@ export async function computeBuildKey(pkgDir, env, { ossRoot = OSS_ROOT } = {}) 
 }
 
 export function stampPathFor(pkgDir) {
+  pkgDir = canonicalDir(pkgDir);
   return path.join(STAMP_DIR, `${path.relative(OSS_ROOT, pkgDir).split(path.sep).join('__')}.json`);
 }
 
 /** Why `pkgDir` must be rebuilt under `env`, or null when the dist is fresh. */
 export async function staleReason(pkgDir, env) {
+  pkgDir = canonicalDir(pkgDir);
   if (env[FORCE_ENV] === '0') return `${FORCE_ENV}=0`;
   let stamp;
   try { stamp = JSON.parse(readFileSync(stampPathFor(pkgDir), 'utf8')); } catch { return 'no stamp'; }
@@ -335,9 +412,17 @@ function publishStamp(pkgDir, stamp) {
  * so a failure never leaves a stale "fresh" stamp).
  */
 export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, npm = process.platform === 'win32' ? 'npm.cmd' : 'npm', log = console.log } = {}) {
+  // Validate EVERY selector before any claim or spawn (round-4 P1).
+  if (!Array.isArray(specs)) throw new Error('build-if-stale: specs must be an array of workspace directories');
+  const targets = specs.map((spec) => ({ spec, ...resolveWorkspaceSelector(spec, cwd) }));
+  const seen = new Set();
+  for (const t of targets) {
+    if (seen.has(t.pkgDir)) throw new Error(`build-if-stale: selector ${JSON.stringify(t.spec)} names a package already selected in this call (${t.npmSpec})`);
+    seen.add(t.pkgDir);
+  }
+  const npmCwd = canonicalDir(cwd);
   const results = [];
-  for (const spec of specs) {
-    const pkgDir = path.resolve(cwd, spec);
+  for (const { spec, pkgDir, npmSpec } of targets) {
     const reason = await staleReason(pkgDir, env);
     if (!reason) {
       log(`[build-if-stale] skip ${spec} (fresh: same inputs/env/stamp values, dist unchanged since its stamp)`);
@@ -352,14 +437,15 @@ export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, np
       // the owner remains the only writer. No lock is ever broken by time.
       throw new Error(
         `build-if-stale: refusing to build ${spec}: its output is claimed by another build-if-stale run (${claimPathFor(pkgDir)}). ` +
-        'Wait for that run to finish. If no build-if-stale run is active (a crashed run left the claim), remove that file and retry.',
+        'Wait for that run to finish. Remove that file only after confirming that NO build-if-stale run and NO npm/tsup/esbuild build ' +
+        'for this package is still running (an orphaned build can still be writing its dist), then retry.',
       );
     }
     try {
       log(`[build-if-stale] build ${spec} (${reason})`);
       const keyBefore = await computeBuildKey(pkgDir, env);
       rmSync(stampPathFor(pkgDir), { force: true });
-      await runBuild(npm, spec, cwd, env);
+      await runBuild(npm, npmSpec, npmCwd, env);
       const distDir = path.join(pkgDir, 'dist');
       const digestAfterBuild = digestDist(distDir);
       const keyAfter = await computeBuildKey(pkgDir, env);
