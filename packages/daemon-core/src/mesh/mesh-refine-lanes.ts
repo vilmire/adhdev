@@ -53,6 +53,8 @@ export interface RefineEscapedProcess {
 export interface RefineLaneCommandHandle {
     /** True once the run has been aborted (by another lane's failure). */
     readonly aborted: boolean;
+    /** True once the executor asked THIS command's child to terminate. */
+    readonly cancelRequested: boolean;
     /** Register the spawned child (call once, right after spawn). */
     attach(child: RefineGroupChild | undefined): void;
 }
@@ -189,10 +191,15 @@ export function spawnRefineGateChild(
         if (overflow) { finish(overflow); return; }
         const { code, signal } = exitInfo ?? { code: null, signal: null };
         if (code === 0) { finish(null); return; }
-        const error: any = new Error(`Command failed: ${[file, ...args].join(' ')}\n${out.stderr}`);
+        const cmd = [file, ...args].join(' ');
+        const error: any = new Error(`Command failed: ${cmd}\n${out.stderr}`);
         error.code = code;
         error.signal = signal;
-        error.killed = !!signal;
+        // Like execFile: `killed` means OUR runner killed it (child.killed is set
+        // only when our child.kill() delivered a signal) — never inferred from an
+        // exit signal, so a natural SIGSEGV is not mistaken for a timeout.
+        error.killed = child.killed === true;
+        error.cmd = cmd;
         finish(error);
     };
     const collect = (which: 'stdout' | 'stderr') => (chunk: string) => {
@@ -203,7 +210,8 @@ export function spawnRefineGateChild(
             // Same truncation rule as execFile: keep the chunk up to the limit.
             const truncatedLen = limit - (bytes[which] - length);
             out[which] += chunk.slice(0, truncatedLen);
-            overflow = Object.assign(new Error(`${which} maxBuffer length exceeded`), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
+            // Same shape as execFile's ERR_CHILD_PROCESS_STDIO_MAXBUFFER (a RangeError).
+            overflow = Object.assign(new RangeError(`${which} maxBuffer length exceeded`), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', cmd: [file, ...args].join(' ') });
             cleanup = terminateRefineChild(child);
             return;
         }
@@ -244,7 +252,9 @@ export async function runScheduledRefinePhases(
     const live = new Set<RefineGroupChild>();
     const kills: Promise<void>[] = [];
     const escaped: RefineEscapedProcess[] = [];
+    const cancelled = new WeakSet<RefineGroupChild>();
     const cancel = (child: RefineGroupChild) => {
+        cancelled.add(child);
         kills.push(terminate(child).then(result => { escaped.push(...result.escaped); }, () => undefined));
     };
     const abort = () => {
@@ -270,6 +280,7 @@ export async function runScheduledRefinePhases(
                     let attached: RefineGroupChild | undefined;
                     const handle: RefineLaneCommandHandle = {
                         get aborted() { return aborted; },
+                        get cancelRequested() { return !!attached && cancelled.has(attached); },
                         attach(child) {
                             if (!child) return;
                             attached = child;

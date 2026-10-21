@@ -41,9 +41,11 @@
 // refine runs in its own worktree with its own dist and stamp dir. As defence
 // in depth against a concurrent manual run in the same worktree, each build
 // claims its package with an O_EXCL marker holding a random owner token:
-//   - a marker already present (another run, or a crashed one) → the build
-//     still runs but is NOT stamped, and the foreign marker is left alone
-//     (delete it by hand only when no build is running);
+//   - a marker already present (another run, or a crashed one) → FAIL CLOSED:
+//     the contender does not build into the claimed output at all (it would
+//     let the owner digest and stamp the contender's bytes under the owner's
+//     key) and exits non-zero naming the claim; the marker is left alone
+//     (delete it by hand only when no build-if-stale run is active);
 //   - before publishing, the token is re-read; a displaced owner publishes
 //     nothing; release deletes the marker only if it still holds our token.
 // Stamps are published atomically (tmp + rename), and a build is stamped only
@@ -344,10 +346,14 @@ export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, np
     }
     const token = claimPackage(pkgDir);
     if (!token) {
-      log(`[build-if-stale] build ${spec} WITHOUT stamping: ${claimPathFor(pkgDir)} is held by another build-if-stale run (or a crashed one — remove it by hand only when no build is running)`);
-      await runBuild(npm, spec, cwd, env);
-      results.push({ spec, built: true, reason, stamped: false, contended: true });
-      continue;
+      // FAIL CLOSED (round-3 P1): building into an output another run has
+      // claimed would let that owner digest — and stamp — OUR bytes under ITS
+      // key. So a contender never writes a claimed output: it stops here, and
+      // the owner remains the only writer. No lock is ever broken by time.
+      throw new Error(
+        `build-if-stale: refusing to build ${spec}: its output is claimed by another build-if-stale run (${claimPathFor(pkgDir)}). ` +
+        'Wait for that run to finish. If no build-if-stale run is active (a crashed run left the claim), remove that file and retry.',
+      );
     }
     try {
       log(`[build-if-stale] build ${spec} (${reason})`);

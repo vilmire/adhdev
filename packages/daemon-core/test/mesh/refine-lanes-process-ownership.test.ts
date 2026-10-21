@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { spawnRefineGateChild, terminateRefineChild } from '../../src/mesh/mesh-refine-lanes.js';
-import { runMeshRefineValidationGate } from '../../src/mesh/mesh-refine-gates.js';
+import { classifyValidationFailure, runMeshRefineValidationGate } from '../../src/mesh/mesh-refine-gates.js';
 
 // REFINE-LANES process ownership (standing mesh rule): a gate is only ever
 // signalled through the ChildProcess handle the runner holds (child.kill()).
@@ -154,4 +154,63 @@ describe('scheduled output limit matches execFile (bytes, streaming utf8)', () =
         expect(scheduled.status).toBe('passed');
         expect(scheduled.commandsRun[0].stdout).toBe('€');
     });
+});
+
+describe('round-3: kill attribution and graceful cancellation', () => {
+    const roots: string[] = [];
+    afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); vi.restoreAllMocks(); });
+    const ws = () => { const d = mkdtempSync(join(tmpdir(), 'adhdev-refine-r3-')); roots.push(d); return d; };
+
+    it.skipIf(process.platform === 'win32')('P2: a natural signal crash (the child SIGSEGVs itself) is killed:false and not a timeout', async () => {
+        const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true); // the TEST never signals anything
+        const dir = ws();
+        // The child raises SIGSEGV on itself — no signal comes from the runner or the test.
+        writeFileSync(join(dir, 'segv.js'), "process.kill(process.pid, 'SIGSEGV');\n");
+        const error: any = await new Promise(resolve => {
+            spawnRefineGateChild(process.execPath, ['segv.js'], { cwd: dir, encoding: 'utf8', maxBuffer: 1024 * 1024 }, err => resolve(err));
+        });
+        expect(error.signal).toBe('SIGSEGV');
+        expect(error.killed).toBe(false);
+        expect(error.cmd).toBe(`${process.execPath} segv.js`);
+        expect(classifyValidationFailure(error, String(error.message), false).timedOut).toBe(false);
+
+        const summary: any = await runMeshRefineValidationGate({ id: 'm', policy: { refineConfig: { version: 1, validation: {
+            required: true, bootstrap: 'skip',
+            commands: [{ id: 'segv', command: 'node', args: ['segv.js'], writes: [] }],
+            schedule: { phases: [{ id: 'p', lanes: [{ id: 'l', commands: ['segv'] }] }] },
+        } } } }, dir);
+        expect(summary.status).toBe('failed');
+        expect(summary.commandsRun[0]).toMatchObject({ passed: false, timedOut: false });
+        expect(summary.failureKind).not.toBe('validation_timeout');
+        expect(processKill).not.toHaveBeenCalled();
+    });
+
+    it('maxBuffer overflow error has execFile\'s shape (RangeError, code, cmd)', async () => {
+        const dir = ws();
+        writeFileSync(join(dir, 'out.js'), "process.stdout.write('x'.repeat(4096))\n");
+        const error: any = await new Promise(resolve => {
+            spawnRefineGateChild(process.execPath, ['out.js'], { cwd: dir, encoding: 'utf8', maxBuffer: 1024 }, err => resolve(err));
+        });
+        expect(error).toBeInstanceOf(RangeError);
+        expect(error.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+        expect(error.cmd).toBe(`${process.execPath} out.js`);
+    });
+
+    it.skipIf(process.platform === 'win32')('P3: a gate that exits 0 because it was cancelled is recorded as cancelled, not passed', async () => {
+        const dir = ws();
+        writeFileSync(join(dir, 'fail.js'), 'setTimeout(() => process.exit(3), 300);\n');
+        // Graceful cancellation: exits 0 from its own SIGTERM handler; self-exits after 8 s anyway.
+        writeFileSync(join(dir, 'slow.js'), "process.on('SIGTERM', () => process.exit(0)); setTimeout(() => {}, 8000);\n");
+        const summary: any = await runMeshRefineValidationGate({ id: 'm', policy: { refineConfig: { version: 1, validation: {
+            required: true, bootstrap: 'skip',
+            commands: [{ id: 'slow', command: 'node', args: ['slow.js'], writes: [] }, { id: 'fail', command: 'node', args: ['fail.js'], writes: [] }],
+            schedule: { phases: [{ id: 'p', lanes: [{ id: 'S', commands: ['slow'] }, { id: 'T', commands: ['fail'] }] }] },
+        } } } }, dir);
+        expect(summary.status).toBe('failed');
+        const slow = summary.commandsRun.find((c: any) => c.displayCommand === 'node slow.js');
+        expect(slow).toMatchObject({ passed: false, cancelled: true, failureKind: 'cancelled_by_lane_failure' });
+        const lanes = summary.schedule.report.phases[0].lanes;
+        expect(lanes.find((l: any) => l.id === 'S').outcome).toBe('cancelled');
+        expect(summary.commandsRun.find((c: any) => c.passed === false).displayCommand).toBe('node fail.js');
+    }, 20_000);
 });

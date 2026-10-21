@@ -95869,11 +95869,13 @@ ${tail}`;
           finish(null);
           return;
         }
-        const error = new Error(`Command failed: ${[file, ...args].join(" ")}
+        const cmd = [file, ...args].join(" ");
+        const error = new Error(`Command failed: ${cmd}
 ${out.stderr}`);
         error.code = code;
         error.signal = signal;
-        error.killed = !!signal;
+        error.killed = child.killed === true;
+        error.cmd = cmd;
         finish(error);
       };
       const collect = (which) => (chunk) => {
@@ -95883,7 +95885,7 @@ ${out.stderr}`);
         if (bytes[which] > limit) {
           const truncatedLen = limit - (bytes[which] - length);
           out[which] += chunk.slice(0, truncatedLen);
-          overflow = Object.assign(new Error(`${which} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+          overflow = Object.assign(new RangeError(`${which} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", cmd: [file, ...args].join(" ") });
           cleanup = terminateRefineChild(child);
           return;
         }
@@ -95918,7 +95920,9 @@ ${out.stderr}`);
       const live = /* @__PURE__ */ new Set();
       const kills = [];
       const escaped = [];
+      const cancelled = /* @__PURE__ */ new WeakSet();
       const cancel = (child) => {
+        cancelled.add(child);
         kills.push(terminate(child).then((result) => {
           escaped.push(...result.escaped);
         }, () => void 0));
@@ -95949,6 +95953,9 @@ ${out.stderr}`);
               const handle = {
                 get aborted() {
                   return aborted;
+                },
+                get cancelRequested() {
+                  return !!attached && cancelled.has(attached);
                 },
                 attach(child) {
                   if (!child) return;
@@ -97693,6 +97700,15 @@ ${asText(streams.stderr)}
         const resolvedCommand = resolveWin32Executable(candidate.command);
         try {
           const result = await execRefineCommand(execFileAsync6, candidate, cwd, resolvedCommand, control);
+          if (handle?.cancelRequested) {
+            summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, result, false, {
+              exitCode: 0,
+              skipped: true,
+              cancelled: true,
+              failureKind: "cancelled_by_lane_failure"
+            }));
+            return "cancelled";
+          }
           summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
           reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, true);
           return "passed";

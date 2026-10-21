@@ -1174,6 +1174,17 @@ export async function runMeshRefineValidationGate(
         const resolvedCommand = resolveWin32Executable(candidate.command);
         try {
             const result = await execRefineCommand(execFileAsync, candidate, cwd, resolvedCommand, control);
+            if (handle?.cancelRequested) {
+                // A gate that exited 0 BECAUSE we cancelled it (graceful SIGTERM
+                // handler) did not pass — record it as cancelled, like a killed one.
+                summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, result, false, {
+                    exitCode: 0,
+                    skipped: true,
+                    cancelled: true,
+                    failureKind: 'cancelled_by_lane_failure',
+                }));
+                return 'cancelled';
+            }
             summary.commandsRun.push(refineCommandRecord(candidate, cwd, startedAt, result, true, { exitCode: 0 }));
             reportRefineCommandComplete(opts?.onCommandComplete, candidate, startedAt, true);
             return 'passed';
