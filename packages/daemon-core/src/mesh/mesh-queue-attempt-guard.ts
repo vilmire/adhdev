@@ -14,15 +14,17 @@
 //
 // This module answers the ledger question for those writers. Ledger STATE is
 // only ever changed through `ledger.observe` (single-emitter rule): retiring an
-// open attempt is a `cancel` (superseded) observed under the queue terminal
-// fence, so the commit closes the attempt without terminalizing the row the
-// caller is about to requeue.
+// open attempt is a `cancel` (superseded), which the reducer commits as an
+// attempt-only retirement — the row the caller is about to requeue is not
+// terminalized and the coordinator is not told the task was cancelled.
 // ---------------------------------------------------------------------------
 
 import { LOG } from '../logging/logger.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { INJECTION_CLOSED_STATES } from './mesh-queue-dispatch-evidence.js';
-import { withQueueTerminalFence } from './mesh-task-terminal.js';
+import { afterBridgeCommit } from './worker-bridge-transaction.js';
+import { expireWorkerTaskTokensForAttempt } from './worker-mcp-isolation.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 import type { TurnStore } from './turn-ledger/store.js';
 import type { TurnAttempt } from './turn-ledger/types.js';
@@ -40,10 +42,7 @@ export function findInjectionClosedQueueAttempt(turns: Pick<TurnStore, 'findLate
     return open && INJECTION_CLOSED_STATES.has(open.state) ? open : null;
 }
 
-/** {@link findOpenQueueAttempt} on this daemon's runtime store (null when the ledger tables are unreadable). */
-export function currentOpenQueueAttempt(meshId: string, taskId: string): TurnAttempt | null {
-    try { return findOpenQueueAttempt(MeshRuntimeStore.getInstance().turnStore(), meshId, taskId); } catch { return null; }
-}
+export type QueueAttemptRetirementRefusal = 'attempt_open' | 'no_ledger' | 'not_owner' | 'cancel_not_applied';
 
 export type QueueAttemptRetirement =
     /** No open attempt — the requeue proceeds as before. */
@@ -51,24 +50,32 @@ export type QueueAttemptRetirement =
     /** The open attempt was closed on the ledger (cancel / superseded). */
     | { kind: 'closed'; attempt: TurnAttempt }
     /** The requeue must not proceed: the attempt stays open. */
-    | { kind: 'refused'; attempt: TurnAttempt; reason: 'attempt_open' | 'no_ledger' | 'cancel_not_applied'; detail?: string };
+    | { kind: 'refused'; attempt: TurnAttempt; reason: QueueAttemptRetirementRefusal; detail?: string };
 
 /**
  * Before a requeue puts the row back to `pending`: close the task's open
  * attempt, or refuse. Without `force` an attempt that already consumed its
  * prompt is a running task and refuses the requeue. Otherwise the attempt is
- * cancelled (superseded) on the ledger — its session's dispatch is cut by the
- * reducer's cancel effects — so the next claim opens attemptNo + 1 under a new
- * nonce instead of being refused by a still-open attempt.
+ * retired on the ledger — cancel/superseded, which the reducer commits as an
+ * attempt-only retirement (its dispatch is cut, but no queue terminal and no
+ * coordinator notice) — so the next claim opens attemptNo + 1 under a new nonce.
+ *
+ * Only the attempt's OWNER may retire it: evidence for a foreign attempt is
+ * forwarded and the owner would commit the cancel without this requeue, so a
+ * foreign attempt refuses before anything is observed.
  */
 export function retireOpenQueueAttemptForRequeue(meshId: string, taskId: string, opts: { force: boolean }): QueueAttemptRetirement {
-    const open = findOpenQueueAttempt(MeshRuntimeStore.getInstance().turnStore(), meshId, taskId);
+    const store = MeshRuntimeStore.getInstance();
+    const open = findOpenQueueAttempt(store.turnStore(), meshId, taskId);
     if (!open) return { kind: 'none' };
     if (!opts.force && INJECTION_CLOSED_STATES.has(open.state)) return { kind: 'refused', attempt: open, reason: 'attempt_open' };
     const ledger = getActiveTurnLedger();
     if (!ledger) return { kind: 'refused', attempt: open, reason: 'no_ledger' };
+    if (open.ownerDaemonId && !daemonIdsEquivalent(open.ownerDaemonId, ledger.selfDaemonId)) {
+        return { kind: 'refused', attempt: open, reason: 'not_owner', detail: `owned by ${open.ownerDaemonId}` };
+    }
     const at = Date.now();
-    const result = withQueueTerminalFence(meshId, taskId, () => ledger.observe({
+    const result = ledger.observe({
         eventId: `requeue_supersede:${open.attemptId}:g${open.generation}:${at}`,
         at,
         source: opts.force ? 'operator' : 'scheduler',
@@ -77,12 +84,44 @@ export function retireOpenQueueAttemptForRequeue(meshId: string, taskId: string,
         attemptRef: { attemptId: open.attemptId, generation: open.generation },
         kind: 'cancel',
         reason: 'superseded',
-    }));
+    });
     if (result.verdict !== 'applied') {
         return { kind: 'refused', attempt: open, reason: 'cancel_not_applied', detail: `${result.verdict}${result.rejection ? ` (${result.rejection})` : ''}` };
     }
-    LOG.info('MeshQueue', `Requeue of task ${taskId} (mesh ${meshId}) closed its open attempt ${open.attemptId} g${open.generation} (${open.state} on ${open.sessionId}) — the next claim opens a fresh attempt`);
+    // The retired attempt's worker tokens die with it (the task's do not): a
+    // same-session retry must not exchange the stale one.
+    afterBridgeCommit(store.db, () => expireWorkerTaskTokensForAttempt(meshId, taskId, open.attemptId));
+    LOG.info('MeshQueue', `Requeue of task ${taskId} (mesh ${meshId}) retired its open attempt ${open.attemptId} g${open.generation} (${open.state} on ${open.sessionId}) — the next claim opens a fresh attempt`);
     return { kind: 'closed', attempt: open };
+}
+
+/**
+ * The command answer for a requeue the turn ledger refused (both the med-family
+ * `requeue_mesh_queue_task` and the turn-IPC `queue_requeue` handlers): never a
+ * success, with the attempt that blocked it.
+ */
+export function requeueRefusalResponse(
+    taskId: string,
+    refusal: { reason: QueueAttemptRetirementRefusal; attempt: TurnAttempt; detail?: string },
+    task: unknown,
+): { success: false; error: string; code: 'requeue_refused_attempt_open'; refusalReason: QueueAttemptRetirementRefusal; attemptId: string; attemptState: TurnAttempt['state']; task: unknown } {
+    const { attempt, reason } = refusal;
+    const why = reason === 'attempt_open'
+        ? 'Pass force:true to retire that attempt and requeue, or cancel and re-enqueue.'
+        : reason === 'not_owner'
+            ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.`
+            : reason === 'no_ledger'
+                ? 'No turn ledger is active on this daemon to retire it.'
+                : `The turn ledger did not apply the retirement${refusal.detail ? ` (${refusal.detail})` : ''}.`;
+    return {
+        success: false,
+        error: `Task '${taskId}' was not requeued: its turn attempt ${attempt.attemptId} is still ${attempt.state} on session ${attempt.sessionId} (${reason}). ${why}`,
+        code: 'requeue_refused_attempt_open',
+        refusalReason: reason,
+        attemptId: attempt.attemptId,
+        attemptState: attempt.state,
+        task,
+    };
 }
 
 /** Claim-refusal backoff: 2 s, 4 s, 8 s … capped at 60 s. */

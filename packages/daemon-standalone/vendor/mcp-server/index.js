@@ -43426,6 +43426,7 @@ ${pattern}
       deriveWorkerMcpDeliveryStatus: () => deriveWorkerMcpDeliveryStatus,
       exchangeWorkerSessionBind: () => exchangeWorkerSessionBind,
       expandWorkerIsolationPlaceholders: () => expandWorkerIsolationPlaceholders,
+      expireWorkerTaskTokensForAttempt: () => expireWorkerTaskTokensForAttempt,
       expireWorkerTaskTokensForTask: () => expireWorkerTaskTokensForTask,
       findWorkerPrivateHomeSpec: () => findWorkerPrivateHomeSpec,
       findWorkerTaskTokenForSession: () => findWorkerTaskTokenForSession,
@@ -43525,6 +43526,13 @@ ${pattern}
       }
       return removed;
     }
+    function expireWorkerTaskTokensForAttempt(meshId, taskId, attemptId) {
+      let removed = 0;
+      for (const entry of tokensForTask(meshId, taskId)) {
+        if (entry.attemptId === attemptId && revokeWorkerTaskToken(entry.token)) removed += 1;
+      }
+      return removed;
+    }
     function __resetWorkerTaskTokensForTest() {
       LIVE_TOKENS.clear();
       TOKENS_BY_TASK.clear();
@@ -43532,12 +43540,15 @@ ${pattern}
     function liveWorkerTaskTokenCount() {
       return LIVE_TOKENS.size;
     }
-    function findWorkerTaskTokenForSession(meshId, taskId, sessionId) {
+    function findWorkerTaskTokenForSession(meshId, taskId, sessionId, preferAttemptId) {
       const wanted = String(sessionId || "").trim();
+      let first = null;
       for (const candidate of tokensForTask(meshId, taskId)) {
-        if (!candidate.sessionId || candidate.sessionId === wanted) return candidate;
+        if (candidate.sessionId && candidate.sessionId !== wanted) continue;
+        if (!preferAttemptId || candidate.attemptId === preferAttemptId) return candidate;
+        first ??= candidate;
       }
-      return null;
+      return first;
     }
     function resolveWorkerMcpIsolation(input, env2 = process.env) {
       if (!isWorkerMcpEnabled(env2)) return null;
@@ -43691,7 +43702,7 @@ ${pattern}
         return null;
       }
       if (!current4?.taskId) return null;
-      let token = findWorkerTaskTokenForSession(binding.meshId, current4.taskId, binding.sessionId);
+      let token = findWorkerTaskTokenForSession(binding.meshId, current4.taskId, binding.sessionId, current4.attemptId);
       if (!token && binding.restored && tokensForTask(binding.meshId, current4.taskId).length === 0) {
         token = mintWorkerTaskToken({
           meshId: binding.meshId,
@@ -44009,12 +44020,31 @@ ${rendered.join("\n\n")}`,
       store2.updateQueueEntry(entry);
       endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
     }
+    function terminalFenced(meshId, taskId) {
+      return (terminalFences.get(fenceKey(meshId, taskId)) ?? 0) > 0;
+    }
+    function withQueueTerminalFence(meshId, taskId, fn) {
+      const key4 = fenceKey(meshId, taskId);
+      terminalFences.set(key4, (terminalFences.get(key4) ?? 0) + 1);
+      try {
+        return fn();
+      } finally {
+        const left = (terminalFences.get(key4) ?? 1) - 1;
+        if (left > 0) terminalFences.set(key4, left);
+        else terminalFences.delete(key4);
+      }
+    }
     function applyTaskTerminalInTxn(input) {
       const store2 = MeshRuntimeStore.getInstance();
       return store2.transaction(() => {
         const entry = store2.findQueueEntryById(input.meshId, input.taskId);
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
+        if (terminalFenced(input.meshId, input.taskId)) {
+          const attemptId = input.attemptId;
+          if (attemptId) afterBridgeCommit(store2.db, () => expireWorkerTaskTokensForAttempt(input.meshId, input.taskId, attemptId));
+          return { entry, transitioned: false };
+        }
         const terminal = {
           meshId: input.meshId,
           taskId: input.taskId,
@@ -44077,6 +44107,8 @@ ${rendered.join("\n\n")}`,
         createdAt: nowIso
       });
     }
+    var terminalFences;
+    var fenceKey;
     var init_mesh_task_terminal = __esm2({
       "src/mesh/mesh-task-terminal.ts"() {
         "use strict";
@@ -44087,6 +44119,8 @@ ${rendered.join("\n\n")}`,
         init_worker_mailbox();
         init_mesh_untrusted_evidence();
         init_hash();
+        terminalFences = /* @__PURE__ */ new Map();
+        fenceKey = (meshId, taskId) => `${meshId}\0${taskId}`;
       }
     });
     function formatMeshTaskModeViolations(result) {
@@ -45199,12 +45233,13 @@ ${rendered.join("\n\n")}`,
         ...summary ? { summary } : {}
       });
       releaseHolds(draft, "*");
-      if (isMeshScope(attempt) && attempt.meshId && attempt.taskId) {
+      const attemptOnly = ev.kind === "cancel" && ev.reason === "superseded" && attempt.scope === "mesh_queue";
+      if (isMeshScope(attempt) && attempt.meshId && attempt.taskId && !attemptOnly) {
         draft.effects.push({ kind: "queue_status", meshId: attempt.meshId, taskId: attempt.taskId, status: outcome, reason });
         draft.effects.push({ kind: "task_terminal", meshId: attempt.meshId, taskId: attempt.taskId, outcome });
       }
       draft.effects.push({ kind: "bus", event: { kind: "turn", phase: "committed", sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation, outcome, strength } });
-      notify(draft, outcome, { ...summary ? { summary } : {}, ...held.textEventId ? { textEventId: held.textEventId } : {} });
+      if (!attemptOnly) notify(draft, outcome, { ...summary ? { summary } : {}, ...held.textEventId ? { textEventId: held.textEventId } : {} });
       draft.effects.push({ kind: "release_attempt_ref", attemptId: attempt.attemptId, sessionId: attempt.sessionId });
       draft.committed = true;
     }
@@ -57059,6 +57094,165 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_record();
       }
     });
+    function dispatchMessageId(task) {
+      return `task:${task.id}:n${task.dispatchNonce ?? 0}`;
+    }
+    function queueAttemptId(meshId, taskId, attemptNo) {
+      return `mesh_queue:${meshId}:${taskId}:${attemptNo}`;
+    }
+    function openOrResumeQueueAttempt(ledger, args) {
+      const latest = ledger.store.findLatestAttemptForTask(args.meshId, args.task.id);
+      if (latest && !latest.terminal) {
+        if (INJECTION_CLOSED_STATES.has(latest.state)) return { refused: latest };
+        return { ref: { attemptId: latest.attemptId, generation: latest.generation } };
+      }
+      const attemptNo = latest ? latest.attemptNo + 1 : 0;
+      const attemptId = queueAttemptId(args.meshId, args.task.id, attemptNo);
+      const coordinatorDaemonId = args.coordinatorDaemonId;
+      const coordinatorSessionId = typeof args.task.sourceCoordinatorSessionId === "string" ? args.task.sourceCoordinatorSessionId.trim() : "";
+      const ref2 = { attemptId, generation: 0 };
+      const baseEventId = `dispatch:${attemptId}`;
+      const at = args.now ?? Date.now();
+      let eventId = baseEventId;
+      for (let retry = 1; ledger.store.hasEvent(eventId); retry++) eventId = `${baseEventId}:retry${retry}`;
+      const result = ledger.observe({
+        eventId,
+        at,
+        source: "dispatch",
+        sessionId: args.sessionId,
+        attemptRef: ref2,
+        // The attempt's task binding: R1's open_dispatch reads the envelope taskId
+        // (the queue_status / task_terminal effects key on it).
+        taskId: args.task.id,
+        observedBy: coordinatorDaemonId || "local",
+        kind: "dispatch_accepted",
+        scope: "mesh_queue",
+        messageId: dispatchMessageId(args.task),
+        meshId: args.meshId,
+        nodeId: args.nodeId,
+        providerType: args.providerType,
+        attemptNo,
+        ...typeof args.task.dispatchNonce === "number" ? { dispatchNonce: args.task.dispatchNonce } : {},
+        consumeProfile: args.consumeProfile,
+        maxTaskRetries: args.maxTaskRetries,
+        ...coordinatorDaemonId ? {
+          coordinator: {
+            daemonId: coordinatorDaemonId,
+            // The coordinator run id is not known on the claim path (contracts.ts
+            // notes the same gap for every emit site); the daemon id stands in.
+            coordinatorRunId: coordinatorDaemonId,
+            ...coordinatorSessionId ? { sessionId: coordinatorSessionId } : {}
+          }
+        } : {}
+      });
+      if (result.verdict === "rejected") throw new Error(`dispatch_accepted rejected (${result.rejection ?? "unknown"})`);
+      if (result.verdict !== "applied") throw new Error(`dispatch_accepted not applied (${result.verdict})`);
+      return { ref: ref2 };
+    }
+    var INJECTION_CLOSED_STATES;
+    var init_mesh_queue_dispatch_evidence = __esm2({
+      "src/mesh/mesh-queue-dispatch-evidence.ts"() {
+        "use strict";
+        INJECTION_CLOSED_STATES = /* @__PURE__ */ new Set(["consumed", "generating", "suspended", "finalizing"]);
+      }
+    });
+    var mesh_queue_attempt_guard_exports = {};
+    __export2(mesh_queue_attempt_guard_exports, {
+      CLAIM_REFUSAL_BACKOFF_BASE_MS: () => CLAIM_REFUSAL_BACKOFF_BASE_MS,
+      CLAIM_REFUSAL_BACKOFF_MAX_MS: () => CLAIM_REFUSAL_BACKOFF_MAX_MS,
+      findInjectionClosedQueueAttempt: () => findInjectionClosedQueueAttempt,
+      findOpenQueueAttempt: () => findOpenQueueAttempt,
+      rebindRefusedClaimToOpenAttempt: () => rebindRefusedClaimToOpenAttempt,
+      requeueRefusalResponse: () => requeueRefusalResponse,
+      retireOpenQueueAttemptForRequeue: () => retireOpenQueueAttemptForRequeue
+    });
+    function findOpenQueueAttempt(turns, meshId, taskId) {
+      const latest = turns.findLatestAttemptForTask(meshId, taskId);
+      return latest && !latest.terminal && latest.scope === "mesh_queue" ? latest : null;
+    }
+    function findInjectionClosedQueueAttempt(turns, meshId, taskId) {
+      const open = findOpenQueueAttempt(turns, meshId, taskId);
+      return open && INJECTION_CLOSED_STATES.has(open.state) ? open : null;
+    }
+    function retireOpenQueueAttemptForRequeue(meshId, taskId, opts) {
+      const store2 = MeshRuntimeStore.getInstance();
+      const open = findOpenQueueAttempt(store2.turnStore(), meshId, taskId);
+      if (!open) return { kind: "none" };
+      if (!opts.force && INJECTION_CLOSED_STATES.has(open.state)) return { kind: "refused", attempt: open, reason: "attempt_open" };
+      const ledger = getActiveTurnLedger();
+      if (!ledger) return { kind: "refused", attempt: open, reason: "no_ledger" };
+      if (open.ownerDaemonId && !daemonIdsEquivalent4(open.ownerDaemonId, ledger.selfDaemonId)) {
+        return { kind: "refused", attempt: open, reason: "not_owner", detail: `owned by ${open.ownerDaemonId}` };
+      }
+      const at = Date.now();
+      const result = ledger.observe({
+        eventId: `requeue_supersede:${open.attemptId}:g${open.generation}:${at}`,
+        at,
+        source: opts.force ? "operator" : "scheduler",
+        sessionId: open.sessionId,
+        observedBy: ledger.selfDaemonId,
+        attemptRef: { attemptId: open.attemptId, generation: open.generation },
+        kind: "cancel",
+        reason: "superseded"
+      });
+      if (result.verdict !== "applied") {
+        return { kind: "refused", attempt: open, reason: "cancel_not_applied", detail: `${result.verdict}${result.rejection ? ` (${result.rejection})` : ""}` };
+      }
+      afterBridgeCommit(store2.db, () => expireWorkerTaskTokensForAttempt(meshId, taskId, open.attemptId));
+      LOG.info("MeshQueue", `Requeue of task ${taskId} (mesh ${meshId}) retired its open attempt ${open.attemptId} g${open.generation} (${open.state} on ${open.sessionId}) \u2014 the next claim opens a fresh attempt`);
+      return { kind: "closed", attempt: open };
+    }
+    function requeueRefusalResponse(taskId, refusal2, task) {
+      const { attempt, reason } = refusal2;
+      const why = reason === "attempt_open" ? "Pass force:true to retire that attempt and requeue, or cancel and re-enqueue." : reason === "not_owner" ? `The attempt is owned by daemon ${attempt.ownerDaemonId}; requeue it there.` : reason === "no_ledger" ? "No turn ledger is active on this daemon to retire it." : `The turn ledger did not apply the retirement${refusal2.detail ? ` (${refusal2.detail})` : ""}.`;
+      return {
+        success: false,
+        error: `Task '${taskId}' was not requeued: its turn attempt ${attempt.attemptId} is still ${attempt.state} on session ${attempt.sessionId} (${reason}). ${why}`,
+        code: "requeue_refused_attempt_open",
+        refusalReason: reason,
+        attemptId: attempt.attemptId,
+        attemptState: attempt.state,
+        task
+      };
+    }
+    function rebindRefusedClaimToOpenAttempt(meshId, taskId, attempt, now = Date.now()) {
+      const store2 = MeshRuntimeStore.getInstance();
+      return store2.transaction(() => {
+        const entry = store2.findQueueEntryById(meshId, taskId);
+        if (!entry || entry.status !== "assigned") return entry;
+        entry.assignedSessionId = attempt.sessionId;
+        if (attempt.nodeId) entry.assignedNodeId = attempt.nodeId;
+        else delete entry.assignedNodeId;
+        if (attempt.providerType) entry.assignedProviderType = attempt.providerType;
+        delete entry.assignedModel;
+        delete entry.assignedTranscriptProfile;
+        entry.attemptId = attempt.attemptId;
+        entry.dispatchNonce = Math.max(0, (entry.dispatchNonce || 0) - 1);
+        entry.dispatchTimestamp = new Date(attempt.deliveredAt ?? attempt.acceptedAt).toISOString();
+        const refusals = (entry.claimRefusedCount || 0) + 1;
+        entry.claimRefusedCount = refusals;
+        const backoffMs = Math.min(CLAIM_REFUSAL_BACKOFF_BASE_MS * Math.pow(2, refusals - 1), CLAIM_REFUSAL_BACKOFF_MAX_MS);
+        entry.notBefore = new Date(now + backoffMs).toISOString();
+        store2.updateQueueEntry(entry);
+        return entry;
+      });
+    }
+    var CLAIM_REFUSAL_BACKOFF_BASE_MS;
+    var CLAIM_REFUSAL_BACKOFF_MAX_MS;
+    var init_mesh_queue_attempt_guard = __esm2({
+      "src/mesh/mesh-queue-attempt-guard.ts"() {
+        "use strict";
+        init_logger();
+        init_mesh_runtime_store();
+        init_mesh_queue_dispatch_evidence();
+        init_worker_bridge_transaction();
+        init_worker_mcp_isolation();
+        init_dist();
+        init_active_ledger();
+        CLAIM_REFUSAL_BACKOFF_BASE_MS = 2e3;
+        CLAIM_REFUSAL_BACKOFF_MAX_MS = 6e4;
+      }
+    });
     function reasonCodeOf(reason) {
       if (typeof reason !== "string") return "unspecified";
       const m = /^[a-z][a-z0-9_]{0,63}/.exec(reason.trim());
@@ -58319,6 +58513,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       recordTaskAutoLaunch: () => recordTaskAutoLaunch,
       requeueTask: () => requeueTask,
       requeueTaskForLedgerReclaim: () => requeueTaskForLedgerReclaim,
+      requeueTaskWithOutcome: () => requeueTaskWithOutcome,
       resolveNotBefore: () => resolveNotBefore2,
       scheduleMissionCloseCandidateCheck: () => scheduleMissionCloseCandidateCheck,
       summarizeQueueEntryInputForView: () => summarizeQueueEntryInputForView2,
@@ -58502,7 +58697,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!next || next === entry.message) return;
       entry.message = next;
     }
-    function requeueTask(meshId, taskId, opts) {
+    function requeueTaskWithOutcome(meshId, taskId, opts) {
       requireMeshHostQueueOwner(opts);
       const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
@@ -58511,12 +58706,24 @@ CREATE TABLE IF NOT EXISTS sq_archive (
           LOG.warn("MeshQueue", `Refusing to requeue task ${taskId} on mesh ${meshId}: it is actively dispatched/generating (single-flight in-flight). Requeueing now would open a duplicate second dispatch into another session. Pass force to override.`);
           return { entry, cascaded: [], missionAffected: false };
         }
+        const retirement = retireOpenQueueAttemptForRequeue(meshId, taskId, { force: opts?.force === true });
+        if (retirement.kind === "refused") {
+          LOG.warn("MeshQueue", `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ""}).${retirement.reason === "attempt_open" ? " Pass force to cancel that attempt and requeue." : ""}`);
+          return {
+            entry,
+            cascaded: [],
+            missionAffected: false,
+            refusal: { reason: retirement.reason, attempt: retirement.attempt, ...retirement.detail ? { detail: retirement.detail } : {} }
+          };
+        }
+        delete entry.attemptId;
+        if (retirement.kind === "closed") entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         endTaskDispatchInFlight(meshId, taskId);
-        terminalizeSiblingDispatch(
+        withQueueTerminalFence(meshId, taskId, () => terminalizeSiblingDispatch(
           meshId,
           taskId,
           opts?.dispatchFailure && !opts?.force ? "queue_task_dispatch_failed" : "queue_task_requeued"
-        );
+        ));
         if (opts?.dispatchFailure && !opts?.force) {
           const dispatchFailures = (entry.dispatchFailureCount || 0) + 1;
           if (dispatchFailures > MAX_DISPATCH_FAILURES) {
@@ -58582,7 +58789,10 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         return { entry, cascaded: [], missionAffected: true };
       });
       if (result?.missionAffected) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
-      return result ? result.entry : null;
+      return result ? { entry: result.entry, ...result.refusal ? { refusal: result.refusal } : {} } : null;
+    }
+    function requeueTask(meshId, taskId, opts) {
+      return requeueTaskWithOutcome(meshId, taskId, opts)?.entry ?? null;
     }
     function parkTaskTargetPin(meshId, taskId, opts) {
       requireMeshHostQueueOwner(opts);
@@ -58781,6 +58991,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_task_mode_guardrail();
         init_mesh_node_capability_tags();
         init_mesh_direct_dispatch();
+        init_mesh_queue_attempt_guard();
         init_mesh_queue_dependency_notice();
         init_mesh_work_queue_enqueue();
         init_mesh_autolaunch_spawn_budget();
@@ -63676,11 +63887,19 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         const allowedTaskDifficulties = opts?.allowedTaskDifficulties;
         const difficultyAllows = (candidate) => !allowedTaskDifficulties || candidate.difficulty === "freeform" || !candidate.difficulty || allowedTaskDifficulties.includes(candidate.difficulty);
         const notParked = (candidate) => !taskIsParked(candidate);
+        const attemptAllowsInjection = (candidate) => {
+          try {
+            return !findInjectionClosedQueueAttempt(host.turnStore(), meshId, candidate.id);
+          } catch {
+            return true;
+          }
+        };
         const gates = [
           { reason: "required_tags_unsatisfied", test: (c) => nodeSatisfiesRequiredTags(c.requiredTags, capabilityTags) },
           { reason: "dependencies_unsatisfied", test: dependenciesSatisfied },
           { reason: "not_before_delayed", test: notBeforeReady },
           { reason: "task_parked", test: notParked },
+          { reason: "attempt_injection_closed", test: attemptAllowsInjection },
           { reason: "convergence_target_is_worktree", test: convergenceAllows },
           { reason: "target_pin_unmatched", test: targetMatches },
           // When the claiming session's live model is unknown (!assignedModel) and the
@@ -63764,6 +63983,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         init_mesh_task_parking();
         init_mesh_daemon_slot_axis();
         init_dist();
+        init_mesh_queue_attempt_guard();
         init_mesh_claim_refusal();
         init_mesh_dirty_write_verdict();
       }
@@ -74512,68 +74732,6 @@ ${upstream}`;
         init_mesh_candidacy_predicates();
       }
     });
-    function dispatchMessageId(task) {
-      return `task:${task.id}:n${task.dispatchNonce ?? 0}`;
-    }
-    function queueAttemptId(meshId, taskId, attemptNo) {
-      return `mesh_queue:${meshId}:${taskId}:${attemptNo}`;
-    }
-    function openOrResumeQueueAttempt(ledger, args) {
-      const latest = ledger.store.findLatestAttemptForTask(args.meshId, args.task.id);
-      if (latest && !latest.terminal) {
-        if (INJECTION_CLOSED_STATES.has(latest.state)) return { refused: latest };
-        return { ref: { attemptId: latest.attemptId, generation: latest.generation } };
-      }
-      const attemptNo = latest ? latest.attemptNo + 1 : 0;
-      const attemptId = queueAttemptId(args.meshId, args.task.id, attemptNo);
-      const coordinatorDaemonId = args.coordinatorDaemonId;
-      const coordinatorSessionId = typeof args.task.sourceCoordinatorSessionId === "string" ? args.task.sourceCoordinatorSessionId.trim() : "";
-      const ref2 = { attemptId, generation: 0 };
-      const baseEventId = `dispatch:${attemptId}`;
-      const at = args.now ?? Date.now();
-      let eventId = baseEventId;
-      for (let retry = 1; ledger.store.hasEvent(eventId); retry++) eventId = `${baseEventId}:retry${retry}`;
-      const result = ledger.observe({
-        eventId,
-        at,
-        source: "dispatch",
-        sessionId: args.sessionId,
-        attemptRef: ref2,
-        // The attempt's task binding: R1's open_dispatch reads the envelope taskId
-        // (the queue_status / task_terminal effects key on it).
-        taskId: args.task.id,
-        observedBy: coordinatorDaemonId || "local",
-        kind: "dispatch_accepted",
-        scope: "mesh_queue",
-        messageId: dispatchMessageId(args.task),
-        meshId: args.meshId,
-        nodeId: args.nodeId,
-        providerType: args.providerType,
-        attemptNo,
-        ...typeof args.task.dispatchNonce === "number" ? { dispatchNonce: args.task.dispatchNonce } : {},
-        consumeProfile: args.consumeProfile,
-        maxTaskRetries: args.maxTaskRetries,
-        ...coordinatorDaemonId ? {
-          coordinator: {
-            daemonId: coordinatorDaemonId,
-            // The coordinator run id is not known on the claim path (contracts.ts
-            // notes the same gap for every emit site); the daemon id stands in.
-            coordinatorRunId: coordinatorDaemonId,
-            ...coordinatorSessionId ? { sessionId: coordinatorSessionId } : {}
-          }
-        } : {}
-      });
-      if (result.verdict === "rejected") throw new Error(`dispatch_accepted rejected (${result.rejection ?? "unknown"})`);
-      if (result.verdict !== "applied") throw new Error(`dispatch_accepted not applied (${result.verdict})`);
-      return { ref: ref2 };
-    }
-    var INJECTION_CLOSED_STATES;
-    var init_mesh_queue_dispatch_evidence = __esm2({
-      "src/mesh/mesh-queue-dispatch-evidence.ts"() {
-        "use strict";
-        INJECTION_CLOSED_STATES = /* @__PURE__ */ new Set(["consumed", "generating", "suspended", "finalizing"]);
-      }
-    });
     function record2(value) {
       return value !== null && typeof value === "object" && !Array.isArray(value);
     }
@@ -77779,8 +77937,8 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           maxTaskRetries: resolveMeshPolicy2(p.mesh?.policy).maxTaskRetries ?? 1
         });
         if ("refused" in opened) {
-          LOG.warn("MeshQueue", `Refusing queue claim dispatch of task ${task.id} \u2192 session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
-          updateTaskStatus(meshId, task.id, "pending");
+          const rebound = rebindRefusedClaimToOpenAttempt(meshId, task.id, opened.refused);
+          LOG.warn("MeshQueue", `Refusing queue claim dispatch of task ${task.id} \u2192 session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state} on ${opened.refused.sessionId} \u2014 row rebound to that session (refusal #${rebound?.claimRefusedCount ?? "?"})`);
           return null;
         }
         task.attemptId = opened.ref.attemptId;
@@ -78048,6 +78206,7 @@ ${continuationNotice}` } : task,
         init_mesh_task_inflight();
         init_slot_model_enforcement();
         init_mesh_queue_dispatch_evidence();
+        init_mesh_queue_attempt_guard();
         init_command_args();
         init_mesh_auto_fast_forward();
         init_mesh_dirty_write_verdict();
@@ -142052,6 +142211,7 @@ ${output}` : "";
     init_mesh_quota_ranking_records();
     init_mesh_work_queue();
     init_mesh_task_predicates();
+    init_mesh_queue_attempt_guard();
     init_mesh_missions();
     init_mesh_active_work();
     init_mesh_scheduling_runtime();
@@ -142292,8 +142452,9 @@ ${output}` : "";
       const req = decodeQueueRequeueRequest(args);
       if (!req) return badRequest("queue_requeue");
       try {
-        const task = requeueTask(req.meshId, req.taskId, withOwnRole(req.options, await ownQueueRole(_ctx, req.meshId)));
-        const response = { task: queueWire(task) };
+        const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options, await ownQueueRole(_ctx, req.meshId)));
+        if (outcome?.refusal) return requeueRefusalResponse(req.taskId, outcome.refusal, queueWire(outcome.entry));
+        const response = { task: queueWire(outcome?.entry ?? null) };
         return { success: true, ...response };
       } catch (e) {
         return failure5(e);
@@ -146601,7 +146762,8 @@ ${output}` : "";
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "queue requeue");
         if (ownerFailure) return ownerFailure;
         try {
-          const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTask: requeueTask2, getQueueEntryById: getQueueEntryById2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+          const { summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22, requeueTaskWithOutcome: requeueTaskWithOutcome2, getQueueEntryById: getQueueEntryById2 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
+          const { requeueRefusalResponse: requeueRefusalResponse2 } = await Promise.resolve().then(() => (init_mesh_queue_attempt_guard(), mesh_queue_attempt_guard_exports));
           if (args?.force !== true) {
             const { isSessionActivelyGenerating: isSessionActivelyGenerating2 } = await Promise.resolve().then(() => (init_mesh_events(), mesh_events_exports));
             const { isHeldRemoteSessionGenerating: isHeldRemoteSessionGenerating2 } = await Promise.resolve().then(() => (init_mesh_candidacy_predicates(), mesh_candidacy_predicates_exports));
@@ -146614,7 +146776,7 @@ ${output}` : "";
               };
             }
           }
-          const task = requeueTask2(meshId, taskId, {
+          const outcome = requeueTaskWithOutcome2(meshId, taskId, {
             reason: typeof args?.reason === "string" ? args.reason : void 0,
             targetNodeId: typeof args?.targetNodeId === "string" ? args.targetNodeId.trim() : void 0,
             targetSessionId: typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : void 0,
@@ -146630,7 +146792,9 @@ ${output}` : "";
             // multi-coordinator topology needs it most.
             message: typeof args?.message === "string" ? args.message : void 0
           });
+          const task = outcome?.entry ?? null;
           if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+          if (outcome?.refusal) return requeueRefusalResponse2(taskId, outcome.refusal, task);
           if (task.status === "assigned" && args?.force !== true) {
             return {
               success: false,

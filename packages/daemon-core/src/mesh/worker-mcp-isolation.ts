@@ -242,6 +242,19 @@ export function expireWorkerTaskTokensForTask(meshId: string, taskId: string): n
     return removed;
 }
 
+/**
+ * Expire the tokens minted for ONE attempt of a task — the attempt a requeue
+ * retired while the task itself lives on (pending, then a fresh attempt). The
+ * task's other tokens are untouched, unlike {@link expireWorkerTaskTokensForTask}.
+ */
+export function expireWorkerTaskTokensForAttempt(meshId: string, taskId: string, attemptId: string): number {
+    let removed = 0;
+    for (const entry of tokensForTask(meshId, taskId)) {
+        if (entry.attemptId === attemptId && revokeWorkerTaskToken(entry.token)) removed += 1;
+    }
+    return removed;
+}
+
 /** Test-only reset so token state cannot leak between cases. */
 export function __resetWorkerTaskTokensForTest(): void {
     LIVE_TOKENS.clear();
@@ -346,12 +359,17 @@ export function findWorkerTaskTokenForSession(
     meshId: string,
     taskId: string,
     sessionId: string,
+    /** The session's current attempt: a token minted for it wins over an older one (same-session retry). */
+    preferAttemptId?: string,
 ): WorkerTaskToken | null {
     const wanted = String(sessionId || '').trim();
+    let first: WorkerTaskToken | null = null;
     for (const candidate of tokensForTask(meshId, taskId)) {
-        if (!candidate.sessionId || candidate.sessionId === wanted) return candidate;
+        if (candidate.sessionId && candidate.sessionId !== wanted) continue;
+        if (!preferAttemptId || candidate.attemptId === preferAttemptId) return candidate;
+        first ??= candidate;
     }
-    return null;
+    return first;
 }
 
 // ─── Top-level resolution ───────────────────────────────────────────────
@@ -802,7 +820,7 @@ export function exchangeWorkerSessionBind(
     }
     if (!current?.taskId) return null;
 
-    let token = findWorkerTaskTokenForSession(binding.meshId, current.taskId, binding.sessionId);
+    let token = findWorkerTaskTokenForSession(binding.meshId, current.taskId, binding.sessionId, current.attemptId);
     // A bind re-adopted for a session restored across a daemon restart: the
     // task tokens of the previous incarnation are gone with its memory, but the
     // session's CURRENT assigned attempt (just resolved daemon-side) is still

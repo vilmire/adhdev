@@ -123,7 +123,8 @@ export {
 // Used by the cancel / requeue / stranded-reclaim paths below, and re-exported
 // with the rest of the direct-dispatch surface at the bottom of this file.
 import { terminalizeSiblingDispatch } from './mesh-direct-dispatch.js';
-import { retireOpenQueueAttemptForRequeue } from './mesh-queue-attempt-guard.js';
+import { retireOpenQueueAttemptForRequeue, type QueueAttemptRetirementRefusal } from './mesh-queue-attempt-guard.js';
+import type { TurnAttempt } from './turn-ledger/types.js';
 export { terminalizeSiblingDispatch };
 import { notifyQueueDependencyStopped } from './mesh-queue-dependency-notice.js';
 import { type MeshWorkQueueEntry, type MeshQueueMutationOptions, type MeshWorkQueueStats } from './mesh-work-queue-types.js';
@@ -602,7 +603,7 @@ function applyRequeueMessageEdit(entry: MeshWorkQueueEntry, message?: string): v
  * Return a queue task to pending for retry. By default, dead session targeting
  * and assigned ownership are cleared so stale assignments do not strand again.
  */
-export function requeueTask(
+export function requeueTaskWithOutcome(
     meshId: string,
     taskId: string,
     opts?: {
@@ -659,9 +660,9 @@ export function requeueTask(
          */
         message?: string;
     } & MeshQueueMutationOptions,
-): MeshWorkQueueEntry | null {
+): MeshRequeueOutcome | null {
     requireMeshHostQueueOwner(opts);
-    const result = withQueueLock(meshId, () => {
+    const result = withQueueLock(meshId, (): (MeshRequeueOutcome & { cascaded: MeshWorkQueueEntry[]; missionAffected: boolean }) | null => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
         // CANON-IDENTITY single-flight: refuse (no-op) to reopen a task whose dispatch
@@ -683,7 +684,10 @@ export function requeueTask(
         const retirement = retireOpenQueueAttemptForRequeue(meshId, taskId, { force: opts?.force === true });
         if (retirement.kind === 'refused') {
             LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ''}).${retirement.reason === 'attempt_open' ? ' Pass force to cancel that attempt and requeue.' : ''}`);
-            return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: false };
+            return {
+                entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: false,
+                refusal: { reason: retirement.reason, attempt: retirement.attempt, ...(retirement.detail ? { detail: retirement.detail } : {}) },
+            };
         }
         delete entry.attemptId;
         // REDRIVE-DUP: the closed attempt's dispatch identity must not be reused.
@@ -804,7 +808,18 @@ export function requeueTask(
         return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: true };
     });
     if (result?.missionAffected) scheduleMissionCloseCandidateCheck(meshId, [result.entry, ...result.cascaded]);
-    return result ? result.entry : null;
+    return result ? { entry: result.entry, ...(result.refusal ? { refusal: result.refusal } : {}) } : null;
+}
+
+/** A requeue's result: the row, plus why it was left untouched when the turn ledger refused it. */
+export interface MeshRequeueOutcome {
+    entry: MeshWorkQueueEntry;
+    refusal?: { reason: QueueAttemptRetirementRefusal; attempt: TurnAttempt; detail?: string };
+}
+
+/** {@link requeueTaskWithOutcome}, returning only the row (a refused requeue returns it unchanged). */
+export function requeueTask(meshId: string, taskId: string, opts?: Parameters<typeof requeueTaskWithOutcome>[2]): MeshWorkQueueEntry | null {
+    return requeueTaskWithOutcome(meshId, taskId, opts)?.entry ?? null;
 }
 
 /**

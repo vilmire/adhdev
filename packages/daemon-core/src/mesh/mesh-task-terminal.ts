@@ -26,7 +26,7 @@ import { afterBridgeCommit } from './worker-bridge-transaction.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { endTaskDispatchInFlight } from './mesh-task-inflight.js';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
-import { expireWorkerTaskTokensForTask } from './worker-mcp-isolation.js';
+import { expireWorkerTaskTokensForAttempt, expireWorkerTaskTokensForTask } from './worker-mcp-isolation.js';
 import { discardWorkerMailboxForTask } from './worker-mailbox.js';
 import { canonicalJson } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
@@ -170,7 +170,13 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
         if (entry.status === input.status) return { entry, transitioned: false };
         // The commit closes an attempt the queue is retiring to re-dispatch the
         // task (requeue supersede): the attempt ends, the row does not.
-        if (terminalFenced(input.meshId, input.taskId)) return { entry, transitioned: false };
+        // Only the row transition is fenced: the closed attempt's own worker tokens
+        // still expire, or a same-session retry would exchange the stale one.
+        if (terminalFenced(input.meshId, input.taskId)) {
+            const attemptId = input.attemptId;
+            if (attemptId) afterBridgeCommit(store.db, () => expireWorkerTaskTokensForAttempt(input.meshId, input.taskId, attemptId));
+            return { entry, transitioned: false };
+        }
         const terminal: MeshTerminalCommitInput = {
             meshId: input.meshId,
             taskId: input.taskId,

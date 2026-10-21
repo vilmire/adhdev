@@ -63,12 +63,13 @@ import {
     getQueue,
     recordDirectDispatchTask,
     recordMeshToolCall,
-    requeueTask,
+    requeueTaskWithOutcome,
     type MeshTaskBatchEntrySpec,
     type MeshTaskStatus,
     type MeshWorkQueueEntry,
 } from '../../mesh/mesh-work-queue.js';
 import { summarizeQueueEntryInputForView } from '../../mesh/mesh-task-predicates.js';
+import { requeueRefusalResponse } from '../../mesh/mesh-queue-attempt-guard.js';
 import { getMeshStatusMissionSummaries, getMeshStatusMissionsCompact, listMeshMissionsForTool, type MeshMissionStatus } from '../../mesh/mesh-missions.js';
 import { buildMeshActiveWork } from '../../mesh/mesh-active-work.js';
 import { buildMeshSchedulingRuntime } from '../../mesh/mesh-scheduling-runtime.js';
@@ -380,8 +381,11 @@ const queueRequeue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     const req = decodeQueueRequeueRequest(args);
     if (!req) return badRequest('queue_requeue');
     try {
-        const task = requeueTask(req.meshId, req.taskId, withOwnRole(req.options as Record<string, unknown> | undefined, await ownQueueRole(_ctx, req.meshId)) as Parameters<typeof requeueTask>[2]);
-        const response: QueueRequeueResponse = { task: queueWire(task) };
+        const outcome = requeueTaskWithOutcome(req.meshId, req.taskId, withOwnRole(req.options as Record<string, unknown> | undefined, await ownQueueRole(_ctx, req.meshId)) as Parameters<typeof requeueTaskWithOutcome>[2]);
+        // The turn ledger refused (attempt still running, foreign owner, no ledger):
+        // the row is untouched — answer a refusal, never `success: true` with that row.
+        if (outcome?.refusal) return requeueRefusalResponse(req.taskId, outcome.refusal, queueWire(outcome.entry));
+        const response: QueueRequeueResponse = { task: queueWire(outcome?.entry ?? null) };
         return { success: true, ...response };
     } catch (e) {
         return failure(e);

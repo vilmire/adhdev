@@ -555,18 +555,22 @@ function commit(
         outcome, strength, reason, source: ev.source, ...(summary ? { summary } : {}),
     });
     releaseHolds(draft, '*');
+    // A queue requeue retiring the attempt (cancel/superseded, mesh-queue-attempt-
+    // guard.ts): only the ATTEMPT ends — the row is going back to pending, so no
+    // queue terminal and no coordinator "task cancelled" notice.
+    const attemptOnly = ev.kind === 'cancel' && ev.reason === 'superseded' && attempt.scope === 'mesh_queue';
     // Both mesh scopes carry a queue row: `mesh_queue` owns one, and a
     // `mesh_direct` dispatch materialises one pre-assigned
     // (`recordDirectDispatchTask`) for mission attribution + status. Gating this
     // on `mesh_queue` alone left a committed direct dispatch's row `assigned`
     // forever (live, rc.37: task 2cb0ab79). A direct attempt with no row is a
     // no-op at the host (`applyTaskTerminalInTxn` finds no entry).
-    if (isMeshScope(attempt) && attempt.meshId && attempt.taskId) {
+    if (isMeshScope(attempt) && attempt.meshId && attempt.taskId && !attemptOnly) {
         draft.effects.push({ kind: 'queue_status', meshId: attempt.meshId, taskId: attempt.taskId, status: outcome, reason });
         draft.effects.push({ kind: 'task_terminal', meshId: attempt.meshId, taskId: attempt.taskId, outcome });
     }
     draft.effects.push({ kind: 'bus', event: { kind: 'turn', phase: 'committed', sessionId: attempt.sessionId, attemptId: attempt.attemptId, generation: attempt.generation, outcome, strength } });
-    notify(draft, outcome, { ...(summary ? { summary } : {}), ...(held.textEventId ? { textEventId: held.textEventId } : {}) });
+    if (!attemptOnly) notify(draft, outcome, { ...(summary ? { summary } : {}), ...(held.textEventId ? { textEventId: held.textEventId } : {}) });
     draft.effects.push({ kind: 'release_attempt_ref', attemptId: attempt.attemptId, sessionId: attempt.sessionId });
     draft.committed = true;
 }

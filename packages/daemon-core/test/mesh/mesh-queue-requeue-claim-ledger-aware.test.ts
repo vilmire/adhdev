@@ -53,7 +53,13 @@ import { fenceWorkerReportOnLedger } from '../../src/mesh/worker-report.js'
 import type { TurnLedger } from '../../src/mesh/turn-ledger/ledger.js'
 import { withMeshRouter } from './helpers/mesh-router-stub.js'
 import { __drainTestTurnLedgersForTests, wipeTurnTablesForTests } from './helpers/mesh-turn-ledger-fixture.js'
-import { evd } from '../turn-ledger/ledger-harness.js'
+import { dispatch, evd, ledgerOn, memDb, recordingHost } from '../turn-ledger/ledger-harness.js'
+import { withQueueTerminalFence, applyTaskTerminalInTxn } from '../../src/mesh/mesh-task-terminal.js'
+import { findInjectionClosedQueueAttempt } from '../../src/mesh/mesh-queue-attempt-guard.js'
+import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-ipc.js'
+import { meshQueueHandlers } from '../../src/commands/med-family/mesh-queue.js'
+import { TURN_IPC_PROTOCOL_VERSION } from '@adhdev/mesh-shared'
+import { findWorkerTaskTokenForSession, exchangeWorkerSessionBind, mintWorkerSessionBind, mintWorkerTaskToken } from '../../src/mesh/worker-mcp-isolation.js'
 
 const NODE_ID = 'node_requeue_ledger_local000000000000000'
 const WS = '/repo/requeue-ledger-aware'
@@ -236,5 +242,172 @@ describe('QUEUE-LEDGER-DRIFT: requeue and claim consult the turn ledger', () => 
     const second = rebindRefusedClaimToOpenAttempt(meshId, task.id, running, t0)!
     expect(second.claimRefusedCount).toBe(2)
     expect(Date.parse(second.notBefore!)).toBe(t0 + 4_000)
+  })
+
+  // ── review 24c9b2db probes ────────────────────────────────────────────────
+
+  it('a real openClaimAttempt refusal (attempt closed after the gate read) rebinds the row to the running attempt', async () => {
+    const task = enqueueTask(meshId, 'REFUSAL-RACE', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const running = await claimAndStart(components, meshId, task.id, 'sess-a')
+    updateTaskStatus(meshId, task.id, 'pending')
+    const nonce = row(meshId, task.id).dispatchNonce
+    const turns = MeshRuntimeStore.getInstance().turnStore()
+    // The gate's read sees no attempt; the attempt open that follows sees it generating.
+    const read = vi.spyOn(turns, 'findLatestAttemptForTask').mockReturnValueOnce(null)
+    try {
+      expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-b', 'claude-cli')).toBe(false)
+    } finally { read.mockRestore() }
+    expect(row(meshId, task.id)).toMatchObject({ status: 'assigned', assignedSessionId: 'sess-a', attemptId: running.attemptId, dispatchNonce: nonce, claimRefusedCount: 1 })
+    expect(Date.parse(row(meshId, task.id).notBefore!)).toBeGreaterThan(Date.now())
+  })
+
+  it('the terminal fence nests, survives a throw, and never blocks another task', () => {
+    const a = enqueueTask(meshId, 'FENCE-A', { taskMode: 'live_debug_readonly', difficulty: 'medium' })
+    const b = enqueueTask(meshId, 'FENCE-B', { taskMode: 'live_debug_readonly', difficulty: 'medium' })
+    const terminal = (taskId: string) => applyTaskTerminalInTxn({ meshId, taskId, status: 'cancelled', occurredAtMs: Date.now() })
+    withQueueTerminalFence(meshId, a.id, () => {
+      expect(terminal(a.id).transitioned).toBe(false)
+      try { withQueueTerminalFence(meshId, a.id, () => { throw new Error('probe') }) } catch { /* expected */ }
+      expect(terminal(a.id).transitioned).toBe(false)
+      expect(terminal(b.id).transitioned).toBe(true)
+    })
+    expect(terminal(a.id).transitioned).toBe(true)
+  })
+
+  it('a genuine operator cancel still terminalizes the row and cascades', async () => {
+    setMesh(meshId, { onDependencyFailure: 'cancel' })
+    const a = enqueueTask(meshId, 'REAL-CANCEL', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const b = enqueueTask(meshId, 'REAL-DEPENDENT', { dependsOn: [a.id], taskMode: 'code_change', difficulty: 'medium' })
+    const attempt = await claimAndStart(components, meshId, a.id, 'sess-a')
+    const ledger = components.turnLedger as TurnLedger
+    expect(ledger.observe(evd('cancel', { reason: 'operator_cancel' }, {
+      at: Date.now(), sessionId: 'sess-a', source: 'operator', observedBy: ledger.selfDaemonId,
+      attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+    })).verdict).toBe('applied')
+    expect(row(meshId, a.id).status).toBe('cancelled')
+    expect(row(meshId, b.id).status).toBe('cancelled')
+  })
+
+  it('the claim gate blocks only open attempts that consumed their prompt', () => {
+    for (const state of ['accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing', 'completed', 'failed', 'cancelled']) {
+      const terminal = ['completed', 'failed', 'cancelled'].includes(state) ? { outcome: state } : null
+      const fake = { findLatestAttemptForTask: () => ({ scope: 'mesh_queue', state, terminal }) } as any
+      expect(!!findInjectionClosedQueueAttempt(fake, meshId, 't'), state).toBe(['consumed', 'generating', 'suspended', 'finalizing'].includes(state))
+    }
+    expect(findInjectionClosedQueueAttempt({ findLatestAttemptForTask: () => null }, meshId, 't')).toBeNull()
+  })
+
+  it('refusal backoff caps at 60 s and a force requeue recovers to a fresh claim', async () => {
+    const task = enqueueTask(meshId, 'CAP-RECOVERY', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const attempt = await claimAndStart(components, meshId, task.id, 'sess-a')
+    const now = Date.now()
+    for (let i = 0; i < 12; i++) {
+      const rebound = rebindRefusedClaimToOpenAttempt(meshId, task.id, attempt, now)!
+      expect(Date.parse(rebound.notBefore!) - now).toBe(Math.min(2000 * 2 ** i, 60000))
+    }
+    requeueTask(meshId, task.id, { force: true })
+    expect(row(meshId, task.id).notBefore).toBeUndefined()
+    expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-b', 'claude-cli')).toBe(true)
+    await settle()
+  })
+
+  // F1 — the retired attempt's token must not win the same-session exchange.
+  it('F1: a same-session retry after force requeue exchanges the FRESH attempt token and its report is provable', async () => {
+    const task = enqueueTask(meshId, 'SAME-SESSION', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const old = await claimAndStart(components, meshId, task.id, 'sess-a')
+    expect(findWorkerTaskTokenForSession(meshId, task.id, 'sess-a')?.attemptId).toBe(old.attemptId)
+    requeueTask(meshId, task.id, { force: true })
+    expect(tryAssignQueueTask(components, meshId, NODE_ID, 'sess-a', 'claude-cli')).toBe(true)
+    await settle()
+    const fresh = attempts(meshId, task.id).at(-1)!
+    expect(fresh.attemptId).not.toBe(old.attemptId)
+    const bind = mintWorkerSessionBind({ meshId, sessionId: 'sess-a', nodeId: NODE_ID })
+    const exchange = exchangeWorkerSessionBind(bind.bind, () => ({ taskId: task.id, attemptId: fresh.attemptId }))!
+    expect(exchange.attemptId).toBe(fresh.attemptId)
+    expect(findWorkerTaskTokenForSession(meshId, task.id, 'sess-a')?.attemptId).toBe(fresh.attemptId)
+    expect(fenceWorkerReportOnLedger(MeshRuntimeStore.getInstance(), { meshId, taskId: task.id, attemptId: exchange.attemptId, sessionId: 'sess-a' }, 'completed')).toBe('ok')
+  })
+
+  // F2 — a foreign-owned attempt is refused BEFORE any evidence is observed.
+  it('F2: a foreign-owned attempt refuses the requeue without forwarding a cancel', async () => {
+    const task = enqueueTask(meshId, 'FORWARDED-REFUSAL', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const attempt = await claimAndStart(components, meshId, task.id, 'sess-a')
+    const store = MeshRuntimeStore.getInstance()
+    store.turnStore().upsertAttempt({ ...attempt, ownerDaemonId: 'remote-owner' }, Date.now())
+    const before = row(meshId, task.id)
+    requeueTask(meshId, task.id, { force: true })
+    expect(row(meshId, task.id)).toEqual(before)
+    const sent = store.db.prepare("SELECT COUNT(*) AS n FROM turn_events WHERE attempt_id = ? AND kind = 'cancel'").get(attempt.attemptId) as { n: number }
+    expect(sent.n).toBe(0)
+    expect(store.turnStore().getAttempt(attempt.attemptId)!.terminal).toBeNull()
+  })
+
+  // F3 — retiring the attempt is not a task cancellation.
+  it('F3: a force requeue sends no task-cancelled notice and no queue terminal effects', async () => {
+    const task = enqueueTask(meshId, 'NOTICE-REQUEUE', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const attempt = await claimAndStart(components, meshId, task.id, 'sess-a')
+    requeueTask(meshId, task.id, { force: true })
+    await (components.turnLedger as TurnLedger).flushPublish()
+    const notices = MeshRuntimeStore.getInstance().db.prepare("SELECT payload_json FROM turn_events WHERE attempt_id = ? AND kind = 'notify'").all(attempt.attemptId) as Array<{ payload_json: string }>
+    expect(notices.map(n => JSON.parse(n.payload_json)).filter(n => n.notify === 'cancelled')).toHaveLength(0)
+    expect(row(meshId, task.id).status).toBe('pending')
+  })
+
+  it('F3 (reducer): cancel/superseded on a mesh_queue attempt retires only the attempt; operator_cancel still commits the task', () => {
+    const effectsFor = (reason: 'superseded' | 'operator_cancel') => {
+      const db = memDb()
+      const ledger = ledgerOn(db, { selfDaemonId: 'dc', host: recordingHost() })
+      ledger.observe(dispatch({ attemptId: 'q1', session: 's1', scope: 'mesh_queue', taskId: 't1' }))
+      const result = ledger.observe(evd('cancel', { reason }, { source: 'operator', sessionId: 's1', observedBy: 'dc', attemptRef: { attemptId: 'q1', generation: 0 } }))
+      db.close()
+      expect(result.verdict).toBe('applied')
+      return result.effects.map(e => e.kind)
+    }
+    const retired = effectsFor('superseded')
+    expect(retired).toEqual(expect.arrayContaining(['cancel_dispatch', 'commit', 'bus', 'release_attempt_ref']))
+    for (const kind of ['queue_status', 'task_terminal', 'notify_coordinator']) expect(retired).not.toContain(kind)
+    expect(effectsFor('operator_cancel')).toEqual(expect.arrayContaining(['queue_status', 'task_terminal', 'notify_coordinator']))
+  })
+
+  // F4 — both requeue command surfaces answer a ledger refusal as a refusal.
+  it('F4: lower queue_requeue IPC and med-family requeue answer success:false on a ledger refusal', async () => {
+    const task = enqueueTask(meshId, 'NO-LEDGER', { targetNodeId: NODE_ID, taskMode: 'code_change', difficulty: 'medium' })
+    const attempt = await claimAndStart(components, meshId, task.id, 'sess-a')
+    setActiveTurnLedger(null)
+    const lower = await meshStoreIpcHandlers.queue_requeue({} as any, { v: TURN_IPC_PROTOCOL_VERSION, meshId, taskId: task.id, options: { force: true } }) as any
+    expect(lower).toMatchObject({ success: false, code: 'requeue_refused_attempt_open', refusalReason: 'no_ledger', attemptId: attempt.attemptId, attemptState: 'generating' })
+    const med = await meshQueueHandlers.requeue_mesh_queue_task({ requireMeshHostMutationOwner: async () => null } as any, { meshId, taskId: task.id, force: true }) as any
+    expect(med).toMatchObject({ success: false, code: 'requeue_refused_attempt_open', refusalReason: 'no_ledger', attemptId: attempt.attemptId })
+    expect(row(meshId, task.id).status).toBe('assigned')
+
+    // Non-force over a running attempt (ledger active again): refused on both surfaces too.
+    setActiveTurnLedger(components.turnLedger)
+    updateTaskStatus(meshId, task.id, 'pending')
+    const lower2 = await meshStoreIpcHandlers.queue_requeue({} as any, { v: TURN_IPC_PROTOCOL_VERSION, meshId, taskId: task.id, options: {} }) as any
+    expect(lower2).toMatchObject({ success: false, code: 'requeue_refused_attempt_open', refusalReason: 'attempt_open' })
+    const med2 = await meshQueueHandlers.requeue_mesh_queue_task({ requireMeshHostMutationOwner: async () => null } as any, { meshId, taskId: task.id }) as any
+    expect(med2).toMatchObject({ success: false, code: 'requeue_refused_attempt_open', refusalReason: 'attempt_open' })
+  })
+
+  it('F1 (defence): token lookup prefers the current attempt over an older token of the same session', () => {
+    const older = mintWorkerTaskToken({ meshId, taskId: 'tok-task', attemptId: 'att-0', sessionId: 'sess-a' })
+    const newer = mintWorkerTaskToken({ meshId, taskId: 'tok-task', attemptId: 'att-1', sessionId: 'sess-a' })
+    expect(findWorkerTaskTokenForSession(meshId, 'tok-task', 'sess-a')?.token).toBe(older.token)
+    expect(findWorkerTaskTokenForSession(meshId, 'tok-task', 'sess-a', 'att-1')?.token).toBe(newer.token)
+    expect(findWorkerTaskTokenForSession(meshId, 'tok-task', 'sess-a', 'att-9')?.token).toBe(older.token)
+    const bind = mintWorkerSessionBind({ meshId, sessionId: 'sess-a', nodeId: NODE_ID })
+    expect(exchangeWorkerSessionBind(bind.bind, () => ({ taskId: 'tok-task', attemptId: 'att-1' }))?.attemptId).toBe('att-1')
+  })
+
+  it('F1 (fence): a fenced terminal skips the row transition but still expires the closed attempt\'s tokens', () => {
+    const t = enqueueTask(meshId, 'FENCE-TOKENS', { taskMode: 'live_debug_readonly', difficulty: 'medium' })
+    mintWorkerTaskToken({ meshId, taskId: t.id, attemptId: 'closed-att', sessionId: 'sess-a' })
+    const keep = mintWorkerTaskToken({ meshId, taskId: t.id, attemptId: 'other-att', sessionId: 'sess-b' })
+    withQueueTerminalFence(meshId, t.id, () => {
+      expect(applyTaskTerminalInTxn({ meshId, taskId: t.id, status: 'cancelled', attemptId: 'closed-att', occurredAtMs: Date.now() }).transitioned).toBe(false)
+    })
+    expect(row(meshId, t.id).status).toBe('pending')
+    expect(findWorkerTaskTokenForSession(meshId, t.id, 'sess-a')).toBeNull()
+    expect(findWorkerTaskTokenForSession(meshId, t.id, 'sess-b')?.token).toBe(keep.token)
   })
 })
