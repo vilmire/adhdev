@@ -100,20 +100,34 @@ ghostty must come from the FetchContent-managed clone (a
 `FETCHCONTENT_SOURCE_DIR_GHOSTTY` substitute or a `GHOSTTY_GIT_TAG` override is
 refused) at the pinned revision with a clean tree; `zig version` must print
 exactly the `toolchain.json` version (only surrounding whitespace is trimmed);
-and `GHOSTTY_ZIG_BUILD_FLAGS` must be empty. The libghostty-vt runtime is then
-provably rebuilt by this build: configure deletes `zig-out/` in the managed
-clone, and the `adhdev_ghostty_runtime` target re-runs `zig build` before
-every link (zig re-installs `zig-out/` from its content-addressed cache,
-replacing any stale file), re-verifying the pinned, clean source before and
-after. For local experiments only, `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1` turns
+and `GHOSTTY_ZIG_BUILD_FLAGS` must be empty. Upstream's CMake wrapper is not
+used: the `adhdev_ghostty_runtime` target runs `zig build` itself on every
+build, with a private global cache, local cache and install prefix inside the
+build tree (`build/ghostty-zig/`; passed as `--global-cache-dir`, `--cache-dir`
+and `--prefix`, so `ZIG_GLOBAL_CACHE_DIR` / `ZIG_LOCAL_CACHE_DIR` are ignored),
+and re-verifies the pinned, clean source before and after. For a release build
+configure empties those caches first, so every dependency is fetched afresh
+(zig verifies its package hash on fetch) and everything is compiled from
+scratch: a stale `zig-out/`, a reused build directory or a poisoned shared zig
+cache cannot reach the shipped runtime. What this does NOT cover: the zig
+installation itself (only its version is checked) and concurrent writers.
+The checks are check-then-use, so a release build needs exclusive ownership of
+its build tree, the ghostty clone and the zig installation for the whole
+configure + build; build release prebuilts where no other process writes to
+them. For local experiments only, `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1` turns
 a failure into a warning, and ALWAYS makes the build non-release: the binary
 reports `releaseEligible: false` with its problem codes (at least
 `unverified-dev-build`), and every release gate refuses it (`non-release`). The
 addon also records the zig version, C/C++ compiler id and version, and build
 type (`getBindingInfo()`, copied into the manifest).
 `scripts/probe-build-provenance.mjs <dir>` exercises all of this against a
-finished build in `<dir>/build` (stale runtime, reconfigure, source edit, dev
-override, zig output parsing, source override).
+configured build in `<dir>/build`: stale runtime, poisoned ambient and private
+zig caches (including a control showing the poison breaks a build that keeps
+them), reconfigure, source edit, dev override, zig output parsing and source
+override. It rebuilds twice from empty caches, so it needs network access and
+about 1 GiB of free disk. Two fresh builds differ only in per-build debug
+metadata (cache object paths, mtimes, image id, signature), so it compares
+runtimes from different builds by their loaded sections.
 
 ```bash
 # Compile from source and emit into the committed prebuilt for this
@@ -134,20 +148,23 @@ rebuild` (fresh configure and clone). Without it, `npm run build` keeps an
 existing local build or copies a usable prebuilt, or compiles incrementally
 (`--plan` prints which it would do).
 
-Binaries embed absolute build and cache paths, so a prebuilt you commit must
-be built outside any home directory, from a fresh clone of the commit being
-stamped. Copy the package to a neutral directory and point every cache there
-(shown for macOS/Linux; on Windows use e.g. `C:\gvn`, `C:\zgc`, `C:\gvn-home`
-and set `HOME`/`USERPROFILE` the same way, with zig installed outside the user
-profile). Do not set `FETCHCONTENT_SOURCE_DIR_GHOSTTY`, `GHOSTTY_GIT_TAG`,
-`GHOSTTY_ZIG_BUILD_FLAGS` or `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD`:
+Binaries embed absolute build paths (the private zig caches live in the build
+tree), so a prebuilt you commit must be built outside any home directory, from
+a fresh clone of the commit being stamped. Copy the package to a neutral
+directory and point `HOME` there for cmake-js' Node headers (shown for
+macOS/Linux; on Windows use e.g. `C:\gvn` and `C:\gvn-home` for
+`HOME`/`USERPROFILE`, with zig installed outside the user profile). The zig
+caches need no setup: the build always uses fresh private ones. Do not set
+`FETCHCONTENT_SOURCE_DIR_GHOSTTY`, `GHOSTTY_GIT_TAG`, `GHOSTTY_ZIG_BUILD_FLAGS`
+or `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD`, and let nothing else write to these
+directories during the build:
 
 ```bash
-rm -rf /tmp/gvn && mkdir -p /tmp/gvn/node_modules /tmp/gvn-home
+rm -rf /tmp/gvn /tmp/gvn-home && mkdir -p /tmp/gvn/node_modules /tmp/gvn-home
 rsync -a --exclude node_modules --exclude prebuilt --exclude build oss/packages/ghostty-vt-node/ /tmp/gvn/
 cp -R oss/node_modules/node-addon-api /tmp/gvn/node_modules/   # or the package-local copy
-(cd /tmp/gvn && HOME=/tmp/gvn-home ZIG_GLOBAL_CACHE_DIR=/tmp/zgc ZIG_LOCAL_CACHE_DIR=/tmp/gvn/.zlc \
-  node "$OLDPWD/oss/node_modules/cmake-js/bin/cmake-js" rebuild)
+(cd /tmp/gvn && HOME=/tmp/gvn-home node "$OLDPWD/oss/node_modules/cmake-js/bin/cmake-js" rebuild)
+node oss/packages/ghostty-vt-node/scripts/probe-build-provenance.mjs /tmp/gvn   # optional, expect 13/13
 node oss/packages/ghostty-vt-node/scripts/prebuilt-manifest.mjs emit /tmp/gvn/build/Release
 node oss/packages/ghostty-vt-node/scripts/check-prebuilts.mjs
 ```
@@ -180,7 +197,9 @@ hashes. The gate fails unless:
 - (b) the host platform's committed prebuilt, loaded by path, embeds the
   current digest and release provenance, and its viewport API behaves.
 - (c) the native CI build compiles from source (`ADHDEV_GHOSTTY_VT_FORCE_COMPILE`)
-  with the zig read from `toolchain.json`, verifies + stamps the exact staged
+  as a clean `cmake-js rebuild` with the zig read from `toolchain.json` and no
+  restored zig cache (`setup-zig` `use-cache: false`, no `ZIG_*_CACHE_DIR`),
+  verifies + stamps the exact staged
   artifact, and the release job checks every prebuilt it publishes
   (`--all-present`).
 - (d) no shipped native file (`.node`/`.dylib`/`.so*`/`.dll`) embeds a

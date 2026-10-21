@@ -61,6 +61,13 @@ export function nativeCiFindings(workflowDir = WORKFLOW_DIR, packageDir = PACKAG
     const zigFromPin = !!zigStep && /version:\s*\$\{\{\s*steps\.toolchain\.outputs\.zig\s*\}\}/.test(zigStep[1])
         && /id: toolchain[\s\S]*?packages\/ghostty-vt-node\/toolchain\.json/.test(native);
     findings.push(['native build installs the zig pinned in toolchain.json', zigFromPin, zigStep ? zigStep[1].trim().replace(/\s+/g, ' ') : 'no "Setup Zig" step']);
+    // A restored zig cache is mutable state from another run; release artifacts
+    // must not see one (setup-zig caches by default). No other step may
+    // restore a cache path that zig reads either.
+    const zigNoCache = !!zigStep && /use-cache:\s*false\b/.test(zigStep[1]);
+    const restoresZigCache = /actions\/cache@[\s\S]*?(zig|ZIG_)/i.test(native) || /ZIG_(GLOBAL|LOCAL)_CACHE_DIR/.test(native);
+    findings.push(['native build restores no zig cache', zigNoCache && !restoresZigCache,
+        `setup-zig use-cache: ${zigNoCache ? 'false' : 'not disabled'}${restoresZigCache ? '; another step restores or points at a zig cache' : ''}`]);
     findings.push(['native build forces a compile', forced, buildStep ? buildText.trim().replace(/\s+/g, ' ') : 'no "Build ghostty-vt-node" step']);
     findings.push(['native build verifies the exact staged artifact', /scripts\/verify-prebuilt\.mjs "?dist-prebuilt\//.test(native), 'verify-prebuilt.mjs on dist-prebuilt/<triplet>']);
     findings.push(['native build stamps a manifest from the built binary', /scripts\/prebuilt-manifest\.mjs write "?dist-prebuilt\//.test(native), 'prebuilt-manifest.mjs write dist-prebuilt/<triplet>']);

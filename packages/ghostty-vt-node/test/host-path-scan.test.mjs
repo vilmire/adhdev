@@ -62,7 +62,26 @@ it('parses the native CI workflow with CRLF line endings (Windows checkout)', ()
         }
         const findings = nativeCiFindings(dir, packageDir);
         assert.deepEqual(findings.filter(([, ok]) => !ok), []);
-        assert.equal(findings.length, 6);
+        assert.equal(findings.length, 7);
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+it('requires the native workflow not to restore a zig cache', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ghostty-zig-cache-'));
+    try {
+        const failing = (native) => {
+            writeFileSync(join(dir, 'ghostty-vt-node.yml'), native);
+            writeFileSync(join(dir, 'ci.yml'), readFileSync(join(workflowDir, 'ci.yml'), 'utf8'));
+            return nativeCiFindings(dir, packageDir).filter(([, ok]) => !ok).map(([name]) => name);
+        };
+        const native = readFileSync(join(workflowDir, 'ghostty-vt-node.yml'), 'utf8');
+        assert.deepEqual(failing(native), []);
+        assert.deepEqual(failing(native.replace(/\n\s*use-cache: false/, '')), ['native build restores no zig cache']);
+        assert.deepEqual(failing(native.replace('use-cache: false', 'use-cache: true')), ['native build restores no zig cache']);
+        const envCache = native.replace('      - name: Build ghostty-vt-node\n', '      - name: Build ghostty-vt-node\n        env:\n          ZIG_GLOBAL_CACHE_DIR: /tmp/shared\n');
+        assert.deepEqual(failing(envCache), ['native build restores no zig cache']);
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }

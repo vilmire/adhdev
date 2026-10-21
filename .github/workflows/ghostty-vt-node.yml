@@ -100,6 +100,10 @@ jobs:
           # `latest` floated to 0.16.0, which breaks the build (std.process.EnvMap
           # removed; requireZig() rejects it).
           version: ${{ steps.toolchain.outputs.zig }}
+          # Never restore a zig cache into a release artifact build: the build
+          # uses fresh private caches in its build tree anyway, and a restored
+          # cache is mutable state from another run.
+          use-cache: false
 
       - name: Install dependencies
         run: npm ci
