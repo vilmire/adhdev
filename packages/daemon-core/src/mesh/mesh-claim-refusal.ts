@@ -39,6 +39,10 @@ export type MeshClaimRefusalReason =
     | 'not_before_delayed'
     /** PIN-PARKING: the row awaits a coordinator decision and no daemon may claim it. */
     | 'task_parked'
+    /** The task's turn attempt already consumed its prompt (consumed/generating/suspended/
+     *  finalizing) — the row is pending beside a running attempt. Cleared when the
+     *  attempt reclaims or commits (mesh-queue-attempt-guard.ts). */
+    | 'attempt_injection_closed'
     /** A base-only convergence task cannot be claimed by a worktree-clone session. */
     | 'convergence_target_is_worktree'
     /** The row is pinned to a different node/session than the one claiming. */

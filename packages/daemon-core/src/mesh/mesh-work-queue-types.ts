@@ -248,6 +248,12 @@ export interface MeshWorkQueueEntry {
      * time to finish booting rather than racing it again on the very next tick.
      */
     dispatchFailureCount?: number;
+    /**
+     * Claims of this row the turn ledger refused because the task's attempt had already
+     * consumed its prompt on another session (mesh-queue-attempt-guard.ts). Drives the
+     * claim-refusal `notBefore` backoff; absent on legacy rows → 0.
+     */
+    claimRefusedCount?: number;
     hold?: import('./mesh-queue-hold.js').MeshQueueHold;
     /** Durable once-per-hold notice marker, independent of updatedAt. */
     holdNoticeId?: string;

@@ -14,12 +14,13 @@ import { taskIsParked } from './mesh-task-parking.js';
 import { effectiveSlotCap } from './mesh-daemon-slot-axis.js';
 import { meshNodeIdMatches, daemonIdsEquivalent, expandDaemonIdForms, sessionIdsEquivalent, findOwnershipConflicts, type InFlightOwnership } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue.js';
+import { findInjectionClosedQueueAttempt } from './mesh-queue-attempt-guard.js';
 import { selectClaimCandidate, type MeshClaimRefusal, type MeshClaimRefusalReason } from './mesh-claim-refusal.js';
 import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } from './mesh-dirty-write-verdict.js';
 
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
-export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction'>;
+export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
 /** Read all currently-assigned non-readonly queue entries with ownedPaths across the entire mesh. */
 export function readInFlightOwnershipMeshWide(
@@ -375,6 +376,15 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // exclusively through requeueTask.
         const notParked = (candidate: MeshWorkQueueEntry): boolean => !taskIsParked(candidate);
 
+        // The task's turn attempt already consumed its prompt (a pending row beside a
+        // running attempt — e.g. an old force requeue). The ledger would refuse the
+        // dispatch, so claiming it would only bump the nonce and flip the row back —
+        // every drain tick (live c362e481: 133 times). Skip it before any write; it is
+        // claimable again once the attempt reclaims (→ accepted) or commits.
+        const attemptAllowsInjection = (candidate: MeshWorkQueueEntry): boolean => {
+            try { return !findInjectionClosedQueueAttempt(host.turnStore(), meshId, candidate.id); } catch { return true; }
+        };
+
         // A6-SILENT-REFUSAL (rationale: mesh-claim-refusal.ts). Was one boolean `.find(...)`
         // whose failure collapsed into a bare `return null` — nine predicates, one silent
         // exit. Order and short-circuit semantics are preserved exactly; this only records
@@ -384,6 +394,7 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             { reason: 'dependencies_unsatisfied', test: dependenciesSatisfied },
             { reason: 'not_before_delayed', test: notBeforeReady },
             { reason: 'task_parked', test: notParked },
+            { reason: 'attempt_injection_closed', test: attemptAllowsInjection },
             { reason: 'convergence_target_is_worktree', test: convergenceAllows },
             { reason: 'target_pin_unmatched', test: targetMatches },
             // When the claiming session's live model is unknown (!assignedModel) and the

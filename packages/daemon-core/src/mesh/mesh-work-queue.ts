@@ -8,7 +8,7 @@ import { LOG } from '../logging/logger.js';
 import { isTaskDispatchInFlight, endTaskDispatchInFlight } from './mesh-task-inflight.js';
 // THE single terminal choke point: updateTaskStatus / updateSessionTaskStatus /
 // cancelTask and the queue policy terminals delegate every terminal flip to it.
-import { commitTaskTerminal, type MeshTerminalCommitSource, type MeshTerminalCommitStatus, type MeshTerminalCompletionEnvelope } from './mesh-task-terminal.js';
+import { commitTaskTerminal, withQueueTerminalFence, type MeshTerminalCommitSource, type MeshTerminalCommitStatus, type MeshTerminalCompletionEnvelope } from './mesh-task-terminal.js';
 import { resolveOnDependencyFailurePolicy } from './mesh-dependency-failure.js';
 import {
     sessionIdsEquivalent,
@@ -123,6 +123,7 @@ export {
 // Used by the cancel / requeue / stranded-reclaim paths below, and re-exported
 // with the rest of the direct-dispatch surface at the bottom of this file.
 import { terminalizeSiblingDispatch } from './mesh-direct-dispatch.js';
+import { retireOpenQueueAttemptForRequeue } from './mesh-queue-attempt-guard.js';
 export { terminalizeSiblingDispatch };
 import { notifyQueueDependencyStopped } from './mesh-queue-dependency-notice.js';
 import { type MeshWorkQueueEntry, type MeshQueueMutationOptions, type MeshWorkQueueStats } from './mesh-work-queue-types.js';
@@ -675,6 +676,18 @@ export function requeueTask(
             // No status change → no mission aggregate change; nothing to re-check.
             return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: false };
         }
+        // The ledger is the authority on whether the task is still running (the
+        // in-flight mark above is process-local). Close its open attempt, or refuse:
+        // a `pending` row beside an open attempt is refused by every later claim, and
+        // the worker's report then finds no provable attempt (mesh-queue-attempt-guard.ts).
+        const retirement = retireOpenQueueAttemptForRequeue(meshId, taskId, { force: opts?.force === true });
+        if (retirement.kind === 'refused') {
+            LOG.warn('MeshQueue', `Refusing to requeue task ${taskId} on mesh ${meshId}: its attempt ${retirement.attempt.attemptId} is still ${retirement.attempt.state} on ${retirement.attempt.sessionId} (${retirement.reason}${retirement.detail ? `: ${retirement.detail}` : ''}).${retirement.reason === 'attempt_open' ? ' Pass force to cancel that attempt and requeue.' : ''}`);
+            return { entry, cascaded: [] as MeshWorkQueueEntry[], missionAffected: false };
+        }
+        delete entry.attemptId;
+        // REDRIVE-DUP: the closed attempt's dispatch identity must not be reused.
+        if (retirement.kind === 'closed') entry.dispatchNonce = (entry.dispatchNonce || 0) + 1;
         // Proceeding to requeue (or force-override): the prior dispatch is being abandoned,
         // so end the single-flight window for this task id.
         endTaskDispatchInFlight(meshId, taskId);
@@ -683,11 +696,12 @@ export function requeueTask(
         // direct-dispatch row live would let the stale row and the new dispatch both render
         // as active work for one task. Reason is refined to 'queue_task_dispatch_failed' in
         // the dispatch-failure branch below, which is the same abandonment on its own axis.
-        terminalizeSiblingDispatch(
+        // Fenced: the sibling's cancel commit must not terminalize the row being requeued.
+        withQueueTerminalFence(meshId, taskId, () => terminalizeSiblingDispatch(
             meshId,
             taskId,
             opts?.dispatchFailure && !opts?.force ? 'queue_task_dispatch_failed' : 'queue_task_requeued',
-        );
+        ));
 
         // DISPATCH-BOOT-RACE: a dispatch failure spends its OWN budget
         // (dispatchFailureCount/MAX_DISPATCH_FAILURES), never requeueCount — see the

@@ -155,6 +155,22 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             // Refuse unless force. A genuinely dead/stale session is not generating, so this
             // observation passes and a legitimate requeue proceeds. force=true (operator
             // override) bypasses BOTH this and the in-memory guard.
+            const { currentOpenQueueAttempt } = await import('../../mesh/mesh-queue-attempt-guard.js');
+            const { INJECTION_CLOSED_STATES } = await import('../../mesh/mesh-queue-dispatch-evidence.js');
+            const openBefore = currentOpenQueueAttempt(meshId, taskId);
+            // The turn ledger is the restart-safe authority: an attempt that already
+            // consumed its prompt is a running task whatever the row says (a `pending`
+            // row beside it included). force cancels that attempt inside requeueTask.
+            if (args?.force !== true && openBefore && INJECTION_CLOSED_STATES.has(openBefore.state)) {
+                return {
+                    success: false,
+                    error: `Task '${taskId}' has an open turn attempt ${openBefore.attemptId} that is ${openBefore.state} on session ${openBefore.sessionId}; requeue refused to avoid a duplicate second dispatch. Pass force:true to cancel that attempt and requeue, or cancel and re-enqueue.`,
+                    code: 'requeue_refused_attempt_open',
+                    attemptId: openBefore.attemptId,
+                    attemptState: openBefore.state,
+                    task: getQueueEntryById(meshId, taskId),
+                };
+            }
             if (args?.force !== true) {
                 const { isSessionActivelyGenerating } = await import('../../mesh/mesh-events.js');
                 const { isHeldRemoteSessionGenerating } = await import('../../mesh/mesh-candidacy-predicates.js');
@@ -188,6 +204,19 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
                 message: typeof args?.message === 'string' ? args.message : undefined,
             });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+            // requeueTask leaves the row untouched when it could not close the open
+            // attempt (no ledger / cancel not applied) — never report that as a requeue.
+            const openAfter = openBefore ? currentOpenQueueAttempt(meshId, taskId) : null;
+            if (openAfter && openAfter.attemptId === openBefore!.attemptId && (args?.force === true || task.status !== 'assigned')) {
+                return {
+                    success: false,
+                    error: `Task '${taskId}' was not requeued: its open turn attempt ${openAfter.attemptId} (${openAfter.state} on session ${openAfter.sessionId}) could not be closed on the turn ledger.`,
+                    code: 'requeue_refused_attempt_open',
+                    attemptId: openAfter.attemptId,
+                    attemptState: openAfter.state,
+                    task,
+                };
+            }
             // The single-flight guard returns the row UNCHANGED (still 'assigned') when it
             // refuses an in-flight requeue — surface that as a clear, non-success signal so
             // the coordinator does not believe a second dispatch was opened.

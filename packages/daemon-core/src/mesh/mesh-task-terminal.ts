@@ -111,6 +111,36 @@ function applyTaskTerminalSteps(
     endTaskDispatchInFlight(terminal.meshId, terminal.taskId);
 }
 
+// Tasks whose queue row must not follow a ledger commit, for the duration of
+// withQueueTerminalFence (process-local; ledger.observe applies its in-txn
+// effects synchronously, so a scoped fence covers exactly that commit).
+const terminalFences = new Map<string, number>();
+const fenceKey = (meshId: string, taskId: string) => `${meshId}\u0000${taskId}`;
+
+function terminalFenced(meshId: string, taskId: string): boolean {
+    return (terminalFences.get(fenceKey(meshId, taskId)) ?? 0) > 0;
+}
+
+/**
+ * Run `fn` with the task's queue row fenced from ledger terminal commits.
+ * For the requeue path: closing the task's open attempt on the ledger commits
+ * it `cancelled`, and that commit's `task_terminal` effect would otherwise flip
+ * the row the caller is about to put back to `pending` (and cascade a
+ * dependency failure onto its dependents). Only `applyTaskTerminalInTxn` (the
+ * ledger effect) honours the fence — queue-side terminals are unaffected.
+ */
+export function withQueueTerminalFence<T>(meshId: string, taskId: string, fn: () => T): T {
+    const key = fenceKey(meshId, taskId);
+    terminalFences.set(key, (terminalFences.get(key) ?? 0) + 1);
+    try {
+        return fn();
+    } finally {
+        const left = (terminalFences.get(key) ?? 1) - 1;
+        if (left > 0) terminalFences.set(key, left);
+        else terminalFences.delete(key);
+    }
+}
+
 /** A committed turn's queue consequence, as the ledger's `task_terminal` effect names it. */
 interface MeshLedgerTerminalInput {
     meshId: string;
@@ -138,6 +168,9 @@ export function applyTaskTerminalInTxn(input: MeshLedgerTerminalInput): { entry:
         const entry = store.findQueueEntryById(input.meshId, input.taskId);
         if (!entry) return { entry: null, transitioned: false };
         if (entry.status === input.status) return { entry, transitioned: false };
+        // The commit closes an attempt the queue is retiring to re-dispatch the
+        // task (requeue supersede): the attempt ends, the row does not.
+        if (terminalFenced(input.meshId, input.taskId)) return { entry, transitioned: false };
         const terminal: MeshTerminalCommitInput = {
             meshId: input.meshId,
             taskId: input.taskId,

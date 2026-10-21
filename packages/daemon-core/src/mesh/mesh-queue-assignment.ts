@@ -20,6 +20,7 @@ import { shouldDeferDispatchForBootstrap } from './worktree-bootstrap-config.js'
 import { beginTaskDispatchInFlight } from './mesh-task-inflight.js';
 import { isModelAllowedBySlot } from './slot-model-enforcement.js';
 import { dispatchMessageId, openOrResumeQueueAttempt } from './mesh-queue-dispatch-evidence.js';
+import { rebindRefusedClaimToOpenAttempt } from './mesh-queue-attempt-guard.js';
 import { withMeshDirectDispatch } from '../commands/command-args.js';
 import type { TurnAttemptRef } from '@adhdev/mesh-shared';
 import type { TurnLedger } from './turn-ledger/ledger.js';
@@ -351,8 +352,11 @@ function openClaimAttempt(p: {
         if ('refused' in opened) {
             // A prompt must never be injected into an attempt that already
             // consumed one (crash/replay or a same-tick duplicate path).
-            LOG.warn('MeshQueue', `Refusing queue claim dispatch of task ${task.id} → session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state}`);
-            updateTaskStatus(meshId, task.id, 'pending');
+            // The task IS running there: rebind the row to that run (claim nonce bump
+            // undone, refusal backoff armed) instead of `pending`, which the next drain
+            // tick would re-claim forever (live c362e481).
+            const rebound = rebindRefusedClaimToOpenAttempt(meshId, task.id, opened.refused);
+            LOG.warn('MeshQueue', `Refusing queue claim dispatch of task ${task.id} → session ${sessionId}: its open attempt ${opened.refused.attemptId} is already ${opened.refused.state} on ${opened.refused.sessionId} — row rebound to that session (refusal #${rebound?.claimRefusedCount ?? '?'})`);
             return null;
         }
         task.attemptId = opened.ref.attemptId;

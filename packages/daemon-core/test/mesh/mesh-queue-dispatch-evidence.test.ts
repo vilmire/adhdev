@@ -125,6 +125,15 @@ describe('claim/dispatch path source shape (C-W4 retirements)', () => {
         for (const args of calls) expect(args, args).toMatch(/'pending'/);
     });
 
+    it('an injection-closed refusal rebinds the row to the running attempt instead of writing it back to pending', () => {
+        // QUEUE-LEDGER-DRIFT (c362e481): `pending` here was re-claimed by every drain
+        // tick, bumping the nonce each time. The one remaining `'pending'` write is the
+        // open-failure (throw) path.
+        const refusal = src.slice(src.indexOf(`if ('refused' in opened)`), src.indexOf('task.attemptId = opened.ref.attemptId'));
+        expect(refusal).toMatch(/rebindRefusedClaimToOpenAttempt\(meshId, task\.id, opened\.refused\)/);
+        expect(refusal).not.toMatch(/updateTaskStatus\(/);
+    });
+
     it('every transport outcome is reported as evidence', () => {
         for (const kind of ['delivered', 'dispatch_failed', 'duplicate_dispatch_refusal', 'session_error']) {
             expect(src, kind).toMatch(new RegExp(`kind: '${kind}'`));
