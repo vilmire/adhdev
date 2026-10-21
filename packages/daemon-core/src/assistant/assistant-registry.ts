@@ -544,8 +544,9 @@ export class AssistantRegistry {
     /**
      * Explicit owner reconciliation of the local `personal` assistant slot
      * binding on this Mac. Preserves the existing `bindingRevision` when already
-     * bound to this daemon unless `opts.bumpRevision` / `opts.forceNewRevision`
-     * is true or the bound daemonId changed.
+     * bound to this daemon, or reuses `maxFollowedRevision` across followed
+     * remote projects when the receipt is missing or the bound `daemonId`
+     * changed, unless `opts.bumpRevision` / `opts.forceNewRevision` is true.
      */
     reconcileOwnerBinding(
         selfDaemonId: string,

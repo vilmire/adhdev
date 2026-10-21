@@ -150,32 +150,27 @@ async function resolveProject(ports: AssistantProjectPorts, ref: unknown): Promi
             const revokedReason = entry.revokedReason ?? entry.lastErrorCode;
             if (isLocalOwnerBindingRefusalCode(revokedReason)) {
                 const verify = ports.verifyOwnerBinding?.();
-                if (!verify || !verify.ok) {
-                    const code = verify && !verify.ok ? verify.code : revokedReason;
-                    const error = verify && !verify.ok
-                        ? verify.error
-                        : 'Local assistant owner binding receipt is missing or mismatched; explicit owner reconciliation is required.';
-                    return {
-                        ok: false,
-                        result: fail(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }),
-                    };
-                }
-                ports.updateFollowedRemoteObservation?.(entry.key, {
-                    state: 'followed',
-                    revokedAt: undefined,
-                    revokedReason: undefined,
-                    lastErrorCode: undefined,
-                });
-            } else {
+                const code = verify && !verify.ok
+                    ? verify.code
+                    : revokedReason === 'local_owner_binding_mismatch'
+                        ? 'local_owner_binding_mismatch'
+                        : 'local_owner_binding_missing';
+                const error = verify && !verify.ok
+                    ? verify.error
+                    : 'Local assistant owner binding requires explicit owner reconciliation (ensure_binding) before this followed project can resume.';
                 return {
                     ok: false,
-                    result: fail(
-                        'host_revoked',
-                        'Remote host access for this project has been revoked.',
-                        { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId },
-                    ),
+                    result: fail(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }),
                 };
             }
+            return {
+                ok: false,
+                result: fail(
+                    'host_revoked',
+                    'Remote host access for this project has been revoked.',
+                    { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId },
+                ),
+            };
         }
         const verify = ports.verifyOwnerBinding?.();
         if (verify && !verify.ok) {

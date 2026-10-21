@@ -1893,7 +1893,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         expect(JSON.stringify(followerRes)).not.toContain('secret_pat');
     });
 
-    it('17. [R3] onAccessRevoked records refusal reason and distinguishes local_owner_binding_* from host_revoked so reconciling local binding recovers followed state without re-follow', async () => {
+    it('17. [R3, N1, N2, N3] onAccessRevoked/remoteFailure record refusal reason, verbs never auto-recover revoked entries, ensure_binding recovers only matching-revision local_owner_binding_* entries, and reconcileOwnerBinding reuses maxFollowedRevision on missing/changed daemonId', async () => {
         await withHostEnv(() =>
             createRouter(HOST_A).execute(
                 ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
@@ -1904,6 +1904,8 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         );
 
         const { wireAssistantRuntime } = await import('../../src/assistant/assistant-runtime.js');
+        const { getAssistantProjectPorts } = await import('../../src/assistant/assistant-project-ports.js');
+        const { remoteFailure } = await import('../../src/commands/high-family/assistant.js');
         const store = new InMemoryAssistantRelayStore();
         installAssistantEnv({
             openThread: (meshId) => store.openThread(meshId, Date.now()),
@@ -1942,7 +1944,8 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             const pollerPorts = (runtime.remotePoller as any).ports;
 
             // Simulate local ownerBinding disappearing from assistant.json and poller hitting local_owner_binding_missing
-            const rawData = JSON.parse(JSON.stringify(assistantRegistry.read()));
+            const savedData = JSON.parse(JSON.stringify(assistantRegistry.read()));
+            const rawData = JSON.parse(JSON.stringify(savedData));
             delete rawData.ownerBinding;
             writeFileSync(assistantRegistry.path, JSON.stringify(rawData), 'utf-8');
             assistantRegistry.reload();
@@ -1961,7 +1964,26 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             );
             expect(statusWhileMissing).toMatchObject({ success: false, code: 'local_owner_binding_missing' });
 
-            // Reconcile local owner binding via ensure_binding -> automatically recovers followed state & reopens thread without re-follow
+            // N1: Even if ownerBinding is restored on disk without running ensure_binding, non-owner verbs (projectStatus/projectSend/projectRead)
+            // MUST NOT auto-recover a revoked entry in resolveProject
+            const restoredReceiptOnly = JSON.parse(JSON.stringify(assistantRegistry.read()));
+            restoredReceiptOnly.ownerBinding = savedData.ownerBinding;
+            writeFileSync(assistantRegistry.path, JSON.stringify(restoredReceiptOnly), 'utf-8');
+            assistantRegistry.reload();
+
+            const statusBeforeEnsure: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectStatus,
+                { project: 'alpha-sim' },
+                'standalone',
+            );
+            expect(statusBeforeEnsure).toMatchObject({ success: false, code: 'local_owner_binding_missing' });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+
+            // Remove ownerBinding again and reconcile via owner-ingress ensure_binding -> recovers followed state & reopens thread
+            delete restoredReceiptOnly.ownerBinding;
+            writeFileSync(assistantRegistry.path, JSON.stringify(restoredReceiptOnly), 'utf-8');
+            assistantRegistry.reload();
+
             const ensureRes: any = await asstRouter.execute(
                 ASSISTANT_REMOTE_FOLLOW_COMMAND,
                 { action: 'ensure_binding' },
@@ -1988,7 +2010,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 result: { via: 'relay', hosting: 'remote_followed', hostDaemonId: HOST_A },
             });
 
-            // By contrast, genuine host revocation ('host_revoked') is NOT auto-recovered by ensure_binding
+            // N1 & R3c/R3e: Genuine host revocation ('host_revoked') is NEVER recovered by ensure_binding OR by any project verb
             pollerPorts.onAccessRevoked(MESH_PREFEX_SIM, 'host_revoked');
             expect(assistantRegistry.getFollowedRemoteProject(key)?.revokedReason).toBe('host_revoked');
             await asstRouter.execute(
@@ -1998,6 +2020,90 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 { ownerVerified: true },
             );
             expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+
+            for (const verb of [ASSISTANT_VERB.projectStatus, ASSISTANT_VERB.projectRead, ASSISTANT_VERB.projectSend] as const) {
+                const verbRes: any = await asstRouter.execute(
+                    verb,
+                    verb === ASSISTANT_VERB.projectSend ? { project: 'alpha-sim', message: 'test' } : { project: 'alpha-sim' },
+                    'standalone',
+                );
+                expect(verbRes).toMatchObject({ success: false, code: 'host_revoked' });
+                expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+            }
+
+            // N2b (R3f): remoteFailure with 'remote_access_denied' via default project ports stores 'remote_access_denied' and is NOT recoverable by ensure_binding
+            assistantRegistry.updateFollowedRemoteProject(key, { state: 'followed' });
+            setAssistantProjectPortsForTests(null);
+            try {
+                const defaultPorts = await getAssistantProjectPorts({
+                    components: () => ({ instanceManager: { getByCategory: () => [] } }) as any,
+                    execute: vi.fn(async () => ({ success: true })) as any,
+                    selfDaemonId: ASSISTANT_B,
+                });
+                remoteFailure(
+                    { project: 'alpha-sim', meshId: MESH_PREFEX_SIM },
+                    { label: 'Host-A', hostDaemonId: HOST_A, hostMeshId: MESH_PREFEX_SIM, reachable: true },
+                    { ok: false, kind: 'refused', code: 'remote_access_denied', error: 'Denied by host ACL' },
+                    defaultPorts,
+                    assistantRegistry.getFollowedRemoteProject(key)!,
+                );
+            } finally {
+                installAssistantEnv({
+                    openThread: (meshId) => store.openThread(meshId, Date.now()),
+                    closeThread: (meshId) => store.closeThread(meshId),
+                });
+            }
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.revokedReason).toBe('remote_access_denied');
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.lastErrorCode).toBe('remote_access_denied');
+            await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                { action: 'ensure_binding' },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+
+            // N2a (R3d): After forceNewRevision (reconcile_binding), entries at old bindingRevision=1 MUST NOT be recovered
+            assistantRegistry.updateFollowedRemoteProject(key, {
+                state: 'revoked',
+                revokedAt: Date.now(),
+                revokedReason: 'local_owner_binding_missing',
+                lastErrorCode: 'local_owner_binding_missing',
+            });
+            const rotateRes: any = await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                { action: 'reconcile_binding', forceNewRevision: true },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(rotateRes).toMatchObject({
+                success: true,
+                ownerBinding: { daemonId: ASSISTANT_B, bindingRevision: 2 },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+
+            // N2c & N3 (R3g): When ownerBinding is bound to another daemonId (or missing), reconcileOwnerBinding without bump reuses maxFollowedRevision
+            assistantRegistry.updateFollowedRemoteProject(key, {
+                state: 'followed',
+                bindingRevision: 4,
+            });
+            const dataWithOtherDaemon = JSON.parse(JSON.stringify(assistantRegistry.read()));
+            dataWithOtherDaemon.ownerBinding = {
+                accountSlot: 'personal',
+                daemonId: ASSISTANT_D,
+                bindingRevision: 7,
+                boundAt: '2026-10-20T00:00:00.000Z',
+            };
+            writeFileSync(assistantRegistry.path, JSON.stringify(dataWithOtherDaemon), 'utf-8');
+            assistantRegistry.reload();
+
+            const reboundReceipt = assistantRegistry.reconcileOwnerBinding(ASSISTANT_B);
+            expect(reboundReceipt).toMatchObject({
+                accountSlot: 'personal',
+                daemonId: ASSISTANT_B,
+                bindingRevision: 4,
+            });
         } finally {
             runtime.dispose();
         }
@@ -2132,6 +2238,33 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         });
 
         try {
+            // Direct unit checks for R5a (SqliteAssistantRelayStore.openThread clears cursor on reopen),
+            // R5c (setThreadCursor { reset: true } clears cursor on an open thread in both SQLite and InMemory stores),
+            // and R5d (InMemoryAssistantRelayStore.openThread clears cursor on reopen).
+            sqliteStore.openThread('mesh-unit-r5', 100);
+            sqliteStore.setThreadCursor('mesh-unit-r5', 'plain:coord-u:turn-5', 'coord-u');
+            expect(sqliteStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.lastCursor).toBe('plain:coord-u:turn-5');
+            sqliteStore.setThreadCursor('mesh-unit-r5', null, 'coord-u', { reset: true });
+            expect(sqliteStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.lastCursor).toBeUndefined();
+            sqliteStore.setThreadCursor('mesh-unit-r5', 'plain:coord-u:turn-9', 'coord-u');
+            sqliteStore.closeThread('mesh-unit-r5', 200);
+            sqliteStore.openThread('mesh-unit-r5', 300);
+            expect(sqliteStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.lastCursor).toBeUndefined();
+            expect(sqliteStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.coordinatorSessionId).toBeUndefined();
+            sqliteStore.closeThread('mesh-unit-r5', 400);
+
+            const memStore = new InMemoryAssistantRelayStore();
+            memStore.openThread('mesh-unit-r5', 100);
+            memStore.setThreadCursor('mesh-unit-r5', 'plain:coord-u:turn-5', 'coord-u');
+            expect(memStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.lastCursor).toBe('plain:coord-u:turn-5');
+            memStore.setThreadCursor('mesh-unit-r5', null, 'coord-u', { reset: true });
+            expect(memStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.lastCursor).toBeUndefined();
+            memStore.setThreadCursor('mesh-unit-r5', 'plain:coord-u:turn-9', 'coord-u');
+            memStore.closeThread('mesh-unit-r5', 200);
+            memStore.openThread('mesh-unit-r5', 300);
+            expect(memStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.lastCursor).toBeUndefined();
+            expect(memStore.openThreads().find((t) => t.meshId === 'mesh-unit-r5')?.coordinatorSessionId).toBeUndefined();
+
             installAssistantEnv({
                 openThread: (meshId) => sqliteStore.openThread(meshId, Date.now()),
                 closeThread: (meshId) => sqliteStore.closeThread(meshId),
@@ -2142,7 +2275,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             });
 
             const asstRouter = createRouter(ASSISTANT_B);
-            // Generation 1 follow: seeds cursor 'plain:coord-alpha-1:old-2'
+            // Generation 1 follow: seeds cursor 'plain:coord-alpha-1:old-2' for coordinator 'coord-alpha-1'
             const followGen1: any = await asstRouter.execute(
                 ASSISTANT_REMOTE_FOLLOW_COMMAND,
                 {
@@ -2170,11 +2303,13 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             );
             expect(sqliteStore.isThreadOpen(MESH_PREFEX_SIM)).toBe(false);
 
-            // Generation 2 on Host A: brand new coordinator 'coord-alpha-fresh' with NO commits yet (latestCommitCursor: null)
+            // Generation 2 on Host A: SAME coordinatorSessionId ('coord-alpha-1') with cleared/empty commits (initialCursor: null)
+            // Using the same coordinatorSessionId ensures R5b (poller.noteSent { reset: true }) is tested directly
+            // without relying on the coordinatorSessionId mismatch prefilter.
             hostCoordinators[MESH_PREFEX_SIM] = [
-                { sessionId: 'coord-alpha-fresh', idle: true, modalParked: false, managedByAssistant: false },
+                { sessionId: 'coord-alpha-1', idle: true, modalParked: false, managedByAssistant: false },
             ];
-            hostTurns[MESH_PREFEX_SIM] = {
+            hostTurns['coord-alpha-1'] = {
                 open: true,
                 committed: [],
             };
@@ -2195,11 +2330,11 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 { ownerVerified: true },
             );
             expect(followGen2.cursor).toBeNull();
-            expect(followGen2.coordinatorSessionId).toBe('coord-alpha-fresh');
+            expect(followGen2.coordinatorSessionId).toBe('coord-alpha-1');
 
             // Both sqliteStore and poller MUST have cleared lastCursor (not stale 'plain:coord-alpha-1:old-2')
             expect(sqliteStore.openThreads()[0]?.lastCursor).toBeUndefined();
-            expect(sqliteStore.openThreads()[0]?.coordinatorSessionId).toBe('coord-alpha-fresh');
+            expect(sqliteStore.openThreads()[0]?.coordinatorSessionId).toBe('coord-alpha-1');
 
             await poller.tick();
             expect(pollArgsSeen).toHaveLength(1);
