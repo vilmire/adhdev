@@ -27,13 +27,19 @@ import { AssistantRemoteRelayPoller } from '../../src/assistant/assistant-remote
 import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
 import { RELAY_QUIET_MS } from '../../src/assistant/assistant-relay-format.js';
 import { callRemoteHost, describeFollowedRemoteHost, type RemoteHostView } from '../../src/assistant/assistant-remote-host.js';
-import { clearFollowerSendReceiptsForTest } from '../../src/commands/high-family/assistant-remote.js';
+import {
+    clearFollowerSendReceiptsForTest,
+    FOLLOWER_SEND_RECEIPT_MAX_ENTRIES,
+    FOLLOWER_SEND_RECEIPT_TTL_MS,
+    getFollowerSendReceiptCountForTest,
+} from '../../src/commands/high-family/assistant-remote.js';
 import type { AssistantCoordinatorView } from '../../src/assistant/coordinator-lifecycle.js';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
 
 const HOST_A = 'daemon_mach_host_a_00001';
 const HOST_C = 'daemon_mach_host_c_00003';
 const ASSISTANT_B = 'daemon_mach_asst_b_00002';
+const ASSISTANT_D = 'daemon_mach_asst_d_00006';
 const MEMBER_M = 'daemon_mach_member_00004';
 const STRANGER_X = 'daemon_mach_stranger0005';
 const MESH_PREFEX_SIM = 'mesh_sim_project_alpha';
@@ -73,6 +79,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
     let hostExecute: ReturnType<typeof vi.fn>;
     let hostCoordinators: Record<string, AssistantCoordinatorView[]>;
     let hostTurns: Record<string, CoordinatorTurns>;
+    let hostLiveSessions: unknown[];
     let hostMeshes: LocalMeshEntry[];
     let assistantMeshes: LocalMeshEntry[];
     let assistantRegistry: AssistantRegistry;
@@ -155,6 +162,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             callHost: () => { throw new Error('not used on host'); },
             coordinatorTurns: (sid: string) => hostTurns[sid] ?? { open: false, committed: [] },
             meshStatusLine: () => '[Mesh] idle',
+            liveSessionStates: () => hostLiveSessions,
             routePreview: async () => null,
         }) as unknown as AssistantProjectPorts);
         try {
@@ -269,6 +277,56 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             [MESH_PREFEX_SIM]: [{ sessionId: 'coord-alpha-1', idle: true, modalParked: false, managedByAssistant: false }],
             [MESH_SECOND]: [{ sessionId: 'coord-beta-1', idle: true, modalParked: false, managedByAssistant: false }],
         };
+        hostLiveSessions = [
+            {
+                instanceId: 'coord-alpha-1',
+                type: 'claude-cli',
+                status: 'idle',
+                workspace: '/Users/secret/private/alpha-sim',
+                settings: { meshCoordinatorFor: MESH_PREFEX_SIM },
+                activeChat: { messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] },
+            },
+            {
+                instanceId: 'worker-alpha-1',
+                type: 'claude-cli',
+                status: 'generating',
+                workspace: '/Users/secret/private/alpha-sim/worktree-1',
+                settings: { meshNodeFor: MESH_PREFEX_SIM, meshNodeId: 'n-host-a', autoLaunchedForQueueTaskId: 'task-alpha-1' },
+                activeChat: { messages: [{ role: 'user', content: 'task prompt' }] },
+            },
+            {
+                instanceId: 'coord-beta-1',
+                type: 'claude-cli',
+                status: 'idle',
+                workspace: '/Users/secret/local/untouched-repo',
+                settings: { meshCoordinatorFor: MESH_SECOND },
+                activeChat: { messages: [] },
+            },
+            {
+                instanceId: 'worker-foreign-1',
+                type: 'claude-cli',
+                status: 'idle',
+                workspace: '/Users/secret/foreign',
+                settings: { meshNodeFor: 'mesh_foreign_member_only', meshNodeId: 'n-foreign' },
+                activeChat: { messages: [] },
+            },
+            {
+                instanceId: 'personal-shell-host-a',
+                type: 'claude-cli',
+                status: 'idle',
+                workspace: '/Users/secret/personal-notes',
+                settings: {},
+                activeChat: { messages: [{ role: 'user', content: 'private note' }] },
+            },
+            {
+                instanceId: 'host-personal-assistant',
+                type: 'claude-cli',
+                status: 'idle',
+                workspace: '/Users/secret/.adhdev/assistant',
+                settings: { assistant: true, meshCoordinatorFor: MESH_PREFEX_SIM },
+                activeChat: { messages: [] },
+            },
+        ];
         hostTurns = {
             'coord-alpha-1': {
                 open: false,
@@ -1200,6 +1258,398 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 'utf-8',
             );
         }
+    });
+
+    it('11. [F1] follower status scopes sessions strictly to the followed mesh (0 other-mesh/unstamped/assistant sessions) and strips local workspace paths & raw repoIdentity by allow-list', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+        installAssistantEnv();
+        const asstRouter = createRouter(ASSISTANT_B);
+        await asstRouter.execute(
+            ASSISTANT_REMOTE_FOLLOW_COMMAND,
+            {
+                action: 'follow',
+                hostDaemonId: HOST_A,
+                hostLabel: 'Host-A',
+                meshId: MESH_PREFEX_SIM,
+                name: 'AlphaSim',
+                sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                grantRevision: 1,
+                bindingRevision: 1,
+            },
+            'p2p',
+            { ownerVerified: true },
+        );
+
+        // 1. Direct wire call to assistant_remote_project { op: 'status' } as checkout-less follower
+        const rawFollowerStatus: any = await dispatchFromAssistantToHost(HOST_A, 'assistant_remote_project', {
+            meshId: MESH_PREFEX_SIM,
+            op: 'status',
+            followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+        });
+        expect(rawFollowerStatus.result.success).toBe(true);
+        const wireBody = rawFollowerStatus.result.result;
+        expect(wireBody.repo).toBe('github.com/acme/alpha-sim');
+        const wireSessions = wireBody.sessions as Array<Record<string, unknown>>;
+        expect(wireSessions.map((s) => s.sessionId)).toEqual(['coord-alpha-1', 'worker-alpha-1']);
+        // 0 sessions from other meshes, 0 unstamped host sessions, 0 host assistant sessions
+        expect(wireSessions.filter((s) => s.meshId !== MESH_PREFEX_SIM)).toHaveLength(0);
+        expect(wireSessions.filter((s) => s.assistant === true)).toHaveLength(0);
+        // 0 local workspace paths on any session or anywhere in the wire payload
+        expect(wireSessions.filter((s) => s.workspace !== null)).toHaveLength(0);
+        expect(JSON.stringify(rawFollowerStatus)).not.toContain('/Users/secret');
+        expect(JSON.stringify(rawFollowerStatus)).not.toContain('secret_pat');
+
+        // 2. End-to-end assistant_project_status on follower daemon B
+        const statusRes: any = await asstRouter.execute(
+            ASSISTANT_VERB.projectStatus,
+            { project: 'alpha-sim' },
+            'standalone',
+        );
+        expect(statusRes.success).toBe(true);
+        expect(statusRes.result.repo).toBe('github.com/acme/alpha-sim');
+        const followerSessions = statusRes.result.sessions as Array<Record<string, unknown>>;
+        expect(followerSessions.map((s) => s.sessionId)).toEqual(['coord-alpha-1', 'worker-alpha-1']);
+        expect(followerSessions.filter((s) => s.meshId !== MESH_PREFEX_SIM)).toHaveLength(0);
+        expect(followerSessions.filter((s) => s.workspace !== null)).toHaveLength(0);
+        expect(JSON.stringify(statusRes)).not.toContain('/Users/secret');
+        expect(JSON.stringify(statusRes)).not.toContain('secret_pat');
+    });
+
+    it('12. [F2] follow preserves baseline coordinatorSessionId across noteSent/onCursorUpdated, and projectSend passes expectedCoordinatorSessionId and records coordinatorSessionId', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        const store = new InMemoryAssistantRelayStore();
+        const remoteSentCalls: Array<{ meshId: string; cursor: string | null; coordinatorSessionId?: string | null }> = [];
+        let poller!: AssistantRemoteRelayPoller;
+        poller = new AssistantRemoteRelayPoller({
+            openThreads: () => store.openThreads().map((t) => ({
+                meshId: t.meshId,
+                lastSendAt: t.lastSendAt,
+                ...(t.lastCursor !== undefined ? { lastCursor: t.lastCursor } : {}),
+                ...(t.coordinatorSessionId !== undefined ? { coordinatorSessionId: t.coordinatorSessionId } : {}),
+            })),
+            remoteTarget: () => null,
+            poll: async () => ({ ok: true, result: { success: true, commits: [] } as any }),
+            relay: {
+                onRemoteCommitted: () => {},
+                observeRemote: () => {},
+                remoteUnreachable: () => {},
+            },
+            onCursorUpdated: (meshId, cursor, coordinatorSessionId) => {
+                store.setThreadCursor(meshId, cursor, coordinatorSessionId);
+                const followed = assistantRegistry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+                if (followed) {
+                    assistantRegistry.updateFollowedRemoteProject(followed.key, { lastCursor: cursor, coordinatorSessionId });
+                }
+            },
+        });
+
+        installAssistantEnv({
+            openThread: (meshId) => store.openThread(meshId, Date.now()),
+            remoteSent: (meshId, cursor, coordinatorSessionId) => {
+                remoteSentCalls.push({ meshId, cursor, coordinatorSessionId });
+                poller.noteSent(meshId, cursor, coordinatorSessionId);
+            },
+        });
+
+        const asstRouter = createRouter(ASSISTANT_B);
+        const followRes: any = await asstRouter.execute(
+            ASSISTANT_REMOTE_FOLLOW_COMMAND,
+            {
+                action: 'follow',
+                hostDaemonId: HOST_A,
+                hostLabel: 'Host-A',
+                meshId: MESH_PREFEX_SIM,
+                name: 'AlphaSim',
+                sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                grantRevision: 1,
+                bindingRevision: 1,
+            },
+            'p2p',
+            { ownerVerified: true },
+        );
+        expect(followRes.success).toBe(true);
+        expect(followRes.coordinatorSessionId).toBe('coord-alpha-1');
+
+        // Baseline coordinatorSessionId MUST NOT be overwritten with null by noteSent/onCursorUpdated
+        const key = followedRemoteProjectKey(HOST_A, MESH_PREFEX_SIM);
+        expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-1');
+        expect(remoteSentCalls[0]?.coordinatorSessionId).toBe('coord-alpha-1');
+
+        // When Host A replaces coordinator ('coord-alpha-1' -> 'coord-alpha-2'), even a NEW send (new messageId)
+        // must fail with coordinator_replaced because projectSend forwards expectedCoordinatorSessionId
+        hostCoordinators[MESH_PREFEX_SIM] = [{ sessionId: 'coord-alpha-2', idle: true, modalParked: false, managedByAssistant: false }];
+        const sendAfterReplace: any = await asstRouter.execute(
+            ASSISTANT_VERB.projectSend,
+            { project: 'alpha-sim', message: 'Brand new message after coordinator replaced', messageId: 'fresh-msg-id' },
+            'standalone',
+        );
+        expect(sendAfterReplace).toMatchObject({ success: false, code: 'coordinator_replaced' });
+    });
+
+    it('13. [F3] AssistantRemoteRelayPoller treats local_owner_binding_missing and local_owner_binding_mismatch as immediate revocation/authority refusals (never transient unreachable)', async () => {
+        const clock = new FakeClock();
+        const store = new InMemoryAssistantRelayStore();
+        const submits: Array<{ sessionId: string; text: string; messageId: string; policy: SendPolicy }> = [];
+        const relay = new AssistantRelay({
+            rehydrateAttemptReport: async () => null,
+            subscribe: () => () => {},
+            coordinatorMeshOf: () => null,
+            projectSlug: () => 'alpha-sim',
+            readCoordinatorTail: async () => null,
+            meshStatusLine: () => '[Mesh] idle',
+            meshWork: () => null,
+            hasAssistant: () => true,
+            assistantSessionId: () => 'asst-session-1',
+            isAssistantReady: () => true,
+            submit: async (sessionId, input) => {
+                submits.push({ sessionId, ...input });
+                return { kind: 'delivered' };
+            },
+            inputLog: new AssistantInputLog(),
+            store,
+            clock,
+        });
+        relay.start();
+
+        for (const refusalCode of ['local_owner_binding_missing', 'local_owner_binding_mismatch'] as const) {
+            const meshId = `${MESH_PREFEX_SIM}_${refusalCode}`;
+            store.openThread(meshId, clock.now());
+            const revoked: Array<{ meshId: string; code: string }> = [];
+            const poller = new AssistantRemoteRelayPoller({
+                openThreads: () => store.openThreads().map((t) => ({ meshId: t.meshId, lastSendAt: t.lastSendAt })),
+                remoteTarget: () => ({
+                    label: 'Host-A',
+                    hostDaemonId: HOST_A,
+                    hostMeshId: meshId,
+                    reachable: true,
+                    followerAccess: {
+                        accountSlot: 'personal',
+                        bindingRevision: 1,
+                        grantRevision: 1,
+                        localBindingError: { code: refusalCode, error: `Refused: ${refusalCode}` },
+                    },
+                }),
+                poll: (target, args) => callRemoteHost({ dispatch: vi.fn() }, target, 'poll', args),
+                relay,
+                now: () => clock.now(),
+                onAccessRevoked: (m, code) => revoked.push({ meshId: m, code }),
+            });
+
+            // Even after 3 ticks, must immediately revoke/close on tick 1 and emit 0 unreachable cards
+            await poller.tick();
+            await poller.tick();
+            await poller.tick();
+            await relay.idle();
+
+            expect(revoked).toEqual([{ meshId, code: refusalCode }]);
+            expect(store.isThreadOpen(meshId)).toBe(false);
+            expect(submits).toHaveLength(0);
+        }
+    });
+
+    it('14. [F4] host ACL grant allows switching active deputy to a second assistant daemon with lower bindingRevision, while rejecting self-grant and non-canonical activeDaemonId', async () => {
+        await withHostEnv(async () => {
+            const router = createRouter(HOST_A);
+
+            // 1. Grant Assistant B at bindingRevision=3
+            const grantB: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 3 },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(grantB).toMatchObject({
+                success: true,
+                access: { activeDaemonId: ASSISTANT_B, bindingRevision: 3, grantRevision: 1, status: 'active' },
+            });
+
+            // 2. Same deputy (Assistant B, even under bare mach_ form) with lower bindingRevision=2 is rejected as stale
+            const staleSameDeputy: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: 'mach_asst_b_00002', bindingRevision: 2 },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(staleSameDeputy).toMatchObject({ success: false, code: 'binding_revision_stale' });
+
+            // 3. Switching active deputy to a second assistant daemon (Assistant D) with bindingRevision=1 succeeds and canonicalizes activeDaemonId
+            const switchToD: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: 'mach_asst_d_00006', bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(switchToD).toMatchObject({
+                success: true,
+                access: {
+                    activeDaemonId: ASSISTANT_D,
+                    bindingRevision: 1,
+                    grantRevision: 2,
+                    status: 'active',
+                },
+            });
+
+            // 4. Self-grant (Host A granting to itself in any daemonId form) is rejected
+            for (const selfId of [HOST_A, 'mach_host_a_00001', 'standalone_mach_host_a_00001']) {
+                const selfGrant: any = await router.execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: selfId, bindingRevision: 1 },
+                    'p2p',
+                    { ownerVerified: true },
+                );
+                expect(selfGrant).toMatchObject({ success: false, code: 'grant_self_not_allowed' });
+            }
+
+            // 5. Non-canonical / invalid activeDaemonId strings are rejected
+            for (const invalidId of ['', 'daemon_', 'not-a-canonical-daemon', 'a'.repeat(64)]) {
+                const badGrant: any = await router.execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: invalidId, bindingRevision: 1 },
+                    'p2p',
+                    { ownerVerified: true },
+                );
+                expect(badGrant.success).toBe(false);
+                expect(badGrant.code).toBe('invalid_active_daemon_id');
+            }
+        });
+    });
+
+    it('15. [F5] wireAssistantRuntime.onCursorUpdated persists observed metadata, meshId-only unfollow/close prefers active followed entry across hosts, and followerSendReceipts enforces TTL + max size cap', async () => {
+        // Part A: meshId-only lookup prefers state === 'followed' when two hosts share a meshId
+        installAssistantEnv();
+        assistantRegistry.reconcileOwnerBinding(ASSISTANT_B);
+        assistantRegistry.upsertFollowedRemoteProject({
+            hostDaemonId: HOST_A,
+            hostLabel: 'Host-A',
+            meshId: MESH_PREFEX_SIM,
+            name: 'SharedMeshOnA',
+            slug: 'shared-a',
+            sanitizedRepoIdentity: 'github.com/acme/shared',
+            bindingRevision: 1,
+            grantRevision: 1,
+            state: 'unfollowed',
+        });
+        assistantRegistry.upsertFollowedRemoteProject({
+            hostDaemonId: HOST_C,
+            hostLabel: 'Host-C',
+            meshId: MESH_PREFEX_SIM,
+            name: 'SharedMeshOnC',
+            slug: 'shared-c',
+            sanitizedRepoIdentity: 'github.com/acme/shared',
+            bindingRevision: 1,
+            grantRevision: 1,
+            state: 'followed',
+        });
+
+        const asstRouter = createRouter(ASSISTANT_B);
+        const unfollowByMeshOnly: any = await asstRouter.execute(
+            ASSISTANT_REMOTE_FOLLOW_COMMAND,
+            { action: 'unfollow', meshId: MESH_PREFEX_SIM },
+            'p2p',
+            { ownerVerified: true },
+        );
+        expect(unfollowByMeshOnly.success).toBe(true);
+        expect(unfollowByMeshOnly.entry.key).toBe(followedRemoteProjectKey(HOST_C, MESH_PREFEX_SIM));
+        expect(assistantRegistry.getFollowedRemoteProject(followedRemoteProjectKey(HOST_C, MESH_PREFEX_SIM))?.state).toBe('unfollowed');
+
+        // Part B: wireAssistantRuntime.onCursorUpdated persists observed metadata from background poll
+        const { wireAssistantRuntime } = await import('../../src/assistant/assistant-runtime.js');
+        const store = new InMemoryAssistantRelayStore();
+        assistantRegistry.updateFollowedRemoteProject(followedRemoteProjectKey(HOST_C, MESH_PREFEX_SIM), { state: 'followed' });
+        store.openThread(MESH_PREFEX_SIM, Date.now());
+        const runtime = wireAssistantRuntime(
+            {
+                instanceManager: { getInstance: () => null, getByCategory: () => [] } as any,
+                router: { execute: vi.fn(async () => ({ success: true })) } as any,
+                cliManager: { input: { isParked: () => false, submit: vi.fn() } } as any,
+                bus: { on: () => () => {} } as any,
+                statusInstanceId: ASSISTANT_B,
+            },
+            { registry: assistantRegistry, store },
+        );
+        try {
+            const pollerPorts = (runtime.remotePoller as any).ports;
+            pollerPorts.onCursorUpdated(MESH_PREFEX_SIM, 'plain:coord-c:turn-9', 'coord-c', {
+                coordinatorState: 'working',
+                coordinatorMissing: false,
+                summary: '[Mesh] 3 active tasks',
+            });
+            const updatedC = assistantRegistry.getFollowedRemoteProject(followedRemoteProjectKey(HOST_C, MESH_PREFEX_SIM));
+            expect(updatedC?.lastCursor).toBe('plain:coord-c:turn-9');
+            expect(updatedC?.coordinatorSessionId).toBe('coord-c');
+            expect(updatedC?.lastObserved).toMatchObject({
+                coordinatorState: 'working',
+                coordinatorMissing: false,
+                summary: '[Mesh] 3 active tasks',
+            });
+        } finally {
+            runtime.dispose();
+        }
+
+        // Part C: followerSendReceipts enforces max-entries cap (1,024) and 24h TTL eviction
+        await withHostEnv(async () => {
+            const router = createRouter(HOST_A);
+            await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            );
+            let fakeNow = 1_700_000_000_000;
+            const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+            try {
+                for (let i = 0; i < FOLLOWER_SEND_RECEIPT_MAX_ENTRIES + 5; i++) {
+                    await router.execute(
+                        'assistant_remote_project',
+                        {
+                            meshId: MESH_PREFEX_SIM,
+                            op: 'send',
+                            text: `msg-${i}`,
+                            clientId: `cap-client-${i}`,
+                            followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                            _meshDirectDispatch: true,
+                            [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                        },
+                        'mesh',
+                    );
+                }
+                expect(getFollowerSendReceiptCountForTest()).toBe(FOLLOWER_SEND_RECEIPT_MAX_ENTRIES);
+
+                // Advance past 24h TTL -> next send prunes all expired entries
+                fakeNow += FOLLOWER_SEND_RECEIPT_TTL_MS + 1;
+                await router.execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'post-ttl-msg',
+                        clientId: 'post-ttl-client',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                );
+                expect(getFollowerSendReceiptCountForTest()).toBe(1);
+            } finally {
+                nowSpy.mockRestore();
+            }
+        });
     });
 });
 

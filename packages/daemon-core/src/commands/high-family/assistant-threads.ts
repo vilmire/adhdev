@@ -87,8 +87,13 @@ const list: HighFamilyHandler = async () => {
         try { return getAssistantServices().listMeshes(); } catch { return []; }
     })();
     const threads: AssistantThreadView[] = store.openThreads().map((t) => {
-        const followed = followedRemoteProjects.find((f) => f.meshId === t.meshId && f.state === 'followed');
         const localMesh = meshes.find((m) => m.id === t.meshId);
+        const activeFollowed = followedRemoteProjects.filter((f) => f.meshId === t.meshId && f.state === 'followed');
+        const followed = !localMesh
+            ? (activeFollowed.find((f) => t.coordinatorSessionId && f.coordinatorSessionId === t.coordinatorSessionId)
+                ?? activeFollowed[0]
+                ?? followedRemoteProjects.find((f) => f.meshId === t.meshId))
+            : undefined;
         return {
             meshId: t.meshId,
             project: slugs.get(t.meshId) ?? followed?.slug ?? null,
@@ -121,15 +126,18 @@ const close: HighFamilyHandler = async (_ctx, args) => {
     }
     const meshId = typeof args?.meshId === 'string' ? args.meshId.trim() : '';
     const key = typeof args?.key === 'string' ? args.key.trim() : '';
+    const hostDaemonId = canonicalDaemonId(str(args?.hostDaemonId));
     if ((!meshId || meshId.length > 200) && !key) {
         return { success: false, code: 'invalid_args', error: 'meshId required' };
     }
     const runtime = await runtimeOrNull();
     const registry = runtime?.registry ?? getAssistantRegistry();
     const store = runtime?.store ?? fallbackRelayStore();
-    const followed = key
-        ? registry.getFollowedRemoteProject(key)
-        : registry.listFollowedRemoteProjects().find((f) => f.meshId === meshId && f.state === 'followed');
+    const lookupKey = key || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : '');
+    const meshMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
+    const followed = lookupKey
+        ? registry.getFollowedRemoteProject(lookupKey)
+        : (meshMatches.find((f) => f.state === 'followed') ?? meshMatches[0] ?? null);
     if (followed) {
         registry.updateFollowedRemoteProject(followed.key, { state: 'unfollowed', unfollowedAt: Date.now() });
     }
@@ -137,9 +145,14 @@ const close: HighFamilyHandler = async (_ctx, args) => {
     if (!runtime && !store && !followed) {
         return { success: false, code: 'assistant_unavailable' };
     }
-    const closed = runtime
-        ? runtime.relay.closeThread(targetMeshId, { suppressPending: true })
-        : (store ? (store.closeThread(targetMeshId, Date.now()), true) : Boolean(followed));
+    const remainingActiveSameMesh = followed
+        ? registry.listFollowedRemoteProjects().find((f) => f.key !== followed.key && f.meshId === targetMeshId && f.state === 'followed')
+        : undefined;
+    const closed = remainingActiveSameMesh
+        ? Boolean(followed)
+        : runtime
+            ? runtime.relay.closeThread(targetMeshId, { suppressPending: true })
+            : (store ? (store.closeThread(targetMeshId, Date.now()), true) : Boolean(followed));
     return { success: true, closed, ...(followed ? { unfollowedKey: followed.key } : {}) };
 };
 
@@ -269,12 +282,12 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
             runtime.activate('registry');
             runtime.relay.openThread(meshId);
             runtime.store.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId);
-            runtime.remotePoller.noteSent(meshId, initialCursor);
+            runtime.remotePoller.noteSent(meshId, initialCursor, coordinatorSessionId);
         } else {
             store?.openThread(meshId, Date.now());
             store?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId);
             ports.relay.openThread?.(meshId);
-            ports.relay.remoteSent?.(meshId, initialCursor);
+            ports.relay.remoteSent?.(meshId, initialCursor, coordinatorSessionId);
         }
 
         return {
@@ -291,9 +304,10 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
         const hostDaemonId = canonicalDaemonId(str(args?.hostDaemonId));
         const meshId = str(args?.meshId);
         const lookupKey = keyArg || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : '');
+        const allMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
         const existing = lookupKey
             ? registry.getFollowedRemoteProject(lookupKey)
-            : (meshId ? registry.listFollowedRemoteProjects().find((f) => f.meshId === meshId) ?? null : null);
+            : (allMatches.find((f) => f.state === 'followed') ?? allMatches[0] ?? null);
         if (!existing) {
             return {
                 success: false,
@@ -307,7 +321,19 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
             state: nextState,
             ...(nextState === 'revoked' ? { revokedAt: now } : { unfollowedAt: now }),
         });
-        if (runtime) {
+        const remainingActiveSameMesh = registry
+            .listFollowedRemoteProjects()
+            .find((f) => f.key !== existing.key && f.meshId === existing.meshId && f.state === 'followed');
+        if (remainingActiveSameMesh) {
+            const nextCursor = remainingActiveSameMesh.lastCursor ?? null;
+            const nextCoordSid = remainingActiveSameMesh.coordinatorSessionId ?? null;
+            if (runtime) {
+                runtime.store.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid);
+                runtime.remotePoller.noteSent(existing.meshId, nextCursor, nextCoordSid);
+            } else {
+                store?.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid);
+            }
+        } else if (runtime) {
             runtime.relay.closeThread(existing.meshId, { suppressPending: true });
         } else {
             store?.closeThread(existing.meshId, now);
@@ -319,7 +345,7 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
         return {
             success: true,
             entry: updated,
-            closed: true,
+            closed: !remainingActiveSameMesh,
         };
     }
 

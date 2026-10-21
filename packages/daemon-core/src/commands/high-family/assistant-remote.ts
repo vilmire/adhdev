@@ -64,7 +64,7 @@ import type { HighFamilyContext, HighFamilyHandler } from './types.js';
 import { LOG } from '../../logging/logger.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
 import { pickCoordinator } from '../../assistant/coordinator-lifecycle.js';
-import { compactTranscriptTail, coordinatorState } from '../../assistant/project-views.js';
+import { compactTranscriptTail, coordinatorState, followerStatusView } from '../../assistant/project-views.js';
 import { ASSISTANT_REMOTE_PROJECT_COMMAND, ASSISTANT_REMOTE_OPS, type AssistantRemoteOp } from '../../assistant/assistant-remote-host.js';
 import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
 import { localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
@@ -121,21 +121,54 @@ export async function withMeshRemoteAccessMutex<T>(meshId: string, fn: () => Pro
     }
 }
 
+export const FOLLOWER_SEND_RECEIPT_MAX_ENTRIES = 1_024;
+export const FOLLOWER_SEND_RECEIPT_TTL_MS = 24 * 60 * 60_000;
+
 interface FollowerSendReceipt {
     coordinatorSessionId: string;
     bodyHash: string;
     messageId: string;
     cursor: string | null;
+    recordedAt: number;
 }
 
 /**
  * Host-side idempotency ledger for follower sends, bound to
  * `(hostDaemonId, meshId, accountSlot, activeDaemonId, bindingRevision, grantRevision, clientId)`.
+ * Bounded by `FOLLOWER_SEND_RECEIPT_MAX_ENTRIES` and `FOLLOWER_SEND_RECEIPT_TTL_MS`.
  */
 const followerSendReceipts = new Map<string, FollowerSendReceipt>();
 
+function pruneFollowerSendReceipts(now: number): void {
+    for (const [k, entry] of followerSendReceipts) {
+        if (now - entry.recordedAt >= FOLLOWER_SEND_RECEIPT_TTL_MS) {
+            followerSendReceipts.delete(k);
+        }
+    }
+    while (followerSendReceipts.size > FOLLOWER_SEND_RECEIPT_MAX_ENTRIES) {
+        const oldestKey = followerSendReceipts.keys().next().value;
+        if (oldestKey === undefined) break;
+        followerSendReceipts.delete(oldestKey);
+    }
+}
+
+function readFollowerSendReceipt(key: string, now: number): FollowerSendReceipt | undefined {
+    pruneFollowerSendReceipts(now);
+    return followerSendReceipts.get(key);
+}
+
+function recordFollowerSendReceipt(key: string, receipt: FollowerSendReceipt, now: number): void {
+    followerSendReceipts.delete(key);
+    followerSendReceipts.set(key, receipt);
+    pruneFollowerSendReceipts(now);
+}
+
 export function clearFollowerSendReceiptsForTest(): void {
     followerSendReceipts.clear();
+}
+
+export function getFollowerSendReceiptCountForTest(): number {
+    return followerSendReceipts.size;
 }
 
 /** The coordinator's latest assistant-role bubble (the same projection a local relay reads). */
@@ -322,9 +355,10 @@ async function followerProjectSend(
             );
         }
 
+        const now = Date.now();
         const bodyHash = createHash('sha256').update(text, 'utf8').digest('hex');
         const idempotencyKey = `${acl.hostDaemonId}::${meshId}::${acl.accountSlot}::${acl.activeDaemonId}::b${acl.bindingRevision}::g${acl.grantRevision}::${clientId}`;
-        const prior = followerSendReceipts.get(idempotencyKey);
+        const prior = readFollowerSendReceipt(idempotencyKey, now);
         if (prior) {
             if (prior.bodyHash !== bodyHash) {
                 return fail(
@@ -381,12 +415,13 @@ async function followerProjectSend(
             );
         }
         const status = sent.deduplicated === true ? 'duplicate' : sent.queued === true ? 'queued' : 'accepted';
-        followerSendReceipts.set(idempotencyKey, {
+        recordFollowerSendReceipt(idempotencyKey, {
             coordinatorSessionId: live.sessionId,
             bodyHash,
             messageId,
             cursor,
-        });
+            recordedAt: now,
+        }, now);
         return {
             success: true,
             result: {
@@ -412,8 +447,10 @@ async function run(
 ): Promise<CommandRouterResult> {
     const mesh = ports.listMeshes().find((m) => m.id === meshId)!;
     switch (op) {
-        case 'status':
-            return { success: true, result: await localProjectStatus(ports, mesh) };
+        case 'status': {
+            const status = await localProjectStatus(ports, mesh);
+            return { success: true, result: isFollower ? followerStatusView(status, mesh) : status };
+        }
         case 'send': {
             if (isFollower) {
                 return followerProjectSend(ports, meshId, sender, args);
@@ -598,8 +635,13 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
 
                     if (action === 'grant') {
                         const rawActiveDaemonId = str(args.activeDaemonId);
-                        const activeDaemonId = canonicalDaemonId(rawActiveDaemonId) ?? rawActiveDaemonId;
-                        if (!activeDaemonId) return fail('invalid_args', 'activeDaemonId required');
+                        const activeDaemonId = canonicalDaemonId(rawActiveDaemonId);
+                        if (!activeDaemonId || !activeDaemonId.startsWith('daemon_mach_')) {
+                            return fail('invalid_active_daemon_id', 'activeDaemonId is required and must be a canonical daemon id.');
+                        }
+                        if (hostDaemonId && daemonIdsEquivalent(activeDaemonId, hostDaemonId)) {
+                            return fail('grant_self_not_allowed', 'Cannot grant remote follower access to the host daemon itself.');
+                        }
                         const slot = str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
                         if (slot !== ASSISTANT_ACCOUNT_SLOT) {
                             return fail('invalid_args', `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
@@ -610,7 +652,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                         if (bindingRevision === null) {
                             return fail('invalid_args', 'bindingRevision must be a positive integer');
                         }
-                        if (existing && bindingRevision < existing.bindingRevision) {
+                        if (existing && daemonIdsEquivalent(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
                             return fail(
                                 'binding_revision_stale',
                                 'Requested bindingRevision is older than the host ACL bindingRevision.',

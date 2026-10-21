@@ -35,7 +35,7 @@ import { randomUUID } from 'crypto';
 import { existsSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
-import { ASSISTANT_VERB, daemonIdsEquivalent, canonicalDaemonId, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
+import { ASSISTANT_VERB, daemonIdsEquivalent, canonicalDaemonId, sanitizeRemoteRepoIdentity, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
 import { defineCommandSpecs } from '../command-registry.js';
 import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
 import type { CommandRouterResult } from '../router.js';
@@ -420,10 +420,13 @@ const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, 
     }
     // The thread and relay times live HERE (this daemon's assistant), not on the host.
     const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
+    const repo = p.followedRemote
+        ? sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str(body.repo))
+        : p.mesh.repoIdentity;
     return wrap(p.slug, meshId, {
         ...body,
         name: p.mesh.name,
-        repo: p.mesh.repoIdentity,
+        repo,
         host: p.remote.label,
         ...(p.followedRemote ? { hostDaemonId: p.followedRemote.hostDaemonId, hosting: 'remote_followed' } : {}),
         via: 'relay',
@@ -456,16 +459,29 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
     if (p.remote) {
         // The host runs the same local path (ensure coordinator → send_chat) under its own mesh id,
         // or followerProjectSend (existing live coordinator only) for followed remote projects.
-        const out = await callRemote(ports, { ...p, remote: p.remote }, 'send', { text: composed.text, clientId });
+        const expectedCoordinatorSessionId = str(args.expectedCoordinatorSessionId) || str(p.followedRemote?.coordinatorSessionId);
+        const out = await callRemote(ports, { ...p, remote: p.remote }, 'send', {
+            text: composed.text,
+            clientId,
+            ...(expectedCoordinatorSessionId ? { expectedCoordinatorSessionId } : {}),
+        });
         if (!out.ok) return remoteFailure(where, p.remote, out, ports, p.followedRemote);
         const body = remoteBody(out);
+        const remoteCursor = str(body.cursor) || null;
+        const remoteCoordSessionId = str(body.coordinatorSessionId) || null;
         ports.relay.openThread?.(meshId);
-        ports.relay.remoteSent?.(meshId, str(body.cursor) || null);
+        ports.relay.remoteSent?.(meshId, remoteCursor, remoteCoordSessionId);
+        if (p.followedRemote) {
+            ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
+                ...(remoteCursor !== null ? { lastCursor: remoteCursor } : {}),
+                ...(remoteCoordSessionId !== null ? { coordinatorSessionId: remoteCoordSessionId } : {}),
+            });
+        }
         if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
         return wrap(p.slug, meshId, {
             status: str(body.status) || 'accepted',
             launched: body.launched === true,
-            coordinatorSessionId: str(body.coordinatorSessionId) || null,
+            coordinatorSessionId: remoteCoordSessionId,
             messageId: str(body.messageId) || null,
             host: p.remote.label,
             via: 'relay',

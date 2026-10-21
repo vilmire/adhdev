@@ -46,9 +46,10 @@ export interface AssistantRelayHooks {
     /**
      * A send to a REMOTE-hosted project was accepted by its host: the relay
      * starts polling it, from `cursor` (the host's newest committed coordinator
-     * turn at send time — earlier turns are never relayed).
+     * turn at send time — earlier turns are never relayed) and records
+     * `coordinatorSessionId` when known.
      */
-    remoteSent?(meshId: string, cursor: string | null): void;
+    remoteSent?(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void;
 }
 
 let relayHooks: AssistantRelayHooks = {};

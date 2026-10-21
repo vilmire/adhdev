@@ -400,11 +400,25 @@ export function wireAssistantRuntime(
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
         relay,
-        onCursorUpdated: (meshId, cursor, coordinatorSessionId) => {
+        onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed) => {
             store.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
             const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
             if (followed) {
-                registry.updateFollowedRemoteProject(followed.key, { lastCursor: cursor, coordinatorSessionId });
+                registry.updateFollowedRemoteProject(followed.key, {
+                    lastCursor: cursor ?? followed.lastCursor ?? null,
+                    coordinatorSessionId: coordinatorSessionId ?? (observed?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null),
+                    ...(observed
+                        ? {
+                            lastObserved: {
+                                ...followed.lastObserved,
+                                observedAt: new Date().toISOString(),
+                                ...(observed.coordinatorState ? { coordinatorState: observed.coordinatorState } : {}),
+                                ...(typeof observed.coordinatorMissing === 'boolean' ? { coordinatorMissing: observed.coordinatorMissing } : {}),
+                                ...(observed.summary ? { summary: observed.summary } : {}),
+                            },
+                        }
+                        : {}),
+                });
             }
         },
         onAccessRevoked: (meshId) => {
@@ -534,7 +548,7 @@ export function wireAssistantRuntime(
         },
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics?.bump('skill_attaches', meshId, Date.now(), count),
-        remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor),
+        remoteSent: (meshId, cursor, coordinatorSessionId) => remotePoller.noteSent(meshId, cursor, coordinatorSessionId),
     });
 
     const runtime: AssistantRuntime = {
@@ -555,8 +569,10 @@ export function wireAssistantRuntime(
             const followed = registry.listFollowedRemoteProjects();
             const events = await relay.pullPending(callerSessionId);
             return events.map((e) => {
+                const activeFollowed = followed.find((f) => f.meshId === e.meshId && f.state === 'followed')
+                    ?? followed.find((f) => f.meshId === e.meshId);
                 const slug = e.meshId
-                    ? (slugs.get(e.meshId) ?? followed.find((f) => f.meshId === e.meshId)?.slug)
+                    ? (slugs.get(e.meshId) ?? activeFollowed?.slug)
                     : undefined;
                 return slug ? { ...e, project: slug } : e;
             });

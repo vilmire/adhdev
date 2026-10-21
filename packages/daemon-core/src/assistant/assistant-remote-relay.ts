@@ -90,11 +90,14 @@ interface MeshPollState {
     nextAt: number;
 }
 
-const REVOCATION_REFUSAL_CODES = new Set([
+export const REVOCATION_REFUSAL_CODES: ReadonlySet<string> = new Set([
     'host_revoked',
     'remote_access_denied',
     'grant_revision_stale',
+    'binding_revision_stale',
     'binding_revision_mismatch',
+    'local_owner_binding_missing',
+    'local_owner_binding_mismatch',
     'assistant_owner_binding_missing',
     'assistant_owner_binding_mismatch',
 ]);
@@ -123,10 +126,11 @@ export class AssistantRemoteRelayPoller {
     /** `project_send` or `follow` established `cursor` (the host's newest commit at that moment). */
     noteSent(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void {
         const prev = this.state.get(meshId);
-        const nextCursor = cursor ?? prev?.cursor ?? null;
+        const thread = !prev ? this.ports.openThreads().find((t) => t.meshId === meshId) : undefined;
+        const nextCursor = cursor ?? prev?.cursor ?? thread?.lastCursor ?? null;
         const nextSessionId = coordinatorSessionId !== undefined
             ? coordinatorSessionId
-            : prev?.coordinatorSessionId ?? null;
+            : prev?.coordinatorSessionId ?? thread?.coordinatorSessionId ?? null;
         this.state.set(meshId, {
             cursor: nextCursor,
             coordinatorSessionId: nextSessionId,

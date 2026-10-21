@@ -12,7 +12,7 @@ import { createHash } from 'crypto';
  * diagnostics: enums and numbers only, by allow-list.
  */
 
-import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { canonicalDaemonId, daemonIdsEquivalent, sanitizeRemoteRepoIdentity } from '@adhdev/mesh-shared';
 import { resolveMeshHostStatus } from '../mesh/mesh-host-ownership.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { AssistantCoordinatorView } from './coordinator-lifecycle.js';
@@ -556,7 +556,7 @@ function countVisibleBubbles(activeChat: unknown): number {
  */
 export function sessionRows(
     states: readonly unknown[],
-    opts: { meshId?: string; now?: number } = {},
+    opts: { meshId?: string; strictMeshScope?: boolean; stripWorkspace?: boolean; now?: number } = {},
 ): SessionRow[] {
     const now = opts.now ?? Date.now();
     const want = readText(opts.meshId);
@@ -569,9 +569,13 @@ export function sessionRows(
         const settings = rec(state.settings) ?? {};
         const launch = rec(state.launch);
         const meshId = readText(settings.meshNodeFor) || readText(settings.meshCoordinatorFor);
-        // Narrowing keeps unstamped sessions: an orphan often carries no mesh
-        // stamp, and dropping it would hide the very thing this surface is for.
-        if (want && meshId && meshId !== want) continue;
+        if (opts.strictMeshScope) {
+            if (!want || meshId !== want || settings.assistant === true) continue;
+        } else {
+            // Narrowing keeps unstamped sessions: an orphan often carries no mesh
+            // stamp, and dropping it would hide the very thing this surface is for.
+            if (want && meshId && meshId !== want) continue;
+        }
         const launchedAt = typeof launch?.launchedAt === 'number' && Number.isFinite(launch.launchedAt)
             ? launch.launchedAt
             : null;
@@ -583,7 +587,7 @@ export function sessionRows(
             nodeId: readText(settings.meshNodeId) || null,
             ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
             messageCount: countVisibleBubbles(state.activeChat),
-            workspace: readText(state.workspace) || null,
+            workspace: opts.stripWorkspace ? null : (readText(state.workspace) || null),
             isCoordinator: !!readText(settings.meshCoordinatorFor),
             assistant: settings.assistant === true,
             spawnedForTaskId: readText(settings.autoLaunchedForQueueTaskId) || null,
@@ -591,6 +595,155 @@ export function sessionRows(
         });
     }
     return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+/**
+ * Strict allow-list projection of a host's `localProjectStatus` result for a
+ * checkout-less remote follower (`assistant_remote_project { op: 'status' }`).
+ *
+ * Follows the same allow-list discipline as the server content boundary and
+ * `SessionRow` above (never object spread + delete):
+ *   - `repo` is sanitized via `sanitizeRemoteRepoIdentity` (strips embedded
+ *     credentials and rejects local filesystem paths);
+ *   - `sessions` includes ONLY non-assistant sessions stamped to `mesh.id`,
+ *     rebuilt field-by-field with `workspace: null`;
+ *   - host-local assistant thread state (`threadOpen`, `lastRelayAt`,
+ *     `missedReports`) is never forwarded.
+ */
+export function followerStatusView(
+    raw: Record<string, unknown>,
+    mesh: LocalMeshEntry,
+): Record<string, unknown> {
+    const rawRepo = readText((mesh as { repoRemoteUrl?: unknown }).repoRemoteUrl) || readText(mesh.repoIdentity);
+    const machines = (Array.isArray(raw.machines) ? raw.machines : [])
+        .map((item: unknown) => {
+            const m = rec(item);
+            const node = readText(m?.node);
+            if (!node) return null;
+            const branch = readText(m?.branch);
+            return {
+                node,
+                label: readText(m?.label) || null,
+                os: readText(m?.os) || null,
+                build: readText(m?.build) || null,
+                online: m?.online === true,
+                ...(branch ? { branch } : {}),
+            };
+        })
+        .filter((m): m is NonNullable<typeof m> => m !== null);
+    const rawQueue = rec(raw.queue);
+    const queue: QueueCounts | null = rawQueue
+        ? {
+            pending: typeof rawQueue.pending === 'number' && Number.isFinite(rawQueue.pending) ? rawQueue.pending : 0,
+            assigned: typeof rawQueue.assigned === 'number' && Number.isFinite(rawQueue.assigned) ? rawQueue.assigned : 0,
+            failed: typeof rawQueue.failed === 'number' && Number.isFinite(rawQueue.failed) ? rawQueue.failed : 0,
+        }
+        : null;
+    const heldTasks = (Array.isArray(raw.heldTasks) ? raw.heldTasks : [])
+        .map((item: unknown) => {
+            const t = rec(item);
+            const taskId = readText(t?.taskId);
+            if (!taskId) return null;
+            return {
+                taskId,
+                title: readText(t?.title),
+                hold: readText(t?.hold) || null,
+            };
+        })
+        .filter((t): t is NonNullable<typeof t> => t !== null);
+    const heldReasonsRaw = rec(raw.heldReasons);
+    const heldReasons: Record<string, number> = {};
+    if (heldReasonsRaw) {
+        for (const [k, v] of Object.entries(heldReasonsRaw)) {
+            if (typeof v === 'number' && Number.isFinite(v)) heldReasons[k] = v;
+        }
+    }
+    const activeMissions = (Array.isArray(raw.activeMissions) ? raw.activeMissions : [])
+        .map((item: unknown) => {
+            const m = rec(item);
+            const id = readText(m?.id);
+            if (!id) return null;
+            return {
+                id,
+                title: readText(m?.title),
+                status: readText(m?.status),
+            };
+        })
+        .filter((m): m is NonNullable<typeof m> => m !== null);
+    const staleMissions = (Array.isArray(raw.staleMissions) ? raw.staleMissions : [])
+        .map((item: unknown) => {
+            const m = rec(item);
+            const id = readText(m?.id);
+            if (!id) return null;
+            return {
+                id,
+                title: readText(m?.title),
+                idleDays: typeof m?.idleDays === 'number' && Number.isFinite(m.idleDays) ? m.idleDays : 0,
+            };
+        })
+        .filter((m): m is NonNullable<typeof m> => m !== null);
+    const sessions: SessionRow[] = (Array.isArray(raw.sessions) ? raw.sessions : [])
+        .map((item: unknown): SessionRow | null => {
+            const s = rec(item);
+            if (!s) return null;
+            const sessionId = readText(s.sessionId);
+            const sessionMeshId = readText(s.meshId);
+            if (!sessionId || sessionMeshId !== mesh.id || s.assistant === true) return null;
+            return {
+                sessionId,
+                provider: readText(s.provider),
+                status: readText(s.status),
+                meshId: mesh.id,
+                nodeId: readText(s.nodeId) || null,
+                ageMs: typeof s.ageMs === 'number' && Number.isFinite(s.ageMs) ? s.ageMs : null,
+                messageCount: typeof s.messageCount === 'number' && Number.isFinite(s.messageCount) ? s.messageCount : 0,
+                workspace: null,
+                isCoordinator: s.isCoordinator === true,
+                assistant: false,
+                spawnedForTaskId: readText(s.spawnedForTaskId) || null,
+                launchedBy: readText(s.launchedBy) || null,
+            };
+        })
+        .filter((s): s is SessionRow => s !== null);
+    const rawRouting = rec(raw.routing);
+    const routing: ProjectRoutingView | null = rawRouting
+        ? {
+            strategy: readText(rawRouting.strategy) || 'unknown',
+            difficulty: readText(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
+            predictedWinner: rec(rawRouting.predictedWinner) && readText(rec(rawRouting.predictedWinner)!.nodeId) && readText(rec(rawRouting.predictedWinner)!.providerType)
+                ? {
+                    nodeId: readText(rec(rawRouting.predictedWinner)!.nodeId),
+                    providerType: readText(rec(rawRouting.predictedWinner)!.providerType),
+                    ...(readText(rec(rawRouting.predictedWinner)!.model) ? { model: readText(rec(rawRouting.predictedWinner)!.model) } : {}),
+                    fitnessScore: routingNum(rec(rawRouting.predictedWinner)!.fitnessScore) ?? 0,
+                }
+                : null,
+            perNode: Array.isArray(rawRouting.perNode) ? rawRouting.perNode as RoutingNodeRow[] : [],
+            ...(readText(rawRouting.error) ? { error: readText(rawRouting.error) } : {}),
+        }
+        : null;
+    const coord = readText(raw.coordinator);
+    const coordinator: CoordinatorState = coord === 'idle' || coord === 'working' || coord === 'waiting' ? coord : 'none';
+    return {
+        name: readText(raw.name) || readText(mesh.name),
+        repo: sanitizeRemoteRepoIdentity(rawRepo),
+        machines,
+        machinesOnline: machines.filter((m) => m.online).length,
+        queue,
+        heldTasks,
+        heldCount: typeof raw.heldCount === 'number' && Number.isFinite(raw.heldCount) ? raw.heldCount : heldTasks.length,
+        heldReasons,
+        activeMissions,
+        failedTasks: queue ? queue.failed : null,
+        pendingApprovals: typeof raw.pendingApprovals === 'number' && Number.isFinite(raw.pendingApprovals) ? raw.pendingApprovals : 0,
+        coordinator,
+        threadOpen: null,
+        lastRelayAt: null,
+        ...(staleMissions.length > 0 ? { staleMissions } : {}),
+        ...(routing ? { routing } : {}),
+        sessions,
+        ...(readText(raw.statusError) ? { statusError: 'mesh_status_view failed' } : {}),
+    };
 }
 
 // ── project_read ───────────────────────────────────────────────────────────

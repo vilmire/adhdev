@@ -201,7 +201,7 @@ function unreachable(reason: ProjectUnreachableReason, error: string): RemoteCal
 
 class RemoteCallTimeout extends Error {}
 
-const FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
+const FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|binding_revision_stale|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
 
 /**
  * One `assistant_remote_project` call on the host. `poll` carries the status

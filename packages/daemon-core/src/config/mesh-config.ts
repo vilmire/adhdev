@@ -44,14 +44,21 @@ export function normalizeAssistantRemoteAccessBinding(
 ): AssistantRemoteAccessBinding | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const rec = raw as Record<string, unknown>;
-    const hostDaemonId = typeof rec.hostDaemonId === 'string' ? rec.hostDaemonId.trim() : '';
+    const rawHostDaemonId = typeof rec.hostDaemonId === 'string' ? rec.hostDaemonId.trim() : '';
     const meshId = typeof rec.meshId === 'string' ? rec.meshId.trim() : '';
-    const activeDaemonId = typeof rec.activeDaemonId === 'string' ? rec.activeDaemonId.trim() : '';
-    if (!hostDaemonId || !meshId || !activeDaemonId) return null;
+    const rawActiveDaemonId = typeof rec.activeDaemonId === 'string' ? rec.activeDaemonId.trim() : '';
+    if (!rawHostDaemonId || !meshId || !rawActiveDaemonId) return null;
     if (expectedMeshId && meshId !== expectedMeshId) return null;
     if (rec.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
     const status = rec.status === 'active' || rec.status === 'revoked' ? rec.status : null;
     if (!status) return null;
+    const hostDaemonId = canonicalDaemonId(rawHostDaemonId);
+    const activeDaemonId = canonicalDaemonId(rawActiveDaemonId);
+    if (!hostDaemonId || !hostDaemonId.startsWith('daemon_mach_')) return null;
+    if (status === 'active') {
+        if (!activeDaemonId || !activeDaemonId.startsWith('daemon_mach_')) return null;
+        if (daemonIdsEquivalent(hostDaemonId, activeDaemonId)) return null;
+    }
     const bindingRevision = typeof rec.bindingRevision === 'number' && Number.isInteger(rec.bindingRevision) && rec.bindingRevision >= 1
         ? rec.bindingRevision
         : null;
@@ -70,10 +77,10 @@ export function normalizeAssistantRemoteAccessBinding(
     const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
     if (allowedOps.length === 0) return null;
     return {
-        hostDaemonId: canonicalDaemonId(hostDaemonId) ?? hostDaemonId,
+        hostDaemonId,
         meshId,
         accountSlot: ASSISTANT_ACCOUNT_SLOT,
-        activeDaemonId: canonicalDaemonId(activeDaemonId) ?? activeDaemonId,
+        activeDaemonId: activeDaemonId ?? rawActiveDaemonId,
         bindingRevision,
         grantRevision,
         status,
