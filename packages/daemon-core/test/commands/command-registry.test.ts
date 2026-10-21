@@ -317,6 +317,7 @@ const LEGACY_HIGH_FAMILY_COMMANDS = [
     // Host side of a remote-hosted assistant project (high-family/assistant-remote.ts,
     // owner decision 2026-10-08); mesh-only + roster, pinned by assistant-remote-verb.test.ts.
     'assistant_remote_project',
+    'assistant_remote_project_catalog', 'assistant_remote_project_access', 'assistant_remote_follow',
     // Integrated assistant execution, environment and project-watch verbs.
     'assistant_action', 'assistant_environment', 'assistant_execution_settings',
     'assistant_execution_state', 'assistant_project_watch',

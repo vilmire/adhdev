@@ -13,9 +13,11 @@
  */
 
 import type { GitCompactSummary } from './git/git-types.js';
-import type { DifficultyBrainMap, LaunchDefaultEntry } from '@adhdev/mesh-shared';
+import type { AssistantRemoteAccessBinding, DifficultyBrainMap, LaunchDefaultEntry } from '@adhdev/mesh-shared';
 import type { RepoMeshRelatedRepo, MeshReportedMemberState, RepoMeshNodePolicy } from './repo-mesh-policy.js';
 import type { RepoMeshPolicyOverrides } from './repo-mesh-policy-resolve.js';
+
+export type { AssistantRemoteAccessBinding };
 
 // Policy types/defaults, their normalization and the runtime status types live in
 // sibling modules; this module re-exports them so `repo-mesh-types` stays the one
@@ -264,6 +266,12 @@ export interface LocalMeshEntry {
     coordinator: RepoMeshCoordinatorConfig;
     /** Sibling of coordinator; only the hosting daemon's meshes.json is authoritative. */
     coordinatorLaunch?: HostCoordinatorLaunchDefault;
+    /**
+     * Host-authoritative narrow project ACL for checkout-less remote assistant follow (rc24).
+     * Only the hosting daemon's `meshes.json` is authoritative; never inherited from
+     * repo files, inline mesh payloads, or member host records.
+     */
+    assistantRemoteAccess?: AssistantRemoteAccessBinding;
     meshHost?: RepoMeshHostMetadata;
     nodes: LocalMeshNodeEntry[];
     /**

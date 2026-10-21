@@ -42,8 +42,21 @@ import { parseReportContinuation } from '../../assistant/report-continuation.js'
  * revoked/removed member drops off the roster and is refused.
  */
 
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { createHash } from 'crypto';
+import {
+    ASSISTANT_ACCOUNT_SLOT,
+    ASSISTANT_FOLLOWER_ALLOWED_OPS,
+    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+    ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND,
+    canonicalDaemonId,
+    daemonIdsEquivalent,
+    isAssistantFollowerAllowedOp,
+    sanitizeRemoteRepoIdentity,
+    type AssistantRemoteAccessBinding,
+    type RemoteProjectCatalogItem,
+} from '@adhdev/mesh-shared';
 import { defineCommandSpecs } from '../command-registry.js';
+import { isTrustedOwnerIngress } from '../command-args.js';
 import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
 import { readMeshSender } from '../mesh-sender.js';
 import type { CommandRouterResult } from '../router.js';
@@ -56,18 +69,73 @@ import { ASSISTANT_REMOTE_PROJECT_COMMAND, ASSISTANT_REMOTE_OPS, type AssistantR
 import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
 import { localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
 import { applyNote, noteTextRefusal, parseNoteOp, projectPortsFor } from './assistant-store.js';
+import { normalizeAssistantRemoteAccessBinding } from '../../config/mesh-config.js';
+import {
+    MeshConfigStrictLockError,
+    readMeshConfigFromDisk,
+    saveMeshConfigDurable,
+    withStrictMeshConfigWriteLock,
+} from '../../config/mesh-config-store.js';
+import type { LocalMeshEntry } from '../../repo-mesh-types.js';
 
 /** Largest composed text a remote send carries (the caller composes; skills are capped at 12 k there). */
 export const REMOTE_SEND_MAX_CHARS = 64_000;
 /** Commits returned per poll (older ones fold into the relay's "earlier turns"). */
 export const REMOTE_POLL_MAX_COMMITS = 5;
 
+export const ASSISTANT_REMOTE_OWNER_SOURCES = ['p2p', 'ws', 'standalone'] as const;
+
 function str(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
 }
 
+function record(v: unknown): Record<string, unknown> | undefined {
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+}
+
 function fail(code: string, error: string = code, extra: Record<string, unknown> = {}): CommandRouterResult {
     return { success: false, code, error, ...extra };
+}
+
+/**
+ * Per-mesh async mutex serializing host ACL grant/revoke mutations with
+ * follower send admission + enqueue so a concurrent revoke cannot interleave
+ * with an in-flight follower send check.
+ */
+const meshRemoteAccessQueues = new Map<string, Promise<unknown>>();
+
+export async function withMeshRemoteAccessMutex<T>(meshId: string, fn: () => Promise<T> | T): Promise<T> {
+    const prev = meshRemoteAccessQueues.get(meshId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const next = prev.then(() => gate, () => gate);
+    meshRemoteAccessQueues.set(meshId, next);
+    await prev.catch(() => undefined);
+    try {
+        return await fn();
+    } finally {
+        release();
+        if (meshRemoteAccessQueues.get(meshId) === next) {
+            meshRemoteAccessQueues.delete(meshId);
+        }
+    }
+}
+
+interface FollowerSendReceipt {
+    coordinatorSessionId: string;
+    bodyHash: string;
+    messageId: string;
+    cursor: string | null;
+}
+
+/**
+ * Host-side idempotency ledger for follower sends, bound to
+ * `(hostDaemonId, meshId, accountSlot, activeDaemonId, bindingRevision, grantRevision, clientId)`.
+ */
+const followerSendReceipts = new Map<string, FollowerSendReceipt>();
+
+export function clearFollowerSendReceiptsForTest(): void {
+    followerSendReceipts.clear();
 }
 
 /** The coordinator's latest assistant-role bubble (the same projection a local relay reads). */
@@ -91,6 +159,22 @@ async function poll(ports: AssistantProjectPorts, meshId: string, args: Record<s
         return { success: true, coordinator: 'none', coordinatorSessionId: null, open: false, modal: false, commits: [], cursor: null, cursorFound: false, work, statusLine };
     }
     const turns = ports.coordinatorTurns(sessionId, REMOTE_POLL_MAX_COMMITS);
+    if (args.cursorOnly === true) {
+        // Follow baseline initialization: return high-water cursor and session identity
+        // without reading transcript history or emitting prior commits.
+        return {
+            success: true,
+            coordinator: coordinatorState(views),
+            coordinatorSessionId: sessionId,
+            open: turns.open,
+            modal: !!live?.modalParked,
+            commits: [],
+            cursor: turns.committed[0]?.attemptId ?? null,
+            cursorFound: true,
+            work,
+            statusLine,
+        };
+    }
     const after = str(args.afterAttemptId);
     const idx = after ? turns.committed.findIndex((c) => c.attemptId === after) : -1;
     const fresh = idx >= 0 ? turns.committed.slice(0, idx) : turns.committed;
@@ -124,12 +208,216 @@ async function note(meshId: string, args: Record<string, unknown>): Promise<Comm
     return { success: true, ...applied };
 }
 
-async function run(ports: AssistantProjectPorts, op: AssistantRemoteOp, meshId: string, args: Record<string, unknown>): Promise<CommandRouterResult> {
+function isSenderOnWorkerRoster(mesh: LocalMeshEntry, selfDaemonId: string, sender: string): boolean {
+    if (!sender) return false;
+    if (selfDaemonId && daemonIdsEquivalent(sender, selfDaemonId)) return true;
+    return (mesh.nodes ?? []).some((n) => typeof n.daemonId === 'string' && daemonIdsEquivalent(n.daemonId, sender));
+}
+
+function hasExplicitFollowerClaim(args: Record<string, unknown>): boolean {
+    return record(args.followerAccess) !== undefined
+        || typeof args.bindingRevision === 'number'
+        || typeof args.grantRevision === 'number';
+}
+
+function verifyFollowerAcl(
+    ports: AssistantProjectPorts,
+    mesh: LocalMeshEntry | undefined,
+    meshId: string,
+    sender: string,
+    op: string,
+    args: Record<string, unknown>,
+): { ok: true; acl: AssistantRemoteAccessBinding } | { ok: false; result: CommandRouterResult } {
+    if (!mesh) {
+        return { ok: false, result: fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`) };
+    }
+    if (!ports.isHostedHere(mesh)) {
+        return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
+    }
+    const self = ports.selfDaemonId();
+    const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
+    if (!acl) {
+        return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
+    }
+    if (self && !daemonIdsEquivalent(acl.hostDaemonId, self)) {
+        return { ok: false, result: fail('remote_access_denied', `Host daemon identity mismatch for mesh ${meshId}.`) };
+    }
+    if (acl.status !== 'active') {
+        return {
+            ok: false,
+            result: fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
+                grantRevision: acl.grantRevision,
+                bindingRevision: acl.bindingRevision,
+            }),
+        };
+    }
+    if (!sender || !daemonIdsEquivalent(acl.activeDaemonId, sender)) {
+        return { ok: false, result: fail('remote_access_denied', `Sender is not the active authorized assistant daemon for mesh ${meshId}.`) };
+    }
+    const followerClaim = record(args.followerAccess);
+    const claimedSlot = str(followerClaim?.accountSlot) || str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+    if (claimedSlot !== ASSISTANT_ACCOUNT_SLOT) {
+        return { ok: false, result: fail('remote_access_denied', `Invalid assistant accountSlot '${claimedSlot}'.`) };
+    }
+    const claimedBindingRev = typeof args.bindingRevision === 'number'
+        ? args.bindingRevision
+        : typeof followerClaim?.bindingRevision === 'number'
+            ? (followerClaim.bindingRevision as number)
+            : null;
+    const claimedGrantRev = typeof args.grantRevision === 'number'
+        ? args.grantRevision
+        : typeof followerClaim?.grantRevision === 'number'
+            ? (followerClaim.grantRevision as number)
+            : null;
+    if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
+        return {
+            ok: false,
+            result: fail('remote_access_denied', `Follower revision mismatch for mesh ${meshId}.`, {
+                actualBindingRevision: acl.bindingRevision,
+                actualGrantRevision: acl.grantRevision,
+            }),
+        };
+    }
+    if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
+        return {
+            ok: false,
+            result: fail('remote_op_forbidden', `Operation '${op}' is not permitted for checkout-less remote followers.`),
+        };
+    }
+    return { ok: true, acl };
+}
+
+async function followerProjectSend(
+    ports: AssistantProjectPorts,
+    meshId: string,
+    sender: string,
+    args: Record<string, unknown>,
+): Promise<CommandRouterResult> {
+    const text = typeof args.text === 'string' ? args.text : '';
+    if (!text.trim()) return fail('invalid_args', 'text required');
+    if (text.length > REMOTE_SEND_MAX_CHARS) return fail('invalid_args', `text over ${REMOTE_SEND_MAX_CHARS} characters`);
+    const clientId = str(args.clientId);
+    if (!clientId || clientId.length > 200) return fail('invalid_args', 'clientId required (at most 200 characters)');
+    const expectedCoordinatorSessionId = str(args.expectedCoordinatorSessionId);
+
+    return withMeshRemoteAccessMutex(meshId, async () => {
+        const freshMesh = ports.listMeshes().find((m) => m.id === meshId);
+        const verified = verifyFollowerAcl(ports, freshMesh, meshId, sender, 'send', args);
+        if (!verified.ok) return verified.result;
+        const { acl } = verified;
+
+        // Follower sends target ONLY an existing live coordinator — never auto-launch.
+        const live = pickCoordinator(ports.coordinators(meshId));
+        if (!live) {
+            return fail(
+                'coordinator_missing',
+                'No live coordinator session is running for this project on the host; remote followers cannot launch a coordinator.',
+            );
+        }
+        if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
+            return fail(
+                'coordinator_replaced',
+                'The live coordinator session on the host does not match expectedCoordinatorSessionId.',
+                { expectedCoordinatorSessionId, currentCoordinatorSessionId: live.sessionId },
+            );
+        }
+
+        const bodyHash = createHash('sha256').update(text, 'utf8').digest('hex');
+        const idempotencyKey = `${acl.hostDaemonId}::${meshId}::${acl.accountSlot}::${acl.activeDaemonId}::b${acl.bindingRevision}::g${acl.grantRevision}::${clientId}`;
+        const prior = followerSendReceipts.get(idempotencyKey);
+        if (prior) {
+            if (prior.bodyHash !== bodyHash) {
+                return fail(
+                    'idempotency_body_mismatch',
+                    'Retry with the same clientId carried a different message body.',
+                );
+            }
+            if (prior.coordinatorSessionId !== live.sessionId) {
+                return fail(
+                    'coordinator_replaced',
+                    'The coordinator session changed since the original send; refusing to replay to a replacement session.',
+                    {
+                        originalCoordinatorSessionId: prior.coordinatorSessionId,
+                        currentCoordinatorSessionId: live.sessionId,
+                    },
+                );
+            }
+        }
+
+        const cursor = prior?.cursor ?? (ports.coordinatorTurns(live.sessionId, 1).committed[0]?.attemptId ?? null);
+        const messageId = prior?.messageId
+            ?? `assistant_follower:${acl.hostDaemonId}:${meshId}:${acl.accountSlot}:${acl.activeDaemonId}:b${acl.bindingRevision}:g${acl.grantRevision}:${live.sessionId}:${bodyHash.slice(0, 16)}:${clientId}`;
+
+        // Re-check disk ACL immediately prior to enqueue / duplicate admission.
+        const latestMesh = ports.listMeshes().find((m) => m.id === meshId);
+        const recheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, 'send', args);
+        if (!recheck.ok) return recheck.result;
+
+        if (prior) {
+            return {
+                success: true,
+                result: {
+                    status: 'duplicate',
+                    launched: false,
+                    coordinatorSessionId: live.sessionId,
+                    messageId: prior.messageId,
+                    cursor: prior.cursor,
+                },
+            };
+        }
+
+        const sent = await ports.execute('send_chat', {
+            targetSessionId: live.sessionId,
+            text,
+            origin: 'assistant',
+            policy: { mode: 'queue' },
+            messageId,
+        });
+        if (!sent.success) {
+            return fail(
+                str(sent.reason) || str(sent.code) || 'send_failed',
+                str(sent.error) || 'send_failed',
+                { launched: false, coordinatorSessionId: live.sessionId, messageId },
+            );
+        }
+        const status = sent.deduplicated === true ? 'duplicate' : sent.queued === true ? 'queued' : 'accepted';
+        followerSendReceipts.set(idempotencyKey, {
+            coordinatorSessionId: live.sessionId,
+            bodyHash,
+            messageId,
+            cursor,
+        });
+        return {
+            success: true,
+            result: {
+                status,
+                launched: false,
+                coordinatorSessionId: live.sessionId,
+                messageId,
+                cursor,
+                bindingRevision: acl.bindingRevision,
+                grantRevision: acl.grantRevision,
+            },
+        };
+    });
+}
+
+async function run(
+    ports: AssistantProjectPorts,
+    op: AssistantRemoteOp,
+    meshId: string,
+    args: Record<string, unknown>,
+    isFollower: boolean,
+    sender: string,
+): Promise<CommandRouterResult> {
     const mesh = ports.listMeshes().find((m) => m.id === meshId)!;
     switch (op) {
         case 'status':
             return { success: true, result: await localProjectStatus(ports, mesh) };
         case 'send': {
+            if (isFollower) {
+                return followerProjectSend(ports, meshId, sender, args);
+            }
             const text = typeof args.text === 'string' ? args.text : '';
             if (!text.trim()) return fail('invalid_args', 'text required');
             if (text.length > REMOTE_SEND_MAX_CHARS) return fail('invalid_args', `text over ${REMOTE_SEND_MAX_CHARS} characters`);
@@ -151,8 +439,10 @@ async function run(ports: AssistantProjectPorts, op: AssistantRemoteOp, meshId: 
             return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
         case 'inventory':
+            if (isFollower) return fail('remote_op_forbidden', 'inventory is not permitted for remote followers');
             return { success: true, result: environmentInventory([mesh], Date.now(), ports.localNodeFacts ? { daemonId: ports.selfDaemonId(), facts: ports.localNodeFacts() } : undefined) };
         case 'terminal': {
+            if (isFollower) return fail('remote_op_forbidden', 'terminal is not permitted for remote followers');
             if (!['task', 'mission'].includes(String(args.kind)) || typeof args.entityId !== 'string' || !args.entityId || args.entityId.length > 200
                 || !Array.isArray(args.receipts) || args.receipts.length > 256 || args.receipts.some(id => typeof id !== 'string' || id.length > 200)) return fail('invalid_args');
             return { success: true, result: { events: readTerminalEvents(MeshRuntimeStore.getInstance().db, meshId, args.kind as 'task' | 'mission', args.entityId, 0, args.receipts as string[]) } };
@@ -160,6 +450,7 @@ async function run(ports: AssistantProjectPorts, op: AssistantRemoteOp, meshId: 
         case 'poll':
             return poll(ports, meshId, args);
         case 'note':
+            if (isFollower) return fail('remote_op_forbidden', 'note is not permitted for remote followers');
             return note(meshId, args);
     }
 }
@@ -174,14 +465,209 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
         const ports = await projectPortsFor(ctx);
         const mesh = ports.listMeshes().find((m) => m.id === meshId);
         if (!mesh) return fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`);
-        if (op !== 'inventory' && !ports.isHostedHere(mesh)) return fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`);
         const sender = readMeshSender(args);
         const self = ports.selfDaemonId();
+        const onRoster = isSenderOnWorkerRoster(mesh, self, sender);
+        const isFollower = !onRoster || hasExplicitFollowerClaim(args);
+
+        if (isFollower) {
+            const verified = verifyFollowerAcl(ports, mesh, meshId, sender, op, args);
+            if (!verified.ok) return verified.result;
+        } else if (op !== 'inventory' && !ports.isHostedHere(mesh)) {
+            return fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`);
+        }
+
         if (op === 'send' || op === 'note') {
             const who = sender && self && daemonIdsEquivalent(sender, self) ? 'self' : sender.slice(0, 24) || 'unknown';
-            LOG.info('Assistant', `remote ${op} for mesh ${meshId} from ${who}`);
+            LOG.info('Assistant', `remote ${op} (${isFollower ? 'follower' : 'roster'}) for mesh ${meshId} from ${who}`);
         }
-        return await run(ports, op, meshId, args);
+        return await run(ports, op, meshId, args, isFollower, sender);
+    } catch (e) {
+        if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
+        throw e;
+    }
+};
+
+/**
+ * Owner-only discovery catalog (`assistant_remote_project_catalog`):
+ * Returns bounded content-free canonical metadata for projects actually hosted
+ * on this daemon. Never exposes workspace paths, rosters, session IDs, prompts,
+ * notes, or secrets.
+ */
+const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyContext, rawArgs: any) => {
+    if (!isTrustedOwnerIngress(rawArgs)) {
+        return fail('owner_ingress_required', 'Remote project catalog requires verified owner ingress.');
+    }
+    try {
+        const ports = await projectPortsFor(ctx);
+        const rawSelf = ports.selfDaemonId();
+        const hostDaemonId = canonicalDaemonId(rawSelf) ?? rawSelf;
+        if (!hostDaemonId) {
+            return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
+        }
+        const now = Date.now();
+        const hostedMeshes = ports.listMeshes().filter((m) => ports.isHostedHere(m));
+        const projects: RemoteProjectCatalogItem[] = hostedMeshes.map((m) => {
+            const views = ports.coordinators(m.id);
+            const live = pickCoordinator(views);
+            const lastSessionId = ports.lastCoordinatorSessionId(m.id);
+            return {
+                hostDaemonId,
+                meshId: m.id,
+                name: m.name,
+                sanitizedRepoIdentity: sanitizeRemoteRepoIdentity(m.repoRemoteUrl || m.repoIdentity),
+                coordinatorState: coordinatorState(views),
+                capabilities: {
+                    status: true,
+                    read: true,
+                    poll: true,
+                    report: true,
+                    send: true,
+                    coordinatorPresent: Boolean(live?.sessionId || lastSessionId),
+                },
+                observedAt: now,
+            };
+        });
+        return {
+            success: true,
+            hostDaemonId,
+            projects,
+            observedAt: now,
+        };
+    } catch (e) {
+        if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
+        throw e;
+    }
+};
+
+/**
+ * Owner-only host ACL management (`assistant_remote_project_access`):
+ * Grants or revokes narrow `assistantRemoteAccess` for the single account-level
+ * `'personal'` assistant slot and one active deputy daemon on a locally hosted mesh.
+ */
+const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyContext, rawArgs: any) => {
+    if (!isTrustedOwnerIngress(rawArgs)) {
+        return fail('owner_ingress_required', 'Remote project access changes require verified owner ingress.');
+    }
+    const args: Record<string, unknown> = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
+    const action = str(args.action) || 'get';
+    const meshId = str(args.meshId);
+    if (!meshId) return fail('invalid_args', 'meshId required');
+    if (action !== 'grant' && action !== 'revoke' && action !== 'get') {
+        return fail('invalid_args', 'action must be grant, revoke, or get');
+    }
+
+    try {
+        const ports = await projectPortsFor(ctx);
+        const rawSelf = ports.selfDaemonId();
+        const hostDaemonId = canonicalDaemonId(rawSelf) ?? rawSelf;
+        if (!hostDaemonId) {
+            return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
+        }
+
+        if (action === 'get') {
+            const mesh = ports.listMeshes().find((m) => m.id === meshId);
+            if (!mesh) return fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`);
+            if (!ports.isHostedHere(mesh)) return fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`);
+            if (mesh.assistantRemoteAccess !== undefined && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
+                return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+            }
+            return {
+                success: true,
+                action: 'get',
+                access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId),
+            };
+        }
+
+        return await withMeshRemoteAccessMutex(meshId, () => {
+            try {
+                return withStrictMeshConfigWriteLock(() => {
+                    const config = readMeshConfigFromDisk();
+                    if (!config) return fail('project_storage_unavailable', 'meshes.json is unavailable');
+                    const mesh = config.meshes.find((m) => m.id === meshId);
+                    if (!mesh) return fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`);
+                    if (!ports.isHostedHere(mesh)) return fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`);
+
+                    const rawAcl = mesh.assistantRemoteAccess;
+                    const existing = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
+                    const rawGrantRev = typeof record(rawAcl)?.grantRevision === 'number' && Number.isInteger(record(rawAcl)!.grantRevision) && (record(rawAcl)!.grantRevision as number) > 0
+                        ? (record(rawAcl)!.grantRevision as number)
+                        : 0;
+                    const baseGrantRevision = Math.max(existing?.grantRevision ?? 0, rawGrantRev);
+                    const now = Date.now();
+
+                    if (action === 'grant') {
+                        const rawActiveDaemonId = str(args.activeDaemonId);
+                        const activeDaemonId = canonicalDaemonId(rawActiveDaemonId) ?? rawActiveDaemonId;
+                        if (!activeDaemonId) return fail('invalid_args', 'activeDaemonId required');
+                        const slot = str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
+                        if (slot !== ASSISTANT_ACCOUNT_SLOT) {
+                            return fail('invalid_args', `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                        }
+                        const bindingRevision = typeof args.bindingRevision === 'number' && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1
+                            ? args.bindingRevision
+                            : null;
+                        if (bindingRevision === null) {
+                            return fail('invalid_args', 'bindingRevision must be a positive integer');
+                        }
+                        if (existing && bindingRevision < existing.bindingRevision) {
+                            return fail(
+                                'binding_revision_stale',
+                                'Requested bindingRevision is older than the host ACL bindingRevision.',
+                                { actualBindingRevision: existing.bindingRevision },
+                            );
+                        }
+                        const nextGrantRevision = baseGrantRevision + 1;
+                        const binding: AssistantRemoteAccessBinding = {
+                            hostDaemonId,
+                            meshId,
+                            accountSlot: ASSISTANT_ACCOUNT_SLOT,
+                            activeDaemonId,
+                            bindingRevision,
+                            grantRevision: nextGrantRevision,
+                            status: 'active',
+                            allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
+                            grantedAt: now,
+                        };
+                        mesh.assistantRemoteAccess = binding;
+                        mesh.updatedAt = new Date(now).toISOString();
+                        const saved = saveMeshConfigDurable(config);
+                        if (!saved.ok) return fail('persistence_failed', saved.reason);
+                        LOG.info('Assistant', `Granted remote assistant access on mesh ${meshId} to ${activeDaemonId.slice(0, 24)} (bindingRev=${bindingRevision}, grantRev=${nextGrantRevision})`);
+                        return { success: true, action: 'grant', access: binding };
+                    }
+
+                    // action === 'revoke'
+                    const nextGrantRevision = baseGrantRevision + 1;
+                    const revokedActiveDaemonId = existing?.activeDaemonId
+                        ?? (canonicalDaemonId(str(args.activeDaemonId)) ?? (str(args.activeDaemonId) || 'revoked'));
+                    const revokedBindingRevision = existing?.bindingRevision ?? 1;
+                    const tombstone: AssistantRemoteAccessBinding = {
+                        hostDaemonId,
+                        meshId,
+                        accountSlot: ASSISTANT_ACCOUNT_SLOT,
+                        activeDaemonId: revokedActiveDaemonId,
+                        bindingRevision: revokedBindingRevision,
+                        grantRevision: nextGrantRevision,
+                        status: 'revoked',
+                        allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
+                        grantedAt: existing?.grantedAt ?? now,
+                        revokedAt: now,
+                    };
+                    mesh.assistantRemoteAccess = tombstone;
+                    mesh.updatedAt = new Date(now).toISOString();
+                    const saved = saveMeshConfigDurable(config);
+                    if (!saved.ok) return fail('persistence_failed', saved.reason);
+                    LOG.info('Assistant', `Revoked remote assistant access on mesh ${meshId} (grantRev=${nextGrantRevision})`);
+                    return { success: true, action: 'revoke', access: tombstone };
+                });
+            } catch (err) {
+                if (err instanceof MeshConfigStrictLockError) {
+                    return fail(err.code, err.message);
+                }
+                throw err;
+            }
+        });
     } catch (e) {
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
@@ -190,8 +676,13 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
 
 export const assistantRemoteHandlers: Record<string, HighFamilyHandler> = {
     [ASSISTANT_REMOTE_PROJECT_COMMAND]: assistantRemoteProject,
+    [ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND]: assistantRemoteProjectCatalog,
+    [ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND]: assistantRemoteProjectAccess,
 };
 
 export const assistantRemoteSpecs = defineCommandSpecs('high', assistantRemoteHandlers, {
     [ASSISTANT_REMOTE_PROJECT_COMMAND]: { sources: ['mesh'], meshSender: 'roster' },
+    [ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND]: { sources: [...ASSISTANT_REMOTE_OWNER_SOURCES] },
+    [ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND]: { sources: [...ASSISTANT_REMOTE_OWNER_SOURCES] },
 });
+

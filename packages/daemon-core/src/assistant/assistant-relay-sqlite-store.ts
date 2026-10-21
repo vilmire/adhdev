@@ -30,7 +30,15 @@ import {
     type RenderedAttemptCoverage, type StoredAttemptCoverage,
 } from './assistant-relay-store.js';
 
-interface ThreadDbRow { mesh_id: string; opened_at: number; last_send_at: number; closed_at: number | null; stall_notified_at?: number | null }
+interface ThreadDbRow {
+    mesh_id: string;
+    opened_at: number;
+    last_send_at: number;
+    closed_at: number | null;
+    stall_notified_at?: number | null;
+    last_cursor?: string | null;
+    coordinator_session_id?: string | null;
+}
 interface RelayDbRow {
     attempt_id: string; mesh_id: string; coordinator_session_id: string;
     committed_at: number; delivered_at: number | null; relayed_at: number | null; kind: string; outcome: string;
@@ -40,6 +48,8 @@ function toThread(r: ThreadDbRow): AssistantThreadRow {
     return {
         meshId: r.mesh_id, openedAt: r.opened_at, lastSendAt: r.last_send_at, closedAt: r.closed_at ?? null,
         ...(typeof r.stall_notified_at === 'number' ? { stallNotifiedAt: r.stall_notified_at } : {}),
+        ...(typeof r.last_cursor === 'string' && r.last_cursor ? { lastCursor: r.last_cursor } : {}),
+        ...(typeof r.coordinator_session_id === 'string' && r.coordinator_session_id ? { coordinatorSessionId: r.coordinator_session_id } : {}),
     };
 }
 
@@ -69,7 +79,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         this.db.prepare('DELETE FROM assistant_relay_receipts WHERE at_ms<=? OR receipt_key IN (SELECT receipt_key FROM assistant_relay_receipts WHERE kind=? ORDER BY at_ms DESC,receipt_key DESC LIMIT -1 OFFSET ?)').run(at - RELAY_DELIVERED_RETENTION_MS, kind, RELAY_RECEIPT_CAPS[kind]);
     }
 
-    openThread(meshId: string, at: number): void {
+    openThread(meshId: string, at: number = Date.now()): void {
         // An open thread keeps its openedAt and refreshes lastSendAt; a closed (or
         // absent) one starts over.
         this.db.prepare(`
@@ -86,7 +96,16 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         this.db.prepare('UPDATE assistant_threads SET stall_notified_at = ? WHERE mesh_id = ? AND closed_at IS NULL').run(at, meshId);
     }
 
-    closeThread(meshId: string, at: number): void {
+    setThreadCursor(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void {
+        this.db.prepare(`
+            UPDATE assistant_threads
+            SET last_cursor = COALESCE(?, last_cursor),
+                coordinator_session_id = COALESCE(?, coordinator_session_id)
+            WHERE mesh_id = ?
+        `).run(cursor, coordinatorSessionId ?? null, meshId);
+    }
+
+    closeThread(meshId: string, at: number = Date.now()): void {
         this.db.prepare('UPDATE assistant_threads SET closed_at = ? WHERE mesh_id = ? AND closed_at IS NULL').run(at, meshId);
     }
 

@@ -44,20 +44,60 @@ export const COMMIT_AGE_SLACK_MS = 5_000;
 
 export interface RemoteRelayPollerPorts {
     /** Open assistant threads (relay store rows). */
-    openThreads(): Array<{ meshId: string; lastSendAt: number }>;
+    openThreads(): Array<{
+        meshId: string;
+        lastSendAt: number;
+        lastCursor?: string | null;
+        coordinatorSessionId?: string | null;
+    }>;
     /** The host of a remote-hosted mesh; null when this daemon hosts it (or it is gone). */
     remoteTarget(meshId: string): RemoteHostView | null;
     poll(target: RemoteHostView, args: { afterAttemptId?: string }): Promise<RemoteCallOutcome>;
-    relay: Pick<AssistantRelay, 'onRemoteCommitted' | 'observeRemote' | 'remoteUnreachable'>;
+    relay: Pick<AssistantRelay, 'onRemoteCommitted' | 'observeRemote' | 'remoteUnreachable'> & {
+        closeThread?(meshId: string, opts?: { suppressPending?: boolean }): boolean;
+        onRemoteGapOrBaseline?(
+            meshId: string,
+            info: {
+                reason: 'coordinator_replaced' | 'cursor_gap';
+                previousSessionId?: string | null;
+                currentSessionId?: string | null;
+                previousCursor?: string | null;
+                currentCursor?: string | null;
+            },
+        ): void;
+    };
+    /** Persist updated high-water cursor / coordinatorSessionId on the durable store and followed project entry. */
+    onCursorUpdated?(
+        meshId: string,
+        cursor: string | null,
+        coordinatorSessionId: string | null,
+        observed?: {
+            coordinatorState?: string;
+            coordinatorMissing?: boolean;
+            summary?: string;
+        },
+    ): void;
+    /** Invoked when the remote host refuses with a revocation or authority mismatch code. */
+    onAccessRevoked?(meshId: string, code: string, error: string): void;
     now?(): number;
 }
 
 interface MeshPollState {
     cursor: string | null;
+    coordinatorSessionId: string | null;
     failures: number;
     signaled: boolean;
     nextAt: number;
 }
+
+const REVOCATION_REFUSAL_CODES = new Set([
+    'host_revoked',
+    'remote_access_denied',
+    'grant_revision_stale',
+    'binding_revision_mismatch',
+    'assistant_owner_binding_missing',
+    'assistant_owner_binding_mismatch',
+]);
 
 function str(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
@@ -80,10 +120,21 @@ export class AssistantRemoteRelayPoller {
         return this.ports.now ? this.ports.now() : Date.now();
     }
 
-    /** `project_send` was accepted by the host: poll from `cursor` (the host's newest commit before the send). */
-    noteSent(meshId: string, cursor: string | null): void {
+    /** `project_send` or `follow` established `cursor` (the host's newest commit at that moment). */
+    noteSent(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void {
         const prev = this.state.get(meshId);
-        this.state.set(meshId, { cursor: cursor ?? prev?.cursor ?? null, failures: 0, signaled: prev?.signaled ?? false, nextAt: 0 });
+        const nextCursor = cursor ?? prev?.cursor ?? null;
+        const nextSessionId = coordinatorSessionId !== undefined
+            ? coordinatorSessionId
+            : prev?.coordinatorSessionId ?? null;
+        this.state.set(meshId, {
+            cursor: nextCursor,
+            coordinatorSessionId: nextSessionId,
+            failures: 0,
+            signaled: prev?.signaled ?? false,
+            nextAt: 0,
+        });
+        this.ports.onCursorUpdated?.(meshId, nextCursor, nextSessionId);
     }
 
     /** One pass over the open remote threads that are due. Overlapping calls share the pass. */
@@ -99,11 +150,18 @@ export class AssistantRemoteRelayPoller {
         const open = new Set(threads.map((t) => t.meshId));
         for (const meshId of [...this.state.keys()]) if (!open.has(meshId)) this.state.delete(meshId);
         const now = this.now();
-        for (const { meshId, lastSendAt } of threads) {
+        for (const thread of threads) {
+            const { meshId, lastSendAt } = thread;
             let target: RemoteHostView | null = null;
             try { target = this.ports.remoteTarget(meshId); } catch { target = null; }
             if (!target) continue;
-            const st = this.state.get(meshId) ?? { cursor: null, failures: 0, signaled: false, nextAt: 0 };
+            const st = this.state.get(meshId) ?? {
+                cursor: thread.lastCursor ?? null,
+                coordinatorSessionId: thread.coordinatorSessionId ?? null,
+                failures: 0,
+                signaled: false,
+                nextAt: 0,
+            };
             this.state.set(meshId, st);
             if (st.nextAt > now) continue;
             await this.pollOne(meshId, target, st, lastSendAt);
@@ -122,6 +180,12 @@ export class AssistantRemoteRelayPoller {
             }
         }
         if (!out.ok) {
+            if (out.kind === 'refused' && REVOCATION_REFUSAL_CODES.has(out.code)) {
+                this.ports.onAccessRevoked?.(meshId, out.code, out.error);
+                this.ports.relay.closeThread?.(meshId, { suppressPending: true });
+                this.state.delete(meshId);
+                return;
+            }
             st.failures += 1;
             if (st.failures >= UNREACHABLE_AFTER_FAILURES) {
                 if (!st.signaled) {
@@ -138,7 +202,27 @@ export class AssistantRemoteRelayPoller {
         st.nextAt = 0;
         const r = out.result;
         const sessionId = str(r.coordinatorSessionId);
+        const newCursor = str(r.cursor) || null;
         const commits = Array.isArray(r.commits) ? r.commits : [];
+        const sessionChanged = Boolean(st.coordinatorSessionId && sessionId && st.coordinatorSessionId !== sessionId);
+        const cursorGap = Boolean(st.cursor && !sessionChanged && r.cursorFound !== true && newCursor && newCursor !== st.cursor);
+        if (sessionChanged) {
+            this.ports.relay.onRemoteGapOrBaseline?.(meshId, {
+                reason: 'coordinator_replaced',
+                previousSessionId: st.coordinatorSessionId,
+                currentSessionId: sessionId || null,
+                previousCursor: st.cursor,
+                currentCursor: newCursor,
+            });
+        } else if (cursorGap) {
+            this.ports.relay.onRemoteGapOrBaseline?.(meshId, {
+                reason: 'cursor_gap',
+                previousSessionId: st.coordinatorSessionId,
+                currentSessionId: sessionId || null,
+                previousCursor: st.cursor,
+                currentCursor: newCursor,
+            });
+        }
         // No usable cursor → only what committed after the last send (host-clock ages).
         const ageLimit = !st.cursor || r.cursorFound !== true ? this.now() - lastSendAt + COMMIT_AGE_SLACK_MS : null;
         const valid = commits
@@ -157,8 +241,26 @@ export class AssistantRemoteRelayPoller {
             });
         });
         // The host's newest commit becomes the cursor whether or not it was relayed.
-        if (str(r.cursor)) st.cursor = str(r.cursor);
+        if (newCursor) st.cursor = newCursor;
         else if (valid.length) st.cursor = valid[valid.length - 1]!.attemptId;
+        if (sessionId) st.coordinatorSessionId = sessionId;
+        else if (r.coordinatorMissing === true) st.coordinatorSessionId = null;
+
+        const coordinatorState = r.coordinatorMissing === true
+            ? 'missing'
+            : r.modal === true
+                ? 'waiting_approval'
+                : r.open === true
+                    ? 'working'
+                    : sessionId
+                        ? 'idle'
+                        : 'missing';
+        this.ports.onCursorUpdated?.(meshId, st.cursor, st.coordinatorSessionId, {
+            coordinatorState,
+            coordinatorMissing: r.coordinatorMissing === true || !sessionId,
+            ...(typeof r.statusLine === 'string' && r.statusLine ? { summary: r.statusLine } : {}),
+        });
+
         this.ports.relay.observeRemote(meshId, {
             open: r.open === true,
             modal: r.modal === true,

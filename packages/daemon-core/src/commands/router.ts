@@ -150,7 +150,7 @@ import {
     withMeshDirectDispatch,
     type TrustedOwnerIngressProof,
 } from './command-args.js';
-import { evaluateMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from './mesh-sender.js';
+import { evaluateMeshSender, markVerifiedMeshSender, meshSenderRefusalResult, MESH_SENDER_DAEMON_ID_ARG, readMeshSender, type MeshSenderGateDeps } from './mesh-sender.js';
 import { listMeshHostRecords, readMeshHostRecord, writeMeshHostRecord } from '../mesh/mesh-host-memory.js';
 import { unwrapMeshRelayResult } from './mesh-relay-result.js';
 import { resolveForwardedEventMeshId } from '../mesh/mesh-event-forwarding.js';
@@ -986,7 +986,7 @@ export class DaemonCommandRouter {
                 gateDeps.getLocalMesh = async (meshId) => await nativeLookup(meshId) ?? { id: policy.meshId, nodes: policy.roster!.map((node) => ({ id: node.nodeId, daemonId: node.daemonId })) };
             }
         }
-        const verdict = await evaluateMeshSender(spec.meshSender, args, gateDeps);
+        const verdict = await evaluateMeshSender(spec.meshSender, args, gateDeps, cmd);
         return verdict.ok ? null : meshSenderRefusalResult(cmd, verdict);
     }
 
@@ -1006,6 +1006,15 @@ export class DaemonCommandRouter {
             selfDaemonId: typeof this.deps.statusInstanceId === 'string' ? this.deps.statusInstanceId : undefined,
             // The LOCAL view only — never warmed from the command's own inlineMesh.
             getLocalMesh: async (meshId) => (await this.getMeshForCommand(meshId, undefined, { preferInline: true }))?.mesh ?? null,
+            // Disk-only meshes.json lookup for host-authoritative follower ACL evaluation.
+            getDiskMesh: async (meshId) => {
+                try {
+                    const { getMesh } = await import('../config/mesh-config.js');
+                    return getMesh(meshId) ?? null;
+                } catch {
+                    return null;
+                }
+            },
             listLocalMeshes: async () => {
                 this.syncInlineMeshPoliciesFromDisk();
                 const byId = new Map<string, any>();
@@ -1040,11 +1049,13 @@ export class DaemonCommandRouter {
     private async runSpec(spec: CommandSpec, args: Record<string, unknown>): Promise<CommandRouterResult> {
         if (spec.stripTransportMetadata) {
             const previousArgs = args;
+            const verifiedSender = readMeshSender(args);
             args = { ...args };
             delete args._interactionId;
             delete args[MESH_SENDER_DAEMON_ID_ARG];
             delete args[COMMAND_SOURCE_ARG];
             preserveTrustedOwnerIngress(previousArgs, args);
+            if (verifiedSender) markVerifiedMeshSender(args, verifiedSender);
         }
         switch (spec.family) {
             case 'low': {

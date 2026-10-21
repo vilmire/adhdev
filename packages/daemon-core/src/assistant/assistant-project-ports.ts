@@ -17,13 +17,13 @@ import type { MeshNodeFacts } from '@adhdev/mesh-shared';
  * `setAssistantRelayHooks`, they are no-ops and the views report `null`.
  */
 
-import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
 import type { AssistantCoordinatorView } from './coordinator-lifecycle.js';
 import { getAssistantServices } from './assistant-services.js';
 import {
-    callRemoteHost, describeRemoteHost,
+    callRemoteHost, describeFollowedRemoteHost, describeRemoteHost,
     type AssistantRemoteOp, type MeshTransportPort, type RemoteCallOutcome, type RemoteHostView,
 } from './assistant-remote-host.js';
 import { refreshMemberMeshDescriptors } from './member-meshes.js';
@@ -32,6 +32,7 @@ export interface AssistantRelayHooks {
     assistantSessionId?(): string | null;
     recordProjectRead?(result: Record<string, unknown>, caller: string): void;
     openThread?(meshId: string): void;
+    closeThread?(meshId: string, opts?: { suppressPending?: boolean }): void;
     isThreadOpen?(meshId: string): boolean;
     lastRelayAt?(meshId: string): number | null;
     /**
@@ -92,6 +93,16 @@ export interface AssistantProjectPorts {
     execute: Execute;
     /** Who hosts a mesh this daemon does not host, and whether it is reachable (remote relay, owner decision 2026-10-08). */
     remoteHost(mesh: LocalMeshEntry): RemoteHostView;
+    /** Durable followed remote project references from assistant.json (never injected into meshes.json). */
+    followedRemoteProjects?(): FollowedRemoteProjectEntry[];
+    /** Resolve remote host view + followerAccess claim for a followed remote project. */
+    followedRemoteHost?(entry: FollowedRemoteProjectEntry): RemoteHostView;
+    /** Update cached observation metadata on a followed remote project. */
+    updateFollowedRemoteObservation?(key: string, patch: Partial<FollowedRemoteProjectEntry>): void;
+    /** Mark a followed remote project as revoked by the host. */
+    markFollowedRemoteRevoked?(key: string): void;
+    /** Verify local durable owner-binding receipt for this assistant daemon. */
+    verifyOwnerBinding?(): { ok: true } | { ok: false; code: string; error: string };
     /**
      * Ask the hosts of member meshes known here only by id for their name /
      * repoIdentity (member-meshes.ts). Bounded; never throws. Optional (fakes).
@@ -212,6 +223,23 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         relay: relayHooks,
         execute: ctx.execute,
         remoteHost: (mesh) => describeRemoteHost(mesh, ctx.selfDaemonId, ctx.transport ?? {}, lazy.peerHostMeshIds),
+        followedRemoteProjects: () => lazy.assistantRegistry().listFollowedRemoteProjects(),
+        followedRemoteHost: (entry) => describeFollowedRemoteHost(
+            entry,
+            ctx.selfDaemonId,
+            lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId),
+            ctx.transport ?? {},
+        ),
+        updateFollowedRemoteObservation: (key, patch) => {
+            lazy.assistantRegistry().updateFollowedRemoteProject(key, patch);
+        },
+        markFollowedRemoteRevoked: (key) => {
+            lazy.assistantRegistry().updateFollowedRemoteProject(key, { state: 'revoked', revokedAt: Date.now() });
+        },
+        verifyOwnerBinding: () => {
+            const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);
+            return v.ok ? { ok: true } : { ok: false, code: v.code, error: v.error };
+        },
         refreshMemberMeshes: () => refreshMemberMeshDescriptors(svc.listMeshes(), ctx.transport ?? {}),
         callHost: (target, op, args) => callRemoteHost(ctx.transport ?? {}, target, op, args),
         coordinatorTurns: (sessionId, limit = 5) => {
@@ -251,6 +279,7 @@ interface MeshReaders {
     listCoordinatorsForMesh: typeof import('../mesh/coordinator-registry.js').listCoordinatorsForMesh;
     getMeshQueueStats: typeof import('../mesh/mesh-work-queue.js').getMeshQueueStats;
     getMeshMissions: typeof import('../mesh/mesh-missions.js').getMeshMissions;
+    assistantRegistry: () => import('./assistant-registry.js').AssistantRegistry;
     assistantAliases: () => Record<string, string>;
     turnStore: () => import('../mesh/turn-ledger/store.js').TurnStore;
     meshStatusLine: (meshId: string) => string | null;
@@ -274,14 +303,14 @@ export async function preloadAssistantProjectReaders(): Promise<void> {
         import('../mesh/mesh-notification-status-line.js'),
         import('../mesh/transport/mesh-peer-secrets.js'),
     ]);
-    const assistantRegistry = new registry.AssistantRegistry();
     readers = {
         hostedMeshes: hk.hostedMeshes,
         listLocalCoordinatorSessions: fwd.listLocalCoordinatorSessions,
         listCoordinatorsForMesh: reg.listCoordinatorsForMesh,
         getMeshQueueStats: queue.getMeshQueueStats,
         getMeshMissions: missions.getMeshMissions,
-        assistantAliases: () => assistantRegistry.reload()?.aliases ?? {},
+        assistantRegistry: () => registry.getAssistantRegistry(),
+        assistantAliases: () => registry.getAssistantRegistry().reload()?.aliases ?? {},
         turnStore: () => runtimeStore.MeshRuntimeStore.getInstance().turnStore(),
         meshStatusLine: (meshId) => statusLine.buildMeshStatusLineForNotification(meshId),
         peerHostMeshIds: (hostDaemonId) => {

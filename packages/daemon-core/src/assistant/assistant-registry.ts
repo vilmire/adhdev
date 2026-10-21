@@ -20,7 +20,16 @@
 
 import { existsSync, readFileSync, renameSync } from 'fs';
 import { join } from 'path';
-import type { SendPolicy } from '@adhdev/mesh-shared';
+import {
+    ASSISTANT_ACCOUNT_SLOT,
+    canonicalDaemonId,
+    followedRemoteProjectKey,
+    sanitizeRemoteRepoIdentity,
+    type AssistantOwnerBindingReceipt,
+    type FollowedRemoteProjectEntry,
+    type FollowedRemoteProjectState,
+    type SendPolicy,
+} from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { resolveMemoryBudgets, type MemoryBudgets } from './memory/memory-store.js';
@@ -94,6 +103,19 @@ export interface AssistantRegistryEntry {
      * note. A dead session's history is not readable for every CLI.
      */
     lastContext?: { sessionId: string; text: string; at: number };
+    /**
+     * Durable local owner-binding receipt for the single account-level
+     * `personal` assistant slot on this Mac. Outlives ordinary daemon restarts
+     * and session/provider replacements. Missing or mismatched receipt fails
+     * closed until explicit owner reconciliation.
+     */
+    ownerBinding?: AssistantOwnerBindingReceipt;
+    /**
+     * Assistant-local followed remote projects keyed by canonical
+     * `${hostDaemonId}::${meshId}`. Independent from `meshes.json` and member
+     * host records.
+     */
+    followedRemoteProjects?: Record<string, FollowedRemoteProjectEntry>;
 }
 
 export interface BindAssistantSessionInput {
@@ -114,6 +136,7 @@ export interface AssistantRegistryOptions {
 
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isPositiveSafeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 1;
 
 function normalizeAliases(raw: unknown): Record<string, string> {
     const out: Record<string, string> = {};
@@ -149,6 +172,79 @@ function normalizeBudget(raw: unknown): Partial<MemoryBudgets> | undefined {
     return Object.keys(out).length ? out : undefined;
 }
 
+export function normalizeAssistantOwnerBinding(raw: unknown): AssistantOwnerBindingReceipt | undefined {
+    const r = raw as Record<string, unknown> | null;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return undefined;
+    if (r.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return undefined;
+    const daemonId = isStr(r.daemonId) ? canonicalDaemonId(r.daemonId) : null;
+    if (!daemonId) return undefined;
+    if (!isPositiveSafeInt(r.bindingRevision)) return undefined;
+    if (!isStr(r.boundAt)) return undefined;
+    return {
+        accountSlot: ASSISTANT_ACCOUNT_SLOT,
+        daemonId,
+        bindingRevision: r.bindingRevision,
+        boundAt: r.boundAt.trim(),
+    };
+}
+
+function isFollowedState(v: unknown): v is FollowedRemoteProjectState {
+    return v === 'followed' || v === 'unfollowed' || v === 'revoked';
+}
+
+export function normalizeFollowedRemoteProjectEntry(raw: unknown): FollowedRemoteProjectEntry | null {
+    const r = raw as Record<string, unknown> | null;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+    const hostDaemonId = isStr(r.hostDaemonId) ? canonicalDaemonId(r.hostDaemonId) : null;
+    const meshId = isStr(r.meshId) ? r.meshId.trim() : '';
+    const name = isStr(r.name) ? r.name.trim() : '';
+    const slug = isStr(r.slug) ? r.slug.trim() : '';
+    if (!hostDaemonId || !meshId || !name || !slug) return null;
+    if (r.accountSlot !== undefined && r.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
+    if (!isPositiveSafeInt(r.bindingRevision) || !isPositiveSafeInt(r.grantRevision)) return null;
+    if (!isFollowedState(r.state)) return null;
+    const key = followedRemoteProjectKey(hostDaemonId, meshId);
+    const followedAt = isStr(r.followedAt) ? r.followedAt.trim() : new Date(0).toISOString();
+    const updatedAt = isStr(r.updatedAt) ? r.updatedAt.trim() : followedAt;
+    const lastObservedRaw = r.lastObserved as Record<string, unknown> | null | undefined;
+    const lastObserved = lastObservedRaw && typeof lastObservedRaw === 'object' && isStr(lastObservedRaw.observedAt)
+        ? {
+            observedAt: lastObservedRaw.observedAt.trim(),
+            ...(isStr(lastObservedRaw.coordinatorState) ? { coordinatorState: lastObservedRaw.coordinatorState.trim() } : {}),
+            ...(typeof lastObservedRaw.coordinatorMissing === 'boolean' ? { coordinatorMissing: lastObservedRaw.coordinatorMissing } : {}),
+            ...(isStr(lastObservedRaw.summary) ? { summary: lastObservedRaw.summary.trim().slice(0, 500) } : {}),
+        }
+        : undefined;
+    return {
+        key,
+        hostDaemonId,
+        ...(isStr(r.hostLabel) ? { hostLabel: r.hostLabel.trim() } : {}),
+        meshId,
+        name,
+        slug,
+        sanitizedRepoIdentity: isStr(r.sanitizedRepoIdentity) ? sanitizeRemoteRepoIdentity(r.sanitizedRepoIdentity) : null,
+        accountSlot: ASSISTANT_ACCOUNT_SLOT,
+        bindingRevision: r.bindingRevision,
+        grantRevision: r.grantRevision,
+        state: r.state,
+        followedAt,
+        updatedAt,
+        ...(r.lastCursor === null || isStr(r.lastCursor) ? { lastCursor: r.lastCursor } : {}),
+        ...(r.coordinatorSessionId === null || isStr(r.coordinatorSessionId) ? { coordinatorSessionId: r.coordinatorSessionId } : {}),
+        ...(lastObserved ? { lastObserved } : {}),
+    };
+}
+
+function normalizeFollowedRemoteProjects(raw: unknown): Record<string, FollowedRemoteProjectEntry> | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const out: Record<string, FollowedRemoteProjectEntry> = {};
+    for (const value of Object.values(raw as Record<string, unknown>)) {
+        const entry = normalizeFollowedRemoteProjectEntry(value);
+        if (entry) out[entry.key] = entry;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Validate a parsed file. Returns null when the minimum fields are missing. */
 export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistryEntry | null {
     const r = raw as Record<string, unknown> | null;
@@ -157,6 +253,8 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
     const mode = BUSY_INPUT_MODES.includes(r.busyInputMode as BusyInputMode) ? r.busyInputMode as BusyInputMode : DEFAULT_BUSY_INPUT_MODE;
     const budget = normalizeBudget(r.memoryBudget);
     const reviewAts = normalizeReviewAts(r.reviewAts);
+    const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
+    const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
     return {
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
@@ -175,6 +273,8 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
         ...(r.digestHour === null ? { digestHour: null } : isDigestHour(r.digestHour) ? { digestHour: r.digestHour } : {}),
         ...(isNum(r.lastDigestAt) ? { lastDigestAt: r.lastDigestAt } : {}),
         ...(normalizeContext(r.lastContext) ? { lastContext: normalizeContext(r.lastContext)! } : {}),
+        ...(ownerBinding ? { ownerBinding } : {}),
+        ...(followedRemoteProjects ? { followedRemoteProjects } : {}),
     };
 }
 
@@ -218,7 +318,19 @@ export class AssistantRegistry {
     read(): AssistantRegistryEntry | null {
         if (this.cache !== undefined) {
             if (!this.cache) return null;
-            return { ...this.cache, aliases: { ...this.cache.aliases }, ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}) };
+            return {
+                ...this.cache,
+                aliases: { ...this.cache.aliases },
+                ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}),
+                ...(this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {}),
+                ...(this.cache.followedRemoteProjects
+                    ? {
+                        followedRemoteProjects: Object.fromEntries(
+                            Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }]),
+                        ),
+                    }
+                    : {}),
+            };
         }
         this.cache = this.load();
         return this.read();
@@ -245,10 +357,11 @@ export class AssistantRegistry {
         const prev = this.read();
         const preLaunchBudget = prev ? undefined : this.loadMemoryBudget();
         const sameSession = !!prev && prev.sessionId === input.sessionId;
+        const at = isNum(input.at) ? input.at : Date.now();
         const next: AssistantRegistryEntry = {
             ...(prev ?? {
                 aliases: {},
-                createdAt: input.at,
+                createdAt: at,
                 firstRelayAt: null,
                 busyInputMode: DEFAULT_BUSY_INPUT_MODE,
                 reviewTurn: true,
@@ -261,7 +374,7 @@ export class AssistantRegistry {
             cliType: input.cliType,
             workspace: input.workspace,
         };
-        if (!sameSession) next.lastTurnState = { state: 'idle', at: input.at, sessionId: input.sessionId };
+        if (!sameSession) next.lastTurnState = { state: 'idle', at, sessionId: input.sessionId };
         if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
         else delete next.mcpConfigPath;
         const entry = this.write(next);
@@ -362,6 +475,186 @@ export class AssistantRegistry {
         return cleared;
     }
 
+    /**
+     * Durable local owner-binding receipt for the account-level `personal`
+     * assistant slot on this Mac. Returns null when missing or corrupt.
+     */
+    ownerBinding(): AssistantOwnerBindingReceipt | null {
+        return this.read()?.ownerBinding ?? null;
+    }
+
+    /**
+     * Verify that the local durable owner-binding receipt exists and matches
+     * this daemon's canonical identity. Never auto-creates a missing receipt:
+     * missing or mismatched receipts fail closed until explicit owner
+     * reconciliation.
+     */
+
+    verifyLocalOwnerBinding(
+        selfDaemonId: string,
+    ):
+        | { ok: true; receipt: AssistantOwnerBindingReceipt; binding: AssistantOwnerBindingReceipt }
+        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch'; error: string } {
+        const canonicalSelf = canonicalDaemonId(selfDaemonId);
+        if (!canonicalSelf) {
+            return {
+                ok: false,
+                code: 'local_owner_binding_missing',
+                error: 'Local daemon identity is not available to verify assistant owner binding.',
+            };
+        }
+        const binding = this.ownerBinding();
+        if (!binding) {
+            return {
+                ok: false,
+                code: 'local_owner_binding_missing',
+                error: 'Local assistant owner binding receipt is missing or corrupt; explicit owner reconciliation is required.',
+            };
+        }
+        if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || binding.daemonId !== canonicalSelf) {
+            return {
+                ok: false,
+                code: 'local_owner_binding_mismatch',
+                error: `Local assistant owner binding receipt is bound to ${binding.daemonId}, not this daemon (${canonicalSelf}); explicit owner reconciliation is required.`,
+            };
+        }
+        return { ok: true, receipt: binding, binding };
+    }
+
+    /**
+     * Explicit owner reconciliation of the local `personal` assistant slot
+     * binding on this Mac. Preserves the existing `bindingRevision` when already
+     * bound to this daemon unless `opts.bumpRevision` / `opts.forceNewRevision`
+     * is true or the bound daemonId changed.
+     */
+    reconcileOwnerBinding(
+        selfDaemonId: string,
+        opts?: { bumpRevision?: boolean; forceNewRevision?: boolean; now?: string },
+    ): AssistantOwnerBindingReceipt {
+        const canonicalSelf = canonicalDaemonId(selfDaemonId);
+        if (!canonicalSelf) {
+            throw new Error(`Invalid selfDaemonId for assistant owner binding: ${String(selfDaemonId)}`);
+        }
+        const nowIso = opts?.now ?? new Date().toISOString();
+        const base = this.ensureBaseEntry(Date.now());
+        const existing = base.ownerBinding;
+        const bump = opts?.bumpRevision === true || opts?.forceNewRevision === true;
+        if (
+            existing
+            && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT
+            && existing.daemonId === canonicalSelf
+            && !bump
+        ) {
+            return existing;
+        }
+        const nextRevision = (existing?.bindingRevision ?? 0) + 1;
+        const receipt: AssistantOwnerBindingReceipt = {
+            accountSlot: ASSISTANT_ACCOUNT_SLOT,
+            daemonId: canonicalSelf,
+            bindingRevision: nextRevision,
+            boundAt: nowIso,
+        };
+        this.write({ ...base, ownerBinding: receipt });
+        return { ...receipt };
+    }
+
+    listFollowedRemoteProjects(): FollowedRemoteProjectEntry[] {
+        const map = this.read()?.followedRemoteProjects;
+        if (!map) return [];
+        return Object.values(map).sort((a, b) => a.key.localeCompare(b.key));
+    }
+
+    getFollowedRemoteProject(key: string): FollowedRemoteProjectEntry | null {
+        const map = this.read()?.followedRemoteProjects;
+        if (!map) return null;
+        return map[key] ? { ...map[key] } : null;
+    }
+
+    upsertFollowedRemoteProject(
+        input: Omit<FollowedRemoteProjectEntry, 'key' | 'accountSlot' | 'followedAt' | 'updatedAt'> &
+            Partial<Pick<FollowedRemoteProjectEntry, 'key' | 'accountSlot' | 'followedAt' | 'updatedAt'>>,
+    ): FollowedRemoteProjectEntry {
+        const canonicalHost = canonicalDaemonId(input.hostDaemonId) ?? input.hostDaemonId;
+        const key = input.key || followedRemoteProjectKey(canonicalHost, input.meshId);
+        const existing = this.read()?.followedRemoteProjects?.[key];
+        const nowIso = new Date().toISOString();
+        const normalized = normalizeFollowedRemoteProjectEntry({
+            ...existing,
+            ...input,
+            key,
+            hostDaemonId: canonicalHost,
+            accountSlot: ASSISTANT_ACCOUNT_SLOT,
+            followedAt: input.followedAt ?? existing?.followedAt ?? nowIso,
+            updatedAt: input.updatedAt ?? nowIso,
+        });
+        if (!normalized) {
+            throw new Error('Invalid followed remote project entry');
+        }
+        const base = this.ensureBaseEntry(Date.now());
+        const nextMap: Record<string, FollowedRemoteProjectEntry> = {
+            ...(base.followedRemoteProjects ?? {}),
+            [normalized.key]: normalized,
+        };
+        this.write({ ...base, followedRemoteProjects: nextMap });
+        return { ...normalized };
+    }
+
+    updateFollowedRemoteProject(
+        key: string,
+        patch: Partial<FollowedRemoteProjectEntry>,
+    ): FollowedRemoteProjectEntry | null {
+        const base = this.read();
+        const existing = base?.followedRemoteProjects?.[key];
+        if (!base || !existing) return null;
+        const merged = normalizeFollowedRemoteProjectEntry({
+            ...existing,
+            ...patch,
+            key: existing.key,
+            hostDaemonId: existing.hostDaemonId,
+            meshId: existing.meshId,
+            updatedAt: patch.updatedAt ?? new Date().toISOString(),
+        });
+        if (!merged) return null;
+        const nextMap: Record<string, FollowedRemoteProjectEntry> = {
+            ...(base.followedRemoteProjects ?? {}),
+            [key]: merged,
+        };
+        this.write({ ...base, followedRemoteProjects: nextMap });
+        return { ...merged };
+    }
+
+    removeFollowedRemoteProject(key: string): boolean {
+        const base = this.read();
+        if (!base?.followedRemoteProjects?.[key]) return false;
+        const nextMap = { ...base.followedRemoteProjects };
+        delete nextMap[key];
+        const next: AssistantRegistryEntry = { ...base };
+        if (Object.keys(nextMap).length > 0) next.followedRemoteProjects = nextMap;
+        else delete next.followedRemoteProjects;
+        this.write(next);
+        return true;
+    }
+
+    private ensureBaseEntry(at: number): AssistantRegistryEntry {
+        const prev = this.read();
+        if (prev) return prev;
+        const preLaunchBudget = this.loadMemoryBudget();
+        return {
+            sessionId: null,
+            cliType: 'codex',
+            workspace: join(this.path, '..'),
+            aliases: {},
+            createdAt: at,
+            firstRelayAt: null,
+            busyInputMode: DEFAULT_BUSY_INPUT_MODE,
+            reviewTurn: true,
+            executionEnabled: true,
+            executionRevision: 0,
+            lastTurnState: null,
+            ...(preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}),
+        };
+    }
+
     private load(): AssistantRegistryEntry | null {
         if (!existsSync(this.path)) return null;
         try {
@@ -405,6 +698,7 @@ export class AssistantRegistry {
 }
 
 let sharedRegistry: AssistantRegistry | null = null;
+let sharedRegistryOverridden = false;
 
 /**
  * The daemon's one registry instance (boot wiring, `launch_assistant`,
@@ -412,13 +706,17 @@ let sharedRegistry: AssistantRegistry | null = null;
  * the same process. Built lazily from the config dir.
  */
 export function getAssistantRegistry(): AssistantRegistry {
-    if (!sharedRegistry) sharedRegistry = new AssistantRegistry();
+    const expectedPath = join(getConfigDir(), ASSISTANT_REGISTRY_FILE);
+    if (!sharedRegistry || (!sharedRegistryOverridden && sharedRegistry.path !== expectedPath)) {
+        sharedRegistry = new AssistantRegistry();
+    }
     return sharedRegistry;
 }
 
 /** Tests: install a registry (null → rebuild lazily from the config dir). */
 export function setAssistantRegistryForTests(registry: AssistantRegistry | null): void {
     sharedRegistry = registry;
+    sharedRegistryOverridden = registry !== null;
 }
 
 /**

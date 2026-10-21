@@ -35,7 +35,7 @@ import { randomUUID } from 'crypto';
 import { existsSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
-import { ASSISTANT_VERB, daemonIdsEquivalent, canonicalDaemonId } from '@adhdev/mesh-shared';
+import { ASSISTANT_VERB, daemonIdsEquivalent, canonicalDaemonId, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
 import { defineCommandSpecs } from '../command-registry.js';
 import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
 import type { CommandRouterResult } from '../router.js';
@@ -86,25 +86,112 @@ function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: a
     };
 }
 
+type ProjectCandidate = LocalMeshEntry & {
+    hostDaemonId?: string;
+    canonicalKey?: string;
+    _followedRemote?: FollowedRemoteProjectEntry;
+};
+
+function followedCandidate(entry: FollowedRemoteProjectEntry): ProjectCandidate {
+    return {
+        id: entry.meshId,
+        name: entry.name,
+        repoIdentity: entry.sanitizedRepoIdentity,
+        nodes: [],
+        hostDaemonId: entry.hostDaemonId,
+        canonicalKey: entry.key,
+        _followedRemote: entry,
+    } as unknown as ProjectCandidate;
+}
+
 /** `remote` is null when this daemon hosts the mesh. */
-type Resolved = { ok: true; mesh: LocalMeshEntry; slug: string; remote: RemoteHostView | null } | { ok: false; result: CommandRouterResult };
+type Resolved =
+    | { ok: true; mesh: LocalMeshEntry; slug: string; remote: RemoteHostView | null; followedRemote?: FollowedRemoteProjectEntry }
+    | { ok: false; result: CommandRouterResult };
 
 /**
  * Resolve a project ref over the inventory, which includes the meshes this
- * daemon is a member of (member-meshes.ts) — named once their host answered.
+ * daemon is a member of (member-meshes.ts) plus checkout-less followed remote
+ * projects from `assistant.json` (never injected into `meshes.json`).
+ *
+ * Canonical `hostDaemonId::meshId` keys prevent name/host collisions and silent
+ * rebind across hosts. Unfollowed or revoked remote projects fail closed and
+ * can never be reopened by a `project_send` or other verb.
  */
 async function resolveProject(ports: AssistantProjectPorts, ref: unknown): Promise<Resolved> {
     await ports.refreshMemberMeshes?.();
-    const r = resolveAssistantProject(ref, ports.listMeshes(), ports.aliases());
+    const localMeshes = ports.listMeshes();
+    const followedList = (ports.followedRemoteProjects?.() ?? []).filter((e) =>
+        !localMeshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent(ports.remoteHost(m).hostDaemonId, e.hostDaemonId))),
+    );
+    const candidates: ProjectCandidate[] = [
+        ...localMeshes,
+        ...followedList.map(followedCandidate),
+    ];
+    const r = resolveAssistantProject(ref, candidates, ports.aliases());
     if (!r.ok) {
         const detail = r.code === 'project_not_found' ? { projects: r.projects } : { candidates: r.candidates };
         return { ok: false, result: fail(r.code, r.code, detail) };
+    }
+    const entry = r.mesh._followedRemote;
+    if (entry) {
+        if (entry.state === 'unfollowed') {
+            return {
+                ok: false,
+                result: fail(
+                    'remote_project_unfollowed',
+                    'Remote project is not currently followed. Follow it again from the dashboard before accessing or sending.',
+                    { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId },
+                ),
+            };
+        }
+        if (entry.state === 'revoked') {
+            return {
+                ok: false,
+                result: fail(
+                    'host_revoked',
+                    'Remote host access for this project has been revoked.',
+                    { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId },
+                ),
+            };
+        }
+        const verify = ports.verifyOwnerBinding?.();
+        if (verify && !verify.ok) {
+            return {
+                ok: false,
+                result: fail(verify.code, verify.error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }),
+            };
+        }
+        const remote: RemoteHostView = ports.followedRemoteHost
+            ? ports.followedRemoteHost(entry)
+            : {
+                label: entry.hostLabel || entry.hostDaemonId,
+                hostDaemonId: entry.hostDaemonId,
+                hostMeshId: entry.meshId,
+                reachable: true,
+                followerAccess: {
+                    accountSlot: entry.accountSlot,
+                    bindingRevision: entry.bindingRevision,
+                    grantRevision: entry.grantRevision,
+                },
+            };
+        return { ok: true, mesh: r.mesh, slug: r.slug, remote, followedRemote: entry };
     }
     return { ok: true, mesh: r.mesh, slug: r.slug, remote: ports.isHostedHere(r.mesh) ? null : ports.remoteHost(r.mesh) };
 }
 
 /** `project_unreachable{reason, host}`, or the host's own refusal, for a remote call that did not succeed. */
-export function remoteFailure(where: { project: string; meshId: string }, remote: RemoteHostView, out: Exclude<RemoteCallOutcome, { ok: true }>): CommandRouterResult {
+export function remoteFailure(
+    where: { project: string; meshId: string },
+    remote: RemoteHostView,
+    out: Exclude<RemoteCallOutcome, { ok: true }>,
+    ports?: AssistantProjectPorts,
+    followedRemote?: FollowedRemoteProjectEntry,
+): CommandRouterResult {
+    if (followedRemote && out.kind === 'refused' && (out.code === 'host_revoked' || out.code === 'remote_access_denied')) {
+        ports?.markFollowedRemoteRevoked?.(followedRemote.key);
+        ports?.relay.closeThread?.(where.meshId, { suppressPending: true });
+    }
     if (out.kind === 'unreachable') {
         return fail('project_unreachable', out.error, { ...where, host: remote.label, reason: out.reason });
     }
@@ -113,6 +200,10 @@ export function remoteFailure(where: { project: string; meshId: string }, remote
 
 /** Call the host of a remote-hosted project; an unreachable host is refused before any call. */
 async function callRemote(ports: AssistantProjectPorts, p: { slug: string; mesh: LocalMeshEntry; remote: RemoteHostView }, op: Parameters<AssistantProjectPorts['callHost']>[1], args: Record<string, unknown>): Promise<RemoteCallOutcome> {
+    if (p.remote.followerAccess?.localBindingError) {
+        const { code, error } = p.remote.followerAccess.localBindingError;
+        return { ok: false, kind: 'refused', code, error, result: { success: false, code, error } };
+    }
     if (!p.remote.reachable) {
         return { ok: false, kind: 'unreachable', code: 'project_unreachable', reason: p.remote.reason ?? 'relay_failed', error: `${p.slug} is hosted on ${p.remote.label}, which cannot be reached now (${p.remote.reason ?? 'relay_failed'})` };
     }
@@ -211,7 +302,14 @@ const environment = assistantVerb(ASSISTANT_VERB.environment, async (ports) => {
 const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
     await ports.refreshMemberMeshes?.();
     const meshes = ports.listMeshes();
-    const slugs = projectSlugs(meshes);
+    const followedActive = (ports.followedRemoteProjects?.() ?? []).filter((e) =>
+        e.state === 'followed' && !meshes.some((m) => m.id === e.meshId && (ports.isHostedHere(m) || daemonIdsEquivalent(ports.remoteHost(m).hostDaemonId, e.hostDaemonId))),
+    );
+    const allCandidates: ProjectCandidate[] = [
+        ...meshes,
+        ...followedActive.map(followedCandidate),
+    ];
+    const slugs = projectSlugs(allCandidates);
     const managed: ProjectRow[] = [];
     const unmanaged: ProjectRow[] = [];
     const remoteHosts: RemoteHostMachine[] = [];
@@ -220,6 +318,28 @@ const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
         // A remote mesh whose host has not told us its repo yet is still a project.
         const scratch = row.hosting === 'remote' && !str(mesh.repoIdentity) ? false : isUnmanagedRepoIdentity(mesh.repoIdentity);
         (scratch ? unmanaged : managed).push(row);
+    }
+    for (const entry of followedActive) {
+        const remote: RemoteHostView = ports.followedRemoteHost
+            ? ports.followedRemoteHost(entry)
+            : { label: entry.hostLabel || entry.hostDaemonId, hostDaemonId: entry.hostDaemonId, hostMeshId: entry.meshId, reachable: true };
+        remoteHosts.push({ daemonId: entry.hostDaemonId, label: remote.label });
+        managed.push({
+            slug: slugs.get(entry.key) ?? slugs.get(entry.meshId) ?? entry.slug,
+            meshId: entry.meshId,
+            name: entry.name,
+            repo: entry.sanitizedRepoIdentity ?? '',
+            hosting: 'remote_followed',
+            host: remote.label,
+            hostLabel: remote.label,
+            hostDaemonId: entry.hostDaemonId,
+            canonicalKey: entry.key,
+            grantRevision: entry.grantRevision,
+            bindingRevision: entry.bindingRevision,
+            reachability: remote.reachable ? 'relay' : 'unreachable',
+            ...(remote.reachable ? {} : { unreachableReason: remote.reason ?? 'relay_failed' }),
+            threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(entry.meshId) : null,
+        });
     }
     return { success: true, projects: managed, unmanaged, machines: machinesSummary(meshes, ports.selfDaemonId(), undefined, remoteHosts) };
 });
@@ -267,14 +387,45 @@ const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, 
     const meshId = p.mesh.id;
     if (!p.remote) return wrap(p.slug, meshId, { ...(await localProjectStatus(ports, p.mesh)), host: 'this machine' });
     const out = await callRemote(ports, { ...p, remote: p.remote }, 'status', {});
-    if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
+    if (!out.ok) {
+        if (p.followedRemote && out.kind === 'unreachable' && p.followedRemote.lastObserved) {
+            const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
+            return wrap(p.slug, meshId, {
+                name: p.mesh.name,
+                repo: p.mesh.repoIdentity,
+                host: p.remote.label,
+                hostDaemonId: p.followedRemote.hostDaemonId,
+                via: 'cached_observation',
+                reachability: 'unreachable',
+                unreachableReason: out.reason,
+                observationOnly: true,
+                lastObserved: p.followedRemote.lastObserved,
+                coordinator: p.followedRemote.lastObserved.coordinatorState ?? 'unknown',
+                threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
+                lastRelayAt: lastRelayAt ? new Date(lastRelayAt).toISOString() : null,
+            });
+        }
+        return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
+    }
+    const body = remoteBody(out);
+    if (p.followedRemote) {
+        const coordState = str(body.coordinator) || 'none';
+        ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
+            lastObserved: {
+                observedAt: new Date().toISOString(),
+                coordinatorState: coordState,
+                coordinatorMissing: coordState === 'none',
+            },
+        });
+    }
     // The thread and relay times live HERE (this daemon's assistant), not on the host.
     const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
     return wrap(p.slug, meshId, {
-        ...remoteBody(out),
+        ...body,
         name: p.mesh.name,
         repo: p.mesh.repoIdentity,
         host: p.remote.label,
+        ...(p.followedRemote ? { hostDaemonId: p.followedRemote.hostDaemonId, hosting: 'remote_followed' } : {}),
         via: 'relay',
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
         lastRelayAt: lastRelayAt ? new Date(lastRelayAt).toISOString() : null,
@@ -303,9 +454,10 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
     const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
 
     if (p.remote) {
-        // The host runs the same local path (ensure coordinator → send_chat) under its own mesh id.
+        // The host runs the same local path (ensure coordinator → send_chat) under its own mesh id,
+        // or followerProjectSend (existing live coordinator only) for followed remote projects.
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'send', { text: composed.text, clientId });
-        if (!out.ok) return remoteFailure(where, p.remote, out);
+        if (!out.ok) return remoteFailure(where, p.remote, out, ports, p.followedRemote);
         const body = remoteBody(out);
         ports.relay.openThread?.(meshId);
         ports.relay.remoteSent?.(meshId, str(body.cursor) || null);
@@ -404,7 +556,7 @@ const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args
     if (typeof continuation === 'string') return fail('invalid_args', continuation);
     if (p.remote) {
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'read', { tail, ...(continuation ?? {}) });
-        if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out);
+        if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
         acknowledge(remoteBody(out));
         return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: 'relay' });
     }
