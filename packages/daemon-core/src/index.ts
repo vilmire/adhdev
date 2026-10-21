@@ -18,6 +18,12 @@ export type {
   ProviderInfo,
   AgentEntry,
 } from './types.js';
+export type {
+  ArtifactErrorCode,
+  ArtifactKind,
+  ArtifactRecord,
+  ChatAttachmentMeta,
+} from './artifacts/types.js';
 
 // ── Shared Types (cross-package) ──
 export type {
@@ -413,7 +419,7 @@ export {
   WORKER_MCP_DAEMON_VERBS,
   isWorkerMcpDaemonVerb,
 } from './standalone-mcp-auth.js';
-export { isLiveWorkerMcpCredential } from './standalone-mcp-auth-verify.js';
+export { isLiveWorkerMcpCredential, matchesLiveArtifactWorkerCredential } from './standalone-mcp-auth-verify.js';
 
 // ── Chat History ──
 export { readChatHistory } from './config/chat-history.js';
@@ -1007,11 +1013,17 @@ export {
   readTrustedOwnerIngressProof,
   preserveTrustedOwnerTransportProof,
   isTrustedOwnerIngress,
+  hasRevokedTrustedOwnerIngress,
+  stampRouterCommandIngress,
+  readRouterCommandIngress,
+  applyRouterCommandIngressProvenance,
 } from './commands/command-args.js';
 export type {
   TrustedOwnerIngressProof,
   TrustedOwnerIngressProofInput,
+  RouterCommandIngressMetadata,
 } from './commands/command-args.js';
+export { attachAuthenticatedMcpCommand, preserveAuthenticatedMcpCommand } from './commands/mcp-command-ingress.js';
 // Assistant input attribution for PTY input that skips the router (cloud P2P
 // `pty_input` frame): the host reports the transport's own source.
 export { reportSessionTerminalInput } from './assistant/assistant-human-input.js';

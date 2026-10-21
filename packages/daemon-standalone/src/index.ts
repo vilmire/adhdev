@@ -744,7 +744,7 @@ class StandaloneServer {
       attachTrustedOwnerIngressProof(args as Record<string, unknown>, ownerProof);
     }
     return this.host.execute(type, args, source, {
-      ownerVerified: isOwner,
+      ownerVerified: isOwner ? true : opts?.ownerVerified,
       ownerProof,
       verifyCurrentOwner: opts?.verifyCurrentOwner,
     });

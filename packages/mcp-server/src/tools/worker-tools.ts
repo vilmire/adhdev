@@ -27,6 +27,7 @@
  */
 
 import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, callDriverTool, type DriverTool } from './driver-tools.js';
+import { ARTIFACT_REGISTER_TOOL, callWorkerArtifactRegister } from './artifact-tools.js';
 import {
   WORKER_BRANCH_STATES,
   WORKER_REPORT_OUTCOMES,
@@ -55,7 +56,7 @@ import { WORKER_OUTBOX_MAX_AGE_MS, type WorkerDeliveryKind, type WorkerReportDel
  * trusted. Here the value is meaningless unless the daemon minted it, so a
  * forged one resolves to nothing.
  */
-interface WorkerCredentials {
+export interface WorkerCredentials {
   bind?: string;
   token?: string;
 }
@@ -200,7 +201,7 @@ export const PEER_CONTEXT_PULL_TOOL = {
  * (see tool-annotations.ts). `annotateAll` throws for an unclassified tool, so a
  * new worker tool cannot be added here without stating what it does.
  */
-export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL]);
+export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL]);
 
 /** Shape of a tool definition as worker mode publishes it. */
 interface WorkerModeTool {
@@ -583,3 +584,19 @@ export async function workerDriverTool(transport: CommandTransport, credentials:
   tool: DriverTool, args: Record<string, unknown>): Promise<WorkerToolResult> {
   return callDriverTool(transport, tool, args, credentials);
 }
+
+/** Register a workspace artifact under this worker's launch credentials (sends `transport.command('artifact_register', ...)`). */
+export async function workerArtifactRegister(
+  transport: CommandTransport,
+  credentials: WorkerCredentials,
+  args: Record<string, unknown>,
+): Promise<WorkerToolResult> {
+  const text = await callWorkerArtifactRegister(transport, credentials, args);
+  let isError = false;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.success === false) isError = true;
+  } catch { /* ignore */ }
+  return { text, ...(isError ? { isError: true } : {}) };
+}
+

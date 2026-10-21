@@ -190,6 +190,41 @@ export function migrate(self: MeshRuntimeStore): void {
     // Worker session binds, hash-keyed, so a session-host-restored worker can
     // still report after a daemon restart (additive, idempotent).
     ensureWorkerSessionBindSchema(self.db);
+    // Session artifacts metadata table (local/P2P only; never projected to cloud status).
+    ensureSessionArtifactsSchema(self.db);
+}
+
+/**
+ * Session artifacts metadata table (Artifact Viewer Task A):
+ * Stores metadata and bounded 600-char text previews per (session_id, rel_path).
+ * Raw file bytes are never stored here and never projected to cloud status paths.
+ * Read/written by artifacts/artifact-store.ts via an injected DB handle so mesh/
+ * and artifacts/ share zero value imports.
+ */
+export function ensureSessionArtifactsSchema(db: MeshRuntimeStore['db']): void {
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS session_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            task_id TEXT,
+            workspace_root TEXT NOT NULL,
+            rel_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            title TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            preview_text TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_session_artifacts_unique_path
+            ON session_artifacts(session_id, rel_path);
+
+        CREATE INDEX IF NOT EXISTS idx_session_artifacts_session
+            ON session_artifacts(session_id, created_at);
+    `);
 }
 
 /**

@@ -11,6 +11,7 @@ import { getRecentLogs, getCurrentDaemonLogPath } from '../../logging/logger.js'
 import { getRecentDebugTrace } from '../../logging/debug-trace.js';
 import { getRecentCommands } from '../../logging/command-log.js';
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
+import { isTrustedOwnerIngress } from '../command-args.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
 export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
@@ -69,6 +70,13 @@ export const diagnosticsHandlers: Record<string, LowFamilyHandler> = {
      * original "never relayed by the server" property.
      */
     get_command_history: async (_ctx: LowFamilyContext, args: any) => {
+        if (!isTrustedOwnerIngress(args, 'p2p')) {
+            return {
+                success: false,
+                code: 'COMMAND_SOURCE_REJECTED',
+                error: "Command 'get_command_history' requires verified owner ingress",
+            };
+        }
         const count = parseInt(args?.count) || 50;
         return { success: true, history: getRecentCommands(count) };
     },

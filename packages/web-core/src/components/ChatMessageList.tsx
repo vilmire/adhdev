@@ -50,6 +50,8 @@ import {
 import { resolveChatRow, type ChatRowModel } from './ChatMessageList/chat-row-model';
 import { useChatRowExpansion, type FetchToolBlock } from './ChatMessageList/chat-row-expansion';
 import { mergeChatAndActivityMessages, collapseAdjacentDuplicateChatMessages } from './dashboard/chat-activity-visibility';
+import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonContext';
+import { resolveArtifactSessionTarget, type FetchArtifactCommandFn } from '../hooks/useArtifactRead';
 
 // ─── Types ────────────────────────────────────
 
@@ -84,6 +86,14 @@ export interface ChatMessageListProps {
     isWorking?: boolean;
     /** Manage expand status with this key prefix */
     contextKey?: string;
+    /** Explicit owning daemon route id for session-scoped artifact fetches (falls back to resolving from contextKey). */
+    daemonId?: string;
+    /** Explicit owning session id for session-scoped artifact fetches (falls back to resolving from contextKey). */
+    sessionId?: string;
+    /** Optional coordinator routing hint for mesh-delegated sessions. */
+    meshCoordinatorDaemonId?: string;
+    /** Optional custom artifact_fetch command dispatcher. */
+    fetchArtifact?: FetchArtifactCommandFn;
     /** Forward received timestamp map from external (messageId → timestamp) */
     receivedAtMap?: Record<string, number>;
     /** Daemon-provided hash for the current last message; avoids re-hashing large idle transcripts. */
@@ -147,10 +157,32 @@ export interface ChatMessageListRef {
 // ─── Component ────────────────────────────────
 
 const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(function ChatMessageList(
-    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock, onChooseReply },
+    { messages, actionLogs, agentName = 'Agent', userName, isCliMode = false, isWorking = false, contextKey = '', daemonId, sessionId, meshCoordinatorDaemonId, fetchArtifact, receivedAtMap = {}, lastMessageHash, showActivityMessages = false, emptyState, onLoadMore, isLoadingMore, hasMoreHistory, hiddenLiveCount = 0, loadError, scrollToBottomRequestNonce, isVisible = true, onSendNow, isSendingNow, onCancelQueued, fetchToolBlock, onChooseReply },
     ref
 ) {
     const { t } = useTranslation('common');
+    const { ides: contextIdes } = useBaseDaemons();
+    const { getIdes } = useBaseDaemonActions();
+    const hasArtifactMessages = useMemo(
+        () => messages.some((m) => m.kind === 'artifact' || m.attachment != null),
+        [messages],
+    );
+    const resolvedArtifactTarget = hasArtifactMessages
+        ? resolveArtifactSessionTarget({
+            daemonId,
+            sessionId,
+            meshCoordinatorDaemonId,
+            contextKey,
+            ides: contextIdes.length > 0 ? contextIdes : getIdes(),
+        })
+        : null;
+    const artifactTargetSignature = hasArtifactMessages
+        ? JSON.stringify([
+            resolvedArtifactTarget?.daemonId ?? '',
+            resolvedArtifactTarget?.sessionId ?? '',
+            resolvedArtifactTarget?.meshCoordinatorDaemonId ?? '',
+        ])
+        : '';
     const containerRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const endRef = useRef<HTMLDivElement>(null);
@@ -639,6 +671,9 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
                 const m = item.data as ChatMessage;
                 const row = item.row;
+                const effectiveRow = row.kind === 'artifact' && artifactTargetSignature
+                    ? { ...row, signature: `${row.signature}::${artifactTargetSignature}` }
+                    : row;
                 const messageKey = item.stableKey;
                 // (TOOL-EXPAND) Expansion is keyed by the tool BLOCK when the row
                 // has one: on the replica lane the React key can fall back to a
@@ -649,11 +684,16 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
                     <ChatMessageRow
                         key={`msg-${messageKey}`}
                         message={m}
-                        row={row}
+                        row={effectiveRow}
                         receivedAt={row.timestamp ?? undefined}
                         agentName={agentName}
                         userName={userName}
                         isCliMode={isCliMode}
+                        contextKey={contextKey}
+                        daemonId={daemonId}
+                        sessionId={sessionId}
+                        meshCoordinatorDaemonId={meshCoordinatorDaemonId}
+                        fetchArtifact={fetchArtifact}
                         onSendNow={onSendNow}
                         isSendingNow={isSendingNow}
                         onCancelQueued={onCancelQueued}
@@ -720,6 +760,7 @@ const ChatMessageList = forwardRef<ChatMessageListRef, ChatMessageListProps>(fun
 
 const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     prev.messages === next.messages
+    && !((!next.daemonId || !next.sessionId) && Boolean(next.contextKey) && next.messages.some((m) => m.kind === 'artifact' || m.attachment != null))
     && prev.actionLogs === next.actionLogs
     && prev.agentName === next.agentName
     && prev.userName === next.userName
@@ -727,6 +768,10 @@ const MemoizedChatMessageList = memo(ChatMessageList, (prev, next) => (
     && prev.isWorking === next.isWorking
     && prev.onChooseReply === next.onChooseReply
     && prev.contextKey === next.contextKey
+    && prev.daemonId === next.daemonId
+    && prev.sessionId === next.sessionId
+    && prev.meshCoordinatorDaemonId === next.meshCoordinatorDaemonId
+    && prev.fetchArtifact === next.fetchArtifact
     && prev.receivedAtMap === next.receivedAtMap
     && prev.lastMessageHash === next.lastMessageHash
     && prev.showActivityMessages === next.showActivityMessages

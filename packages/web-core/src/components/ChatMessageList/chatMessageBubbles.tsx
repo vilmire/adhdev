@@ -11,6 +11,8 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage } from '../../types';
+import type { FetchArtifactCommandFn } from '../../hooks/useArtifactRead';
+import { AttachmentBubble } from '../attachments/AttachmentBubble';
 import { formatTime, type ActionLog, type ToolExpandAddress } from './chatMessageHelpers';
 import { ChatMarkdownBody } from './chat-row-content';
 import { ChatRowShell } from './chat-row-shell';
@@ -42,6 +44,12 @@ export interface ChatMessageRowProps {
     isCliMode: boolean;
     isTextExpanded: boolean;
     onToggleTextExpanded: () => void;
+    /** Session/tab context key used to resolve exact daemonId + sessionId for artifact fetches. */
+    contextKey?: string;
+    daemonId?: string;
+    sessionId?: string;
+    meshCoordinatorDaemonId?: string;
+    fetchArtifact?: FetchArtifactCommandFn;
     /**
      * SEND-NOW: deliver this queued body now. Optional — read-only viewers
      * (SessionShare) pass nothing and the affordance does not render. Receives
@@ -136,6 +144,21 @@ export const ChatMessageRow = memo(function ChatMessageRow(props: ChatMessageRow
     if (row.kind === 'injected') {
         return <InjectedRow model={row} openSegments={props.openSegments ?? ''} onToggleSegment={props.onToggleSegment} />;
     }
+    if (row.kind === 'artifact' && row.attachment) {
+        return (
+            <div className="chat-message-row chat-message-row-assistant self-start w-full" data-chat-row-kind="artifact">
+                <AttachmentBubble
+                    attachment={row.attachment}
+                    timestamp={row.timestamp}
+                    contextKey={props.contextKey}
+                    daemonId={props.daemonId}
+                    sessionId={props.sessionId}
+                    meshCoordinatorDaemonId={props.meshCoordinatorDaemonId}
+                    fetchArtifact={props.fetchArtifact}
+                />
+            </div>
+        );
+    }
     const queued = row.status?.queued;
     return (
         <ChatRowShell
@@ -163,6 +186,11 @@ export const ChatMessageRow = memo(function ChatMessageRow(props: ChatMessageRow
     && prev.isCliMode === next.isCliMode
     && prev.isTextExpanded === next.isTextExpanded
     && prev.openSegments === next.openSegments
+    && prev.contextKey === next.contextKey
+    && prev.daemonId === next.daemonId
+    && prev.sessionId === next.sessionId
+    && prev.meshCoordinatorDaemonId === next.meshCoordinatorDaemonId
+    && prev.fetchArtifact === next.fetchArtifact
     // SEND-NOW / QUEUED-SEND-CANCEL: disabled/label state and handler identity
     // must reach the row, or a press calls a stale closure over queue state.
     && prev.isSendingNow === next.isSendingNow

@@ -40,6 +40,8 @@ export interface TranscriptObservationMessage {
     readonly expandable?: boolean;
     /** Natural id adopted by source handoff (§3.4), when the ledger recorded one. */
     readonly srcId?: string | null;
+    /** Wire-safe attachment metadata for kind='artifact' bubbles. */
+    readonly attachment?: unknown;
     readonly meta?: unknown;
     readonly [extra: string]: unknown;
 }

@@ -1,5 +1,7 @@
 import { readOutgoingReceipt, type OutgoingReceipt } from './outgoing-receipt.js';
 export { readOutgoingReceipt, sameOutgoingAttempt, outgoingInputDigest, type OutgoingReceipt } from './outgoing-receipt.js';
+import type { ArtifactKind, ChatAttachmentMeta } from '../artifacts/types.js';
+export type { ArtifactKind, ChatAttachmentMeta } from '../artifacts/types.js';
 /**
  * `session.<safeSessionId>.chat` keyed wire contract — design 2026-09-28
  * (message-keyed storage) §4.2–§4.6.
@@ -129,6 +131,7 @@ export interface ChatMsgV2 {
     readonly sourceMessageId?: string | null;
     readonly runtimeInputAck?: boolean;
     readonly outgoingReceipt?: OutgoingReceipt | null;
+    readonly attachment?: ChatAttachmentMeta;
     readonly receivedAt: number | null;
     readonly timestamp: number | null;
     /** A truncated tool bubble the daemon can expand by `messageId` (§5.9). */
@@ -272,6 +275,7 @@ export interface ReplicatedTranscriptMessageV2 {
     readonly sourceMessageId?: string | null;
     readonly runtimeInputAck?: boolean;
     readonly outgoingReceipt?: OutgoingReceipt | null;
+    readonly attachment?: ChatAttachmentMeta;
     readonly streaming: boolean | null;
     readonly expandable: boolean;
     readonly srcId: string | null;
@@ -336,6 +340,7 @@ export interface ChatMessageCandidate {
     readonly senderName?: unknown;
     readonly toolName?: unknown;
     readonly expandable?: unknown;
+    readonly attachment?: unknown;
     readonly meta?: unknown;
     readonly [extra: string]: unknown;
 }
@@ -434,6 +439,66 @@ function boundedStringList(value: unknown): string[] {
     return out;
 }
 
+const ARTIFACT_KINDS_WIRE: readonly ArtifactKind[] = ['markdown', 'image', 'diff', 'json', 'text'];
+const ARTIFACT_PREVIEW_WIRE_MAX = 600;
+
+export function readChatAttachment(value: unknown): ChatAttachmentMeta | null {
+    const raw = recordField(value);
+    if (!raw) return null;
+    const artifactId = boundedString(raw.artifactId, CHAT_META_LABEL_MAX);
+    const kind = typeof raw.kind === 'string' && (ARTIFACT_KINDS_WIRE as readonly string[]).includes(raw.kind)
+        ? (raw.kind as ArtifactKind)
+        : null;
+    const mime = boundedString(raw.mime, CHAT_META_LABEL_MAX);
+    const filename = boundedString(raw.filename, CHAT_META_LABEL_MAX);
+    const title = boundedString(raw.title, CHAT_META_LABEL_MAX);
+    const sizeBytes = typeof raw.sizeBytes === 'number' && Number.isSafeInteger(raw.sizeBytes) && raw.sizeBytes >= 0
+        ? raw.sizeBytes
+        : null;
+    const sha256 = boundedString(raw.sha256, CHAT_META_LABEL_MAX);
+    const createdAt = typeof raw.createdAt === 'number' && Number.isSafeInteger(raw.createdAt) && raw.createdAt >= 0
+        ? raw.createdAt
+        : null;
+    const updatedAt = typeof raw.updatedAt === 'number' && Number.isSafeInteger(raw.updatedAt) && raw.updatedAt >= 0
+        ? raw.updatedAt
+        : null;
+    if (
+        !artifactId ||
+        !kind ||
+        !mime ||
+        !filename ||
+        !title ||
+        sizeBytes === null ||
+        !sha256 ||
+        createdAt === null ||
+        updatedAt === null
+    ) {
+        return null;
+    }
+    let previewText: string | undefined;
+    if (raw.previewText === null || raw.previewText === undefined) {
+        previewText = undefined;
+    } else if (typeof raw.previewText === 'string') {
+        previewText = raw.previewText.length > ARTIFACT_PREVIEW_WIRE_MAX
+            ? raw.previewText.slice(0, ARTIFACT_PREVIEW_WIRE_MAX)
+            : raw.previewText;
+    } else {
+        return null;
+    }
+    return {
+        artifactId,
+        kind,
+        mime,
+        filename,
+        title,
+        sizeBytes,
+        sha256,
+        ...(previewText !== undefined ? { previewText } : {}),
+        createdAt,
+        updatedAt,
+    };
+}
+
 // ─── Encoders (by-name allow-lists — never a spread) ────────────────────────
 
 /**
@@ -460,12 +525,14 @@ export function encodeChatMessageHead(candidate: ChatMessageCandidate, stamp: Ch
         streaming: meta ? booleanField(meta.streaming) : null,
         senderName: stringField(candidate.senderName),
         toolName: stringField(candidate.toolName),
+        attachment: readChatAttachment(candidate.attachment) ?? undefined,
         receivedAt: numberField(candidate.receivedAt),
         timestamp: numberField(candidate.timestamp),
         expandable: candidate.expandable === true,
         srcId: stamp.srcId,
         body: stamp.body,
     };
+    if (!head.attachment) delete head.attachment;
     if (typeof meta?.sourceMessageId === 'string') head.sourceMessageId = meta.sourceMessageId;
     if (meta?.runtimeInputAck === true) head.runtimeInputAck = true;
     const outgoingReceipt = readOutgoingReceipt(meta?.outgoingReceipt);
@@ -677,6 +744,7 @@ export function readChatMsg(payload: unknown): ChatMsgV2 | null {
     const raw = recordField(payload);
     if (!raw || raw.v !== 2 || typeof raw.id !== 'string' || !raw.id) return null;
     if (!isRev(raw.rev) || typeof raw.epoch !== 'string' || !isRev(raw.frame) || typeof raw.ord !== 'string') return null;
+    if (raw.attachment !== undefined && readChatAttachment(raw.attachment) === null) return null;
     const body = recordField(raw.body);
     if (!body) return null;
     if (typeof body.text !== 'string') {
@@ -742,6 +810,7 @@ export function chatMessageFromWire(head: ChatMsgV2, content: string): Replicate
         ...(typeof head.sourceMessageId === 'string' ? { sourceMessageId: head.sourceMessageId } : {}),
         ...(head.runtimeInputAck === true ? { runtimeInputAck: true } : {}),
         ...(readOutgoingReceipt(head.outgoingReceipt) ? { outgoingReceipt: readOutgoingReceipt(head.outgoingReceipt) } : {}),
+        ...(readChatAttachment(head.attachment) ? { attachment: readChatAttachment(head.attachment)! } : {}),
         streaming: head.streaming,
         expandable: head.expandable === true,
         srcId: head.srcId,

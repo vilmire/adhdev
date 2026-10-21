@@ -114,6 +114,18 @@ export function classifyChatMessageForDisplay(message: ChatMessage | null | unde
     if (explicitUserFacing) {
         return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: getActivityLabel(message, kind, source), labelKey }
     }
+    if (kind === 'artifact' || Boolean(message.attachment)) {
+        return {
+            surface: 'chat',
+            isUserFacing: true,
+            isActivityFacing: false,
+            isInternal: false,
+            role,
+            kind: 'artifact',
+            label: 'Artifact',
+            labelKey: 'chat.artifact',
+        }
+    }
     if ((role === 'system' || kind === 'system') && hasStructuredDisplayContent(message)) {
         return { surface: 'chat', isUserFacing: true, isActivityFacing: false, isInternal: false, role, kind, label: 'Chat', labelKey }
     }
@@ -155,9 +167,13 @@ function chatBubbleText(message: ChatMessage): string {
     return text
 }
 
-function chatBubbleContentSignature(message: ChatMessage): string {
+export function chatBubbleContentSignature(message: ChatMessage): string {
     const role = String((message as { role?: unknown }).role || '')
-    return `${role}::${chatBubbleText(message)}`
+    const attachment = message.attachment
+    const artifactPart = attachment?.artifactId
+        ? `::artifact:${attachment.artifactId}:${attachment.sha256 || ''}:${attachment.updatedAt ?? ''}`
+        : ''
+    return `${role}::${chatBubbleText(message)}${artifactPart}`
 }
 
 /**
@@ -178,7 +194,7 @@ export function collapseAdjacentDuplicateChatMessages<T extends ChatMessage>(mes
         const sig = chatBubbleContentSignature(message)
         // Never collapse empty-content bubbles into each other (distinct activity
         // placeholders can legitimately repeat); only collapse substantive dupes.
-        const hasBody = chatBubbleText(message).trim().length > 0
+        const hasBody = chatBubbleText(message).trim().length > 0 || Boolean(message.attachment?.artifactId)
         if (hasBody && sig === prevSig) continue
         out.push(message)
         prevSig = sig

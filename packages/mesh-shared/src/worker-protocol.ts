@@ -43,6 +43,7 @@ export const WORKER_TOOLS = [
     'driver_list',
     'driver_describe',
     'driver_invoke',
+    'artifact_register',
 ] as const
 
 export type WorkerTool = typeof WORKER_TOOLS[number]

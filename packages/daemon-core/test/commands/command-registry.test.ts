@@ -63,6 +63,9 @@ const LEGACY_SESSION_TARGET_COMMANDS = [
     'stop_cli',
     'restart_session',
     'agent_command',
+    // Artifact viewer: the router accepts sessionId as the target alias for all seven commands.
+    'artifact_fetch', 'artifact_list', 'artifact_read', 'artifact_register',
+    'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',
 ];
 
 const LEGACY_SESSION_SCOPED_COMMANDS = [
@@ -277,6 +280,9 @@ const LEGACY_MED_FAMILY_COMMANDS = [
     'restart_daemon_node', 'plan_mesh_onboarding', 'cleanup_worktree_nodes', 'mesh_route_preview',
     'mesh_task_output',
     'driver_describe', 'driver_invoke', 'driver_list', 'driver_set_enabled',
+    // Artifact viewer additions use med-family contexts; not part of the legacy migration.
+    'artifact_fetch', 'artifact_list', 'artifact_read', 'artifact_register',
+    'session_artifact_fetch', 'session_artifact_list', 'session_artifact_register',
 ];
 
 /** high-family/index.ts highFamilyRegistry keys. */

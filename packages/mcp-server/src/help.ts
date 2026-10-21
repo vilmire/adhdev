@@ -18,6 +18,8 @@ const STANDARD_TOOLS = [
   'git_checkpoint',
   'git_push',
   'screenshot',
+  'artifact_register',
+  'artifact_list',
 ];
 
 export function buildMcpHelpText(): string {

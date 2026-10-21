@@ -67,9 +67,16 @@ export interface BuildTranscriptObservationInput {
  */
 function flattenMessage(message: ChatMessage, identity: MessageIdentityAssignment | undefined): TranscriptObservationMessage {
     const meta = message.meta && typeof message.meta === 'object' ? message.meta : undefined;
+    const isArtifactBubble = message.kind === 'artifact' && message.attachment && typeof message.attachment === 'object';
+    const artifactMessageId = isArtifactBubble && typeof message.messageId === 'string' && message.messageId.startsWith('artifact:')
+        ? message.messageId
+        : undefined;
+    const artifactOrd = artifactMessageId && typeof (message as { ord?: unknown }).ord === 'string'
+        ? (message as { ord?: string }).ord
+        : undefined;
     return {
-        messageId: identity?.messageId,
-        ord: identity?.ord,
+        messageId: identity?.messageId ?? artifactMessageId,
+        ord: identity?.ord ?? artifactOrd,
         srcId: identity?.srcId ?? null,
         role: message.role,
         kind: message.kind,
@@ -88,6 +95,7 @@ function flattenMessage(message: ChatMessage, identity: MessageIdentityAssignmen
         // daemon can expand. The address itself stays on the ledger entry
         // (design §5.9) — see the `toolBlockRef` exclusion above.
         expandable: message.kind === 'tool' && !!message.toolBlockRef,
+        ...(message.attachment ? { attachment: message.attachment } : {}),
         meta,
     };
 }

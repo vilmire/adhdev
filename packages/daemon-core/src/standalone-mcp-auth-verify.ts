@@ -4,6 +4,7 @@
  */
 import { verifyWorkerSessionBind } from './worker-session-bind-registry.js';
 import { verifyWorkerTaskToken } from './mesh/worker-mcp-isolation.js';
+import { sessionIdsEquivalent } from '@adhdev/mesh-shared';
 
 /**
  * True when `credential` is a live worker session bind (including one
@@ -13,4 +14,26 @@ import { verifyWorkerTaskToken } from './mesh/worker-mcp-isolation.js';
 export function isLiveWorkerMcpCredential(credential: unknown): boolean {
     if (typeof credential !== 'string' || !credential.trim()) return false;
     return !!verifyWorkerSessionBind(credential) || !!verifyWorkerTaskToken(credential);
+}
+
+/** Bind artifact arguments to the credential that authenticated this HTTP request. */
+export function matchesLiveArtifactWorkerCredential(
+    credential: string,
+    args: Record<string, unknown>,
+): boolean {
+    const headerBind = verifyWorkerSessionBind(credential);
+    const headerToken = headerBind ? null : verifyWorkerTaskToken(credential);
+    const principal = headerBind ?? headerToken;
+    if (!principal?.sessionId) return false;
+    if (headerBind ? args.bind !== credential : args.token !== credential) return false;
+    const bind = args.bind == null ? null : verifyWorkerSessionBind(args.bind);
+    const token = args.token == null ? null : verifyWorkerTaskToken(args.token);
+    if ((args.bind != null && !bind) || (args.token != null && !token)) return false;
+    // A second credential must name the SAME principal. Keep both arguments:
+    // the artifact consumer must still fence their task/attempt against the
+    // actual current queue and ledger, rather than silently dropping a token.
+    return [bind, token].every(value => !value || (
+        value.meshId === principal.meshId && typeof value.sessionId === 'string'
+        && sessionIdsEquivalent(value.sessionId, principal.sessionId!)
+    ));
 }

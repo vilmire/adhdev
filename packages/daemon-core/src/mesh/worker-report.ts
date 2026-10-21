@@ -198,7 +198,34 @@ export function __resetReportedSummariesForTest(): void {
 export function resolveWorkerIdentity(credential: {
     token?: unknown;
     bind?: unknown;
-}): WorkerTokenExchangeResult | null {
+}): WorkerTokenExchangeResult | null;
+export function resolveWorkerIdentity(
+    store: Pick<MeshRuntimeStore, 'findAssignedBySession'> | null | undefined,
+    bind?: unknown,
+    token?: unknown,
+): WorkerTokenExchangeResult | null;
+export function resolveWorkerIdentity(
+    credentialOrStore: { token?: unknown; bind?: unknown } | Pick<MeshRuntimeStore, 'findAssignedBySession'> | null | undefined,
+    bindArg?: unknown,
+    tokenArg?: unknown,
+): WorkerTokenExchangeResult | null {
+    const isThreeArg =
+        bindArg !== undefined ||
+        tokenArg !== undefined ||
+        (credentialOrStore !== null &&
+            credentialOrStore !== undefined &&
+            typeof (credentialOrStore as Pick<MeshRuntimeStore, 'findAssignedBySession'>).findAssignedBySession === 'function');
+    const credential: { token?: unknown; bind?: unknown } = isThreeArg
+        ? { bind: bindArg, token: tokenArg }
+        : credentialOrStore && typeof credentialOrStore === 'object'
+          ? (credentialOrStore as { token?: unknown; bind?: unknown })
+          : {};
+    const customStore =
+        isThreeArg &&
+        credentialOrStore &&
+        typeof (credentialOrStore as Pick<MeshRuntimeStore, 'findAssignedBySession'>).findAssignedBySession === 'function'
+            ? (credentialOrStore as MeshRuntimeStore)
+            : null;
     // A directly-held token wins: it already names its own attempt, so there is
     // nothing to resolve and no window in which the session could have moved on.
     const direct = verifyWorkerTaskToken(credential.token);
@@ -212,7 +239,9 @@ export function resolveWorkerIdentity(credential: {
             ...(direct.nodeId ? { nodeId: direct.nodeId } : {}),
         };
     }
-    return exchangeWorkerSessionBind(credential.bind, resolveCurrentTaskForSession);
+    return exchangeWorkerSessionBind(credential.bind, (meshId, sessionId) =>
+        resolveCurrentTaskForSession(meshId, sessionId, customStore),
+    );
 }
 
 /**
@@ -263,9 +292,10 @@ export function classifyUnresolvedWorkerCredential(credential: { token?: unknown
 function resolveCurrentTaskForSession(
     meshId: string,
     sessionId: string,
+    customStore: MeshRuntimeStore | null = null,
 ): { taskId: string; attemptId?: string } | null {
     try {
-        const store = MeshRuntimeStore.getInstance();
+        const store = customStore ?? MeshRuntimeStore.getInstance();
         const entry = store.findAssignedBySession(meshId, sessionId);
         if (!entry?.id) return null;
         // A row without an attempt id: name the task's current ledger attempt when

@@ -100,6 +100,7 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV2): Record<st
     if (message.bubbleState !== null) mapped.bubbleState = message.bubbleState;
     if (message.senderName !== null) mapped.senderName = message.senderName;
     if (message.toolName !== null) mapped.toolName = message.toolName;
+    if (message.attachment) mapped.attachment = message.attachment;
     // Expand is addressed by `messageId` (design §5.9); only the affordance travels.
     if (message.expandable) mapped.expandable = message.expandable;
     if (message.turnKey !== null) {

@@ -1625,7 +1625,8 @@
         },
         "relayIdle": "実行中の作業なし",
         "reviewLabel": "メモリーの見直し",
-        "daemonNoticeLabel": "お知らせ"
+        "daemonNoticeLabel": "お知らせ",
+        "artifact": "アーティファクト"
     },
     "assistantWatched": {
         "badge": "フォロー中 {{count}}",
@@ -4415,6 +4416,37 @@
         "resetDefaults": "既定値に戻す",
         "outOfRange": "{{min}}〜{{max}}文字の範囲で指定してください（既定: {{default}}）。",
         "ownerRequired": "アシスタントのメモリ上限を変更できるのはオーナーだけです。このダッシュボードにサインイン（パスワードまたはトークンを設定）するか、クラウドダッシュボードを使用してください。"
+    },
+    "artifact": {
+        "viewFull": "全体を表示",
+        "viewFullTitle": "全体を表示 (전체 보기)",
+        "collapse": "折りたたむ",
+        "download": "ダウンロード",
+        "downloading": "ダウンロード中…",
+        "copyContent": "コピー",
+        "loading": "アーティファクトを読み込み中…",
+        "retry": "再試行",
+        "openLightbox": "画像を拡大",
+        "closeLightbox": "画像プレビューを閉じる",
+        "zoomIn": "拡大",
+        "zoomOut": "縮小",
+        "zoomReset": "リセット",
+        "hashChangedWarning": "登録後にファイルが変更されました",
+        "hashChangedDetail": "このアーティファクトの登録後にワークスペースファイルの SHA-256 ハッシュが変更されました。",
+        "invalidJsonNotice": "不正な JSON — 生テキストを表示しています",
+        "emptyContent": "空のアーティファクトファイル",
+        "errorMissingSession": "このアーティファクトを読み込むにはセッション情報が必要です。",
+        "errorFileMissing": "ワークスペースにアーティファクトファイルが見つかりません。",
+        "errorFileTooLarge": "アーティファクトが 4 MiB の上限を超えています。",
+        "errorUnsupported": "このアーティファクト形式はサポートされていません。",
+        "errorGeneric": "アーティファクトの全内容を読み込めませんでした。",
+        "kind": {
+            "markdown": "Markdown",
+            "diff": "Diff",
+            "json": "JSON",
+            "text": "テキスト",
+            "image": "画像"
+        }
     }
 }
 

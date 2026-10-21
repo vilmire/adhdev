@@ -258,6 +258,7 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
         message.providerUnitKey ? `unit:${message.providerUnitKey}` : '',
         typeof message.index === 'number' ? `msgIndex:${message.index}` : '',
         typeof message.sequence === 'number' ? `seq:${message.sequence}` : '',
+        message.attachment?.artifactId ? `artifact:${message.attachment.artifactId}` : '',
     ].filter(Boolean);
 
     // Preserved emission order (id > _localId > _turnKey > bubbleId > ...) so
@@ -270,6 +271,7 @@ export function getChatMessageStableKey(message: ChatMessage, index: number): st
         message.providerUnitKey ? `unit:${message.providerUnitKey}` : '',
         typeof message.index === 'number' ? `msgIndex:${message.index}` : '',
         typeof message.sequence === 'number' ? `seq:${message.sequence}` : '',
+        message.attachment?.artifactId ? `artifact:${message.attachment.artifactId}` : '',
     ].filter(Boolean);
 
     if (identity.length > 0) {

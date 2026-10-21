@@ -43,6 +43,7 @@
 
 import { createHash } from 'node:crypto';
 import { jcs, type JsonValue } from 'seqscribe';
+import { generateKeyBetween, isValidOrderKey } from '../chat/fractional-index.js';
 import {
     CHAT_COMMIT_KEY,
     CHAT_COMMIT_KIND,
@@ -63,12 +64,14 @@ import {
     encodeChatMeta,
     encodeChatPart,
     parseChatKey,
+    readChatAttachment,
     readChatCommit,
     readChatDel,
     readChatMeta,
     readChatMsg,
     readChatPart,
     splitChatBody,
+    type ChatAttachmentMeta,
     type ChatBaseReason,
     type ChatCommitV2,
     type ChatMetaV2,
@@ -140,6 +143,16 @@ export interface KeyedChatBuildContext {
     readonly retainMessages?: boolean;
 }
 
+export interface KeyedChatArtifactInput {
+    readonly attachment: ChatAttachmentMeta;
+    readonly providerType?: string;
+    readonly status?: string;
+    readonly title?: string | null;
+    readonly historySessionId?: string | null;
+    /** When true, always emit an updated revision (e.g., same-path re-registration). */
+    readonly forceUpsert?: boolean;
+}
+
 export type KeyedChatBuildResult =
     | { readonly status: 'frame'; readonly frame: KeyedChatFrame }
     | { readonly status: 'unchanged' }
@@ -162,6 +175,7 @@ function headChangeKey(head: ChatMsgV2, text: string): string {
         streaming: head.streaming,
         senderName: head.senderName,
         toolName: head.toolName,
+        ...(head.attachment ? { attachment: head.attachment } : {}),
         receivedAt: head.receivedAt,
         timestamp: head.timestamp,
         expandable: head.expandable,
@@ -208,10 +222,17 @@ const STAGED = Symbol('keyedChatStaged');
 /** What `commit` applies once the frame's rows are durable. */
 interface StagedFrame {
     readonly staged: Map<string, PublishedBubble>;
+    readonly stagedArtifacts: Map<string, TranscriptObservationMessage>;
     readonly deleted: Map<string, number>;
     readonly metaRev: number;
     readonly metaHash: string;
     readonly historySessionId: string | null;
+    readonly metaCandidate: {
+        readonly providerType: string;
+        readonly status: string;
+        readonly title: string | null;
+        readonly historySessionId: string | null;
+    } | null;
     readonly basis: 'delta' | 'base';
 }
 
@@ -225,10 +246,17 @@ interface EncodedBubble {
 
 export class KeyedChatSessionState {
     private bubbles = new Map<string, PublishedBubble>();
+    private artifactMessages = new Map<string, TranscriptObservationMessage>();
     private metaRev = 0;
     private metaHash: string | null = null;
     private coverage: ChatMetaV2['coverage'] | null = null;
     private historySessionId: string | null | undefined = undefined;
+    private lastMetaCandidate: {
+        readonly providerType: string;
+        readonly status: string;
+        readonly title: string | null;
+        readonly historySessionId: string | null;
+    } | null = null;
     private frameNo = 0;
     private readonly deletedRevs = new Map<string, number>();
     /** Keys above W at restore: id → highest rev seen, and their part indexes. */
@@ -296,6 +324,12 @@ export class KeyedChatSessionState {
                     this.metaHash = metaChangeKey(meta);
                     this.coverage = meta.coverage;
                     this.historySessionId = meta.historySessionId;
+                    this.lastMetaCandidate = {
+                        providerType: meta.providerType,
+                        status: meta.status,
+                        title: meta.title,
+                        historySessionId: meta.historySessionId,
+                    };
                 }
             } else if (row.kind === CHAT_COMMIT_KIND) {
                 const commit = readChatCommit(row.payload);
@@ -340,6 +374,24 @@ export class KeyedChatSessionState {
                 bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES,
                 final: head.bubbleState === 'final',
             });
+            if (head.id.startsWith('artifact:')) {
+                this.artifactMessages.set(head.id, {
+                    messageId: head.id,
+                    ord: head.ord,
+                    srcId: head.srcId,
+                    role: head.role,
+                    kind: head.kind,
+                    content: text,
+                    receivedAt: head.receivedAt,
+                    timestamp: head.timestamp,
+                    turnKey: head.turnKey,
+                    bubbleState: head.bubbleState,
+                    senderName: head.senderName,
+                    toolName: head.toolName,
+                    expandable: head.expandable,
+                    ...(head.attachment ? { attachment: head.attachment } : {}),
+                });
+            }
         }
         for (const row of persisted.torn) {
             const parsed = parseChatKey(row.key);
@@ -378,6 +430,21 @@ export class KeyedChatSessionState {
         }
     }
 
+    private nextArtifactOrd(extraOrds: Iterable<string> = []): string {
+        let maxOrd: string | null = null;
+        for (const b of this.bubbles.values()) {
+            if (isValidOrderKey(b.ord) && (maxOrd === null || b.ord > maxOrd)) {
+                maxOrd = b.ord;
+            }
+        }
+        for (const ord of extraOrds) {
+            if (isValidOrderKey(ord) && (maxOrd === null || ord > maxOrd)) {
+                maxOrd = ord;
+            }
+        }
+        return generateKeyBetween(maxOrd, null);
+    }
+
     /**
      * Build the next frame, or report that nothing changed. The returned frame
      * is NOT applied: call `commit(frame)` once its rows are durably appended,
@@ -388,24 +455,63 @@ export class KeyedChatSessionState {
         // A writer-change/resync base must rewrite bodies before pruning old rows.
         // Wait for a readable transcript rather than claiming a metadata-only base.
         if (ctx.retainMessages && (this.pendingBase === 'writer_change' || this.pendingBase === 'resync_request')) return { status: 'unchanged' };
+
+        // ── base frame decision ─────────────────────────────────────────────
+        const nextHistory = typeof observation.historySessionId === 'string' ? observation.historySessionId : null;
+        let baseReason: ChatBaseReason | null = this.pendingBase;
+        if (!baseReason && this.isLineageSwitch(observation)) {
+            baseReason = 'lineage_switch';
+        }
+        const forceAll = baseReason === 'resync_request' || baseReason === 'writer_change';
+
         // ── desired live set ────────────────────────────────────────────────
         const observed: EncodedBubble[] = [];
         const seen = new Set<string>();
         for (const message of observation.messages) {
             const id = typeof message.messageId === 'string' ? message.messageId : '';
-            const ord = typeof message.ord === 'string' ? message.ord : '';
+            const isArtifact = id.startsWith('artifact:');
+            const priorOrd = isArtifact ? this.bubbles.get(id)?.ord : undefined;
+            const ord =
+                priorOrd ||
+                (typeof message.ord === 'string' && message.ord
+                    ? message.ord
+                    : isArtifact
+                      ? this.nextArtifactOrd(observed.map((b) => b.ord))
+                      : '');
             if (!id || !ord) return { status: 'unidentified' };
             if (seen.has(id)) continue;
             seen.add(id);
             const text = typeof message.content === 'string' ? message.content : '';
             observed.push({ message, id, ord, text, bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES });
         }
+
         const retained = new Set<string>();
+        const windowRetained = new Set<string>();
         if (ctx.retainMessages) for (const id of this.bubbles.keys()) retained.add(id);
         for (const id of observation.coverage.retainedMessageIds ?? []) {
-            if (!seen.has(id) && this.bubbles.has(id)) retained.add(id);
+            if (!seen.has(id) && this.bubbles.has(id)) {
+                retained.add(id);
+                windowRetained.add(id);
+            }
         }
-        if (ctx.verifiedClear || this.isLineageSwitch(observation)) retained.clear();
+        if (!ctx.verifiedClear && !this.isLineageSwitch(observation)) {
+            for (const id of this.bubbles.keys()) {
+                if (!id.startsWith('artifact:') || seen.has(id)) continue;
+                if (forceAll && this.artifactMessages.has(id)) {
+                    const artifactMsg = this.artifactMessages.get(id)!;
+                    const ord = this.bubbles.get(id)!.ord;
+                    const text = typeof artifactMsg.content === 'string' ? artifactMsg.content : '';
+                    seen.add(id);
+                    observed.push({ message: artifactMsg, id, ord, text, bytes: utf8Bytes(text) + HEAD_OVERHEAD_BYTES });
+                } else {
+                    retained.add(id);
+                }
+            }
+        }
+        if (ctx.verifiedClear || this.isLineageSwitch(observation)) {
+            retained.clear();
+            windowRetained.clear();
+        }
 
         // ── §11 Q1 live cap: tombstone the oldest bubbles beyond 16 MiB ──────
         const byOrd: Array<{ id: string; ord: string; bytes: number }> = [
@@ -426,21 +532,14 @@ export class KeyedChatSessionState {
         }
         const omittedBefore = ctx.retainMessages && this.coverage
             ? this.coverage.omittedBefore
-            : capped.size > 0 || retained.size > 0 || observation.coverage.omittedBefore === true;
-
-        // ── base frame decision ─────────────────────────────────────────────
-        const nextHistory = typeof observation.historySessionId === 'string' ? observation.historySessionId : null;
-        let baseReason: ChatBaseReason | null = this.pendingBase;
-        if (!baseReason && this.isLineageSwitch(observation)) {
-            baseReason = 'lineage_switch';
-        }
-        const forceAll = baseReason === 'resync_request' || baseReason === 'writer_change';
+            : capped.size > 0 || windowRetained.size > 0 || observation.coverage.omittedBefore === true;
 
         const epoch = this.epoch;
         const frameNo = this.frameNo + 1;
         const partRows: KeyedChatFrameRow[] = [];
         const headRows: KeyedChatFrameRow[] = [];
         const staged = new Map<string, PublishedBubble>();
+        const stagedArtifacts = new Map<string, TranscriptObservationMessage>();
         const deleted = new Map<string, number>();
         let supersededRows = 0;
         let supersededBytes = 0;
@@ -453,6 +552,9 @@ export class KeyedChatSessionState {
         // ── upserts ─────────────────────────────────────────────────────────
         for (const bubble of observed) {
             if (capped.has(bubble.id)) continue;
+            if (bubble.id.startsWith('artifact:')) {
+                stagedArtifacts.set(bubble.id, { ...bubble.message, messageId: bubble.id, ord: bubble.ord });
+            }
             const prior = this.bubbles.get(bubble.id);
             const probe = encodeChatMessageHead(bubble.message, {
                 id: bubble.id,
@@ -636,10 +738,17 @@ export class KeyedChatSessionState {
 
         const staging: StagedFrame = {
             staged,
+            stagedArtifacts,
             deleted,
             metaRev,
             metaHash,
             historySessionId: nextHistory ?? this.historySessionId ?? null,
+            metaCandidate: {
+                providerType: metaProbe.providerType,
+                status: metaProbe.status,
+                title: metaProbe.title,
+                historySessionId: metaProbe.historySessionId,
+            },
             basis,
         };
         const frame: KeyedChatFrame & { [STAGED]: StagedFrame } = {
@@ -663,6 +772,180 @@ export class KeyedChatSessionState {
         return { status: 'frame', frame };
     }
 
+    /**
+     * Build a committed delta frame for a single registered/updated artifact
+     * bubble (`m:artifact:<artifactId>`). Ensures `chat.meta.v2` is emitted when
+     * no session meta has been committed yet so `KeyedTranscriptFolder.verify`
+     * always succeeds.
+     */
+    buildArtifactFrame(input: KeyedChatArtifactInput, ctx: KeyedChatBuildContext): KeyedChatBuildResult {
+        const attachment = readChatAttachment(input.attachment);
+        if (!attachment) return { status: 'unidentified' };
+
+        const id = `artifact:${attachment.artifactId}`;
+        const prior = this.bubbles.get(id);
+        const ord = prior?.ord ?? this.nextArtifactOrd();
+        const text = attachment.title;
+        const message: TranscriptObservationMessage = {
+            messageId: id,
+            ord,
+            srcId: null,
+            role: 'system',
+            kind: 'artifact',
+            content: text,
+            bubbleState: 'final',
+            receivedAt: attachment.createdAt,
+            timestamp: attachment.updatedAt,
+            attachment,
+        };
+
+        const probe = encodeChatMessageHead(message, {
+            id,
+            ord,
+            rev: 0,
+            epoch: '',
+            frame: 0,
+            srcId: null,
+            body: { text: '' },
+        });
+        const hash = headChangeKey(probe, text);
+        const torn = this.tornIds.has(id);
+        const needsMeta = this.metaHash === null || this.tornMetaRev !== null;
+        if (prior && prior.hash === hash && !torn && input.forceUpsert !== true && !needsMeta) {
+            return { status: 'unchanged' };
+        }
+
+        const epoch = this.epoch;
+        const frameNo = this.frameNo + 1;
+        const rev = Math.max(prior?.rev ?? 0, this.tornIds.get(id) ?? 0, this.deletedRevs.get(id) ?? 0) + 1;
+        const head = encodeChatMessageHead(message, {
+            id,
+            ord,
+            rev,
+            epoch,
+            frame: frameNo,
+            srcId: null,
+            body: { text },
+        });
+        const headRows: KeyedChatFrameRow[] = [
+            { key: chatMessageKey(id), kind: CHAT_MSG_KIND, payload: head as unknown as JsonValue },
+        ];
+        const bubbleBytes = utf8Bytes(text) + HEAD_OVERHEAD_BYTES;
+        let supersededRows = prior ? 1 : 0;
+        const supersededBytes = prior ? prior.bytes : 0;
+
+        let metaRow: KeyedChatFrameRow | null = null;
+        let metaRev = this.metaRev;
+        let metaHash = this.metaHash ?? '';
+        let metaCandidate = this.lastMetaCandidate;
+        if (needsMeta) {
+            metaCandidate = {
+                providerType: input.providerType ?? this.lastMetaCandidate?.providerType ?? 'unknown',
+                status: input.status ?? this.lastMetaCandidate?.status ?? 'running',
+                title: input.title !== undefined ? input.title : (this.lastMetaCandidate?.title ?? null),
+                historySessionId:
+                    input.historySessionId !== undefined
+                        ? input.historySessionId
+                        : (this.lastMetaCandidate?.historySessionId ?? this.historySessionId ?? null),
+            };
+            const metaProbe = encodeChatMeta(
+                {
+                    sessionId: this.sessionId,
+                    historySessionId: metaCandidate.historySessionId,
+                    providerType: metaCandidate.providerType,
+                    status: metaCandidate.status,
+                    title: metaCandidate.title,
+                },
+                {
+                    rev: 0,
+                    epoch: '',
+                    frame: 0,
+                    producerDaemonId: ctx.producerDaemonId,
+                    ledgerEpoch: '',
+                    coverage: this.coverage ?? { mode: 'full', omittedBefore: false },
+                },
+            );
+            metaHash = metaChangeKey(metaProbe);
+            metaRev = Math.max(this.metaRev, this.tornMetaRev ?? 0) + 1;
+            const meta: ChatMetaV2 = { ...metaProbe, rev: metaRev, epoch, frame: frameNo };
+            metaRow = { key: CHAT_META_KEY, kind: CHAT_META_KIND, payload: meta as unknown as JsonValue };
+            if (this.metaHash !== null) supersededRows += 1;
+        }
+
+        const staged = new Map<string, PublishedBubble>([
+            [
+                id,
+                {
+                    rev,
+                    hash,
+                    ord,
+                    partHashes: [],
+                    partRevs: [],
+                    bytes: bubbleBytes,
+                    final: true,
+                },
+            ],
+        ]);
+        const stagedArtifacts = new Map<string, TranscriptObservationMessage>([[id, message]]);
+        const live = new Map<string, number>();
+        for (const [k, b] of this.bubbles) live.set(k, b.rev);
+        live.set(id, rev);
+
+        const priorLive = this.bubbles.size;
+        const commit: ChatCommitV2 = {
+            v: 2,
+            sessionId: this.sessionId,
+            writer: ctx.writerId,
+            producerDaemonId: ctx.producerDaemonId,
+            epoch,
+            frame: frameNo,
+            observedAt: ctx.observedAt,
+            liveCount: live.size,
+            metaRev,
+            digest: computeChatCommitDigest(live, metaRev),
+            basis: 'delta',
+            baseReason: null,
+        };
+        const rows: KeyedChatFrameRow[] = [
+            ...headRows,
+            ...(metaRow ? [metaRow] : []),
+            { key: CHAT_COMMIT_KEY, kind: CHAT_COMMIT_KIND, payload: commit as unknown as JsonValue },
+        ];
+        let bytes = 0;
+        for (const row of rows) bytes += jcsBytesOf(row.payload);
+        supersededRows += 1; // previous commit
+
+        const staging: StagedFrame = {
+            staged,
+            stagedArtifacts,
+            deleted: new Map(),
+            metaRev,
+            metaHash,
+            historySessionId: metaCandidate?.historySessionId ?? this.historySessionId ?? null,
+            metaCandidate,
+            basis: 'delta',
+        };
+        const frame: KeyedChatFrame & { [STAGED]: StagedFrame } = {
+            sessionId: this.sessionId,
+            epoch,
+            frame: frameNo,
+            rows,
+            commit,
+            changedBubbles: 1,
+            rewrittenBubbles: prior ? 1 : 0,
+            priorLive,
+            bytes,
+            supersededRows,
+            supersededBytes,
+            finalized: !prior?.final,
+            capped: false,
+            tripwire: false,
+            baseRateExceeded: false,
+            [STAGED]: staging,
+        };
+        return { status: 'frame', frame };
+    }
+
     /** Apply a frame whose rows are durably appended. */
     commit(frame: KeyedChatFrame, nowMs: number): void {
         const staging = (frame as KeyedChatFrame & { [STAGED]?: StagedFrame })[STAGED];
@@ -671,12 +954,17 @@ export class KeyedChatSessionState {
             this.bubbles.set(id, bubble);
             this.deletedRevs.delete(id);
         }
+        for (const [id, msg] of staging.stagedArtifacts) {
+            this.artifactMessages.set(id, msg);
+        }
         for (const [id, rev] of staging.deleted) {
             this.bubbles.delete(id);
+            this.artifactMessages.delete(id);
             this.rememberDeleted(id, rev);
         }
         this.metaRev = staging.metaRev;
         this.metaHash = staging.metaHash;
+        if (staging.metaCandidate) this.lastMetaCandidate = staging.metaCandidate;
         const metaRow = frame.rows.find(row => row.key === CHAT_META_KEY);
         if (metaRow) this.coverage = readChatMeta(metaRow.payload)?.coverage ?? this.coverage;
         this.historySessionId = staging.historySessionId;

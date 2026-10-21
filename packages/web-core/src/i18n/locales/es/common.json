@@ -1628,7 +1628,8 @@
         },
         "relayIdle": "Sin trabajo en curso",
         "reviewLabel": "Revisión de memoria",
-        "daemonNoticeLabel": "Aviso"
+        "daemonNoticeLabel": "Aviso",
+        "artifact": "Artefacto"
     },
     "assistantWatched": {
         "badge": "Siguiendo {{count}}",
@@ -4418,6 +4419,37 @@
         "resetDefaults": "Restablecer valores predeterminados",
         "outOfRange": "Debe estar entre {{min}} y {{max}} caracteres (predeterminado: {{default}}).",
         "ownerRequired": "Solo el propietario puede cambiar los límites de memoria del asistente. Inicia sesión en este panel (configura una contraseña o token) o usa el panel en la nube."
+    },
+    "artifact": {
+        "viewFull": "Ver completo",
+        "viewFullTitle": "Ver completo (전체 보기)",
+        "collapse": "Contraer",
+        "download": "Descargar",
+        "downloading": "Descargando…",
+        "copyContent": "Copiar",
+        "loading": "Cargando artefacto…",
+        "retry": "Reintentar",
+        "openLightbox": "Ampliar imagen",
+        "closeLightbox": "Cerrar vista previa",
+        "zoomIn": "Acercar",
+        "zoomOut": "Alejar",
+        "zoomReset": "Restablecer zoom",
+        "hashChangedWarning": "Archivo modificado tras el registro",
+        "hashChangedDetail": "El hash SHA-256 del archivo en el espacio de trabajo cambió después de registrar este artefacto.",
+        "invalidJsonNotice": "JSON no válido — mostrando texto sin formato",
+        "emptyContent": "Archivo de artefacto vacío",
+        "errorMissingSession": "Se requiere el contexto de la sesión para cargar este artefacto.",
+        "errorFileMissing": "El archivo del artefacto ya no se encuentra en el espacio de trabajo.",
+        "errorFileTooLarge": "Este artefacto supera el límite de 4 MiB del visor.",
+        "errorUnsupported": "Este formato de artefacto no es compatible con el visor.",
+        "errorGeneric": "No se pudo cargar el contenido completo del artefacto.",
+        "kind": {
+            "markdown": "Markdown",
+            "diff": "Diff",
+            "json": "JSON",
+            "text": "Texto",
+            "image": "Imagen"
+        }
     }
 }
 

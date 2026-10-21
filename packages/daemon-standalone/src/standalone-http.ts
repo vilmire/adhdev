@@ -18,8 +18,10 @@ import {
   ADHDEV_WORKER_CREDENTIAL_HEADER,
   MESH_JOIN_HTTP_PATH,
   attachTrustedOwnerIngressProof,
+  attachAuthenticatedMcpCommand,
   issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
+  matchesLiveArtifactWorkerCredential,
   isWorkerMcpDaemonVerb,
   type StatusResponse,
   type TrustedOwnerIngressProof,
@@ -89,6 +91,8 @@ export interface StandaloneHttpDeps {
    * token). Default: daemon-core `isLiveWorkerMcpCredential`.
    */
   verifyWorkerCredential?(credential: string): boolean;
+  /** Same real verifier across source/bundled embedding boundaries. */
+  verifyArtifactWorkerCredential?(credential: string, args: Record<string, unknown>): boolean;
   /** Optional hook notified when owner auth epoch changes (logout, password change/clear). */
   onAuthEpochChanged?(): void;
 }
@@ -868,12 +872,32 @@ export class StandaloneHttpApi {
         try {
           const parsed = JSON.parse(body || '{}');
           const { type, payload } = normalizeCommandEnvelope(parsed);
+          if (internalScope !== null && this.resolveInternalAuthScope(req) !== internalScope) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: 'MCP credential was revoked before command execution' }));
+            return;
+          }
           if (internalScope === 'worker' && !isWorkerMcpDaemonVerb(type)) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: `Command ${type} is not available to a worker MCP credential.` }));
             return;
           }
           const commandPayload = (payload && typeof payload === 'object' ? { ...payload } : {}) as Record<string, unknown>;
+          if (internalScope === 'worker' && type === 'artifact_register') {
+            const credential = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER) ?? '';
+            const verify = this.deps.verifyArtifactWorkerCredential ?? matchesLiveArtifactWorkerCredential;
+            let matches = false;
+            try { matches = verify(credential, commandPayload) === true; } catch { /* fail closed */ }
+            if (!matches) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Artifact arguments must retain the authenticated worker credential and principal.' }));
+              return;
+            }
+            attachAuthenticatedMcpCommand(commandPayload, type, () =>
+              this.resolveInternalAuthScope(req) === 'worker'
+              && verify(credential, commandPayload) === true,
+            );
+          }
           const ownerGuard = this.captureOwnerAuthGuard(req, url);
           const isOwner = Boolean(ownerGuard && ownerGuard());
           const ownerProof = isOwner && ownerGuard
@@ -886,12 +910,30 @@ export class StandaloneHttpApi {
           if (ownerProof) {
             attachTrustedOwnerIngressProof(commandPayload, ownerProof);
           }
+          if (internalScope === 'coordinator') {
+            // This credential authenticates the internal command API, not a
+            // dashboard owner or a particular coordinator principal. Retain
+            // only this request's artifact operation/arguments and lifetime;
+            // the consumer still resolves registered session/workspace/mesh.
+            const token = this.internalAuthToken;
+            const epoch = this.authEpoch;
+            attachAuthenticatedMcpCommand(commandPayload, type, () =>
+              token !== null && this.internalAuthToken === token
+              && this.authEpoch === epoch
+              && this.resolveInternalAuthScope(req) === 'coordinator',
+            );
+          }
+          const ownerVerified = isOwner
+            ? true
+            : internalScope !== null
+              ? undefined
+              : false;
           const result = await this.deps.executeCommand(
             type,
             commandPayload,
             isOwner ? 'standalone' : 'ipc',
             {
-              ownerVerified: isOwner,
+              ownerVerified,
               ownerProof,
               verifyCurrentOwner: ownerGuard ?? undefined,
             },

@@ -98,6 +98,7 @@ function mapTranscriptMessage(message: ReplicatedTranscriptMessageV2): Dashboard
             ...(message.runtimeInputAck ? { runtimeInputAck: true } : {}),
             ...(message.outgoingReceipt ? { outgoingReceipt: message.outgoingReceipt } : {}) };
     }
+    if (message.attachment) mapped.attachment = message.attachment
     if (message.expandable) mapped._expandable = true
     if (message.turnKey !== null) mapped._turnKey = message.turnKey
     return mapped
@@ -127,7 +128,9 @@ export class TranscriptBubbleCache {
                 || (hit.source !== message
                     && (hit.source.rev !== message.rev
                         || hit.source.ord !== message.ord
-                        || hit.source.content !== message.content))
+                        || hit.source.content !== message.content
+                        || hit.source.attachment?.sha256 !== message.attachment?.sha256
+                        || hit.source.attachment?.updatedAt !== message.attachment?.updatedAt))
             ) {
                 entry = { source: message, mapped: mapTranscriptMessage(message) }
             } else if (hit.source !== message) {
