@@ -251,7 +251,9 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
         // owner follow), initialize it once under trusted owner ingress.
         let bindingCheck = registry.verifyLocalOwnerBinding(selfDaemonId);
         if (!bindingCheck.ok && bindingCheck.code === 'local_owner_binding_missing' && (args?.bindingRevision === undefined || Number(args?.bindingRevision) === 1)) {
-            registry.reconcileOwnerBinding(selfDaemonId);
+            // Bootstrap only: recovering revoked entries belongs to ensure_binding,
+            // which also re-arms their relay thread and poller.
+            registry.reconcileOwnerBinding(selfDaemonId, { recoverFollowed: false });
             bindingCheck = registry.verifyLocalOwnerBinding(selfDaemonId);
         }
         if (!bindingCheck.ok) {

@@ -90782,6 +90782,10 @@ ${result.stderr}`, result.code);
            * bound to this daemon, or reuses `maxFollowedRevision` across followed
            * remote projects when the receipt is missing or the bound `daemonId`
            * changed, unless `opts.bumpRevision` / `opts.forceNewRevision` is true.
+           * Revoked `local_owner_binding_*` followed entries whose `bindingRevision`
+           * matches the resulting receipt are recovered unless
+           * `opts.recoverFollowed === false`; callers that recover must also re-arm
+           * the relay thread and poller (see `ensure_binding`).
            */
           reconcileOwnerBinding(selfDaemonId, opts) {
             const canonicalSelf = canonicalDaemonId2(selfDaemonId);
@@ -90808,7 +90812,7 @@ ${result.stderr}`, result.code);
               boundAt: nowIso
             };
             let nextFollowed = base.followedRemoteProjects;
-            if (nextFollowed) {
+            if (nextFollowed && opts?.recoverFollowed !== false) {
               let recoveredAny = false;
               const copy = { ...nextFollowed };
               for (const [k, entry] of Object.entries(copy)) {
@@ -152593,7 +152597,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         let bindingCheck = registry.verifyLocalOwnerBinding(selfDaemonId);
         if (!bindingCheck.ok && bindingCheck.code === "local_owner_binding_missing" && (args?.bindingRevision === void 0 || Number(args?.bindingRevision) === 1)) {
-          registry.reconcileOwnerBinding(selfDaemonId);
+          registry.reconcileOwnerBinding(selfDaemonId, { recoverFollowed: false });
           bindingCheck = registry.verifyLocalOwnerBinding(selfDaemonId);
         }
         if (!bindingCheck.ok) {

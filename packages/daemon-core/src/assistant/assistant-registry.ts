@@ -547,10 +547,14 @@ export class AssistantRegistry {
      * bound to this daemon, or reuses `maxFollowedRevision` across followed
      * remote projects when the receipt is missing or the bound `daemonId`
      * changed, unless `opts.bumpRevision` / `opts.forceNewRevision` is true.
+     * Revoked `local_owner_binding_*` followed entries whose `bindingRevision`
+     * matches the resulting receipt are recovered unless
+     * `opts.recoverFollowed === false`; callers that recover must also re-arm
+     * the relay thread and poller (see `ensure_binding`).
      */
     reconcileOwnerBinding(
         selfDaemonId: string,
-        opts?: { bumpRevision?: boolean; forceNewRevision?: boolean; now?: string },
+        opts?: { bumpRevision?: boolean; forceNewRevision?: boolean; recoverFollowed?: boolean; now?: string },
     ): AssistantOwnerBindingReceipt {
         const canonicalSelf = canonicalDaemonId(selfDaemonId);
         if (!canonicalSelf) {
@@ -586,7 +590,7 @@ export class AssistantRegistry {
                 boundAt: nowIso,
             };
         let nextFollowed = base.followedRemoteProjects;
-        if (nextFollowed) {
+        if (nextFollowed && opts?.recoverFollowed !== false) {
             let recoveredAny = false;
             const copy: Record<string, FollowedRemoteProjectEntry> = { ...nextFollowed };
             for (const [k, entry] of Object.entries(copy)) {

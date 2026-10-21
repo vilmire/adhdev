@@ -2550,6 +2550,126 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             expect(String(statusOnCorruptSelf.detail ?? statusOnCorruptSelf.code)).toContain('remote_access_denied');
         });
     });
+
+    it('21. [L1, T1, T2] remote_follow requires owner ingress on every allowed source, follow bootstrap never recovers revoked entries, and ensure_binding re-arms recovered threads with { reset: true }', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        const { wireAssistantRuntime } = await import('../../src/assistant/assistant-runtime.js');
+        const store = new InMemoryAssistantRelayStore();
+        installAssistantEnv({
+            openThread: (meshId) => store.openThread(meshId, Date.now()),
+            closeThread: (meshId) => store.closeThread(meshId),
+        });
+        const runtime = wireAssistantRuntime(
+            {
+                instanceManager: { getInstance: () => null, getByCategory: () => [] } as any,
+                router: { execute: vi.fn(async () => ({ success: true })) } as any,
+                cliManager: { input: { isParked: () => false, submit: vi.fn() } } as any,
+                bus: { on: () => () => {} } as any,
+                statusInstanceId: ASSISTANT_B,
+            },
+            { registry: assistantRegistry, store },
+        );
+
+        try {
+            const asstRouter = createRouter(ASSISTANT_B);
+
+            // A followed entry revoked for a local binding fault, at the revision a missing receipt would be rebuilt with.
+            const staleKey = followedRemoteProjectKey(HOST_A, MESH_SECOND);
+            assistantRegistry.upsertFollowedRemoteProject({
+                hostDaemonId: HOST_A,
+                hostLabel: 'Host-A',
+                meshId: MESH_SECOND,
+                name: 'UntouchedMesh',
+                slug: 'untouched',
+                sanitizedRepoIdentity: 'github.com/acme/untouched',
+                bindingRevision: 1,
+                grantRevision: 1,
+                state: 'followed',
+                lastCursor: 'plain:coord-beta-1:turn-3',
+                coordinatorSessionId: 'coord-beta-1',
+            });
+            assistantRegistry.updateFollowedRemoteProject(staleKey, {
+                state: 'revoked',
+                revokedAt: Date.now(),
+                revokedReason: 'local_owner_binding_missing',
+                lastErrorCode: 'local_owner_binding_missing',
+            });
+            expect(assistantRegistry.ownerBinding()).toBeFalsy();
+
+            // T2: allowed sources without an owner-ingress proof are refused for every action, and recover nothing.
+            for (const source of ['p2p', 'ws', 'standalone'] as const) {
+                for (const args of [
+                    { action: 'ensure_binding' },
+                    { action: 'reconcile_binding', forceNewRevision: true },
+                    { action: 'follow', hostDaemonId: HOST_A, meshId: MESH_PREFEX_SIM, grantRevision: 1 },
+                    { action: 'unfollow', key: staleKey },
+                ]) {
+                    const res: any = await asstRouter.execute(ASSISTANT_REMOTE_FOLLOW_COMMAND, { ...args }, source);
+                    expect(res).toMatchObject({ success: false, code: 'owner_authorization_required' });
+                }
+            }
+            expect(assistantRegistry.ownerBinding()).toBeFalsy();
+            expect(assistantRegistry.getFollowedRemoteProject(staleKey)).toMatchObject({
+                state: 'revoked',
+                revokedReason: 'local_owner_binding_missing',
+            });
+
+            // L1: an owner follow that bootstraps the missing receipt must not recover other revoked entries as a side effect.
+            const followRes: any = await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                {
+                    action: 'follow',
+                    hostDaemonId: HOST_A,
+                    hostLabel: 'Host-A',
+                    meshId: MESH_PREFEX_SIM,
+                    name: 'AlphaSim',
+                    sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                    grantRevision: 1,
+                },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(followRes).toMatchObject({ success: true });
+            expect(assistantRegistry.ownerBinding()).toMatchObject({ daemonId: ASSISTANT_B, bindingRevision: 1 });
+            expect(assistantRegistry.getFollowedRemoteProject(staleKey)).toMatchObject({
+                state: 'revoked',
+                revokedReason: 'local_owner_binding_missing',
+            });
+            expect(store.isThreadOpen(MESH_SECOND)).toBe(false);
+
+            // T1: ensure_binding is the recovery path, and it re-arms the recovered thread's store cursor and poller with { reset: true }.
+            const noteSentSpy = vi.spyOn(runtime.remotePoller, 'noteSent');
+            const setCursorSpy = vi.spyOn(store, 'setThreadCursor');
+            const ensureRes: any = await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                { action: 'ensure_binding' },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(ensureRes).toMatchObject({
+                success: true,
+                ownerBinding: { daemonId: ASSISTANT_B, bindingRevision: 1 },
+                recoveredKeys: [staleKey],
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(staleKey)?.state).toBe('followed');
+            expect(store.isThreadOpen(MESH_SECOND)).toBe(true);
+            expect(noteSentSpy).toHaveBeenCalledWith(MESH_SECOND, 'plain:coord-beta-1:turn-3', 'coord-beta-1', { reset: true });
+            expect(setCursorSpy).toHaveBeenCalledWith(MESH_SECOND, 'plain:coord-beta-1:turn-3', 'coord-beta-1', { reset: true });
+            expect(noteSentSpy.mock.calls.every((c) => c[3]?.reset === true)).toBe(true);
+            // The poller's own cursor echo may follow without reset; the re-arm itself must come first and reset.
+            expect(setCursorSpy.mock.calls[0]).toEqual([MESH_SECOND, 'plain:coord-beta-1:turn-3', 'coord-beta-1', { reset: true }]);
+        } finally {
+            runtime.dispose();
+        }
+    });
 });
 
 
