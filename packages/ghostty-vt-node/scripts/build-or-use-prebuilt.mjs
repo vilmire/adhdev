@@ -129,7 +129,7 @@ const forceCompile = process.env.ADHDEV_GHOSTTY_VT_FORCE_COMPILE === '1';
 const planOnly = process.argv.includes('--plan');
 
 function decide() {
-  if (forceCompile) return { action: 'compile', reason: 'ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1' };
+  if (forceCompile) return { action: 'compile', mode: 'rebuild', reason: 'ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1' };
   const sourceMtime = latestSourceMtime();
   const outputMtime = safeMtime(outputFile);
   // A local build output is something this machine compiled, so its mtime
@@ -149,7 +149,7 @@ function decide() {
 
 const decision = decide();
 if (planOnly) {
-  console.log(`[ghostty-vt-node] plan: ${decision.action}${decision.file ? ` ${decision.file}` : ''}${decision.reason ? ` (${decision.reason})` : ''}`);
+  console.log(`[ghostty-vt-node] plan: ${decision.action}${decision.mode ? ` (cmake-js ${decision.mode})` : ''}${decision.file ? ` ${decision.file}` : ''}${decision.reason ? ` (${decision.reason})` : ''}`);
   process.exit(0);
 }
 
@@ -169,11 +169,15 @@ if (decision.action === 'skip') {
   process.exit(0);
 }
 
+// A forced compile is a CLEAN rebuild (fresh configure, fresh FetchContent
+// clone, zig-out regenerated): an incremental `compile` would reuse whatever
+// the previous build directory holds. Other compiles stay incremental.
+const cmakeJsCommand = forceCompile ? 'rebuild' : 'compile';
 const isWindows = process.platform === 'win32';
 const command = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
 const args = isWindows
-  ? ['/d', '/s', '/c', 'npm exec -- cmake-js compile']
-  : ['exec', '--', 'cmake-js', 'compile'];
+  ? ['/d', '/s', '/c', `npm exec -- cmake-js ${cmakeJsCommand}`]
+  : ['exec', '--', 'cmake-js', cmakeJsCommand];
 console.log(`[ghostty-vt-node] compiling ${triplet} (${decision.reason}) via ${command} ${args.join(' ')}`);
 const result = spawnSync(command, args, {
   cwd: packageDir,

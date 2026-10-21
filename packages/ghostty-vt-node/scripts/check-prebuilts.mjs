@@ -73,7 +73,9 @@ export function nativeCiFindings(workflowDir = WORKFLOW_DIR, packageDir = PACKAG
         windowsHide: true,
     });
     const planLine = (plan.stdout || '').trim().split('\n').pop() || (plan.stderr || '').trim();
-    findings.push(['build script honours ADHDEV_GHOSTTY_VT_FORCE_COMPILE', /plan: compile/.test(planLine), planLine]);
+    // A forced compile must be a clean `cmake-js rebuild`, never an incremental
+    // compile that could reuse a previous build directory's outputs.
+    findings.push(['build script honours ADHDEV_GHOSTTY_VT_FORCE_COMPILE with a clean rebuild', /plan: compile \(cmake-js rebuild\)/.test(planLine), planLine]);
     return findings;
 }
 

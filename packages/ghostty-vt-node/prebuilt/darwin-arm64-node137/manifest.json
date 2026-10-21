@@ -3,7 +3,7 @@
   "platform": "darwin",
   "arch": "arm64",
   "apiLevel": 2,
-  "sourceDigest": "5cae9be1c0fa99676f75c5e0d2a74117aba4cbe8798f16c38f25d2d01f52f7fa",
+  "sourceDigest": "d8093f470cde5a2281a086f08cf966c98ae37702b110ffb747c2f90877bed4b1",
   "ghosttyRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
   "napiVersion": 8,
   "builtWithNode": "v22.17.0",
@@ -19,15 +19,15 @@
   },
   "files": {
     "ghostty_vt_node.node": {
-      "sha256": "bb8f673d4585b9628448ba62f35c5b09c5386b202ec8fbe9896e034533639955",
+      "sha256": "49ae371574d75b320683c67c358255d5d4637ab67e6f06ab9f816df0b43f1419",
       "size": 100536
     },
     "libghostty-vt.0.1.0.dylib": {
-      "sha256": "89e71056c59e16e58ef395fd3d9d26ed77457ac2f562a0211f2f7acec0a264c0",
+      "sha256": "089ea079f22439e7a0e14fe77c2dde9c848dd4ffe50b8691fe98484f20dd60ba",
       "size": 1527384
     },
     "libghostty-vt.dylib": {
-      "sha256": "89e71056c59e16e58ef395fd3d9d26ed77457ac2f562a0211f2f7acec0a264c0",
+      "sha256": "089ea079f22439e7a0e14fe77c2dde9c848dd4ffe50b8691fe98484f20dd60ba",
       "size": 1527384
     }
   }

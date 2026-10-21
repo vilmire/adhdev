@@ -5,6 +5,7 @@
 // provenance for the pinned ghostty + zig. Every case below runs on any host:
 // nothing is loaded.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { cpSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -141,4 +142,61 @@ it('rejects wrong architectures, a wrong SONAME and non-binaries', () => {
     assert.match(checkNativeFile('libghostty-vt.dylib', fat, 'darwin', 'arm64').join(), /macho-fat binary, want macho/);
     assert.match(checkNativeFile('ghostty-vt.dll', Buffer.from('not a binary'), 'win32', 'x64').join(), /unknown binary, want pe/);
     assert.match(checkNativeFile('ghostty-vt.dll', Buffer.from('MZ'), 'win32', 'x64').join(), /truncated DOS header/);
+});
+
+const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex');
+const peOptional = (dll) => dll.readUInt32LE(0x3c) + 24;
+
+it('rejects a PE32 optional header on an AMD64 DLL, even with a matching manifest hash', () => {
+    // The reviewer's proof: flip only the optional-header magic 0x20b -> 0x10b
+    // and re-hash the manifest; this used to pass as "ok".
+    const result = stage(WIN32, WIN32, (manifest, dir) => {
+        const file = join(dir, 'ghostty-vt.dll');
+        const dll = readFileSync(file);
+        assert.equal(dll.readUInt16LE(peOptional(dll)), 0x20b);
+        dll.writeUInt16LE(0x10b, peOptional(dll));
+        writeFileSync(file, dll);
+        manifest.files['ghostty-vt.dll'].sha256 = sha256(dll);
+    });
+    assert.equal(result.status, 'invalid-runtime');
+    assert.match(result.detail, /ghostty-vt\.dll: optional header magic 0x10b, want 0x20b \(PE32\+\)/);
+});
+
+it('rejects a missing, undersized, oversized or inconsistent PE optional header', () => {
+    const dll = () => Buffer.from(file(WIN32, 'ghostty-vt.dll'));
+    const sizeField = (b) => b.readUInt32LE(0x3c) + 20;
+    const check = (b) => checkNativeFile('ghostty-vt.dll', b, 'win32', 'x64').join();
+
+    const none = dll(); none.writeUInt16LE(0, sizeField(none));
+    assert.match(check(none), /no optional header/);
+    const small = dll(); small.writeUInt16LE(96, sizeField(small));
+    assert.match(check(small), /optional header size 96 invalid or out of bounds/);
+    const huge = dll().subarray(0, peOptional(dll()) + 64); // header claims 240 bytes, file ends sooner
+    assert.match(check(huge), /optional header size \d+ invalid or out of bounds/);
+    const rva = dll(); rva.writeUInt32LE(4096, peOptional(rva) + 108);
+    assert.match(check(rva), /NumberOfRvaAndSizes 4096 does not fit/);
+    const subsystem = dll(); subsystem.writeUInt16LE(1, peOptional(subsystem) + 68); // native driver
+    assert.match(check(subsystem), /subsystem 1 is not a Windows GUI\/CUI DLL/);
+    const align = dll(); align.writeUInt32LE(300, peOptional(align) + 36);
+    assert.match(check(align), /FileAlignment 300 invalid/);
+    const lfanew = dll(); lfanew.writeUInt32LE(0x7fffffff, 0x3c);
+    assert.match(check(lfanew), /no PE signature/);
+});
+
+it('rejects truncated and malformed Mach-O and ELF headers', () => {
+    const macho = file(DARWIN, 'libghostty-vt.dylib');
+    assert.match(checkNativeFile('libghostty-vt.dylib', macho.subarray(0, 20), 'darwin', 'arm64').join(), /truncated Mach-O header/);
+    assert.match(checkNativeFile('libghostty-vt.dylib', macho.subarray(0, 200), 'darwin', 'arm64').join(), /load commands missing or out of bounds/);
+    const badCmd = Buffer.from(macho); badCmd.writeUInt32LE(3, 32 + 4); // first cmdsize not a multiple of 8
+    assert.match(checkNativeFile('libghostty-vt.dylib', badCmd, 'darwin', 'arm64').join(), /malformed load command 0/);
+
+    const elf = file(LINUX, 'libghostty-vt.so.0');
+    assert.match(checkNativeFile('libghostty-vt.so.0', elf.subarray(0, 40), 'linux', 'x64').join(), /truncated ELF header/);
+    const phoff = Buffer.from(elf); phoff.writeBigUInt64LE(BigInt(elf.length), 32);
+    assert.match(checkNativeFile('libghostty-vt.so.0', phoff, 'linux', 'x64').join(), /program header table missing or out of bounds/);
+    // Cut the file inside the section header table (which sits at the end).
+    const cut = elf.subarray(0, Number(elf.readBigUInt64LE(40)) + 64);
+    assert.match(checkNativeFile('libghostty-vt.so.0', cut, 'linux', 'x64').join(), /section header table missing or out of bounds/);
+    const version = Buffer.from(elf); version[6] = 0;
+    assert.match(checkNativeFile('libghostty-vt.so.0', version, 'linux', 'x64').join(), /unsupported ELF version/);
 });

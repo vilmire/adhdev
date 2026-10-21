@@ -16,18 +16,22 @@ execute_process(
 string(REPLACE "\"" "" NODE_ADDON_API_DIR "${NODE_ADDON_API_DIR}")
 
 set(GHOSTTY_GIT_TAG "d4a38c8661453026bd1b1bb022ba2c37b347adce" CACHE STRING "Ghostty git revision for libghostty-vt")
+# The pin itself, independent of the overridable cache entry above.
+set(ADHDEV_GHOSTTY_PINNED_REVISION "d4a38c8661453026bd1b1bb022ba2c37b347adce")
 
 if(DEFINED ENV{ZIG_EXECUTABLE} AND NOT DEFINED ZIG_EXECUTABLE)
   set(ZIG_EXECUTABLE "$ENV{ZIG_EXECUTABLE}" CACHE FILEPATH "Path to zig executable")
 endif()
 
 # --- Build provenance ---------------------------------------------------------
-# A release binary must be built from exactly the pinned ghostty revision, from
-# a clean checkout, with the pinned zig. Each violation is a problem code; any
-# problem fails the configure step unless the explicit developer override
-# ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1 (cache variable or environment) is set.
-# Then the binary reports releaseEligible=false and the prebuilt release gates
-# refuse it. Only problem codes are embedded, never paths.
+# A release binary must be built from exactly the pinned ghostty revision, in a
+# clean FetchContent-managed clone, with the pinned zig, and its libghostty-vt
+# must be rebuilt by THIS build (see "Runtime freshness" below). Each violation
+# is a problem code; any problem fails the configure step unless the explicit
+# developer override ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1 (cache variable or
+# environment) is set. The override ALWAYS makes the build non-release, even
+# with nothing else wrong: the binary reports releaseEligible=false and the
+# prebuilt release gates refuse it. Only problem codes are embedded, never paths.
 #
 # toolchain.json is the single zig pin: the native workflow installs that
 # version and the release gate compares against it. It is a binding digest
@@ -40,6 +44,19 @@ if("$ENV{ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD}" STREQUAL "1")
   set(ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD ON)
 endif()
 set(ADHDEV_PROVENANCE_PROBLEMS "")
+if(ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD)
+  list(APPEND ADHDEV_PROVENANCE_PROBLEMS "unverified-dev-build")
+endif()
+if(NOT GHOSTTY_GIT_TAG STREQUAL ADHDEV_GHOSTTY_PINNED_REVISION)
+  list(APPEND ADHDEV_PROVENANCE_PROBLEMS "ghostty-tag-override")
+endif()
+# A substituted checkout may carry build outputs this build would trust (the
+# upstream zig build is an OUTPUT-only custom command and zig-out/ is ignored
+# by git, so HEAD/status checks cannot see a stale one). Release builds use the
+# managed clone only, whose outputs this file controls.
+if(FETCHCONTENT_SOURCE_DIR_GHOSTTY)
+  list(APPEND ADHDEV_PROVENANCE_PROBLEMS "ghostty-source-override")
+endif()
 
 # User-supplied extra zig flags change the library ghostty builds.
 if(NOT "${GHOSTTY_ZIG_BUILD_FLAGS}" STREQUAL "")
@@ -47,17 +64,26 @@ if(NOT "${GHOSTTY_ZIG_BUILD_FLAGS}" STREQUAL "")
 endif()
 
 # Resolve zig here (ghostty's own find_program reuses this cache entry) and
-# record the version that actually builds libghostty-vt.
+# record the version that actually builds libghostty-vt. The whole output, with
+# only surrounding whitespace/CRLF trimmed, must equal the pin exactly.
 find_program(ZIG_EXECUTABLE zig REQUIRED)
 execute_process(
   COMMAND "${ZIG_EXECUTABLE}" version
-  OUTPUT_VARIABLE ADHDEV_ZIG_VERSION
-  OUTPUT_STRIP_TRAILING_WHITESPACE
+  OUTPUT_VARIABLE zig_version_output
   RESULT_VARIABLE zig_version_result
+  ERROR_QUIET
 )
-string(REGEX REPLACE "[^0-9A-Za-z.+-]" "" ADHDEV_ZIG_VERSION "${ADHDEV_ZIG_VERSION}")
-if(NOT zig_version_result EQUAL 0 OR NOT ADHDEV_ZIG_VERSION STREQUAL ADHDEV_PINNED_ZIG_VERSION)
+string(STRIP "${zig_version_output}" zig_version_output)
+if(zig_version_result EQUAL 0 AND zig_version_output STREQUAL ADHDEV_PINNED_ZIG_VERSION)
+  set(ADHDEV_ZIG_VERSION "${ADHDEV_PINNED_ZIG_VERSION}")
+else()
   list(APPEND ADHDEV_PROVENANCE_PROBLEMS "zig-version-mismatch")
+  # Recorded for diagnostics only, and only if it is a plain version token.
+  if(zig_version_output MATCHES "^[0-9A-Za-z.+-]+$")
+    set(ADHDEV_ZIG_VERSION "${zig_version_output}")
+  else()
+    set(ADHDEV_ZIG_VERSION "unrecognized")
+  endif()
 endif()
 
 FetchContent_Declare(ghostty
@@ -95,18 +121,53 @@ if(GIT_EXECUTABLE)
 endif()
 if(ADHDEV_GHOSTTY_SOURCE_REVISION STREQUAL "")
   list(APPEND ADHDEV_PROVENANCE_PROBLEMS "ghostty-source-not-a-git-checkout")
-elseif(NOT ADHDEV_GHOSTTY_SOURCE_REVISION STREQUAL GHOSTTY_GIT_TAG)
+elseif(NOT ADHDEV_GHOSTTY_SOURCE_REVISION STREQUAL ADHDEV_GHOSTTY_PINNED_REVISION)
   list(APPEND ADHDEV_PROVENANCE_PROBLEMS "ghostty-head-mismatch")
 endif()
 if(NOT ADHDEV_GHOSTTY_SOURCE_CLEAN)
   list(APPEND ADHDEV_PROVENANCE_PROBLEMS "ghostty-source-dirty")
 endif()
 
+# --- Runtime freshness --------------------------------------------------------
+# HEAD/status/zig checks describe the INPUTS; they do not prove that the
+# imported libghostty-vt was built from them. Upstream builds it with an
+# OUTPUT-only custom command (no DEPENDS), so any existing zig-out/ library
+# would be reused without running zig. Two measures close that:
+#  1. Configure deletes zig-out/ in the managed clone, so this build's first
+#     zig run must produce it. (zig's own caches are content-addressed by
+#     sources, options and compiler, so they cannot serve a stale artifact.)
+#  2. adhdev_ghostty_runtime (below) runs `zig build` with upstream's exact
+#     flags on EVERY build, before the addon links and copies the runtime: zig
+#     re-installs zig-out/ from its cache, replacing anything left there. For a
+#     release build it re-verifies HEAD and a clean tree before and after.
+# A substituted checkout (FETCHCONTENT_SOURCE_DIR_GHOSTTY) is never touched and
+# never release eligible.
+if(NOT FETCHCONTENT_SOURCE_DIR_GHOSTTY)
+  file(REMOVE_RECURSE "${ghostty_SOURCE_DIR}/zig-out")
+  file(MAKE_DIRECTORY "${ghostty_SOURCE_DIR}/zig-out/include")
+endif()
+get_directory_property(ADHDEV_GHOSTTY_ZIG_FLAGS DIRECTORY "${ghostty_SOURCE_DIR}" DEFINITION GHOSTTY_ZIG_BUILD_FLAGS)
+set(ADHDEV_VERIFY_GHOSTTY_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/adhdev-verify-ghostty-source.cmake")
+file(WRITE "${ADHDEV_VERIFY_GHOSTTY_SCRIPT}" [==[
+# Generated by ghostty-vt-node/CMakeLists.txt: re-verify at build time that the
+# ghostty source is still the pinned revision with a clean tree.
+execute_process(COMMAND "${GIT}" -C "${SRC}" rev-parse HEAD
+  OUTPUT_VARIABLE head OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE head_result ERROR_QUIET)
+execute_process(COMMAND "${GIT}" -C "${SRC}" status --porcelain
+  OUTPUT_VARIABLE status OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE status_result ERROR_QUIET)
+if(NOT head_result EQUAL 0 OR NOT head STREQUAL PIN)
+  message(FATAL_ERROR "ghostty-vt-node: ghostty source HEAD is '${head}', not the pin ${PIN}; reconfigure")
+endif()
+if(NOT status_result EQUAL 0 OR NOT status STREQUAL "")
+  message(FATAL_ERROR "ghostty-vt-node: ghostty source tree changed since configure; reconfigure from a clean clone")
+endif()
+]==])
+
 if(ADHDEV_PROVENANCE_PROBLEMS)
   if(NOT ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD)
     message(FATAL_ERROR
       "ghostty-vt-node build provenance check failed: ${ADHDEV_PROVENANCE_PROBLEMS}\n"
-      "  ghostty pin ${GHOSTTY_GIT_TAG}, resolved '${ADHDEV_GHOSTTY_SOURCE_REVISION}' (clean=${ADHDEV_GHOSTTY_SOURCE_CLEAN})\n"
+      "  ghostty pin ${ADHDEV_GHOSTTY_PINNED_REVISION}, resolved '${ADHDEV_GHOSTTY_SOURCE_REVISION}' (clean=${ADHDEV_GHOSTTY_SOURCE_CLEAN})\n"
       "  zig pin ${ADHDEV_PINNED_ZIG_VERSION} (toolchain.json), found '${ADHDEV_ZIG_VERSION}'\n"
       "Fix the toolchain/source, or set ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1 for a local NON-RELEASE build "
       "(the prebuilt release gates refuse it).")
@@ -125,6 +186,26 @@ add_library(${PROJECT_NAME} SHARED
 )
 
 set(GHOSTTY_VT_RUNTIME_ALIAS "${CMAKE_SHARED_LIBRARY_PREFIX}ghostty-vt${CMAKE_SHARED_LIBRARY_SUFFIX}")
+
+# Runtime freshness, step 2 (see above): a custom target always runs.
+set(ADHDEV_VERIFY_GHOSTTY_COMMAND "")
+if(ADHDEV_GHOSTTY_RELEASE_ELIGIBLE)
+  set(ADHDEV_VERIFY_GHOSTTY_COMMAND
+    "${CMAKE_COMMAND}" "-DGIT=${GIT_EXECUTABLE}" "-DSRC=${ghostty_SOURCE_DIR}"
+    "-DPIN=${ADHDEV_GHOSTTY_PINNED_REVISION}" -P "${ADHDEV_VERIFY_GHOSTTY_SCRIPT}")
+else()
+  set(ADHDEV_VERIFY_GHOSTTY_COMMAND "${CMAKE_COMMAND}" -E echo "ghostty-vt-node: non-release build, source not re-verified")
+endif()
+add_custom_target(adhdev_ghostty_runtime
+  COMMAND ${ADHDEV_VERIFY_GHOSTTY_COMMAND}
+  COMMAND "${ZIG_EXECUTABLE}" build -Demit-lib-vt ${ADHDEV_GHOSTTY_ZIG_FLAGS}
+  COMMAND ${ADHDEV_VERIFY_GHOSTTY_COMMAND}
+  WORKING_DIRECTORY "${ghostty_SOURCE_DIR}"
+  COMMENT "Re-running zig build for libghostty-vt (always; replaces any stale zig-out output)"
+  VERBATIM
+)
+add_dependencies(adhdev_ghostty_runtime zig_build_lib_vt)
+add_dependencies(${PROJECT_NAME} adhdev_ghostty_runtime)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
   ${CMAKE_JS_INC}

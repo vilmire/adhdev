@@ -48,8 +48,10 @@ export function pinnedZigVersion(packageDir = PACKAGE_DIR) {
 export function pinnedGhosttyRevision(packageDir = PACKAGE_DIR) {
     const cmake = readFileSync(join(packageDir, 'CMakeLists.txt'), 'utf8');
     const match = cmake.match(/set\(GHOSTTY_GIT_TAG "([0-9a-f]{40})"/);
-    if (!match) throw new Error('CMakeLists.txt does not pin GHOSTTY_GIT_TAG to a 40-hex revision');
-    return match[1];
+    const pin = cmake.match(/set\(ADHDEV_GHOSTTY_PINNED_REVISION "([0-9a-f]{40})"\)/);
+    if (!match || !pin) throw new Error('CMakeLists.txt does not pin GHOSTTY_GIT_TAG / ADHDEV_GHOSTTY_PINNED_REVISION to a 40-hex revision');
+    if (match[1] !== pin[1]) throw new Error(`CMakeLists.txt pins disagree: GHOSTTY_GIT_TAG ${match[1]} != ADHDEV_GHOSTTY_PINNED_REVISION ${pin[1]}`);
+    return pin[1];
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

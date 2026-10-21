@@ -96,14 +96,24 @@ in `toolchain.json` for `libghostty`; set `ZIG_EXECUTABLE` if zig is not on
 `PATH`).
 
 The configure step verifies the build's provenance and fails on any problem:
-the resolved ghostty checkout (including one substituted with
-`FETCHCONTENT_SOURCE_DIR_GHOSTTY`) must be the pinned revision with a clean
-tree, zig must be the `toolchain.json` version, and `GHOSTTY_ZIG_BUILD_FLAGS`
-must be empty. For local experiments only, `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1`
-turns the failure into a warning; the binary then reports
-`releaseEligible: false` with its problem codes, and every release gate refuses
-it (`non-release`). The addon also records the zig version, C/C++ compiler id
-and version, and build type (`getBindingInfo()`, copied into the manifest).
+ghostty must come from the FetchContent-managed clone (a
+`FETCHCONTENT_SOURCE_DIR_GHOSTTY` substitute or a `GHOSTTY_GIT_TAG` override is
+refused) at the pinned revision with a clean tree; `zig version` must print
+exactly the `toolchain.json` version (only surrounding whitespace is trimmed);
+and `GHOSTTY_ZIG_BUILD_FLAGS` must be empty. The libghostty-vt runtime is then
+provably rebuilt by this build: configure deletes `zig-out/` in the managed
+clone, and the `adhdev_ghostty_runtime` target re-runs `zig build` before
+every link (zig re-installs `zig-out/` from its content-addressed cache,
+replacing any stale file), re-verifying the pinned, clean source before and
+after. For local experiments only, `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1` turns
+a failure into a warning, and ALWAYS makes the build non-release: the binary
+reports `releaseEligible: false` with its problem codes (at least
+`unverified-dev-build`), and every release gate refuses it (`non-release`). The
+addon also records the zig version, C/C++ compiler id and version, and build
+type (`getBindingInfo()`, copied into the manifest).
+`scripts/probe-build-provenance.mjs <dir>` exercises all of this against a
+finished build in `<dir>/build` (stale runtime, reconfigure, source edit, dev
+override, zig output parsing, source override).
 
 ```bash
 # Compile from source and emit into the committed prebuilt for this
@@ -119,14 +129,18 @@ node oss/packages/ghostty-vt-node/scripts/verify-prebuilt.mjs oss/packages/ghost
 node oss/packages/ghostty-vt-node/scripts/check-prebuilts.mjs
 ```
 
-Without `ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1`, `npm run build` keeps an existing
-local build or copies a usable prebuilt instead of compiling (`--plan` prints
-which it would do).
+With `ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1` the build is a clean `cmake-js
+rebuild` (fresh configure and clone). Without it, `npm run build` keeps an
+existing local build or copies a usable prebuilt, or compiles incrementally
+(`--plan` prints which it would do).
 
 Binaries embed absolute build and cache paths, so a prebuilt you commit must
-be built outside any home directory. Copy the package to a neutral directory and
-point every cache there (shown for macOS/Linux; on Windows use e.g. `C:\gvn`,
-`C:\zgc` and set `HOME`/`USERPROFILE` the same way):
+be built outside any home directory, from a fresh clone of the commit being
+stamped. Copy the package to a neutral directory and point every cache there
+(shown for macOS/Linux; on Windows use e.g. `C:\gvn`, `C:\zgc`, `C:\gvn-home`
+and set `HOME`/`USERPROFILE` the same way, with zig installed outside the user
+profile). Do not set `FETCHCONTENT_SOURCE_DIR_GHOSTTY`, `GHOSTTY_GIT_TAG`,
+`GHOSTTY_ZIG_BUILD_FLAGS` or `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD`:
 
 ```bash
 rm -rf /tmp/gvn && mkdir -p /tmp/gvn/node_modules /tmp/gvn-home
