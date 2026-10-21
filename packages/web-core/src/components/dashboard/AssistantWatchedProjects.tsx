@@ -574,21 +574,21 @@ export default function AssistantWatchedProjects({
                                                         >
                                                             <div className="flex items-center justify-between gap-2">
                                                                 <span className="truncate font-semibold text-text-primary">{project.name}</span>
-                                                                <span className="shrink-0 text-[11px] text-text-muted">
+                                                                <span className="shrink-0 text-[11px] leading-4 text-text-muted">
                                                                     {t('assistantWatched.coordinatorState', { state: project.coordinatorState })}
                                                                 </span>
                                                             </div>
                                                             {project.sanitizedRepoIdentity && (
-                                                                <div className="truncate text-[11px] text-text-muted">{project.sanitizedRepoIdentity}</div>
+                                                                <div className="truncate text-[11px] leading-4 text-text-muted">{project.sanitizedRepoIdentity}</div>
                                                             )}
                                                             {isFollowed && (
-                                                                <div className="text-[11px] text-status-success">{t('assistantWatched.stateFollowed')}</div>
+                                                                <div className="text-[11px] leading-4 text-status-success">{t('assistantWatched.stateFollowed')}</div>
                                                             )}
                                                             {isUnfollowed && (
-                                                                <div className="text-[11px] text-text-muted">{t('assistantWatched.stateUnfollowed')}</div>
+                                                                <div className="text-[11px] leading-4 text-text-muted">{t('assistantWatched.stateUnfollowed')}</div>
                                                             )}
                                                             {isRevoked && (
-                                                                <div className="text-[11px] text-status-warning">{t('assistantWatched.stateRevoked')}</div>
+                                                                <div className="text-[11px] leading-4 text-status-warning">{t('assistantWatched.stateRevoked')}</div>
                                                             )}
                                                             <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                                                                 {!isFollowed && (

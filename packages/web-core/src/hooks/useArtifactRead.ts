@@ -4,19 +4,19 @@ import { useBaseDaemonActions, useBaseDaemons } from '../context/BaseDaemonConte
 import { useTransport } from '../context/TransportContext'
 import { buildConversations } from '../components/dashboard/buildConversations'
 import { getCoordinatorRoutingHint, getConversationDaemonRouteId } from '../components/dashboard/conversation-selectors'
-import {
-    controllerRegistry,
-    getControllerRegistryGeneration,
-    subscribeControllerRegistry,
-} from '../components/dashboard/session-chat-controller'
+import * as sessionChatControllerModule from '../components/dashboard/session-chat-controller'
 import type { DaemonData } from '../types'
 import { unwrapDaemonCommandBody } from '../utils/daemon-command-envelope'
 
 const subscribeControllerRegistrySafe = (listener: () => void): (() => void) =>
-    typeof subscribeControllerRegistry === 'function' ? subscribeControllerRegistry(listener) : () => {}
+    typeof sessionChatControllerModule.subscribeControllerRegistry === 'function'
+        ? sessionChatControllerModule.subscribeControllerRegistry(listener)
+        : () => {}
 
 const getControllerRegistryGenerationSafe = (): number =>
-    typeof getControllerRegistryGeneration === 'function' ? getControllerRegistryGeneration() : 0
+    typeof sessionChatControllerModule.getControllerRegistryGeneration === 'function'
+        ? sessionChatControllerModule.getControllerRegistryGeneration()
+        : 0
 
 export const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
 export const MAX_ARTIFACT_PREVIEW_CHARS = 600
@@ -38,7 +38,7 @@ export const ALLOWED_ARTIFACT_KINDS: ReadonlySet<ArtifactKind> = new Set<Artifac
 export const ALLOWED_ARTIFACT_MIMES: Readonly<Record<ArtifactKind, ReadonlySet<string>>> = {
     markdown: new Set(['text/markdown', 'text/plain']),
     image: new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
-    diff: new Set(['text/x-diff', 'text/plain']),
+    diff: new Set(['text/x-diff', 'text/x-patch', 'text/plain']),
     json: new Set(['application/json', 'text/plain']),
     text: new Set(['text/plain']),
 }
@@ -360,24 +360,27 @@ export function resolveArtifactSessionTarget(
 
     const exactControllerMatches = new Map<string, ResolvedArtifactSessionTarget>()
     const bareControllerMatches = new Map<string, ResolvedArtifactSessionTarget>()
-    for (const controller of controllerRegistry.values()) {
-        const id = controller.getIdentity()
-        const cDaemonId = typeof id.daemonId === 'string' ? id.daemonId.trim() : ''
-        const cSessionId = typeof id.sessionId === 'string' ? id.sessionId.trim() : ''
-        if (!cDaemonId || !cSessionId) continue
-        const pairKey = JSON.stringify([cDaemonId, cSessionId])
-        if (`${cDaemonId}:${cSessionId}` === contextKey) {
-            exactControllerMatches.set(pairKey, {
-                daemonId: cDaemonId,
-                sessionId: cSessionId,
-                ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
-            })
-        } else if (cSessionId === contextKey) {
-            bareControllerMatches.set(pairKey, {
-                daemonId: cDaemonId,
-                sessionId: cSessionId,
-                ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
-            })
+    const registry = sessionChatControllerModule.controllerRegistry
+    if (registry && typeof registry.values === 'function') {
+        for (const controller of registry.values()) {
+            const id = controller.getIdentity()
+            const cDaemonId = typeof id.daemonId === 'string' ? id.daemonId.trim() : ''
+            const cSessionId = typeof id.sessionId === 'string' ? id.sessionId.trim() : ''
+            if (!cDaemonId || !cSessionId) continue
+            const pairKey = JSON.stringify([cDaemonId, cSessionId])
+            if (`${cDaemonId}:${cSessionId}` === contextKey) {
+                exactControllerMatches.set(pairKey, {
+                    daemonId: cDaemonId,
+                    sessionId: cSessionId,
+                    ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+                })
+            } else if (cSessionId === contextKey) {
+                bareControllerMatches.set(pairKey, {
+                    daemonId: cDaemonId,
+                    sessionId: cSessionId,
+                    ...(explicitCoordinatorId ? { meshCoordinatorDaemonId: explicitCoordinatorId } : {}),
+                })
+            }
         }
     }
 

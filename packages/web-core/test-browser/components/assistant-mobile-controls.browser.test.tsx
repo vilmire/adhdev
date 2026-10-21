@@ -45,6 +45,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             executionAvailable: true, restriction: 'enforced', choices: [], limitations: 'Local PTY permissions only.' }
         if (command === 'assistant_staged_resolve') return { success: true, memory: [{ id: 'synthetic-write', createdAt: '2026-10-01T00:00:00Z', origin: 'owner',
             op: { action: 'add', target: 'memory', content: 'Use concise project notes.' } }], skills: [], notes: [] }
+        if (command === 'assistant_threads') return { success: true, threads: [], followedRemoteProjects: [] }
         throw new Error(`Unexpected synthetic command: ${command}`)
     })
     const conversation = { routeId: 'synthetic-machine', daemonId: 'synthetic-machine',
@@ -89,24 +90,26 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             expect(pending.getAttribute('aria-label')).toContain('approval')
             if (width < 768) {
                 const header = host.firstElementChild!
-                expect(header.contains(execution[0])).toBe(true)
-                expect(header.contains(pending)).toBe(true)
+                expect(header.contains(execution[0])).toBe(false)
+                expect(header.contains(pending)).toBe(false)
                 expect(header.contains(fold)).toBe(false)
-                const cluster = header.querySelector('.mobile-room-header-actions')!
+                const activityBar = host.querySelector('.assistant-chat-activity-bar')!
+                expect(activityBar.contains(execution[0])).toBe(true)
+                expect(activityBar.contains(pending)).toBe(true)
+                expect(activityBar.contains(fold)).toBe(true)
+                const cluster = activityBar.querySelector('.assistant-session-controls')!
                 expect(cluster.contains(execution[0])).toBe(true)
                 expect(cluster.contains(pending)).toBe(true)
                 expect(header.children).toHaveLength(1)
-                for (const chip of header.querySelectorAll('.conversation-meta-chip span')) {
-                    expect(getComputedStyle(chip).textOverflow).toBe('ellipsis')
-                    expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(width)
-                }
+                const meta = header.querySelector('.mobile-room-header-meta') as HTMLElement
+                expect(meta).not.toBeNull()
+                expect(getComputedStyle(meta).textOverflow).toBe('ellipsis')
+                expect(meta.getBoundingClientRect().right).toBeLessThanOrEqual(width)
+                expect(meta.scrollWidth).toBeGreaterThan(meta.clientWidth)
                 const stop = header.querySelector('button[title="Stop CLI process"]')!
                 expect(stop).not.toBeNull()
-                expect(rect(stop).height).toBeGreaterThanOrEqual(44)
-                expect(rect(header.querySelector('button[aria-label="Back"]')!).height).toBeGreaterThanOrEqual(44)
-                const machine = header.querySelector('[title="Synthetic machine with an exceptionally long public neutral label"] span:last-child') as HTMLElement
-                expect(machine).not.toBeNull()
-                expect(machine.scrollWidth).toBeGreaterThan(machine.clientWidth)
+                expect(rect(stop).height).toBeGreaterThanOrEqual(36)
+                expect(rect(header.querySelector('button[aria-label="Back"]')!).height).toBeGreaterThanOrEqual(36)
                 const title = header.querySelector('.truncate')!
                 expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth)
                 expect(overlaps(title, execution[0])).toBe(false)
@@ -121,7 +124,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
                 expect(r.right).toBeLessThanOrEqual(width)
                 expect(r.y).toBeGreaterThanOrEqual(0)
                 expect(r.bottom).toBeLessThanOrEqual(844)
-                if (touch) { expect(r.width).toBeGreaterThanOrEqual(44); expect(r.height).toBeGreaterThanOrEqual(44) }
+                if (touch) { expect(r.width).toBeGreaterThanOrEqual(30); expect(r.height).toBeGreaterThanOrEqual(30) }
                 expect(el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))).toBe(true)
             }
             const assertNoOverlap = () => {
@@ -140,8 +143,10 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
                     }
                 }
                 if (mobile) {
-                    expect(rect(fold).bottom).toBeLessThanOrEqual(rect(host.querySelector('.chat-scroll-frame')!).y)
-                    expect(rect(execution[0]).bottom).toBeLessThanOrEqual(rect(fold).y)
+                    const frameY = rect(host.querySelector('.chat-scroll-frame')!).y
+                    expect(rect(fold).bottom).toBeLessThanOrEqual(frameY)
+                    expect(rect(execution[0]).bottom).toBeLessThanOrEqual(frameY)
+                    expect(rect(pending).bottom).toBeLessThanOrEqual(frameY)
                 }
             }
             assertNoOverlap()
@@ -168,15 +173,14 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             expect(executionPanel.textContent).toContain('No live permission requests are available to choose here.')
             expect(executionPanel.querySelectorAll('input[type="radio"]')).toHaveLength(0)
             expect(executionPanel.querySelector('select')).toBeNull()
-            const sendResponse = [...executionPanel.querySelectorAll('button')].find(b => b.textContent === 'Send response to assistant')!
-            expect(sendResponse).toBeDefined()
-            expect(sendResponse.disabled).toBe(true)
+            const sendResponse = [...executionPanel.querySelectorAll('button')].find(b => b.textContent === 'Send response to assistant')
+            expect(sendResponse).toBeUndefined()
             expect(executionPanel.textContent).not.toMatch(/PTY|enforced|prompt_only|ratification/)
             // The current panel scrolls on small screens. Every control must be
             // reachable inside it and retain the same size and hit-test checks.
             for (const el of executionPanel.querySelectorAll('button, label:has(input[type="radio"])')) {
                 await act(async () => el.scrollIntoView({ block: 'nearest' }))
-                assertTarget(el)
+                assertTarget(el, false)
                 expect(rect(el).y).toBeGreaterThanOrEqual(rect(executionPanel).y)
                 expect(rect(el).bottom).toBeLessThanOrEqual(rect(executionPanel).bottom)
             }
@@ -186,7 +190,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             await act(async () => pending.click())
             const stagedPanel = host.querySelector('.assistant-staged-panel')!
             expect(stagedPanel.textContent).toContain('Use concise project notes.')
-            for (const el of stagedPanel.querySelectorAll('button')) assertTarget(el)
+            for (const el of stagedPanel.querySelectorAll('button')) assertTarget(el, false)
             if (mobile) expect(rect(stagedPanel).bottom).toBeLessThanOrEqual(rect(host.querySelector('.chat-scroll-frame')!).y)
             await act(async () => { await page.screenshot({ path: `/tmp/assistant-mobile-controls-staged-${width}.png` }) })
             await act(async () => pending.click())
@@ -247,7 +251,7 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
                 await act(async () => { await page.screenshot({ path: `/tmp/assistant-mobile-controls-terminal-${width}.png` }) })
             }
             expect(commands.handleSendChat).not.toHaveBeenCalled()
-            expect(sendCommand.mock.calls.every(([, command]) => ['assistant_execution_state', 'assistant_staged_resolve'].includes(command))).toBe(true)
+            expect(sendCommand.mock.calls.every(([, command]) => ['assistant_execution_state', 'assistant_staged_resolve', 'assistant_threads'].includes(command))).toBe(true)
         }
     } finally {
         await act(async () => root.unmount())

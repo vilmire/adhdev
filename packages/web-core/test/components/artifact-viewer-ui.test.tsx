@@ -15,9 +15,13 @@
  *    on download, close, sha256 update, and unmount.
  * 6. Actual ChatMessageList / ChatRowModel / chat-activity-visibility / mobile tail (`📎 <title>`) wiring.
  */
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ARTIFACT_EXTENSION_MAP, resolveArtifactFile } from '../../../daemon-core/src/artifacts/index.js'
 import type { ChatAttachmentMeta, ChatMessage, DaemonData } from '../../src/types'
 import { AttachmentBubble } from '../../src/components/attachments/AttachmentBubble'
 import { ArtifactContentRenderer, classifyDiffLine } from '../../src/components/attachments/ArtifactContentRenderers'
@@ -565,6 +569,92 @@ describe('Task D — Artifact Viewer UI', () => {
             expect(diffEl?.querySelectorAll('[data-diff-line-kind="del"]')).toHaveLength(1)
             expect(diffEl?.querySelectorAll('[data-diff-line-kind="hunk"]')).toHaveLength(1)
             expect(diffEl?.querySelectorAll('[data-diff-line-kind="meta"]')).toHaveLength(3)
+        })
+
+        it('accepts and renders .patch diff artifacts registered without explicit mime (text/x-patch from ARTIFACT_EXTENSION_MAP)', async () => {
+            const rawPatch = [
+                'diff --git a/src/hooks/useArtifactRead.ts b/src/hooks/useArtifactRead.ts',
+                '--- a/src/hooks/useArtifactRead.ts',
+                '+++ b/src/hooks/useArtifactRead.ts',
+                '@@ -38,3 +38,3 @@',
+                "-    diff: new Set(['text/x-diff', 'text/plain']),",
+                "+    diff: new Set(['text/x-diff', 'text/x-patch', 'text/plain']),",
+            ].join('\n')
+
+            const tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-patch-artifact-test-'))
+            try {
+                fs.writeFileSync(path.join(tmpWorkspace, 'rc25-fix.patch'), rawPatch, 'utf8')
+                // Register/resolve .patch without declaredMime -> daemon-core assigns { kind: 'diff', mime: 'text/x-patch' }
+                const resolved = resolveArtifactFile(tmpWorkspace, 'rc25-fix.patch')
+                expect(ARTIFACT_EXTENSION_MAP['.patch']).toEqual({ kind: 'diff', mime: 'text/x-patch' })
+                expect(resolved.kind).toBe('diff')
+                expect(resolved.mime).toBe('text/x-patch')
+
+                const patchAttachment = makeAttachment({
+                    artifactId: 'art_patch01234567890',
+                    kind: resolved.kind,
+                    mime: resolved.mime,
+                    filename: resolved.filename,
+                    title: resolved.title,
+                    sizeBytes: resolved.sizeBytes,
+                    sha256: resolved.sha256,
+                    previewText: resolved.previewText ?? undefined,
+                })
+
+                const fetchResponse = {
+                    success: true,
+                    artifactId: patchAttachment.artifactId,
+                    sessionId: 'sess-101',
+                    kind: resolved.kind,
+                    mime: resolved.mime,
+                    filename: resolved.filename,
+                    title: resolved.title,
+                    sizeBytes: resolved.sizeBytes,
+                    sha256: resolved.sha256,
+                    registeredSha256: resolved.sha256,
+                    sha256Changed: false,
+                    encoding: 'utf8' as const,
+                    content: rawPatch,
+                }
+
+                const parsed = readArtifactFetchCommandResponse(fetchResponse, {
+                    artifactId: patchAttachment.artifactId,
+                    sessionId: 'sess-101',
+                    daemonId: 'daemon-alpha',
+                    attachment: patchAttachment,
+                })
+                expect(parsed.errorCode).toBeNull()
+                expect(parsed.error).toBeNull()
+                expect(parsed.data).not.toBeNull()
+                expect(parsed.data?.kind).toBe('diff')
+                expect(parsed.data?.mime).toBe('text/x-patch')
+
+                const fetchArtifact = vi.fn<FetchArtifactCommandFn>().mockResolvedValue(fetchResponse)
+                mount(
+                    <AttachmentBubble
+                        attachment={patchAttachment}
+                        daemonId="daemon-alpha"
+                        sessionId="sess-101"
+                        fetchArtifact={fetchArtifact}
+                    />,
+                )
+
+                const viewBtn = container.querySelector('[data-testid="artifact-view-full-button"]') as HTMLButtonElement
+                await act(async () => {
+                    viewBtn.click()
+                })
+
+                expect(fetchArtifact).toHaveBeenCalledTimes(1)
+                expect(container.querySelector('[data-testid="artifact-error"]')).toBeNull()
+                expect(container.querySelector('[data-artifact-renderer="unsupported"]')).toBeNull()
+                const diffEl = container.querySelector('[data-artifact-renderer="diff"]')
+                expect(diffEl).not.toBeNull()
+                expect(diffEl?.querySelectorAll('[data-diff-line-kind="add"]')).toHaveLength(1)
+                expect(diffEl?.querySelectorAll('[data-diff-line-kind="del"]')).toHaveLength(1)
+                expect(diffEl?.querySelectorAll('[data-diff-line-kind="hunk"]')).toHaveLength(1)
+            } finally {
+                fs.rmSync(tmpWorkspace, { recursive: true, force: true })
+            }
         })
 
         it('renders formatted JSON for valid JSON and raw text + notice for malformed JSON', () => {
