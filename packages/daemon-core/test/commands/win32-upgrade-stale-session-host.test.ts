@@ -60,6 +60,7 @@ describe('win32 upgrade — stale session-host survival', () => {
   let killSpy: ReturnType<typeof vi.spyOn> | undefined
 
   beforeEach(() => {
+    vi.useFakeTimers()
     cp.execFileSync.mockReset()
     cp.spawn.mockReset()
     cp.execFileSync.mockImplementation(() => '')
@@ -70,6 +71,7 @@ describe('win32 upgrade — stale session-host survival', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     killSpy?.mockRestore()
     killSpy = undefined
     if (platformDescriptor) Object.defineProperty(process, 'platform', platformDescriptor)
@@ -134,7 +136,9 @@ describe('win32 upgrade — stale session-host survival', () => {
       mockBrokenCommandLineProbe([31338])
       mockLiveness(true) // never dies
 
-      const outcome = await stopSessionHostProcesses('adhdev', configDir)
+      const pending = stopSessionHostProcesses('adhdev', configDir)
+      await vi.advanceTimersByTimeAsync(15_000)
+      const outcome = await pending
 
       expect(outcome.survived).toBe(true)
       expect(fs.existsSync(pidFile)).toBe(true)

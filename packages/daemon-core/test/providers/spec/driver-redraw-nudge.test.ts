@@ -15,7 +15,7 @@
  * redrawn frame is reconstructed from the same capture's rows in agy's idle
  * layout. Nudge timings are shrunk through the env policy knobs.
  */
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -80,7 +80,7 @@ function specPath(): string {
     return p;
 }
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
 const ENV_KEYS = ['ADHDEV_REDRAW_NUDGE_SILENT_MS', 'ADHDEV_REDRAW_NUDGE_MAX', 'ADHDEV_REDRAW_NUDGE_HOLD_MS', 'ADHDEV_REDRAW_NUDGE_SETTLE_MS'] as const;
 const savedEnv: Record<string, string | undefined> = {};
@@ -93,12 +93,16 @@ function setPolicy(p: { silent: number; max?: number; hold?: number; settle?: nu
 }
 
 const drivers: FsmDriver[] = [];
+beforeEach(() => {
+    vi.useFakeTimers();
+});
 afterEach(() => {
     for (const d of drivers.splice(0)) { try { d.shutdown(); } catch { /* already down */ } }
     for (const k of ENV_KEYS) {
         if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k];
     }
     vi.restoreAllMocks();
+    vi.useRealTimers();
 });
 
 /** Boot the real spec to `idle`, then land the live torn frame → `busy`. */

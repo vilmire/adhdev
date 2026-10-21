@@ -17,13 +17,13 @@
  * The fake PTY records every byte in order, so the assertions are made against
  * the actual write sequence rather than against mock call counts.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { SpecCliAdapter } from '../../src/providers/spec/cli-adapter.js';
 import { CTRL_C } from '../../src/providers/spec/interrupt-capability.js';
-import { waitForIdleAfterInterrupt } from '../../src/sessions/session-input-interrupt.js';
+import { waitForIdleAfterInterrupt as waitForIdleAfterInterruptReal } from '../../src/sessions/session-input-interrupt.js';
 import { createSessionInputService, type SessionInputService } from '../../src/sessions/session-input-service.js';
 import { buildSessionInputTarget, type SessionInputAdapterLike } from '../../src/sessions/session-input-target.js';
 import type { SubmitOutcome } from '@adhdev/mesh-shared';
@@ -97,7 +97,50 @@ function writeSpec(spec: Record<string, unknown>): string {
     return p;
 }
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+let drivingTimers = false;
+const sleep = async (ms: number): Promise<void> => {
+    if (drivingTimers) {
+        await new Promise<void>(r => setTimeout(r, ms));
+        return;
+    }
+    await vi.advanceTimersByTimeAsync(ms);
+};
+
+async function driveTimers<T>(promise: Promise<T>, stepMs = 10): Promise<T> {
+    if (drivingTimers) return promise;
+    drivingTimers = true;
+    let done = false;
+    const tracked = promise.finally(() => { done = true; });
+    try {
+        while (!done) {
+            await vi.advanceTimersByTimeAsync(stepMs);
+        }
+        return await tracked;
+    } finally {
+        drivingTimers = false;
+    }
+}
+
+function waitForIdleAfterInterrupt(
+    ...args: Parameters<typeof waitForIdleAfterInterruptReal>
+): Promise<boolean> {
+    const p = waitForIdleAfterInterruptReal(...args);
+    return {
+        then(onfulfilled, onrejected) {
+            return driveTimers(p).then(onfulfilled, onrejected);
+        },
+    } as Promise<boolean>;
+}
+
+beforeEach(() => {
+    drivingTimers = false;
+    vi.useFakeTimers();
+});
+
+afterEach(() => {
+    drivingTimers = false;
+    vi.useRealTimers();
+});
 
 const services = new WeakMap<object, SessionInputService>();
 let idCounter = 0;
@@ -130,7 +173,7 @@ function legacy(outcome: SubmitOutcome) {
 async function interruptVia(adapter: object, text: string, tuning?: { timeoutMs?: number; pollMs?: number; secondPressAfterMs?: number; minBusyDwellMs?: number; messageId?: string }) {
     const { messageId, ...rest } = tuning ?? {};
     const svc = tuning && Object.keys(rest).length > 0 ? serviceFor(adapter, rest) : serviceFor(adapter);
-    return legacy(await svc.submit(textMessage(text, 'interrupt', messageId ?? `msg_fresh_${++idCounter}`)));
+    return legacy(await driveTimers(svc.submit(textMessage(text, 'interrupt', messageId ?? `msg_fresh_${++idCounter}`))));
 }
 
 async function makeRunningAdapter() {

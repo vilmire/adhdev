@@ -22,7 +22,7 @@
  * condition — so `stable_ms:3000` can never be satisfied and only the
  * modal-absence rule can fire.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -61,7 +61,7 @@ class DrivableFactory implements PtyTransportFactory {
     }
 }
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 const RULE = '─'.repeat(70);
 
 /** Clear screen + home, then draw `lines` from row 1 and park the cursor. */
@@ -100,6 +100,8 @@ const MODAL_GONE = (tick: number) => [
 
 maybe('FsmDriver — claude-cli approval modal vanished on a REPAINTING screen', () => {
     if (!specAvailable) return;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
 
     async function driveToWedge() {
         const factory = new DrivableFactory();

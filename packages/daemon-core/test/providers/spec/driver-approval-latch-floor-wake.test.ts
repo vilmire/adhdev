@@ -18,7 +18,7 @@
  * modal, and — the counter-invariant — that the floor does NOT dismiss a prompt
  * nobody answered, and does not arm itself outside modal states.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -57,7 +57,7 @@ class DrivableFactory implements PtyTransportFactory {
     }
 }
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
 function paint(lines: string[], cursorRow: number): string {
     return `\x1b[2J\x1b[H${lines.join('\r\n')}\x1b[${cursorRow};1H`;
@@ -86,6 +86,8 @@ const IDLE_SCREEN = [
 
 maybe('FsmDriver — approval-state floor wake keeps the modal latch fresh (APPROVE-LATCH-STALE ②)', () => {
     if (!specAvailable) return;
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
 
     /** Drive to a committed `approval` state with the modal drawn, then stop
      *  feeding the PTY entirely — the live "agy went quiet at the modal" shape. */

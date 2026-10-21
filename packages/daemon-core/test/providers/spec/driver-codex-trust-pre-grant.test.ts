@@ -28,7 +28,7 @@
  *      never by matching text on the screen. A screen-string assertion would
  *      pass for the wrong reason the moment codex rewords its modal.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -75,7 +75,7 @@ class DrivableFactory implements PtyTransportFactory {
     }
 }
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
 /** Replay a captured phase honoring the real inter-chunk gaps. */
 async function replay(pty: DrivablePty, frames: Frame[]): Promise<void> {
@@ -180,6 +180,8 @@ maybe('codex-cli folder trust — pre-launch grant', () => {
     });
 
     describe('FSM behaviour on real captured codex frames', () => {
+        beforeEach(() => { vi.useFakeTimers(); });
+        afterEach(() => { vi.useRealTimers(); });
         /**
          * The counter-invariant, and the reason the grant is the fix rather than
          * an FSM change: when the modal DOES render (no pre-grant, e.g. a

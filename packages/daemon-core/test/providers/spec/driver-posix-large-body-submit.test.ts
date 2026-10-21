@@ -24,7 +24,7 @@
  * the old blind-timer behaviour that yields ZERO submits (the live defect); under
  * the verified path the resend loop carries it to exactly one.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -151,14 +151,19 @@ function writeSpec(spec: Record<string, unknown>): string {
     return p;
 }
 
+beforeEach(() => {
+    vi.useFakeTimers();
+});
+
 afterEach(() => {
+    vi.useRealTimers();
     while (__tmpDirsToClean.length > 0) {
         const dir = __tmpDirsToClean.pop()!;
         fs.rmSync(dir, { recursive: true, force: true });
     }
 });
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
 const ORIGINAL_PLATFORM = process.platform;
 function setPlatform(p: NodeJS.Platform): void {
