@@ -1051,9 +1051,9 @@ function recordRefineCommandFailure(
 /**
  * REFINE-LANES: run the schedule's prepare commands, then its phases. Returns
  * false when validation already failed (the summary carries the failure).
- * Every scheduled command gets ADHDEV_REFINE_RUN_ID so run-scoped preflight
- * stamps (scripts/check-submodule-sync.mjs) can tell "already verified in THIS
- * run" from a stale stamp of an earlier one.
+ * Every scheduled command gets ADHDEV_REFINE_RUN_ID (also on the summary) so
+ * child logs of one run can be correlated; it is not a build input
+ * (oss/scripts/build-if-stale.mjs excludes it from its key).
  */
 async function runScheduledRefineValidation(
     schedule: NonNullable<RefineValidationSelection['schedule']>,
