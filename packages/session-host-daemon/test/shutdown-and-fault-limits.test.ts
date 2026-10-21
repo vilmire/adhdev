@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import * as fs from 'fs'
+import * as net from 'net'
 import * as os from 'os'
 import * as path from 'path'
 import { SessionHostServer } from '../src/server.js'
@@ -125,9 +127,16 @@ test('start() evicts a prior managed host process recorded in pidFilePath before
     )
     const secondIno = fs.lstatSync(sockPath, { bigint: true }).ino
 
-    // Old host stopping late must NOT unlink the replacement host's bound socket inode
+    // Old host stopping late must NOT unlink or rename the replacement host's bound socket inode
+    const origClose = (firstServer as any).ipcServer.close.bind((firstServer as any).ipcServer)
+    let sockExistedDuringClose = true
+    ;(firstServer as any).ipcServer.close = (cb?: (err?: Error) => void) => {
+      sockExistedDuringClose = fs.existsSync(sockPath) && fs.lstatSync(sockPath, { bigint: true }).ino === secondIno
+      return origClose(cb)
+    }
     await firstServer.stop()
     firstServer = null
+    assert.equal(sockExistedDuringClose, true, 'runStop() must never rename the replacement socket away before close (M3)')
     assert.equal(fs.existsSync(sockPath), true, 'late stop() of old host unlinked replacement socket')
     assert.equal(fs.lstatSync(sockPath, { bigint: true }).ino, secondIno)
 
@@ -137,6 +146,109 @@ test('start() evicts a prior managed host process recorded in pidFilePath before
     process.kill = realKill
     await firstServer?.stop().catch(() => {})
     await secondServer?.stop().catch(() => {})
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('C1: real lsof/ps eviction only targets the listener of this exact socket and never signals other unix sockets or agent prompts mentioning session-host-daemon', async () => {
+  if (process.platform === 'win32') return
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'session-host-c1-lsof-'))
+  const targetSockPath = path.join(tmp, 'target.sock')
+  const unrelatedSockPath = path.join(tmp, 'unrelated.sock')
+  const pidFilePath = path.join(tmp, 'stale-recycled.pid')
+
+  // 1. Spawn a real child process running from `<tmp>/session-host-daemon/index.js`
+  //    that listens on `targetSockPath` (the actual prior host owning `targetSockPath`).
+  const fakeHostDir = path.join(tmp, 'session-host-daemon')
+  fs.mkdirSync(fakeHostDir, { recursive: true })
+  const fakeHostEntry = path.join(fakeHostDir, 'index.js')
+  fs.writeFileSync(
+    fakeHostEntry,
+    `
+      const net = require('net');
+      const srv = net.createServer();
+      srv.listen(${JSON.stringify(targetSockPath)}, () => {
+        process.stdout.write('READY\\n');
+      });
+      process.on('SIGTERM', () => {
+        srv.close(() => process.exit(0));
+      });
+      setInterval(() => {}, 10000);
+    `,
+    'utf8',
+  )
+  const targetListenerChild = spawn(process.execPath, [fakeHostEntry, 'serve'], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  })
+  await new Promise<void>((resolve, reject) => {
+    targetListenerChild.once('error', reject)
+    targetListenerChild.stdout?.on('data', (chunk) => {
+      if (String(chunk).includes('READY')) resolve()
+    })
+  })
+
+  // 2. Spawn a real decoy child process that holds a unix socket at `unrelatedSockPath`
+  //    AND has "session-host-daemon/index.js" and "adhdev-sessiond" in its trailing prompt argv
+  //    (simulating an agent CLI worker like codex/claude AND another instance's unix socket).
+  //    Also write its PID into `pidFilePath` to simulate a recycled PID in a stale pidfile!
+  const decoyScript = `
+    const net = require('net');
+    const srv = net.createServer();
+    srv.listen(${JSON.stringify(unrelatedSockPath)}, () => {
+      process.stdout.write('READY\\n');
+    });
+    setInterval(() => {}, 10000);
+  `
+  const decoyChild = spawn(
+    process.execPath,
+    ['-e', decoyScript, '--', '--prompt', 'investigate session-host-daemon/index.js and adhdev-sessiond split-brain'],
+    { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true },
+  )
+  await new Promise<void>((resolve, reject) => {
+    decoyChild.once('error', reject)
+    decoyChild.stdout?.on('data', (chunk) => {
+      if (String(chunk).includes('READY')) resolve()
+    })
+  })
+  fs.writeFileSync(pidFilePath, `${decoyChild.pid}\n`, 'utf8')
+
+  // Intercept process.kill so no unrelated process on the machine can ever be signaled,
+  // while forwarding real signals to targetListenerChild so it exits cleanly on SIGTERM.
+  const realKill = process.kill.bind(process)
+  const signaledPids: Array<[number, string | number]> = []
+  ;(process as any).kill = (pid: number, signal?: string | number) => {
+    if (signal === 0 || signal === undefined) {
+      return realKill(pid, 0)
+    }
+    signaledPids.push([pid, signal])
+    if (pid === targetListenerChild.pid) {
+      return realKill(pid, signal as any)
+    }
+    return true
+  }
+
+  let server: SessionHostServer | null = null
+  try {
+    server = new SessionHostServer({
+      appName: `adhdev-c1-test-${process.pid}`,
+      endpoint: { kind: 'unix', path: targetSockPath },
+      storageRootDir: path.join(tmp, 'storage'),
+      pidFilePath,
+      evictGraceMs: 200,
+    })
+    await server.start()
+
+    assert.deepEqual(
+      signaledPids,
+      [[targetListenerChild.pid!, 'SIGTERM']],
+      `evictPriorEndpointOwners must signal ONLY targetListenerChild (pid ${targetListenerChild.pid}), never decoyChild (pid ${decoyChild.pid}) or other unix sockets, but signaled: ${JSON.stringify(signaledPids)}`,
+    )
+  } finally {
+    process.kill = realKill
+    await server?.stop().catch(() => {})
+    try { realKill(targetListenerChild.pid!, 'SIGKILL') } catch { /* noop */ }
+    try { realKill(decoyChild.pid!, 'SIGKILL') } catch { /* noop */ }
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 })

@@ -952,6 +952,51 @@ function withReplayResyncPreamble(text, sinceSeq) {
 }
 
 // src/server.ts
+var DEFAULT_EVICT_SIGKILL_GRACE_MS = 4e3;
+function isManagedSessionHostCommandLine(commandLine) {
+  if (!commandLine) return false;
+  const tokens = [];
+  const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match;
+  while ((match = tokenRegex.exec(commandLine)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
+  }
+  if (tokens.length === 0) return false;
+  const execBase = path5.basename(tokens[0].replace(/\\/g, "/")).toLowerCase().replace(/\.exe$/, "");
+  if (execBase === "adhdev-sessiond") {
+    const subcommand2 = tokens[1]?.toLowerCase();
+    return !subcommand2 || subcommand2 === "serve";
+  }
+  if (execBase !== "node") return false;
+  const valueFlags = /* @__PURE__ */ new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "-C"]);
+  let idx = 1;
+  while (idx < tokens.length) {
+    const token = tokens[idx];
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (token === "-e" || token === "--eval" || token === "-p" || token === "--print") {
+      return false;
+    }
+    if (valueFlags.has(token)) {
+      idx += 2;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+  const scriptToken = tokens[idx];
+  if (!scriptToken) return false;
+  const normalizedScript = scriptToken.replace(/\\/g, "/").toLowerCase();
+  const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || path5.basename(normalizedScript) === "adhdev-sessiond";
+  if (!isSessionHostEntry) return false;
+  const subcommand = tokens[idx + 1]?.toLowerCase();
+  return !subcommand || subcommand === "serve" || subcommand.startsWith("-");
+}
 var SessionHostServer = class extends import_events.EventEmitter {
   endpoint;
   registry = new import_session_host_core5.SessionHostRegistry();
@@ -960,6 +1005,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
   upgradeLease;
   pidFilePath;
   isManagedOwnerPid;
+  evictGraceMs;
   restorePending = true;
   mutatingRequests = 0;
   endpointInode = null;
@@ -994,6 +1040,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
     this.upgradeLease = options.upgradeBinding ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.pidFilePath = options.pidFilePath || null;
     this.isManagedOwnerPid = options.isManagedOwnerPid;
+    this.evictGraceMs = options.evictGraceMs ?? DEFAULT_EVICT_SIGKILL_GRACE_MS;
     this.storage = new SessionHostStorage({
       appName: options.appName || "adhdev",
       rootDir: options.storageRootDir
@@ -1008,23 +1055,26 @@ var SessionHostServer = class extends import_events.EventEmitter {
       return error?.code === "EPERM";
     }
   }
-  isManagedSessionHostPid(pid) {
-    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
-    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
-    if (process.platform === "win32") return false;
+  readProcessArgs(pid) {
+    if (process.platform === "win32") return null;
     try {
-      const cmd = String(
+      return String(
         (0, import_child_process.execFileSync)("/bin/ps", ["-o", "args=", "-p", String(pid)], {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
           timeout: 2e3,
           windowsHide: true
         })
-      ).trim();
-      return /session-host-daemon|adhdev-sessiond/i.test(cmd);
+      ).trim() || null;
     } catch {
-      return false;
+      return null;
     }
+  }
+  isManagedSessionHostPid(pid) {
+    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
+    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
+    const cmd = this.readProcessArgs(pid);
+    return isManagedSessionHostCommandLine(cmd);
   }
   async evictPriorEndpointOwners() {
     if (this.endpoint.kind !== "unix") return;
@@ -1042,7 +1092,7 @@ var SessionHostServer = class extends import_events.EventEmitter {
       const lsofBin = process.platform === "darwin" ? "/usr/sbin/lsof" : "lsof";
       try {
         const out = String(
-          (0, import_child_process.execFileSync)(lsofBin, ["-n", "-t", "-U", "--", this.endpoint.path], {
+          (0, import_child_process.execFileSync)(lsofBin, ["-n", "-t", "--", this.endpoint.path], {
             encoding: "utf8",
             stdio: ["ignore", "pipe", "ignore"],
             timeout: 2e3,
@@ -1060,16 +1110,25 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     for (const pid of candidatePids) {
       if (!this.isPidAlive(pid) || !this.isManagedSessionHostPid(pid)) continue;
+      const cmd = this.readProcessArgs(pid) || "managed-session-host";
+      this.recordHostLog(
+        "warn",
+        `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd})`
+      );
       try {
         process.kill(pid, "SIGTERM");
       } catch {
         continue;
       }
-      const deadline = Date.now() + 300;
+      const deadline = Date.now() + this.evictGraceMs;
       while (Date.now() < deadline && this.isPidAlive(pid)) {
-        await new Promise((resolve3) => setTimeout(resolve3, 20));
+        await new Promise((resolve3) => setTimeout(resolve3, 25));
       }
       if (this.isPidAlive(pid)) {
+        this.recordHostLog(
+          "warn",
+          `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
+        );
         try {
           process.kill(pid, "SIGKILL");
         } catch {
@@ -1187,34 +1246,26 @@ var SessionHostServer = class extends import_events.EventEmitter {
     }
     this.sockets.clear();
     this.socketSessions.clear();
+    let endpointReplaced = false;
+    if (this.endpoint.kind === "unix" && this.endpointInode !== null) {
+      try {
+        const currentIno = fs5.lstatSync(this.endpoint.path, { bigint: true }).ino;
+        endpointReplaced = currentIno !== this.endpointInode;
+      } catch {
+        endpointReplaced = true;
+      }
+    }
     if (this.ipcServer) {
       const server = this.ipcServer;
       this.ipcServer = null;
-      let preservePath = null;
-      if (this.endpoint.kind === "unix" && this.endpointInode !== null) {
-        try {
-          const currentIno = fs5.lstatSync(this.endpoint.path, { bigint: true }).ino;
-          if (currentIno !== this.endpointInode) {
-            preservePath = `${this.endpoint.path}.preserve-${process.pid}-${Date.now()}`;
-            fs5.renameSync(this.endpoint.path, preservePath);
-          }
-        } catch {
-          preservePath = null;
-        }
+      if (endpointReplaced) {
+        server.unref();
+        server.removeAllListeners();
+      } else {
+        await new Promise((resolve3) => server.close(() => resolve3()));
       }
-      await new Promise(
-        (resolve3) => server.close(() => {
-          if (preservePath) {
-            try {
-              fs5.renameSync(preservePath, this.endpoint.path);
-            } catch {
-            }
-          }
-          resolve3();
-        })
-      );
     }
-    if (this.endpoint.kind === "unix") {
+    if (this.endpoint.kind === "unix" && !endpointReplaced) {
       try {
         if (this.endpointInode !== null && fs5.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
           fs5.unlinkSync(this.endpoint.path);

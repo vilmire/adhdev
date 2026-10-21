@@ -6,18 +6,34 @@ import {
   type SessionHostEndpoint,
 } from '@adhdev/daemon-core';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../../daemon-core/src/runtime-defaults.js';
+import { getProcessCommandLine, isManagedSessionHostCommandLine } from '../../daemon-core/src/commands/process-lifecycle.js';
 const SESSION_HOST_APP_NAME_RESOLUTION = resolveSessionHostAppNameResolution({ standalone: true });
 const SESSION_HOST_APP_NAME = SESSION_HOST_APP_NAME_RESOLUTION.appName;
 const SESSION_HOST_START_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
 
+function identifiesStandaloneSessionHostPid(pid: number): boolean {
+  return getProcessCommandLine(pid) !== null;
+}
+
+function isManagedStandaloneSessionHostPid(pid: number): boolean {
+  const commandLine = getProcessCommandLine(pid);
+  // If ps cannot find the pid (e.g. a synthetic pid in unit tests that mock
+  // process.kill only), allow the SIGTERM probe; when a real live process is
+  // positively identified on the OS, require its script entrypoint to be
+  // session-host-daemon so a recycled pid is never killed (M1).
+  if (commandLine === null) return true;
+  return isManagedSessionHostCommandLine(commandLine);
+}
+
 // Shared managed-host helpers (env/pidfile/kill/spawn/ensureReady). Standalone keeps
-// stdio='ignore' spawns and kills pidfile-tracked processes unconditionally, matching
-// the prior local implementation exactly.
+// stdio='ignore' spawns and verifies live pidfile processes before signaling.
 const managedHost = createManagedSessionHost({
   appName: SESSION_HOST_APP_NAME,
   requiredRequestTypes: ['delete_session', 'get_terminal_snapshot'],
   timeoutMs: SESSION_HOST_START_TIMEOUT_MS,
   spawnStdio: 'ignore',
+  isManagedPid: isManagedStandaloneSessionHostPid,
+  identifiesPid: identifiesStandaloneSessionHostPid,
 });
 
 export function getStandaloneSessionHostAppName(): string {

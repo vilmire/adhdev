@@ -45,6 +45,62 @@ import {
   mergeRuntimeSnapshot,
 } from './session-protocol.js';
 
+export const DEFAULT_EVICT_SIGKILL_GRACE_MS = 4_000;
+
+export function isManagedSessionHostCommandLine(commandLine: string | null | undefined): boolean {
+  if (!commandLine) return false;
+  const tokens: string[] = [];
+  const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = tokenRegex.exec(commandLine)) !== null) {
+    tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+  if (tokens.length === 0) return false;
+
+  const execBase = path.basename(tokens[0].replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
+  if (execBase === 'adhdev-sessiond') {
+    const subcommand = tokens[1]?.toLowerCase();
+    return !subcommand || subcommand === 'serve';
+  }
+  if (execBase !== 'node') return false;
+
+  const valueFlags = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--conditions', '-C']);
+  let idx = 1;
+  while (idx < tokens.length) {
+    const token = tokens[idx];
+    if (token === '--') {
+      idx += 1;
+      break;
+    }
+    if (token === '-e' || token === '--eval' || token === '-p' || token === '--print') {
+      return false;
+    }
+    if (valueFlags.has(token)) {
+      idx += 2;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      idx += 1;
+      continue;
+    }
+    break;
+  }
+
+  const scriptToken = tokens[idx];
+  if (!scriptToken) return false;
+  const normalizedScript = scriptToken.replace(/\\/g, '/').toLowerCase();
+  const isSessionHostEntry =
+    normalizedScript.endsWith('/session-host-daemon/dist/index.js')
+    || normalizedScript.endsWith('/session-host-daemon/dist/index.mjs')
+    || normalizedScript.endsWith('/session-host-daemon/index.js')
+    || normalizedScript.endsWith('/session-host-daemon/src/index.ts')
+    || path.basename(normalizedScript) === 'adhdev-sessiond';
+  if (!isSessionHostEntry) return false;
+
+  const subcommand = tokens[idx + 1]?.toLowerCase();
+  return !subcommand || subcommand === 'serve' || subcommand.startsWith('-');
+}
+
 export interface SessionHostServerOptions {
   endpoint?: SessionHostEndpoint;
   /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
@@ -56,6 +112,8 @@ export interface SessionHostServerOptions {
   pidFilePath?: string;
   /** Optional predicate override for testing whether a prior pid is a managed session-host. */
   isManagedOwnerPid?: (pid: number) => boolean;
+  /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
+  evictGraceMs?: number;
 }
 
 export class SessionHostServer extends EventEmitter {
@@ -66,6 +124,7 @@ export class SessionHostServer extends EventEmitter {
   private readonly upgradeLease: HostUpgradeLease | null;
   private readonly pidFilePath: string | null;
   private readonly isManagedOwnerPid?: (pid: number) => boolean;
+  private readonly evictGraceMs: number;
   private restorePending = true;
   private mutatingRequests = 0;
   private endpointInode: bigint | null = null;
@@ -103,6 +162,7 @@ export class SessionHostServer extends EventEmitter {
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.pidFilePath = options.pidFilePath || null;
     this.isManagedOwnerPid = options.isManagedOwnerPid;
+    this.evictGraceMs = options.evictGraceMs ?? DEFAULT_EVICT_SIGKILL_GRACE_MS;
     this.storage = new SessionHostStorage({
       appName: options.appName || 'adhdev',
       rootDir: options.storageRootDir,
@@ -119,23 +179,27 @@ export class SessionHostServer extends EventEmitter {
     }
   }
 
-  private isManagedSessionHostPid(pid: number): boolean {
-    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
-    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
-    if (process.platform === 'win32') return false;
+  private readProcessArgs(pid: number): string | null {
+    if (process.platform === 'win32') return null;
     try {
-      const cmd = String(
+      return String(
         execFileSync('/bin/ps', ['-o', 'args=', '-p', String(pid)], {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'ignore'],
           timeout: 2_000,
           windowsHide: true,
         }),
-      ).trim();
-      return /session-host-daemon|adhdev-sessiond/i.test(cmd);
+      ).trim() || null;
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  private isManagedSessionHostPid(pid: number): boolean {
+    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
+    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
+    const cmd = this.readProcessArgs(pid);
+    return isManagedSessionHostCommandLine(cmd);
   }
 
   private async evictPriorEndpointOwners(): Promise<void> {
@@ -154,8 +218,11 @@ export class SessionHostServer extends EventEmitter {
     if (process.platform !== 'win32' && fs.existsSync(this.endpoint.path)) {
       const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
       try {
+        // IMPORTANT (C1): never pass `-U` without `-a` — lsof ORs selectors by default,
+        // which would enumerate every unix-socket process on the machine. Passing only
+        // the file path `-- <endpoint.path>` restricts lsof to this exact socket file.
         const out = String(
-          execFileSync(lsofBin, ['-n', '-t', '-U', '--', this.endpoint.path], {
+          execFileSync(lsofBin, ['-n', '-t', '--', this.endpoint.path], {
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'ignore'],
             timeout: 2_000,
@@ -175,16 +242,25 @@ export class SessionHostServer extends EventEmitter {
 
     for (const pid of candidatePids) {
       if (!this.isPidAlive(pid) || !this.isManagedSessionHostPid(pid)) continue;
+      const cmd = this.readProcessArgs(pid) || 'managed-session-host';
+      this.recordHostLog(
+        'warn',
+        `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd})`,
+      );
       try {
         process.kill(pid, 'SIGTERM');
       } catch {
         continue;
       }
-      const deadline = Date.now() + 300;
+      const deadline = Date.now() + this.evictGraceMs;
       while (Date.now() < deadline && this.isPidAlive(pid)) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => setTimeout(resolve, 25));
       }
       if (this.isPidAlive(pid)) {
+        this.recordHostLog(
+          'warn',
+          `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
+        );
         try {
           process.kill(pid, 'SIGKILL');
         } catch {
@@ -328,35 +404,32 @@ export class SessionHostServer extends EventEmitter {
     }
     this.sockets.clear();
     this.socketSessions.clear();
+    let endpointReplaced = false;
+    if (this.endpoint.kind === 'unix' && this.endpointInode !== null) {
+      try {
+        const currentIno = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
+        endpointReplaced = currentIno !== this.endpointInode;
+      } catch {
+        endpointReplaced = true;
+      }
+    }
     if (this.ipcServer) {
       const server = this.ipcServer;
       this.ipcServer = null;
-      let preservePath: string | null = null;
-      if (this.endpoint.kind === 'unix' && this.endpointInode !== null) {
-        try {
-          const currentIno = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
-          if (currentIno !== this.endpointInode) {
-            preservePath = `${this.endpoint.path}.preserve-${process.pid}-${Date.now()}`;
-            fs.renameSync(this.endpoint.path, preservePath);
-          }
-        } catch {
-          preservePath = null;
-        }
+      if (endpointReplaced) {
+        // M3: Another server has already replaced this.endpoint.path with a new inode.
+        // Calling net.Server.close() on a unix socket makes libuv unconditionally
+        // unlink(pipe_fname) by path string, which would delete the replacement host's
+        // socket; renaming the replacement socket away across close() risks stranding it
+        // if this process is force-exited mid-stop. Since our socket inode is already
+        // unlinked from the filesystem, unref and detach listeners without touching disk.
+        server.unref();
+        server.removeAllListeners();
+      } else {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
       }
-      await new Promise<void>((resolve) =>
-        server.close(() => {
-          if (preservePath) {
-            try {
-              fs.renameSync(preservePath, this.endpoint.path);
-            } catch {
-              // noop
-            }
-          }
-          resolve();
-        }),
-      );
     }
-    if (this.endpoint.kind === 'unix') {
+    if (this.endpoint.kind === 'unix' && !endpointReplaced) {
       try {
         if (this.endpointInode !== null && fs.lstatSync(this.endpoint.path, { bigint: true }).ino === this.endpointInode) {
           fs.unlinkSync(this.endpoint.path);

@@ -1134,6 +1134,16 @@ export class StandaloneHttpApi {
     }
 
     const client = await this.deps.createSessionHostClient();
+    const sseClientId = `standalone-sse-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await client.request({
+      type: 'attach_session',
+      payload: {
+        sessionId,
+        clientId: sseClientId,
+        clientType: 'web',
+        readOnly: true,
+      },
+    }).catch(() => ({ success: false }));
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -1164,10 +1174,18 @@ export class StandaloneHttpApi {
       res.write(': ping\n\n');
     }, 15000);
 
+    let cleanedUp = false;
     const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       clearInterval(heartbeat);
       unsubscribe();
-      void client.close().catch(() => {});
+      void client.request({
+        type: 'detach_session',
+        payload: { sessionId, clientId: sseClientId },
+      }).catch(() => {}).finally(() => {
+        void client.close().catch(() => {});
+      });
     };
 
     req.on('close', cleanup);

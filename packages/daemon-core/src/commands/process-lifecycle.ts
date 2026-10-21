@@ -135,6 +135,72 @@ export function parseNodeScriptPath(commandLine: string | null): string | null {
     return idx === -1 ? rest : rest.slice(0, idx);
 }
 
+/**
+ * Positively identify whether a process command line is a running
+ * `session-host-daemon` server instance.
+ *
+ * IMPORTANT (C1/M1): Never use a free-text `/session-host-daemon/` regex over
+ * the full command line — AI agent CLI processes (`claude`, `codex`, etc.)
+ * frequently carry `'session-host-daemon'` or `'adhdev-sessiond'` inside their
+ * trailing prompt arguments. Instead, inspect only the executable token and the
+ * script-path token passed to Node.
+ */
+export function isManagedSessionHostCommandLine(commandLine: string | null | undefined): boolean {
+    if (!commandLine) return false;
+    const tokens: string[] = [];
+    const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = tokenRegex.exec(commandLine)) !== null) {
+        tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
+    }
+    if (tokens.length === 0) return false;
+
+    const execNormalized = tokens[0].replace(/\\/g, '/').toLowerCase();
+    const execBase = (execNormalized.split('/').pop() || '').replace(/\.exe$/, '');
+    if (execBase === 'adhdev-sessiond') {
+        const subcommand = tokens[1]?.toLowerCase();
+        return !subcommand || subcommand === 'serve';
+    }
+    if (execBase !== 'node') return false;
+
+    const valueFlags = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--conditions', '-C']);
+    let idx = 1;
+    while (idx < tokens.length) {
+        const token = tokens[idx];
+        if (token === '--') {
+            idx += 1;
+            break;
+        }
+        if (token === '-e' || token === '--eval' || token === '-p' || token === '--print') {
+            return false;
+        }
+        if (valueFlags.has(token)) {
+            idx += 2;
+            continue;
+        }
+        if (token.startsWith('-')) {
+            idx += 1;
+            continue;
+        }
+        break;
+    }
+
+    const scriptToken = tokens[idx];
+    if (!scriptToken) return false;
+    const normalizedScript = scriptToken.replace(/\\/g, '/').toLowerCase();
+    const scriptBase = normalizedScript.split('/').pop() || '';
+    const isSessionHostEntry =
+        normalizedScript.endsWith('/session-host-daemon/dist/index.js')
+        || normalizedScript.endsWith('/session-host-daemon/dist/index.mjs')
+        || normalizedScript.endsWith('/session-host-daemon/index.js')
+        || normalizedScript.endsWith('/session-host-daemon/src/index.ts')
+        || scriptBase === 'adhdev-sessiond';
+    if (!isSessionHostEntry) return false;
+
+    const subcommand = tokens[idx + 1]?.toLowerCase();
+    return !subcommand || subcommand === 'serve' || subcommand.startsWith('-');
+}
+
 function normalizeWindowsPath(value: string): string {
     return value.toLowerCase().replace(/\//g, '\\').replace(/\\+$/, '');
 }

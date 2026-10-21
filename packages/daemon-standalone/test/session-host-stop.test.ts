@@ -267,3 +267,29 @@ test('stopSessionHost ignores a hostile inherited config dir/home even after it 
   ])
   assert.equal(fs.existsSync(pidFile), false)
 })
+
+test('M1: stopSessionHost refuses to kill a live unrelated process when a stale pidfile PID was recycled', async (t) => {
+  const homeDir = makeTempHome()
+  pinTempInstance(t, homeDir)
+
+  const unrelatedChild = childProcessModule.spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 10000)', '--prompt', 'mention session-host-daemon in prompt'],
+    { stdio: 'ignore', windowsHide: true },
+  )
+  t.after(() => {
+    try { unrelatedChild.kill('SIGKILL') } catch { /* noop */ }
+  })
+
+  const pidFile = writePidFile(homeDir, unrelatedChild.pid!)
+  const { stopSessionHost } = await importSessionHostModule()
+  const killCalls = mockProcessKill(t)
+
+  assert.equal(stopSessionHost(), false, 'must not stop a positively identified unrelated process')
+  assert.equal(
+    killCalls.some(([pid, sig]) => pid === unrelatedChild.pid && sig === 'SIGTERM'),
+    false,
+    'must not send SIGTERM to recycled unrelated PID',
+  )
+  assert.equal(fs.existsSync(pidFile), false, 'stale pidfile for recycled unrelated PID must be removed')
+})

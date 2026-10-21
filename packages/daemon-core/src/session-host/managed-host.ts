@@ -13,7 +13,7 @@ import {
     type SessionHostEndpoint,
     type SessionHostRequestType,
 } from '@adhdev/session-host-core';
-import { getProcessCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
+import { getProcessCommandLine, isManagedSessionHostCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
 import { findPortableNode22, resolveConptyPrebuildCandidates } from '../commands/windows-atomic-upgrade.js';
 import { resolveInstanceDir } from '../commands/upgrade-log.js';
 import { getProcessInstanceContext } from '../config/instance-context.js';
@@ -91,6 +91,12 @@ export interface ManagedSessionHostOptions {
      * Production never sets it and behavior is unchanged when omitted.
      */
     resolveEntryOverride?: () => string;
+    /**
+     * Grace period in ms between SIGTERM and SIGKILL when stopping an unresponsive
+     * managed session-host before spawning a replacement (defaults to 4000ms so the
+     * old host has time to flush persistence cleanly).
+     */
+    evictGraceMs?: number;
 }
 
 export interface ManagedSessionHost {
@@ -157,7 +163,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
     function getRunningSessionHostScriptPath(pid: number): string | null {
         const commandLine = getProcessCommandLine(pid);
-        if (!commandLine || !/session-host-daemon/i.test(commandLine)) return null;
+        if (!isManagedSessionHostCommandLine(commandLine)) return null;
         return parseNodeScriptPath(commandLine);
     }
 
@@ -642,17 +648,37 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             (SessionHostClient as { disconnectClients?: (ep?: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
         };
 
+        const evictGraceMs = options.evictGraceMs ?? 4_000;
+        const canPositivelyEscalateSigkill = (pid: number): boolean => {
+            if (options.isManagedPid) {
+                if (!options.isManagedPid(pid)) return false;
+                if (options.identifiesPid && !options.identifiesPid(pid)) return false;
+                return true;
+            }
+            return isManagedSessionHostCommandLine(getProcessCommandLine(pid));
+        };
+
         const beforeSpawnHost = async (endpoint: SessionHostEndpoint): Promise<void> => {
             disconnectEndpointClients(endpoint);
             const existingPid = getPid();
             if (existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid)) {
+                const cmd = getProcessCommandLine(existingPid);
+                LOG.warn(
+                    'SessionHost',
+                    `Stopping unresponsive session-host pid ${existingPid} before spawning replacement ` +
+                        `(endpoint=${endpoint.path}, cmd=${cmd || 'unverified'})`,
+                );
                 stopManagedSessionHostProcess();
-                if (process.platform !== 'win32' && isPidAlive(existingPid) && isManagedPid(existingPid)) {
-                    const deadline = Date.now() + 300;
+                if (process.platform !== 'win32' && isPidAlive(existingPid) && canPositivelyEscalateSigkill(existingPid)) {
+                    const deadline = Date.now() + evictGraceMs;
                     while (Date.now() < deadline && isPidAlive(existingPid)) {
                         await new Promise((resolve) => setTimeout(resolve, 25));
                     }
                     if (isPidAlive(existingPid)) {
+                        LOG.warn(
+                            'SessionHost',
+                            `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
+                        );
                         try { process.kill(existingPid, 'SIGKILL'); } catch { /* noop */ }
                         try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
                     }

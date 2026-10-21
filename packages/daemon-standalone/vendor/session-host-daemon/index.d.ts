@@ -23,6 +23,8 @@ interface SessionHostServerOptions {
     pidFilePath?: string;
     /** Optional predicate override for testing whether a prior pid is a managed session-host. */
     isManagedOwnerPid?: (pid: number) => boolean;
+    /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
+    evictGraceMs?: number;
 }
 declare class SessionHostServer extends EventEmitter {
     readonly endpoint: SessionHostEndpoint;
@@ -32,6 +34,7 @@ declare class SessionHostServer extends EventEmitter {
     private readonly upgradeLease;
     private readonly pidFilePath;
     private readonly isManagedOwnerPid?;
+    private readonly evictGraceMs;
     private restorePending;
     private mutatingRequests;
     private endpointInode;
@@ -49,6 +52,7 @@ declare class SessionHostServer extends EventEmitter {
     private stopPromise;
     constructor(options?: SessionHostServerOptions);
     private isPidAlive;
+    private readProcessArgs;
     private isManagedSessionHostPid;
     private evictPriorEndpointOwners;
     start(): Promise<void>;

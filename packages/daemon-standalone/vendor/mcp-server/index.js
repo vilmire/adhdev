@@ -3631,14 +3631,20 @@ var require_dist = __commonJS({
     var SessionHostClient = class {
       endpoint;
       socket = null;
+      connectPromise = null;
       requestTimeoutMs = 3e4;
       requestWaiters = /* @__PURE__ */ new Map();
       eventListeners = /* @__PURE__ */ new Set();
       disconnectListeners = /* @__PURE__ */ new Set();
       /** Guards against emitting both an 'error'-path and a 'close'-path disconnect for one socket. */
       disconnectedSockets = /* @__PURE__ */ new WeakSet();
+      /** Session subscriptions established via create_session/attach_session, replayed automatically on reconnect. */
+      attachedSessions = /* @__PURE__ */ new Map();
       constructor(options = {}) {
         this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || "adhdev");
+        if (typeof options.requestTimeoutMs === "number" && options.requestTimeoutMs > 0) {
+          this.requestTimeoutMs = options.requestTimeoutMs;
+        }
         activeClientRefs.add(new WeakRef(this));
       }
       static disconnectClients(endpoint, error) {
@@ -3685,6 +3691,7 @@ var require_dist = __commonJS({
         this.requestWaiters.clear();
         if (this.socket === socket) {
           this.socket = null;
+          this.connectPromise = null;
         }
         try {
           socket.destroy();
@@ -3704,8 +3711,48 @@ var require_dist = __commonJS({
           }
         }
       }
+      sendRawRequestOnSocket(socket, request) {
+        const requestId = generateUUID();
+        const envelope = {
+          kind: "request",
+          requestId,
+          request
+        };
+        const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 3e4;
+        const timeoutLabel = timeoutMs % 1e3 === 0 ? `${timeoutMs / 1e3}s` : `${timeoutMs}ms`;
+        return new Promise((resolve3, reject) => {
+          const timeout = setTimeout(() => {
+            const timeoutError = new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`);
+            if (this.socket === socket) {
+              this.disconnect(timeoutError);
+            } else {
+              this.requestWaiters.delete(requestId);
+              this.disconnectedSockets.add(socket);
+              try {
+                socket.destroy();
+              } catch {
+              }
+              reject(timeoutError);
+            }
+          }, timeoutMs);
+          this.requestWaiters.set(requestId, {
+            resolve: (value) => {
+              clearTimeout(timeout);
+              resolve3(value);
+            },
+            reject: (error) => {
+              clearTimeout(timeout);
+              reject(error);
+            }
+          });
+          socket.write(serializeEnvelope(envelope));
+        });
+      }
       async connect() {
-        if (this.socket && !this.socket.destroyed) return;
+        if (this.socket && !this.socket.destroyed) {
+          if (this.connectPromise) await this.connectPromise;
+          return;
+        }
         if (this.socket) {
           try {
             this.socket.destroy();
@@ -3713,6 +3760,7 @@ var require_dist = __commonJS({
           }
           this.socket = null;
         }
+        this.connectPromise = null;
         const socket = net.createConnection(this.endpoint.path);
         this.socket = socket;
         const parser = createLineParser((envelope) => {
@@ -3746,13 +3794,33 @@ var require_dist = __commonJS({
         socket.on("end", () => {
           this.handleDisconnect(socket, "ended", void 0, flushParser().length);
         });
-        await new Promise((resolve3, reject) => {
-          socket.once("connect", () => {
-            establishedSockets.add(socket);
-            resolve3();
+        const connectTask = (async () => {
+          await new Promise((resolve3, reject) => {
+            socket.once("connect", () => {
+              establishedSockets.add(socket);
+              resolve3();
+            });
+            socket.once("error", reject);
           });
-          socket.once("error", reject);
-        });
+          if (this.attachedSessions.size > 0 && this.socket === socket && !socket.destroyed) {
+            for (const sub of [...this.attachedSessions.values()]) {
+              if (this.socket !== socket || socket.destroyed) break;
+              await this.sendRawRequestOnSocket(socket, {
+                type: "attach_session",
+                payload: sub
+              }).catch(() => {
+              });
+            }
+          }
+        })();
+        this.connectPromise = connectTask;
+        try {
+          await connectTask;
+        } finally {
+          if (this.connectPromise === connectTask) {
+            this.connectPromise = null;
+          }
+        }
       }
       onEvent(listener) {
         this.eventListeners.add(listener);
@@ -3764,52 +3832,38 @@ var require_dist = __commonJS({
         await this.connect();
         const requestSocket = this.socket;
         if (!requestSocket) throw new Error("Session host socket unavailable");
-        const requestId = generateUUID();
-        const envelope = {
-          kind: "request",
-          requestId,
-          request
-        };
-        const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 3e4;
-        const response = await new Promise((resolve3, reject) => {
-          const timeout = setTimeout(() => {
-            this.requestWaiters.delete(requestId);
-            const timeoutError = new Error(`Session host request timed out after 30s (${request.type})`);
-            if (this.socket === requestSocket) {
-              this.disconnect(timeoutError);
-            } else {
-              this.disconnectedSockets.add(requestSocket);
-              try {
-                requestSocket.destroy();
-              } catch {
-              }
+        const response = await this.sendRawRequestOnSocket(requestSocket, request);
+        if (response.success) {
+          if (request.type === "attach_session") {
+            this.attachedSessions.set(request.payload.sessionId, {
+              sessionId: request.payload.sessionId,
+              clientId: request.payload.clientId,
+              clientType: request.payload.clientType,
+              readOnly: request.payload.readOnly === true
+            });
+          } else if (request.type === "create_session") {
+            const createdId = response.result?.sessionId || request.payload.sessionId;
+            if (createdId) {
+              this.attachedSessions.set(createdId, {
+                sessionId: createdId,
+                clientId: request.payload.clientId || `daemon-client-${generateUUID().slice(0, 8)}`,
+                clientType: request.payload.clientType || "daemon",
+                readOnly: false
+              });
             }
-            reject(timeoutError);
-          }, timeoutMs);
-          this.requestWaiters.set(requestId, {
-            resolve: (value) => {
-              clearTimeout(timeout);
-              resolve3(value);
-            },
-            reject: (error) => {
-              clearTimeout(timeout);
-              reject(error);
-            }
-          });
-          requestSocket.write(serializeEnvelope(envelope));
-        });
+          } else if (request.type === "detach_session") {
+            this.attachedSessions.delete(request.payload.sessionId);
+          }
+        }
         return response;
       }
       disconnect(error) {
         const socket = this.socket;
-        this.socket = null;
         if (socket) {
-          this.disconnectedSockets.add(socket);
-          try {
-            socket.destroy();
-          } catch {
-          }
+          this.handleDisconnect(socket, error ? "error" : "closed", error, 0);
+          return;
         }
+        this.connectPromise = null;
         const failure = error || new Error(`Session host client disconnected (${this.endpoint.path})`);
         for (const waiter of this.requestWaiters.values()) {
           waiter.reject(failure);
@@ -3817,6 +3871,8 @@ var require_dist = __commonJS({
         this.requestWaiters.clear();
       }
       async close() {
+        this.attachedSessions.clear();
+        this.connectPromise = null;
         if (!this.socket) return;
         const socket = this.socket;
         this.socket = null;
@@ -116535,6 +116591,52 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       const idx = rest.search(/\s/);
       return idx === -1 ? rest : rest.slice(0, idx);
     }
+    function isManagedSessionHostCommandLine(commandLine) {
+      if (!commandLine) return false;
+      const tokens = [];
+      const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
+      let match;
+      while ((match = tokenRegex.exec(commandLine)) !== null) {
+        tokens.push(match[1] ?? match[2] ?? match[3] ?? "");
+      }
+      if (tokens.length === 0) return false;
+      const execNormalized = tokens[0].replace(/\\/g, "/").toLowerCase();
+      const execBase = (execNormalized.split("/").pop() || "").replace(/\.exe$/, "");
+      if (execBase === "adhdev-sessiond") {
+        const subcommand2 = tokens[1]?.toLowerCase();
+        return !subcommand2 || subcommand2 === "serve";
+      }
+      if (execBase !== "node") return false;
+      const valueFlags = /* @__PURE__ */ new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--conditions", "-C"]);
+      let idx = 1;
+      while (idx < tokens.length) {
+        const token = tokens[idx];
+        if (token === "--") {
+          idx += 1;
+          break;
+        }
+        if (token === "-e" || token === "--eval" || token === "-p" || token === "--print") {
+          return false;
+        }
+        if (valueFlags.has(token)) {
+          idx += 2;
+          continue;
+        }
+        if (token.startsWith("-")) {
+          idx += 1;
+          continue;
+        }
+        break;
+      }
+      const scriptToken = tokens[idx];
+      if (!scriptToken) return false;
+      const normalizedScript = scriptToken.replace(/\\/g, "/").toLowerCase();
+      const scriptBase = normalizedScript.split("/").pop() || "";
+      const isSessionHostEntry = normalizedScript.endsWith("/session-host-daemon/dist/index.js") || normalizedScript.endsWith("/session-host-daemon/dist/index.mjs") || normalizedScript.endsWith("/session-host-daemon/index.js") || normalizedScript.endsWith("/session-host-daemon/src/index.ts") || scriptBase === "adhdev-sessiond";
+      if (!isSessionHostEntry) return false;
+      const subcommand = tokens[idx + 1]?.toLowerCase();
+      return !subcommand || subcommand === "serve" || subcommand.startsWith("-");
+    }
     function normalizeWindowsPath(value) {
       return value.toLowerCase().replace(/\//g, "\\").replace(/\\+$/, "");
     }
@@ -178973,6 +179075,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       pendingOutput = [];
       operationChain = Promise.resolve();
       unsubscribe = null;
+      unsubscribeDisconnect = null;
+      reconnecting = false;
       currentPid = 0;
       closed = false;
       metadata = null;
@@ -179176,6 +179280,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           await this.client.connect();
         }
         this.unsubscribe = this.client.onEvent((event) => this.handleEvent(event));
+        this.unsubscribeDisconnect = this.client.onDisconnect(() => {
+          if (this.closed) return;
+          void this.reconnectAndReattach();
+        });
         let record6 = null;
         if (this.options.attachExisting) {
           const existingRecords = await this.client.request({
@@ -179374,12 +179482,63 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         });
         return operation;
       }
+      async reconnectAndReattach() {
+        if (this.closed || this.reconnecting) return;
+        this.reconnecting = true;
+        try {
+          for (let attempt = 0; attempt < 5 && !this.closed; attempt += 1) {
+            if (attempt > 0) {
+              await new Promise((resolve54) => setTimeout(resolve54, 50 * attempt));
+            }
+            if (this.closed) return;
+            try {
+              await this.client.connect();
+              const attachResponse = await this.client.request({
+                type: "attach_session",
+                payload: {
+                  sessionId: this.options.runtimeId,
+                  clientId: this.options.clientId,
+                  clientType: "daemon",
+                  readOnly: false
+                }
+              });
+              if (!attachResponse.success) {
+                if (isLostRuntimeError(attachResponse.error)) {
+                  this.reportLostRuntime(attachResponse.error);
+                  return;
+                }
+                continue;
+              }
+              if (attachResponse.result) {
+                this.updateMetadata(attachResponse.result);
+                if (attachResponse.result.lifecycle === "stopped" || attachResponse.result.lifecycle === "failed") {
+                  const term = attachResponse.result.termination;
+                  for (const callback of this.exitCallbacks) {
+                    callback({
+                      exitCode: term?.exitCode ?? null,
+                      signal: term?.signal ?? null,
+                      termination: term
+                    });
+                  }
+                  void this.closeClient(false);
+                }
+              }
+              return;
+            } catch {
+            }
+          }
+        } finally {
+          this.reconnecting = false;
+        }
+      }
       async closeClient(destroy = false) {
         if (this.closed) return;
         this.closed = true;
         try {
           this.unsubscribe?.();
           this.unsubscribe = null;
+          this.unsubscribeDisconnect?.();
+          this.unsubscribeDisconnect = null;
         } catch {
         }
         try {
@@ -179761,7 +179920,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
       function getRunningSessionHostScriptPath(pid) {
         const commandLine = getProcessCommandLine(pid);
-        if (!commandLine || !/session-host-daemon/i.test(commandLine)) return null;
+        if (!isManagedSessionHostCommandLine(commandLine)) return null;
         return parseNodeScriptPath(commandLine);
       }
       function getPidFile() {
@@ -180025,17 +180184,35 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const disconnectEndpointClients = (endpoint) => {
           import_session_host_core16.SessionHostClient.disconnectClients?.(endpoint);
         };
+        const evictGraceMs = options.evictGraceMs ?? 4e3;
+        const canPositivelyEscalateSigkill = (pid) => {
+          if (options.isManagedPid) {
+            if (!options.isManagedPid(pid)) return false;
+            if (options.identifiesPid && !options.identifiesPid(pid)) return false;
+            return true;
+          }
+          return isManagedSessionHostCommandLine(getProcessCommandLine(pid));
+        };
         const beforeSpawnHost = async (endpoint) => {
           disconnectEndpointClients(endpoint);
           const existingPid = getPid();
           if (existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid)) {
+            const cmd = getProcessCommandLine(existingPid);
+            LOG.warn(
+              "SessionHost",
+              `Stopping unresponsive session-host pid ${existingPid} before spawning replacement (endpoint=${endpoint.path}, cmd=${cmd || "unverified"})`
+            );
             stopManagedSessionHostProcess();
-            if (process.platform !== "win32" && isPidAlive(existingPid) && isManagedPid(existingPid)) {
-              const deadline = Date.now() + 300;
+            if (process.platform !== "win32" && isPidAlive(existingPid) && canPositivelyEscalateSigkill(existingPid)) {
+              const deadline = Date.now() + evictGraceMs;
               while (Date.now() < deadline && isPidAlive(existingPid)) {
                 await new Promise((resolve54) => setTimeout(resolve54, 25));
               }
               if (isPidAlive(existingPid)) {
+                LOG.warn(
+                  "SessionHost",
+                  `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`
+                );
                 try {
                   process.kill(existingPid, "SIGKILL");
                 } catch {

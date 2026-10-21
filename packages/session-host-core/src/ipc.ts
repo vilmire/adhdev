@@ -4,6 +4,7 @@ import * as net from 'net';
 import { generateUUID } from './uuid.js';
 import { StringDecoder } from 'string_decoder';
 import type {
+  AttachSessionPayload,
   SessionHostEvent,
   SessionHostRequest,
   SessionHostRequestEnvelope,
@@ -122,6 +123,7 @@ function createLineParser<TEnvelope = SessionHostWireEnvelope>(
 export interface SessionHostClientOptions {
   endpoint?: SessionHostEndpoint;
   appName?: string;
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -175,15 +177,21 @@ export class SessionHostClient {
   readonly endpoint: SessionHostEndpoint;
 
   private socket: net.Socket | null = null;
+  private connectPromise: Promise<void> | null = null;
   private requestTimeoutMs = 30_000;
   private requestWaiters = new Map<string, { resolve: (value: SessionHostResponse) => void; reject: (error: Error) => void }>();
   private eventListeners = new Set<(event: SessionHostEvent) => void>();
   private disconnectListeners = new Set<(info: SessionHostDisconnectInfo) => void>();
   /** Guards against emitting both an 'error'-path and a 'close'-path disconnect for one socket. */
   private disconnectedSockets = new WeakSet<net.Socket>();
+  /** Session subscriptions established via create_session/attach_session, replayed automatically on reconnect. */
+  private attachedSessions = new Map<string, AttachSessionPayload>();
 
   constructor(options: SessionHostClientOptions = {}) {
     this.endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || 'adhdev');
+    if (typeof options.requestTimeoutMs === 'number' && options.requestTimeoutMs > 0) {
+      this.requestTimeoutMs = options.requestTimeoutMs;
+    }
     activeClientRefs.add(new WeakRef(this));
   }
 
@@ -248,6 +256,7 @@ export class SessionHostClient {
     // guard at the top of connect().
     if (this.socket === socket) {
       this.socket = null;
+      this.connectPromise = null;
     }
     try { socket.destroy(); } catch { /* noop */ }
 
@@ -266,13 +275,49 @@ export class SessionHostClient {
     }
   }
 
+  private sendRawRequestOnSocket<T = unknown>(
+    socket: net.Socket,
+    request: SessionHostRequest,
+  ): Promise<SessionHostResponse<T>> {
+    const requestId = generateUUID();
+    const envelope: SessionHostRequestEnvelope = {
+      kind: 'request',
+      requestId,
+      request,
+    };
+    const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 30_000;
+    const timeoutLabel = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}s` : `${timeoutMs}ms`;
+    return new Promise<SessionHostResponse<T>>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const timeoutError = new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`);
+        if (this.socket === socket) {
+          this.disconnect(timeoutError);
+        } else {
+          this.requestWaiters.delete(requestId);
+          this.disconnectedSockets.add(socket);
+          try { socket.destroy(); } catch { /* noop */ }
+          reject(timeoutError);
+        }
+      }, timeoutMs);
+      this.requestWaiters.set(requestId, {
+        resolve: (value) => { clearTimeout(timeout); resolve(value as SessionHostResponse<T>); },
+        reject: (error) => { clearTimeout(timeout); reject(error); },
+      });
+      socket.write(serializeEnvelope(envelope));
+    });
+  }
+
   async connect(): Promise<void> {
-    if (this.socket && !this.socket.destroyed) return;
+    if (this.socket && !this.socket.destroyed) {
+      if (this.connectPromise) await this.connectPromise;
+      return;
+    }
     // Cleanup stale socket reference left after error/disconnect
     if (this.socket) {
       try { this.socket.destroy(); } catch { /* noop */ }
       this.socket = null;
     }
+    this.connectPromise = null;
 
     const socket = net.createConnection(this.endpoint.path);
     this.socket = socket;
@@ -334,13 +379,33 @@ export class SessionHostClient {
       this.handleDisconnect(socket, 'ended', undefined, flushParser().length);
     });
 
-    await new Promise<void>((resolve, reject) => {
-      socket.once('connect', () => {
-        establishedSockets.add(socket);
-        resolve();
+    const connectTask = (async () => {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('connect', () => {
+          establishedSockets.add(socket);
+          resolve();
+        });
+        socket.once('error', reject);
       });
-      socket.once('error', reject);
-    });
+      if (this.attachedSessions.size > 0 && this.socket === socket && !socket.destroyed) {
+        for (const sub of [...this.attachedSessions.values()]) {
+          if (this.socket !== socket || socket.destroyed) break;
+          await this.sendRawRequestOnSocket(socket, {
+            type: 'attach_session',
+            payload: sub,
+          }).catch(() => {});
+        }
+      }
+    })();
+
+    this.connectPromise = connectTask;
+    try {
+      await connectTask;
+    } finally {
+      if (this.connectPromise === connectTask) {
+        this.connectPromise = null;
+      }
+    }
   }
 
   onEvent(listener: (event: SessionHostEvent) => void): () => void {
@@ -355,43 +420,39 @@ export class SessionHostClient {
     const requestSocket = this.socket;
     if (!requestSocket) throw new Error('Session host socket unavailable');
 
-    const requestId = generateUUID();
-    const envelope: SessionHostRequestEnvelope = {
-      kind: 'request',
-      requestId,
-      request,
-    };
-
-    const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 30_000;
-    const response = await new Promise<SessionHostResponse>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.requestWaiters.delete(requestId);
-        const timeoutError = new Error(`Session host request timed out after 30s (${request.type})`);
-        if (this.socket === requestSocket) {
-          this.disconnect(timeoutError);
-        } else {
-          this.disconnectedSockets.add(requestSocket);
-          try { requestSocket.destroy(); } catch { /* noop */ }
+    const response = await this.sendRawRequestOnSocket<T>(requestSocket, request);
+    if (response.success) {
+      if (request.type === 'attach_session') {
+        this.attachedSessions.set(request.payload.sessionId, {
+          sessionId: request.payload.sessionId,
+          clientId: request.payload.clientId,
+          clientType: request.payload.clientType,
+          readOnly: request.payload.readOnly === true,
+        });
+      } else if (request.type === 'create_session') {
+        const createdId = (response.result as { sessionId?: string } | undefined)?.sessionId || request.payload.sessionId;
+        if (createdId) {
+          this.attachedSessions.set(createdId, {
+            sessionId: createdId,
+            clientId: request.payload.clientId || `daemon-client-${generateUUID().slice(0, 8)}`,
+            clientType: request.payload.clientType || 'daemon',
+            readOnly: false,
+          });
         }
-        reject(timeoutError);
-      }, timeoutMs);
-      this.requestWaiters.set(requestId, {
-        resolve: (value) => { clearTimeout(timeout); resolve(value); },
-        reject: (error) => { clearTimeout(timeout); reject(error); },
-      });
-      requestSocket.write(serializeEnvelope(envelope));
-    });
-
-    return response as SessionHostResponse<T>;
+      } else if (request.type === 'detach_session') {
+        this.attachedSessions.delete(request.payload.sessionId);
+      }
+    }
+    return response;
   }
 
   disconnect(error?: Error): void {
     const socket = this.socket;
-    this.socket = null;
     if (socket) {
-      this.disconnectedSockets.add(socket);
-      try { socket.destroy(); } catch { /* noop */ }
+      this.handleDisconnect(socket, error ? 'error' : 'closed', error, 0);
+      return;
     }
+    this.connectPromise = null;
     const failure = error || new Error(`Session host client disconnected (${this.endpoint.path})`);
     for (const waiter of this.requestWaiters.values()) {
       waiter.reject(failure);
@@ -400,6 +461,8 @@ export class SessionHostClient {
   }
 
   async close(): Promise<void> {
+    this.attachedSessions.clear();
+    this.connectPromise = null;
     if (!this.socket) return;
     const socket = this.socket;
     this.socket = null;

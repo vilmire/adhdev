@@ -267,10 +267,15 @@ test('request timeout destroys the wedged socket, rejects concurrent waiters, an
   })
   await new Promise<void>((resolve) => server.listen(sockPath, resolve))
 
-  const client = new SessionHostClient({ endpoint: { kind: 'unix', path: sockPath } })
+  const client = new SessionHostClient({
+    endpoint: { kind: 'unix', path: sockPath },
+    requestTimeoutMs: 30,
+  } as any)
+  const disconnectSignals: SessionHostDisconnectInfo[] = []
+  client.onDisconnect((info) => disconnectSignals.push(info))
   const realSetTimeout = globalThis.setTimeout
   ;(globalThis as any).setTimeout = (fn: (...args: any[]) => void, ms?: number, ...args: any[]) => {
-    const adjustedMs = ms === 30_000 ? 30 : ms
+    const adjustedMs = ms === 30_000 ? 45 : ms
     return realSetTimeout(fn, adjustedMs, ...args)
   }
 
@@ -278,9 +283,10 @@ test('request timeout destroys the wedged socket, rejects concurrent waiters, an
     const firstReq = client.request({ type: 'list_sessions', payload: {} })
     const concurrentReq = client.request({ type: 'get_host_diagnostics', payload: {} })
 
-    await assert.rejects(firstReq, /Session host request timed out/)
-    await assert.rejects(concurrentReq, /Session host request timed out/)
+    await assert.rejects(firstReq, /Session host request timed out after 30ms \(list_sessions\)/)
+    await assert.rejects(concurrentReq, /Session host request timed out after 30ms \(list_sessions\)/)
     assert.equal(connectionCount, 1)
+    assert.equal(disconnectSignals.length, 1, 'timeout/disconnect must emit onDisconnect for established socket')
 
     // Subsequent request must open a new UDS connection (connId === 2) instead of reusing wedged connId === 1
     dropRequestsOnCurrentSocket = false
@@ -293,6 +299,64 @@ test('request timeout destroys the wedged socket, rejects concurrent waiters, an
     assert.equal(connectionCount, 2)
   } finally {
     globalThis.setTimeout = realSetTimeout
+    await client.close().catch(() => {})
+    if (server.listening) await new Promise<void>((r) => server.close(() => r()))
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
+  }
+})
+
+test('H1: client that attached to a session automatically replays attach_session on reconnect after disconnect', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-reattach-'))
+  const sockPath = path.join(dir, 'host.sock')
+  const attachedByConn = new Map<number, string[]>()
+  let connectionCount = 0
+
+  const server = net.createServer((socket) => {
+    connectionCount += 1
+    const connId = connectionCount
+    attachedByConn.set(connId, [])
+    socket.on('data', (chunk) => {
+      const lines = chunk.toString('utf8').split('\n').filter((line) => line.trim().length > 0)
+      for (const line of lines) {
+        const env = JSON.parse(line)
+        if (env.request?.type === 'attach_session') {
+          attachedByConn.get(connId)!.push(env.request.payload.sessionId)
+        }
+        socket.write(
+          `${JSON.stringify({
+            kind: 'response',
+            requestId: env.requestId,
+            response: { success: true, result: { sessionId: env.request?.payload?.sessionId || 'ok' } },
+          })}\n`,
+        )
+      }
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(sockPath, resolve))
+
+  const client = new SessionHostClient({ endpoint: { kind: 'unix', path: sockPath } })
+  try {
+    await client.request({
+      type: 'attach_session',
+      payload: {
+        sessionId: 'sess-reattach-1',
+        clientId: 'daemon-transport-1',
+        clientType: 'daemon',
+        readOnly: false,
+      },
+    })
+    assert.deepEqual(attachedByConn.get(1), ['sess-reattach-1'])
+
+    client.disconnect(new Error('simulated socket wedge'))
+    await client.request({ type: 'list_sessions', payload: {} })
+
+    assert.equal(connectionCount, 2)
+    assert.deepEqual(
+      attachedByConn.get(2),
+      ['sess-reattach-1'],
+      'reconnected socket must automatically replay attach_session so session events are not lost',
+    )
+  } finally {
     await client.close().catch(() => {})
     if (server.listening) await new Promise<void>((r) => server.close(() => r()))
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }

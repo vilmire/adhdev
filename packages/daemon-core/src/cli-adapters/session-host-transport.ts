@@ -46,6 +46,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     private readonly pendingOutput: string[] = [];
     private operationChain = Promise.resolve();
     private unsubscribe: (() => void) | null = null;
+    private unsubscribeDisconnect: (() => void) | null = null;
+    private reconnecting = false;
     private currentPid = 0;
     private closed = false;
     private metadata: PtyRuntimeMetadata | null = null;
@@ -279,6 +281,10 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
             await this.client.connect();
         }
         this.unsubscribe = this.client.onEvent((event: SessionHostEvent) => this.handleEvent(event));
+        this.unsubscribeDisconnect = this.client.onDisconnect(() => {
+            if (this.closed) return;
+            void this.reconnectAndReattach();
+        });
 
         let record: SessionHostRecord | null = null;
         if (this.options.attachExisting) {
@@ -500,12 +506,65 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         return operation;
     }
 
+    private async reconnectAndReattach(): Promise<void> {
+        if (this.closed || this.reconnecting) return;
+        this.reconnecting = true;
+        try {
+            for (let attempt = 0; attempt < 5 && !this.closed; attempt += 1) {
+                if (attempt > 0) {
+                    await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+                }
+                if (this.closed) return;
+                try {
+                    await this.client.connect();
+                    const attachResponse = await this.client.request<SessionHostRecord>({
+                        type: 'attach_session',
+                        payload: {
+                            sessionId: this.options.runtimeId,
+                            clientId: this.options.clientId,
+                            clientType: 'daemon',
+                            readOnly: false,
+                        },
+                    });
+                    if (!attachResponse.success) {
+                        if (isLostRuntimeError(attachResponse.error)) {
+                            this.reportLostRuntime(attachResponse.error!);
+                            return;
+                        }
+                        continue;
+                    }
+                    if (attachResponse.result) {
+                        this.updateMetadata(attachResponse.result);
+                        if (attachResponse.result.lifecycle === 'stopped' || attachResponse.result.lifecycle === 'failed') {
+                            const term = attachResponse.result.termination;
+                            for (const callback of this.exitCallbacks) {
+                                callback({
+                                    exitCode: term?.exitCode ?? null,
+                                    signal: term?.signal ?? null,
+                                    termination: term,
+                                });
+                            }
+                            void this.closeClient(false);
+                        }
+                    }
+                    return;
+                } catch {
+                    // Wait and retry on transient socket reconnect failure.
+                }
+            }
+        } finally {
+            this.reconnecting = false;
+        }
+    }
+
     private async closeClient(destroy = false): Promise<void> {
         if (this.closed) return;
         this.closed = true;
         try {
             this.unsubscribe?.();
             this.unsubscribe = null;
+            this.unsubscribeDisconnect?.();
+            this.unsubscribeDisconnect = null;
         } catch { /* noop */ }
         try {
             await this.client.close();
