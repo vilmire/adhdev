@@ -1,20 +1,30 @@
 {
-  "schema": 1,
+  "schema": 2,
   "platform": "win32",
   "arch": "x64",
   "apiLevel": 2,
-  "sourceDigest": "f62a58448855fa1951208601db8095f85cc584b6f3bbffd24f161a951237cf33",
+  "sourceDigest": "5cae9be1c0fa99676f75c5e0d2a74117aba4cbe8798f16c38f25d2d01f52f7fa",
   "ghosttyRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
   "napiVersion": 8,
   "builtWithNode": "v22.14.0",
+  "release": true,
+  "provenance": {
+    "problems": [],
+    "ghosttySourceRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
+    "ghosttySourceClean": true,
+    "zigVersion": "0.15.2",
+    "cCompiler": "MSVC 19.44.35229.0",
+    "cxxCompiler": "MSVC 19.44.35229.0",
+    "buildType": "Release"
+  },
   "files": {
     "ghostty-vt.dll": {
-      "sha256": "47f4234d3229d40a616bb6aae79c5a23ec8381dbbaee876714e6ac3407823dc8",
-      "size": 1305600
+      "sha256": "5be35a8148cf9cec8881382ff04b05a54a7fa7df05b03a10fbe3b26ff4b094d8",
+      "size": 1305088
     },
     "ghostty_vt_node.node": {
-      "sha256": "351b95636880be14507690db28b31495d8feb673f6881e7fba3e4f4d42407ffd",
-      "size": 56832
+      "sha256": "e8eaa7378177f07d4489f0fc5b0296fb4a1ff39c4a700370eb9e1d44af169d21",
+      "size": 70656
     }
   }
 }
