@@ -12,6 +12,7 @@ const outputFile = path.join(outputDir, 'ghostty_vt_node.node');
 const triplet = `${process.platform}-${process.arch}-node${process.versions.modules}`;
 const sourceInputs = [
   path.join(packageDir, 'CMakeLists.txt'),
+  path.join(packageDir, 'toolchain.json'),
   path.join(packageDir, 'src', 'addon.cc'),
   path.join(packageDir, 'src', 'ghostty_bridge.c'),
   path.join(packageDir, 'src', 'ghostty_bridge.h'),

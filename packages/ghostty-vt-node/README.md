@@ -83,11 +83,27 @@ handle.getViewport === 'function'`) and treat exact reads as unavailable —
 never fall back to guessing from formatter output. `bindingInfo` reports the
 loaded binary's `apiLevel`, embedded `sourceDigest` and `ghosttyRevision`.
 
+Every method on a terminal handle owns a share of the native state, so a method
+taken off the handle (`const get = t.getViewport`) keeps working after the
+handle is garbage-collected; the terminal is freed when the last of them is.
+After `dispose()` every method throws `ERR_GHOSTTY_DISPOSED`.
+
 ## Producing / refreshing a prebuilt
 
 Build on the **target platform/arch** (cross-builds are not wired here) with the
-toolchain present (`cmake`, a C/C++ compiler, and `zig` 0.15.2 for `libghostty`;
-set `ZIG_EXECUTABLE` if zig is not on `PATH`):
+toolchain present (`cmake`, `git`, a C/C++ compiler, and the zig version pinned
+in `toolchain.json` for `libghostty`; set `ZIG_EXECUTABLE` if zig is not on
+`PATH`).
+
+The configure step verifies the build's provenance and fails on any problem:
+the resolved ghostty checkout (including one substituted with
+`FETCHCONTENT_SOURCE_DIR_GHOSTTY`) must be the pinned revision with a clean
+tree, zig must be the `toolchain.json` version, and `GHOSTTY_ZIG_BUILD_FLAGS`
+must be empty. For local experiments only, `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=1`
+turns the failure into a warning; the binary then reports
+`releaseEligible: false` with its problem codes, and every release gate refuses
+it (`non-release`). The addon also records the zig version, C/C++ compiler id
+and version, and build type (`getBindingInfo()`, copied into the manifest).
 
 ```bash
 # Compile from source and emit into the committed prebuilt for this
@@ -107,26 +123,52 @@ Without `ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1`, `npm run build` keeps an existing
 local build or copies a usable prebuilt instead of compiling (`--plan` prints
 which it would do).
 
+Binaries embed absolute build and cache paths, so a prebuilt you commit must
+be built outside any home directory. Copy the package to a neutral directory and
+point every cache there (shown for macOS/Linux; on Windows use e.g. `C:\gvn`,
+`C:\zgc` and set `HOME`/`USERPROFILE` the same way):
+
+```bash
+rm -rf /tmp/gvn && mkdir -p /tmp/gvn/node_modules /tmp/gvn-home
+rsync -a --exclude node_modules --exclude prebuilt --exclude build oss/packages/ghostty-vt-node/ /tmp/gvn/
+cp -R oss/node_modules/node-addon-api /tmp/gvn/node_modules/   # or the package-local copy
+(cd /tmp/gvn && HOME=/tmp/gvn-home ZIG_GLOBAL_CACHE_DIR=/tmp/zgc ZIG_LOCAL_CACHE_DIR=/tmp/gvn/.zlc \
+  node "$OLDPWD/oss/node_modules/cmake-js/bin/cmake-js" rebuild)
+node oss/packages/ghostty-vt-node/scripts/prebuilt-manifest.mjs emit /tmp/gvn/build/Release
+node oss/packages/ghostty-vt-node/scripts/check-prebuilts.mjs
+```
+
 - macOS arm64 and Linux x64 can be produced on the corresponding native runner.
 - Windows x64 must be built on a Windows runner (MSVC; see the `if(MSVC)` block in
   `CMakeLists.txt` for the required dynamic-CRT link flags).
 
 ### Release-safety gate (`scripts/check-prebuilts.mjs`)
 
-CMake embeds a **binding source digest** (sha256 over `CMakeLists.txt` and
-`src/*`, LF-normalized; `scripts/binding-digest.mjs` reproduces it) into the
-addon. Each shipped prebuilt carries a `manifest.json` stamped from the binary
-itself plus file hashes. The gate fails unless:
+CMake embeds a **binding source digest** (sha256 over `CMakeLists.txt`,
+`toolchain.json` and `src/*`, LF-normalized; `scripts/binding-digest.mjs`
+reproduces it) and the build provenance into the addon. Each shipped prebuilt
+carries a `manifest.json` (schema 2) stamped from the binary itself plus file
+hashes. The gate fails unless:
 
 - (a) all three shipped triplets carry a manifest matching the current digest,
-  API level and ghostty pin, with matching file hashes. A triplet built from
-  older sources reports **pending-rebuild**: after any bridge/addon change the
-  tree is not shippable until every platform is rebuilt and re-stamped.
+  API level, ghostty pin and zig pin, with matching file hashes, stamped as a
+  release build from the pinned, clean ghostty checkout. A triplet built from
+  older sources, another zig, or an older manifest schema reports
+  **pending-rebuild**: after any bridge/addon/toolchain change the tree is not
+  shippable until every platform is rebuilt and re-stamped. Without loading
+  anything (release CI runs on Linux), the manifest's platform/arch must match
+  the directory, the platform's runtime set must be complete (darwin: addon +
+  `libghostty-vt.dylib` + `libghostty-vt.X.Y.Z.dylib`; linux: addon +
+  `libghostty-vt.so`, `.so.0`, `.so.0.X.Y`; win32: addon + `ghostty-vt.dll`),
+  and every file must be a thin Mach-O arm64 / ELF x86-64 (SONAME
+  `libghostty-vt.so.0`, NEEDed by the addon) / PE32+ x64 DLL
+  (`scripts/native-format.mjs`).
 - (b) the host platform's committed prebuilt, loaded by path, embeds the
-  current digest and its viewport API behaves.
+  current digest and release provenance, and its viewport API behaves.
 - (c) the native CI build compiles from source (`ADHDEV_GHOSTTY_VT_FORCE_COMPILE`)
-  and verifies + stamps the exact staged artifact, and the release job checks
-  every prebuilt it publishes (`--all-present`).
+  with the zig read from `toolchain.json`, verifies + stamps the exact staged
+  artifact, and the release job checks every prebuilt it publishes
+  (`--all-present`).
 - (d) no shipped native file (`.node`/`.dylib`/`.so*`/`.dll`) embeds a
   home-directory path (`/Users/<name>/`, `/home/<name>/`, `X:\Users\<name>\`),
   scanned as raw bytes in ASCII and UTF-16LE (`scripts/host-path-scan.mjs`; CI

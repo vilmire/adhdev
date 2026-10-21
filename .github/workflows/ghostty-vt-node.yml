@@ -85,14 +85,21 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
+      # The zig pin lives in packages/ghostty-vt-node/toolchain.json only:
+      # CMakeLists.txt refuses any other zig (and records the one it used), the
+      # file is a binding digest input, and the release gate compares against
+      # it, so changing the pin invalidates every previously built artifact.
+      - name: Read toolchain pin
+        id: toolchain
+        run: echo "zig=$(node -p "require('./packages/ghostty-vt-node/toolchain.json').zig")" >> "$GITHUB_OUTPUT"
+
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          # Pin to the version ghostty's build.zig.zon requires
-          # (minimum_zig_version = "0.15.2"). `latest` floated to 0.16.0, which
-          # breaks the build (std.process.EnvMap removed; requireZig() rejects it),
-          # leaving the committed prebuilts stale and missing getCursorPosition().
-          version: 0.15.2
+          # Must satisfy ghostty's build.zig.zon (minimum_zig_version = "0.15.2").
+          # `latest` floated to 0.16.0, which breaks the build (std.process.EnvMap
+          # removed; requireZig() rejects it).
+          version: ${{ steps.toolchain.outputs.zig }}
 
       - name: Install dependencies
         run: npm ci

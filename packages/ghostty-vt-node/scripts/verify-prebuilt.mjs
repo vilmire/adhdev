@@ -2,18 +2,21 @@
 // Exercise the EXACT addon in a directory — require()d by path, so neither the
 // package loader's build/Release preference nor its same-platform fallback can
 // substitute a different binary — and fail unless it is built from the binding
-// sources in this checkout and its viewport API behaves. Loading alone proves
-// nothing about the API: a stale binary loads fine. Every native file in the
+// sources in this checkout, by the pinned toolchain from a verified ghostty
+// checkout (release eligible), and its viewport API behaves. Loading alone
+// proves nothing about the API: a stale binary loads fine. Every native file in the
 // directory is also byte-scanned for embedded home-directory paths.
 //
 //   node scripts/verify-prebuilt.mjs <dir>     # e.g. prebuilt/darwin-arm64-node137
 import { createRequire } from 'node:module';
+import { readdirSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { computeBindingDigest, pinnedGhosttyRevision } from './binding-digest.mjs';
+import { computeBindingDigest, pinnedGhosttyRevision, pinnedZigVersion } from './binding-digest.mjs';
 import { scanHostPaths } from './host-path-scan.mjs';
-import { ADDON_FILE, expectedApiLevel } from './prebuilt-manifest.mjs';
+import { checkNativeFile } from './native-format.mjs';
+import { ADDON_FILE, RUNTIME_FILE_PATTERN, expectedApiLevel } from './prebuilt-manifest.mjs';
 
 const requireNative = createRequire(import.meta.url);
 
@@ -36,6 +39,10 @@ function scanChecks(dir) {
 export function verifyPrebuilt(dir, { hostPathScan = true } = {}) {
     // Scanned before loading: a binary that leaks paths fails even if it cannot load.
     const checks = hostPathScan ? scanChecks(dir) : [];
+    for (const name of readdirSync(dir).filter((entry) => RUNTIME_FILE_PATTERN.test(entry)).sort()) {
+        const problems = checkNativeFile(name, readFileSync(resolve(dir, name)), process.platform, process.arch);
+        checks.push({ name: `native format of ${name}`, ok: problems.length === 0, detail: problems.length ? problems.join('; ') : `${process.platform}-${process.arch} shared library` });
+    }
     const file = resolve(dir, ADDON_FILE);
     let addon;
     try {
@@ -52,6 +59,10 @@ export function verifyPrebuilt(dir, { hostPathScan = true } = {}) {
     expect(checks, 'apiLevel', info.apiLevel, expectedApiLevel());
     expect(checks, 'sourceDigest matches sources', info.sourceDigest, computeBindingDigest());
     expect(checks, 'ghosttyRevision is the pin', info.ghosttyRevision, pinnedGhosttyRevision());
+    expect(checks, 'built ghostty checkout is the pin', info.ghosttySourceRevision, pinnedGhosttyRevision());
+    expect(checks, 'built ghostty checkout is clean', info.ghosttySourceClean, true);
+    expect(checks, 'zig is the toolchain.json pin', info.zigVersion, pinnedZigVersion());
+    expect(checks, 'release eligible (no provenance problems)', [info.releaseEligible, info.provenanceProblems], [true, []]);
 
     const terminal = addon.createTerminal({ cols: 12, rows: 4, scrollback: 100000 });
     try {

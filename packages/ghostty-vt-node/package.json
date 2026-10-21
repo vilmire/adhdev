@@ -10,6 +10,7 @@
     "prebuilt",
     "scripts",
     "CMakeLists.txt",
+    "toolchain.json",
     "src",
     "README.md"
   ],

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include <napi.h>
@@ -9,9 +10,33 @@
 
 namespace {
 
+// Native state of one terminal handle. Ownership is shared: the handle's
+// `_native` External and EVERY method function hold a std::shared_ptr to it,
+// each released by that JS object's own finalizer. A method taken off the
+// handle (`const get = t.getViewport`) therefore keeps the state alive after
+// the handle is collected, and the terminal is destroyed only when the last
+// holder goes. Finalizers run in any order (including at env teardown) without
+// one of them leaving the others with a dangling pointer.
+//
+// This is preferred over validating `this` as a wrapped receiver: detached
+// methods are ordinary JS (destructuring, passing `t.write` as a callback) and
+// keep working instead of throwing, and no receiver check is needed on the
+// hot path. A disposed terminal throws ERR_GHOSTTY_DISPOSED.
 struct TerminalBindingState {
   AdhdevGhosttyTerminal* terminal = nullptr;
+
+  TerminalBindingState() = default;
+  TerminalBindingState(const TerminalBindingState&) = delete;
+  TerminalBindingState& operator=(const TerminalBindingState&) = delete;
+  ~TerminalBindingState() {
+    if (terminal) {
+      adhdev_ghostty_terminal_destroy(terminal);
+      terminal = nullptr;
+    }
+  }
 };
+
+using SharedState = std::shared_ptr<TerminalBindingState>;
 
 std::string BuildGhosttyErrorMessage(const char* context, int result) {
   return std::string(context) + ": " + adhdev_ghostty_result_message(result);
@@ -27,29 +52,36 @@ void ThrowCodedError(Napi::Env env, const std::string& message, const char* code
   error.ThrowAsJavaScriptException();
 }
 
+// info.Data() is the calling function's own SharedState holder, which lives as
+// long as that function object, so the state it points to is always alive here.
 TerminalBindingState* GetState(const Napi::CallbackInfo& info) {
-  if (!info.Data()) {
-    Napi::Error::New(info.Env(), "missing native terminal state").ThrowAsJavaScriptException();
+  auto* holder = static_cast<SharedState*>(info.Data());
+  if (!holder || !*holder) {
+    ThrowCodedError(info.Env(), "missing native terminal state", "ERR_GHOSTTY_NO_STATE");
     return nullptr;
   }
-  return static_cast<TerminalBindingState*>(info.Data());
+  return holder->get();
 }
 
 bool EnsureOpen(Napi::Env env, TerminalBindingState* state) {
-  if (!state || !state->terminal) {
-    Napi::Error::New(env, "ghostty terminal already disposed").ThrowAsJavaScriptException();
+  if (!state) return false;  // GetState already threw
+  if (!state->terminal) {
+    ThrowCodedError(env, "ghostty terminal already disposed", "ERR_GHOSTTY_DISPOSED");
     return false;
   }
   return true;
 }
 
-void FinalizeState(Napi::Env, TerminalBindingState* state) {
-  if (!state) return;
-  if (state->terminal) {
-    adhdev_ghostty_terminal_destroy(state->terminal);
-    state->terminal = nullptr;
-  }
-  delete state;
+void ReleaseSharedState(Napi::Env, SharedState* holder) {
+  delete holder;
+}
+
+// A method function holding its own share of the state.
+Napi::Function NewMethod(Napi::Env env, const SharedState& state, const char* name, Napi::Function::Callback callback) {
+  auto* holder = new SharedState(state);
+  Napi::Function fn = Napi::Function::New(env, callback, name, holder);
+  fn.AddFinalizer(ReleaseSharedState, holder);
+  return fn;
 }
 
 Napi::Value Write(const Napi::CallbackInfo& info) {
@@ -441,7 +473,8 @@ Napi::Value ScrollViewport(const Napi::CallbackInfo& info) {
 
 Napi::Value Dispose(const Napi::CallbackInfo& info) {
   TerminalBindingState* state = GetState(info);
-  if (state && state->terminal) {
+  if (!state) return info.Env().Undefined();
+  if (state->terminal) {
     adhdev_ghostty_terminal_destroy(state->terminal);
     state->terminal = nullptr;
   }
@@ -462,26 +495,26 @@ Napi::Value CreateTerminal(const Napi::CallbackInfo& info) {
       ? static_cast<size_t>(std::max<int64_t>(0, options.Get("scrollback").ToNumber().Int64Value()))
       : 2000;
 
-  auto* state = new TerminalBindingState();
+  SharedState state = std::make_shared<TerminalBindingState>();
   const int result = adhdev_ghostty_terminal_create(cols, rows, scrollback, &state->terminal);
   if (result != ADHDEV_GHOSTTY_SUCCESS) {
-    delete state;
+    state->terminal = nullptr;
     ThrowGhosttyError(env, "adhdev_ghostty_terminal_create", result);
     return env.Null();
   }
 
   Napi::Object object = Napi::Object::New(env);
-  Napi::External<TerminalBindingState> external = Napi::External<TerminalBindingState>::New(env, state, FinalizeState);
-  object.Set("_native", external);
-  object.Set("write", Napi::Function::New(env, Write, "write", state));
-  object.Set("resize", Napi::Function::New(env, Resize, "resize", state));
-  object.Set("formatPlainText", Napi::Function::New(env, FormatPlainText, "formatPlainText", state));
-  object.Set("formatVT", Napi::Function::New(env, FormatVT, "formatVT", state));
-  object.Set("getCursorPosition", Napi::Function::New(env, GetCursorPosition, "getCursorPosition", state));
-  object.Set("getViewport", Napi::Function::New(env, GetViewport, "getViewport", state));
-  object.Set("readRow", Napi::Function::New(env, ReadRow, "readRow", state));
-  object.Set("scrollViewport", Napi::Function::New(env, ScrollViewport, "scrollViewport", state));
-  object.Set("dispose", Napi::Function::New(env, Dispose, "dispose", state));
+  auto* nativeHolder = new SharedState(state);
+  object.Set("_native", Napi::External<SharedState>::New(env, nativeHolder, ReleaseSharedState));
+  object.Set("write", NewMethod(env, state, "write", Write));
+  object.Set("resize", NewMethod(env, state, "resize", Resize));
+  object.Set("formatPlainText", NewMethod(env, state, "formatPlainText", FormatPlainText));
+  object.Set("formatVT", NewMethod(env, state, "formatVT", FormatVT));
+  object.Set("getCursorPosition", NewMethod(env, state, "getCursorPosition", GetCursorPosition));
+  object.Set("getViewport", NewMethod(env, state, "getViewport", GetViewport));
+  object.Set("readRow", NewMethod(env, state, "readRow", ReadRow));
+  object.Set("scrollViewport", NewMethod(env, state, "scrollViewport", ScrollViewport));
+  object.Set("dispose", NewMethod(env, state, "dispose", Dispose));
   return object;
 }
 
@@ -491,10 +524,39 @@ Napi::Value CreateTerminal(const Napi::CallbackInfo& info) {
 #ifndef ADHDEV_GHOSTTY_GIT_TAG
 #define ADHDEV_GHOSTTY_GIT_TAG ""
 #endif
+// Build provenance from CMakeLists.txt. A build without it (no CMake
+// definitions) is never release eligible.
+#ifndef ADHDEV_GHOSTTY_RELEASE_ELIGIBLE
+#define ADHDEV_GHOSTTY_RELEASE_ELIGIBLE 0
+#endif
+#ifndef ADHDEV_GHOSTTY_PROVENANCE_PROBLEMS
+#define ADHDEV_GHOSTTY_PROVENANCE_PROBLEMS "no-build-provenance"
+#endif
+#ifndef ADHDEV_GHOSTTY_SOURCE_REVISION
+#define ADHDEV_GHOSTTY_SOURCE_REVISION ""
+#endif
+#ifndef ADHDEV_GHOSTTY_SOURCE_CLEAN
+#define ADHDEV_GHOSTTY_SOURCE_CLEAN 0
+#endif
+#ifndef ADHDEV_GHOSTTY_ZIG_VERSION
+#define ADHDEV_GHOSTTY_ZIG_VERSION ""
+#endif
+#ifndef ADHDEV_GHOSTTY_C_COMPILER
+#define ADHDEV_GHOSTTY_C_COMPILER ""
+#endif
+#ifndef ADHDEV_GHOSTTY_CXX_COMPILER
+#define ADHDEV_GHOSTTY_CXX_COMPILER ""
+#endif
+#ifndef ADHDEV_GHOSTTY_BUILD_TYPE
+#define ADHDEV_GHOSTTY_BUILD_TYPE ""
+#endif
 
 // Provenance of this compiled binary. sourceDigest is computed by CMake from
 // the binding sources at build time (scripts/binding-digest.mjs reproduces it),
 // so a prebuilt can be matched against the sources it claims to implement.
+// ghosttyRevision is the declared pin; ghosttySourceRevision/Clean describe the
+// checkout that was actually built, and zigVersion/cCompiler/cxxCompiler the
+// toolchain. releaseEligible is false for an ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD.
 Napi::Value GetBindingInfo(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   Napi::Object output = Napi::Object::New(env);
@@ -502,6 +564,23 @@ Napi::Value GetBindingInfo(const Napi::CallbackInfo& info) {
   output.Set("sourceDigest", Napi::String::New(env, ADHDEV_GHOSTTY_SOURCE_DIGEST));
   output.Set("ghosttyRevision", Napi::String::New(env, ADHDEV_GHOSTTY_GIT_TAG));
   output.Set("napiVersion", Napi::Number::New(env, NAPI_VERSION));
+  output.Set("releaseEligible", Napi::Boolean::New(env, ADHDEV_GHOSTTY_RELEASE_ELIGIBLE != 0));
+  Napi::Array problems = Napi::Array::New(env);
+  std::string problemText = ADHDEV_GHOSTTY_PROVENANCE_PROBLEMS;
+  size_t start = 0;
+  while (start < problemText.size()) {
+    size_t end = problemText.find(',', start);
+    if (end == std::string::npos) end = problemText.size();
+    if (end > start) problems.Set(problems.Length(), Napi::String::New(env, problemText.substr(start, end - start)));
+    start = end + 1;
+  }
+  output.Set("provenanceProblems", problems);
+  output.Set("ghosttySourceRevision", Napi::String::New(env, ADHDEV_GHOSTTY_SOURCE_REVISION));
+  output.Set("ghosttySourceClean", Napi::Boolean::New(env, ADHDEV_GHOSTTY_SOURCE_CLEAN != 0));
+  output.Set("zigVersion", Napi::String::New(env, ADHDEV_GHOSTTY_ZIG_VERSION));
+  output.Set("cCompiler", Napi::String::New(env, ADHDEV_GHOSTTY_C_COMPILER));
+  output.Set("cxxCompiler", Napi::String::New(env, ADHDEV_GHOSTTY_CXX_COMPILER));
+  output.Set("buildType", Napi::String::New(env, ADHDEV_GHOSTTY_BUILD_TYPE));
   return output;
 }
 

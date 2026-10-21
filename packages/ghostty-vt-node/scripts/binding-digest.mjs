@@ -19,6 +19,7 @@ export const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const BINDING_DIGEST_INPUTS = [
     'CMakeLists.txt',
+    'toolchain.json',
     'src/addon.cc',
     'src/ghostty_bridge.c',
     'src/ghostty_bridge.h',
@@ -33,6 +34,14 @@ export function computeBindingDigest(packageDir = PACKAGE_DIR) {
         manifest += `${input}:${sha256(Buffer.from(content, 'utf8'))}\n`;
     }
     return sha256(Buffer.from(manifest, 'utf8'));
+}
+
+// The zig version toolchain.json pins: the single source the native workflow
+// installs, CMakeLists.txt enforces and the release gate compares against.
+export function pinnedZigVersion(packageDir = PACKAGE_DIR) {
+    const { zig } = JSON.parse(readFileSync(join(packageDir, 'toolchain.json'), 'utf8'));
+    if (typeof zig !== 'string' || !/^\d+\.\d+\.\d+$/.test(zig)) throw new Error('toolchain.json does not pin "zig" to x.y.z');
+    return zig;
 }
 
 // The ghostty revision CMakeLists.txt pins by default.

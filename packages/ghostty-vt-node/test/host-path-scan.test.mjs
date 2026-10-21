@@ -62,7 +62,7 @@ it('parses the native CI workflow with CRLF line endings (Windows checkout)', ()
         }
         const findings = nativeCiFindings(dir, packageDir);
         assert.deepEqual(findings.filter(([, ok]) => !ok), []);
-        assert.equal(findings.length, 5);
+        assert.equal(findings.length, 6);
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }

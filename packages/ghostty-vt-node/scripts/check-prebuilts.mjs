@@ -55,6 +55,12 @@ export function nativeCiFindings(workflowDir = WORKFLOW_DIR, packageDir = PACKAG
     const buildStep = native.match(/- name: Build ghostty-vt-node\r?\n([\s\S]*?)(?=\r?\n {6}- name:)/);
     const buildText = buildStep ? buildStep[1] : '';
     const forced = /ADHDEV_GHOSTTY_VT_FORCE_COMPILE:\s*['"]?1['"]?/.test(buildText) || /npm run rebuild -w packages\/ghostty-vt-node/.test(buildText);
+    // The zig version comes from toolchain.json (the pin CMake enforces and the
+    // release gate compares), never from a literal in the workflow.
+    const zigStep = native.match(/- name: Setup Zig\r?\n([\s\S]*?)(?=\r?\n {6}- name:)/);
+    const zigFromPin = !!zigStep && /version:\s*\$\{\{\s*steps\.toolchain\.outputs\.zig\s*\}\}/.test(zigStep[1])
+        && /id: toolchain[\s\S]*?packages\/ghostty-vt-node\/toolchain\.json/.test(native);
+    findings.push(['native build installs the zig pinned in toolchain.json', zigFromPin, zigStep ? zigStep[1].trim().replace(/\s+/g, ' ') : 'no "Setup Zig" step']);
     findings.push(['native build forces a compile', forced, buildStep ? buildText.trim().replace(/\s+/g, ' ') : 'no "Build ghostty-vt-node" step']);
     findings.push(['native build verifies the exact staged artifact', /scripts\/verify-prebuilt\.mjs "?dist-prebuilt\//.test(native), 'verify-prebuilt.mjs on dist-prebuilt/<triplet>']);
     findings.push(['native build stamps a manifest from the built binary', /scripts\/prebuilt-manifest\.mjs write "?dist-prebuilt\//.test(native), 'prebuilt-manifest.mjs write dist-prebuilt/<triplet>']);
