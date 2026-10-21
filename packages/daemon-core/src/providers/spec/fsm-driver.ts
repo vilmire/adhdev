@@ -825,12 +825,10 @@ export class FsmDriver implements ISpecDriver {
         const sections = resolveSections(this.spec.sections ?? {}, lines);
 
         // Modal states (approval / picker) extract their buttons + title from the
-        // active VIEWPORT rather than the 5,000-line scrollback buffer so scrolled-off
-        // nested approval output in earlier turns cannot be extracted as a live modal.
-        // TODO(mission 3e9bae23): Nested approval text still visible inside the active
-        // viewport requires the exact cursor/composer region from the ghostty native
-        // viewport API.
-        const modal = deriveModal(state, sections, screen, (id, reason) => this.warnModalParseMiss(id, reason));
+        // cursor-bound live modal region in the active viewport so neither scrolled-off
+        // history nor a quoted modal above an active/idle composer is extracted as live.
+        const cursor = this.adapter.getCursorPosition();
+        const modal = deriveModal(state, sections, screen, (id, reason) => this.warnModalParseMiss(id, reason), cursor);
         const controls = this.deriveControls(state.id);
         const title = modal?.title ?? deriveTitle(state, sections, screen);
 

@@ -497,6 +497,54 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
                 + '  enter to submit | esc to cancel',
             ], 36, 24)).status).toBe('waiting_approval');
         });
+
+        it('does NOT enter waiting_approval when a quoted modal sits ABOVE an idle local composer inside the viewport (plain text AND real GhosttyVT)', async () => {
+            const viewportLines = [
+                '• Ran adhdev-mesh.read_chat({"session_id":"worker-1"})',
+                '  Would you like to run the following command?',
+                '  $ git status --porcelain',
+                '  › 1. Yes, proceed (y)',
+                "    2. Yes, and don't ask again for git status commands (a)",
+                '    3. No, and tell Codex what to do differently (esc)',
+                '  enter to submit | esc to cancel',
+                '',
+                '• Waiting for your next instruction.',
+                '',
+                '› ',
+                '  tab to queue message  ·  ⏎ send',
+            ];
+            const viewport = viewportLines.join('\n');
+            const composerCursor = { row: viewportLines.length - 2, col: 2 };
+
+            const ev = evaluateFsm(codexSpec, 'idle', viewport, composerCursor, undefined, clk(10_000, 0), undefined, 0);
+            expect(ev.fired?.to).not.toBe('approval');
+
+            const sections = resolveSections(codexSpec.sections ?? {}, viewportLines);
+            const modal = deriveModal(codexApprovalState, sections, viewport, () => {}, composerCursor);
+            expect(modal).toBeNull();
+
+            const plainDriver = runDriver(codexSpec, '', viewport, composerCursor);
+            expect(plainDriver.status).not.toBe('waiting_approval');
+            expect(plainDriver.modal).toBeNull();
+
+            // Real GhosttyVT rendering: quoted modal in the upper viewport, idle composer at the bottom with cursor on `› `
+            const ghosttyResult = await runGhostty('codex-cli', [
+                '\x1b[2J\x1b[H'
+                + '• Ran adhdev-mesh.read_chat({"session_id":"worker-1"})\r\n'
+                + '  Would you like to run the following command?\r\n'
+                + '  $ git status --porcelain\r\n'
+                + '  › 1. Yes, proceed (y)\r\n'
+                + "    2. Yes, and don't ask again for git status commands (a)\r\n"
+                + '    3. No, and tell Codex what to do differently (esc)\r\n'
+                + '  enter to submit | esc to cancel\r\n\r\n'
+                + '• Waiting for your next instruction.\r\n\r\n'
+                + '› \r\n'
+                + '  tab to queue message  ·  ⏎ send'
+                + '\x1b[11;3H',
+            ]);
+            expect(ghosttyResult.status).not.toBe('waiting_approval');
+            expect(ghosttyResult.modal).toBeNull();
+        });
     });
 
     describe('status projection and modalKey stability', () => {

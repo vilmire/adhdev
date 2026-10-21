@@ -48,6 +48,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
     private appliedEffectKeys = new Set<string>();
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
     private lastAgentStatus: string = 'idle';
+    private currentApprovalModalKey: string | null = null;
     private generatingStartedAt: number = 0;
     private monitor: StatusMonitor;
     private historyWriter: ChatHistoryWriter;
@@ -112,6 +113,16 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 status: this.currentStatus,
                 messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.messages),
                 activeModal: this.activeModal,
+                ...(this.currentStatus === 'waiting_approval' && this.currentApprovalModalKey ? {
+                    providerApproval: {
+                        type: 'tool_permission',
+                        lifecycle: 'pending',
+                        evidence: 'live',
+                        actionable: Array.isArray(this.activeModal?.buttons) && this.activeModal.buttons.length > 0,
+                        modalKey: this.currentApprovalModalKey,
+                        resolvedAt: null,
+                    } as any,
+                } : {}),
                 inputContent: '',
             } : null,
             controlValues: surface.controlValues,
@@ -206,6 +217,9 @@ export class ExtensionProviderInstance implements ProviderInstance {
             : undefined;
 
         const previousStatus = this.lastAgentStatus;
+        if (agentStatus !== 'waiting_approval') {
+            this.currentApprovalModalKey = null;
+        }
         if (agentStatus !== this.lastAgentStatus) {
             if (this.lastAgentStatus === 'idle' && agentStatus === 'generating') {
                 this.generatingStartedAt = now;
@@ -226,6 +240,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
             } else if (agentStatus === 'waiting_approval') {
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
                 const modalKey = `modal:${randomUUID()}`;
+                this.currentApprovalModalKey = modalKey;
                 this.pushEvent({
                     event: 'agent:waiting_approval',
                     chatTitle: this.resolveChatTitle(data),
@@ -421,6 +436,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
         this.agentName = '';
         this.extensionId = '';
         this.lastAgentStatus = 'idle';
+        this.currentApprovalModalKey = null;
         this.generatingStartedAt = 0;
         this.monitor.reset();
     }

@@ -259,6 +259,164 @@ describe('coordinator-first owner escalation', () => {
         expect(delivered[0]).toMatchObject({ modalKey: EP_1, approvalEvidence: 'live' });
         gate.dispose();
     });
+
+    it('defers escalation when episode B has an empty modal after episode A, and never leaks A command/buttons under B UUID', () => {
+        const w = world({
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run rm -rf /?', buttons: ['1. Yes', '2. No'] },
+                providerApproval: approval(EP_1),
+            },
+        });
+        w.ask({
+            modalMessage: 'Run rm -rf /?',
+            modalButtons: ['1. Yes', '2. No'],
+            modalKey: EP_1,
+        });
+
+        // Before the 60s escalation deadline, episode B replaces A, but B's modal is currently empty
+        vi.advanceTimersByTime(20_000);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: '', buttons: [] },
+                providerApproval: approval(EP_2),
+            },
+        };
+
+        // At 60s, B has no actionable modal yet -> must DEFER, not send A's command/buttons under EP_2
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS - 20_000);
+        expect(w.server).toHaveLength(0);
+
+        // Once B's modal populates, the deferred recheck delivers B's own modal and UUID
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm run lint?', buttons: ['Allow', 'Deny'] },
+                providerApproval: approval(EP_2),
+            },
+        };
+        vi.advanceTimersByTime(5_000);
+        expect(w.server).toHaveLength(1);
+        expect(w.server[0]).toMatchObject({
+            modalKey: EP_2,
+            modalMessage: 'Run npm run lint?',
+            modalButtons: ['Allow', 'Deny'],
+            approvalEvidence: 'live',
+        });
+        w.stop();
+    });
+
+    it('never drops a live IDE approval held past 90s when providerApproval is absent on getState()', () => {
+        let canDeliver = false;
+        const delivered: any[] = [];
+        const ideState: any = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: {
+                id: 'ide-chat-1',
+                status: 'waiting_approval',
+                activeModal: { message: 'Allow IDE file edit?', buttons: ['Allow', 'Deny'] },
+            },
+        };
+        const gate = createApprovalEscalationGate({
+            readState: () => ideState,
+            escalate: (_id, raw) => {
+                if (!canDeliver) return false;
+                delivered.push(raw);
+                return true;
+            },
+        });
+
+        expect(gate.hold({
+            event: 'agent:waiting_approval',
+            targetSessionId: 'ide-w1',
+            providerType: 'antigravity',
+            modalMessage: 'Allow IDE file edit?',
+            modalButtons: ['Allow', 'Deny'],
+            modalKey: EP_1,
+            approvalEvidence: 'live',
+            timestamp: 1,
+        })).toBe(true);
+
+        // Advance past 90s (60s initial window + 7 * 5s rechecks = 95s) while delivery is blocked
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS + 35_000);
+        expect(delivered).toHaveLength(0);
+
+        // Unblock delivery after 95s: the live IDE approval must still be escalated to the owner, never dropped
+        canDeliver = true;
+        vi.advanceTimersByTime(5_000);
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({
+            targetSessionId: 'ide-w1',
+            modalKey: EP_1,
+            modalMessage: 'Allow IDE file edit?',
+            modalButtons: ['Allow', 'Deny'],
+            approvalEvidence: 'live',
+        });
+        gate.dispose();
+    });
+
+    it('coalescing A then B marks only delivered B as escalated, so unresolved A can still escalate if it becomes current again', () => {
+        const w = world({
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Episode A command', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_1),
+            },
+        });
+        // Hold episode A at t=0
+        w.ask({
+            modalMessage: 'Episode A command',
+            modalButtons: ['Yes', 'No'],
+            modalKey: EP_1,
+        });
+
+        // At t=20s, episode B becomes current and coalesces into the pending entry
+        vi.advanceTimersByTime(20_000);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Episode B command', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_2),
+            },
+        };
+        w.ask({
+            modalMessage: 'Episode B command',
+            modalButtons: ['Yes', 'No'],
+            modalKey: EP_2,
+        });
+
+        // At t=60s, episode B is delivered
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS - 20_000);
+        expect(w.server).toHaveLength(1);
+        expect(w.server[0]).toMatchObject({ modalKey: EP_2, modalMessage: 'Episode B command' });
+
+        // Later, episode A (which was never delivered) becomes current again
+        vi.advanceTimersByTime(10_000);
+        state = {
+            ...state,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Episode A command', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_1),
+            },
+        };
+        w.ask({
+            modalMessage: 'Episode A command',
+            modalButtons: ['Yes', 'No'],
+            modalKey: EP_1,
+        });
+
+        // Once the session cooldown from B elapses, A must escalate (not be suppressed forever)
+        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS);
+        expect(w.server).toHaveLength(2);
+        expect(w.server[1]).toMatchObject({ modalKey: EP_1, modalMessage: 'Episode A command' });
+        w.stop();
+    });
 });
 
 describe('episode identity helpers', () => {

@@ -27695,6 +27695,971 @@ ${renderWorkerProtocolFooter2(input)}`;
         };
       }
     });
+    function stripAnsi(text4) {
+      return text4.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+    }
+    function normalizeAntigravityPromptText(text4) {
+      return stripAnsi(text4).replace(/\s+/g, " ").trim();
+    }
+    function parseAntigravityChoiceScreen(rawSectionText) {
+      if (!rawSectionText || !rawSectionText.trim()) return null;
+      const cleaned = stripAnsi(rawSectionText).replace(/\r\n/g, "\n");
+      const lines = cleaned.split("\n");
+      let headerIdx = -1;
+      let currentIndex = 0;
+      let totalQuestions = 0;
+      let questionHeaderLineIdx = -1;
+      let questionFirstLine = "";
+      for (let i = 0; i + 2 < lines.length; i++) {
+        if (!HEADER_TITLE_RE.test(lines[i])) continue;
+        if (!HEADER_DIVIDER_RE.test(lines[i + 1])) continue;
+        let qLineIdx = i + 2;
+        if (lines[qLineIdx].trim() === "" && i + 3 < lines.length) {
+          qLineIdx = i + 3;
+        }
+        const qMatch = QUESTION_HEADER_RE.exec(lines[qLineIdx]);
+        if (!qMatch) continue;
+        const m = Number.parseInt(qMatch[1], 10);
+        const n = Number.parseInt(qMatch[2], 10);
+        if (!Number.isFinite(m) || !Number.isFinite(n) || m < 1 || n < 1 || m > n) continue;
+        headerIdx = i;
+        currentIndex = m;
+        totalQuestions = n;
+        questionHeaderLineIdx = qLineIdx;
+        questionFirstLine = qMatch[3].trim();
+      }
+      if (headerIdx < 0 || questionHeaderLineIdx < 0) return null;
+      let footerIdx = -1;
+      let writingIn = false;
+      let multiSelectFromHint = false;
+      for (let i = questionHeaderLineIdx + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (OPTIONS_NAV_HINTS_RE.test(line)) {
+          footerIdx = i;
+          writingIn = false;
+          multiSelectFromHint = /\bToggle\b/i.test(line);
+          break;
+        }
+        if (WRITE_IN_NAV_HINTS_RE.test(line)) {
+          footerIdx = i;
+          writingIn = true;
+          break;
+        }
+      }
+      if (footerIdx < 0) return null;
+      for (let i = footerIdx + 1; i < lines.length; i++) {
+        if (POST_MODAL_VETO_RE.test(lines[i])) {
+          return null;
+        }
+      }
+      if (writingIn) {
+        let yourAnswerIdx = -1;
+        for (let i = questionHeaderLineIdx + 1; i < footerIdx; i++) {
+          if (WRITE_IN_PROMPT_RE.test(lines[i])) {
+            yourAnswerIdx = i;
+            break;
+          }
+        }
+        if (yourAnswerIdx < 0) return null;
+        const questionLines2 = [questionFirstLine];
+        for (let i = questionHeaderLineIdx + 1; i < yourAnswerIdx; i++) {
+          const trimmed2 = lines[i].trim();
+          if (trimmed2) questionLines2.push(trimmed2);
+        }
+        const questionText2 = questionLines2.join(" ");
+        return {
+          currentIndex,
+          totalQuestions,
+          questionText: questionText2,
+          multiSelect: false,
+          options: [],
+          writeInRowIndex: 0,
+          currentCursorRow: 1,
+          writingIn: true,
+          fingerprint: `agy-q:${currentIndex}/${totalQuestions}:writein:${questionText2}`
+        };
+      }
+      const questionLines = [questionFirstLine];
+      const rawRows = [];
+      for (let i = questionHeaderLineIdx + 1; i < footerIdx; i++) {
+        const line = lines[i];
+        const optMatch = OPTION_LINE_RE.exec(line);
+        if (optMatch) {
+          rawRows.push({
+            focused: Boolean(optMatch[1]),
+            index: Number.parseInt(optMatch[2], 10),
+            checkbox: optMatch[3] ?? null,
+            labelParts: [optMatch[4].trim()]
+          });
+          continue;
+        }
+        const trimmed2 = line.trim();
+        if (!trimmed2) continue;
+        if (rawRows.length === 0) {
+          questionLines.push(trimmed2);
+        } else {
+          rawRows[rawRows.length - 1].labelParts.push(trimmed2);
+        }
+      }
+      if (rawRows.length < 2) return null;
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        if (rawRows[idx].index !== idx + 1) return null;
+      }
+      const lastRow = rawRows[rawRows.length - 1];
+      const lastRowLabel = lastRow.labelParts.join(" ");
+      if (!WRITE_IN_LABEL_RE.test(lastRowLabel)) {
+        return null;
+      }
+      let currentCursorRow = 1;
+      for (const row2 of rawRows) {
+        if (row2.focused) {
+          currentCursorRow = row2.index;
+          break;
+        }
+      }
+      const realRows = rawRows.slice(0, -1);
+      const hasCheckboxes = realRows.some((r) => r.checkbox !== null);
+      const multiSelect = hasCheckboxes || multiSelectFromHint;
+      const options = realRows.map((row2) => ({
+        index: row2.index,
+        label: row2.labelParts.join(" "),
+        checked: row2.checkbox !== null && row2.checkbox.trim().length > 0
+      }));
+      const questionText = questionLines.join(" ");
+      const optionSig = options.map((o) => `${o.index}:${o.label}`).join("|");
+      return {
+        currentIndex,
+        totalQuestions,
+        questionText,
+        multiSelect,
+        options,
+        writeInRowIndex: lastRow.index,
+        currentCursorRow,
+        writingIn: false,
+        fingerprint: `agy-q:${currentIndex}/${totalQuestions}:${multiSelect ? "m" : "s"}:${questionText}:${optionSig}`
+      };
+    }
+    function doesAntigravityScreenMatchNativeStep(screen, nativePending) {
+      if (nativePending.questions.length !== screen.totalQuestions) return false;
+      const targetQuestion = nativePending.questions[screen.currentIndex - 1];
+      if (!targetQuestion) return false;
+      const normScreenQ = normalizeAntigravityPromptText(screen.questionText);
+      const normNativeQ = normalizeAntigravityPromptText(targetQuestion.questionText);
+      if (!normScreenQ || !normNativeQ) return false;
+      if (normScreenQ !== normNativeQ && !normScreenQ.includes(normNativeQ) && !normNativeQ.includes(normScreenQ)) {
+        return false;
+      }
+      if (screen.writingIn) {
+        return true;
+      }
+      if (Boolean(targetQuestion.isMultiSelect) !== Boolean(screen.multiSelect)) {
+        return false;
+      }
+      if (targetQuestion.options.length !== screen.options.length) {
+        return false;
+      }
+      for (let i = 0; i < targetQuestion.options.length; i++) {
+        const normNativeOpt = normalizeAntigravityPromptText(targetQuestion.options[i].label);
+        const normScreenOpt = normalizeAntigravityPromptText(screen.options[i].label);
+        if (normNativeOpt !== normScreenOpt && !normScreenOpt.includes(normNativeOpt) && !normNativeOpt.includes(normScreenOpt)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    function buildAntigravityInteractivePrompt(params) {
+      const { screen, nativePending, promptId, createdAt, providerType = "antigravity-cli" } = params;
+      if (!nativePending) return null;
+      if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
+        return null;
+      }
+      const questions = nativePending.questions.map((q, qIdx) => {
+        const options = q.options.map((opt) => ({
+          label: opt.label
+        }));
+        return {
+          questionId: `q${qIdx + 1}`,
+          question: q.questionText,
+          header: `Question ${qIdx + 1}/${nativePending.questions.length}`,
+          options,
+          multiSelect: q.isMultiSelect,
+          allowFreeform: true
+        };
+      });
+      const resolvedPromptId = promptId ?? `agy-ask:${nativePending.conversationId}:${nativePending.stepIdx}:${nativePending.callId || "0"}`;
+      return {
+        promptId: resolvedPromptId,
+        origin: "cli",
+        providerType,
+        createdAt: createdAt ?? Date.now(),
+        questions
+      };
+    }
+    function moveAntigravityCursor(fromRow, toRow2) {
+      if (toRow2 === fromRow) return "";
+      if (toRow2 > fromRow) return "\x1B[B".repeat(toRow2 - fromRow);
+      return "\x1B[A".repeat(fromRow - toRow2);
+    }
+    function resolveSelectedOptionRows(question, selectedLabels) {
+      const rows = [];
+      const seen2 = /* @__PURE__ */ new Set();
+      for (const selected2 of selectedLabels) {
+        let idx = question.options.findIndex((candidate) => candidate.label === selected2);
+        if (idx < 0) {
+          const asNum = Number(selected2);
+          if (Number.isInteger(asNum) && asNum >= 1 && asNum <= question.options.length) {
+            idx = asNum - 1;
+          }
+        }
+        if (idx < 0) {
+          throw new Error(`Unknown option for ${question.questionId}: ${selected2}`);
+        }
+        const rowNumber = idx + 1;
+        if (!seen2.has(rowNumber)) {
+          seen2.add(rowNumber);
+          rows.push(rowNumber);
+        }
+      }
+      return rows;
+    }
+    function computeMultiSelectToggleRows(realOptionCount, desiredRows, currentlyCheckedRows) {
+      const desiredSet = new Set(desiredRows);
+      const checkedSet = /* @__PURE__ */ new Set();
+      for (const row2 of currentlyCheckedRows) {
+        if (!Number.isInteger(row2) || row2 < 1 || row2 > realOptionCount) {
+          throw new Error(`Invalid checked option row ${row2} (expected 1..${realOptionCount})`);
+        }
+        checkedSet.add(row2);
+      }
+      const toggleRows = [];
+      for (let row2 = 1; row2 <= realOptionCount; row2++) {
+        if (checkedSet.has(row2) !== desiredSet.has(row2)) {
+          toggleRows.push(row2);
+        }
+      }
+      return toggleRows;
+    }
+    function appendMultiSelectToggleKeys(toggleRows, initialCursorRow) {
+      let keys = "";
+      let cursorRow = initialCursorRow;
+      for (const targetRow of toggleRows) {
+        if (targetRow <= 9) {
+          keys += String(targetRow);
+          cursorRow = targetRow;
+        } else {
+          keys += moveAntigravityCursor(cursorRow, targetRow);
+          keys += " ";
+          cursorRow = targetRow;
+        }
+      }
+      return { keys, cursorRow };
+    }
+    function buildAntigravityQuestionKeystrokes(question, answer, options) {
+      const realOptionCount = question.options.length;
+      if (realOptionCount < 1) {
+        throw new Error(`Question ${question.questionId} has no options`);
+      }
+      const writeInRow = realOptionCount + 1;
+      let cursorRow = options?.currentCursorRow && options.currentCursorRow >= 1 ? options.currentCursorRow : 1;
+      const freeform = answer.freeformText?.trim() ?? "";
+      if (question.multiSelect && options?.writingIn && options.currentlyCheckedRows === void 0) {
+        throw new Error(
+          `Cannot reconcile multi-select checkboxes for ${question.questionId} while the native Write-in editor is already open`
+        );
+      }
+      if (freeform.length > 0) {
+        if (question.allowFreeform === false) {
+          throw new Error(`Freeform write-in is not supported for ${question.questionId}`);
+        }
+        if (!question.multiSelect && answer.selectedLabels.length > 0) {
+          throw new Error(
+            `Single-select question ${question.questionId} cannot combine option selection with freeform write-in`
+          );
+        }
+        if (!question.multiSelect) {
+          if (options?.writingIn) {
+            return `${freeform}\r`;
+          }
+          let keys2 = "";
+          if (writeInRow <= 9) {
+            keys2 += String(writeInRow);
+          } else {
+            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
+            keys2 += "\r";
+          }
+          keys2 += `${freeform}\r`;
+          return keys2;
+        }
+        const desiredRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+        const toggleRows = computeMultiSelectToggleRows(
+          realOptionCount,
+          desiredRows,
+          options?.currentlyCheckedRows ?? []
+        );
+        if (options?.writingIn) {
+          if (toggleRows.length === 0) {
+            return `${freeform}\r`;
+          }
+          let keys2 = "\x1B";
+          const toggled2 = appendMultiSelectToggleKeys(toggleRows, writeInRow);
+          keys2 += toggled2.keys;
+          cursorRow = toggled2.cursorRow;
+          if (writeInRow <= 9) {
+            keys2 += String(writeInRow);
+          } else {
+            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
+            keys2 += "\r";
+          }
+          keys2 += `${freeform}\r`;
+          return keys2;
+        }
+        let keys = "";
+        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+        keys += toggled.keys;
+        cursorRow = toggled.cursorRow;
+        if (writeInRow <= 9) {
+          keys += String(writeInRow);
+        } else {
+          keys += moveAntigravityCursor(cursorRow, writeInRow);
+          keys += "\r";
+        }
+        keys += `${freeform}\r`;
+        return keys;
+      }
+      const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+      if (treatAsMultiSelect && !question.multiSelect) {
+        throw new Error(`Expected one selected label for ${question.questionId}`);
+      }
+      const selectedRows = resolveSelectedOptionRows(question, answer.selectedLabels);
+      if (question.multiSelect) {
+        if (selectedRows.length === 0) {
+          throw new Error(`Expected at least one selected label for ${question.questionId}`);
+        }
+      } else if (selectedRows.length !== 1) {
+        throw new Error(`Expected one selected label for ${question.questionId}`);
+      }
+      let prefix = "";
+      if (options?.writingIn) {
+        prefix = "\x1B";
+        cursorRow = writeInRow;
+      }
+      if (question.multiSelect) {
+        const toggleRows = computeMultiSelectToggleRows(
+          realOptionCount,
+          selectedRows,
+          options?.currentlyCheckedRows ?? []
+        );
+        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
+        return `${prefix}${toggled.keys}\r`;
+      }
+      const targetRow = selectedRows[0];
+      if (targetRow <= 9) {
+        return `${prefix}${String(targetRow)}`;
+      }
+      return `${prefix}${moveAntigravityCursor(cursorRow, targetRow)}\r`;
+    }
+    var HEADER_TITLE_RE;
+    var HEADER_DIVIDER_RE;
+    var QUESTION_HEADER_RE;
+    var OPTION_LINE_RE;
+    var WRITE_IN_LABEL_RE;
+    var OPTIONS_NAV_HINTS_RE;
+    var WRITE_IN_PROMPT_RE;
+    var WRITE_IN_NAV_HINTS_RE;
+    var POST_MODAL_VETO_RE;
+    var init_antigravity_interactive_prompt = __esm2({
+      "src/providers/types/antigravity-interactive-prompt.ts"() {
+        "use strict";
+        HEADER_TITLE_RE = /^\s*Question\s*$/;
+        HEADER_DIVIDER_RE = /^\s*─{10,}\s*$/;
+        QUESTION_HEADER_RE = /^\s*Question\s+(\d+)\/(\d+):\s+(.+?)\s*$/;
+        OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX✓✔])\]\s+)?(.+?)\s*$/;
+        WRITE_IN_LABEL_RE = /^(?:Write-in\.\.\.|.+\(Write-in\))$/i;
+        OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*[•·].*[•·]\s*(?:<esc>|esc)\s+Skip\s*$/;
+        WRITE_IN_PROMPT_RE = /^\s*Your answer:\s*$/;
+        WRITE_IN_NAV_HINTS_RE = /^\s*[Ee]nter Submit.*[•·]\s*(?:<esc>|esc)\s+Back\s*$/;
+        POST_MODAL_VETO_RE = /^\s*(?:─{10,}|[╭╰┌└│]|>\s+Type your message)|[\u2800-\u28ff]\s+(?:Generating|Running|Thinking)/;
+      }
+    });
+    function readStringArray2(value) {
+      return Array.isArray(value) ? value.map((item) => readString2(item)).filter((item) => !!item) : [];
+    }
+    function normalizeOption(raw) {
+      if (typeof raw === "string") {
+        const label3 = raw.trim();
+        return label3 ? { label: label3 } : null;
+      }
+      if (!raw || typeof raw !== "object") return null;
+      const record6 = raw;
+      const label2 = readString2(record6.label);
+      if (!label2) return null;
+      const description = readString2(record6.description);
+      const preview = readString2(record6.preview);
+      return {
+        label: label2,
+        ...description ? { description } : {},
+        ...preview ? { preview } : {}
+      };
+    }
+    function normalizeQuestion(raw, index) {
+      if (!raw || typeof raw !== "object") return null;
+      const record6 = raw;
+      const question = readString2(record6.question);
+      if (!question) return null;
+      const questionId = readString2(record6.questionId) || readString2(record6.id) || `q${index + 1}`;
+      const options = Array.isArray(record6.options) ? record6.options.map(normalizeOption).filter((item) => !!item) : [];
+      const header = readString2(record6.header);
+      return {
+        questionId,
+        question,
+        ...header ? { header } : {},
+        multiSelect: record6.multiSelect === true,
+        options,
+        ...record6.allowFreeform === true ? { allowFreeform: true } : {}
+      };
+    }
+    function normalizeInteractivePrompt(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const record6 = raw;
+      const promptId = readString2(record6.promptId);
+      const providerType = readString2(record6.providerType);
+      const origin = record6.origin === "mcp" || record6.origin === "agent" ? record6.origin : "cli";
+      const questions = Array.isArray(record6.questions) ? record6.questions.map(normalizeQuestion).filter((item) => !!item) : [];
+      if (!promptId || !providerType || questions.length === 0) return null;
+      const createdAt = typeof record6.createdAt === "number" && Number.isFinite(record6.createdAt) ? record6.createdAt : Date.now();
+      return { promptId, origin, providerType, createdAt, questions };
+    }
+    function assertNativeInteractivePromptResponse(raw) {
+      const isRecord10 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+      const hasUnknownKeys = (value, keys) => Reflect.ownKeys(value).some((key4) => typeof key4 !== "string" || !keys.includes(key4));
+      if (!isRecord10(raw) || hasUnknownKeys(raw, ["promptId", "answers", "binding", "action"]) || typeof raw.promptId !== "string" || !raw.promptId.trim() || !isProviderQuestionBinding(raw.binding) || !isRecord10(raw.answers) || raw.action !== void 0 && raw.action !== "dismiss") {
+        throw new Error("Malformed or unsupported native question response");
+      }
+      if (raw.action === "dismiss" && raw.binding.transport !== "codex_async") throw new Error("Native RPC dismissal is unsupported");
+      for (const key4 of Reflect.ownKeys(raw.answers)) {
+        if (typeof key4 !== "string" || !key4.trim()) throw new Error("Malformed native question id");
+        const answer = raw.answers[key4];
+        if (!isRecord10(answer) || hasUnknownKeys(answer, ["selectedLabels", "freeformText"]) || !Array.isArray(answer.selectedLabels) || answer.selectedLabels.some((label2) => typeof label2 !== "string") || new Set(answer.selectedLabels).size !== answer.selectedLabels.length || answer.freeformText !== void 0 && typeof answer.freeformText !== "string") {
+          throw new Error("Malformed or unsupported native answer");
+        }
+      }
+    }
+    function normalizeInteractivePromptResponse(raw) {
+      if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
+      const record6 = raw;
+      if ("binding" in record6) assertNativeInteractivePromptResponse(raw);
+      const promptId = readString2(record6.promptId);
+      if (!promptId) throw new Error("promptId must be a non-empty string");
+      if (!record6.answers || typeof record6.answers !== "object" || Array.isArray(record6.answers)) {
+        throw new Error("answers must be an object");
+      }
+      const answers = /* @__PURE__ */ Object.create(null);
+      for (const [questionId, answerRaw] of Object.entries(record6.answers)) {
+        if (!answerRaw || typeof answerRaw !== "object" || Array.isArray(answerRaw)) continue;
+        const answer = answerRaw;
+        const selectedLabels = record6.binding && Array.isArray(answer.selectedLabels) ? answer.selectedLabels.slice() : readStringArray2(answer.selectedLabels);
+        const freeformText = readString2(answer.freeformText);
+        answers[questionId] = {
+          selectedLabels,
+          ...freeformText ? { freeformText } : {}
+        };
+      }
+      return {
+        promptId,
+        answers,
+        ...record6.binding ? { binding: record6.binding } : {},
+        ...record6.action === "dismiss" ? { action: "dismiss" } : {}
+      };
+    }
+    function resolveInteractivePromptResponse(prompt, raw) {
+      if (prompt.binding) {
+        assertNativeInteractivePromptResponse(raw);
+        if (raw.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
+        return normalizeInteractivePromptResponse(raw);
+      }
+      if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
+      const record6 = raw;
+      const promptId = readString2(record6.promptId);
+      if (!promptId) throw new Error("promptId must be a non-empty string");
+      if (promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
+      if (record6.answers && typeof record6.answers === "object" && !Array.isArray(record6.answers)) {
+        return normalizeInteractivePromptResponse(record6);
+      }
+      if (record6.action === "dismiss" && record6.answers === void 0) {
+        return { promptId, answers: {}, action: "dismiss" };
+      }
+      if (!Array.isArray(record6.answers)) throw new Error("answers must be an array or a questionId-keyed object");
+      const resolveOneLabel = (question, sel) => {
+        if (typeof sel === "number" && Number.isFinite(sel)) {
+          const idx = Math.trunc(sel) - 1;
+          const option = question.options[idx];
+          if (!option) throw new Error(`Option index ${sel} out of range for ${question.questionId}`);
+          return option.label;
+        }
+        const label2 = readString2(sel);
+        if (!label2) throw new Error(`Empty selection for ${question.questionId}`);
+        const exact = question.options.find((o) => o.label === label2);
+        if (exact) return exact.label;
+        const asIndex = Number(label2);
+        if (Number.isInteger(asIndex)) {
+          const option = question.options[asIndex - 1];
+          if (option) return option.label;
+        }
+        throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
+      };
+      const answers = {};
+      const entries = record6.answers;
+      entries.forEach((entryRaw, index) => {
+        const entry = entryRaw && typeof entryRaw === "object" && !Array.isArray(entryRaw) ? entryRaw : { select: entryRaw };
+        const questionId = readString2(entry.questionId);
+        const question = (questionId ? prompt.questions.find((q) => q.questionId === questionId) : void 0) ?? prompt.questions[index];
+        if (!question) throw new Error(`No matching question for answer entry ${index}`);
+        const freeformText = readString2(entry.freeform) ?? readString2(entry.freeformText);
+        const select = entry.select ?? entry.answer ?? entry.selected;
+        const selectedLabels = [];
+        if (Array.isArray(select)) {
+          for (const sel of select) selectedLabels.push(resolveOneLabel(question, sel));
+        } else if (select !== void 0 && select !== null) {
+          selectedLabels.push(resolveOneLabel(question, select));
+        } else if (!freeformText) {
+          throw new Error(
+            `Answer entry ${index} for ${question.questionId} has no recognized selection: expected "select" (option label, 1-based index, or array of either) or "freeform" (text).`
+          );
+        }
+        answers[question.questionId] = {
+          selectedLabels,
+          ...freeformText ? { freeformText } : {}
+        };
+      });
+      return {
+        promptId,
+        answers,
+        ...record6.action === "dismiss" ? { action: "dismiss" } : {}
+      };
+    }
+    function interactivePromptContentFingerprint(questions) {
+      let hash3 = 2166136261;
+      const mix = (text4) => {
+        for (let i = 0; i < text4.length; i += 1) {
+          hash3 ^= text4.charCodeAt(i);
+          hash3 = Math.imul(hash3, 16777619) >>> 0;
+        }
+      };
+      for (const question of questions) {
+        mix(question.question);
+        mix(question.multiSelect ? "multi" : "single");
+        for (const option of question.options) {
+          mix("");
+          mix(option.label);
+        }
+        mix("");
+      }
+      return hash3.toString(16).padStart(8, "0");
+    }
+    function stableClaudeTuiPromptId(questions) {
+      return `ask-user-tui-${interactivePromptContentFingerprint(questions)}`;
+    }
+    function buildClaudeInteractiveToolResult(response) {
+      return JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: response.promptId,
+            content: JSON.stringify({ answers: response.answers }),
+            is_error: false
+          }]
+        }
+      });
+    }
+    function readClaudeTuiScreenLines(screenText) {
+      return screenText.split(/\r?\n/).map((raw) => {
+        const panel = raw.match(/(\s+)[│┃┌└├╭╰┏┗┣].*$/);
+        return {
+          // Keep the rc.58 preview-panel removal, but retain whether the main-pane
+          // text reached the panel edge. One padding cell before the divider is the
+          // observable signal that the terminal continued that logical row on the
+          // next physical row; generously accept two for wide-glyph edge padding.
+          text: panel ? raw.slice(0, panel.index ?? raw.length) : raw,
+          wrapsIntoNext: !!panel && panel[1].length <= 2
+        };
+      });
+    }
+    function joinClaudeTuiRows(lines, start, end) {
+      return lines.slice(start, end).map((line) => line.text.trim().replace(/^[│┃]\s*/, "")).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    }
+    function readClaudeQuestionBeforeOption(lines, firstOptionIndex, lowerBound) {
+      let end = firstOptionIndex;
+      while (end > lowerBound) {
+        const candidate = lines[end - 1].text.trim();
+        if (candidate && !/^─+$/.test(candidate)) break;
+        end -= 1;
+      }
+      let start = end;
+      while (start > lowerBound) {
+        const candidate = lines[start - 1].text.trim();
+        if (!candidate || /^─+$/.test(candidate) || candidate.includes("\u2714 Submit") || CLAUDE_TUI_OPTION_PATTERN.test(lines[start - 1].text)) break;
+        start -= 1;
+      }
+      const question = joinClaudeTuiRows(lines, start, end);
+      return question.replace(/^[☐☒]\s+/, "").trim();
+    }
+    function readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd) {
+      const match = lines[optionLineIndex].text.match(CLAUDE_TUI_OPTION_PATTERN);
+      if (!match) return null;
+      let label2 = match[2].trim();
+      let continuationEnd = optionLineIndex + 1;
+      while (continuationEnd < optionBlockEnd) {
+        const candidate = lines[continuationEnd].text.trim();
+        if (!candidate || CLAUDE_TUI_OPTION_PATTERN.test(lines[continuationEnd].text) || /^─+$/.test(candidate) || /^Enter to select\b/i.test(candidate)) break;
+        continuationEnd += 1;
+      }
+      let labelEnd = optionLineIndex + 1;
+      while (labelEnd < continuationEnd && lines[labelEnd - 1].wrapsIntoNext) labelEnd += 1;
+      if (labelEnd > optionLineIndex + 1) {
+        label2 = `${label2} ${joinClaudeTuiRows(lines, optionLineIndex + 1, labelEnd)}`.replace(/\s+/g, " ").trim();
+      }
+      const description = joinClaudeTuiRows(lines, labelEnd, continuationEnd) || void 0;
+      return { label: label2, ...description ? { description } : {} };
+    }
+    function claudeTuiQuestionHeaders(screenText) {
+      const navLine = screenText.split(/\r?\n/).find((line) => line.includes("\u2714 Submit") && /[☐☒]/.test(line));
+      if (!navLine) return [];
+      const headers = [];
+      const pattern = /[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g;
+      for (const match of navLine.matchAll(pattern)) {
+        const header = readString2(match[1]);
+        if (header) headers.push(header);
+      }
+      return headers;
+    }
+    function isClaudeTuiSelectFooter(text4) {
+      if (/Enter to select/i.test(text4)) return true;
+      return claudeTuiChecklistOptionPattern().test(text4);
+    }
+    function claudeTuiChecklistOptionPattern() {
+      const optionCheckbox = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
+      return new RegExp(
+        `(?:^|\\n)\\s*(?:[\u276F\u203A>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S|(?:^|\\n)\\s*(?:[\u276F\u203A>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`
+      );
+    }
+    function detectClaudeTuiMultiSelect(screenText) {
+      if (/Space to (?:select|toggle)|toggle selection|select multiple|select all that apply/i.test(screenText)) {
+        return true;
+      }
+      const optionCheckbox = `(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])`;
+      const beforeNumber = new RegExp(`^\\s*(?:[\u276F\u203A>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S`);
+      const afterNumber = new RegExp(`^\\s*(?:[\u276F\u203A>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`);
+      for (const line of screenText.split(/\r?\n/)) {
+        if (line.includes("\u2714 Submit")) continue;
+        if (beforeNumber.test(line) || afterNumber.test(line)) return true;
+      }
+      return false;
+    }
+    function readClaudeHeaderLine(lines, beforeIndex) {
+      for (let i = beforeIndex; i >= 0; i -= 1) {
+        const candidate = lines[i].trim();
+        if (!candidate) continue;
+        const match = candidate.match(/^[☐☒]\s+(.+?)\s*$/);
+        if (match?.[1]) return readString2(match[1]);
+        if (/^─+$/.test(candidate)) break;
+      }
+      return void 0;
+    }
+    function parseClaudeHeaderlessInteractiveTuiQuestion(page, index) {
+      if (!isClaudeTuiSelectFooter(page.screenText)) return null;
+      const lines = readClaudeTuiScreenLines(page.screenText);
+      let footerIndex = -1;
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        if (/Enter to select/i.test(lines[i].text)) {
+          footerIndex = i;
+          break;
+        }
+      }
+      let optionBlockEnd;
+      if (footerIndex < 0) {
+        let lastOptionIndex = -1;
+        for (let i = lines.length - 1; i >= 0; i -= 1) {
+          if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
+            lastOptionIndex = i;
+            break;
+          }
+        }
+        if (lastOptionIndex < 0) return null;
+        optionBlockEnd = lastOptionIndex;
+      } else {
+        optionBlockEnd = footerIndex - 1;
+        for (let i = footerIndex - 1; i >= 0; i -= 1) {
+          if (/^─+$/.test(lines[i].text.trim())) {
+            optionBlockEnd = i - 1;
+            break;
+          }
+        }
+      }
+      const optionLineIndexes = [];
+      for (let i = optionBlockEnd; i >= 0; i -= 1) {
+        const line = lines[i].text;
+        if (CLAUDE_TUI_OPTION_PATTERN.test(line)) {
+          optionLineIndexes.push(i);
+          continue;
+        }
+        if (optionLineIndexes.length > 0 && (!line.trim() || /^─+$/.test(line.trim()))) break;
+      }
+      optionLineIndexes.reverse();
+      if (optionLineIndexes.length === 0) return null;
+      const firstOptionIndex = optionLineIndexes[0];
+      const question = readClaudeQuestionBeforeOption(lines, firstOptionIndex, 0);
+      if (!question) return null;
+      const options = [];
+      let allowFreeform = false;
+      for (const optionLineIndex of optionLineIndexes) {
+        const option = readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd + 1);
+        if (!option) continue;
+        const { label: label2 } = option;
+        if (/^Chat about this$/i.test(label2)) continue;
+        if (/^Type something\.?$/i.test(label2)) {
+          allowFreeform = true;
+          continue;
+        }
+        options.push(option);
+      }
+      if (options.length === 0) return null;
+      const header = readString2(page.header) || readClaudeHeaderLine(lines.map((line) => line.text), firstOptionIndex - 1);
+      return {
+        questionId: `q${index + 1}`,
+        question,
+        ...header ? { header } : {},
+        multiSelect: detectClaudeTuiMultiSelect(page.screenText),
+        options,
+        ...allowFreeform ? { allowFreeform: true } : {}
+      };
+    }
+    function isClaudeTuiReviewScreen(screenText) {
+      return /(?:^|\n)\s*(?:Review your answers|Ready to submit your answers\?)\s*(?:\r?\n|$)/.test(screenText);
+    }
+    function readFocusedClaudeTuiPickerRegion(screenText) {
+      if (!screenText.includes("Enter to select")) return null;
+      const lines = screenText.split(/\r?\n/);
+      let lastFooterIndex = -1;
+      let previousFooterIndex = -1;
+      for (let index = 0; index < lines.length; index += 1) {
+        if (!lines[index].includes("Enter to select")) continue;
+        previousFooterIndex = lastFooterIndex;
+        lastFooterIndex = index;
+      }
+      if (lastFooterIndex < 0) return null;
+      return lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join("\n");
+    }
+    function claudeTuiPreviewPanelVisible(screenText) {
+      const region = readFocusedClaudeTuiPickerRegion(screenText);
+      if (region === null) return false;
+      const lines = region.split(/\r?\n/);
+      const firstOptionIndex = lines.findIndex((line) => CLAUDE_TUI_OPTION_PATTERN.test(line));
+      if (firstOptionIndex < 0) return false;
+      const block2 = lines.slice(firstOptionIndex);
+      return block2.some((line) => /┌─/.test(line)) && block2.some((line) => /└─/.test(line));
+    }
+    function parseClaudeInteractiveTuiQuestion(page, index) {
+      const lines = readClaudeTuiScreenLines(page.screenText);
+      let navIndex = -1;
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        if (lines[i].text.includes("\u2714 Submit") && /[☐☒]/.test(lines[i].text)) {
+          navIndex = i;
+          break;
+        }
+      }
+      if (navIndex < 0) return parseClaudeHeaderlessInteractiveTuiQuestion(page, index);
+      if (!isClaudeTuiSelectFooter(page.screenText)) return null;
+      for (let i = navIndex + 1; i < lines.length; i += 1) {
+        const candidate = lines[i].text.trim();
+        if (!candidate || /^─+$/.test(candidate)) continue;
+        if (candidate === "Review your answers" || candidate === "Ready to submit your answers?") return null;
+        if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) break;
+      }
+      let firstOptionIndex = -1;
+      for (let i = navIndex + 1; i < lines.length; i += 1) {
+        if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
+          firstOptionIndex = i;
+          break;
+        }
+      }
+      if (firstOptionIndex < 0) return null;
+      const question = readClaudeQuestionBeforeOption(lines, firstOptionIndex, navIndex + 1);
+      if (!question) return null;
+      const options = [];
+      let allowFreeform = false;
+      for (let i = firstOptionIndex; i < lines.length; i += 1) {
+        const match = lines[i].text.match(CLAUDE_TUI_OPTION_PATTERN);
+        if (!match) continue;
+        const option = readClaudeTuiOption(lines, i, lines.length);
+        if (!option) continue;
+        const { label: label2 } = option;
+        if (/^Type something\.?$/i.test(label2)) {
+          allowFreeform = true;
+          continue;
+        }
+        if (/^Chat about this$/i.test(label2)) continue;
+        options.push(option);
+      }
+      if (options.length === 0) return null;
+      const header = readString2(page.header);
+      return {
+        questionId: `q${index + 1}`,
+        question,
+        ...header ? { header } : {},
+        multiSelect: detectClaudeTuiMultiSelect(page.screenText),
+        options,
+        ...allowFreeform ? { allowFreeform: true } : {}
+      };
+    }
+    function readFocusedClaudeTuiQuestion(screenText) {
+      const focusedScreenText = readFocusedClaudeTuiPickerRegion(screenText);
+      if (focusedScreenText === null) return null;
+      const parsed = parseClaudeInteractiveTuiQuestion({ screenText: focusedScreenText }, 0);
+      if (!parsed) return null;
+      return {
+        question: parsed.question,
+        ...parsed.header ? { header: parsed.header } : {},
+        multiSelect: parsed.multiSelect
+      };
+    }
+    function detectClaudeAskUserQuestionPromptFromTuiPages(pages, options) {
+      if (pages.length === 0) return null;
+      const headers = claudeTuiQuestionHeaders(pages[0].screenText);
+      const questions = pages.map((page, index) => parseClaudeInteractiveTuiQuestion({
+        ...page,
+        header: page.header || headers[index]
+      }, index)).filter((question) => !!question);
+      if (questions.length !== pages.length) return null;
+      return {
+        promptId: options.promptId,
+        origin: "cli",
+        providerType: options.providerType || "claude-cli",
+        createdAt: options.createdAt || Date.now(),
+        questions
+      };
+    }
+    function buildClaudeInteractiveTuiAnswerSteps(prompt, response) {
+      if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
+      const steps = [];
+      for (const question of prompt.questions) {
+        const answer = response.answers[question.questionId];
+        if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
+        const freeformText = answer.freeformText?.trim() ?? "";
+        const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+        if (treatAsMultiSelect) {
+          const labels = answer.selectedLabels;
+          if (labels.length === 0) {
+            throw new Error(`Expected at least one selected label for ${question.questionId}`);
+          }
+          for (const label2 of labels) {
+            const selectedIndex = question.options.findIndex((option) => option.label === label2);
+            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
+            steps.push(String(selectedIndex + 1));
+          }
+          steps.push("	");
+        } else if (freeformText) {
+          const typeOptionIndex = question.options.findIndex((o) => /^Type something\.?$/i.test(o.label));
+          const optionNumber = typeOptionIndex >= 0 ? typeOptionIndex + 1 : question.options.length + 1;
+          steps.push(String(optionNumber));
+          for (const ch of freeformText) steps.push(ch);
+          steps.push("\r");
+        } else {
+          if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+          const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
+          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+          steps.push(String(selectedIndex + 1));
+          if (question.options.some((option) => option.preview)) steps.push("\r");
+        }
+      }
+      steps.push("\r");
+      return steps;
+    }
+    function buildKimiInteractiveTuiAnswerSteps(prompt, response) {
+      if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
+      const steps = [];
+      for (const question of prompt.questions) {
+        const answer = response.answers[question.questionId];
+        if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
+        const freeformText = answer.freeformText?.trim() ?? "";
+        const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
+        if (treatAsMultiSelect) {
+          const labels = answer.selectedLabels;
+          if (labels.length === 0) {
+            throw new Error(`Expected at least one selected label for ${question.questionId}`);
+          }
+          for (const label2 of labels) {
+            const selectedIndex = question.options.findIndex((option) => option.label === label2);
+            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
+            steps.push(String(selectedIndex + 1));
+          }
+          steps.push("	");
+        } else if (freeformText) {
+          steps.push(String(question.options.length + 1));
+          for (const ch of freeformText) steps.push(ch);
+          steps.push("\r");
+        } else {
+          if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
+          const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
+          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
+          steps.push(String(selectedIndex + 1));
+        }
+      }
+      steps.push("\r");
+      return steps;
+    }
+    function interactivePromptFromClaudeAskUserQuestion(input, options) {
+      if (!input || typeof input !== "object") return null;
+      const record6 = input;
+      const questions = Array.isArray(record6.questions) ? record6.questions.map(normalizeQuestion).filter((item) => !!item) : [];
+      if (questions.length === 0) return null;
+      return {
+        promptId: options.promptId,
+        origin: options.origin || "cli",
+        providerType: options.providerType,
+        createdAt: options.createdAt || Date.now(),
+        questions
+      };
+    }
+    function detectClaudeAskUserQuestionPromptFromJson(value, providerType = "claude-cli") {
+      if (!value || typeof value !== "object") return null;
+      const record6 = value;
+      const blocks = [];
+      if (Array.isArray(record6.content)) blocks.push(...record6.content);
+      const message = record6.message;
+      if (message && typeof message === "object" && Array.isArray(message.content)) {
+        blocks.push(...message.content);
+      }
+      if (record6.type === "tool_use") blocks.push(record6);
+      for (const block2 of blocks) {
+        if (!block2 || typeof block2 !== "object") continue;
+        const b = block2;
+        const name = readString2(b.name);
+        if (b.type !== "tool_use" || name !== "AskUserQuestion") continue;
+        const id4 = readString2(b.id) || readString2(record6.id) || `ask-user-${Date.now()}`;
+        const prompt = interactivePromptFromClaudeAskUserQuestion(b.input, {
+          promptId: id4,
+          providerType,
+          origin: "cli"
+        });
+        if (prompt) return prompt;
+      }
+      return null;
+    }
+    var CLAUDE_TUI_OPTION_CHECKBOX;
+    var CLAUDE_TUI_OPTION_PATTERN;
+    var init_interactive_prompt = __esm2({
+      "src/providers/types/interactive-prompt.ts"() {
+        "use strict";
+        init_dist();
+        init_antigravity_interactive_prompt();
+        CLAUDE_TUI_OPTION_CHECKBOX = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
+        CLAUDE_TUI_OPTION_PATTERN = new RegExp(
+          `^\\s*(?:[\u276F\u203A>\u2750]\\s*)?(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(\\d+)\\.\\s+(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(.+?)\\s*$`
+        );
+      }
+    });
     function normalizeMeshSchedulingStrategy(value) {
       if (typeof value !== "string") return DEFAULT_MESH_SCHEDULING_STRATEGY;
       const trimmed2 = value.trim();
@@ -83889,6 +84854,27 @@ ${closeSentinel}`;
           }
           getCursorPosition() {
             if (this.disposed) return { col: 0, row: 0 };
+            if (typeof this.terminal.getViewport === "function") {
+              try {
+                const vp = this.terminal.getViewport({ includeRows: "none" });
+                if (this.altScreenActive || vp.activeScreen === "alternate") {
+                  return { col: vp.cursorCol, row: vp.cursorRow };
+                }
+                const lines = this.formatLines();
+                if (lines.length === 0) return { col: vp.cursorCol, row: 0 };
+                const viewportStart = lines.length > this.rows ? lines.length - this.rows : 0;
+                const viewport = lines.slice(viewportStart);
+                let first = 0;
+                while (first < viewport.length && !viewport[first]) first += 1;
+                if (first >= viewport.length) return { col: vp.cursorCol, row: 0 };
+                const screenCursorRow = vp.activeOriginRow + vp.cursorRow;
+                return {
+                  col: vp.cursorCol,
+                  row: Math.max(0, screenCursorRow - viewportStart - first)
+                };
+              } catch {
+              }
+            }
             if (typeof this.terminal.getCursorPosition !== "function") return { col: 0, row: 0 };
             return this.terminal.getCursorPosition();
           }
@@ -92169,7 +93155,7 @@ ${body}`;
     });
     var import_node_fs8;
     var import_node_path9;
-    var import_node_crypto18;
+    var import_node_crypto19;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -92178,7 +93164,7 @@ ${body}`;
         "use strict";
         import_node_fs8 = require("fs");
         import_node_path9 = require("path");
-        import_node_crypto18 = require("crypto");
+        import_node_crypto19 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -92202,7 +93188,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto18.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto19.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -92445,7 +93431,7 @@ ${body}`;
           if (!reclaim2(lock, alive, now)) return held();
           continue;
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto19.randomBytes)(16).toString("hex"), acquiredAt: now() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto20.randomBytes)(16).toString("hex"), acquiredAt: now() };
         try {
           (0, import_node_fs9.writeFileSync)((0, import_node_path10.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -92469,7 +93455,7 @@ ${body}`;
     }
     var import_node_fs9;
     var import_node_path10;
-    var import_node_crypto19;
+    var import_node_crypto20;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var init_owned_lock = __esm2({
@@ -92477,7 +93463,7 @@ ${body}`;
         "use strict";
         import_node_fs9 = require("fs");
         import_node_path10 = require("path");
-        import_node_crypto19 = require("crypto");
+        import_node_crypto20 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
       }
@@ -92574,7 +93560,7 @@ ${body}`;
     }
     var import_node_fs10;
     var import_node_path11;
-    var import_node_crypto20;
+    var import_node_crypto21;
     var entryKeys;
     var origins;
     var integer;
@@ -92584,7 +93570,7 @@ ${body}`;
         "use strict";
         import_node_fs10 = require("fs");
         import_node_path11 = require("path");
-        import_node_crypto20 = require("crypto");
+        import_node_crypto21 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -92669,7 +93655,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto20.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto21.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs10.openSync)(temp, "wx", 384);
@@ -92808,7 +93794,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto21.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto222.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -92821,7 +93807,7 @@ ${body}`;
     }
     var import_node_fs11;
     var import_node_path12;
-    var import_node_crypto21;
+    var import_node_crypto222;
     var ID2;
     var proposalKeys;
     var text2;
@@ -92832,7 +93818,7 @@ ${body}`;
         "use strict";
         import_node_fs11 = require("fs");
         import_node_path12 = require("path");
-        import_node_crypto21 = require("crypto");
+        import_node_crypto222 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -92864,7 +93850,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto21.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto222.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -92875,7 +93861,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs11.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto21.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto222.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs11.openSync)(tmp, "wx", 384);
               try {
@@ -94447,6 +95433,280 @@ ${detail.join("\n")}` : stripped;
         DEFAULT_CURSOR_MARKER_CLASS = "\u276F\u203A>\u2192";
       }
     });
+    function matchNumberedChoiceIndex(line) {
+      const m = NUMBERED_CHOICE_LINE_RE.exec(line);
+      if (!m) return null;
+      const idx = Number(m[1]);
+      return Number.isFinite(idx) && idx > 0 ? idx : null;
+    }
+    function isBackgroundTaskDrawerLine(line) {
+      return /^\s*●\s+\[\d{2}:\d{2}:\d{2}\]\s+.*\brunning\s*$/.test(line);
+    }
+    function isComposerOrSpinnerOrBulletLine(line, nextLine = "") {
+      if (/(?:^|\s)(?:Working|Thinking)\s*\((?:[⠀-⣿]|\d+(?:h|m|s|ms)\b|\d+:\d)/.test(line)) return true;
+      if (/^\s*[✢✳✶✽✷✸✹✻\u2800-\u28ff]\s+\w/.test(line) && /(?:…|\.\.\.|esc to (?:interrupt|stop)|tokens?\b|\[stop\])/i.test(line)) return true;
+      if (/\besc to (?:interrupt|stop)\b/i.test(line)) return true;
+      if (/^›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line)) return true;
+      if (/^\s*›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line) && /tab to queue message|⏎\s*send/i.test(nextLine)) return true;
+      if (/^\s*(?:[│|]\s*)?❯(?:\s*$|(?:\s+(?!(?:\[[ xX]\]|[☐☒◻◼])?\s*\d+\.\s)(?!No,\s*exit\b|Yes,\s*I trust this folder\b)))/.test(line)) return true;
+      if (/Shift\+Tab:mode\b/i.test(line)) return true;
+      if (/^\s*[•●⏺]\s+\S/.test(line) && !isBackgroundTaskDrawerLine(line)) return true;
+      return false;
+    }
+    function isComposerPromptBoundary(line, nextLine = "") {
+      if (/^›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line)) return true;
+      if (/^\s*›(?:\s*$|(?:\s+(?!\d+\.\s)))/.test(line) && /tab to queue message|⏎\s*send/i.test(nextLine)) return true;
+      if (/^\s*(?:[│|]\s*)?❯(?:\s*$|(?:\s+(?!(?:\[[ xX]\]|[☐☒◻◼])?\s*\d+\.\s)(?!No,\s*exit\b|Yes,\s*I trust this folder\b)))/.test(line)) return true;
+      return false;
+    }
+    function resolveLiveModalSlice(lines, cursor, viewportStartRow = 0) {
+      const empty = { hasLiveModal: false, startRow: 0, endRow: 0, lines: [], screen: "" };
+      let lastNonBlankRow = lines.length - 1;
+      while (lastNonBlankRow >= 0 && !lines[lastNonBlankRow].trim()) lastNonBlankRow -= 1;
+      if (lastNonBlankRow < 0) return empty;
+      const choiceBlocks = [];
+      const unnumberedRows = [];
+      const footerRows = [];
+      for (let i = 0; i <= lastNonBlankRow; i += 1) {
+        const line = lines[i];
+        const idx = matchNumberedChoiceIndex(line);
+        if (idx !== null) {
+          let optEnd = i;
+          for (let j = i + 1; j <= lastNonBlankRow && j <= i + 3; j += 1) {
+            const next = lines[j];
+            if (!next.trim()) break;
+            if (matchNumberedChoiceIndex(next) !== null) break;
+            if (UNNUMBERED_CHOICE_LINE_RE.test(next)) break;
+            if (MODAL_FOOTER_LINE_RE.test(next) || isComposerOrSpinnerOrBulletLine(next, lines[j + 1] ?? "")) break;
+            if (/^\s*[─╌═━]{8,}\s*$/.test(next)) break;
+            if (/^\s*(?:\? for shortcuts|⏵⏵\s+|tab to queue message|⏎\s*send|>\s*$)/i.test(next)) break;
+            optEnd = j;
+          }
+          const prevBlock = choiceBlocks[choiceBlocks.length - 1];
+          let canContinuePrev = false;
+          if (prevBlock && idx === prevBlock.lastIdx + 1 && i <= prevBlock.endRow + 4) {
+            canContinuePrev = true;
+            for (let r = prevBlock.endRow + 1; r < i; r += 1) {
+              if (isComposerOrSpinnerOrBulletLine(lines[r], lines[r + 1] ?? "") || MODAL_FOOTER_LINE_RE.test(lines[r])) {
+                canContinuePrev = false;
+                break;
+              }
+            }
+          }
+          if (canContinuePrev && prevBlock) {
+            prevBlock.endRow = optEnd;
+            prevBlock.lastIdx = idx;
+            prevBlock.count += 1;
+          } else if (idx === 1) {
+            choiceBlocks.push({ startRow: i, endRow: optEnd, lastIdx: 1, count: 1 });
+          }
+          i = optEnd;
+          continue;
+        }
+        if (UNNUMBERED_CHOICE_LINE_RE.test(line)) {
+          unnumberedRows.push(i);
+        }
+        if (MODAL_FOOTER_LINE_RE.test(line) && !isComposerOrSpinnerOrBulletLine(line, lines[i + 1] ?? "")) {
+          footerRows.push(i);
+        }
+      }
+      const validChoiceBlocks = choiceBlocks.filter(
+        (b) => b.count >= 2 || footerRows.some((f) => f >= b.endRow && f <= b.endRow + 3)
+      );
+      const lastChoiceBlock = validChoiceBlocks[validChoiceBlocks.length - 1];
+      const lastUnnumberedRow = unnumberedRows[unnumberedRows.length - 1] ?? -1;
+      const lastFooterRow = footerRows[footerRows.length - 1] ?? -1;
+      let choiceStartRow = -1;
+      let choiceEndRow = -1;
+      if (lastChoiceBlock && lastChoiceBlock.endRow >= lastUnnumberedRow) {
+        choiceStartRow = lastChoiceBlock.startRow;
+        choiceEndRow = lastChoiceBlock.endRow;
+      } else if (lastUnnumberedRow !== -1) {
+        choiceStartRow = unnumberedRows.find((r) => r >= lastUnnumberedRow - 8) ?? lastUnnumberedRow;
+        choiceEndRow = lastUnnumberedRow;
+      } else if (lastFooterRow !== -1) {
+        choiceStartRow = lastFooterRow;
+        choiceEndRow = lastFooterRow;
+      }
+      let modalEndRow;
+      if (choiceEndRow !== -1) {
+        modalEndRow = choiceEndRow;
+        let sawModalFooter = MODAL_FOOTER_LINE_RE.test(lines[choiceEndRow]);
+        for (let r = choiceEndRow + 1; r <= lastNonBlankRow; r += 1) {
+          const line = lines[r];
+          if (!line.trim()) continue;
+          if (isComposerOrSpinnerOrBulletLine(line, lines[r + 1] ?? "")) break;
+          if (MODAL_FOOTER_LINE_RE.test(line)) {
+            sawModalFooter = true;
+            modalEndRow = r;
+            continue;
+          }
+          if (/^\s*[─╌═━┃│╭╮╰╯┌┐└┘├┤┬┴┼]+\s*$/.test(line)) {
+            modalEndRow = r;
+            continue;
+          }
+          if (sawModalFooter && r === lastNonBlankRow || isBackgroundTaskDrawerLine(line) || /^\s*⏵⏵\s+/.test(line) || /tab to queue message|⏎\s*send/i.test(line) || /^\s*>\s*$/.test(line) || r >= lastNonBlankRow - 2 && /^\s*(?:\? for shortcuts|›|ctrl\+f\s+Fullscreen|Grok Build\b|K\d+(?:\.\d+)?\s+Preview\b|context:\s*\d+%|- Terms of Service:|https?:\/\/|Links:)/i.test(line)) {
+            modalEndRow = r;
+            continue;
+          }
+          break;
+        }
+      } else {
+        const checkFrom = Math.max(0, viewportStartRow);
+        for (let r = lastNonBlankRow; r >= checkFrom && r >= lastNonBlankRow - 6; r -= 1) {
+          if (isComposerOrSpinnerOrBulletLine(lines[r], lines[r + 1] ?? "")) {
+            return empty;
+          }
+        }
+        choiceStartRow = checkFrom;
+        modalEndRow = lastNonBlankRow;
+      }
+      if (modalEndRow < viewportStartRow) return empty;
+      if (modalEndRow < lastNonBlankRow) return empty;
+      let minStartRow = 0;
+      for (const b of choiceBlocks) {
+        if (b !== lastChoiceBlock && b.endRow < choiceStartRow) {
+          minStartRow = Math.max(minStartRow, b.endRow + 1);
+        }
+      }
+      for (const f of footerRows) {
+        if (f < choiceStartRow) {
+          minStartRow = Math.max(minStartRow, f + 1);
+        }
+      }
+      for (let r = 0; r < choiceStartRow; r += 1) {
+        if (isComposerPromptBoundary(lines[r], lines[r + 1] ?? "")) {
+          minStartRow = Math.max(minStartRow, r + 1);
+        }
+      }
+      if (cursor !== void 0 && !(cursor.row === 0 && cursor.col === 0)) {
+        const effectiveCursorRow = cursor.row >= lines.length ? lastNonBlankRow + 1 : Math.max(0, cursor.row);
+        if (effectiveCursorRow <= lastNonBlankRow && isComposerOrSpinnerOrBulletLine(lines[effectiveCursorRow], lines[effectiveCursorRow + 1] ?? "")) {
+          return empty;
+        }
+        if (effectiveCursorRow < Math.max(0, minStartRow - 1) || effectiveCursorRow > modalEndRow + 1) {
+          return empty;
+        }
+      }
+      const sliceLines = lines.slice(minStartRow, modalEndRow + 1);
+      return {
+        hasLiveModal: true,
+        startRow: minStartRow,
+        endRow: modalEndRow,
+        lines: sliceLines,
+        screen: sliceLines.join("\n")
+      };
+    }
+    function deriveModal(state2, sections, fullScreen, warnParseMiss, cursor) {
+      const rule = state2.extract?.buttons;
+      if (!rule) {
+        if (state2.modal) {
+          warnParseMiss(state2.id, `state '${state2.id}' is modal but its spec declares NO extract.buttons rule, so no button can ever be parsed or pressed`);
+        }
+        return null;
+      }
+      const screenLines = fullScreen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
+      const liveModal = resolveLiveModalSlice(screenLines, cursor, 0);
+      if (!liveModal.hasLiveModal) {
+        return null;
+      }
+      const scopedScreen = liveModal.screen;
+      const scopedSections = sections.map((s2) => {
+        const fromLine = Math.max(s2.fromLine, liveModal.startRow);
+        const toLine = Math.max(fromLine, Math.min(s2.toLine, liveModal.endRow + 1));
+        return {
+          id: s2.id,
+          fromLine: fromLine - liveModal.startRow,
+          toLine: toLine - liveModal.startRow,
+          text: screenLines.slice(fromLine, toLine).join("\n")
+        };
+      });
+      const hay = sectionText(scopedSections, rule.section, scopedScreen);
+      const minCount = rule.min_count ?? 2;
+      let buttons = extractButtonsFromRule(rule, hay);
+      if (buttons.length < minCount && rule.section) {
+        const whole = extractButtonsFromRule(rule, scopedScreen);
+        if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
+      } else if (buttons.length >= minCount && rule.section && !buttons.some((b) => b.current)) {
+        const whole = extractButtonsFromRule(rule, scopedScreen);
+        if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
+      }
+      if (rule.cursor_marker && buttons.length > 0 && !buttons.some((b) => b.current)) {
+        const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: void 0 }, hay);
+        const relaxedCurrent = relaxed.filter((b) => b.current);
+        if (relaxedCurrent.length === 1) {
+          const cursorIndex = relaxedCurrent[0].index;
+          if (buttons.some((b) => b.index === cursorIndex)) {
+            buttons = buttons.map((b) => b.index === cursorIndex ? { ...b, current: true } : b);
+          }
+        }
+      }
+      if (buttons.length < minCount) {
+        if (state2.modal) {
+          warnParseMiss(state2.id, `state '${state2.id}' is modal but its extract.buttons pattern matched ${buttons.length} row(s), below min_count=${minCount} \u2014 the on-screen modal cannot be approved until the rule covers this screen`);
+        }
+        return null;
+      }
+      const title = deriveTitle(state2, scopedSections, scopedScreen);
+      return { title, buttons };
+    }
+    function deriveTitle(state2, sections, fullScreen) {
+      const rule = state2.extract?.title;
+      if (!rule) return null;
+      return extractTitle(rule, sections, fullScreen);
+    }
+    function isMultiSelectCheckboxPicker(state2, readScrollbackLines) {
+      if (!state2 || modalKindForState(state2) !== "picker") return false;
+      try {
+        return detectClaudeTuiMultiSelect(readScrollbackLines().join("\n"));
+      } catch {
+        return false;
+      }
+    }
+    function pressModalButton(ctx, index) {
+      const m = ctx.modal;
+      if (!m) return false;
+      const btn = m.buttons.find((b) => b.index === index);
+      if (!btn) return false;
+      if (isMultiSelectCheckboxPicker(ctx.state, ctx.readScrollbackLines)) {
+        LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 multi-select checkbox picker cannot be answered by a raw modal press (needs the structured interactive-prompt path: digit per selection + Tab + review Enter). No keys written.`);
+        return false;
+      }
+      const rule = ctx.state?.extract?.buttons;
+      if (rule?.select_mode === "arrow_keys") {
+        if (!m.buttons.some((b) => b.current)) {
+          LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 no cursor marker on any row of an arrow_keys modal, so the choice list is stale scrollback and the live picker is gone. Writing a bare CR here would submit an empty message into the composer. No keys written.`);
+          return false;
+        }
+        const from = m.buttons.find((b) => b.current).index;
+        const up = rule.cursor_keys?.up ?? "\x1B[A";
+        const down = rule.cursor_keys?.down ?? "\x1B[B";
+        const delta = btn.index - from;
+        const step = delta >= 0 ? down : up;
+        const nav = step.repeat(Math.abs(delta));
+        const confirm = (rule.key_for_index || "\r").replace(/\{index\}/g, "") || "\r";
+        if (nav) ctx.sendKeys(nav);
+        ctx.submitConfirm(confirm);
+        return true;
+      }
+      ctx.submitConfirm(btn.key);
+      return true;
+    }
+    var NUMBERED_CHOICE_LINE_RE;
+    var UNNUMBERED_CHOICE_LINE_RE;
+    var MODAL_FOOTER_LINE_RE;
+    var init_fsm_driver_modal = __esm2({
+      "src/providers/spec/fsm-driver-modal.ts"() {
+        "use strict";
+        init_evaluator();
+        init_fsm_types();
+        init_interactive_prompt();
+        init_logger();
+        NUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→●○◉◯▶]\s*)?(?:\(\s*[●○xX ]\s*\)\s*)?(?:\[[ xX]\]|[☐☒◻◼])?\s*(\d+)(?:\.\s*(?:\[[ xX]\]|[☐☒◻◼])?\s*\S|\s*\([●○xX ]\)\s*\S)/;
+        UNNUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→]\s*)?(?:Yes,\s*I trust this folder|No,\s*exit)\s*$|Allow once\s+Allow always\s+Reject|\bConfirm\s+Cancel\b|^\s*Yes,\s*proceed\s+y\s*$|^\s*No,\s*quit\s+n\s*$/i;
+        MODAL_FOOTER_LINE_RE = /enter to submit|Press enter to confirm or esc to cancel|Enter to confirm\s*[·•|]\s*Esc to cancel|Esc to cancel\b|escape to cancel\b|press\s+esc(?:ape)?\b|Enter to select\b|(?:↑|↓|up|down)[\s/]+(?:↑|↓)?\s*to navigate\b|↑\/↓\s*(?:Navigate|select)\b|\d+\/\d+:select\b|Space to select\b|Tab to amend\b|ctrl\+e to explain\b/i;
+      }
+    });
     function unavailableSignalSnapshot(now, reason, profile) {
       return {
         kind: SIGNAL_SNAPSHOT_KIND,
@@ -94621,16 +95881,26 @@ ${detail.join("\n")}` : stripped;
         return { kind: "stable", result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
       }
       if (isSectionAbsent(cond)) {
-        const result = evaluateCondition(cond, sections, fullScreen, cursor, prevLines, legacyTrace, stateId);
+        const useModalSlice = Boolean(
+          absence && (cond.section_absent === "modal" || cond.section_absent === "trust")
+        );
+        const haySections = useModalSlice ? absence.modalSections : sections;
+        const hayScreen = useModalSlice ? absence.modalScreen : fullScreen;
+        const hayCursor = useModalSlice ? absence.modalCursor : cursor;
+        const result = evaluateCondition(cond, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         return { kind: "regex", result, detail: `section_absent=${cond.section_absent}` };
       }
       if (isRegex(cond) || isChanged(cond)) {
-        const useViewport = Boolean(
-          absence && isRegex(cond) && (cond.section === "modal" || cond.section === "footer" || cond.section === "StatusLine" || absence.inNot && !cond.section)
+        const secName = isRegex(cond) ? cond.section : void 0;
+        const useModalSlice = Boolean(
+          absence && isRegex(cond) && (secName === "modal" || secName === "trust" || absence.isModalTarget && !absence.inNot)
         );
-        const hayScreen = useViewport ? absence.viewportScreen : fullScreen;
-        const haySections = useViewport ? absence.viewportSections : sections;
-        const hayCursor = useViewport ? absence.viewportCursor : cursor;
+        const useViewport = Boolean(
+          !useModalSlice && absence && absence.viewportScreen !== null && absence.viewportSections !== null && isRegex(cond) && (secName === "footer" || secName === "StatusLine" || absence.inNot && !secName)
+        );
+        const hayScreen = useModalSlice ? absence.modalScreen : useViewport ? absence.viewportScreen : fullScreen;
+        const haySections = useModalSlice ? absence.modalSections : useViewport ? absence.viewportSections : sections;
+        const hayCursor = useModalSlice ? absence.modalCursor : useViewport ? absence.viewportCursor : cursor;
         const result = evaluateCondition(cond, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         const kind = isRegex(cond) ? "regex" : "changed";
         const detail = isRegex(cond) ? `${cond.section ?? "*"}~/${cond.matches}/` : `cursor_above=${cond.cursor_above} changed=${cond.changed}`;
@@ -94657,12 +95927,12 @@ ${detail.join("\n")}` : stripped;
       const lines = screenText.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
       const cleanScreen = lines.join("\n");
       const viewportLines = viewportStartRow && viewportStartRow > 0 ? lines.slice(viewportStartRow) : null;
-      const absence = viewportLines ? {
-        viewportScreen: viewportLines.join("\n"),
-        viewportSections: resolveSections(spec.sections ?? {}, viewportLines),
-        viewportCursor: cursor ? { row: Math.max(0, cursor.row - viewportStartRow), col: cursor.col } : void 0,
-        inNot: false
-      } : void 0;
+      const viewportScreen = viewportLines ? viewportLines.join("\n") : null;
+      const viewportSections = viewportLines ? resolveSections(spec.sections ?? {}, viewportLines) : null;
+      const viewportCursor = viewportLines && cursor ? { row: Math.max(0, cursor.row - viewportStartRow), col: cursor.col } : cursor;
+      const liveModal = resolveLiveModalSlice(lines, cursor, viewportStartRow ?? 0);
+      const modalSections = liveModal.hasLiveModal ? resolveSections(spec.sections ?? {}, liveModal.lines) : Object.keys(spec.sections ?? {}).map((id4) => ({ id: id4, fromLine: 0, toLine: 0, text: "" }));
+      const modalCursor = liveModal.hasLiveModal && cursor ? { row: Math.max(0, cursor.row - liveModal.startRow), col: cursor.col } : cursor;
       const sections = resolveSections(spec.sections ?? {}, lines);
       const outgoing = outgoingTransitions(spec, currentStateId);
       const transitions = [];
@@ -94672,10 +95942,32 @@ ${detail.join("\n")}` : stripped;
         const heldFor = clock.now - clock.stateEnteredAt;
         const holdSatisfied = heldFor >= holdMs;
         const holdRemainingMs = holdSatisfied ? 0 : holdMs - heldFor;
+        const targetState = stateById(spec, t.to);
+        const isModalTarget = Boolean(targetState && modalKindForState(targetState) !== null);
         let cond;
         let condResult = true;
         if (t.when) {
-          cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}\u2192${t.to}`, signalSnapshot, absence);
+          cond = evalCond(
+            t.when,
+            sections,
+            cleanScreen,
+            cursor,
+            prevLines,
+            clock,
+            legacyTrace,
+            `${currentStateId}\u2192${t.to}`,
+            signalSnapshot,
+            {
+              viewportScreen,
+              viewportSections,
+              viewportCursor,
+              modalScreen: liveModal.screen,
+              modalSections,
+              modalCursor,
+              isModalTarget,
+              inNot: false
+            }
+          );
           condResult = cond.result;
         }
         const fires = holdSatisfied && condResult;
@@ -94719,6 +96011,7 @@ ${detail.join("\n")}` : stripped;
       "src/providers/spec/fsm-evaluator.ts"() {
         "use strict";
         init_evaluator();
+        init_fsm_driver_modal();
         init_fsm_types();
         init_signal_envelope();
         WHOLE_SCREEN = -1;
@@ -98969,7 +100262,7 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
-    var import_node_crypto23;
+    var import_node_crypto24;
     var import_node_os22;
     var import_node_path16;
     var refused;
@@ -98978,7 +100271,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto23 = require("crypto");
+        import_node_crypto24 = require("crypto");
         import_node_os22 = require("os");
         import_node_path16 = require("path");
         init_managed_mcp_process();
@@ -99183,7 +100476,7 @@ ${asText(streams.stderr)}
               this.instances.set(input.type, instance);
             }
             const record6 = {
-              invocationId: (0, import_node_crypto23.randomUUID)(),
+              invocationId: (0, import_node_crypto24.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
@@ -99255,7 +100548,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto24;
+    var import_node_crypto25;
     var import_node_fs14;
     var import_node_path17;
     var ID3;
@@ -99264,7 +100557,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto24 = require("crypto");
+        import_node_crypto25 = require("crypto");
         import_node_fs14 = require("fs");
         import_node_path17 = require("path");
         init_config();
@@ -99284,7 +100577,7 @@ ${asText(streams.stderr)}
             const record6 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto24.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto25.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -99353,7 +100646,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto25.createHash)("sha256");
+      const hash3 = (0, import_node_crypto26.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs15.readFileSync)((0, import_node_path18.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path18.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -99376,13 +100669,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta._sourceTrust }, treeDigest: digest4 };
     }
-    var import_node_crypto25;
+    var import_node_crypto26;
     var import_node_fs15;
     var import_node_path18;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto25 = require("crypto");
+        import_node_crypto26 = require("crypto");
         import_node_fs15 = require("fs");
         import_node_path18 = require("path");
         init_manifest();
@@ -103190,7 +104483,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises10.lstat)(root)).isSymbolicLink() || await (0, import_promises10.realpath)(root) !== (0, import_node_path19.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key4 = (0, import_node_crypto26.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
+      const key4 = (0, import_node_crypto27.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
       return (0, import_node_path19.join)(root, key4);
     }
     async function verifyCheckout(workspace, identity2) {
@@ -103259,7 +104552,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         throw busy();
       }
       const ownerPath = (0, import_node_path19.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
       try {
         await (0, import_promises10.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -103285,7 +104578,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises10.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
         await (0, import_promises10.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -103407,7 +104700,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process14;
     var import_node_util8;
-    var import_node_crypto26;
+    var import_node_crypto27;
     var import_promises10;
     var import_node_path19;
     var exec5;
@@ -103426,7 +104719,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process14 = require("child_process");
         import_node_util8 = require("util");
-        import_node_crypto26 = require("crypto");
+        import_node_crypto27 = require("crypto");
         import_promises10 = require("fs/promises");
         import_node_path19 = require("path");
         init_config();
@@ -103471,13 +104764,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity2) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key4 = (0, import_node_crypto27.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto27.createHmac)("sha256", key4).update(`${grant.target}
+      const key4 = (0, import_node_crypto28.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto28.createHmac)("sha256", key4).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto27.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto28.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity2) {
       const hostId = str9(args?.hostDaemonId);
@@ -103506,7 +104799,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto27;
+    var import_node_crypto28;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -103515,7 +104808,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto27 = require("crypto");
+        import_node_crypto28 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -103747,7 +105040,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest4 = (0, import_node_crypto28.createHash)("sha256").update(body).digest("hex");
+        const digest4 = (0, import_node_crypto29.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
       } catch {
         return false;
@@ -103784,7 +105077,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto28.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -103978,7 +105271,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto28.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto29.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -104055,7 +105348,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto28;
+    var import_node_crypto29;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -104066,7 +105359,7 @@ ${b.text}`).join("\n\n");
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
-        import_node_crypto28 = require("crypto");
+        import_node_crypto29 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -105438,15 +106731,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
     }
-    var import_node_crypto29;
+    var import_node_crypto30;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto29 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto30 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto30.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -105632,7 +106925,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    var import_node_crypto30;
+    var import_node_crypto31;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -105648,7 +106941,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto30 = require("crypto");
+        import_node_crypto31 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -105660,7 +106953,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto30.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto31.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -111669,949 +112962,7 @@ ${tail}` : ""
       writeCooperativeMaintenance: () => writeCooperativeMaintenance
     });
     module2.exports = __toCommonJS2(index_exports2);
-    init_dist();
-    var HEADER_TITLE_RE = /^\s*Question\s*$/;
-    var HEADER_DIVIDER_RE = /^\s*─{10,}\s*$/;
-    var QUESTION_HEADER_RE = /^\s*Question\s+(\d+)\/(\d+):\s+(.+?)\s*$/;
-    var OPTION_LINE_RE = /^\s*([❯›>])?\s*(\d+)\.\s+(?:\[([ xX✓✔])\]\s+)?(.+?)\s*$/;
-    var WRITE_IN_LABEL_RE = /^(?:Write-in\.\.\.|.+\(Write-in\))$/i;
-    var OPTIONS_NAV_HINTS_RE = /^\s*↑\/↓ Navigate\s*[•·].*[•·]\s*(?:<esc>|esc)\s+Skip\s*$/;
-    var WRITE_IN_PROMPT_RE = /^\s*Your answer:\s*$/;
-    var WRITE_IN_NAV_HINTS_RE = /^\s*[Ee]nter Submit.*[•·]\s*(?:<esc>|esc)\s+Back\s*$/;
-    var POST_MODAL_VETO_RE = /^\s*(?:─{10,}|[╭╰┌└│]|>\s+Type your message)|[\u2800-\u28ff]\s+(?:Generating|Running|Thinking)/;
-    function stripAnsi(text4) {
-      return text4.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-    }
-    function normalizeAntigravityPromptText(text4) {
-      return stripAnsi(text4).replace(/\s+/g, " ").trim();
-    }
-    function parseAntigravityChoiceScreen(rawSectionText) {
-      if (!rawSectionText || !rawSectionText.trim()) return null;
-      const cleaned = stripAnsi(rawSectionText).replace(/\r\n/g, "\n");
-      const lines = cleaned.split("\n");
-      let headerIdx = -1;
-      let currentIndex = 0;
-      let totalQuestions = 0;
-      let questionHeaderLineIdx = -1;
-      let questionFirstLine = "";
-      for (let i = 0; i + 2 < lines.length; i++) {
-        if (!HEADER_TITLE_RE.test(lines[i])) continue;
-        if (!HEADER_DIVIDER_RE.test(lines[i + 1])) continue;
-        let qLineIdx = i + 2;
-        if (lines[qLineIdx].trim() === "" && i + 3 < lines.length) {
-          qLineIdx = i + 3;
-        }
-        const qMatch = QUESTION_HEADER_RE.exec(lines[qLineIdx]);
-        if (!qMatch) continue;
-        const m = Number.parseInt(qMatch[1], 10);
-        const n = Number.parseInt(qMatch[2], 10);
-        if (!Number.isFinite(m) || !Number.isFinite(n) || m < 1 || n < 1 || m > n) continue;
-        headerIdx = i;
-        currentIndex = m;
-        totalQuestions = n;
-        questionHeaderLineIdx = qLineIdx;
-        questionFirstLine = qMatch[3].trim();
-      }
-      if (headerIdx < 0 || questionHeaderLineIdx < 0) return null;
-      let footerIdx = -1;
-      let writingIn = false;
-      let multiSelectFromHint = false;
-      for (let i = questionHeaderLineIdx + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (OPTIONS_NAV_HINTS_RE.test(line)) {
-          footerIdx = i;
-          writingIn = false;
-          multiSelectFromHint = /\bToggle\b/i.test(line);
-          break;
-        }
-        if (WRITE_IN_NAV_HINTS_RE.test(line)) {
-          footerIdx = i;
-          writingIn = true;
-          break;
-        }
-      }
-      if (footerIdx < 0) return null;
-      for (let i = footerIdx + 1; i < lines.length; i++) {
-        if (POST_MODAL_VETO_RE.test(lines[i])) {
-          return null;
-        }
-      }
-      if (writingIn) {
-        let yourAnswerIdx = -1;
-        for (let i = questionHeaderLineIdx + 1; i < footerIdx; i++) {
-          if (WRITE_IN_PROMPT_RE.test(lines[i])) {
-            yourAnswerIdx = i;
-            break;
-          }
-        }
-        if (yourAnswerIdx < 0) return null;
-        const questionLines2 = [questionFirstLine];
-        for (let i = questionHeaderLineIdx + 1; i < yourAnswerIdx; i++) {
-          const trimmed2 = lines[i].trim();
-          if (trimmed2) questionLines2.push(trimmed2);
-        }
-        const questionText2 = questionLines2.join(" ");
-        return {
-          currentIndex,
-          totalQuestions,
-          questionText: questionText2,
-          multiSelect: false,
-          options: [],
-          writeInRowIndex: 0,
-          currentCursorRow: 1,
-          writingIn: true,
-          fingerprint: `agy-q:${currentIndex}/${totalQuestions}:writein:${questionText2}`
-        };
-      }
-      const questionLines = [questionFirstLine];
-      const rawRows = [];
-      for (let i = questionHeaderLineIdx + 1; i < footerIdx; i++) {
-        const line = lines[i];
-        const optMatch = OPTION_LINE_RE.exec(line);
-        if (optMatch) {
-          rawRows.push({
-            focused: Boolean(optMatch[1]),
-            index: Number.parseInt(optMatch[2], 10),
-            checkbox: optMatch[3] ?? null,
-            labelParts: [optMatch[4].trim()]
-          });
-          continue;
-        }
-        const trimmed2 = line.trim();
-        if (!trimmed2) continue;
-        if (rawRows.length === 0) {
-          questionLines.push(trimmed2);
-        } else {
-          rawRows[rawRows.length - 1].labelParts.push(trimmed2);
-        }
-      }
-      if (rawRows.length < 2) return null;
-      for (let idx = 0; idx < rawRows.length; idx++) {
-        if (rawRows[idx].index !== idx + 1) return null;
-      }
-      const lastRow = rawRows[rawRows.length - 1];
-      const lastRowLabel = lastRow.labelParts.join(" ");
-      if (!WRITE_IN_LABEL_RE.test(lastRowLabel)) {
-        return null;
-      }
-      let currentCursorRow = 1;
-      for (const row2 of rawRows) {
-        if (row2.focused) {
-          currentCursorRow = row2.index;
-          break;
-        }
-      }
-      const realRows = rawRows.slice(0, -1);
-      const hasCheckboxes = realRows.some((r) => r.checkbox !== null);
-      const multiSelect = hasCheckboxes || multiSelectFromHint;
-      const options = realRows.map((row2) => ({
-        index: row2.index,
-        label: row2.labelParts.join(" "),
-        checked: row2.checkbox !== null && row2.checkbox.trim().length > 0
-      }));
-      const questionText = questionLines.join(" ");
-      const optionSig = options.map((o) => `${o.index}:${o.label}`).join("|");
-      return {
-        currentIndex,
-        totalQuestions,
-        questionText,
-        multiSelect,
-        options,
-        writeInRowIndex: lastRow.index,
-        currentCursorRow,
-        writingIn: false,
-        fingerprint: `agy-q:${currentIndex}/${totalQuestions}:${multiSelect ? "m" : "s"}:${questionText}:${optionSig}`
-      };
-    }
-    function doesAntigravityScreenMatchNativeStep(screen, nativePending) {
-      if (nativePending.questions.length !== screen.totalQuestions) return false;
-      const targetQuestion = nativePending.questions[screen.currentIndex - 1];
-      if (!targetQuestion) return false;
-      const normScreenQ = normalizeAntigravityPromptText(screen.questionText);
-      const normNativeQ = normalizeAntigravityPromptText(targetQuestion.questionText);
-      if (!normScreenQ || !normNativeQ) return false;
-      if (normScreenQ !== normNativeQ && !normScreenQ.includes(normNativeQ) && !normNativeQ.includes(normScreenQ)) {
-        return false;
-      }
-      if (screen.writingIn) {
-        return true;
-      }
-      if (Boolean(targetQuestion.isMultiSelect) !== Boolean(screen.multiSelect)) {
-        return false;
-      }
-      if (targetQuestion.options.length !== screen.options.length) {
-        return false;
-      }
-      for (let i = 0; i < targetQuestion.options.length; i++) {
-        const normNativeOpt = normalizeAntigravityPromptText(targetQuestion.options[i].label);
-        const normScreenOpt = normalizeAntigravityPromptText(screen.options[i].label);
-        if (normNativeOpt !== normScreenOpt && !normScreenOpt.includes(normNativeOpt) && !normNativeOpt.includes(normScreenOpt)) {
-          return false;
-        }
-      }
-      return true;
-    }
-    function buildAntigravityInteractivePrompt(params) {
-      const { screen, nativePending, promptId, createdAt, providerType = "antigravity-cli" } = params;
-      if (!nativePending) return null;
-      if (!doesAntigravityScreenMatchNativeStep(screen, nativePending)) {
-        return null;
-      }
-      const questions = nativePending.questions.map((q, qIdx) => {
-        const options = q.options.map((opt) => ({
-          label: opt.label
-        }));
-        return {
-          questionId: `q${qIdx + 1}`,
-          question: q.questionText,
-          header: `Question ${qIdx + 1}/${nativePending.questions.length}`,
-          options,
-          multiSelect: q.isMultiSelect,
-          allowFreeform: true
-        };
-      });
-      const resolvedPromptId = promptId ?? `agy-ask:${nativePending.conversationId}:${nativePending.stepIdx}:${nativePending.callId || "0"}`;
-      return {
-        promptId: resolvedPromptId,
-        origin: "cli",
-        providerType,
-        createdAt: createdAt ?? Date.now(),
-        questions
-      };
-    }
-    function moveAntigravityCursor(fromRow, toRow2) {
-      if (toRow2 === fromRow) return "";
-      if (toRow2 > fromRow) return "\x1B[B".repeat(toRow2 - fromRow);
-      return "\x1B[A".repeat(fromRow - toRow2);
-    }
-    function resolveSelectedOptionRows(question, selectedLabels) {
-      const rows = [];
-      const seen2 = /* @__PURE__ */ new Set();
-      for (const selected2 of selectedLabels) {
-        let idx = question.options.findIndex((candidate) => candidate.label === selected2);
-        if (idx < 0) {
-          const asNum = Number(selected2);
-          if (Number.isInteger(asNum) && asNum >= 1 && asNum <= question.options.length) {
-            idx = asNum - 1;
-          }
-        }
-        if (idx < 0) {
-          throw new Error(`Unknown option for ${question.questionId}: ${selected2}`);
-        }
-        const rowNumber = idx + 1;
-        if (!seen2.has(rowNumber)) {
-          seen2.add(rowNumber);
-          rows.push(rowNumber);
-        }
-      }
-      return rows;
-    }
-    function computeMultiSelectToggleRows(realOptionCount, desiredRows, currentlyCheckedRows) {
-      const desiredSet = new Set(desiredRows);
-      const checkedSet = /* @__PURE__ */ new Set();
-      for (const row2 of currentlyCheckedRows) {
-        if (!Number.isInteger(row2) || row2 < 1 || row2 > realOptionCount) {
-          throw new Error(`Invalid checked option row ${row2} (expected 1..${realOptionCount})`);
-        }
-        checkedSet.add(row2);
-      }
-      const toggleRows = [];
-      for (let row2 = 1; row2 <= realOptionCount; row2++) {
-        if (checkedSet.has(row2) !== desiredSet.has(row2)) {
-          toggleRows.push(row2);
-        }
-      }
-      return toggleRows;
-    }
-    function appendMultiSelectToggleKeys(toggleRows, initialCursorRow) {
-      let keys = "";
-      let cursorRow = initialCursorRow;
-      for (const targetRow of toggleRows) {
-        if (targetRow <= 9) {
-          keys += String(targetRow);
-          cursorRow = targetRow;
-        } else {
-          keys += moveAntigravityCursor(cursorRow, targetRow);
-          keys += " ";
-          cursorRow = targetRow;
-        }
-      }
-      return { keys, cursorRow };
-    }
-    function buildAntigravityQuestionKeystrokes(question, answer, options) {
-      const realOptionCount = question.options.length;
-      if (realOptionCount < 1) {
-        throw new Error(`Question ${question.questionId} has no options`);
-      }
-      const writeInRow = realOptionCount + 1;
-      let cursorRow = options?.currentCursorRow && options.currentCursorRow >= 1 ? options.currentCursorRow : 1;
-      const freeform = answer.freeformText?.trim() ?? "";
-      if (question.multiSelect && options?.writingIn && options.currentlyCheckedRows === void 0) {
-        throw new Error(
-          `Cannot reconcile multi-select checkboxes for ${question.questionId} while the native Write-in editor is already open`
-        );
-      }
-      if (freeform.length > 0) {
-        if (question.allowFreeform === false) {
-          throw new Error(`Freeform write-in is not supported for ${question.questionId}`);
-        }
-        if (!question.multiSelect && answer.selectedLabels.length > 0) {
-          throw new Error(
-            `Single-select question ${question.questionId} cannot combine option selection with freeform write-in`
-          );
-        }
-        if (!question.multiSelect) {
-          if (options?.writingIn) {
-            return `${freeform}\r`;
-          }
-          let keys2 = "";
-          if (writeInRow <= 9) {
-            keys2 += String(writeInRow);
-          } else {
-            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
-            keys2 += "\r";
-          }
-          keys2 += `${freeform}\r`;
-          return keys2;
-        }
-        const desiredRows = resolveSelectedOptionRows(question, answer.selectedLabels);
-        const toggleRows = computeMultiSelectToggleRows(
-          realOptionCount,
-          desiredRows,
-          options?.currentlyCheckedRows ?? []
-        );
-        if (options?.writingIn) {
-          if (toggleRows.length === 0) {
-            return `${freeform}\r`;
-          }
-          let keys2 = "\x1B";
-          const toggled2 = appendMultiSelectToggleKeys(toggleRows, writeInRow);
-          keys2 += toggled2.keys;
-          cursorRow = toggled2.cursorRow;
-          if (writeInRow <= 9) {
-            keys2 += String(writeInRow);
-          } else {
-            keys2 += moveAntigravityCursor(cursorRow, writeInRow);
-            keys2 += "\r";
-          }
-          keys2 += `${freeform}\r`;
-          return keys2;
-        }
-        let keys = "";
-        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
-        keys += toggled.keys;
-        cursorRow = toggled.cursorRow;
-        if (writeInRow <= 9) {
-          keys += String(writeInRow);
-        } else {
-          keys += moveAntigravityCursor(cursorRow, writeInRow);
-          keys += "\r";
-        }
-        keys += `${freeform}\r`;
-        return keys;
-      }
-      const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
-      if (treatAsMultiSelect && !question.multiSelect) {
-        throw new Error(`Expected one selected label for ${question.questionId}`);
-      }
-      const selectedRows = resolveSelectedOptionRows(question, answer.selectedLabels);
-      if (question.multiSelect) {
-        if (selectedRows.length === 0) {
-          throw new Error(`Expected at least one selected label for ${question.questionId}`);
-        }
-      } else if (selectedRows.length !== 1) {
-        throw new Error(`Expected one selected label for ${question.questionId}`);
-      }
-      let prefix = "";
-      if (options?.writingIn) {
-        prefix = "\x1B";
-        cursorRow = writeInRow;
-      }
-      if (question.multiSelect) {
-        const toggleRows = computeMultiSelectToggleRows(
-          realOptionCount,
-          selectedRows,
-          options?.currentlyCheckedRows ?? []
-        );
-        const toggled = appendMultiSelectToggleKeys(toggleRows, cursorRow);
-        return `${prefix}${toggled.keys}\r`;
-      }
-      const targetRow = selectedRows[0];
-      if (targetRow <= 9) {
-        return `${prefix}${String(targetRow)}`;
-      }
-      return `${prefix}${moveAntigravityCursor(cursorRow, targetRow)}\r`;
-    }
-    function readStringArray2(value) {
-      return Array.isArray(value) ? value.map((item) => readString2(item)).filter((item) => !!item) : [];
-    }
-    function normalizeOption(raw) {
-      if (typeof raw === "string") {
-        const label3 = raw.trim();
-        return label3 ? { label: label3 } : null;
-      }
-      if (!raw || typeof raw !== "object") return null;
-      const record6 = raw;
-      const label2 = readString2(record6.label);
-      if (!label2) return null;
-      const description = readString2(record6.description);
-      const preview = readString2(record6.preview);
-      return {
-        label: label2,
-        ...description ? { description } : {},
-        ...preview ? { preview } : {}
-      };
-    }
-    function normalizeQuestion(raw, index) {
-      if (!raw || typeof raw !== "object") return null;
-      const record6 = raw;
-      const question = readString2(record6.question);
-      if (!question) return null;
-      const questionId = readString2(record6.questionId) || readString2(record6.id) || `q${index + 1}`;
-      const options = Array.isArray(record6.options) ? record6.options.map(normalizeOption).filter((item) => !!item) : [];
-      const header = readString2(record6.header);
-      return {
-        questionId,
-        question,
-        ...header ? { header } : {},
-        multiSelect: record6.multiSelect === true,
-        options,
-        ...record6.allowFreeform === true ? { allowFreeform: true } : {}
-      };
-    }
-    function normalizeInteractivePrompt(raw) {
-      if (!raw || typeof raw !== "object") return null;
-      const record6 = raw;
-      const promptId = readString2(record6.promptId);
-      const providerType = readString2(record6.providerType);
-      const origin = record6.origin === "mcp" || record6.origin === "agent" ? record6.origin : "cli";
-      const questions = Array.isArray(record6.questions) ? record6.questions.map(normalizeQuestion).filter((item) => !!item) : [];
-      if (!promptId || !providerType || questions.length === 0) return null;
-      const createdAt = typeof record6.createdAt === "number" && Number.isFinite(record6.createdAt) ? record6.createdAt : Date.now();
-      return { promptId, origin, providerType, createdAt, questions };
-    }
-    function assertNativeInteractivePromptResponse(raw) {
-      const isRecord10 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
-      const hasUnknownKeys = (value, keys) => Reflect.ownKeys(value).some((key4) => typeof key4 !== "string" || !keys.includes(key4));
-      if (!isRecord10(raw) || hasUnknownKeys(raw, ["promptId", "answers", "binding", "action"]) || typeof raw.promptId !== "string" || !raw.promptId.trim() || !isProviderQuestionBinding(raw.binding) || !isRecord10(raw.answers) || raw.action !== void 0 && raw.action !== "dismiss") {
-        throw new Error("Malformed or unsupported native question response");
-      }
-      if (raw.action === "dismiss" && raw.binding.transport !== "codex_async") throw new Error("Native RPC dismissal is unsupported");
-      for (const key4 of Reflect.ownKeys(raw.answers)) {
-        if (typeof key4 !== "string" || !key4.trim()) throw new Error("Malformed native question id");
-        const answer = raw.answers[key4];
-        if (!isRecord10(answer) || hasUnknownKeys(answer, ["selectedLabels", "freeformText"]) || !Array.isArray(answer.selectedLabels) || answer.selectedLabels.some((label2) => typeof label2 !== "string") || new Set(answer.selectedLabels).size !== answer.selectedLabels.length || answer.freeformText !== void 0 && typeof answer.freeformText !== "string") {
-          throw new Error("Malformed or unsupported native answer");
-        }
-      }
-    }
-    function normalizeInteractivePromptResponse(raw) {
-      if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
-      const record6 = raw;
-      if ("binding" in record6) assertNativeInteractivePromptResponse(raw);
-      const promptId = readString2(record6.promptId);
-      if (!promptId) throw new Error("promptId must be a non-empty string");
-      if (!record6.answers || typeof record6.answers !== "object" || Array.isArray(record6.answers)) {
-        throw new Error("answers must be an object");
-      }
-      const answers = /* @__PURE__ */ Object.create(null);
-      for (const [questionId, answerRaw] of Object.entries(record6.answers)) {
-        if (!answerRaw || typeof answerRaw !== "object" || Array.isArray(answerRaw)) continue;
-        const answer = answerRaw;
-        const selectedLabels = record6.binding && Array.isArray(answer.selectedLabels) ? answer.selectedLabels.slice() : readStringArray2(answer.selectedLabels);
-        const freeformText = readString2(answer.freeformText);
-        answers[questionId] = {
-          selectedLabels,
-          ...freeformText ? { freeformText } : {}
-        };
-      }
-      return {
-        promptId,
-        answers,
-        ...record6.binding ? { binding: record6.binding } : {},
-        ...record6.action === "dismiss" ? { action: "dismiss" } : {}
-      };
-    }
-    function resolveInteractivePromptResponse(prompt, raw) {
-      if (prompt.binding) {
-        assertNativeInteractivePromptResponse(raw);
-        if (raw.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
-        return normalizeInteractivePromptResponse(raw);
-      }
-      if (!raw || typeof raw !== "object") throw new Error("Interactive prompt response must be an object");
-      const record6 = raw;
-      const promptId = readString2(record6.promptId);
-      if (!promptId) throw new Error("promptId must be a non-empty string");
-      if (promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
-      if (record6.answers && typeof record6.answers === "object" && !Array.isArray(record6.answers)) {
-        return normalizeInteractivePromptResponse(record6);
-      }
-      if (record6.action === "dismiss" && record6.answers === void 0) {
-        return { promptId, answers: {}, action: "dismiss" };
-      }
-      if (!Array.isArray(record6.answers)) throw new Error("answers must be an array or a questionId-keyed object");
-      const resolveOneLabel = (question, sel) => {
-        if (typeof sel === "number" && Number.isFinite(sel)) {
-          const idx = Math.trunc(sel) - 1;
-          const option = question.options[idx];
-          if (!option) throw new Error(`Option index ${sel} out of range for ${question.questionId}`);
-          return option.label;
-        }
-        const label2 = readString2(sel);
-        if (!label2) throw new Error(`Empty selection for ${question.questionId}`);
-        const exact = question.options.find((o) => o.label === label2);
-        if (exact) return exact.label;
-        const asIndex = Number(label2);
-        if (Number.isInteger(asIndex)) {
-          const option = question.options[asIndex - 1];
-          if (option) return option.label;
-        }
-        throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
-      };
-      const answers = {};
-      const entries = record6.answers;
-      entries.forEach((entryRaw, index) => {
-        const entry = entryRaw && typeof entryRaw === "object" && !Array.isArray(entryRaw) ? entryRaw : { select: entryRaw };
-        const questionId = readString2(entry.questionId);
-        const question = (questionId ? prompt.questions.find((q) => q.questionId === questionId) : void 0) ?? prompt.questions[index];
-        if (!question) throw new Error(`No matching question for answer entry ${index}`);
-        const freeformText = readString2(entry.freeform) ?? readString2(entry.freeformText);
-        const select = entry.select ?? entry.answer ?? entry.selected;
-        const selectedLabels = [];
-        if (Array.isArray(select)) {
-          for (const sel of select) selectedLabels.push(resolveOneLabel(question, sel));
-        } else if (select !== void 0 && select !== null) {
-          selectedLabels.push(resolveOneLabel(question, select));
-        } else if (!freeformText) {
-          throw new Error(
-            `Answer entry ${index} for ${question.questionId} has no recognized selection: expected "select" (option label, 1-based index, or array of either) or "freeform" (text).`
-          );
-        }
-        answers[question.questionId] = {
-          selectedLabels,
-          ...freeformText ? { freeformText } : {}
-        };
-      });
-      return {
-        promptId,
-        answers,
-        ...record6.action === "dismiss" ? { action: "dismiss" } : {}
-      };
-    }
-    function interactivePromptContentFingerprint(questions) {
-      let hash3 = 2166136261;
-      const mix = (text4) => {
-        for (let i = 0; i < text4.length; i += 1) {
-          hash3 ^= text4.charCodeAt(i);
-          hash3 = Math.imul(hash3, 16777619) >>> 0;
-        }
-      };
-      for (const question of questions) {
-        mix(question.question);
-        mix(question.multiSelect ? "multi" : "single");
-        for (const option of question.options) {
-          mix("");
-          mix(option.label);
-        }
-        mix("");
-      }
-      return hash3.toString(16).padStart(8, "0");
-    }
-    function stableClaudeTuiPromptId(questions) {
-      return `ask-user-tui-${interactivePromptContentFingerprint(questions)}`;
-    }
-    function buildClaudeInteractiveToolResult(response) {
-      return JSON.stringify({
-        type: "user",
-        message: {
-          role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: response.promptId,
-            content: JSON.stringify({ answers: response.answers }),
-            is_error: false
-          }]
-        }
-      });
-    }
-    var CLAUDE_TUI_OPTION_CHECKBOX = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
-    var CLAUDE_TUI_OPTION_PATTERN = new RegExp(
-      `^\\s*(?:[\u276F\u203A>\u2750]\\s*)?(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(\\d+)\\.\\s+(?:${CLAUDE_TUI_OPTION_CHECKBOX}\\s*)?(.+?)\\s*$`
-    );
-    function readClaudeTuiScreenLines(screenText) {
-      return screenText.split(/\r?\n/).map((raw) => {
-        const panel = raw.match(/(\s+)[│┃┌└├╭╰┏┗┣].*$/);
-        return {
-          // Keep the rc.58 preview-panel removal, but retain whether the main-pane
-          // text reached the panel edge. One padding cell before the divider is the
-          // observable signal that the terminal continued that logical row on the
-          // next physical row; generously accept two for wide-glyph edge padding.
-          text: panel ? raw.slice(0, panel.index ?? raw.length) : raw,
-          wrapsIntoNext: !!panel && panel[1].length <= 2
-        };
-      });
-    }
-    function joinClaudeTuiRows(lines, start, end) {
-      return lines.slice(start, end).map((line) => line.text.trim().replace(/^[│┃]\s*/, "")).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-    }
-    function readClaudeQuestionBeforeOption(lines, firstOptionIndex, lowerBound) {
-      let end = firstOptionIndex;
-      while (end > lowerBound) {
-        const candidate = lines[end - 1].text.trim();
-        if (candidate && !/^─+$/.test(candidate)) break;
-        end -= 1;
-      }
-      let start = end;
-      while (start > lowerBound) {
-        const candidate = lines[start - 1].text.trim();
-        if (!candidate || /^─+$/.test(candidate) || candidate.includes("\u2714 Submit") || CLAUDE_TUI_OPTION_PATTERN.test(lines[start - 1].text)) break;
-        start -= 1;
-      }
-      const question = joinClaudeTuiRows(lines, start, end);
-      return question.replace(/^[☐☒]\s+/, "").trim();
-    }
-    function readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd) {
-      const match = lines[optionLineIndex].text.match(CLAUDE_TUI_OPTION_PATTERN);
-      if (!match) return null;
-      let label2 = match[2].trim();
-      let continuationEnd = optionLineIndex + 1;
-      while (continuationEnd < optionBlockEnd) {
-        const candidate = lines[continuationEnd].text.trim();
-        if (!candidate || CLAUDE_TUI_OPTION_PATTERN.test(lines[continuationEnd].text) || /^─+$/.test(candidate) || /^Enter to select\b/i.test(candidate)) break;
-        continuationEnd += 1;
-      }
-      let labelEnd = optionLineIndex + 1;
-      while (labelEnd < continuationEnd && lines[labelEnd - 1].wrapsIntoNext) labelEnd += 1;
-      if (labelEnd > optionLineIndex + 1) {
-        label2 = `${label2} ${joinClaudeTuiRows(lines, optionLineIndex + 1, labelEnd)}`.replace(/\s+/g, " ").trim();
-      }
-      const description = joinClaudeTuiRows(lines, labelEnd, continuationEnd) || void 0;
-      return { label: label2, ...description ? { description } : {} };
-    }
-    function claudeTuiQuestionHeaders(screenText) {
-      const navLine = screenText.split(/\r?\n/).find((line) => line.includes("\u2714 Submit") && /[☐☒]/.test(line));
-      if (!navLine) return [];
-      const headers = [];
-      const pattern = /[☐☒]\s+(.+?)(?=\s+[☐☒]|\s+✔\s+Submit)/g;
-      for (const match of navLine.matchAll(pattern)) {
-        const header = readString2(match[1]);
-        if (header) headers.push(header);
-      }
-      return headers;
-    }
-    function isClaudeTuiSelectFooter(text4) {
-      if (/Enter to select/i.test(text4)) return true;
-      return claudeTuiChecklistOptionPattern().test(text4);
-    }
-    function claudeTuiChecklistOptionPattern() {
-      const optionCheckbox = "(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])";
-      return new RegExp(
-        `(?:^|\\n)\\s*(?:[\u276F\u203A>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S|(?:^|\\n)\\s*(?:[\u276F\u203A>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`
-      );
-    }
-    function detectClaudeTuiMultiSelect(screenText) {
-      if (/Space to (?:select|toggle)|toggle selection|select multiple|select all that apply/i.test(screenText)) {
-        return true;
-      }
-      const optionCheckbox = `(?:\\[[ xX]\\]|[\u2610\u2612\u25FB\u25FC])`;
-      const beforeNumber = new RegExp(`^\\s*(?:[\u276F\u203A>]\\s*)?${optionCheckbox}\\s*\\d+\\.\\s+\\S`);
-      const afterNumber = new RegExp(`^\\s*(?:[\u276F\u203A>]\\s*)?\\d+\\.\\s*${optionCheckbox}\\s+\\S`);
-      for (const line of screenText.split(/\r?\n/)) {
-        if (line.includes("\u2714 Submit")) continue;
-        if (beforeNumber.test(line) || afterNumber.test(line)) return true;
-      }
-      return false;
-    }
-    function readClaudeHeaderLine(lines, beforeIndex) {
-      for (let i = beforeIndex; i >= 0; i -= 1) {
-        const candidate = lines[i].trim();
-        if (!candidate) continue;
-        const match = candidate.match(/^[☐☒]\s+(.+?)\s*$/);
-        if (match?.[1]) return readString2(match[1]);
-        if (/^─+$/.test(candidate)) break;
-      }
-      return void 0;
-    }
-    function parseClaudeHeaderlessInteractiveTuiQuestion(page, index) {
-      if (!isClaudeTuiSelectFooter(page.screenText)) return null;
-      const lines = readClaudeTuiScreenLines(page.screenText);
-      let footerIndex = -1;
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        if (/Enter to select/i.test(lines[i].text)) {
-          footerIndex = i;
-          break;
-        }
-      }
-      let optionBlockEnd;
-      if (footerIndex < 0) {
-        let lastOptionIndex = -1;
-        for (let i = lines.length - 1; i >= 0; i -= 1) {
-          if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
-            lastOptionIndex = i;
-            break;
-          }
-        }
-        if (lastOptionIndex < 0) return null;
-        optionBlockEnd = lastOptionIndex;
-      } else {
-        optionBlockEnd = footerIndex - 1;
-        for (let i = footerIndex - 1; i >= 0; i -= 1) {
-          if (/^─+$/.test(lines[i].text.trim())) {
-            optionBlockEnd = i - 1;
-            break;
-          }
-        }
-      }
-      const optionLineIndexes = [];
-      for (let i = optionBlockEnd; i >= 0; i -= 1) {
-        const line = lines[i].text;
-        if (CLAUDE_TUI_OPTION_PATTERN.test(line)) {
-          optionLineIndexes.push(i);
-          continue;
-        }
-        if (optionLineIndexes.length > 0 && (!line.trim() || /^─+$/.test(line.trim()))) break;
-      }
-      optionLineIndexes.reverse();
-      if (optionLineIndexes.length === 0) return null;
-      const firstOptionIndex = optionLineIndexes[0];
-      const question = readClaudeQuestionBeforeOption(lines, firstOptionIndex, 0);
-      if (!question) return null;
-      const options = [];
-      let allowFreeform = false;
-      for (const optionLineIndex of optionLineIndexes) {
-        const option = readClaudeTuiOption(lines, optionLineIndex, optionBlockEnd + 1);
-        if (!option) continue;
-        const { label: label2 } = option;
-        if (/^Chat about this$/i.test(label2)) continue;
-        if (/^Type something\.?$/i.test(label2)) {
-          allowFreeform = true;
-          continue;
-        }
-        options.push(option);
-      }
-      if (options.length === 0) return null;
-      const header = readString2(page.header) || readClaudeHeaderLine(lines.map((line) => line.text), firstOptionIndex - 1);
-      return {
-        questionId: `q${index + 1}`,
-        question,
-        ...header ? { header } : {},
-        multiSelect: detectClaudeTuiMultiSelect(page.screenText),
-        options,
-        ...allowFreeform ? { allowFreeform: true } : {}
-      };
-    }
-    function isClaudeTuiReviewScreen(screenText) {
-      return /(?:^|\n)\s*(?:Review your answers|Ready to submit your answers\?)\s*(?:\r?\n|$)/.test(screenText);
-    }
-    function readFocusedClaudeTuiPickerRegion(screenText) {
-      if (!screenText.includes("Enter to select")) return null;
-      const lines = screenText.split(/\r?\n/);
-      let lastFooterIndex = -1;
-      let previousFooterIndex = -1;
-      for (let index = 0; index < lines.length; index += 1) {
-        if (!lines[index].includes("Enter to select")) continue;
-        previousFooterIndex = lastFooterIndex;
-        lastFooterIndex = index;
-      }
-      if (lastFooterIndex < 0) return null;
-      return lines.slice(previousFooterIndex + 1, lastFooterIndex + 1).join("\n");
-    }
-    function claudeTuiPreviewPanelVisible(screenText) {
-      const region = readFocusedClaudeTuiPickerRegion(screenText);
-      if (region === null) return false;
-      const lines = region.split(/\r?\n/);
-      const firstOptionIndex = lines.findIndex((line) => CLAUDE_TUI_OPTION_PATTERN.test(line));
-      if (firstOptionIndex < 0) return false;
-      const block2 = lines.slice(firstOptionIndex);
-      return block2.some((line) => /┌─/.test(line)) && block2.some((line) => /└─/.test(line));
-    }
-    function parseClaudeInteractiveTuiQuestion(page, index) {
-      const lines = readClaudeTuiScreenLines(page.screenText);
-      let navIndex = -1;
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        if (lines[i].text.includes("\u2714 Submit") && /[☐☒]/.test(lines[i].text)) {
-          navIndex = i;
-          break;
-        }
-      }
-      if (navIndex < 0) return parseClaudeHeaderlessInteractiveTuiQuestion(page, index);
-      if (!isClaudeTuiSelectFooter(page.screenText)) return null;
-      for (let i = navIndex + 1; i < lines.length; i += 1) {
-        const candidate = lines[i].text.trim();
-        if (!candidate || /^─+$/.test(candidate)) continue;
-        if (candidate === "Review your answers" || candidate === "Ready to submit your answers?") return null;
-        if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) break;
-      }
-      let firstOptionIndex = -1;
-      for (let i = navIndex + 1; i < lines.length; i += 1) {
-        if (CLAUDE_TUI_OPTION_PATTERN.test(lines[i].text)) {
-          firstOptionIndex = i;
-          break;
-        }
-      }
-      if (firstOptionIndex < 0) return null;
-      const question = readClaudeQuestionBeforeOption(lines, firstOptionIndex, navIndex + 1);
-      if (!question) return null;
-      const options = [];
-      let allowFreeform = false;
-      for (let i = firstOptionIndex; i < lines.length; i += 1) {
-        const match = lines[i].text.match(CLAUDE_TUI_OPTION_PATTERN);
-        if (!match) continue;
-        const option = readClaudeTuiOption(lines, i, lines.length);
-        if (!option) continue;
-        const { label: label2 } = option;
-        if (/^Type something\.?$/i.test(label2)) {
-          allowFreeform = true;
-          continue;
-        }
-        if (/^Chat about this$/i.test(label2)) continue;
-        options.push(option);
-      }
-      if (options.length === 0) return null;
-      const header = readString2(page.header);
-      return {
-        questionId: `q${index + 1}`,
-        question,
-        ...header ? { header } : {},
-        multiSelect: detectClaudeTuiMultiSelect(page.screenText),
-        options,
-        ...allowFreeform ? { allowFreeform: true } : {}
-      };
-    }
-    function readFocusedClaudeTuiQuestion(screenText) {
-      const focusedScreenText = readFocusedClaudeTuiPickerRegion(screenText);
-      if (focusedScreenText === null) return null;
-      const parsed = parseClaudeInteractiveTuiQuestion({ screenText: focusedScreenText }, 0);
-      if (!parsed) return null;
-      return {
-        question: parsed.question,
-        ...parsed.header ? { header: parsed.header } : {},
-        multiSelect: parsed.multiSelect
-      };
-    }
-    function detectClaudeAskUserQuestionPromptFromTuiPages(pages, options) {
-      if (pages.length === 0) return null;
-      const headers = claudeTuiQuestionHeaders(pages[0].screenText);
-      const questions = pages.map((page, index) => parseClaudeInteractiveTuiQuestion({
-        ...page,
-        header: page.header || headers[index]
-      }, index)).filter((question) => !!question);
-      if (questions.length !== pages.length) return null;
-      return {
-        promptId: options.promptId,
-        origin: "cli",
-        providerType: options.providerType || "claude-cli",
-        createdAt: options.createdAt || Date.now(),
-        questions
-      };
-    }
-    function buildClaudeInteractiveTuiAnswerSteps(prompt, response) {
-      if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
-      const steps = [];
-      for (const question of prompt.questions) {
-        const answer = response.answers[question.questionId];
-        if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
-        const freeformText = answer.freeformText?.trim() ?? "";
-        const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
-        if (treatAsMultiSelect) {
-          const labels = answer.selectedLabels;
-          if (labels.length === 0) {
-            throw new Error(`Expected at least one selected label for ${question.questionId}`);
-          }
-          for (const label2 of labels) {
-            const selectedIndex = question.options.findIndex((option) => option.label === label2);
-            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
-            steps.push(String(selectedIndex + 1));
-          }
-          steps.push("	");
-        } else if (freeformText) {
-          const typeOptionIndex = question.options.findIndex((o) => /^Type something\.?$/i.test(o.label));
-          const optionNumber = typeOptionIndex >= 0 ? typeOptionIndex + 1 : question.options.length + 1;
-          steps.push(String(optionNumber));
-          for (const ch of freeformText) steps.push(ch);
-          steps.push("\r");
-        } else {
-          if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
-          const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
-          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
-          steps.push(String(selectedIndex + 1));
-          if (question.options.some((option) => option.preview)) steps.push("\r");
-        }
-      }
-      steps.push("\r");
-      return steps;
-    }
-    function buildKimiInteractiveTuiAnswerSteps(prompt, response) {
-      if (response.promptId !== prompt.promptId) throw new Error("Interactive prompt response does not match active prompt");
-      const steps = [];
-      for (const question of prompt.questions) {
-        const answer = response.answers[question.questionId];
-        if (!answer) throw new Error(`Missing answer for ${question.questionId}`);
-        const freeformText = answer.freeformText?.trim() ?? "";
-        const treatAsMultiSelect = question.multiSelect || answer.selectedLabels.length > 1;
-        if (treatAsMultiSelect) {
-          const labels = answer.selectedLabels;
-          if (labels.length === 0) {
-            throw new Error(`Expected at least one selected label for ${question.questionId}`);
-          }
-          for (const label2 of labels) {
-            const selectedIndex = question.options.findIndex((option) => option.label === label2);
-            if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${label2}`);
-            steps.push(String(selectedIndex + 1));
-          }
-          steps.push("	");
-        } else if (freeformText) {
-          steps.push(String(question.options.length + 1));
-          for (const ch of freeformText) steps.push(ch);
-          steps.push("\r");
-        } else {
-          if (answer.selectedLabels.length !== 1) throw new Error(`Expected one selected label for ${question.questionId}`);
-          const selectedIndex = question.options.findIndex((option) => option.label === answer.selectedLabels[0]);
-          if (selectedIndex < 0) throw new Error(`Unknown option for ${question.questionId}: ${answer.selectedLabels[0]}`);
-          steps.push(String(selectedIndex + 1));
-        }
-      }
-      steps.push("\r");
-      return steps;
-    }
-    function interactivePromptFromClaudeAskUserQuestion(input, options) {
-      if (!input || typeof input !== "object") return null;
-      const record6 = input;
-      const questions = Array.isArray(record6.questions) ? record6.questions.map(normalizeQuestion).filter((item) => !!item) : [];
-      if (questions.length === 0) return null;
-      return {
-        promptId: options.promptId,
-        origin: options.origin || "cli",
-        providerType: options.providerType,
-        createdAt: options.createdAt || Date.now(),
-        questions
-      };
-    }
-    function detectClaudeAskUserQuestionPromptFromJson(value, providerType = "claude-cli") {
-      if (!value || typeof value !== "object") return null;
-      const record6 = value;
-      const blocks = [];
-      if (Array.isArray(record6.content)) blocks.push(...record6.content);
-      const message = record6.message;
-      if (message && typeof message === "object" && Array.isArray(message.content)) {
-        blocks.push(...message.content);
-      }
-      if (record6.type === "tool_use") blocks.push(record6);
-      for (const block2 of blocks) {
-        if (!block2 || typeof block2 !== "object") continue;
-        const b = block2;
-        const name = readString2(b.name);
-        if (b.type !== "tool_use" || name !== "AskUserQuestion") continue;
-        const id4 = readString2(b.id) || readString2(record6.id) || `ask-user-${Date.now()}`;
-        const prompt = interactivePromptFromClaudeAskUserQuestion(b.input, {
-          promptId: id4,
-          providerType,
-          origin: "cli"
-        });
-        if (prompt) return prompt;
-      }
-      return null;
-    }
+    init_interactive_prompt();
     init_repo_mesh_types();
     init_mesh_json_config();
     init_git_executor();
@@ -122188,6 +122539,7 @@ ${marker2}`,
       }
     };
     var crypto6 = __toESM2(require("crypto"));
+    var import_node_crypto14 = require("crypto");
     init_contracts2();
     var DEFAULT_MONITOR_CONFIG = {
       approvalAlert: true,
@@ -122736,6 +123088,7 @@ ${marker2}`,
       appliedEffectKeys = /* @__PURE__ */ new Set();
       runtimeMessages = [];
       lastAgentStatus = "idle";
+      currentApprovalModalKey = null;
       generatingStartedAt = 0;
       monitor;
       historyWriter;
@@ -122787,6 +123140,16 @@ ${marker2}`,
             status: this.currentStatus,
             messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.messages),
             activeModal: this.activeModal,
+            ...this.currentStatus === "waiting_approval" && this.currentApprovalModalKey ? {
+              providerApproval: {
+                type: "tool_permission",
+                lifecycle: "pending",
+                evidence: "live",
+                actionable: Array.isArray(this.activeModal?.buttons) && this.activeModal.buttons.length > 0,
+                modalKey: this.currentApprovalModalKey,
+                resolvedAt: null
+              }
+            } : {},
             inputContent: ""
           } : null,
           controlValues: surface.controlValues,
@@ -122859,6 +123222,9 @@ ${marker2}`,
         const lastMsg = Array.isArray(data?.messages) && data.messages.length > 0 ? data.messages[data.messages.length - 1] : null;
         const progressFingerprint = agentStatus === "generating" ? `${lastMsg?.role || ""}:${typeof lastMsg?.content === "string" ? lastMsg.content : JSON.stringify(lastMsg?.content || "")}`.slice(-2e3) : void 0;
         const previousStatus = this.lastAgentStatus;
+        if (agentStatus !== "waiting_approval") {
+          this.currentApprovalModalKey = null;
+        }
         if (agentStatus !== this.lastAgentStatus) {
           if (this.lastAgentStatus === "idle" && agentStatus === "generating") {
             this.generatingStartedAt = now;
@@ -122882,6 +123248,8 @@ ${marker2}`,
             }
           } else if (agentStatus === "waiting_approval") {
             if (!this.generatingStartedAt) this.generatingStartedAt = now;
+            const modalKey = `modal:${(0, import_node_crypto14.randomUUID)()}`;
+            this.currentApprovalModalKey = modalKey;
             this.pushEvent({
               event: "agent:waiting_approval",
               chatTitle: this.resolveChatTitle(data),
@@ -122891,7 +123259,8 @@ ${marker2}`,
               agentName: this.agentName || this.provider.name,
               extensionId: this.extensionId || this.type,
               modalMessage: data?.activeModal?.message,
-              modalButtons: data?.activeModal?.buttons
+              modalButtons: data?.activeModal?.buttons,
+              modalKey
             });
             if (this.turnEvidencePort) {
               emitSuspension(this.turnEvidencePort, {
@@ -122899,7 +123268,8 @@ ${marker2}`,
                 observedBy: "ide_poll",
                 source: "fsm_edge",
                 at: now,
-                modal: "approval"
+                modal: "approval",
+                modalKey
               });
             }
           } else if (agentStatus === "idle" && (this.lastAgentStatus === "generating" || this.lastAgentStatus === "waiting_approval")) {
@@ -123046,6 +123416,7 @@ ${marker2}`,
         this.agentName = "";
         this.extensionId = "";
         this.lastAgentStatus = "idle";
+        this.currentApprovalModalKey = null;
         this.generatingStartedAt = 0;
         this.monitor.reset();
       }
@@ -123404,6 +123775,7 @@ ${marker2}`,
       monitor;
       historyWriter;
       autoApproveBusy = false;
+      currentApprovalModalKey = null;
       appliedEffectKeys = /* @__PURE__ */ new Set();
       runtimeMessages = [];
       instanceId;
@@ -123474,6 +123846,16 @@ ${marker2}`,
             status: autoApproveActive && this.cachedChat.status === "waiting_approval" ? "generating" : this.cachedChat.status || visibleStatus,
             messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.cachedChat.messages || []),
             activeModal: autoApproveActive ? null : this.cachedChat.activeModal || null,
+            ...visibleStatus === "waiting_approval" && this.currentApprovalModalKey ? {
+              providerApproval: {
+                type: "tool_permission",
+                lifecycle: "pending",
+                evidence: "live",
+                actionable: Array.isArray(this.cachedChat.activeModal?.buttons) && this.cachedChat.activeModal.buttons.length > 0,
+                modalKey: this.currentApprovalModalKey,
+                resolvedAt: null
+              }
+            } : {},
             inputContent: this.cachedChat.inputContent || ""
           } : null,
           workspace: this.workspace || null,
@@ -123493,6 +123875,7 @@ ${marker2}`,
         } else if (event === "cdp_disconnected") {
           this.cachedChat = null;
           this.currentStatus = "idle";
+          this.currentApprovalModalKey = null;
           for (const ext of this.extensions.values()) {
             ext.onEvent("stream_reset");
           }
@@ -123521,6 +123904,7 @@ ${marker2}`,
       }
       dispose() {
         this.cachedChat = null;
+        this.currentApprovalModalKey = null;
         this.lastAgentStatuses.clear();
         this.generatingStartedAt.clear();
         this.monitor.reset();
@@ -123708,6 +124092,9 @@ ${marker2}`,
         const lastMsg = Array.isArray(chatData?.messages) && chatData.messages.length > 0 ? chatData.messages[chatData.messages.length - 1] : null;
         const progressFingerprint = agentStatus === "generating" ? `${lastMsg?.role || ""}:${typeof lastMsg?.content === "string" ? lastMsg.content : JSON.stringify(lastMsg?.content || "")}`.slice(-2e3) : void 0;
         this.currentStatus = agentStatus;
+        if (agentStatus !== "waiting_approval") {
+          this.currentApprovalModalKey = null;
+        }
         const lastStatus = this.lastAgentStatuses.get(agentKey) || "idle";
         if (agentStatus !== lastStatus) {
           const chatTitle = chatData.title || this.provider.name;
@@ -123726,13 +124113,16 @@ ${marker2}`,
           } else if (agentStatus === "waiting_approval") {
             if (!this.generatingStartedAt.has(agentKey)) this.generatingStartedAt.set(agentKey, now);
             const msg = chatData.activeModal?.message;
+            const modalKey = `modal:${crypto6.randomUUID()}`;
+            this.currentApprovalModalKey = modalKey;
             this.pushEvent({
               event: "agent:waiting_approval",
               chatTitle,
               timestamp: now,
               ideType: this.type,
               modalMessage: msg,
-              modalButtons: chatData.activeModal?.buttons
+              modalButtons: chatData.activeModal?.buttons,
+              modalKey
             });
             if (this.turnEvidencePort) {
               emitSuspension(this.turnEvidencePort, {
@@ -123740,7 +124130,8 @@ ${marker2}`,
                 observedBy: "ide_poll",
                 source: "fsm_edge",
                 at: now,
-                modal: "approval"
+                modal: "approval",
+                modalKey
               });
             }
           } else if (agentStatus === "idle" && (lastStatus === "generating" || lastStatus === "waiting_approval")) {
@@ -133451,7 +133842,7 @@ ${output}` : "";
     }
     var fs71 = __toESM2(require("fs"));
     var path77 = __toESM2(require("path"));
-    var import_node_crypto16 = require("crypto");
+    var import_node_crypto17 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -134436,7 +134827,7 @@ ${output}` : "";
       };
     }
     var fs70 = __toESM2(require("fs"));
-    var import_node_crypto15 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     init_logger();
     var import_crypto24 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -135520,10 +135911,10 @@ ${output}` : "";
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto15 = require("crypto");
     init_dist2();
     function sha1(text4) {
-      return (0, import_node_crypto14.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto15.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -136397,7 +136788,7 @@ ${output}` : "";
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto15.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto16.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     var TranscriptProjectionService = class {
       deps;
@@ -138622,7 +139013,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto16.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto17.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -138914,14 +139305,14 @@ ${output}` : "";
     }
     var import_node_fs6 = __toESM2(require("fs"));
     var import_node_path7 = __toESM2(require("path"));
-    var import_node_crypto17 = require("crypto");
+    var import_node_crypto18 = require("crypto");
     var OutgoingReceiptStore = class {
       constructor(directory2) {
         this.directory = directory2;
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path7.default.join(this.directory, (0, import_node_crypto17.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path7.default.join(this.directory, (0, import_node_crypto18.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -138954,8 +139345,8 @@ ${output}` : "";
           messageId,
           sessionId,
           inputDigest,
-          attemptId: (0, import_node_crypto17.randomUUID)(),
-          generation: (0, import_node_crypto17.randomUUID)(),
+          attemptId: (0, import_node_crypto18.randomUUID)(),
+          generation: (0, import_node_crypto18.randomUUID)(),
           state: "accepted",
           revision: 1,
           proof: "acceptance"
@@ -138991,7 +139382,7 @@ ${output}` : "";
         };
         if (this.directory) {
           const file = this.filename(current4.messageId);
-          const staging = `${file}.${(0, import_node_crypto17.randomUUID)()}.tmp`;
+          const staging = `${file}.${(0, import_node_crypto18.randomUUID)()}.tmp`;
           const fd = import_node_fs6.default.openSync(staging, "wx", 384);
           try {
             import_node_fs6.default.writeFileSync(fd, JSON.stringify(next));
@@ -144710,7 +145101,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db) {
@@ -144718,7 +145109,7 @@ ${output}` : "";
     }
     function key3(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto222.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto23.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db, credential, claim) {
       schema2(db);
@@ -147040,9 +147431,9 @@ ${output}` : "";
       };
       if (meshRecord2.inline) {
         const crypto18 = await import("crypto");
-        const randomUUID46 = crypto18.randomUUID || crypto18.default && crypto18.default.randomUUID;
+        const randomUUID48 = crypto18.randomUUID || crypto18.default && crypto18.default.randomUUID;
         const node2 = {
-          id: `node_${randomUUID46().replace(/-/g, "")}`,
+          id: `node_${randomUUID48().replace(/-/g, "")}`,
           workspace: fields.workspace,
           repoRoot: fields.repoRoot,
           daemonId: fields.daemonId,
@@ -148689,6 +149080,7 @@ ${output}` : "";
     var meshTaskViewCommandSpecs = defineCommandSpecs("med", meshTaskViewCommandHandlers, {}, { meshSender: "authenticated_peer" });
     init_mesh_events();
     init_deliver();
+    init_interactive_prompt();
     init_command_registry();
     init_daemon_components_port();
     init_command_args();
@@ -153605,7 +153997,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto31 = require("crypto");
+    var import_node_crypto322 = require("crypto");
     var import_node_fs16 = require("fs");
     var os36 = __toESM2(require("os"));
     var import_node_path20 = require("path");
@@ -153830,7 +154222,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const tmpPath = (0, import_node_path20.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto31.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto322.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -161083,7 +161475,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs105 = __toESM2(require("fs"));
     var path96 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto322 = require("crypto");
+    var import_node_crypto33 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -161125,7 +161517,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto322.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto33.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -163284,90 +163676,7 @@ trust_level = "trusted"
       if (end <= start) return null;
       return { start, end };
     }
-    init_evaluator();
-    init_fsm_types();
-    init_logger();
-    function deriveModal(state2, sections, fullScreen, warnParseMiss) {
-      const rule = state2.extract?.buttons;
-      if (!rule) {
-        if (state2.modal) {
-          warnParseMiss(state2.id, `state '${state2.id}' is modal but its spec declares NO extract.buttons rule, so no button can ever be parsed or pressed`);
-        }
-        return null;
-      }
-      const hay = sectionText(sections, rule.section, fullScreen);
-      const minCount = rule.min_count ?? 2;
-      let buttons = extractButtonsFromRule(rule, hay);
-      if (buttons.length === 0) {
-        if (state2.modal) {
-          warnParseMiss(state2.id, `state '${state2.id}' is modal but its extract.buttons pattern matched 0 row(s), below min_count=${minCount} \u2014 the on-screen modal cannot be approved until the rule covers this screen`);
-        }
-        return null;
-      }
-      if (rule.cursor_marker && buttons.length > 0 && !buttons.some((b) => b.current)) {
-        const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: void 0 }, hay);
-        const relaxedCurrent = relaxed.filter((b) => b.current);
-        if (relaxedCurrent.length === 1) {
-          const cursorIndex = relaxedCurrent[0].index;
-          if (buttons.some((b) => b.index === cursorIndex)) {
-            buttons = buttons.map((b) => b.index === cursorIndex ? { ...b, current: true } : b);
-          }
-        }
-      }
-      if (rule.select_mode === "arrow_keys" && !buttons.some((b) => b.current)) {
-        return null;
-      }
-      if (buttons.length < minCount) {
-        if (state2.modal) {
-          warnParseMiss(state2.id, `state '${state2.id}' is modal but its extract.buttons pattern matched ${buttons.length} row(s), below min_count=${minCount} \u2014 the on-screen modal cannot be approved until the rule covers this screen`);
-        }
-        return null;
-      }
-      const title = deriveTitle(state2, sections, fullScreen);
-      return { title, buttons };
-    }
-    function deriveTitle(state2, sections, fullScreen) {
-      const rule = state2.extract?.title;
-      if (!rule) return null;
-      return extractTitle(rule, sections, fullScreen);
-    }
-    function isMultiSelectCheckboxPicker(state2, readScrollbackLines) {
-      if (!state2 || modalKindForState(state2) !== "picker") return false;
-      try {
-        return detectClaudeTuiMultiSelect(readScrollbackLines().join("\n"));
-      } catch {
-        return false;
-      }
-    }
-    function pressModalButton(ctx, index) {
-      const m = ctx.modal;
-      if (!m) return false;
-      const btn = m.buttons.find((b) => b.index === index);
-      if (!btn) return false;
-      if (isMultiSelectCheckboxPicker(ctx.state, ctx.readScrollbackLines)) {
-        LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 multi-select checkbox picker cannot be answered by a raw modal press (needs the structured interactive-prompt path: digit per selection + Tab + review Enter). No keys written.`);
-        return false;
-      }
-      const rule = ctx.state?.extract?.buttons;
-      if (rule?.select_mode === "arrow_keys") {
-        if (!m.buttons.some((b) => b.current)) {
-          LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 no cursor marker on any row of an arrow_keys modal, so the choice list is stale scrollback and the live picker is gone. Writing a bare CR here would submit an empty message into the composer. No keys written.`);
-          return false;
-        }
-        const from = m.buttons.find((b) => b.current).index;
-        const up = rule.cursor_keys?.up ?? "\x1B[A";
-        const down = rule.cursor_keys?.down ?? "\x1B[B";
-        const delta = btn.index - from;
-        const step = delta >= 0 ? down : up;
-        const nav = step.repeat(Math.abs(delta));
-        const confirm = (rule.key_for_index || "\r").replace(/\{index\}/g, "") || "\r";
-        if (nav) ctx.sendKeys(nav);
-        ctx.submitConfirm(confirm);
-        return true;
-      }
-      ctx.submitConfirm(btn.key);
-      return true;
-    }
+    init_fsm_driver_modal();
     init_logger();
     var DEFAULT_SPAWN_PRIME_MAX_WAIT_MS = 2e3;
     var STALL_REFOCUS_INFO_LIMIT = 3;
@@ -164195,12 +164504,10 @@ trust_level = "trusted"
         const screen = this.adapter.snapshot();
         const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
-        const modalLines = state2.modal ? this.scrollbackLines() : lines;
-        const modalSections = state2.modal ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
-        const modalFullScreen = modalLines.join("\n");
-        const modal = deriveModal(state2, modalSections, modalFullScreen, (id4, reason) => this.warnModalParseMiss(id4, reason));
+        const cursor = this.adapter.getCursorPosition();
+        const modal = deriveModal(state2, sections, screen, (id4, reason) => this.warnModalParseMiss(id4, reason), cursor);
         const controls = this.deriveControls(state2.id);
-        const title = modal?.title ?? deriveTitle(state2, modalSections, modalFullScreen);
+        const title = modal?.title ?? deriveTitle(state2, sections, screen);
         const next = {
           // status is derived from the FSM state itself (statusForState), NOT from
           // whether a modal was parsed this frame. A modal state whose buttons briefly
@@ -165542,7 +165849,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs104 = __toESM2(require("fs"));
-    var import_node_crypto33 = require("crypto");
+    var import_node_crypto34 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -165569,7 +165876,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto33.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto34.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -165631,7 +165938,10 @@ ${text4}` : text4;
       };
     }
     init_logger();
+    init_interactive_prompt();
+    init_interactive_prompt();
     init_logger();
+    init_interactive_prompt();
     var TAIL_BYTES2 = 512 * 1024;
     function detectKimiPendingQuestion(cfg, input) {
       if ((input.agentType ?? "").trim() !== "kimi") return null;
@@ -165902,6 +166212,7 @@ ${text4}` : text4;
       }
       return { ...base, status: "idle", fsmReadySeen: readySeen === true };
     }
+    init_interactive_prompt();
     function normalizeClaudeTuiIdentity(text4) {
       return text4.replace(/\s+/g, " ").trim();
     }
@@ -165970,7 +166281,9 @@ ${text4}` : text4;
       }
       return ids;
     }
+    init_interactive_prompt();
     init_logger();
+    init_interactive_prompt();
     var TAIL_BYTES3 = 512 * 1024;
     function detectClaudePendingQuestion(cfg, input) {
       if ((input.agentType ?? "").trim() !== "claude-cli") return null;
@@ -166398,6 +166711,7 @@ ${text4}` : text4;
       host.interactivePromptTransport = null;
       host.notifyChange("prompt_cleared");
     }
+    init_interactive_prompt();
     var INTERACTIVE_PROMPT_LOST_GRACE_MS2 = 1500;
     var CAROUSEL_STEP_POLL_INTERVAL_MS = 50;
     var CAROUSEL_STEP_SETTLE_TIMEOUT_MS = 600;
@@ -168157,7 +168471,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process18 = require("child_process");
-    var import_node_crypto34 = require("crypto");
+    var import_node_crypto35 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -168167,7 +168481,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto34.randomUUID)();
+      generation = (0, import_node_crypto35.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -168228,7 +168542,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto34.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto35.randomUUID)()}`;
         return new Promise((resolve54, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -168264,8 +168578,9 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto35 = require("crypto");
+    var import_node_crypto36 = require("crypto");
     init_dist();
+    init_interactive_prompt();
     function record5(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
     }
@@ -168395,7 +168710,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto35.randomUUID)(),
+          promptId: (0, import_node_crypto36.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -168934,7 +169249,9 @@ ${JSON.stringify(replies)}
     init_summary_metadata();
     var crypto14 = __toESM2(require("crypto"));
     init_contracts2();
+    init_interactive_prompt();
     init_logger();
+    init_interactive_prompt();
     function describeInteractivePrompt(prompt) {
       if (!prompt) return null;
       return {
@@ -170038,7 +170355,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto36 = require("crypto");
+    var import_node_crypto37 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -170219,7 +170536,8 @@ ${buttons.join("\n")}`;
               `approval_request:${now}`,
               now
             );
-            const approvalModalKey = adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto36.createHash)("sha256").update(approvalFingerprint).digest("hex")}`;
+            const approvalModalKey = adapterStatus?.providerApproval?.modalKey ?? `modal:${(0, import_node_crypto37.randomUUID)()}`;
+            host.lastApprovalModalKey = approvalModalKey;
             const approvalEvidence = adapterStatus?.providerApproval?.evidence;
             host.pushEvent({
               event: "agent:waiting_approval",
@@ -170264,7 +170582,9 @@ ${buttons.join("\n")}`;
           host.busyEpoch++;
         } else if (newStatus === "generating" && host.lastStatus === "waiting_approval") {
           host.lastApprovalEventFingerprint = "";
+          host.lastApprovalModalKey = null;
         } else if (newStatus === "idle" && (host.lastStatus === "generating" || host.lastStatus === "waiting_approval")) {
+          host.lastApprovalModalKey = null;
           const duration = host.generatingStartedAt ? Math.round((now - host.generatingStartedAt) / 1e3) : 0;
           if (!host.generatingStartedAt && !host.generatingDebouncePending) {
             LOG.debug("CLI", `[${host.type}] suppressed startup-phase generating\u2192idle blip (generatingStartedAt=0, no debounce pending)`);
@@ -171284,6 +171604,15 @@ ${buttons.join("\n")}`;
       const hasInteractivePrompt = !!host.activeInteractivePrompt && host.activeInteractivePrompt.blocking !== false && nativeQuestion !== "codex_async" && !(nativeQuestion === "codex_rpc" && adapterStatus.status === "waiting_approval");
       const finalStatus = hasInteractivePrompt ? "waiting_choice" : visibleStatus;
       const finalChatStatus = hasInteractivePrompt ? "waiting_choice" : activeChatStatus;
+      const resolvedActiveModal = autoApproveActive || autoApproveHoldIdle ? null : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal);
+      const resolvedProviderApproval = autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt ? null : adapterStatus.providerApproval ?? (finalStatus === "waiting_approval" && host.lastApprovalModalKey ? {
+        type: "tool_permission",
+        lifecycle: "pending",
+        evidence: "live",
+        actionable: hasNonEmptyCliModalButtons(resolvedActiveModal),
+        modalKey: host.lastApprovalModalKey,
+        resolvedAt: null
+      } : null);
       return {
         type: host.type,
         name: host.provider.name,
@@ -171295,8 +171624,8 @@ ${buttons.join("\n")}`;
           title: parsedStatus?.title || dirName,
           status: finalChatStatus,
           messages: statusMessages,
-          activeModal: autoApproveActive || autoApproveHoldIdle ? null : resolveCliActiveModal(parsedStatus?.activeModal, adapterStatus.activeModal),
-          providerApproval: autoApproveActive || autoApproveHoldIdle || hasInteractivePrompt ? null : adapterStatus.providerApproval,
+          activeModal: resolvedActiveModal,
+          providerApproval: resolvedProviderApproval,
           activeInteractivePrompt: host.activeInteractivePrompt,
           inputContent: ""
         },
@@ -186754,7 +187083,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto37 = require("crypto");
+    var import_node_crypto38 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -186763,7 +187092,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto37.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto38.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -186773,7 +187102,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto37.randomUUID)();
+          const id4 = (0, import_node_crypto38.randomUUID)();
           active.add(id4);
           try {
             return await run3();
@@ -188522,13 +188851,18 @@ ${notice.notice}${supersededHint}`;
     function isCoordinatorFirstSession(settings2) {
       return settings2?.launchedByCoordinator === true && typeof settings2.meshNodeFor === "string" && !!settings2.meshNodeFor.trim();
     }
-    function currentApprovalEpisodeKey(state2) {
+    function currentApprovalEpisodeKey(state2, fallbackRawEvent) {
       if (!state2) return null;
       if (state2.status === "generating" || state2.activeChat?.status === "generating") return null;
       const waiting2 = state2.status === "waiting_approval" || state2.activeChat?.status === "waiting_approval";
       if (!waiting2) return null;
       const approval = state2.activeChat?.providerApproval ?? state2.providerApproval;
-      if (!approval) return null;
+      if (!approval) {
+        const rawModalKey = typeof fallbackRawEvent?.modalKey === "string" ? fallbackRawEvent.modalKey.trim() : "";
+        if (!rawModalKey) return null;
+        if (fallbackRawEvent?.approvalEvidence && fallbackRawEvent.approvalEvidence !== "live") return null;
+        return `modal:${rawModalKey}`;
+      }
       const pending = approval.lifecycle === "pending" || approval.status === "awaiting_approval";
       if (!pending || approval.resolvedAt != null || approval.evidence !== "live") return null;
       const modalKey = typeof approval.modalKey === "string" ? approval.modalKey.trim() : "";
@@ -188540,6 +188874,64 @@ ${notice.notice}${supersededHint}`;
     function stillWaiting(state2) {
       return !!state2 && (state2.status === "waiting_approval" || state2.activeChat?.status === "waiting_approval");
     }
+    function buildEscalatedEvent(rawEvent, state2) {
+      const approval = state2?.activeChat?.providerApproval ?? state2?.providerApproval;
+      const hasActiveModalProp = Boolean(state2?.activeChat && "activeModal" in state2.activeChat);
+      const activeModal = state2?.activeChat?.activeModal;
+      const rebuilt = { ...rawEvent };
+      delete rebuilt.modalMessage;
+      delete rebuilt.modalButtons;
+      delete rebuilt.modalKey;
+      delete rebuilt.approvalEvidence;
+      if (approval) {
+        const modalKey = typeof approval.modalKey === "string" ? approval.modalKey.trim() : "";
+        if (modalKey) {
+          rebuilt.modalKey = modalKey;
+        }
+        if (approval.evidence === "live" || approval.evidence === "cached" || approval.evidence === "unavailable") {
+          rebuilt.approvalEvidence = approval.evidence;
+        }
+      } else if (stillWaiting(state2) && state2?.status !== "generating" && state2?.activeChat?.status !== "generating") {
+        const fallbackKey = typeof rawEvent.modalKey === "string" ? rawEvent.modalKey.trim() : "";
+        if (fallbackKey) rebuilt.modalKey = fallbackKey;
+        const rawEvidence = rawEvent.approvalEvidence;
+        rebuilt.approvalEvidence = rawEvidence === "live" || rawEvidence === "cached" || rawEvidence === "unavailable" ? rawEvidence : "live";
+      }
+      if (activeModal) {
+        if (typeof activeModal.message === "string" && activeModal.message.trim()) {
+          rebuilt.modalMessage = activeModal.message;
+        }
+        if (Array.isArray(activeModal.buttons)) {
+          const buttons = activeModal.buttons.filter(
+            (button) => typeof button === "string" && button.trim().length > 0
+          );
+          if (buttons.length > 0) {
+            rebuilt.modalButtons = buttons;
+          }
+        }
+      } else if (!hasActiveModalProp) {
+        const rawKey = typeof rawEvent.modalKey === "string" ? rawEvent.modalKey.trim() : "";
+        if (rawKey && rebuilt.modalKey === rawKey) {
+          if (typeof rawEvent.modalMessage === "string" && rawEvent.modalMessage.trim()) {
+            rebuilt.modalMessage = rawEvent.modalMessage;
+          }
+          if (Array.isArray(rawEvent.modalButtons)) {
+            const buttons = rawEvent.modalButtons.filter(
+              (button) => typeof button === "string" && button.trim().length > 0
+            );
+            if (buttons.length > 0) {
+              rebuilt.modalButtons = buttons;
+            }
+          }
+        }
+      }
+      return rebuilt;
+    }
+    function hasActionableEscalatedModal(rebuilt, state2) {
+      const approval = state2?.activeChat?.providerApproval ?? state2?.providerApproval;
+      if (approval && approval.actionable === false) return false;
+      return Array.isArray(rebuilt.modalButtons) && rebuilt.modalButtons.length > 0;
+    }
     function createApprovalEscalationGate(deps) {
       const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
       const cooldownMs = deps.cooldownMs ?? OWNER_APPROVAL_SESSION_COOLDOWN_MS;
@@ -188549,7 +188941,7 @@ ${notice.notice}${supersededHint}`;
         return t;
       });
       const clearTimer = deps.clearTimer ?? ((handle) => clearTimeout(handle));
-      const now = deps.now ?? Date.now;
+      const now = deps.now ?? (() => Date.now());
       const held = /* @__PURE__ */ new Map();
       const escalated = /* @__PURE__ */ new Set();
       const lastEscalatedAt = /* @__PURE__ */ new Map();
@@ -188560,7 +188952,7 @@ ${notice.notice}${supersededHint}`;
         let currentKey = null;
         try {
           state2 = deps.readState(sessionId);
-          currentKey = currentApprovalEpisodeKey(state2);
+          currentKey = currentApprovalEpisodeKey(state2, entry.raw);
         } catch {
           currentKey = null;
         }
@@ -188586,8 +188978,36 @@ ${notice.notice}${supersededHint}`;
           entry.timer = setTimer(() => fire(sessionId), cooldownRemaining);
           return;
         }
+        const rebuilt = buildEscalatedEvent(entry.raw, state2);
+        if (!hasActionableEscalatedModal(rebuilt, state2)) {
+          if (stillWaiting(state2) && entry.rechecks < ESCALATION_MAX_RECHECKS) {
+            entry.rechecks += 1;
+            entry.key = currentKey;
+            entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+            return;
+          }
+          held.delete(sessionId);
+          return;
+        }
+        LOG.info("StatusEvent", `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1e3)}s unresolved`);
+        let delivered = false;
+        try {
+          delivered = deps.escalate(sessionId, rebuilt) !== false;
+        } catch (error) {
+          LOG.warn("StatusEvent", `approval escalation delivery failed session=${sessionId}: ${error?.message ?? error}`);
+          delivered = false;
+        }
+        if (!delivered) {
+          if (stillWaiting(state2)) {
+            entry.rechecks += 1;
+            entry.key = currentKey;
+            entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+          } else {
+            held.delete(sessionId);
+          }
+          return;
+        }
         held.delete(sessionId);
-        if (entry.key) escalated.add(`${sessionId}\0${entry.key}`);
         escalated.add(`${sessionId}\0${currentKey}`);
         lastEscalatedAt.set(sessionId, nowMs2);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
@@ -188595,8 +189015,6 @@ ${notice.notice}${supersededHint}`;
           if (oldest === void 0) break;
           escalated.delete(oldest);
         }
-        LOG.info("StatusEvent", `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1e3)}s unresolved`);
-        deps.escalate(sessionId, entry.raw);
       };
       return {
         hold(rawEvent) {
@@ -188610,7 +189028,7 @@ ${notice.notice}${supersededHint}`;
             return false;
           }
           if (!state2 || !isCoordinatorFirstSession(state2.settings ?? null)) return false;
-          const key4 = currentApprovalEpisodeKey(state2);
+          const key4 = currentApprovalEpisodeKey(state2, rawEvent);
           if (key4 && escalated.has(`${sessionId}\0${key4}`)) return true;
           const existing = held.get(sessionId);
           if (existing) {
@@ -188787,6 +189205,7 @@ ${notice.notice}${supersededHint}`;
       if (idx <= 0) return message;
       return [lines[idx].trim(), ...lines.slice(0, idx), ...lines.slice(idx + 1)].join("\n");
     }
+    var MODAL_KEY_UUID_RE = /^(?:modal:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     function projectServerStatusEvent(event, resolveHideMute) {
       const eventName = toDaemonStatusEventName(event.event);
       if (!eventName) return null;
@@ -188828,8 +189247,11 @@ ${notice.notice}${supersededHint}`;
           payload.modalButtons = modalButtons;
         }
       }
-      if (typeof event.modalKey === "string" && event.modalKey.trim()) {
-        payload.modalKey = event.modalKey.trim().slice(0, 128);
+      if (typeof event.modalKey === "string") {
+        const trimmedModalKey = event.modalKey.trim();
+        if (MODAL_KEY_UUID_RE.test(trimmedModalKey)) {
+          payload.modalKey = trimmedModalKey;
+        }
       }
       if (event.approvalEvidence === "live" || event.approvalEvidence === "cached" || event.approvalEvidence === "unavailable") {
         payload.approvalEvidence = event.approvalEvidence;
@@ -188890,11 +189312,13 @@ ${notice.notice}${supersededHint}`;
       const resolveSessionMeta = createInstanceSessionMetaResolver(deps.instanceManager, deps.sessionRegistry);
       const durations = createTurnDurationTracker();
       const sendServer = (serverEvent) => {
-        if (!deps.sendServer) return;
+        if (!deps.sendServer) return false;
         try {
           deps.sendServer(serverEvent);
+          return true;
         } catch (error) {
           LOG.warn("StatusEvent", `server delivery failed: ${error?.message ?? error}`);
+          return false;
         }
       };
       const escalation = deps.sendServer && deps.approvalEscalationMs !== false ? createApprovalEscalationGate({
@@ -188903,10 +189327,11 @@ ${notice.notice}${supersededHint}`;
           const getInstance = deps.instanceManager?.getInstance;
           return typeof getInstance === "function" ? getInstance.call(deps.instanceManager, sessionId)?.getState?.() : void 0;
         },
-        // Re-project at send time so current hide/mute is honoured.
+        // Re-project at send time so current hide/mute and live episode fields are honoured.
         escalate: (_sessionId, raw) => {
           const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
-          if (serverEvent) sendServer({ ...serverEvent, timestamp: Date.now() });
+          if (!serverEvent) return false;
+          return sendServer({ ...serverEvent, timestamp: Date.now() });
         }
       }) : null;
       const unsubProviderEvent = bus.on("provider_event", (e) => {

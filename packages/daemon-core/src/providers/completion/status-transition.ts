@@ -131,6 +131,7 @@ export interface StatusTransitionHost {
     autoApproveBusy: boolean;
     suppressIdleHistoryReplay: boolean;
     lastApprovalEventFingerprint: string;
+    lastApprovalModalKey?: string | null;
     lastInteractivePromptEventKey: string;
     agentReadyEmitted: boolean;
     /** A real turn (idle→generating) has started since this instance attached; never cleared. */
@@ -511,6 +512,7 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                 // from prompt text or button labels.
                 const approvalModalKey = adapterStatus?.providerApproval?.modalKey
                     ?? `modal:${randomUUID()}`;
+                host.lastApprovalModalKey = approvalModalKey;
                 const approvalEvidence = adapterStatus?.providerApproval?.evidence;
                 host.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now,
@@ -571,7 +573,9 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
             // dropped. The seq in the fingerprint already separates entries; this
             // reset is a belt-and-suspenders guard for the re-entry case.
             host.lastApprovalEventFingerprint = '';
+            host.lastApprovalModalKey = null;
         } else if (newStatus === 'idle' && (host.lastStatus === 'generating' || host.lastStatus === 'waiting_approval')) {
+            host.lastApprovalModalKey = null;
             const duration = host.generatingStartedAt ? Math.round((now - host.generatingStartedAt) / 1000) : 0;
             // Guard: if generatingStartedAt===0 and no debounce pending, the generating phase
             // was entered from 'starting' state (startup PTY noise), not from a real idle→generating

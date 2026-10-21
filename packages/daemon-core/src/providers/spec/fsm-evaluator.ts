@@ -18,9 +18,10 @@ import type { Condition, SectionDef } from './types.js';
 import {
     resolveSections, evaluateCondition, sectionText, type ResolvedSection, type TraceEntry,
 } from './evaluator.js';
+import { resolveLiveModalSlice } from './fsm-driver-modal.js';
 import {
     type CliSpecV4, type FsmCondition, type FsmTransition,
-    outgoingTransitions, stateById,
+    modalKindForState, outgoingTransitions, stateById,
 } from './fsm-types.js';
 import { evaluateSignalLeaf, type SignalSnapshot } from './signal-envelope.js';
 
@@ -218,9 +219,13 @@ function evalCond(
     stateId: string,
     signalSnapshot?: SignalSnapshot | null,
     absence?: {
-        viewportScreen: string;
-        viewportSections: ResolvedSection[];
+        viewportScreen: string | null;
+        viewportSections: ResolvedSection[] | null;
         viewportCursor: { row: number; col: number } | undefined;
+        modalScreen: string;
+        modalSections: ResolvedSection[];
+        modalCursor: { row: number; col: number } | undefined;
+        isModalTarget: boolean;
         inNot: boolean;
     },
 ): CondResult {
@@ -283,7 +288,13 @@ function evalCond(
         return { kind: 'stable', result, detail: `stable ${where}${ign} ${stableFor}ms / ${cond.stable_ms}ms`, remainingMs };
     }
     if (isSectionAbsent(cond)) {
-        const result = evaluateCondition(cond as Condition, sections, fullScreen, cursor, prevLines, legacyTrace, stateId);
+        const useModalSlice = Boolean(
+            absence && (cond.section_absent === 'modal' || cond.section_absent === 'trust'),
+        );
+        const haySections = useModalSlice ? absence!.modalSections : sections;
+        const hayScreen = useModalSlice ? absence!.modalScreen : fullScreen;
+        const hayCursor = useModalSlice ? absence!.modalCursor : cursor;
+        const result = evaluateCondition(cond as Condition, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         return { kind: 'regex', result, detail: `section_absent=${cond.section_absent}` };
     }
     // regex / changed → shared evaluator (operates on v3 Condition shape)
@@ -296,23 +307,47 @@ function evalCond(
         // line in scrollback; `not <spinner>` stayed false for the 200-line
         // lookback and the coordinator sat in busy at an idle prompt for an
         // hour, with every queued mesh event undelivered.)
-        // Evaluate modal/footer/StatusLine conditions and unscoped `not` conditions
-        // against the active viewport rather than the 200-line scrollback guard frame
-        // so scrolled-off nested approval text in scrollback cannot trigger a modal transition.
-        // TODO(mission 3e9bae23): Nested approval text still visible inside the active
-        // viewport is a known limitation deferred to the ghostty native viewport API
-        // (exact cursor/composer region).
-        const useViewport = Boolean(
+        //
+        // Modal/trust sections and positive modal-transition guards evaluate
+        // against the cursor-bound live modal slice (`resolveLiveModalSlice`) so
+        // a quoted modal in scrollback or above an active/idle composer cannot
+        // fire a modal transition, while a tall live modal whose header scrolled
+        // into scrollback still matches.
+        const secName = isRegex(cond) ? ((cond as any).section as string | undefined) : undefined;
+        const useModalSlice = Boolean(
             absence && isRegex(cond) && (
-                (cond as any).section === 'modal'
-                || (cond as any).section === 'footer'
-                || (cond as any).section === 'StatusLine'
-                || (absence.inNot && !(cond as any).section)
+                secName === 'modal'
+                || secName === 'trust'
+                || (absence.isModalTarget && !absence.inNot)
             ),
         );
-        const hayScreen = useViewport ? absence!.viewportScreen : fullScreen;
-        const haySections = useViewport ? absence!.viewportSections : sections;
-        const hayCursor = useViewport ? absence!.viewportCursor : cursor;
+        const useViewport = Boolean(
+            !useModalSlice
+            && absence
+            && absence.viewportScreen !== null
+            && absence.viewportSections !== null
+            && isRegex(cond)
+            && (
+                secName === 'footer'
+                || secName === 'StatusLine'
+                || (absence.inNot && !secName)
+            ),
+        );
+        const hayScreen = useModalSlice
+            ? absence!.modalScreen
+            : useViewport
+                ? absence!.viewportScreen!
+                : fullScreen;
+        const haySections = useModalSlice
+            ? absence!.modalSections
+            : useViewport
+                ? absence!.viewportSections!
+                : sections;
+        const hayCursor = useModalSlice
+            ? absence!.modalCursor
+            : useViewport
+                ? absence!.viewportCursor
+                : cursor;
         const result = evaluateCondition(cond as Condition, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         const kind = isRegex(cond) ? 'regex' : 'changed';
         const detail = isRegex(cond)
@@ -364,14 +399,18 @@ export function evaluateFsm(
     const viewportLines = viewportStartRow && viewportStartRow > 0
         ? lines.slice(viewportStartRow)
         : null;
-    const absence = viewportLines
-        ? {
-            viewportScreen: viewportLines.join('\n'),
-            viewportSections: resolveSections(spec.sections ?? {}, viewportLines),
-            viewportCursor: cursor ? { row: Math.max(0, cursor.row - viewportStartRow!), col: cursor.col } : undefined,
-            inNot: false,
-        }
-        : undefined;
+    const viewportScreen = viewportLines ? viewportLines.join('\n') : null;
+    const viewportSections = viewportLines ? resolveSections(spec.sections ?? {}, viewportLines) : null;
+    const viewportCursor = viewportLines && cursor
+        ? { row: Math.max(0, cursor.row - viewportStartRow!), col: cursor.col }
+        : cursor;
+    const liveModal = resolveLiveModalSlice(lines, cursor, viewportStartRow ?? 0);
+    const modalSections: ResolvedSection[] = liveModal.hasLiveModal
+        ? resolveSections(spec.sections ?? {}, liveModal.lines)
+        : Object.keys(spec.sections ?? {}).map(id => ({ id, fromLine: 0, toLine: 0, text: '' }));
+    const modalCursor = liveModal.hasLiveModal && cursor
+        ? { row: Math.max(0, cursor.row - liveModal.startRow), col: cursor.col }
+        : cursor;
     const sections = resolveSections(spec.sections ?? {}, lines);
 
     const outgoing = outgoingTransitions(spec, currentStateId);
@@ -384,10 +423,33 @@ export function evaluateFsm(
         const holdSatisfied = heldFor >= holdMs;
         const holdRemainingMs = holdSatisfied ? 0 : holdMs - heldFor;
 
+        const targetState = stateById(spec, t.to);
+        const isModalTarget = Boolean(targetState && modalKindForState(targetState) !== null);
+
         let cond: CondResult | undefined;
         let condResult = true;
         if (t.when) {
-            cond = evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, legacyTrace, `${currentStateId}→${t.to}`, signalSnapshot, absence);
+            cond = evalCond(
+                t.when,
+                sections,
+                cleanScreen,
+                cursor,
+                prevLines,
+                clock,
+                legacyTrace,
+                `${currentStateId}→${t.to}`,
+                signalSnapshot,
+                {
+                    viewportScreen,
+                    viewportSections,
+                    viewportCursor,
+                    modalScreen: liveModal.screen,
+                    modalSections,
+                    modalCursor,
+                    isModalTarget,
+                    inNot: false,
+                },
+            );
             condResult = cond.result;
         }
 

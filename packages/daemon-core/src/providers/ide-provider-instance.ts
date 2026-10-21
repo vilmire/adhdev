@@ -80,6 +80,7 @@ export class IdeProviderInstance implements ProviderInstance {
     private monitor: StatusMonitor;
     private historyWriter: ChatHistoryWriter;
     private autoApproveBusy = false;
+    private currentApprovalModalKey: string | null = null;
     private appliedEffectKeys = new Set<string>();
     private runtimeMessages: Array<{ key: string; message: ChatMessage }> = [];
 
@@ -174,6 +175,16 @@ export class IdeProviderInstance implements ProviderInstance {
                     : (this.cachedChat.status || visibleStatus),
                 messages: mergeRuntimeMessagesByTime(this.runtimeMessages, this.cachedChat.messages || []),
                 activeModal: autoApproveActive ? null : (this.cachedChat.activeModal || null),
+                ...(visibleStatus === 'waiting_approval' && this.currentApprovalModalKey ? {
+                    providerApproval: {
+                        type: 'tool_permission',
+                        lifecycle: 'pending',
+                        evidence: 'live',
+                        actionable: Array.isArray(this.cachedChat.activeModal?.buttons) && this.cachedChat.activeModal.buttons.length > 0,
+                        modalKey: this.currentApprovalModalKey,
+                        resolvedAt: null,
+                    } as any,
+                } : {}),
                 inputContent: this.cachedChat.inputContent || '',
             } : null,
             workspace: this.workspace || null,
@@ -195,6 +206,7 @@ export class IdeProviderInstance implements ProviderInstance {
         } else if (event === 'cdp_disconnected') {
             this.cachedChat = null;
             this.currentStatus = 'idle';
+            this.currentApprovalModalKey = null;
             for (const ext of this.extensions.values()) {
                 ext.onEvent('stream_reset');
             }
@@ -225,6 +237,7 @@ export class IdeProviderInstance implements ProviderInstance {
 
     dispose(): void {
         this.cachedChat = null;
+        this.currentApprovalModalKey = null;
         this.lastAgentStatuses.clear();
         this.generatingStartedAt.clear();
         this.monitor.reset();
@@ -452,6 +465,9 @@ export class IdeProviderInstance implements ProviderInstance {
             : undefined;
 
         this.currentStatus = agentStatus;
+        if (agentStatus !== 'waiting_approval') {
+            this.currentApprovalModalKey = null;
+        }
         const lastStatus = this.lastAgentStatuses.get(agentKey) || 'idle';
 
         if (agentStatus !== lastStatus) {
@@ -469,6 +485,7 @@ export class IdeProviderInstance implements ProviderInstance {
                 if (!this.generatingStartedAt.has(agentKey)) this.generatingStartedAt.set(agentKey, now);
                 const msg = chatData.activeModal?.message;
                 const modalKey = `modal:${crypto.randomUUID()}`;
+                this.currentApprovalModalKey = modalKey;
                 this.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now, ideType: this.type,
                     modalMessage: msg,
