@@ -1650,6 +1650,9 @@
         "stateFollowed": "팔로우 중",
         "stateUnfollowed": "로컬 팔로우 중단됨 (호스트 권한 유지)",
         "stateRevoked": "호스트 접근 권한 해제됨",
+        "hostStateOnline": "온라인",
+        "hostStateOffline": "오프라인",
+        "coordinatorState": "코디네이터: {{state}}",
         "removedProject": "삭제된 프로젝트",
         "ownerRequired": "프로젝트 팔로우 및 원격 권한 관리는 소유자만 할 수 있습니다. 이 대시보드에 로그인(대시보드 비밀번호 설정)하거나 클라우드 대시보드를 사용하세요."
     },

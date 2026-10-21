@@ -534,7 +534,7 @@ export default function AssistantWatchedProjects({
                                         >
                                             {remoteHosts.map(h => (
                                                 <option key={h.id} value={h.id}>
-                                                    {h.label} ({h.online ? 'online' : 'offline'})
+                                                    {h.label} ({h.online ? t('assistantWatched.hostStateOnline') : t('assistantWatched.hostStateOffline')})
                                                 </option>
                                             ))}
                                         </select>
@@ -575,7 +575,7 @@ export default function AssistantWatchedProjects({
                                                             <div className="flex items-center justify-between gap-2">
                                                                 <span className="truncate font-semibold text-text-primary">{project.name}</span>
                                                                 <span className="shrink-0 text-[11px] text-text-muted">
-                                                                    coordinator: {project.coordinatorState}
+                                                                    {t('assistantWatched.coordinatorState', { state: project.coordinatorState })}
                                                                 </span>
                                                             </div>
                                                             {project.sanitizedRepoIdentity && (

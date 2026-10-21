@@ -1650,6 +1650,9 @@
         "stateFollowed": "Following",
         "stateUnfollowed": "Unfollowed locally (host grant still active)",
         "stateRevoked": "Access removed on host",
+        "hostStateOnline": "online",
+        "hostStateOffline": "offline",
+        "coordinatorState": "coordinator: {{state}}",
         "removedProject": "Removed project",
         "ownerRequired": "Only the owner can manage followed projects or remote access. Sign in to this dashboard (set a dashboard password) or use the cloud dashboard."
     },
