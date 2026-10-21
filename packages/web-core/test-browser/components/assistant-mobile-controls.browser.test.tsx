@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
@@ -8,6 +8,7 @@ import { initI18n } from '../../src/i18n/config'
 import DashboardMobileChatRoom from '../../src/components/dashboard/DashboardMobileChatRoom'
 import InteractivePromptModal from '../../src/components/interactive-prompt/InteractivePromptModal'
 import PaneGroupContent from '../../src/components/dashboard/PaneGroupContent'
+import { BaseDaemonProvider, useBaseDaemonActions } from '../../src/context/BaseDaemonContext'
 import { TransportProvider } from '../../src/context/TransportContext'
 import type { ActiveConversation } from '../../src/components/dashboard/types'
 import type { DashboardConversationCommands } from '../../src/hooks/useDashboardConversationCommands'
@@ -259,6 +260,349 @@ it('keeps assistant policy, staged approval and transcript folding distinct at i
             expect(commands.handleSendChat).not.toHaveBeenCalled()
             expect(sendCommand.mock.calls.every(([, command]) => ['assistant_execution_state', 'assistant_staged_resolve', 'assistant_threads'].includes(command))).toBe(true)
         }
+    } finally {
+        await act(async () => root.unmount())
+        host.remove()
+    }
+})
+
+function SeedRemoteDaemons() {
+    const { injectEntries } = useBaseDaemonActions()
+    useEffect(() => {
+        const approval = {
+            source: 'provider_modal',
+            type: 'tool_permission',
+            evidence: 'live',
+            lifecycle: 'pending',
+            resolvedAt: null,
+            modalKey: 'modal-one',
+            attemptId: 'attempt-one',
+            generation: 7,
+            actionable: true,
+            sessionId: 'worker-1',
+            meshId: 'mesh-coord-1',
+            buttons: ['Allow once'],
+        }
+        injectEntries([
+            { id: 'remote-host-1', type: 'adhdev-daemon', status: 'online', hostname: 'Remote Mac', timestamp: 1 } as any,
+            { id: 'synthetic-machine', type: 'adhdev-daemon', status: 'online', hostname: 'Local Mac', timestamp: 1 } as any,
+            {
+                id: 'synthetic-machine:cli:worker-1',
+                daemonId: 'synthetic-machine',
+                machineId: 'synthetic-machine',
+                sessionId: 'worker-1',
+                transport: 'pty',
+                hostname: 'Local Mac',
+                status: 'waiting_approval',
+                timestamp: 1,
+                activeChat: {
+                    title: 'Worker task',
+                    status: 'waiting_approval',
+                    providerApproval: approval,
+                    activeModal: { message: 'Run scoped verification?', buttons: ['Allow once'] },
+                },
+            } as any,
+        ])
+    }, [injectEntries])
+    return null
+}
+
+it('expands mobile touch hit targets to 44px via pseudo-elements while preserving compact visual bounds at 390x844', async () => {
+    localStorage.setItem('lang', 'en')
+    localStorage.removeItem('adhdev_assistant_activity_visible')
+    initI18n()
+    ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
+    const sendCommand = vi.fn(async (targetDaemon: string, command: string) => {
+        if (command === 'assistant_execution_state') {
+            return {
+                success: true,
+                executionEnabled: true,
+                executionAvailable: true,
+                restriction: 'enforced',
+                choices: [
+                    {
+                        meshId: 'mesh-coord-1',
+                        targetSessionId: 'worker-1',
+                        action: 'approve',
+                        button: 'Allow once',
+                        modalIdentity: 'exact-modal',
+                        label: 'Worker 1',
+                        message: 'Run scoped verification?',
+                    },
+                ],
+            }
+        }
+        if (command === 'assistant_staged_resolve') {
+            return {
+                success: true,
+                memory: [
+                    {
+                        id: 'staged-1',
+                        createdAt: '2026-10-01T00:00:00Z',
+                        origin: 'owner',
+                        op: { action: 'add', target: 'memory', content: 'Keep touch targets 44px.' },
+                    },
+                ],
+                skills: [],
+                notes: [],
+            }
+        }
+        if (command === 'assistant_threads') {
+            return {
+                success: true,
+                threads: [
+                    {
+                        meshId: 'mesh-followed-1',
+                        project: 'AlphaRepo',
+                        openedAt: 1000,
+                        lastSendAt: 2000,
+                        hosting: 'remote_followed',
+                        hostDaemonId: 'remote-host-1',
+                        hostLabel: 'Remote Mac',
+                        canonicalKey: 'remote-host-1::mesh-followed-1',
+                    },
+                ],
+                followedRemoteProjects: [],
+            }
+        }
+        if (command === 'assistant_remote_project_catalog') {
+            return {
+                success: true,
+                hostDaemonId: targetDaemon,
+                projects: [
+                    {
+                        hostDaemonId: targetDaemon,
+                        meshId: 'mesh-catalog-2',
+                        name: 'BetaRepo',
+                        sanitizedRepoIdentity: 'github.com/acme/beta-repo',
+                        coordinatorState: 'idle',
+                        capabilities: { status: true, read: true, poll: true, report: true, send: true },
+                        observedAt: '2026-10-20T00:00:00.000Z',
+                    },
+                ],
+            }
+        }
+        return { success: true }
+    })
+
+    const conversation = {
+        routeId: 'synthetic-machine',
+        daemonId: 'synthetic-machine',
+        sessionId: 'synthetic-assistant',
+        tabKey: 'synthetic-tab',
+        assistant: true,
+        transport: 'pty',
+        mode: 'chat',
+        agentName: 'Codex',
+        agentType: 'codex-cli',
+        status: 'idle',
+        title: 'Assistant',
+        displayPrimary: 'Assistant',
+        displaySecondary: 'Codex',
+        workspaceName: 'Public example',
+        machineName: 'Local Mac',
+        connectionState: 'connected',
+        coordinator: { meshId: 'mesh-coord-1' },
+        messages: [
+            { id: 'step-1', role: 'tool', kind: 'tool', content: 'Tool step 1', timestamp: 1000, toolName: 'Read' },
+            { id: 'answer', role: 'assistant', content: 'Ready.', timestamp: 2000 },
+        ],
+    } as ActiveConversation
+
+    const commands = {
+        handleSendChat: vi.fn(async () => true),
+        handleModalButton: vi.fn(),
+        handleFocusAgent: vi.fn(),
+        handleRelaunch: vi.fn(),
+    } as unknown as DashboardConversationCommands
+
+    const host = document.createElement('div')
+    host.style.cssText = 'height:100dvh;display:flex;flex-direction:column'
+    document.body.append(host)
+    const root = createRoot(host)
+
+    function assertHitExpansion(
+        el: Element,
+        expectedVisual: { width?: number; height: number },
+        pad: { top: number; bottom: number; left: number; right: number },
+        minHit: { width: number; height: number } = { width: 44, height: 44 },
+    ) {
+        const r = rect(el)
+        if (expectedVisual.width !== undefined) {
+            expect(Math.round(r.width)).toBe(expectedVisual.width)
+        } else {
+            expect(r.width).toBeGreaterThanOrEqual(44)
+        }
+        expect(Math.round(r.height)).toBe(expectedVisual.height)
+        expect(Math.round(r.width + pad.left + pad.right)).toBeGreaterThanOrEqual(minHit.width)
+        expect(Math.round(r.height + pad.top + pad.bottom)).toBeGreaterThanOrEqual(minHit.height)
+
+        const cx = r.x + r.width / 2
+        const cy = r.y + r.height / 2
+        // Points strictly outside the visual bounding box must still hit `el` via ::after.
+        const topProbe = document.elementFromPoint(cx, r.y - Math.max(1, pad.top - 1))
+        const bottomProbe = document.elementFromPoint(cx, r.bottom + Math.max(1, pad.bottom - 1))
+        const leftProbe = document.elementFromPoint(r.x - Math.max(1, pad.left - 1), cy)
+        const rightProbe = document.elementFromPoint(r.right + Math.max(1, pad.right - 1), cy)
+
+        expect(topProbe && el.contains(topProbe)).toBe(true)
+        expect(bottomProbe && el.contains(bottomProbe)).toBe(true)
+        expect(leftProbe && el.contains(leftProbe)).toBe(true)
+        expect(rightProbe && el.contains(rightProbe)).toBe(true)
+    }
+
+    function assertAdjacentPairNoOverlap(leftEl: Element, rightEl: Element) {
+        const l = rect(leftEl)
+        const r = rect(rightEl)
+        const cy = (Math.max(l.y, r.y) + Math.min(l.bottom, r.bottom)) / 2
+        const leftEdgeProbe = document.elementFromPoint(l.right + 1, cy)
+        const rightEdgeProbe = document.elementFromPoint(r.x - 1, cy)
+        expect(leftEdgeProbe && leftEl.contains(leftEdgeProbe)).toBe(true)
+        expect(leftEdgeProbe && rightEl.contains(leftEdgeProbe)).toBe(false)
+        expect(rightEdgeProbe && rightEl.contains(rightEdgeProbe)).toBe(true)
+        expect(rightEdgeProbe && leftEl.contains(rightEdgeProbe)).toBe(false)
+    }
+
+    try {
+        await page.viewport(390, 844)
+        await act(async () => {
+            root.render(
+                <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                    <BaseDaemonProvider connectionOverrides={{ connectionStates: { 'synthetic-machine': 'connected' } }}>
+                        <SeedRemoteDaemons />
+                        <TransportProvider value={{ sendCommand }}>
+                            <DashboardMobileChatRoom
+                                selectedConversation={conversation}
+                                isStandalone={false}
+                                onStopCli={vi.fn()}
+                                onOpenMeshGraph={vi.fn()}
+                                actionLogs={[]}
+                                commands={commands}
+                                onBack={() => {}}
+                                onOpenNativeConversation={() => {}}
+                                onOpenMachine={() => {}}
+                                onOpenHistory={() => {}}
+                                onOpenRemote={() => {}}
+                                cliViewMode="chat"
+                                onSetCliViewMode={() => {}}
+                            />
+                        </TransportProvider>
+                    </BaseDaemonProvider>
+                </MemoryRouter>,
+            )
+        })
+        await act(async () => {
+            await Promise.resolve()
+            await Promise.resolve()
+        })
+
+        // 1. Mobile room header buttons (visual 36x36; 4px gap-1 between action buttons split to 2px each)
+        const backBtn = host.querySelector('button.mobile-room-back')!
+        const viewModeBtn = host.querySelector('.mobile-room-header-actions button[title="Switch to Terminal view"]')!
+        const stopCliBtn = host.querySelector('.mobile-room-header-actions button[title="Stop CLI process"]')!
+        const meshGraphBtn = host.querySelector('.mobile-room-header-actions button[data-testid="conversation-mesh-graph-button"]')!
+        const actionsMenuBtn = host.querySelector('.mobile-room-header-actions button[data-testid="conversation-actions-menu"]')!
+
+        assertHitExpansion(backBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 4, right: 4 })
+        assertHitExpansion(viewModeBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 4, right: 2 }, { width: 42, height: 44 })
+        assertHitExpansion(stopCliBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 }, { width: 40, height: 44 })
+        assertHitExpansion(meshGraphBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 }, { width: 40, height: 44 })
+        assertHitExpansion(actionsMenuBtn, { width: 36, height: 36 }, { top: 4, bottom: 4, left: 2, right: 4 }, { width: 42, height: 44 })
+
+        assertAdjacentPairNoOverlap(viewModeBtn, stopCliBtn)
+        assertAdjacentPairNoOverlap(stopCliBtn, meshGraphBtn)
+        assertAdjacentPairNoOverlap(meshGraphBtn, actionsMenuBtn)
+
+        // 2. Activity bar pills (visual min-height 30px -> hit height +14px >= 44px; 4px gap-1 split to 2px each)
+        const foldBtn = [...host.querySelectorAll<HTMLButtonElement>('.assistant-chat-activity-bar > button.chat-activity-toggle')][0]!
+        const execToggleBtn = host.querySelector<HTMLButtonElement>('button.assistant-execution-toggle')!
+        const watchedBadgeBtn = host.querySelector<HTMLButtonElement>('button.assistant-watched-badge')!
+        const stagedBadgeBtn = host.querySelector<HTMLButtonElement>('button.assistant-staged-badge')!
+
+        for (const pill of [foldBtn, execToggleBtn, watchedBadgeBtn, stagedBadgeBtn]) {
+            expect(getComputedStyle(pill).minHeight).toBe('30px')
+            assertHitExpansion(pill, { height: Math.round(rect(pill).height) }, { top: 7, bottom: 7, left: 2, right: 2 })
+        }
+        assertAdjacentPairNoOverlap(execToggleBtn, watchedBadgeBtn)
+        assertAdjacentPairNoOverlap(watchedBadgeBtn, stagedBadgeBtn)
+
+        // 3. Assistant execution dialog buttons (Close 32x36 -> 44x44; Turn off / Refresh / Send response height 36 -> 44)
+        await act(async () => execToggleBtn.click())
+        // With the dialog open, the 3 session-control pills sit on their own full-width row without wrapping text (exact 30px visual height).
+        expect(Math.round(rect(execToggleBtn).height)).toBe(30)
+        expect(Math.round(rect(watchedBadgeBtn).height)).toBe(30)
+        expect(Math.round(rect(stagedBadgeBtn).height)).toBe(30)
+        const execDialog = host.querySelector('.assistant-execution-panel')!
+        const execCloseBtn = execDialog.querySelector<HTMLButtonElement>('button.btn-icon[aria-label="Close"]')!
+        const execActionBtns = [...execDialog.querySelectorAll<HTMLButtonElement>('button.assistant-panel-action')]
+        const turnOffBtn = execActionBtns[0]!
+        const refreshPermBtn = execActionBtns[1]!
+        const sendDirectionBtn = [...execDialog.querySelectorAll<HTMLButtonElement>('button.btn-primary')].find(
+            b => b.textContent === 'Send response to assistant',
+        )!
+
+        assertHitExpansion(execCloseBtn, { width: 32, height: 36 }, { top: 4, bottom: 4, left: 6, right: 6 })
+        assertHitExpansion(turnOffBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        assertHitExpansion(refreshPermBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        assertAdjacentPairNoOverlap(turnOffBtn, refreshPermBtn)
+        await act(async () => sendDirectionBtn.scrollIntoView({ block: 'center' }))
+        assertHitExpansion(sendDirectionBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        await act(async () => execCloseBtn.click())
+
+        // 4. Assistant watched projects dialog buttons (Close 32x36 -> 44x44; Stop following / Remove access / Allow and follow height 36 -> 44)
+        await act(async () => watchedBadgeBtn.click())
+        await act(async () => {
+            await Promise.resolve()
+            await Promise.resolve()
+        })
+        const watchedDialog = host.querySelector('.assistant-watched-panel')!
+        const watchedCloseBtn = watchedDialog.querySelector<HTMLButtonElement>('button.btn-icon[aria-label="Close"]')!
+        const followedItemBtns = [...watchedDialog.querySelectorAll<HTMLButtonElement>('ul:not([data-testid]) li button')]
+        const stopFollowingBtn = followedItemBtns[0]!
+        const removeAccessBtn = followedItemBtns[1]!
+        const allowAndFollowBtn = watchedDialog.querySelector<HTMLButtonElement>('button[data-testid="allow-and-follow-mesh-catalog-2"]')!
+
+        assertHitExpansion(watchedCloseBtn, { width: 32, height: 36 }, { top: 4, bottom: 4, left: 6, right: 6 })
+        assertHitExpansion(stopFollowingBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        assertHitExpansion(removeAccessBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        assertAdjacentPairNoOverlap(stopFollowingBtn, removeAccessBtn)
+        await act(async () => allowAndFollowBtn.scrollIntoView({ block: 'center' }))
+        assertHitExpansion(allowAndFollowBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        await act(async () => watchedCloseBtn.click())
+
+        // 5. Assistant staged writes dialog buttons (Close 20x24 -> 44x44; Approve / Reject height 36 -> 44)
+        await act(async () => stagedBadgeBtn.click())
+        const stagedDialog = host.querySelector('.assistant-staged-panel')!
+        const stagedCloseBtn = stagedDialog.querySelector<HTMLButtonElement>('button.btn-ghost[aria-label="Close"]')!
+        const approveBtn = stagedDialog.querySelector<HTMLButtonElement>('button[data-staged-action="apply"]')!
+        const rejectBtn = stagedDialog.querySelector<HTMLButtonElement>('button[data-staged-action="discard"]')!
+
+        assertHitExpansion(stagedCloseBtn, { width: 20, height: 24 }, { top: 8, bottom: 12, left: 12, right: 12 })
+        assertHitExpansion(approveBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        assertHitExpansion(rejectBtn, { height: 36 }, { top: 4, bottom: 4, left: 2, right: 2 })
+        assertAdjacentPairNoOverlap(approveBtn, rejectBtn)
+        await act(async () => stagedCloseBtn.click())
+
+        // 6. Standalone .btn-icon (32x32 -> 44x44) and .btn-quiet (height 32 -> 44) at 390x844 vs 1280x844 desktop
+        const toolbarProbe = document.createElement('div')
+        toolbarProbe.style.cssText = 'position:fixed;bottom:16px;left:16px;z-index:50;display:flex;gap:16px;align-items:center'
+        toolbarProbe.innerHTML = '<button type="button" class="btn btn-icon" aria-label="Standalone icon">I</button><button type="button" class="btn btn-quiet">Quiet action</button>'
+        host.append(toolbarProbe)
+        const standaloneIconBtn = toolbarProbe.querySelector<HTMLButtonElement>('.btn-icon')!
+        const standaloneQuietBtn = toolbarProbe.querySelector<HTMLButtonElement>('.btn-quiet')!
+
+        assertHitExpansion(standaloneIconBtn, { width: 32, height: 32 }, { top: 6, bottom: 6, left: 6, right: 6 })
+        assertHitExpansion(standaloneQuietBtn, { height: 32 }, { top: 6, bottom: 6, left: 2, right: 2 })
+
+        // At desktop width (1280x844, fine pointer), ::after expansion is inactive
+        await page.viewport(1280, 844)
+        const iconDesktopRect = rect(standaloneIconBtn)
+        expect(Math.round(iconDesktopRect.width)).toBe(32)
+        expect(Math.round(iconDesktopRect.height)).toBe(32)
+        const outsideDesktop = document.elementFromPoint(iconDesktopRect.x + 16, iconDesktopRect.y - 4)
+        expect(outsideDesktop && standaloneIconBtn.contains(outsideDesktop)).toBe(false)
+        toolbarProbe.remove()
     } finally {
         await act(async () => root.unmount())
         host.remove()

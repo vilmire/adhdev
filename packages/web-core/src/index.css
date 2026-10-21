@@ -3472,6 +3472,36 @@
         font-size: 13px;
     }
 
+    /* Touch hit-target restoration (owner decision 2026-10-21 option B):
+       keep the calm 32px visual footprint of .btn-icon / .btn-quiet, and use an
+       out-of-flow ::after pseudo-element on coarse pointers / mobile viewports
+       so the tappable area reaches 44×44px without shifting layout. Adjacent
+       buttons in gap-1 (4px) toolbars split horizontal expansion (-2px outside
+       the 1px border-box = -3px from the padding-box). */
+    @media (max-width: 767px), (pointer: coarse) {
+        .btn-icon::after,
+        .btn-quiet::after {
+            content: '';
+            position: absolute;
+            top: -7px;
+            bottom: -7px;
+            left: -3px;
+            right: -3px;
+        }
+
+        .btn-icon::after {
+            left: -7px;
+            right: -7px;
+        }
+
+        .assistant-starters .assistant-starter::after {
+            top: -4px;
+            bottom: -4px;
+            left: -4px;
+            right: -4px;
+        }
+    }
+
     .btn-icon:hover,
     .btn-quiet:hover,
     .btn-icon[aria-expanded="true"],
@@ -4814,9 +4844,25 @@
 
     .assistant-chat-activity-bar .chat-activity-toggle,
     .assistant-session-controls .chat-activity-toggle {
+        position: relative;
+        z-index: 1;
         min-height: 30px;
         padding: 4px 10px;
         font-size: 11px;
+    }
+
+    /* Keep the calm 30px pill silhouette while restoring a ≥44px vertical touch
+       target via ::after (-8px from the padding-box = 7px outside the 1px
+       border-box); -3px horizontally (= 2px outside border-box) splits the 4px
+       gap-1 between adjacent pills in half so neighbors never overlap. */
+    .assistant-chat-activity-bar .chat-activity-toggle::after,
+    .assistant-session-controls .chat-activity-toggle::after {
+        content: '';
+        position: absolute;
+        top: -8px;
+        bottom: -8px;
+        left: -3px;
+        right: -3px;
     }
 
 
@@ -4852,9 +4898,40 @@
         margin-top: 6px;
     }
 
-    /* Touch-friendly but not boxy: the panel's own buttons are 36px. */
+    /* Touch-friendly but not boxy: the panel's own buttons are 36px visually,
+       while ::after extends their touch hit target to ≥44×44px (splitting the
+       4px gap-1 between adjacent actions to 2px outside the 1px border-box so
+       neighbors never overlap). */
     .assistant-session-controls [role="dialog"] .btn {
+        position: relative;
         min-height: 36px;
+    }
+
+    .assistant-session-controls [role="dialog"] .btn::after {
+        content: '';
+        position: absolute;
+        top: -5px;
+        bottom: -5px;
+        left: -3px;
+        right: -3px;
+    }
+
+    .assistant-session-controls [role="dialog"] .btn.btn-icon::after {
+        left: -7px;
+        right: -7px;
+    }
+
+    .assistant-session-controls [role="dialog"] .btn-ghost {
+        position: relative;
+    }
+
+    .assistant-session-controls [role="dialog"] .btn-ghost::after {
+        content: '';
+        position: absolute;
+        top: -8px;
+        bottom: -12px;
+        left: -12px;
+        right: -12px;
     }
 }
 
@@ -4863,6 +4940,7 @@
    Three classes deep so it also outranks the light-theme .btn-secondary rule. */
 .mobile-room-header-row .mobile-room-header-actions .btn,
 .mobile-room-header-row .mobile-room-header-actions button {
+    position: relative;
     width: 36px;
     height: 36px;
     min-width: 36px;
@@ -4890,6 +4968,7 @@
     color: var(--status-error, #ef4444);
 }
 .mobile-room-back {
+    position: relative;
     width: 36px;
     height: 36px;
     margin-left: -8px;
@@ -4904,4 +4983,34 @@
 .mobile-room-header-row .mobile-room-header-actions .btn svg {
     width: 18px;
     height: 18px;
+}
+
+/* Keep the plain 36×36px mobile header icon buttons while expanding touch hit
+   areas to 44px vertically and on outer edges; adjacent buttons in the 4px
+   gap-1 action strip split the inner gap in half (-2px outside the 1px
+   border-box = -3px from the padding-box) to prevent mis-taps. */
+@media (max-width: 767px), (pointer: coarse) {
+    .mobile-room-back::after {
+        content: '';
+        position: absolute;
+        inset: -6px;
+    }
+
+    .mobile-room-header-row .mobile-room-header-actions .btn::after,
+    .mobile-room-header-row .mobile-room-header-actions button::after {
+        content: '';
+        position: absolute;
+        top: -5px;
+        bottom: -5px;
+        left: -3px;
+        right: -3px;
+    }
+
+    .mobile-room-header-row .mobile-room-header-actions button:first-of-type::after {
+        left: -5px;
+    }
+
+    .mobile-room-header-row .mobile-room-header-actions button:last-of-type::after {
+        right: -5px;
+    }
 }
