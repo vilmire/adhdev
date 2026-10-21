@@ -287,7 +287,7 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
         // Hysteresis: a momentary status blip while the same modal's buttons are
         // on screen must not wipe the settle clock (Fix B widens the window for
         // an active worker mask episode so a multi-second flap cycle survives).
-        if (host.pendingAutoApprovalSince) {
+        if (host.pendingAutoApprovalSince || host.autoApproveMaskSince) {
             if (!host.autoApproveInactiveSince) host.autoApproveInactiveSince = now;
             const goneForMs = now - host.autoApproveInactiveSince;
             const continuityMs = autoApproveContinuityWindowMs(host);
@@ -436,9 +436,9 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
     host.pendingAutoApprovalSignature = '';
     host.pendingAutoApprovalSince = 0;
     host.autoApproveInactiveSince = 0;
-    // Fired (resolveModal in flight) — the episode resolved; end the mask clock.
-    host.autoApproveMaskSince = 0;
-    host.stalledApprovalNudgeEpisode = 0;
+    // Keep autoApproveMaskSince and stalledApprovalNudgeEpisode active until the
+    // approval state actually exits so a keystroke that fails to close the modal
+    // cannot restart the mask/nudge episode loop.
     host.autoApproveLastModalSeenAt = 0;
     if (host.autoApproveBusyTimer) clearTimeout(host.autoApproveBusyTimer);
     host.autoApproveBusyTimer = setTimeout(() => {

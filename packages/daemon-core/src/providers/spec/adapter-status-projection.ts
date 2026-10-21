@@ -113,11 +113,19 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
     // that collapse fired false completions while a session sat at an approval prompt.
     const modal = input.modal;
     if (state.status === 'approval') {
+        if (!modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) {
+            return {
+                ...base,
+                status: 'generating',
+                activeModal: null,
+            };
+        }
         return {
             ...base,
             status: 'waiting_approval',
             // Surface buttons when we have them; an approval state with no parsed
-            // modal this frame still stays waiting_approval (no activeModal yet).
+            // modal this frame projects generating (no activeModal) so a false or
+            // buttonless approval state never triggers waiting_approval pushes.
             // `kind` carries the semantic modal class through to the auto-approve
             // gate so a /model picker (kind='picker') is never auto-answered.
             // BUTTON-INDEX-MISMAP (Fix C.1): keep `buttons` as the label list every
@@ -128,14 +136,12 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
             // once it leaves the adapter: a consumer that has an array position can recover
             // the true FSM index without re-parsing. SpecCliAdapter.resolveModal relies on
             // the same ordered list to translate an array position to the correct FSM index.
-            activeModal: modal
-                ? {
-                    message: modal.title ?? state.label,
-                    buttons: modal.buttons.map(b => b.label),
-                    buttonMeta: modal.buttons.map(b => ({ index: b.index, label: b.label })),
-                    kind: modal.kind ?? null,
-                }
-                : null,
+            activeModal: {
+                message: modal.title ?? state.label,
+                buttons: modal.buttons.map(b => b.label),
+                buttonMeta: modal.buttons.map(b => ({ index: b.index, label: b.label })),
+                kind: modal.kind ?? null,
+            },
         };
     }
 

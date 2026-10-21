@@ -354,6 +354,8 @@ export interface RegexCondition {
     cursor_row_max?: number;
     cursor_col_min?: number;
     cursor_col_max?: number;
+    cursor_above?: boolean;
+    cursor_above_tolerance?: number;
 }
 
 export interface ChangedCondition {

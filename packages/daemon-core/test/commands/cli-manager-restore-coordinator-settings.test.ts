@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 import { registerMeshCoordinator, unregisterMeshCoordinator } from '../../src/mesh/coordinator-registry.js';
+import { isCoordinatorSpawnedHiddenWorker } from '../../src/status/builders.js';
 
 // Regression: a daemon restart re-attaches hosted CLI runtimes via
 // restoreHostedSessions. That path used to recreate instances with a bare {}
@@ -348,7 +349,9 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
       meshNodeId: 'nodeA',
       meshLastNodeId: 'nodeA',
       launchedByCoordinator: true,
+      spawnedSessionVisibility: 'hidden',
     });
+    expect(isCoordinatorSpawnedHiddenWorker(context.settings)).toBe(true);
     // Membership is not the coordinator mark, and no task envelope is resurrected.
     expect(context.settings.meshCoordinatorFor).toBeUndefined();
     expect(context.settings.meshActiveTaskId).toBeUndefined();

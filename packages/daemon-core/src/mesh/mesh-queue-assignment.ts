@@ -450,7 +450,7 @@ function buildClaimDispatchMeshContext(p: {
  * co-located session — stamps this daemon's id as meshCoordinatorDaemonId, the
  * anchor the forwarder keys on (matching what mesh_launch_session stamps).
  */
-function stampLocalClaimedSession(components: DaemonComponents, p: { meshId: string; nodeId: string; sessionId: string; providerType: string; task: MeshWorkQueueEntry; mesh: any; node: any }): void {
+export function stampLocalClaimedSession(components: DaemonComponents, p: { meshId: string; nodeId: string; sessionId: string; providerType: string; task: MeshWorkQueueEntry; mesh: any; node: any }): void {
     try {
         const inst = components.instanceManager.getInstance(p.sessionId);
         if (!inst || typeof inst.updateSettings !== 'function') return;
@@ -460,6 +460,7 @@ function stampLocalClaimedSession(components: DaemonComponents, p: { meshId: str
             meshNodeFor: p.meshId,
             meshNodeId: p.nodeId,
             launchedByCoordinator: true,
+            spawnedSessionVisibility: 'hidden',
             ...delegatedWorkerAutoApproveSettingsForNode(
                 p.mesh,
                 p.node,

@@ -29,7 +29,10 @@ export class ProviderApprovalLifecycle {
             this.inApproval = true;
             return;
         }
-        const signature = JSON.stringify([state.id, modal.kind, modal.title, modal.buttons]);
+        const titleHead = typeof modal.title === 'string'
+            ? (modal.title.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? '')
+            : '';
+        const signature = JSON.stringify([state.id, modal.kind, titleHead, modal.buttons]);
         const isNew = !this.inApproval || !this.current?.modalKey || signature !== this.signature;
         if (isNew) {
             this.current = {

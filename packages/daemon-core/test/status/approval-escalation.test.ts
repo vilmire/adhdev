@@ -7,7 +7,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { createStatusEventEmitter } from '../../src/status/status-event.js';
-import { currentApprovalEpisodeKey, isCoordinatorFirstSession, OWNER_APPROVAL_ESCALATION_MS } from '../../src/status/approval-escalation.js';
+import {
+    createApprovalEscalationGate,
+    currentApprovalEpisodeKey,
+    isCoordinatorFirstSession,
+    OWNER_APPROVAL_ESCALATION_MS,
+    OWNER_APPROVAL_SESSION_COOLDOWN_MS,
+} from '../../src/status/approval-escalation.js';
 
 const workerSettings = { launchedByCoordinator: true, meshNodeFor: 'mesh-1', spawnedSessionVisibility: 'visible' };
 const approval = (modalKey: string, extra: Record<string, unknown> = {}) => ({ type: 'tool_permission', lifecycle: 'pending', evidence: 'live', actionable: true, modalKey, resolvedAt: null, ...extra });
@@ -117,6 +123,63 @@ describe('coordinator-first owner escalation', () => {
     it('sends a non-delegated session immediately, as before', () => {
         const w = world({ settings: {} }); w.ask();
         expect(w.server).toHaveLength(1);
+        w.stop();
+    });
+
+    it('fails closed (hold() === true) when a coordinator-first session is masked to generating or has unavailable evidence', () => {
+        const escalated: any[] = [];
+        let currentState: any = {
+            status: 'generating',
+            settings: workerSettings,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval('modal:masked'),
+            },
+        };
+        const gate = createApprovalEscalationGate({
+            readState: () => currentState,
+            escalate: (_id, raw) => escalated.push(raw),
+        });
+        expect(gate.hold({ event: 'agent:waiting_approval', targetSessionId: 'w1' })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(escalated).toHaveLength(0);
+
+        currentState = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval('', { evidence: 'unavailable', modalKey: null }),
+            },
+        };
+        expect(gate.hold({ event: 'agent:waiting_approval', targetSessionId: 'w1' })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(escalated).toHaveLength(0);
+        gate.dispose();
+    });
+
+    it('enforces per-session cooldown so a worker cannot escalate twice within the cooldown window', () => {
+        const w = world();
+        w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+
+        // A new approval episode 10s later (still inside the 120s cooldown) must be held/suppressed.
+        vi.advanceTimersByTime(10_000);
+        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:second-episode') } };
+        w.ask();
+        expect(w.server).toHaveLength(1);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+
+        // Once the cooldown window has elapsed from the first escalation, a fresh episode can escalate.
+        vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS);
+        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:third-episode') } };
+        w.ask();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(2);
         w.stop();
     });
 });

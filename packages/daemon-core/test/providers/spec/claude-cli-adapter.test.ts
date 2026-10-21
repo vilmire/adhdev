@@ -173,16 +173,16 @@ describe('SpecCliAdapter — claude-cli screen fallbacks', () => {
 });
 
 describe('SpecCliAdapter — FSM state is authoritative for status', () => {
-  // Regression: an approval state whose modal buttons briefly fail to parse (PTY
-  // repaint → latestModal=null) used to collapse to 'idle', firing a false
-  // task_completed while the session sat at an approval prompt. Status must follow
-  // the FSM state.status, not the presence of a parsed modal.
-  it('keeps waiting_approval when the FSM state is approval but the modal failed to parse this frame', () => {
+  // Regression: an approval state whose modal buttons fail to parse (PTY
+  // repaint or unactionable modal → latestModal=null) must project 'generating'
+  // rather than 'idle' (which would fire a false task_completed) or
+  // 'waiting_approval' (which would emit a buttonless approval push).
+  it('projects generating (never idle or buttonless waiting_approval) when the FSM state is approval but the modal failed to parse this frame', () => {
     const adapter = makeAdapter(SINGLE_QUESTION_SCREEN);
     adapter.latestState = { id: 'approval', label: 'Approval requested', title: null, status: 'approval' };
     adapter.latestModal = null; // modal-parse miss
 
-    expect(adapter.getStatus().status).toBe('waiting_approval');
+    expect(adapter.getStatus().status).toBe('generating');
     expect(adapter.getStatus().activeModal).toBeNull();
   });
 

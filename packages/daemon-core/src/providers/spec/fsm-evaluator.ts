@@ -217,7 +217,12 @@ function evalCond(
     legacyTrace: TraceEntry[],
     stateId: string,
     signalSnapshot?: SignalSnapshot | null,
-    absence?: { viewportScreen: string; inNot: boolean },
+    absence?: {
+        viewportScreen: string;
+        viewportSections: ResolvedSection[];
+        viewportCursor: { row: number; col: number } | undefined;
+        inNot: boolean;
+    },
 ): CondResult {
     if (isAll(cond)) {
         const children = cond.all.map(c =>
@@ -291,8 +296,16 @@ function evalCond(
         // line in scrollback; `not <spinner>` stayed false for the 200-line
         // lookback and the coordinator sat in busy at an idle prompt for an
         // hour, with every queued mesh event undelivered.)
-        const hayScreen = absence?.inNot && isRegex(cond) && !(cond as any).section ? absence.viewportScreen : fullScreen;
-        const result = evaluateCondition(cond as Condition, sections, hayScreen, cursor, prevLines, legacyTrace, stateId);
+        const useViewport = Boolean(
+            absence && isRegex(cond) && (
+                (cond as any).section === 'modal'
+                || (absence.inNot && !(cond as any).section)
+            ),
+        );
+        const hayScreen = useViewport ? absence!.viewportScreen : fullScreen;
+        const haySections = useViewport ? absence!.viewportSections : sections;
+        const hayCursor = useViewport ? absence!.viewportCursor : cursor;
+        const result = evaluateCondition(cond as Condition, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         const kind = isRegex(cond) ? 'regex' : 'changed';
         const detail = isRegex(cond)
             ? `${(cond as any).section ?? '*'}~/${(cond as any).matches}/`
@@ -304,7 +317,7 @@ function evalCond(
         let matchedText: string | undefined;
         if (result && isRegex(cond)) {
             try {
-                const hay = sectionText(sections, (cond as any).section, hayScreen);
+                const hay = sectionText(haySections, (cond as any).section, hayScreen);
                 const re = new RegExp((cond as any).matches, (cond as any).flags ?? 'i');
                 const m = re.exec(hay);
                 if (m && m[0]) matchedText = m[0].replace(/\s+/g, ' ').trim().slice(0, 160);
@@ -340,8 +353,16 @@ export function evaluateFsm(
     const legacyTrace: TraceEntry[] = [];
     const lines = screenText.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
     const cleanScreen = lines.join('\n');
-    const absence = viewportStartRow && viewportStartRow > 0
-        ? { viewportScreen: lines.slice(viewportStartRow).join('\n'), inNot: false }
+    const viewportLines = viewportStartRow && viewportStartRow > 0
+        ? lines.slice(viewportStartRow)
+        : null;
+    const absence = viewportLines
+        ? {
+            viewportScreen: viewportLines.join('\n'),
+            viewportSections: resolveSections(spec.sections ?? {}, viewportLines),
+            viewportCursor: cursor ? { row: Math.max(0, cursor.row - viewportStartRow!), col: cursor.col } : undefined,
+            inNot: false,
+        }
         : undefined;
     const sections = resolveSections(spec.sections ?? {}, lines);
 

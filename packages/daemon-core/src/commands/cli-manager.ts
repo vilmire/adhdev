@@ -135,6 +135,8 @@ export interface HostedCliRuntimeDescriptor {
      */
     meshActiveAttemptRef?: { attemptId: string; generation: number };
     launchedByCoordinator?: boolean;
+    /** Preserved across restart so coordinator-spawned workers remain hidden from owner surfaces. */
+    spawnedSessionVisibility?: string;
     /** The session's launch-time auto-approve mode id, re-applied on restore. */
     autoApproveMode?: string;
     /**
@@ -409,6 +411,8 @@ export class DaemonCliManager {
             // The daemon that owns this worker's mesh work (see the descriptor field).
             ...(launchMeshNodeFor && launchMeshCoordinatorDaemonId ? { meshCoordinatorDaemonId: launchMeshCoordinatorDaemonId } : {}),
             ...(settings?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {}),
+            ...(typeof settings?.spawnedSessionVisibility === 'string' && settings.spawnedSessionVisibility.trim()
+                ? { spawnedSessionVisibility: settings.spawnedSessionVisibility.trim() } : {}),
             ...(launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {}),
             // The session's own approval mode (launch dialog / mesh policy). Restore
             // rebuilt settings from provider defaults only, so a restarted

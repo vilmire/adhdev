@@ -112,6 +112,7 @@ const approvalScreen = makeScreenWithModal(
         '  Would you like to run the following command?',
         '  › 1. Yes',
         '    2. No',
+        '  enter to submit | esc to cancel',
         '',
     ]
 );
@@ -274,13 +275,10 @@ describe('codex-cli v4 FSM', () => {
     });
 
     // ── anchor-relative window regression ───────────────────────────────────
-    // The old spec pinned `modal` to a fixed `from_bottom: 36` window. A long
-    // approval diff (the command preview spanning > 36 lines between the header
-    // question and the numbered buttons) pushes the header question far above
-    // the bottom — the fixed 36-line window would clip the header off the top
-    // of the modal, breaking both →approval detection (header regex) and title
-    // extraction. The anchor-relative modal locates the header wherever it is
-    // and bounds it at the footer, so it survives arbitrarily long diffs.
+    // sections.modal anchors on the last modal header (anchor_last: true,
+    // anchor_miss: "empty", lines: 30) so a multi-line diff preview inside the
+    // 30-line modal window keeps the header, command, buttons, and footer
+    // together while preventing stale scrollback headers from matching.
     function makeLongDiffApprovalScreen(diffLines: number): string {
         const lines: string[] = [
             '  Codex wants to run the following command:',
@@ -288,25 +286,26 @@ describe('codex-cli v4 FSM', () => {
             '  Would you like to run the following command?',
             '  $ git apply big.patch',
         ];
-        // a long command/diff preview that pushes the buttons far from header
-        for (let i = 0; i < diffLines; i++) lines.push(`  + line ${i} of a very long patch preview`);
+        // command/diff preview inside the 30-line anchored modal window
+        for (let i = 0; i < diffLines; i++) lines.push(`  + line ${i} of a patch preview`);
         lines.push('  › 1. Yes');
         lines.push('    2. No');
+        lines.push('  enter to submit | esc to cancel');
         lines.push('');
         // footer (settled prompt)
         lines.push('  tab to queue message  ·  ⏎ send');
         return lines.join('\n');
     }
 
-    it('→approval fires even when a long diff (>36 lines) separates header from buttons', () => {
-        const screen = makeLongDiffApprovalScreen(60);
+    it('→approval fires when a multi-line diff separates header from buttons within the modal window', () => {
+        const screen = makeLongDiffApprovalScreen(20);
         const row = screen.split('\n').length - 1;
         const ev = evaluateFsm(spec, 'busy', screen, { row, col: 2 }, undefined, clk(10000, 0));
         expect(ev.fired?.to).toBe('approval');
     });
 
-    it('approval title + buttons survive a long diff between header and buttons', () => {
-        const screen = makeLongDiffApprovalScreen(60);
+    it('approval title + buttons survive a multi-line diff between header and buttons', () => {
+        const screen = makeLongDiffApprovalScreen(20);
         const approval = spec.states.find(s => s.id === 'approval')!;
         const lines = screen.split('\n').map(l => l.endsWith('\r') ? l.slice(0, -1) : l);
         const sections = resolveSections(spec.sections ?? {}, lines);
@@ -317,7 +316,7 @@ describe('codex-cli v4 FSM', () => {
         // The command line rides along (approval pushes must show WHAT runs);
         // the diff body stops the detail so the title stays one command long.
         expect(title).toBe('Would you like to run the following command?\n$ git apply big.patch');
-        // Buttons are still found below the long diff.
+        // Buttons are still found below the diff.
         const rule = approval.extract!.buttons!;
         const hay = sectionText(sections, rule.section, lines.join('\n'));
         const buttons = extractButtonsFromRule(rule, hay);
@@ -551,7 +550,10 @@ describe('codex-cli v4 FSM — busy→idle bounded fallback (repaint wedge)', ()
         expect(fallbackModalNot).toBeDefined();
         for (const label of ['→approval', '→trust', '→picker']) {
             const t = spec.transitions.find(x => x.label === label)!;
-            const pattern = (t.when as any).matches as string;
+            const rawPattern = ((t.when as any).matches ?? (t.when as any).all?.[0]?.matches) as string;
+            const pattern = rawPattern
+                .replace(/^\(\?:\^\|\\n\)\\s\*\(\?:/, '')
+                .replace(/\)$/, '');
             // Every alternative of each modal transition pattern must appear in
             // the fallback veto, so a future modal pattern can't drift past it.
             for (const alt of pattern.split('|')) {

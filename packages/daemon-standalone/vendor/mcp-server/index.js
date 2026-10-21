@@ -78372,6 +78372,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
           meshNodeFor: p.meshId,
           meshNodeId: p.nodeId,
           launchedByCoordinator: true,
+          spawnedSessionVisibility: "hidden",
           ...delegatedWorkerAutoApproveSettingsForNode(
             p.mesh,
             p.node,
@@ -94240,9 +94241,20 @@ ${body}`;
       if (isRegexCondition(cond)) {
         const haystack = sectionText(sections, cond.section, fullScreen);
         let matched = false;
+        let lastMatchEnd = -1;
         try {
-          const re = new RegExp(cond.matches, cond.flags ?? "i");
+          const baseFlags = cond.flags ?? "i";
+          const re = new RegExp(cond.matches, baseFlags);
           matched = re.test(haystack);
+          if (matched && cond.cursor_above === true && cursor !== void 0) {
+            const gFlags = baseFlags.includes("g") ? baseFlags : `${baseFlags}g`;
+            const gre = new RegExp(cond.matches, gFlags);
+            let m;
+            while ((m = gre.exec(haystack)) !== null) {
+              lastMatchEnd = m.index + m[0].length;
+              if (m[0].length === 0) gre.lastIndex++;
+            }
+          }
         } catch {
           matched = false;
         }
@@ -94266,6 +94278,17 @@ ${body}`;
           if (cond.cursor_col_max !== void 0 && cursor.col > cond.cursor_col_max) {
             trace.push({ kind: "state_skip", text: `state[${stateId}] cursor col ${cursor.col} > cursor_col_max ${cond.cursor_col_max}` });
             return false;
+          }
+          if (cond.cursor_above === true && lastMatchEnd !== -1) {
+            const sec = cond.section ? sections.find((s2) => s2.id === cond.section) : void 0;
+            const baseRow = sec ? sec.fromLine : 0;
+            const relRow = (haystack.slice(0, lastMatchEnd).replace(/\n+$/, "").match(/\n/g) ?? []).length;
+            const matchRow = baseRow + relRow;
+            const tolerance = typeof cond.cursor_above_tolerance === "number" ? cond.cursor_above_tolerance : 0;
+            if (cursor.row > matchRow + tolerance) {
+              trace.push({ kind: "state_skip", text: `state[${stateId}] cursor row ${cursor.row} > matchRow ${matchRow} + tolerance ${tolerance}` });
+              return false;
+            }
           }
         }
         trace.push({ kind: "state_match", text: `state[${stateId}] regex cond ${cond.section ?? "*"}~/${cond.matches}/ matched${cursor !== void 0 ? ` cursor=(${cursor.row},${cursor.col})` : ""}` });
@@ -94624,14 +94647,19 @@ ${detail.join("\n")}` : stripped;
         return { kind: "regex", result, detail: `section_absent=${cond.section_absent}` };
       }
       if (isRegex(cond) || isChanged(cond)) {
-        const hayScreen = absence?.inNot && isRegex(cond) && !cond.section ? absence.viewportScreen : fullScreen;
-        const result = evaluateCondition(cond, sections, hayScreen, cursor, prevLines, legacyTrace, stateId);
+        const useViewport = Boolean(
+          absence && isRegex(cond) && (cond.section === "modal" || absence.inNot && !cond.section)
+        );
+        const hayScreen = useViewport ? absence.viewportScreen : fullScreen;
+        const haySections = useViewport ? absence.viewportSections : sections;
+        const hayCursor = useViewport ? absence.viewportCursor : cursor;
+        const result = evaluateCondition(cond, haySections, hayScreen, hayCursor, prevLines, legacyTrace, stateId);
         const kind = isRegex(cond) ? "regex" : "changed";
         const detail = isRegex(cond) ? `${cond.section ?? "*"}~/${cond.matches}/` : `cursor_above=${cond.cursor_above} changed=${cond.changed}`;
         let matchedText;
         if (result && isRegex(cond)) {
           try {
-            const hay = sectionText(sections, cond.section, hayScreen);
+            const hay = sectionText(haySections, cond.section, hayScreen);
             const re = new RegExp(cond.matches, cond.flags ?? "i");
             const m = re.exec(hay);
             if (m && m[0]) matchedText = m[0].replace(/\s+/g, " ").trim().slice(0, 160);
@@ -94650,7 +94678,13 @@ ${detail.join("\n")}` : stripped;
       const legacyTrace = [];
       const lines = screenText.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
       const cleanScreen = lines.join("\n");
-      const absence = viewportStartRow && viewportStartRow > 0 ? { viewportScreen: lines.slice(viewportStartRow).join("\n"), inNot: false } : void 0;
+      const viewportLines = viewportStartRow && viewportStartRow > 0 ? lines.slice(viewportStartRow) : null;
+      const absence = viewportLines ? {
+        viewportScreen: viewportLines.join("\n"),
+        viewportSections: resolveSections(spec.sections ?? {}, viewportLines),
+        viewportCursor: cursor ? { row: Math.max(0, cursor.row - viewportStartRow), col: cursor.col } : void 0,
+        inNot: false
+      } : void 0;
       const sections = resolveSections(spec.sections ?? {}, lines);
       const outgoing = outgoingTransitions(spec, currentStateId);
       const transitions = [];
@@ -161103,7 +161137,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           this.inApproval = true;
           return;
         }
-        const signature = JSON.stringify([state2.id, modal.kind, modal.title, modal.buttons]);
+        const titleHead = typeof modal.title === "string" ? modal.title.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? "" : "";
+        const signature = JSON.stringify([state2.id, modal.kind, titleHead, modal.buttons]);
         const isNew = !this.inApproval || !this.current?.modalKey || signature !== this.signature;
         if (isNew) {
           this.current = {
@@ -163278,12 +163313,11 @@ trust_level = "trusted"
       const hay = sectionText(sections, rule.section, fullScreen);
       const minCount = rule.min_count ?? 2;
       let buttons = extractButtonsFromRule(rule, hay);
-      if (buttons.length < minCount && rule.section) {
-        const whole = extractButtonsFromRule(rule, fullScreen);
-        if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
-      } else if (buttons.length >= minCount && rule.section && !buttons.some((b) => b.current)) {
-        const whole = extractButtonsFromRule(rule, fullScreen);
-        if (whole.length >= minCount && whole.some((b) => b.current)) buttons = whole;
+      if (buttons.length === 0) {
+        if (state2.modal) {
+          warnParseMiss(state2.id, `state '${state2.id}' is modal but its extract.buttons pattern matched 0 row(s), below min_count=${minCount} \u2014 the on-screen modal cannot be approved until the rule covers this screen`);
+        }
+        return null;
       }
       if (rule.cursor_marker && buttons.length > 0 && !buttons.some((b) => b.current)) {
         const relaxed = extractButtonsFromRule({ ...rule, cursor_marker: void 0 }, hay);
@@ -163294,6 +163328,9 @@ trust_level = "trusted"
             buttons = buttons.map((b) => b.index === cursorIndex ? { ...b, current: true } : b);
           }
         }
+      }
+      if (rule.select_mode === "arrow_keys" && !buttons.some((b) => b.current)) {
+        return null;
       }
       if (buttons.length < minCount) {
         if (state2.modal) {
@@ -164173,12 +164210,9 @@ trust_level = "trusted"
         const screen = this.adapter.snapshot();
         const lines = screen.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
         const sections = resolveSections(this.spec.sections ?? {}, lines);
-        const modalLines = state2.modal ? this.scrollbackLines() : lines;
-        const modalSections = state2.modal ? resolveSections(this.spec.sections ?? {}, modalLines) : sections;
-        const modalFullScreen = modalLines.join("\n");
-        const modal = deriveModal(state2, modalSections, modalFullScreen, (id4, reason) => this.warnModalParseMiss(id4, reason));
+        const modal = deriveModal(state2, sections, screen, (id4, reason) => this.warnModalParseMiss(id4, reason));
         const controls = this.deriveControls(state2.id);
-        const title = modal?.title ?? deriveTitle(state2, modalSections, modalFullScreen);
+        const title = modal?.title ?? deriveTitle(state2, sections, screen);
         const next = {
           // status is derived from the FSM state itself (statusForState), NOT from
           // whether a modal was parsed this frame. A modal state whose buttons briefly
@@ -165816,11 +165850,19 @@ ${text4}` : text4;
       if (!state2) return { ...base, status: "starting" };
       const modal = input.modal;
       if (state2.status === "approval") {
+        if (!modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) {
+          return {
+            ...base,
+            status: "generating",
+            activeModal: null
+          };
+        }
         return {
           ...base,
           status: "waiting_approval",
           // Surface buttons when we have them; an approval state with no parsed
-          // modal this frame still stays waiting_approval (no activeModal yet).
+          // modal this frame projects generating (no activeModal) so a false or
+          // buttonless approval state never triggers waiting_approval pushes.
           // `kind` carries the semantic modal class through to the auto-approve
           // gate so a /model picker (kind='picker') is never auto-answered.
           // BUTTON-INDEX-MISMAP (Fix C.1): keep `buttons` as the label list every
@@ -165831,12 +165873,12 @@ ${text4}` : text4;
           // once it leaves the adapter: a consumer that has an array position can recover
           // the true FSM index without re-parsing. SpecCliAdapter.resolveModal relies on
           // the same ordered list to translate an array position to the correct FSM index.
-          activeModal: modal ? {
+          activeModal: {
             message: modal.title ?? state2.label,
             buttons: modal.buttons.map((b) => b.label),
             buttonMeta: modal.buttons.map((b) => ({ index: b.index, label: b.label })),
             kind: modal.kind ?? null
-          } : null
+          }
         };
       }
       if (state2.status === "waiting_external") {
@@ -169566,7 +169608,7 @@ ${JSON.stringify(replies)}
       const autoApproveActive = adapterStatus?.status === "waiting_approval" && host.shouldUsePtyAutoApprove();
       if (!autoApproveActive) {
         host.lastAutoApprovalSignature = "";
-        if (host.pendingAutoApprovalSince) {
+        if (host.pendingAutoApprovalSince || host.autoApproveMaskSince) {
           if (!host.autoApproveInactiveSince) host.autoApproveInactiveSince = now;
           const goneForMs = now - host.autoApproveInactiveSince;
           const continuityMs = autoApproveContinuityWindowMs(host);
@@ -169655,8 +169697,6 @@ ${buttons.join("\n")}`;
       host.pendingAutoApprovalSignature = "";
       host.pendingAutoApprovalSince = 0;
       host.autoApproveInactiveSince = 0;
-      host.autoApproveMaskSince = 0;
-      host.stalledApprovalNudgeEpisode = 0;
       host.autoApproveLastModalSeenAt = 0;
       if (host.autoApproveBusyTimer) clearTimeout(host.autoApproveBusyTimer);
       host.autoApproveBusyTimer = setTimeout(() => {
@@ -174499,7 +174539,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         restoredSettings.meshNodeId = recordMeshNodeId;
         restoredSettings.meshLastNodeId = recordMeshNodeId;
       }
-      if (record6.launchedByCoordinator === true) restoredSettings.launchedByCoordinator = true;
+      if (record6.launchedByCoordinator === true) {
+        restoredSettings.launchedByCoordinator = true;
+        if (!restoredSettings.meshCoordinatorFor) {
+          const visibility = typeof record6.spawnedSessionVisibility === "string" ? record6.spawnedSessionVisibility.trim() : "";
+          restoredSettings.spawnedSessionVisibility = visibility || "hidden";
+        }
+      } else if (typeof record6.spawnedSessionVisibility === "string" && record6.spawnedSessionVisibility.trim()) {
+        restoredSettings.spawnedSessionVisibility = record6.spawnedSessionVisibility.trim();
+      }
       if (typeof record6.autoApproveMode === "string" && record6.autoApproveMode.trim()) {
         restoredSettings.autoApproveMode = record6.autoApproveMode.trim();
       }
@@ -174938,6 +174986,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
             // The daemon that owns this worker's mesh work (see the descriptor field).
             ...launchMeshNodeFor && launchMeshCoordinatorDaemonId ? { meshCoordinatorDaemonId: launchMeshCoordinatorDaemonId } : {},
             ...settings2?.launchedByCoordinator === true ? { launchedByCoordinator: true } : {},
+            ...typeof settings2?.spawnedSessionVisibility === "string" && settings2.spawnedSessionVisibility.trim() ? { spawnedSessionVisibility: settings2.spawnedSessionVisibility.trim() } : {},
             ...launchAutoLaunchedForQueueTaskId ? { autoLaunchedForQueueTaskId: launchAutoLaunchedForQueueTaskId } : {},
             // The session's own approval mode (launch dialog / mesh policy). Restore
             // rebuilt settings from provider defaults only, so a restarted
@@ -181161,6 +181210,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           meshCoordinatorDaemonId: typeof record6.meta?.meshCoordinatorDaemonId === "string" && record6.meta.meshCoordinatorDaemonId.trim() ? String(record6.meta.meshCoordinatorDaemonId).trim() : void 0,
           meshActiveAttemptRef: readPersistedAttemptRef(record6.meta?.meshActiveAttemptRef),
           launchedByCoordinator: record6.meta?.launchedByCoordinator === true ? true : void 0,
+          spawnedSessionVisibility: typeof record6.meta?.spawnedSessionVisibility === "string" && record6.meta.spawnedSessionVisibility.trim() ? String(record6.meta.spawnedSessionVisibility).trim() : void 0,
           autoApproveMode: typeof record6.meta?.autoApproveMode === "string" && record6.meta.autoApproveMode.trim() ? String(record6.meta.autoApproveMode).trim() : void 0,
           // Phase E launch provenance written at spawn; validated on restore
           // (buildRestoredLaunchRecord), so it is passed through raw here.
@@ -188477,21 +188527,21 @@ ${notice.notice}${supersededHint}`;
     init_builders();
     init_logger();
     var OWNER_APPROVAL_ESCALATION_MS = 6e4;
+    var OWNER_APPROVAL_SESSION_COOLDOWN_MS = 12e4;
     function isCoordinatorFirstSession(settings2) {
       return settings2?.launchedByCoordinator === true && typeof settings2.meshNodeFor === "string" && !!settings2.meshNodeFor.trim();
     }
     function currentApprovalEpisodeKey(state2) {
       if (!state2) return null;
+      if (state2.status === "generating" || state2.activeChat?.status === "generating") return null;
       const waiting2 = state2.status === "waiting_approval" || state2.activeChat?.status === "waiting_approval";
       if (!waiting2) return null;
-      const approval = state2.activeChat?.providerApproval;
-      if (approval) {
-        if (approval.lifecycle !== "pending" || approval.resolvedAt != null || approval.evidence !== "live") return null;
-        return typeof approval.modalKey === "string" && approval.modalKey ? `modal:${approval.modalKey}` : null;
-      }
-      const modal = state2.activeChat?.activeModal;
-      if (!modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) return null;
-      return `legacy:${JSON.stringify([String(modal.message ?? ""), modal.buttons.map(String)])}`;
+      const approval = state2.activeChat?.providerApproval ?? state2.providerApproval;
+      if (!approval) return null;
+      const pending = approval.lifecycle === "pending" || approval.status === "awaiting_approval";
+      if (!pending || approval.resolvedAt != null || approval.evidence !== "live") return null;
+      const modalKey = typeof approval.modalKey === "string" ? approval.modalKey.trim() : "";
+      return modalKey ? `modal:${modalKey}` : null;
     }
     var MAX_ESCALATED_REMEMBERED = 512;
     var ESCALATION_RECHECK_MS = 5e3;
@@ -188501,6 +188551,7 @@ ${notice.notice}${supersededHint}`;
     }
     function createApprovalEscalationGate(deps) {
       const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
+      const cooldownMs = deps.cooldownMs ?? OWNER_APPROVAL_SESSION_COOLDOWN_MS;
       const setTimer = deps.setTimer ?? ((fn, ms3) => {
         const t = setTimeout(fn, ms3);
         t.unref?.();
@@ -188510,6 +188561,7 @@ ${notice.notice}${supersededHint}`;
       const now = deps.now ?? Date.now;
       const held = /* @__PURE__ */ new Map();
       const escalated = /* @__PURE__ */ new Set();
+      const lastEscalatedAt = /* @__PURE__ */ new Map();
       const fire = (sessionId) => {
         const entry = held.get(sessionId);
         if (!entry) return;
@@ -188533,8 +188585,12 @@ ${notice.notice}${supersededHint}`;
         }
         held.delete(sessionId);
         if (escalated.has(`${sessionId}\0${currentKey}`)) return;
+        const nowMs2 = now();
+        const lastAt = lastEscalatedAt.get(sessionId);
+        if (lastAt !== void 0 && nowMs2 - lastAt < cooldownMs) return;
         escalated.add(`${sessionId}\0${entry.key}`);
         escalated.add(`${sessionId}\0${currentKey}`);
+        lastEscalatedAt.set(sessionId, nowMs2);
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
           const oldest = escalated.values().next().value;
           if (oldest === void 0) break;
@@ -188556,8 +188612,10 @@ ${notice.notice}${supersededHint}`;
           }
           if (!state2 || !isCoordinatorFirstSession(state2.settings ?? null)) return false;
           const key4 = currentApprovalEpisodeKey(state2);
-          if (!key4) return false;
+          if (!key4) return true;
           if (escalated.has(`${sessionId}\0${key4}`)) return true;
+          const lastAt = lastEscalatedAt.get(sessionId);
+          if (lastAt !== void 0 && now() - lastAt < cooldownMs) return true;
           const existing = held.get(sessionId);
           if (existing?.key === key4) {
             existing.raw = rawEvent;
@@ -188576,11 +188634,13 @@ ${notice.notice}${supersededHint}`;
             held.delete(sessionId);
           }
           for (const k of [...escalated]) if (k.startsWith(`${sessionId}\0`)) escalated.delete(k);
+          lastEscalatedAt.delete(sessionId);
         },
         dispose() {
           for (const entry of held.values()) clearTimer(entry.timer);
           held.clear();
           escalated.clear();
+          lastEscalatedAt.clear();
         },
         get heldCount() {
           return held.size;
