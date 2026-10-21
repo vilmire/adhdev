@@ -68,8 +68,8 @@ export function currentApprovalEpisodeKey(state: SessionStateLike): string | nul
 
 export interface ApprovalEscalationGateDeps {
     readState(sessionId: string): SessionStateLike;
-    /** Re-project and send the held raw event on escalation. */
-    escalate(sessionId: string, rawEvent: Record<string, unknown>): void;
+    /** Re-project and send the held raw event on escalation. Return false when delivery was rejected. */
+    escalate(sessionId: string, rawEvent: Record<string, unknown>): boolean | void;
     delayMs?: number;
     cooldownMs?: number;
     now?: () => number;
@@ -95,16 +95,57 @@ function stillWaiting(state: SessionStateLike): boolean {
     return !!state && (state.status === 'waiting_approval' || state.activeChat?.status === 'waiting_approval');
 }
 
+/**
+ * Rebuild the escalated event from the CURRENT validated episode in `state`
+ * rather than forwarding stale fields from `entry.raw` (which may have been
+ * captured while `approvalEvidence: 'unavailable'` or an earlier episode key).
+ */
+function buildEscalatedEvent(
+    rawEvent: Record<string, unknown>,
+    state: SessionStateLike,
+): Record<string, unknown> {
+    const approval = state?.activeChat?.providerApproval ?? state?.providerApproval;
+    const activeModal = state?.activeChat?.activeModal;
+    const rebuilt: Record<string, unknown> = { ...rawEvent };
+    if (approval) {
+        const modalKey = typeof approval.modalKey === 'string' ? approval.modalKey.trim() : '';
+        if (modalKey) {
+            rebuilt.modalKey = modalKey;
+        } else {
+            delete rebuilt.modalKey;
+        }
+        if (approval.evidence === 'live' || approval.evidence === 'cached' || approval.evidence === 'unavailable') {
+            rebuilt.approvalEvidence = approval.evidence;
+        } else {
+            delete rebuilt.approvalEvidence;
+        }
+    }
+    if (activeModal) {
+        if (typeof activeModal.message === 'string' && activeModal.message.trim()) {
+            rebuilt.modalMessage = activeModal.message;
+        }
+        if (Array.isArray(activeModal.buttons)) {
+            const buttons = activeModal.buttons.filter(
+                (button): button is string => typeof button === 'string' && button.trim().length > 0,
+            );
+            if (buttons.length > 0) {
+                rebuilt.modalButtons = buttons;
+            }
+        }
+    }
+    return rebuilt;
+}
+
 export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): ApprovalEscalationGate {
     const delayMs = deps.delayMs ?? OWNER_APPROVAL_ESCALATION_MS;
     const cooldownMs = deps.cooldownMs ?? OWNER_APPROVAL_SESSION_COOLDOWN_MS;
     const setTimer = deps.setTimer ?? ((fn, ms) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); return t; });
     const clearTimer = deps.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
-    const now = deps.now ?? Date.now;
+    const now = deps.now ?? (() => Date.now());
     // firstHeldAt caps the total hold per session: a modal that keeps minting new
     // episode keys (a tall diff scrolling its buttons in and out) must not keep
     // restarting the window and starve the owner push.
-    const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
+    const held = new Map<string, { key: string; pendingKeys: Set<string>; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
     const escalated = new Set<string>();
     const lastEscalatedAt = new Map<string, number>();
 
@@ -136,12 +177,36 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         if (lastAt !== undefined && nowMs - lastAt < cooldownMs) {
             const cooldownRemaining = Math.max(1, cooldownMs - (nowMs - lastAt));
             entry.key = currentKey;
+            entry.pendingKeys.add(currentKey);
             entry.timer = setTimer(() => fire(sessionId), cooldownRemaining);
             return;
         }
+        const rebuilt = buildEscalatedEvent(entry.raw, state);
+        LOG.info('StatusEvent', `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1000)}s unresolved`);
+        let delivered = false;
+        try {
+            delivered = deps.escalate(sessionId, rebuilt) !== false;
+        } catch (error) {
+            LOG.warn('StatusEvent', `approval escalation delivery failed session=${sessionId}: ${(error as Error)?.message ?? error}`);
+            delivered = false;
+        }
+        if (!delivered) {
+            if (entry.rechecks < ESCALATION_MAX_RECHECKS) {
+                entry.rechecks += 1;
+                entry.key = currentKey;
+                entry.pendingKeys.add(currentKey);
+                entry.timer = setTimer(() => fire(sessionId), ESCALATION_RECHECK_MS);
+            } else {
+                held.delete(sessionId);
+            }
+            return;
+        }
         held.delete(sessionId);
-        // A replaced but still-pending episode is still an unanswered request
-        // from the same worker: escalate it rather than retiring silently.
+        // Mark the episode (and any coalesced replaced episodes from this window)
+        // as escalated ONLY after a successful delivery attempt.
+        for (const k of entry.pendingKeys) {
+            if (k) escalated.add(`${sessionId}\u0000${k}`);
+        }
         if (entry.key) escalated.add(`${sessionId}\u0000${entry.key}`);
         escalated.add(`${sessionId}\u0000${currentKey}`);
         lastEscalatedAt.set(sessionId, nowMs);
@@ -150,8 +215,6 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             if (oldest === undefined) break;
             escalated.delete(oldest);
         }
-        LOG.info('StatusEvent', `approval escalated to owner session=${sessionId} after ${Math.round(delayMs / 1000)}s unresolved`);
-        deps.escalate(sessionId, entry.raw);
     };
 
     return {
@@ -166,6 +229,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             if (key && escalated.has(`${sessionId}\u0000${key}`)) return true;
             const existing = held.get(sessionId);
             if (existing) {
+                if (key) existing.pendingKeys.add(key);
                 if (!key || existing.key === key) {
                     existing.raw = rawEvent;
                     return true;
@@ -178,6 +242,8 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             }
             const nowMs = now();
             const firstHeldAt = existing?.firstHeldAt ?? nowMs;
+            const pendingKeys = existing?.pendingKeys ?? new Set<string>();
+            if (key) pendingKeys.add(key);
             if (existing) clearTimer(existing.timer);
             const lastAt = lastEscalatedAt.get(sessionId);
             const cooldownRemaining = lastAt !== undefined ? Math.max(0, lastAt + cooldownMs - nowMs) : 0;
@@ -185,6 +251,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             const waitMs = Math.max(holdRemaining, cooldownRemaining);
             held.set(sessionId, {
                 key: key ?? '',
+                pendingKeys,
                 raw: rawEvent,
                 firstHeldAt,
                 rechecks: 0,

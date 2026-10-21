@@ -468,14 +468,16 @@ export class IdeProviderInstance implements ProviderInstance {
             } else if (agentStatus === 'waiting_approval') {
                 if (!this.generatingStartedAt.has(agentKey)) this.generatingStartedAt.set(agentKey, now);
                 const msg = chatData.activeModal?.message;
+                const modalKey = `modal:${crypto.randomUUID()}`;
                 this.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now, ideType: this.type,
                     modalMessage: msg,
                     modalButtons: chatData.activeModal?.buttons,
+                    modalKey,
                 });
                 if (this.turnEvidencePort) {
                     emitSuspension(this.turnEvidencePort, {
-                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, modal: 'approval',
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, modal: 'approval', modalKey,
                     });
                 }
             } else if (agentStatus === 'idle' && (lastStatus === 'generating' || lastStatus === 'waiting_approval')) {

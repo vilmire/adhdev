@@ -15,13 +15,16 @@ import {
     OWNER_APPROVAL_SESSION_COOLDOWN_MS,
 } from '../../src/status/approval-escalation.js';
 
+const EP_1 = 'modal:11111111-1111-4111-8111-111111111111';
+const EP_2 = 'modal:22222222-2222-4222-8222-222222222222';
+const EP_RECOVERED = 'modal:33333333-3333-4333-8333-333333333333';
 const workerSettings = { launchedByCoordinator: true, meshNodeFor: 'mesh-1', spawnedSessionVisibility: 'visible' };
 const approval = (modalKey: string, extra: Record<string, unknown> = {}) => ({ type: 'tool_permission', lifecycle: 'pending', evidence: 'live', actionable: true, modalKey, resolvedAt: null, ...extra });
 
 let state: any;
-function world(opts: { settings?: Record<string, unknown> } = {}) {
+function world(opts: { settings?: Record<string, unknown>; activeChat?: Record<string, unknown> } = {}) {
     state = { status: 'waiting_approval', settings: opts.settings ?? workerSettings,
-        activeChat: { status: 'waiting_approval', activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] }, providerApproval: approval('modal:1') } };
+        activeChat: opts.activeChat ?? { status: 'waiting_approval', activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] }, providerApproval: approval(EP_1) } };
     const bus = createSessionLifecycleBus();
     const dashboard: any[] = [];
     const server: any[] = [];
@@ -29,7 +32,7 @@ function world(opts: { settings?: Record<string, unknown> } = {}) {
         instanceManager: { getInstance: (id: string) => id === 'w1' ? { getState: () => state } : undefined },
         sendDashboard: (p) => dashboard.push(p), sendServer: (p) => server.push(p),
     });
-    const ask = () => bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'codex-cli', modalMessage: 'Run npm test?', modalButtons: ['Yes', 'No'], timestamp: 1 } } as any);
+    const ask = (extra: Record<string, unknown> = {}) => bus.emit({ kind: 'provider_event', sessionId: 'w1', event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'codex-cli', modalMessage: 'Run npm test?', modalButtons: ['Yes', 'No'], modalKey: EP_1, approvalEvidence: 'live', timestamp: 1, ...extra } } as any);
     return { bus, dashboard, server, stop, ask };
 }
 
@@ -169,8 +172,8 @@ describe('coordinator-first owner escalation', () => {
         // A new approval episode 10s later (still inside the 120s cooldown) must be held during the cooldown window
         // and then escalate automatically once the cooldown expires without needing a new provider event.
         vi.advanceTimersByTime(10_000);
-        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval('modal:second-episode') } };
-        w.ask();
+        state = { ...state, activeChat: { ...state.activeChat, providerApproval: approval(EP_2) } };
+        w.ask({ modalKey: EP_2 });
         expect(w.server).toHaveLength(1);
         vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
         expect(w.server).toHaveLength(1);
@@ -178,31 +181,83 @@ describe('coordinator-first owner escalation', () => {
         // Once the remaining cooldown window elapses from the first escalation, the held second episode escalates automatically.
         vi.advanceTimersByTime(OWNER_APPROVAL_SESSION_COOLDOWN_MS - OWNER_APPROVAL_ESCALATION_MS - 10_000);
         expect(w.server).toHaveLength(2);
+        expect(w.server[1]).toMatchObject({ modalKey: EP_2, approvalEvidence: 'live' });
         w.stop();
     });
 
-    it('escalates an approval that was momentarily unavailable at event time once live evidence settles without a new provider event', () => {
+    it('rebuilds the escalated event from the current validated episode (not stale entry.raw) when evidence starts unavailable and recovers late', () => {
         const w = world({
             activeChat: {
                 status: 'waiting_approval',
-                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                activeModal: { message: 'Initial transient frame', buttons: [] },
                 providerApproval: approval('', { evidence: 'unavailable', modalKey: null }),
             },
         });
-        w.ask();
+        // Initial raw event had unavailable evidence, no buttons, and no valid modalKey
+        w.ask({
+            modalMessage: 'Initial transient frame',
+            modalButtons: [],
+            modalKey: undefined,
+            approvalEvidence: 'unavailable',
+        });
         expect(w.server).toHaveLength(0);
+
         // Settles to live evidence 500ms later with no second provider_event
         vi.advanceTimersByTime(500);
         state = {
             ...state,
             activeChat: {
-                ...state.activeChat,
-                providerApproval: approval('modal:recovered-after-repaint'),
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?\n$ npm test', buttons: ['1. Yes, proceed', '2. No'] },
+                providerApproval: approval(EP_RECOVERED, { evidence: 'live' }),
             },
         };
         vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
         expect(w.server).toHaveLength(1);
+        // The escalated server payload carries the recovered live UUID modalKey, evidence, and buttons
+        expect(w.server[0]).toMatchObject({
+            event: 'agent:waiting_approval',
+            targetSessionId: 'w1',
+            modalKey: EP_RECOVERED,
+            approvalEvidence: 'live',
+            modalButtons: ['1. Yes, proceed', '2. No'],
+        });
+        expect(w.server[0].modalMessage).toContain('$ npm test');
         w.stop();
+    });
+
+    it('marks an episode as escalated ONLY after a successful delivery attempt and retries on transient failure', () => {
+        const currentState: any = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: {
+                status: 'waiting_approval',
+                activeModal: { message: 'Run npm test?', buttons: ['Yes', 'No'] },
+                providerApproval: approval(EP_1),
+            },
+        };
+        let attempts = 0;
+        const delivered: any[] = [];
+        const gate = createApprovalEscalationGate({
+            readState: () => currentState,
+            escalate: (_id, raw) => {
+                attempts += 1;
+                if (attempts === 1) return false;
+                delivered.push(raw);
+                return true;
+            },
+        });
+        expect(gate.hold({ event: 'agent:waiting_approval', targetSessionId: 'w1' })).toBe(true);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(attempts).toBe(1);
+        expect(delivered).toHaveLength(0);
+
+        // Retries after ESCALATION_RECHECK_MS (5s) because attempt 1 returned false
+        vi.advanceTimersByTime(5_000);
+        expect(attempts).toBe(2);
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({ modalKey: EP_1, approvalEvidence: 'live' });
+        gate.dispose();
     });
 });
 

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 /**
  * FSM status-transition tick (Phase 4 of the completion-engine rewrite —
  * verbatim move of CliProviderInstance.detectStatusTransition).
@@ -506,10 +506,11 @@ export function runStatusTransitionTick(host: StatusTransitionHost, adapterCause
                     `approval_request:${now}`,
                     now,
                 );
-                // Legacy adapters have no modal identity; persist only a digest of
-                // their live fingerprint, never prompt text or button labels.
+                // Legacy adapters without ProviderApprovalLifecycle still mint a
+                // random opaque UUID per approval episode — never derive modalKey
+                // from prompt text or button labels.
                 const approvalModalKey = adapterStatus?.providerApproval?.modalKey
-                    ?? `modal-digest:${createHash('sha256').update(approvalFingerprint).digest('hex')}`;
+                    ?? `modal:${randomUUID()}`;
                 const approvalEvidence = adapterStatus?.providerApproval?.evidence;
                 host.pushEvent({
                     event: 'agent:waiting_approval', chatTitle, timestamp: now,

@@ -296,6 +296,12 @@ function evalCond(
         // line in scrollback; `not <spinner>` stayed false for the 200-line
         // lookback and the coordinator sat in busy at an idle prompt for an
         // hour, with every queued mesh event undelivered.)
+        // Evaluate modal/footer/StatusLine conditions and unscoped `not` conditions
+        // against the active viewport rather than the 200-line scrollback guard frame
+        // so scrolled-off nested approval text in scrollback cannot trigger a modal transition.
+        // TODO(mission 3e9bae23): Nested approval text still visible inside the active
+        // viewport is a known limitation deferred to the ghostty native viewport API
+        // (exact cursor/composer region).
         const useViewport = Boolean(
             absence && isRegex(cond) && (
                 (cond as any).section === 'modal'

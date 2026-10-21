@@ -5,6 +5,7 @@
  * CDP webview discovery + agent stream collection moved here.
  */
 
+import { randomUUID } from 'node:crypto';
 import { flattenContent, type ProviderModule } from './contracts.js';
 import type { ProviderInstance, ProviderState, ProviderEvent, InstanceContext } from './provider-instance.js';
 import { StatusMonitor } from './status-monitor.js';
@@ -224,6 +225,7 @@ export class ExtensionProviderInstance implements ProviderInstance {
                 }
             } else if (agentStatus === 'waiting_approval') {
                 if (!this.generatingStartedAt) this.generatingStartedAt = now;
+                const modalKey = `modal:${randomUUID()}`;
                 this.pushEvent({
                     event: 'agent:waiting_approval',
                     chatTitle: this.resolveChatTitle(data),
@@ -234,10 +236,11 @@ export class ExtensionProviderInstance implements ProviderInstance {
                     extensionId: this.extensionId || this.type,
                     modalMessage: data?.activeModal?.message,
                     modalButtons: data?.activeModal?.buttons,
+                    modalKey,
                 });
                 if (this.turnEvidencePort) {
                     emitSuspension(this.turnEvidencePort, {
-                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, modal: 'approval',
+                        sessionId: this.instanceId, observedBy: 'ide_poll', source: 'fsm_edge', at: now, modal: 'approval', modalKey,
                     });
                 }
             } else if (agentStatus === 'idle' && (this.lastAgentStatus === 'generating' || this.lastAgentStatus === 'waiting_approval')) {

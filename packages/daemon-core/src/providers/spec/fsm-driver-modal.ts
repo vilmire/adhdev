@@ -36,11 +36,40 @@ export function deriveModal(
     const hay = sectionText(sections, rule.section, fullScreen);
     const minCount = rule.min_count ?? 2;
     let buttons = extractButtonsFromRule(rule, hay);
-    if (buttons.length === 0) {
-        if (state.modal) {
-            warnParseMiss(state.id, `state '${state.id}' is modal but its extract.buttons pattern matched 0 row(s), below min_count=${minCount} — the on-screen modal cannot be approved until the rule covers this screen`);
-        }
-        return null;
+    if (buttons.length < minCount && rule.section) {
+        // Whole-screen fallback: the modal `section` can resolve too short
+        // when a spec's `until` anchor clips the section BEFORE the choices
+        // (e.g. a claude-cli approval whose command preview carries a leading
+        // shell-redirect line — `>/dev/null 2>&1` — that an over-broad
+        // `[…>…]` modal-terminator anchor mistakes for the input prompt,
+        // stranding the `❯ 1. Yes / 2. No` buttons below the cut and wedging
+        // auto-approve forever). The buttons are still present in the full
+        // buffer, so re-extract from it. `lastContiguousNumberedBlock`
+        // (inside extractButtonsFromRule) already isolates the real
+        // bottom-most choice block from any stray body-numbered lines the
+        // wider scope pulls in, so this cannot bind the wrong rows. Guards
+        // it to the buttons-under-count case only, so a correctly-scoped
+        // spec pays nothing.
+        //
+        // The wider scope must still show a real choice block, i.e. a row with
+        // the cursor marker. A list the assistant WROTE has none, yet it was
+        // bound here (2026-10-01, claude-cli): in the ~1s between answering an
+        // approval and approval→vanished, the modal is re-derived from a screen
+        // whose dialog is gone, and the answer's "1. … 2. … 3." block became the
+        // buttons (title: the footer status line) — pressing one typed a digit
+        // into the prompt.
+        const whole = extractButtonsFromRule(rule, fullScreen);
+        if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
+    } else if (buttons.length >= minCount && rule.section && !buttons.some(b => b.current)) {
+        // Same rule from the other side: the section resolved to a numbered list
+        // with no cursor row while a real choice block is on screen. The modal
+        // anchor's "line followed by `1.`" candidate also matches an assistant's
+        // own numbered list in scrollback, and a `❯` prompt line between that
+        // list and a later picker ends the section early (2026-10-01, claude-cli
+        // AskUserQuestion): the picker reported the old list as its buttons for
+        // the rest of the session.
+        const whole = extractButtonsFromRule(rule, fullScreen);
+        if (whole.length >= minCount && whole.some(b => b.current)) buttons = whole;
     }
     // APPROVAL-DEADLOCK cursor fallback. A spec narrows `cursor_marker` to
     // keep an assistant blockquote (`> 1. quoted item`) from stealing the
@@ -72,9 +101,6 @@ export function deriveModal(
                 buttons = buttons.map(b => (b.index === cursorIndex ? { ...b, current: true } : b));
             }
         }
-    }
-    if (rule.select_mode === 'arrow_keys' && !buttons.some(b => b.current)) {
-        return null;
     }
     if (buttons.length < minCount) {
         // Same diagnosability contract as the no-rule branch above: report
