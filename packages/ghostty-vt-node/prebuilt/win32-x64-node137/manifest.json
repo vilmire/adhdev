@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "platform": "win32",
+  "arch": "x64",
+  "apiLevel": 2,
+  "sourceDigest": "f62a58448855fa1951208601db8095f85cc584b6f3bbffd24f161a951237cf33",
+  "ghosttyRevision": "d4a38c8661453026bd1b1bb022ba2c37b347adce",
+  "napiVersion": 8,
+  "builtWithNode": "v22.14.0",
+  "files": {
+    "ghostty-vt.dll": {
+      "sha256": "47f4234d3229d40a616bb6aae79c5a23ec8381dbbaee876714e6ac3407823dc8",
+      "size": 1305600
+    },
+    "ghostty_vt_node.node": {
+      "sha256": "351b95636880be14507690db28b31495d8feb673f6881e7fba3e4f4d42407ffd",
+      "size": 56832
+    }
+  }
+}
