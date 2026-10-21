@@ -296,7 +296,7 @@ describe('remote-hosted project (relay to the host)', () => {
         expect(args.text).toContain('Fix the RSS feed\n\nAdded by the user\'s assistant (not the user\'s words):\nShort.');
         expect(args.text).toContain('## Attached procedure: release-steps');
         expect(relay.openThread).toHaveBeenCalledWith('mesh_b');
-        expect(relay.remoteSent).toHaveBeenCalledWith('mesh_b', 'plain:host-coord:9');
+        expect(relay.remoteSent).toHaveBeenCalledWith('mesh_b', 'plain:host-coord:9', 'host-coord');
         expect(relay.recordSkillAttaches).toHaveBeenCalledWith('mesh_b', 1);
         expect(execute).not.toHaveBeenCalled(); // nothing runs on this daemon
     });

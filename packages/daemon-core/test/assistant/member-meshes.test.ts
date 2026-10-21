@@ -156,7 +156,7 @@ describe('a member daemon with no meshes.json entry', () => {
         expect(target).toBe(HOST_CORE);
         expect(command).toBe('assistant_remote_project');
         expect(payload).toMatchObject({ meshId: MESH, op: 'send', text: 'Fix the flaky test', clientId: 'm1' });
-        expect(remoteSent).toHaveBeenCalledWith(MESH, null);
+        expect(remoteSent).toHaveBeenCalledWith(MESH, null, 'coord-1');
     });
 
     it('after a restart (host record + push subscription only) asks the host once for the record, then lists and resolves it by slug', async () => {
