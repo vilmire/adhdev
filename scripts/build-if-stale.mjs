@@ -73,8 +73,9 @@
 // an existing directory with a package.json, and must be one of the workspaces
 // npm resolves for this cwd (realpaths of the root package.json `workspaces`
 // globs). Names, globs, multiple selectors and non-workspace dirs are rejected
-// BEFORE any claim or spawn. The canonical relative directory is what npm gets,
-// and the claim, key and dist all derive from that one realpath.
+// BEFORE any claim or spawn. The build then runs the package's own script IN
+// that canonical directory (not `npm -w`, which can match more than one
+// package), and the claim, key and dist all derive from that one realpath.
 //
 // Recovery (stale claim): a crashed run leaves
 // <oss>/node_modules/.cache/adhdev-build-freshness/<pkg>.json.building and the
@@ -299,7 +300,8 @@ function workspaceDirs(cwd) {
 
 /**
  * Resolve ONE directory selector to its canonical workspace directory, or
- * throw. Returns { pkgDir: realpath, npmSpec: canonical path relative to cwd }.
+ * throw. Returns { pkgDir: realpath, npmSpec: canonical path relative to cwd
+ * (used only as a label — the build runs IN pkgDir, see runBuild) }.
  */
 export function resolveWorkspaceSelector(spec, cwd) {
   const reject = (why) => new Error(`build-if-stale: unsupported selector ${JSON.stringify(spec)}: ${why}. Pass exactly one workspace DIRECTORY relative to ${cwd} (e.g. oss/packages/mesh-shared).`);
@@ -389,12 +391,22 @@ function releaseClaim(pkgDir, token) {
   if (ownsClaim(pkgDir, token)) rmSync(claimPathFor(pkgDir), { force: true });
 }
 
-function runBuild(npm, spec, cwd, env) {
+/**
+ * Build EXACTLY the claimed package (round-5 P1): run its own `build` script
+ * with cwd = the canonical package directory, never through `npm -w <x>`.
+ * `-w` is a filter that matches a package NAME or a path INCLUDING children,
+ * so one accepted directory selector could build more than the claimed
+ * package (nested workspaces `packages/a` + `packages/a/sub`; a directory
+ * `pkg` plus another workspace NAMED `pkg`). `--workspaces=false` keeps npm
+ * from re-entering workspace mode. npm run-script still puts every ancestor
+ * node_modules/.bin on PATH, so hoisted tsup/esbuild/tsc resolve as before.
+ */
+function runBuild(npm, pkgDir, label, env) {
   return new Promise((resolve, reject) => {
     // Node 24 on Windows refuses to spawn .cmd shims without a shell; args are fixed and space-free.
-    const child = spawn(npm, ['run', 'build', '-w', spec], { stdio: 'inherit', cwd, env, shell: process.platform === 'win32', windowsHide: true });
+    const child = spawn(npm, ['run', 'build', '--workspaces=false'], { stdio: 'inherit', cwd: pkgDir, env, shell: process.platform === 'win32', windowsHide: true });
     child.on('error', reject);
-    child.on('close', (code, signal) => (code === 0 ? resolve() : reject(new Error(`npm run build -w ${spec} exited ${code ?? signal}`))));
+    child.on('close', (code, signal) => (code === 0 ? resolve() : reject(new Error(`npm run build (in ${label}) exited ${code ?? signal}`))));
   });
 }
 
@@ -420,7 +432,6 @@ export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, np
     if (seen.has(t.pkgDir)) throw new Error(`build-if-stale: selector ${JSON.stringify(t.spec)} names a package already selected in this call (${t.npmSpec})`);
     seen.add(t.pkgDir);
   }
-  const npmCwd = canonicalDir(cwd);
   const results = [];
   for (const { spec, pkgDir, npmSpec } of targets) {
     const reason = await staleReason(pkgDir, env);
@@ -445,7 +456,7 @@ export async function buildWorkspacesIfStale(specs, { cwd, env = process.env, np
       log(`[build-if-stale] build ${spec} (${reason})`);
       const keyBefore = await computeBuildKey(pkgDir, env);
       rmSync(stampPathFor(pkgDir), { force: true });
-      await runBuild(npm, npmSpec, npmCwd, env);
+      await runBuild(npm, pkgDir, npmSpec, env);
       const distDir = path.join(pkgDir, 'dist');
       const digestAfterBuild = digestDist(distDir);
       const keyAfter = await computeBuildKey(pkgDir, env);
