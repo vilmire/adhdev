@@ -26,8 +26,8 @@ import * as fs from 'fs';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
-import { killRefineProcessTree, runScheduledRefinePhases, spawnRefineProcessGroup } from './mesh-refine-lanes.js';
-import type { RefineLaneCommandHandle, RefineLaneCommandOutcome, ScheduledRefineRunReport } from './mesh-refine-lanes.js';
+import { runScheduledRefinePhases, spawnRefineProcessGroup, terminateRefineProcessGroup } from './mesh-refine-lanes.js';
+import type { RefineGroupChild, RefineLaneCommandHandle, RefineLaneCommandOutcome, ScheduledRefineRunReport } from './mesh-refine-lanes.js';
 import { planScheduledRefineRun } from './refine-schedule.js';
 import { randomUUID } from 'crypto';
 // ★B1: type-only — the gate never emits, it only carries the caller's channel.
@@ -817,7 +817,7 @@ function selectRefineCommandsToRun(
 interface RefineCommandControl {
     processGroup?: boolean;
     env?: Record<string, string>;
-    onSpawn?: (child: { pid?: number } | undefined) => void;
+    onSpawn?: (child: RefineGroupChild | undefined) => void;
 }
 
 async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: MeshRefineValidationCommand, cwd: string, resolvedCommand: string, control?: RefineCommandControl): Promise<{ stdout?: string; stderr?: string }> {
@@ -836,18 +836,22 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
         let timer: ReturnType<typeof setTimeout> | undefined;
         let idleTimedOut = false;
         let childRef: any;
+        // REFINE-LANES: group termination started by the idle timeout; awaited
+        // before the gate result is returned (never fire-and-forget).
+        let groupCleanup: Promise<{ escaped: unknown[] }> | undefined;
         const resetTimer = () => {
             if (timer) clearTimeout(timer);
             if (idleTimeoutMs > 0) {
                 timer = setTimeout(() => {
                     idleTimedOut = true;
-                    if (control?.processGroup && childRef?.pid) { void killRefineProcessTree(childRef.pid); return; }
+                    if (control?.processGroup && childRef) { groupCleanup = terminateRefineProcessGroup(childRef); return; }
                     try { childRef?.kill?.('SIGTERM'); } catch { /* ignore */ }
                 }, idleTimeoutMs);
             }
         };
-        const child = (control?.processGroup ? spawnRefineProcessGroup : execFileFn)(spawn.file, spawn.args, execOptions, (error: any, stdout: string, stderr: string) => {
+        const child = (control?.processGroup ? spawnRefineProcessGroup : execFileFn)(spawn.file, spawn.args, execOptions, async (error: any, stdout: string, stderr: string) => {
             if (timer) clearTimeout(timer);
+            const cleanup = groupCleanup ? await groupCleanup : undefined;
             if (error || idleTimedOut) {
                 const err: any = error || new Error(`TIMEOUT: validation command exceeded ${idleTimeoutMs}ms without output`);
                 err.stdout = err.stdout ?? stdout;
@@ -860,6 +864,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
                         err.message = `TIMEOUT: validation command timed out after ${idleTimeoutMs}ms without output (${err.message || 'killed'})`;
                     }
                 }
+                if (cleanup?.escaped.length) err.escapedProcesses = cleanup.escaped;
                 reject(err);
                 return;
             }
@@ -881,6 +886,8 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
 function refineExecFailureExtras(error: any) {
     const timedOut = error?.timedOut === true || error?.code === 'ETIMEDOUT' || error?.killed === true || /timed out/i.test(String(error?.message || ''));
     return {
+        // REFINE-LANES: processes that left a terminated gate's group — reported, never signalled.
+        ...(Array.isArray(error?.escapedProcesses) && error.escapedProcesses.length ? { escapedProcesses: error.escapedProcesses } : {}),
         exitCode: typeof error?.code === 'number' ? error.code : null,
         signal: typeof error?.signal === 'string' ? error.signal : null,
         timedOut,

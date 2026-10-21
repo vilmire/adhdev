@@ -61136,7 +61136,20 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       if (!Array.isArray(value) || !value.every((v) => typeof v === "string" && v.trim() && !/[\n\r\0]/.test(v))) {
         return { error: "must be an array of non-empty path strings" };
       }
-      return { list: [...new Set(value.map((v) => v.trim().replace(/\/+$/, "")))] };
+      const list2 = [];
+      for (const raw of value) {
+        const v = raw.trim().replace(/\/+$/, "");
+        if (v === REFINE_SCHEDULE_WILDCARD) {
+          list2.push(v);
+          continue;
+        }
+        const segments = v.split("/");
+        if (!v || v.startsWith("/") || /^[A-Za-z]:/.test(v) || v.includes("\\") || segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
+          return { error: `path "${raw}" is not a canonical repo-relative POSIX path (no leading '/', drive letter, backslash, or '.', '..', empty segments)` };
+        }
+        list2.push(v);
+      }
+      return { list: [...new Set(list2)] };
     }
     function overlaps(a, b) {
       if (a === REFINE_SCHEDULE_WILDCARD || b === REFINE_SCHEDULE_WILDCARD) return true;
@@ -95750,81 +95763,118 @@ ${tail}`;
         REFINE_GATE_ENV_ALLOWLIST = /* @__PURE__ */ new Set([]);
       }
     });
-    function listDescendantPids(rootPid) {
+    function listProcessesPs() {
       return new Promise((resolve54) => {
-        (0, import_node_child_process11.execFile)("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8", windowsHide: true, timeout: 1e4 }, (error, stdout) => {
+        (0, import_node_child_process11.execFile)("ps", ["-A", "-o", "pid=,ppid=,pgid=,command="], { encoding: "utf8", windowsHide: true, timeout: 1e4, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
           if (error || typeof stdout !== "string") {
             resolve54([]);
             return;
           }
-          const children = /* @__PURE__ */ new Map();
+          const rows = [];
           for (const line of stdout.split("\n")) {
-            const [pid, ppid] = line.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
-            if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue;
-            const list2 = children.get(ppid) || [];
-            list2.push(pid);
-            children.set(ppid, list2);
+            const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+            if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), command: m[4] });
           }
-          const out = [];
-          const queue = [rootPid];
-          while (queue.length) {
-            const next = queue.shift();
-            for (const child of children.get(next) || []) {
-              if (!out.includes(child) && child !== rootPid) {
-                out.push(child);
-                queue.push(child);
-              }
-            }
-          }
-          resolve54(out);
+          resolve54(rows);
         });
       });
     }
-    function signalPid(pid, signal) {
-      try {
-        process.kill(pid, signal);
-      } catch {
-      }
+    function leaderUnreaped(child) {
+      return child.exitCode === null && child.signalCode === null;
     }
-    async function killRefineProcessTree(pid, platform10 = process.platform) {
-      if (!Number.isInteger(pid) || pid <= 0) return;
-      if (platform10 === "win32") {
-        await new Promise((resolve54) => {
-          (0, import_node_child_process11.execFile)("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, timeout: 15e3 }, () => resolve54());
+    function waitForExit(child, ms3) {
+      if (!leaderUnreaped(child)) return Promise.resolve(true);
+      return new Promise((resolve54) => {
+        const timer = setTimeout(() => resolve54(!leaderUnreaped(child)), ms3);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve54(true);
         });
-        return;
+      });
+    }
+    async function terminateRefineProcessGroup(child, deps = {}) {
+      const platform10 = deps.platform ?? process.platform;
+      const signals = [];
+      const pid = child.pid;
+      if (!pid || !Number.isInteger(pid) || pid <= 1) return { signals, escaped: [] };
+      if (platform10 === "win32") {
+        if (leaderUnreaped(child)) {
+          const taskkill = deps.taskkill ?? ((p) => new Promise((resolve54) => {
+            (0, import_node_child_process11.execFile)("taskkill", ["/pid", String(p), "/T", "/F"], { windowsHide: true, timeout: 15e3 }, () => resolve54());
+          }));
+          signals.push("SIGKILL");
+          await taskkill(pid);
+          await waitForExit(child, KILL_WAIT_MS);
+        }
+        return { signals, escaped: [] };
       }
-      const descendants = await listDescendantPids(pid);
-      signalPid(-pid, "SIGTERM");
-      for (const child of descendants) signalPid(child, "SIGTERM");
-      await new Promise((resolve54) => setTimeout(resolve54, KILL_GRACE_MS));
-      const late = await listDescendantPids(pid);
-      signalPid(-pid, "SIGKILL");
-      for (const child of /* @__PURE__ */ new Set([...descendants, ...late])) signalPid(child, "SIGKILL");
+      const signal = deps.signal ?? ((p, s2) => {
+        process.kill(p, s2);
+      });
+      const listProcesses = deps.listProcesses ?? listProcessesPs;
+      const before = await listProcesses();
+      const descendants = /* @__PURE__ */ new Map();
+      const queue = [pid];
+      while (queue.length) {
+        const parent = queue.shift();
+        for (const row2 of before) {
+          if (row2.ppid === parent && row2.pid !== pid && !descendants.has(row2.pid)) {
+            descendants.set(row2.pid, row2);
+            queue.push(row2.pid);
+          }
+        }
+      }
+      const sendToGroup = (s2) => {
+        if (!leaderUnreaped(child)) return;
+        try {
+          signal(-pid, s2);
+          signals.push(s2);
+        } catch {
+        }
+      };
+      sendToGroup("SIGTERM");
+      if (!await waitForExit(child, deps.graceMs ?? KILL_GRACE_MS)) {
+        sendToGroup("SIGKILL");
+        await waitForExit(child, KILL_WAIT_MS);
+      }
+      const after = await listProcesses();
+      const escaped = [];
+      for (const row2 of after) {
+        const seen2 = descendants.get(row2.pid);
+        if (!seen2 || seen2.command !== row2.command) continue;
+        escaped.push({ pid: row2.pid, pgid: row2.pgid, command: row2.command, reason: row2.pgid === pid ? "outlived_leader" : "left_group" });
+      }
+      return { signals, escaped };
     }
     function spawnRefineProcessGroup(file, args, options, callback) {
       const { maxBuffer, timeout: _timeout, encoding: _encoding, ...spawnOptions } = options;
       const limit = typeof maxBuffer === "number" && maxBuffer > 0 ? maxBuffer : Infinity;
       const child = (0, import_node_child_process11.spawn)(file, args, { ...spawnOptions, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "";
-      let stderr = "";
+      const out = { stdout: "", stderr: "" };
+      const bytes = { stdout: 0, stderr: 0 };
       let settled = false;
       let overflow;
+      let cleanup;
       const finish = (error) => {
         if (settled) return;
         settled = true;
-        callback(error, stdout, stderr);
+        void Promise.resolve(cleanup).then(() => callback(error, out.stdout, out.stderr));
       };
       const collect = (which) => (chunk) => {
         if (overflow) return;
-        const text4 = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-        if (which === "stdout") stdout += text4;
-        else stderr += text4;
-        if (stdout.length > limit || stderr.length > limit) {
+        const length = Buffer.byteLength(chunk, "utf8");
+        bytes[which] += length;
+        if (bytes[which] > limit) {
+          const truncatedLen = limit - (bytes[which] - length);
+          out[which] += chunk.slice(0, truncatedLen);
           overflow = Object.assign(new Error(`${which} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
-          if (child.pid) void killRefineProcessTree(child.pid);
+          cleanup = terminateRefineProcessGroup(child);
+          return;
         }
+        out[which] += chunk;
       };
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
       child.stdout?.on("data", collect("stdout"));
       child.stderr?.on("data", collect("stderr"));
       child.on("error", (error) => finish(error));
@@ -95838,7 +95888,7 @@ ${tail}`;
           return;
         }
         const error = new Error(`Command failed: ${[file, ...args].join(" ")}
-${stderr}`);
+${out.stderr}`);
         error.code = code;
         error.signal = signal;
         error.killed = !!signal;
@@ -95846,14 +95896,20 @@ ${stderr}`);
       });
       return child;
     }
-    async function runScheduledRefinePhases(phases, runCommand2, killTree = killRefineProcessTree) {
+    async function runScheduledRefinePhases(phases, runCommand2, terminate = (child) => terminateRefineProcessGroup(child)) {
       let aborted = false;
       const live = /* @__PURE__ */ new Set();
       const kills = [];
+      const escaped = [];
+      const cancel = (child) => {
+        kills.push(terminate(child).then((result) => {
+          escaped.push(...result.escaped);
+        }, () => void 0));
+      };
       const abort = () => {
         if (aborted) return;
         aborted = true;
-        for (const pid of live) kills.push(killTree(pid));
+        for (const child of live) cancel(child);
       };
       const report = { aborted: false, phases: [] };
       for (const phase of phases) {
@@ -95872,23 +95928,23 @@ ${stderr}`);
                 outcome = "cancelled";
                 break;
               }
-              let pid;
+              let attached;
               const handle = {
                 get aborted() {
                   return aborted;
                 },
                 attach(child) {
-                  if (!child?.pid) return;
-                  pid = child.pid;
-                  live.add(pid);
-                  if (aborted) kills.push(killTree(pid));
+                  if (!child) return;
+                  attached = child;
+                  live.add(child);
+                  if (aborted) cancel(child);
                 }
               };
               let result;
               try {
                 result = await runCommand2(candidate, lane.env, handle);
               } finally {
-                if (pid !== void 0) live.delete(pid);
+                if (attached) live.delete(attached);
               }
               if (result === "failed") {
                 outcome = "failed";
@@ -95909,15 +95965,18 @@ ${stderr}`);
       }
       await Promise.all(kills);
       report.aborted = aborted;
+      if (escaped.length) report.escaped = escaped;
       return report;
     }
     var import_node_child_process11;
     var KILL_GRACE_MS;
+    var KILL_WAIT_MS;
     var init_mesh_refine_lanes = __esm2({
       "src/mesh/mesh-refine-lanes.ts"() {
         "use strict";
         import_node_child_process11 = require("child_process");
         KILL_GRACE_MS = 3e3;
+        KILL_WAIT_MS = 5e3;
       }
     });
     function isRefineGeneratedVendorBundlePath(candidatePath) {
@@ -97365,13 +97424,14 @@ ${asText(streams.stderr)}
         let timer;
         let idleTimedOut = false;
         let childRef;
+        let groupCleanup;
         const resetTimer = () => {
           if (timer) clearTimeout(timer);
           if (idleTimeoutMs > 0) {
             timer = setTimeout(() => {
               idleTimedOut = true;
-              if (control?.processGroup && childRef?.pid) {
-                void killRefineProcessTree(childRef.pid);
+              if (control?.processGroup && childRef) {
+                groupCleanup = terminateRefineProcessGroup(childRef);
                 return;
               }
               try {
@@ -97381,8 +97441,9 @@ ${asText(streams.stderr)}
             }, idleTimeoutMs);
           }
         };
-        const child = (control?.processGroup ? spawnRefineProcessGroup : execFileFn)(spawn10.file, spawn10.args, execOptions, (error, stdout, stderr) => {
+        const child = (control?.processGroup ? spawnRefineProcessGroup : execFileFn)(spawn10.file, spawn10.args, execOptions, async (error, stdout, stderr) => {
           if (timer) clearTimeout(timer);
+          const cleanup = groupCleanup ? await groupCleanup : void 0;
           if (error || idleTimedOut) {
             const err = error || new Error(`TIMEOUT: validation command exceeded ${idleTimeoutMs}ms without output`);
             err.stdout = err.stdout ?? stdout;
@@ -97395,6 +97456,7 @@ ${asText(streams.stderr)}
                 err.message = `TIMEOUT: validation command timed out after ${idleTimeoutMs}ms without output (${err.message || "killed"})`;
               }
             }
+            if (cleanup?.escaped.length) err.escapedProcesses = cleanup.escaped;
             reject(err);
             return;
           }
@@ -97415,6 +97477,8 @@ ${asText(streams.stderr)}
     function refineExecFailureExtras(error) {
       const timedOut = error?.timedOut === true || error?.code === "ETIMEDOUT" || error?.killed === true || /timed out/i.test(String(error?.message || ""));
       return {
+        // REFINE-LANES: processes that left a terminated gate's group — reported, never signalled.
+        ...Array.isArray(error?.escapedProcesses) && error.escapedProcesses.length ? { escapedProcesses: error.escapedProcesses } : {},
         exitCode: typeof error?.code === "number" ? error.code : null,
         signal: typeof error?.signal === "string" ? error.signal : null,
         timedOut,

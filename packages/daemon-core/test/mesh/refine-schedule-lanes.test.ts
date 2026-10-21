@@ -83,6 +83,23 @@ describe('validation.schedule — config validation', () => {
         expect(result.errors).toEqual([]);
     });
 
+    it('rejects non-canonical path declarations that could alias a canonical path past the overlap check', () => {
+        for (const bad of ['pkg/../shared', './shared', 'shared//dist', '/abs/shared', 'C:/repo/shared', 'shared\\dist', '..', '.']) {
+            const result = validateMeshRefineConfig(config(
+                [cmd('w', { writes: [bad] }), cmd('r', { writes: [], reads: ['shared'] })],
+                { phases: [{ id: 'p', lanes: [{ id: 'a', commands: ['w'] }, { id: 'b', commands: ['r'] }] }] },
+            ));
+            expect(result.valid, bad).toBe(false);
+            expect(result.rejectedCommands.map(r => String(r.reason)).join('\n'), bad).toMatch(/not a canonical repo-relative POSIX path/);
+        }
+        // Canonical spellings (trailing '/' trimmed) are accepted and still overlap-checked.
+        const ok = validateMeshRefineConfig(config(
+            [cmd('w', { writes: ['shared/dist/'] }), cmd('r', { writes: [], reads: ['shared'] })],
+            { phases: [{ id: 'p', lanes: [{ id: 'a', commands: ['w'] }, { id: 'b', commands: ['r'] }] }] },
+        ));
+        expect(ok.errors.join('\n')).toMatch(/schedule refused: in phase "p", "w" \(lane a\) writes shared\/dist/);
+    });
+
     it('planScheduledRefineRun drops scope-skipped commands and empty lanes but keeps every runnable one', () => {
         const result = validateMeshRefineConfig(config(
             [cmd('a', { writes: [] }), cmd('b', { writes: [] }), cmd('c')],
@@ -157,14 +174,14 @@ setTimeout(() => { log('${id} end ' + Date.now()); process.exit(${exitCode}); },
         expect(log.find(l => l[0] === 's1' && l[1] === 'start')![4]).toBe('-');
     });
 
-    it.skipIf(process.platform === 'win32')('first failure cancels the other lane and kills its whole process tree', async () => {
+    it.skipIf(process.platform === 'win32')('first failure cancels the other lane: its process group dies, an escaped (setsid) grandchild is reported, never signalled', async () => {
         const ws = workspace({
             'fail.js': timed('fail', 300, 3),
             // Lane S: npm-like wrapper → child → detached grandchild that would outlive a plain kill.
             'slow.js': `
 const { spawn } = require('child_process');
 const fs = require('fs');
-const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { detached: true, stdio: 'ignore' });
 fs.writeFileSync(__dirname + '/grandchild.pid', String(g.pid));
 const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'inherit' });
 fs.writeFileSync(__dirname + '/child.pid', String(c.pid));
@@ -195,11 +212,17 @@ setTimeout(() => {}, 60000);
         expect(summary.commandsRun.some((c: any) => c.displayCommand === 'node after.js')).toBe(false);
         expect(existsSync(join(ws, 'log.txt')) && readFileSync(join(ws, 'log.txt'), 'utf-8').includes('after start')).toBe(false);
 
+        // signal 0 only probes existence; nothing is delivered.
         const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-        for (const file of ['child.pid', 'grandchild.pid']) {
-            const pid = Number(readFileSync(join(ws, file), 'utf-8'));
-            expect(alive(pid), `${file} ${pid} survived the lane cancel`).toBe(false);
-        }
+        const childPid = Number(readFileSync(join(ws, 'child.pid'), 'utf-8'));
+        const grandchildPid = Number(readFileSync(join(ws, 'grandchild.pid'), 'utf-8'));
+        // The in-group child died with the group signal.
+        expect(alive(childPid), `in-group child ${childPid} survived the lane cancel`).toBe(false);
+        // The setsid'ed grandchild left the group: not signalled (it ends on its own
+        // 4 s lifeline), but reported on the run.
+        expect(summary.schedule.report.escaped).toEqual(expect.arrayContaining([
+            expect.objectContaining({ pid: grandchildPid, reason: 'left_group' }),
+        ]));
     }, 30_000);
 
     it('a failing prepare command fails validation before any gate runs and is the first failed command', async () => {

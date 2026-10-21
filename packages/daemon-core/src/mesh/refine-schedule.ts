@@ -62,13 +62,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Validate + normalize a `reads`/`writes` declaration. undefined = undeclared. */
+/**
+ * Validate a `reads`/`writes` declaration. undefined = undeclared.
+ *
+ * Paths must be CANONICAL repo-relative POSIX paths (or the lone '*'): no
+ * leading '/', no drive letter, no backslash, no '.'/'..'/empty segments. A
+ * non-canonical spelling (`pkg/../shared`, `.\\shared`, `/abs/shared`) would
+ * name the same tree as a canonical one yet slip past the prefix-overlap
+ * check, so it is rejected rather than guessed at. A trailing '/' is trimmed.
+ */
 export function normalizeRefineDistList(value: unknown): { list?: string[]; error?: string } {
     if (value === undefined) return {};
     if (!Array.isArray(value) || !value.every(v => typeof v === 'string' && v.trim() && !/[\n\r\0]/.test(v))) {
         return { error: 'must be an array of non-empty path strings' };
     }
-    return { list: [...new Set((value as string[]).map(v => v.trim().replace(/\/+$/, '')))] };
+    const list: string[] = [];
+    for (const raw of value as string[]) {
+        const v = raw.trim().replace(/\/+$/, '');
+        if (v === REFINE_SCHEDULE_WILDCARD) { list.push(v); continue; }
+        const segments = v.split('/');
+        if (!v || v.startsWith('/') || /^[A-Za-z]:/.test(v) || v.includes('\\') || segments.some(seg => seg === '' || seg === '.' || seg === '..')) {
+            return { error: `path "${raw}" is not a canonical repo-relative POSIX path (no leading '/', drive letter, backslash, or '.', '..', empty segments)` };
+        }
+        list.push(v);
+    }
+    return { list: [...new Set(list)] };
 }
 
 function overlaps(a: string, b: string): boolean {
