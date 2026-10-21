@@ -13,6 +13,9 @@ import type {DaemonComponents} from '../boot/daemon-components.js';
 const sha=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const fail=(s:string):never=>{throw Error(s);};
+// A whole-machine `ps -A -ww` census outgrows Node's 1 MiB default buffer on hosts
+// running agent CLIs whose argv carries a full system prompt (ENOBUFS = refusal).
+const MAINTENANCE_CENSUS_MAX_BUFFER=256*1024*1024;
 export async function authenticatedActivationControl(components:DaemonComponents,request:ActorObservationChallenge){
  const auth=authorizeMaintenanceCollection(request,'control',{allowOpen:true}),s=auth.state,b=request.body as any;
  if(!b||!['inspect','prepare','commit','verify-committed','open','verify-open','peer'].includes(b.action))fail('maintenance_control_operation_invalid');
@@ -79,7 +82,7 @@ export async function authenticatedActivationControl(components:DaemonComponents
   const drain=await withMaintenanceObservation(state=>collectTargetDrain(components,state,auth.root,request.nonce));
   if(!drain.mcp.observed||MAINTENANCE_DRAIN_CHANNELS.some(k=>!drain.channels[k]?.observed||drain.channels[k].pending.length))fail('maintenance_control_complete_drain_required');
   const tool=c.tools?.ps;if(!tool||sha(fs.readFileSync(tool.path))!==tool.sha256||!Array.isArray(c.mcpEntrypoints)||!c.mcpEntrypoints.length)fail('maintenance_control_native_mcp_port_required');
-  const census=execFileSync(tool.path,['-A','-ww','-o','pid=,uid=,lstart=,command='],{encoding:'utf8',timeout:5000,windowsHide:true,env:{...process.env,LC_ALL:'C'}}).split('\n').filter(Boolean).map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.+)$/);if(!m)fail('maintenance_control_native_census_unknown');return {pid:Number(m![1]),birth:m![3].replace(/\s+/g,' '),uid:Number(m![2]),command:m![4]};});
+  const census=execFileSync(tool.path,['-A','-ww','-o','pid=,uid=,lstart=,command='],{encoding:'utf8',timeout:5000,maxBuffer:MAINTENANCE_CENSUS_MAX_BUFFER,windowsHide:true,env:{...process.env,LC_ALL:'C'}}).split('\n').filter(Boolean).map(line=>{const m=line.trim().match(/^(\d+)\s+(\d+)\s+(\w+\s+\w+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.+)$/);if(!m)fail('maintenance_control_native_census_unknown');return {pid:Number(m![1]),birth:m![3].replace(/\s+/g,' '),uid:Number(m![2]),command:m![4]};});
   const native=census.filter(p=>c.mcpEntrypoints.some((e:any)=>p.command.split(/\s+/).includes(e.path))||p.command.includes('mcp-server')&&p.command.includes(auth.root));
   if(native.length!==drain.mcp.members.length||native.some(p=>!drain.mcp.members.some(m=>m.observed&&m.identity.pid===p.pid&&m.identity.birth===p.birth&&c.mcpEntrypoints.some((e:any)=>e.path===m.identity.entryPath&&p.command.startsWith(e.nodePath+' '+e.path)))))fail('maintenance_control_native_mcp_membership_changed');
   pinBuild();auth.reply({preflight:true},state);
