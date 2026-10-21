@@ -12,6 +12,7 @@ import { pendingTerminalEvents } from '../../src/assistant/terminal-watch-runtim
 import { assistantRemoteHandlers } from '../../src/commands/high-family/assistant-remote.js';
 import { setAssistantProjectPortsForTests } from '../../src/assistant/assistant-project-ports.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
+import { markVerifiedMeshSender } from '../../src/commands/mesh-sender.js';
 const dbs: ReturnType<typeof memDb>[] = [];
 afterEach(() => { vi.restoreAllMocks(); setAssistantProjectPortsForTests(null); dbs.splice(0).forEach(db => db.close()); });
 function producer(scope: 'mesh_queue' | 'mesh_direct', end: 'genuine' | 'weak' | 'failed' | 'cancelled') {
@@ -55,12 +56,16 @@ it('weak uncommitted evidence does not appear; migration duplicates and old rece
 it('actual remote terminal operation carries reducer evidence through member normalization with authority and receipt fences', async () => {
     const { db } = producer('mesh_queue', 'genuine');
     vi.spyOn(MeshRuntimeStore, 'getInstance').mockReturnValue({ db } as any);
-    const hostMesh = { id: 'm1' };
+    // The member daemon is on the host's worker roster; a sender outside it is a follower and needs an ACL grant.
+    const hostMesh = { id: 'm1', nodes: [{ id: 'n-member', daemonId: 'member-daemon' }] };
     setAssistantProjectPortsForTests(() => ({ listMeshes: () => [hostMesh], isHostedHere: () => true, selfDaemonId: () => 'host' }) as any);
     const handler = assistantRemoteHandlers.assistant_remote_project;
     const store = new TerminalWatchStore(db); const subscription: any = store.subscribe('member', 'task', 't1', 'assistant');
     const ports: any = { listMeshes: () => [{ id: 'member' }], isHostedHere: () => false, remoteHost: () => ({ reachable: true, hostMeshId: 'm1', hostDaemonId: 'host' }),
-        callHost: async (_remote: any, op: string, args: any) => ({ ok: true, result: await handler({ components: () => ({}) } as any, { meshId: 'm1', op, ...args }) }) };
+        callHost: async (_remote: any, op: string, args: any) => {
+            const hostArgs = { meshId: 'm1', op, ...args }; markVerifiedMeshSender(hostArgs, 'member-daemon');
+            return { ok: true, result: await handler({ components: () => ({}) } as any, hostArgs) };
+        } };
     const events = await pendingTerminalEvents(store, ports, store.get(subscription.watchId)!);
     expect(events[0]).toMatchObject({ eventId: 'a1#committed', meshId: 'member', sourceMeshId: 'm1', strength: 'genuine', evidenceLevel: 'strong' });
     store.acknowledge(subscription.watchId, events[0]!.eventId);

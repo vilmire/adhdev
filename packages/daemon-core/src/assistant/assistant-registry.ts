@@ -23,6 +23,7 @@ import { join } from 'path';
 import {
     ASSISTANT_ACCOUNT_SLOT,
     canonicalDaemonId,
+    daemonIdsEquivalent,
     followedRemoteProjectKey,
     sanitizeRemoteRepoIdentity,
     type AssistantOwnerBindingReceipt,
@@ -511,7 +512,7 @@ export class AssistantRegistry {
                 error: 'Local assistant owner binding receipt is missing or corrupt; explicit owner reconciliation is required.',
             };
         }
-        if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || binding.daemonId !== canonicalSelf) {
+        if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || !daemonIdsEquivalent(binding.daemonId, canonicalSelf)) {
             return {
                 ok: false,
                 code: 'local_owner_binding_mismatch',
@@ -542,7 +543,7 @@ export class AssistantRegistry {
         if (
             existing
             && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT
-            && existing.daemonId === canonicalSelf
+            && daemonIdsEquivalent(existing.daemonId, canonicalSelf)
             && !bump
         ) {
             return existing;

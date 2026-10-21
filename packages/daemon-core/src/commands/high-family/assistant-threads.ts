@@ -14,6 +14,7 @@ import {
     ASSISTANT_REMOTE_FOLLOW_COMMAND,
     ASSISTANT_VERB,
     canonicalDaemonId,
+    daemonIdsEquivalent,
     followedRemoteProjectKey,
     sanitizeRemoteRepoIdentity,
     type AssistantOwnerBindingReceipt,
@@ -177,7 +178,7 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
                 error: 'hostDaemonId, meshId, and positive integer grantRevision are required.',
             };
         }
-        if (hostDaemonId === selfDaemonId) {
+        if (daemonIdsEquivalent(hostDaemonId, selfDaemonId)) {
             return {
                 success: false,
                 code: 'remote_host_is_self',

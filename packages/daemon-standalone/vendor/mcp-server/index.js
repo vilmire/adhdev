@@ -90246,7 +90246,7 @@ ${result.stderr}`, result.code);
                 error: "Local assistant owner binding receipt is missing or corrupt; explicit owner reconciliation is required."
               };
             }
-            if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || binding.daemonId !== canonicalSelf) {
+            if (binding.accountSlot !== ASSISTANT_ACCOUNT_SLOT || !daemonIdsEquivalent4(binding.daemonId, canonicalSelf)) {
               return {
                 ok: false,
                 code: "local_owner_binding_mismatch",
@@ -90270,7 +90270,7 @@ ${result.stderr}`, result.code);
             const base = this.ensureBaseEntry(Date.now());
             const existing = base.ownerBinding;
             const bump = opts?.bumpRevision === true || opts?.forceNewRevision === true;
-            if (existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && existing.daemonId === canonicalSelf && !bump) {
+            if (existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent4(existing.daemonId, canonicalSelf) && !bump) {
               return existing;
             }
             const nextRevision = (existing?.bindingRevision ?? 0) + 1;
@@ -151347,7 +151347,7 @@ ${ptyResult.output.slice(-2e3)}`);
             error: "hostDaemonId, meshId, and positive integer grantRevision are required."
           };
         }
-        if (hostDaemonId === selfDaemonId) {
+        if (daemonIdsEquivalent4(hostDaemonId, selfDaemonId)) {
           return {
             success: false,
             code: "remote_host_is_self",
