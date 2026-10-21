@@ -3,14 +3,16 @@
 // package loader's build/Release preference nor its same-platform fallback can
 // substitute a different binary — and fail unless it is built from the binding
 // sources in this checkout and its viewport API behaves. Loading alone proves
-// nothing about the API: a stale binary loads fine.
+// nothing about the API: a stale binary loads fine. Every native file in the
+// directory is also byte-scanned for embedded home-directory paths.
 //
 //   node scripts/verify-prebuilt.mjs <dir>     # e.g. prebuilt/darwin-arm64-node137
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { computeBindingDigest, pinnedGhosttyRevision } from './binding-digest.mjs';
+import { scanHostPaths } from './host-path-scan.mjs';
 import { ADDON_FILE, expectedApiLevel } from './prebuilt-manifest.mjs';
 
 const requireNative = createRequire(import.meta.url);
@@ -21,8 +23,19 @@ function expect(checks, name, actual, expected) {
     return ok;
 }
 
-export function verifyPrebuilt(dir) {
-    const checks = [];
+function scanChecks(dir) {
+    return scanHostPaths([dir]).map(({ file, hits }) => ({
+        name: `no host paths in ${basename(file)}`,
+        ok: hits.length === 0,
+        detail: hits.length === 0
+            ? 'clean (ASCII + UTF-16LE)'
+            : hits.slice(0, 5).map((hit) => `0x${hit.offset.toString(16)} ${hit.encoding} ${JSON.stringify(hit.prefix)}`).join('; ') + (hits.length > 5 ? ` … +${hits.length - 5}` : ''),
+    }));
+}
+
+export function verifyPrebuilt(dir, { hostPathScan = true } = {}) {
+    // Scanned before loading: a binary that leaks paths fails even if it cannot load.
+    const checks = hostPathScan ? scanChecks(dir) : [];
     const file = resolve(dir, ADDON_FILE);
     let addon;
     try {

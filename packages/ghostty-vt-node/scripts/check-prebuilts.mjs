@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Release-safety gate for the committed ghostty-vt-node prebuilts. Three
+// Release-safety gate for the committed ghostty-vt-node prebuilts. Four
 // checks, all printed, any failure fails the gate:
 //
 //   (a) manifests  every shipped triplet carries a manifest whose binding source
@@ -14,6 +14,8 @@
 //   (c) native-ci  the native CI build compiles from source instead of copying
 //                  the tracked prebuilt, and verifies + stamps what it built;
 //                  the release job checks every prebuilt it is about to publish.
+//   (d) host-paths every shipped native file is free of absolute home-directory
+//                  paths (ASCII and UTF-16LE), see scripts/host-path-scan.mjs.
 //
 //   node scripts/check-prebuilts.mjs [--all-present]
 import { spawnSync } from 'node:child_process';
@@ -22,6 +24,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { PACKAGE_DIR } from './binding-digest.mjs';
+import { printHostPathReport, scanHostPaths } from './host-path-scan.mjs';
 import { PREBUILT_ROOT, checkManifests, printManifestReport, shippedTripletFor } from './prebuilt-manifest.mjs';
 import { printVerifyReport, verifyPrebuilt } from './verify-prebuilt.mjs';
 
@@ -33,7 +36,8 @@ function checkExactHostPrebuilt() {
         console.log(`[ghostty-vt] no shipped prebuilt for ${process.platform}-${process.arch}; exact check runs on darwin-arm64 / linux-x64 / win32-x64`);
         return true;
     }
-    return printVerifyReport(verifyPrebuilt(join(PREBUILT_ROOT, triplet)));
+    // (d) scans every triplet, including this one.
+    return printVerifyReport(verifyPrebuilt(join(PREBUILT_ROOT, triplet), { hostPathScan: false }));
 }
 
 // Returns [name, ok, detail] rows.
@@ -47,7 +51,8 @@ export function nativeCiFindings(workflowDir = WORKFLOW_DIR, packageDir = PACKAG
     const native = readFileSync(nativePath, 'utf8');
     const ci = readFileSync(ciPath, 'utf8');
 
-    const buildStep = native.match(/- name: Build ghostty-vt-node\n([\s\S]*?)(?=\n {6}- name:)/);
+    // A Windows checkout (core.autocrlf) has CRLF line endings.
+    const buildStep = native.match(/- name: Build ghostty-vt-node\r?\n([\s\S]*?)(?=\r?\n {6}- name:)/);
     const buildText = buildStep ? buildStep[1] : '';
     const forced = /ADHDEV_GHOSTTY_VT_FORCE_COMPILE:\s*['"]?1['"]?/.test(buildText) || /npm run rebuild -w packages\/ghostty-vt-node/.test(buildText);
     findings.push(['native build forces a compile', forced, buildStep ? buildText.trim().replace(/\s+/g, ' ') : 'no "Build ghostty-vt-node" step']);
@@ -82,6 +87,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     results.exact = checkExactHostPrebuilt();
     console.log('── (c) native CI compiles instead of copying');
     results.nativeCi = existsSync(WORKFLOW_DIR) ? checkNativeCi() : (console.log('[ghostty-vt] no .github/workflows next to this package (npm install); skipped'), true);
+    console.log('── (d) shipped native files carry no host paths');
+    results.hostPaths = printHostPathReport(scanHostPaths());
     const failed = Object.entries(results).filter(([, ok]) => !ok).map(([name]) => name);
     if (failed.length) {
         console.error(`✗ ghostty-vt-node prebuilt gate failed: ${failed.join(', ')}`);

@@ -127,6 +127,14 @@ itself plus file hashes. The gate fails unless:
 - (c) the native CI build compiles from source (`ADHDEV_GHOSTTY_VT_FORCE_COMPILE`)
   and verifies + stamps the exact staged artifact, and the release job checks
   every prebuilt it publishes (`--all-present`).
+- (d) no shipped native file (`.node`/`.dylib`/`.so*`/`.dll`) embeds a
+  home-directory path (`/Users/<name>/`, `/home/<name>/`, `X:\Users\<name>\`),
+  scanned as raw bytes in ASCII and UTF-16LE (`scripts/host-path-scan.mjs`; CI
+  accounts `runner`/`runneradmin` are allowed). Build prebuilts from a neutral
+  directory with a neutral zig cache (`ZIG_GLOBAL_CACHE_DIR`). Extra literals
+  (hostnames) can be denied from an untracked file named by
+  `ADHDEV_GHOSTTY_HOST_PATH_DENYLIST` or `.host-path-denylist` in this package.
+  `verify-prebuilt.mjs` runs the same scan on the directory it verifies.
 
 ## Skipping the native build
 

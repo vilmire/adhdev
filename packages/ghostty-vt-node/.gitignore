@@ -1,6 +1,9 @@
 # Local cmake-js build output (per-machine, never committed).
 build/
 
+# Optional local denylist for scripts/host-path-scan.mjs (personal hostnames etc.).
+.host-path-denylist
+
 # Native prebuilts are committed so worktree/CI clones load the binding without a
 # toolchain. The binding is Node-API (ABI-stable), so ONE prebuilt per
 # platform-arch serves every Node version — we ship the node137 triplet and the
