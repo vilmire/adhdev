@@ -362,3 +362,84 @@ test('H1: client that attached to a session automatically replays attach_session
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
   }
 })
+
+test('L3: create_session without clientId does not invent a daemon clientId on reconnect, and failed replay entries are pruned', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adhdev-ipc-l3-'))
+  const sockPath = path.join(dir, 'host.sock')
+  let connectionCount = 0
+  const replaysByConn = new Map<number, Array<{ sessionId: string; clientId: string }>>()
+
+  const server = net.createServer((socket) => {
+    connectionCount += 1
+    const connId = connectionCount
+    replaysByConn.set(connId, [])
+    socket.on('data', (chunk) => {
+      const lines = chunk.toString('utf8').split('\n').filter((line) => line.trim().length > 0)
+      for (const line of lines) {
+        const env = JSON.parse(line)
+        if (env.request?.type === 'attach_session' && connId >= 2) {
+          replaysByConn.get(connId)!.push({
+            sessionId: env.request.payload.sessionId,
+            clientId: env.request.payload.clientId,
+          })
+          socket.write(
+            `${JSON.stringify({
+              kind: 'response',
+              requestId: env.requestId,
+              response: { success: false, error: `Unknown session: ${env.request.payload.sessionId}` },
+            })}\n`,
+          )
+          continue
+        }
+        socket.write(
+          `${JSON.stringify({
+            kind: 'response',
+            requestId: env.requestId,
+            response: { success: true, result: { sessionId: env.request?.payload?.sessionId || 'ok' } },
+          })}\n`,
+        )
+      }
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(sockPath, resolve))
+
+  const client = new SessionHostClient({ endpoint: { kind: 'unix', path: sockPath } })
+  try {
+    await client.request({
+      type: 'create_session',
+      payload: {
+        sessionId: 'sess-no-client-id',
+        providerType: 'codex',
+        category: 'cli',
+        workspace: dir,
+        launchCommand: { command: process.execPath, args: ['-e', ''] },
+      },
+    })
+    await client.request({
+      type: 'attach_session',
+      payload: {
+        sessionId: 'sess-gone-later',
+        clientId: 'explicit-client-1',
+        clientType: 'daemon',
+        readOnly: false,
+      },
+    })
+
+    // First reconnect: only sess-gone-later should be replayed (never sess-no-client-id with an invented clientId),
+    // and its replay fails with Unknown session.
+    client.disconnect(new Error('drop 1'))
+    await client.request({ type: 'list_sessions', payload: {} })
+    assert.deepEqual(replaysByConn.get(2), [
+      { sessionId: 'sess-gone-later', clientId: 'explicit-client-1' },
+    ])
+
+    // Second reconnect: sess-gone-later was pruned after failing replay on conn 2, so conn 3 replays nothing.
+    client.disconnect(new Error('drop 2'))
+    await client.request({ type: 'list_sessions', payload: {} })
+    assert.deepEqual(replaysByConn.get(3), [])
+  } finally {
+    await client.close().catch(() => {})
+    if (server.listening) await new Promise<void>((r) => server.close(() => r()))
+    try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
+  }
+})

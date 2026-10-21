@@ -3803,13 +3803,15 @@ var require_dist = __commonJS({
             socket.once("error", reject);
           });
           if (this.attachedSessions.size > 0 && this.socket === socket && !socket.destroyed) {
-            for (const sub of [...this.attachedSessions.values()]) {
+            for (const [sessionId, sub] of [...this.attachedSessions.entries()]) {
               if (this.socket !== socket || socket.destroyed) break;
-              await this.sendRawRequestOnSocket(socket, {
+              const replayResponse = await this.sendRawRequestOnSocket(socket, {
                 type: "attach_session",
                 payload: sub
-              }).catch(() => {
-              });
+              }).catch(() => null);
+              if (replayResponse && !replayResponse.success) {
+                this.attachedSessions.delete(sessionId);
+              }
             }
           }
         })();
@@ -3843,15 +3845,16 @@ var require_dist = __commonJS({
             });
           } else if (request.type === "create_session") {
             const createdId = response.result?.sessionId || request.payload.sessionId;
-            if (createdId) {
+            const clientId = typeof request.payload.clientId === "string" ? request.payload.clientId.trim() : "";
+            if (createdId && clientId) {
               this.attachedSessions.set(createdId, {
                 sessionId: createdId,
-                clientId: request.payload.clientId || `daemon-client-${generateUUID().slice(0, 8)}`,
+                clientId,
                 clientType: request.payload.clientType || "daemon",
                 readOnly: false
               });
             }
-          } else if (request.type === "detach_session") {
+          } else if (request.type === "detach_session" || request.type === "delete_session") {
             this.attachedSessions.delete(request.payload.sessionId);
           }
         }
@@ -179077,6 +179080,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       unsubscribe = null;
       unsubscribeDisconnect = null;
       reconnecting = false;
+      reconnectTimer = null;
+      reconnectWake = null;
       currentPid = 0;
       closed = false;
       metadata = null;
@@ -179486,10 +179491,21 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (this.closed || this.reconnecting) return;
         this.reconnecting = true;
         try {
-          for (let attempt = 0; attempt < 5 && !this.closed; attempt += 1) {
+          let attempt = 0;
+          while (!this.closed) {
             if (attempt > 0) {
-              await new Promise((resolve54) => setTimeout(resolve54, 50 * attempt));
+              const delayMs = Math.min(50 * Math.pow(2, Math.min(attempt - 1, 4)), 500);
+              await new Promise((resolve54) => {
+                this.reconnectWake = resolve54;
+                this.reconnectTimer = setTimeout(() => {
+                  this.reconnectTimer = null;
+                  this.reconnectWake = null;
+                  resolve54();
+                }, delayMs);
+                this.reconnectTimer.unref?.();
+              });
             }
+            attempt += 1;
             if (this.closed) return;
             try {
               await this.client.connect();
@@ -179534,6 +179550,15 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       async closeClient(destroy = false) {
         if (this.closed) return;
         this.closed = true;
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        if (this.reconnectWake) {
+          const wake = this.reconnectWake;
+          this.reconnectWake = null;
+          wake();
+        }
         try {
           this.unsubscribe?.();
           this.unsubscribe = null;
@@ -187912,6 +187937,9 @@ ${notice.notice}${supersededHint}`;
       wasConnected = false;
       consecutiveConnectFailures = 0;
       consecutiveFailureCount = 0;
+      forcedDisconnectInStreak = false;
+      forceDisconnectBeforeNextRequest = false;
+      inFlightRequests = 0;
       /** Every Nth consecutive 2s connect failure gets a warn line (30 → ~1/min). */
       static CONNECT_FAILURE_LOG_EVERY = 30;
       /** First respawn after this many consecutive failures (~6s), then every RESPAWN_RETRY_EVERY (~30s). */
@@ -187953,6 +187981,9 @@ ${notice.notice}${supersededHint}`;
         this.wasConnected = false;
         this.consecutiveConnectFailures = 0;
         this.consecutiveFailureCount = 0;
+        this.forcedDisconnectInStreak = false;
+        this.forceDisconnectBeforeNextRequest = false;
+        this.inFlightRequests = 0;
         await this.client.close().catch(() => {
         });
       }
@@ -187995,33 +188026,43 @@ ${notice.notice}${supersededHint}`;
       async request(request) {
         const readOnly = ["list_sessions", "get_host_diagnostics"].includes(request.type);
         const execute = async () => {
-          if (this.consecutiveFailureCount >= 2) {
+          if (this.forceDisconnectBeforeNextRequest && !this.forcedDisconnectInStreak && this.inFlightRequests === 0) {
+            this.forceDisconnectBeforeNextRequest = false;
+            this.forcedDisconnectInStreak = true;
             this.client.disconnect();
           }
           await this.ensureConnected();
           let response;
+          this.inFlightRequests += 1;
           try {
             response = await this.client.request(request);
           } catch (error) {
+            this.inFlightRequests = Math.max(0, this.inFlightRequests - 1);
             this.consecutiveFailureCount += 1;
-            if (this.consecutiveFailureCount >= 2) {
-              this.client.disconnect();
+            if (this.consecutiveFailureCount >= 2 && !this.forcedDisconnectInStreak) {
+              if (this.inFlightRequests === 0) {
+                this.forcedDisconnectInStreak = true;
+                this.forceDisconnectBeforeNextRequest = false;
+                this.client.disconnect();
+              } else {
+                this.forceDisconnectBeforeNextRequest = true;
+              }
             }
             throw error;
           }
+          this.inFlightRequests = Math.max(0, this.inFlightRequests - 1);
           if (!response.success) {
             throw new Error(response.error || `Session host request failed: ${request.type}`);
           }
           this.consecutiveFailureCount = 0;
+          this.forcedDisconnectInStreak = false;
+          this.forceDisconnectBeforeNextRequest = false;
           return response.result ?? null;
         };
         return readOnly ? execute() : withMaintenanceAdmission(execute);
       }
       async ensureConnected() {
         try {
-          if (this.consecutiveFailureCount >= 2 || this.consecutiveConnectFailures >= 2) {
-            this.client.disconnect();
-          }
           await this.client.connect();
           if (!this.wasConnected) {
             this.wasConnected = true;

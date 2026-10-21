@@ -103,11 +103,24 @@ type KillCall = [number, NodeJS.Signals | number | undefined]
  */
 function mockProcessKill(
   t: TestContext,
-  options: { survivesSigterm?: boolean } = {},
+  options: { survivesSigterm?: boolean; mockCommandLine?: boolean } = {},
 ): KillCall[] {
   const survivesSigterm = options.survivesSigterm ?? false
+  const mockCommandLine = options.mockCommandLine ?? true
   const killCalls: KillCall[] = []
   const dead = new Set<number>()
+
+  if (mockCommandLine) {
+    t.mock.method(childProcessModule, 'execFileSync', (((file: string, args: readonly string[] = []) => {
+      if (file === 'ps' || file === '/bin/ps' || file === 'powershell.exe') {
+        const pidArg = Number.parseInt(String(args.at(-1) ?? ''), 10)
+        if ([4242, 5151, 6161, 7171].includes(pidArg) || file === 'powershell.exe') {
+          return '/usr/bin/node /opt/adhdev/vendor/session-host-daemon/index.js\n'
+        }
+      }
+      return ''
+    }) as unknown) as typeof childProcessModule.execFileSync)
+  }
 
   t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
     killCalls.push([pid, signal])
@@ -137,7 +150,7 @@ test('stopSessionHost only targets the current namespace pid file and does not s
     execCalls.push([command, [...args]])
     throw new Error('unexpected execFileSync call')
   }) as unknown) as typeof childProcessModule.execFileSync)
-  const killCalls = mockProcessKill(t)
+  const killCalls = mockProcessKill(t, { mockCommandLine: false })
 
   assert.equal(stopSessionHost(), false)
   assert.deepEqual(execCalls, [])
@@ -283,7 +296,7 @@ test('M1: stopSessionHost refuses to kill a live unrelated process when a stale 
 
   const pidFile = writePidFile(homeDir, unrelatedChild.pid!)
   const { stopSessionHost } = await importSessionHostModule()
-  const killCalls = mockProcessKill(t)
+  const killCalls = mockProcessKill(t, { mockCommandLine: false })
 
   assert.equal(stopSessionHost(), false, 'must not stop a positively identified unrelated process')
   assert.equal(
@@ -292,4 +305,22 @@ test('M1: stopSessionHost refuses to kill a live unrelated process when a stale 
     'must not send SIGTERM to recycled unrelated PID',
   )
   assert.equal(fs.existsSync(pidFile), false, 'stale pidfile for recycled unrelated PID must be removed')
+})
+
+test('L3: stopSessionHost does not send SIGTERM when the process command line cannot be read', async (t) => {
+  const homeDir = makeTempHome()
+  pinTempInstance(t, homeDir)
+  const pidFile = writePidFile(homeDir, 8181)
+
+  const { stopSessionHost } = await importSessionHostModule()
+  t.mock.method(childProcessModule, 'execFileSync', ((() => '') as unknown) as typeof childProcessModule.execFileSync)
+  const killCalls = mockProcessKill(t, { survivesSigterm: true, mockCommandLine: false })
+
+  assert.equal(stopSessionHost(), false, 'must not claim stop when command line is unreadable')
+  assert.equal(
+    killCalls.some(([pid, sig]) => pid === 8181 && sig === 'SIGTERM'),
+    false,
+    'must not send SIGTERM to an unidentified PID whose command line could not be read',
+  )
+  assert.equal(fs.existsSync(pidFile), true, 'pidfile must be retained when process is alive and unverifiable')
 })

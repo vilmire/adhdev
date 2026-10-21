@@ -48,6 +48,8 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     private unsubscribe: (() => void) | null = null;
     private unsubscribeDisconnect: (() => void) | null = null;
     private reconnecting = false;
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private reconnectWake: (() => void) | null = null;
     private currentPid = 0;
     private closed = false;
     private metadata: PtyRuntimeMetadata | null = null;
@@ -510,10 +512,21 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
         if (this.closed || this.reconnecting) return;
         this.reconnecting = true;
         try {
-            for (let attempt = 0; attempt < 5 && !this.closed; attempt += 1) {
+            let attempt = 0;
+            while (!this.closed) {
                 if (attempt > 0) {
-                    await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+                    const delayMs = Math.min(50 * Math.pow(2, Math.min(attempt - 1, 4)), 500);
+                    await new Promise<void>((resolve) => {
+                        this.reconnectWake = resolve;
+                        this.reconnectTimer = setTimeout(() => {
+                            this.reconnectTimer = null;
+                            this.reconnectWake = null;
+                            resolve();
+                        }, delayMs);
+                        this.reconnectTimer.unref?.();
+                    });
                 }
+                attempt += 1;
                 if (this.closed) return;
                 try {
                     await this.client.connect();
@@ -560,6 +573,15 @@ class SessionHostRuntimeTransport implements PtyRuntimeTransport {
     private async closeClient(destroy = false): Promise<void> {
         if (this.closed) return;
         this.closed = true;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        if (this.reconnectWake) {
+            const wake = this.reconnectWake;
+            this.reconnectWake = null;
+            wake();
+        }
         try {
             this.unsubscribe?.();
             this.unsubscribe = null;

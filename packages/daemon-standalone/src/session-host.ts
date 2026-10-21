@@ -17,11 +17,6 @@ function identifiesStandaloneSessionHostPid(pid: number): boolean {
 
 function isManagedStandaloneSessionHostPid(pid: number): boolean {
   const commandLine = getProcessCommandLine(pid);
-  // If ps cannot find the pid (e.g. a synthetic pid in unit tests that mock
-  // process.kill only), allow the SIGTERM probe; when a real live process is
-  // positively identified on the OS, require its script entrypoint to be
-  // session-host-daemon so a recycled pid is never killed (M1).
-  if (commandLine === null) return true;
   return isManagedSessionHostCommandLine(commandLine);
 }
 

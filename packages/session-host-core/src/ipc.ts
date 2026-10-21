@@ -388,12 +388,15 @@ export class SessionHostClient {
         socket.once('error', reject);
       });
       if (this.attachedSessions.size > 0 && this.socket === socket && !socket.destroyed) {
-        for (const sub of [...this.attachedSessions.values()]) {
+        for (const [sessionId, sub] of [...this.attachedSessions.entries()]) {
           if (this.socket !== socket || socket.destroyed) break;
-          await this.sendRawRequestOnSocket(socket, {
+          const replayResponse = await this.sendRawRequestOnSocket(socket, {
             type: 'attach_session',
             payload: sub,
-          }).catch(() => {});
+          }).catch(() => null);
+          if (replayResponse && !replayResponse.success) {
+            this.attachedSessions.delete(sessionId);
+          }
         }
       }
     })();
@@ -431,15 +434,16 @@ export class SessionHostClient {
         });
       } else if (request.type === 'create_session') {
         const createdId = (response.result as { sessionId?: string } | undefined)?.sessionId || request.payload.sessionId;
-        if (createdId) {
+        const clientId = typeof request.payload.clientId === 'string' ? request.payload.clientId.trim() : '';
+        if (createdId && clientId) {
           this.attachedSessions.set(createdId, {
             sessionId: createdId,
-            clientId: request.payload.clientId || `daemon-client-${generateUUID().slice(0, 8)}`,
+            clientId,
             clientType: request.payload.clientType || 'daemon',
             readOnly: false,
           });
         }
-      } else if (request.type === 'detach_session') {
+      } else if (request.type === 'detach_session' || request.type === 'delete_session') {
         this.attachedSessions.delete(request.payload.sessionId);
       }
     }
