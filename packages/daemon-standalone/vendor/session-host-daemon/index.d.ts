@@ -81,6 +81,39 @@ declare class SessionHostServer extends EventEmitter {
     private handleRuntimeExit;
 }
 
+/**
+ * Detects a wedged libuv thread pool and reports it once.
+ *
+ * node-pty writes to the PTY with `fs.write`, which runs on the libuv thread
+ * pool. On 2026-10-21 a preview host was found with every pool request
+ * (`fs.*`, `crypto.pbkdf2`, `dns.lookup`) never completing while the main loop
+ * still served IPC: the host acknowledged every `send_input`, the PTY write
+ * queue grew without draining, and no hosted session could receive input for
+ * hours. Nothing in that state recovers on its own, and a host that answers
+ * IPC never looks dead to the daemon, so the host has to notice it itself.
+ *
+ * One probe is in flight at a time. A probe that does not complete within
+ * `stallMs` means the pool is not making progress; `onStall` fires once and
+ * the watchdog stops. Timers are unref'd so the watchdog never keeps the
+ * process alive.
+ */
+interface ThreadpoolWatchdogOptions {
+    /** How often to start a probe when none is in flight. */
+    intervalMs?: number;
+    /** How long one probe may stay in flight before the pool counts as wedged. */
+    stallMs?: number;
+    /** A thread-pool operation that calls `done` when it completes. */
+    probe?: (done: () => void) => void;
+    onStall: (stalledForMs: number) => void;
+    now?: () => number;
+}
+interface ThreadpoolWatchdog {
+    stop(): void;
+    /** Runs one check immediately; exposed for tests. */
+    tick(): void;
+}
+declare function startThreadpoolWatchdog(options: ThreadpoolWatchdogOptions): ThreadpoolWatchdog;
+
 interface GuardianArtifactPins {
     packageRoot: string;
     manifestPath: string;
@@ -101,4 +134,4 @@ declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: numbe
     countInWindow: number;
 };
 
-export { type GuardianArtifactPins, type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, resolveGuardianArtifact };
+export { type GuardianArtifactPins, type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, resolveGuardianArtifact, startThreadpoolWatchdog };

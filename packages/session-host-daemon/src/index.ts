@@ -16,14 +16,17 @@ import {
 } from '@adhdev/session-host-core';
 import { resolveGuardianArtifact, type GuardianArtifactPins } from './guardian-artifact.js';
 import { SessionHostServer } from './server.js';
+import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
 
 export { SessionHostServer } from './server.js';
+export { startThreadpoolWatchdog } from './threadpool-watchdog.js';
 export type { SessionHostServerOptions } from './server.js';
 export { resolveGuardianArtifact } from './guardian-artifact.js';
 export type { GuardianArtifactPins } from './guardian-artifact.js';
 export type { HostUpgradeBinding } from './upgrade-lease.js';
 
 const SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || 'adhdev';
+const SHUTDOWN_DEADLINE_MS = 10_000;
 
 // Instance identity comes from the parent daemon's pinned env
 // (ADHDEV_CONFIG_DIR — see managed-host buildEnv). The endpoint, pid file, and
@@ -97,16 +100,38 @@ async function runServer(): Promise<void> {
   await server.start();
   if (upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
 
-  process.on('SIGINT', async () => {
+  const shutdown = async () => {
+    // A wedged thread pool can leave stop() pending forever; the 2026-10-21
+    // host ignored SIGTERM this way and needed SIGKILL. Exit regardless.
+    const deadline = setTimeout(() => {
+      writeStderrLineSync(`[session-host] stop() did not finish within ${SHUTDOWN_DEADLINE_MS / 1000}s; exiting anyway.`);
+      removeSessionHostPid(SESSION_HOST_APP_NAME);
+      process.exit(1);
+    }, SHUTDOWN_DEADLINE_MS);
+    deadline.unref?.();
     await server.stop();
     removeSessionHostPid(SESSION_HOST_APP_NAME);
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 
-  process.on('SIGTERM', async () => {
-    await server.stop();
-    removeSessionHostPid(SESSION_HOST_APP_NAME);
-    process.exit(0);
+  // Exiting ends every hosted session, but in this state none of them can take
+  // input anyway; the daemon respawns the host as soon as the socket drops.
+  startThreadpoolWatchdog({
+    onStall: (stalledForMs) => {
+      writeStderrLineSync(
+        `[session-host] libuv thread pool made no progress for ${Math.round(stalledForMs / 1000)}s ` +
+          '(PTY writes cannot complete); exiting so the daemon respawns the host.',
+      );
+      try {
+        server.flushAllPersistence();
+      } catch {
+        // noop — exiting regardless
+      }
+      removeSessionHostPid(SESSION_HOST_APP_NAME);
+      process.exit(1);
+    },
   });
 
   // Fallback: flush persistence on any exit (covers Windows where SIGTERM is unsupported)

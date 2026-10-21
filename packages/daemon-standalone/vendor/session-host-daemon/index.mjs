@@ -8,7 +8,7 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
 
 // src/index.ts
 import { randomUUID as randomUUID2 } from "crypto";
-import * as fs6 from "fs";
+import * as fs7 from "fs";
 import * as path6 from "path";
 import {
   SessionHostClient,
@@ -289,8 +289,8 @@ var PtySessionRuntime = class {
     let cwd = this.payload.workspace || process.cwd();
     if (cwd) {
       try {
-        const stat = fs2.statSync(cwd);
-        if (!stat.isDirectory()) cwd = os.homedir();
+        const stat2 = fs2.statSync(cwd);
+        if (!stat2.isDirectory()) cwd = os.homedir();
       } catch {
         cwd = os.homedir();
       }
@@ -542,8 +542,8 @@ var HostUpgradeLease = class {
     try {
       if (this.binding.helperFileIdentity && (this.fileIdentity() !== this.binding.helperFileIdentity || digest(fs3.readFileSync(this.binding.helperPath)) !== this.binding.helperSha256)) throw new Error("native_host_helper_file_identity_changed");
       if (fs3.existsSync(this.journal)) {
-        const stat = fs3.lstatSync(this.journal);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid?.() || stat.mode & 63) throw new Error("native_host_lease_untrusted");
+        const stat2 = fs3.lstatSync(this.journal);
+        if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("native_host_lease_untrusted");
         const value = JSON.parse(fs3.readFileSync(this.journal, "utf8"));
         if (value.schema !== 1 || value.endpoint !== this.endpoint || !Number.isSafeInteger(value.epoch) || value.epoch < 0 || typeof value.held !== "boolean" || (value.held ? typeof value.owner !== "string" || typeof value.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(value.tokenHash) : value.owner !== null || value.tokenHash !== null)) throw new Error("native_host_lease_corrupt");
         this.state = value;
@@ -644,8 +644,8 @@ var SessionHostStorage = class {
   /** Unknown/corrupt recovery files also veto idle admission; reads names only. */
   hasRuntimeEntries() {
     if (!fs4.existsSync(this.runtimesDir)) return false;
-    const stat = fs4.lstatSync(this.runtimesDir);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("native_host_runtime_storage_untrusted");
+    const stat2 = fs4.lstatSync(this.runtimesDir);
+    if (!stat2.isDirectory() || stat2.isSymbolicLink()) throw new Error("native_host_runtime_storage_untrusted");
     return fs4.readdirSync(this.runtimesDir).length > 0;
   }
   loadAll() {
@@ -1777,8 +1777,59 @@ var SessionHostServer = class extends EventEmitter {
   }
 };
 
+// src/threadpool-watchdog.ts
+import * as fs6 from "fs";
+import * as os2 from "os";
+var THREADPOOL_WATCHDOG_INTERVAL_MS = 15e3;
+var THREADPOOL_WATCHDOG_STALL_MS = 12e4;
+function defaultProbe(done) {
+  fs6.stat(os2.tmpdir(), () => done());
+}
+function startThreadpoolWatchdog(options) {
+  const intervalMs = options.intervalMs ?? THREADPOOL_WATCHDOG_INTERVAL_MS;
+  const stallMs = options.stallMs ?? THREADPOOL_WATCHDOG_STALL_MS;
+  const probe = options.probe ?? defaultProbe;
+  const now = options.now ?? Date.now;
+  let inFlightSince = null;
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    if (inFlightSince !== null) {
+      const stalledForMs = now() - inFlightSince;
+      if (stalledForMs >= stallMs) {
+        stopped = true;
+        clearInterval(timer);
+        options.onStall(stalledForMs);
+      }
+      return;
+    }
+    const startedAt = now();
+    inFlightSince = startedAt;
+    probe(() => {
+      if (inFlightSince === startedAt) inFlightSince = null;
+    });
+  };
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+    tick
+  };
+}
+function writeStderrLineSync(line) {
+  try {
+    fs6.writeSync(2, `${line}
+`);
+  } catch {
+  }
+}
+
 // src/index.ts
 var SESSION_HOST_APP_NAME = process.env.ADHDEV_SESSION_HOST_NAME || "adhdev";
+var SHUTDOWN_DEADLINE_MS = 1e4;
 var INSTANCE_CONFIG_DIR = resolveInstanceConfigDir2(process.env);
 var INSTANCE_IPC_KEY = resolveSessionHostIpcKey(INSTANCE_CONFIG_DIR);
 function getSessionHostEndpoint() {
@@ -1789,15 +1840,15 @@ function getSessionHostStorageRoot() {
 }
 function getSessionHostPidFile(appName) {
   const dir = INSTANCE_CONFIG_DIR;
-  if (!fs6.existsSync(dir)) fs6.mkdirSync(dir, { recursive: true });
+  if (!fs7.existsSync(dir)) fs7.mkdirSync(dir, { recursive: true });
   return path6.join(dir, `${appName}-session-host.pid`);
 }
 function writeSessionHostPid(appName) {
-  fs6.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");
+  fs7.writeFileSync(getSessionHostPidFile(appName), String(process.pid), "utf8");
 }
 function removeSessionHostPid(appName) {
   try {
-    fs6.unlinkSync(getSessionHostPidFile(appName));
+    fs7.unlinkSync(getSessionHostPidFile(appName));
   } catch {
   }
 }
@@ -1819,10 +1870,10 @@ async function runServer() {
   let upgradeBinding;
   const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
   if (pinFile) {
-    const stat = fs6.lstatSync(pinFile);
-    if (process.platform !== "darwin" || fs6.realpathSync(pinFile) !== pinFile || !stat.isFile() || stat.uid !== process.getuid?.() || stat.mode & 63) throw new Error("guardian_launch_pins_untrusted");
-    const pins = JSON.parse(fs6.readFileSync(pinFile, "utf8"));
-    if (pins.nodePath !== fs6.realpathSync(process.execPath) || pins.hostEntryPath !== fs6.realpathSync(process.argv[1]) || pins.stateDir !== path6.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
+    const stat2 = fs7.lstatSync(pinFile);
+    if (process.platform !== "darwin" || fs7.realpathSync(pinFile) !== pinFile || !stat2.isFile() || stat2.uid !== process.getuid?.() || stat2.mode & 63) throw new Error("guardian_launch_pins_untrusted");
+    const pins = JSON.parse(fs7.readFileSync(pinFile, "utf8"));
+    if (pins.nodePath !== fs7.realpathSync(process.execPath) || pins.hostEntryPath !== fs7.realpathSync(process.argv[1]) || pins.stateDir !== path6.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
     upgradeBinding = resolveGuardianArtifact(pins);
   }
   const server = new SessionHostServer({
@@ -1834,15 +1885,31 @@ async function runServer() {
   if (!upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
   await server.start();
   if (upgradeBinding) writeSessionHostPid(SESSION_HOST_APP_NAME);
-  process.on("SIGINT", async () => {
+  const shutdown = async () => {
+    const deadline = setTimeout(() => {
+      writeStderrLineSync(`[session-host] stop() did not finish within ${SHUTDOWN_DEADLINE_MS / 1e3}s; exiting anyway.`);
+      removeSessionHostPid(SESSION_HOST_APP_NAME);
+      process.exit(1);
+    }, SHUTDOWN_DEADLINE_MS);
+    deadline.unref?.();
     await server.stop();
     removeSessionHostPid(SESSION_HOST_APP_NAME);
     process.exit(0);
-  });
-  process.on("SIGTERM", async () => {
-    await server.stop();
-    removeSessionHostPid(SESSION_HOST_APP_NAME);
-    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  startThreadpoolWatchdog({
+    onStall: (stalledForMs) => {
+      writeStderrLineSync(
+        `[session-host] libuv thread pool made no progress for ${Math.round(stalledForMs / 1e3)}s (PTY writes cannot complete); exiting so the daemon respawns the host.`
+      );
+      try {
+        server.flushAllPersistence();
+      } catch {
+      }
+      removeSessionHostPid(SESSION_HOST_APP_NAME);
+      process.exit(1);
+    }
   });
   process.on("exit", () => {
     server.flushAllPersistence();
@@ -2184,6 +2251,7 @@ ${err?.stack || ""}`);
 export {
   SessionHostServer,
   createUncaughtExceptionLimiter,
-  resolveGuardianArtifact
+  resolveGuardianArtifact,
+  startThreadpoolWatchdog
 };
 //# sourceMappingURL=index.mjs.map
