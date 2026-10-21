@@ -106,7 +106,9 @@ build, with a private global cache, local cache and install prefix inside the
 build tree (`build/ghostty-zig/`; passed as `--global-cache-dir`, `--cache-dir`
 and `--prefix`, so `ZIG_GLOBAL_CACHE_DIR` / `ZIG_LOCAL_CACHE_DIR` are ignored),
 and re-verifies the pinned, clean source before and after. For a release build
-configure empties those caches first, so every dependency is fetched afresh
+configure empties those caches first (with `scripts/clean-dir.cjs`, because
+CMake's own removal stops on the `._.` files zig extracts on Windows; if
+anything survives, configure fails), so every dependency is fetched afresh
 (zig verifies its package hash on fetch) and everything is compiled from
 scratch: a stale `zig-out/`, a reused build directory or a poisoned shared zig
 cache cannot reach the shipped runtime. What this does NOT cover: the zig
@@ -144,7 +146,8 @@ node oss/packages/ghostty-vt-node/scripts/check-prebuilts.mjs
 ```
 
 With `ADHDEV_GHOSTTY_VT_FORCE_COMPILE=1` the build is a clean `cmake-js
-rebuild` (fresh configure and clone). Without it, `npm run build` keeps an
+rebuild` (fresh configure and clone); `build/` is removed with
+`scripts/clean-dir.cjs` first, and the build stops if that fails. Without it, `npm run build` keeps an
 existing local build or copies a usable prebuilt, or compiles incrementally
 (`--plan` prints which it would do).
 
@@ -157,7 +160,9 @@ macOS/Linux; on Windows use e.g. `C:\gvn` and `C:\gvn-home` for
 caches need no setup: the build always uses fresh private ones. Do not set
 `FETCHCONTENT_SOURCE_DIR_GHOSTTY`, `GHOSTTY_GIT_TAG`, `GHOSTTY_ZIG_BUILD_FLAGS`
 or `ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD`, and let nothing else write to these
-directories during the build:
+directories during the build. On Windows, remove a previous `C:\gvn` with
+`node oss\packages\ghostty-vt-node\scripts\clean-dir.cjs C:\gvn`: `rmdir /s`
+and CMake cannot delete the `._.` files an earlier build's zig cache holds.
 
 ```bash
 rm -rf /tmp/gvn /tmp/gvn-home && mkdir -p /tmp/gvn/node_modules /tmp/gvn-home

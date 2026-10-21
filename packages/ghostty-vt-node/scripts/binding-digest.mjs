@@ -23,6 +23,7 @@ export const BINDING_DIGEST_INPUTS = [
     'src/addon.cc',
     'src/ghostty_bridge.c',
     'src/ghostty_bridge.h',
+    'scripts/clean-dir.cjs',
 ];
 
 const sha256 = (data) => createHash('sha256').update(data).digest('hex');

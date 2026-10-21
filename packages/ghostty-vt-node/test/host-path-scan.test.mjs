@@ -76,12 +76,20 @@ it('requires the native workflow not to restore a zig cache', () => {
             writeFileSync(join(dir, 'ci.yml'), readFileSync(join(workflowDir, 'ci.yml'), 'utf8'));
             return nativeCiFindings(dir, packageDir).filter(([, ok]) => !ok).map(([name]) => name);
         };
-        const native = readFileSync(join(workflowDir, 'ghostty-vt-node.yml'), 'utf8');
-        assert.deepEqual(failing(native), []);
-        assert.deepEqual(failing(native.replace(/\n\s*use-cache: false/, '')), ['native build restores no zig cache']);
-        assert.deepEqual(failing(native.replace('use-cache: false', 'use-cache: true')), ['native build restores no zig cache']);
-        const envCache = native.replace('      - name: Build ghostty-vt-node\n', '      - name: Build ghostty-vt-node\n        env:\n          ZIG_GLOBAL_CACHE_DIR: /tmp/shared\n');
-        assert.deepEqual(failing(envCache), ['native build restores no zig cache']);
+        // Both line endings: a Windows checkout (core.autocrlf) has CRLF.
+        const raw = readFileSync(join(workflowDir, 'ghostty-vt-node.yml'), 'utf8');
+        for (const eol of ['\n', '\r\n']) {
+            const native = raw.replace(/\r?\n/g, eol);
+            assert.deepEqual(failing(native), []);
+            const noCache = native.replace(/\r?\n[ \t]*use-cache: false/, '');
+            assert.notEqual(noCache, native);
+            assert.deepEqual(failing(noCache), ['native build restores no zig cache']);
+            assert.deepEqual(failing(native.replace('use-cache: false', 'use-cache: true')), ['native build restores no zig cache']);
+            const envCache = native.replace(/( {6}- name: Build ghostty-vt-node)(\r?\n)/,
+                (_, step, nl) => `${step}${nl}        env:${nl}          ZIG_GLOBAL_CACHE_DIR: /tmp/shared${nl}`);
+            assert.notEqual(envCache, native);
+            assert.deepEqual(failing(envCache), ['native build restores no zig cache']);
+        }
     } finally {
         rmSync(dir, { recursive: true, force: true });
     }

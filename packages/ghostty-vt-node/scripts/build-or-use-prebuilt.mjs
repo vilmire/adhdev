@@ -16,6 +16,7 @@ const sourceInputs = [
   path.join(packageDir, 'src', 'addon.cc'),
   path.join(packageDir, 'src', 'ghostty_bridge.c'),
   path.join(packageDir, 'src', 'ghostty_bridge.h'),
+  path.join(packageDir, 'scripts', 'clean-dir.cjs'),
 ];
 
 function safeMtime(filePath) {
@@ -178,6 +179,17 @@ const command = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
 const args = isWindows
   ? ['/d', '/s', '/c', `npm exec -- cmake-js ${cmakeJsCommand}`]
   : ['exec', '--', 'cmake-js', cmakeJsCommand];
+// cmake-js' own clean (`cmake -E remove_directory`) has the same Windows
+// trailing-dot problem as file(REMOVE_RECURSE), so a forced rebuild removes
+// build/ itself first and refuses to continue on a partial removal.
+if (forceCompile) {
+  const buildDir = path.join(packageDir, 'build');
+  const clean = spawnSync(process.execPath, [path.join(scriptDir, 'clean-dir.cjs'), buildDir], { stdio: 'inherit', windowsHide: true });
+  if (clean.status !== 0 || fs.existsSync(buildDir)) {
+    console.error(`[ghostty-vt-node] could not remove ${buildDir}; refusing to rebuild on top of it`);
+    process.exit(1);
+  }
+}
 console.log(`[ghostty-vt-node] compiling ${triplet} (${decision.reason}) via ${command} ${args.join(' ')}`);
 const result = spawnSync(command, args, {
   cwd: packageDir,

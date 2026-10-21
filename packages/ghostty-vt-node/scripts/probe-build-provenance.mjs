@@ -19,7 +19,11 @@
 //   poison-is-live         control: the poisoned PRIVATE caches break a build
 //                          that keeps them (dev override), so the poison bites
 //   zig-strict             "0.15.2!" / "0.15 .2" / two lines refused, " X\r\n" accepted
-//   reconfigure-clears     a release configure empties the private caches/prefix
+//   clean-fails-closed     a cache clean that leaves anything behind (simulated
+//                          with a no-op fs.rmSync) fails the release configure
+//   reconfigure-clears     a release configure empties the private caches/prefix,
+//                          including planted trailing-dot (`._.`) entries that
+//                          CMake's file(REMOVE_RECURSE) cannot delete on Windows
 //   private-cache-poison   ...so the poisoned package/artifact caches are never
 //                          used: the release rebuild yields the baseline runtime
 //   source-override        FETCHCONTENT_SOURCE_DIR_GHOSTTY => refused
@@ -231,13 +235,33 @@ try {
         rmSync(fakeDir, { recursive: true, force: true });
     }
 
+    // Plant names Win32 normalizes away (zig extracts such `._.` AppleDouble
+    // files from some packages); \\?\ keeps the trailing dot on Windows.
+    const raw = (file) => (isWin ? `\\\\?\\${file}` : file);
+    mkdirSync(join(globalCache, 'p', 'adhdev-probe'), { recursive: true });
+    writeFileSync(raw(join(globalCache, 'p', 'adhdev-probe', '._.')), 'AppleDouble');
+    writeFileSync(raw(join(localCache, 'stale.')), 'x');
+
+    // A clean that leaves the caches in place must stop the release configure.
+    const mockDir = mkdtempSync(join(tmpdir(), 'ghostty-rm-mock-'));
+    try {
+        const mock = join(mockDir, 'rm-noop.cjs');
+        writeFileSync(mock, "require('node:fs').rmSync = () => {};\n");
+        configured = configure(['ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=OFF', `ZIG_EXECUTABLE=${realZig}`], { NODE_OPTIONS: `--require ${JSON.stringify(mock)}` });
+        const kept = walk(globalCache).length + walk(localCache).length;
+        probe('clean-fails-closed', configured.status !== 0 && /could not empty the private zig caches/.test(configured.out) && kept > 0,
+            `configure exit ${configured.status}; ${kept} planted cache files left in place`);
+    } finally {
+        rmSync(mockDir, { recursive: true, force: true });
+    }
+
     // Release configure with the real zig and the ambient poison still in the
     // environment: the private caches and prefix are emptied, then rebuilt
     // from freshly fetched packages.
     configured = configure(['ADHDEV_GHOSTTY_UNVERIFIED_DEV_BUILD=OFF', `ZIG_EXECUTABLE=${realZig}`], ambientEnv);
     const leftovers = walk(globalCache).length + walk(localCache).length;
     probe('reconfigure-clears', configured.status === 0 && releaseFlag(configured.out) === '1' && leftovers === 0 && !existsSync(installedLib),
-        `release=${releaseFlag(configured.out)}, ${leftovers} files left in the private caches, runtime ${existsSync(installedLib) ? 'still present' : 'deleted'}`);
+        `release=${releaseFlag(configured.out)}, ${leftovers} files left in the private caches (incl. planted ._. / trailing-dot), runtime ${existsSync(installedLib) ? 'still present' : 'deleted'}`);
     before = snapshot(ambient);
     built = compile(ambientEnv);
     // A fresh build: equal loaded sections to the baseline (bytes differ only in

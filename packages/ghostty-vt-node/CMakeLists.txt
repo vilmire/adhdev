@@ -99,6 +99,7 @@ FetchContent_MakeAvailable(ghostty)
 # The DECLARED tag proves nothing: FETCHCONTENT_SOURCE_DIR_GHOSTTY can point at
 # any checkout. Verify the source that is actually built.
 find_package(Git QUIET)
+find_program(ADHDEV_NODE_EXECUTABLE node REQUIRED)
 set(ADHDEV_GHOSTTY_SOURCE_REVISION "")
 set(ADHDEV_GHOSTTY_SOURCE_CLEAN 0)
 if(GIT_EXECUTABLE)
@@ -197,7 +198,24 @@ set(ADHDEV_ZIG_GLOBAL_CACHE "${ADHDEV_GHOSTTY_ZIG_DIR}/global-cache")
 set(ADHDEV_ZIG_LOCAL_CACHE "${ADHDEV_GHOSTTY_ZIG_DIR}/local-cache")
 set(ADHDEV_GHOSTTY_PREFIX "${ADHDEV_GHOSTTY_ZIG_DIR}/prefix")
 if(ADHDEV_GHOSTTY_RELEASE_ELIGIBLE)
-  file(REMOVE_RECURSE "${ADHDEV_GHOSTTY_ZIG_DIR}")
+  # Not file(REMOVE_RECURSE): on Windows it stops part-way on names Win32
+  # normalizes away (zig extracts macOS `._.` files into the package cache),
+  # silently keeping cached packages. scripts/clean-dir.cjs removes them, and a
+  # clean that leaves anything behind fails the configure; a release build never
+  # proceeds on a partially emptied cache.
+  execute_process(
+    COMMAND "${ADHDEV_NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/clean-dir.cjs" "${ADHDEV_GHOSTTY_ZIG_DIR}"
+    RESULT_VARIABLE adhdev_clean_result
+    OUTPUT_VARIABLE adhdev_clean_output
+    ERROR_VARIABLE adhdev_clean_output
+  )
+  if(NOT adhdev_clean_result EQUAL 0 OR EXISTS "${ADHDEV_GHOSTTY_ZIG_DIR}")
+    message(FATAL_ERROR
+      "ghostty-vt-node: could not empty the private zig caches in ${ADHDEV_GHOSTTY_ZIG_DIR} "
+      "(exit ${adhdev_clean_result}): ${adhdev_clean_output}\n"
+      "A release build must start from empty caches. Remove the directory by hand, "
+      "and make sure no other process is using it.")
+  endif()
 endif()
 file(MAKE_DIRECTORY "${ADHDEV_ZIG_GLOBAL_CACHE}" "${ADHDEV_ZIG_LOCAL_CACHE}" "${ADHDEV_GHOSTTY_PREFIX}/include")
 if(DEFINED ENV{ZIG_GLOBAL_CACHE_DIR} OR DEFINED ENV{ZIG_LOCAL_CACHE_DIR})
@@ -281,6 +299,7 @@ set(ADHDEV_BINDING_DIGEST_INPUTS
   src/addon.cc
   src/ghostty_bridge.c
   src/ghostty_bridge.h
+  scripts/clean-dir.cjs
 )
 set(ADHDEV_BINDING_DIGEST_MANIFEST "")
 foreach(input IN LISTS ADHDEV_BINDING_DIGEST_INPUTS)
