@@ -189,6 +189,17 @@ export function normalizeAssistantOwnerBinding(raw: unknown): AssistantOwnerBind
     };
 }
 
+const LOCAL_OWNER_BINDING_REFUSAL_CODES: ReadonlySet<string> = new Set([
+    'local_owner_binding_missing',
+    'local_owner_binding_mismatch',
+    'assistant_owner_binding_missing',
+    'assistant_owner_binding_mismatch',
+]);
+
+export function isLocalOwnerBindingRefusalCode(code: unknown): code is string {
+    return typeof code === 'string' && LOCAL_OWNER_BINDING_REFUSAL_CODES.has(code.trim());
+}
+
 function isFollowedState(v: unknown): v is FollowedRemoteProjectState {
     return v === 'followed' || v === 'unfollowed' || v === 'revoked';
 }
@@ -207,6 +218,10 @@ export function normalizeFollowedRemoteProjectEntry(raw: unknown): FollowedRemot
     const key = followedRemoteProjectKey(hostDaemonId, meshId);
     const followedAt = isStr(r.followedAt) ? r.followedAt.trim() : new Date(0).toISOString();
     const updatedAt = isStr(r.updatedAt) ? r.updatedAt.trim() : followedAt;
+    const unfollowedAt = isNum(r.unfollowedAt) || isStr(r.unfollowedAt) ? r.unfollowedAt : undefined;
+    const revokedAt = isNum(r.revokedAt) || isStr(r.revokedAt) ? r.revokedAt : undefined;
+    const revokedReason = isStr(r.revokedReason) ? r.revokedReason.trim() : undefined;
+    const lastErrorCode = isStr(r.lastErrorCode) ? r.lastErrorCode.trim() : undefined;
     const lastObservedRaw = r.lastObserved as Record<string, unknown> | null | undefined;
     const lastObserved = lastObservedRaw && typeof lastObservedRaw === 'object' && isStr(lastObservedRaw.observedAt)
         ? {
@@ -230,6 +245,10 @@ export function normalizeFollowedRemoteProjectEntry(raw: unknown): FollowedRemot
         state: r.state,
         followedAt,
         updatedAt,
+        ...(r.state === 'unfollowed' && unfollowedAt !== undefined ? { unfollowedAt } : {}),
+        ...(r.state === 'revoked' && revokedAt !== undefined ? { revokedAt } : {}),
+        ...(r.state === 'revoked' && revokedReason ? { revokedReason } : {}),
+        ...(lastErrorCode ? { lastErrorCode } : {}),
         ...(r.lastCursor === null || isStr(r.lastCursor) ? { lastCursor: r.lastCursor } : {}),
         ...(r.coordinatorSessionId === null || isStr(r.coordinatorSessionId) ? { coordinatorSessionId: r.coordinatorSessionId } : {}),
         ...(lastObserved ? { lastObserved } : {}),
@@ -540,22 +559,65 @@ export class AssistantRegistry {
         const base = this.ensureBaseEntry(Date.now());
         const existing = base.ownerBinding;
         const bump = opts?.bumpRevision === true || opts?.forceNewRevision === true;
-        if (
+        const followedEntries = Object.values(base.followedRemoteProjects ?? {});
+        const maxFollowedRevision = followedEntries.reduce(
+            (max, e) => (e && isPositiveSafeInt(e.bindingRevision) && e.bindingRevision > max ? e.bindingRevision : max),
+            0,
+        );
+        const sameDaemon = Boolean(
             existing
             && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT
-            && daemonIdsEquivalent(existing.daemonId, canonicalSelf)
-            && !bump
-        ) {
-            return existing;
+            && daemonIdsEquivalent(existing.daemonId, canonicalSelf),
+        );
+        const nextRevision = bump
+            ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1
+            : sameDaemon
+                ? existing!.bindingRevision
+                : maxFollowedRevision > 0
+                    ? maxFollowedRevision
+                    : (existing?.bindingRevision ?? 0) + 1;
+        const receipt: AssistantOwnerBindingReceipt = sameDaemon && !bump
+            ? existing!
+            : {
+                accountSlot: ASSISTANT_ACCOUNT_SLOT,
+                daemonId: canonicalSelf,
+                bindingRevision: nextRevision,
+                boundAt: nowIso,
+            };
+        let nextFollowed = base.followedRemoteProjects;
+        if (nextFollowed) {
+            let recoveredAny = false;
+            const copy: Record<string, FollowedRemoteProjectEntry> = { ...nextFollowed };
+            for (const [k, entry] of Object.entries(copy)) {
+                if (
+                    entry.state === 'revoked'
+                    && isLocalOwnerBindingRefusalCode(entry.revokedReason ?? entry.lastErrorCode)
+                    && entry.bindingRevision === receipt.bindingRevision
+                ) {
+                    const recovered = normalizeFollowedRemoteProjectEntry({
+                        ...entry,
+                        state: 'followed',
+                        updatedAt: nowIso,
+                        revokedAt: undefined,
+                        revokedReason: undefined,
+                        lastErrorCode: undefined,
+                    });
+                    if (recovered) {
+                        copy[k] = recovered;
+                        recoveredAny = true;
+                    }
+                }
+            }
+            if (recoveredAny) nextFollowed = copy;
         }
-        const nextRevision = (existing?.bindingRevision ?? 0) + 1;
-        const receipt: AssistantOwnerBindingReceipt = {
-            accountSlot: ASSISTANT_ACCOUNT_SLOT,
-            daemonId: canonicalSelf,
-            bindingRevision: nextRevision,
-            boundAt: nowIso,
-        };
-        this.write({ ...base, ownerBinding: receipt });
+        if (sameDaemon && !bump && nextFollowed === base.followedRemoteProjects) {
+            return existing!;
+        }
+        this.write({
+            ...base,
+            ownerBinding: receipt,
+            ...(nextFollowed ? { followedRemoteProjects: nextFollowed } : {}),
+        });
         return { ...receipt };
     }
 

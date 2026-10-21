@@ -88,7 +88,9 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
                 opened_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.opened_at ELSE excluded.opened_at END,
                 last_send_at = excluded.last_send_at,
                 closed_at = NULL,
-                stall_notified_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.stall_notified_at ELSE NULL END
+                stall_notified_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.stall_notified_at ELSE NULL END,
+                last_cursor = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.last_cursor ELSE NULL END,
+                coordinator_session_id = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.coordinator_session_id ELSE NULL END
         `).run(meshId, at, at);
     }
 
@@ -96,7 +98,16 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
         this.db.prepare('UPDATE assistant_threads SET stall_notified_at = ? WHERE mesh_id = ? AND closed_at IS NULL').run(at, meshId);
     }
 
-    setThreadCursor(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void {
+    setThreadCursor(meshId: string, cursor: string | null, coordinatorSessionId?: string | null, opts?: { reset?: boolean }): void {
+        if (opts?.reset) {
+            this.db.prepare(`
+                UPDATE assistant_threads
+                SET last_cursor = ?,
+                    coordinator_session_id = ?
+                WHERE mesh_id = ?
+            `).run(cursor, coordinatorSessionId ?? null, meshId);
+            return;
+        }
         this.db.prepare(`
             UPDATE assistant_threads
             SET last_cursor = COALESCE(?, last_cursor),

@@ -24,7 +24,7 @@ import { isTrustedOwnerIngress } from '../command-args.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { ASSISTANT_OWNER_SOURCES, projectPortsFor } from './assistant-store.js';
 import { getAssistantServices } from '../../assistant/assistant-services.js';
-import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
+import { getAssistantRegistry, isLocalOwnerBindingRefusalCode } from '../../assistant/assistant-registry.js';
 import { projectSlugBase, projectSlugs } from '../../assistant/assistant-projects.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { SqliteAssistantRelayStore } from '../../assistant/assistant-relay-sqlite-store.js';
@@ -148,11 +148,24 @@ const close: HighFamilyHandler = async (_ctx, args) => {
     const remainingActiveSameMesh = followed
         ? registry.listFollowedRemoteProjects().find((f) => f.key !== followed.key && f.meshId === targetMeshId && f.state === 'followed')
         : undefined;
-    const closed = remainingActiveSameMesh
-        ? Boolean(followed)
-        : runtime
-            ? runtime.relay.closeThread(targetMeshId, { suppressPending: true })
-            : (store ? (store.closeThread(targetMeshId, Date.now()), true) : Boolean(followed));
+    if (remainingActiveSameMesh) {
+        const nextCursor = remainingActiveSameMesh.lastCursor ?? null;
+        const nextCoordSid = remainingActiveSameMesh.coordinatorSessionId ?? null;
+        if (runtime) {
+            runtime.store.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+            runtime.remotePoller.noteSent(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+        } else {
+            store?.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+            try {
+                const ports = await projectPortsFor(_ctx);
+                ports.relay.remoteSent?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+            } catch { /* ignore */ }
+        }
+        return { success: true, closed: false, ...(followed ? { unfollowedKey: followed.key } : {}) };
+    }
+    const closed = runtime
+        ? runtime.relay.closeThread(targetMeshId, { suppressPending: true })
+        : (store ? (store.closeThread(targetMeshId, Date.now()), true) : Boolean(followed));
     return { success: true, closed, ...(followed ? { unfollowedKey: followed.key } : {}) };
 };
 
@@ -174,10 +187,44 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
         if (!selfDaemonId) {
             return { success: false, code: 'daemon_id_missing', error: 'Local assistant daemonId is unavailable.' };
         }
+        const recoverableBefore = new Set(
+            registry
+                .listFollowedRemoteProjects()
+                .filter((e) => e.state === 'revoked' && isLocalOwnerBindingRefusalCode(e.revokedReason ?? e.lastErrorCode))
+                .map((e) => e.key),
+        );
         const ownerBinding = registry.reconcileOwnerBinding(selfDaemonId, {
             forceNewRevision: args?.forceNewRevision === true,
         });
-        return { success: true, ownerBinding };
+        const recovered = registry
+            .listFollowedRemoteProjects()
+            .filter((e) => recoverableBefore.has(e.key) && e.state === 'followed');
+        if (recovered.length > 0) {
+            let ports: Awaited<ReturnType<typeof projectPortsFor>> | null = null;
+            if (!runtime) {
+                try { ports = await projectPortsFor(ctx); } catch { ports = null; }
+            }
+            for (const entry of recovered) {
+                const cur = entry.lastCursor ?? null;
+                const sid = entry.coordinatorSessionId ?? null;
+                if (runtime) {
+                    runtime.activate('registry');
+                    runtime.relay.openThread(entry.meshId);
+                    runtime.store.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
+                    runtime.remotePoller.noteSent(entry.meshId, cur, sid, { reset: true });
+                } else {
+                    store?.openThread(entry.meshId, Date.now());
+                    store?.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
+                    ports?.relay.openThread?.(entry.meshId);
+                    ports?.relay.remoteSent?.(entry.meshId, cur, sid, { reset: true });
+                }
+            }
+        }
+        return {
+            success: true,
+            ownerBinding,
+            ...(recovered.length > 0 ? { recoveredKeys: recovered.map((e) => e.key) } : {}),
+        };
     }
 
     if (action === 'follow') {
@@ -281,13 +328,13 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
         if (runtime) {
             runtime.activate('registry');
             runtime.relay.openThread(meshId);
-            runtime.store.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId);
-            runtime.remotePoller.noteSent(meshId, initialCursor, coordinatorSessionId);
+            runtime.store.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
+            runtime.remotePoller.noteSent(meshId, initialCursor, coordinatorSessionId, { reset: true });
         } else {
             store?.openThread(meshId, Date.now());
-            store?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId);
+            store?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
             ports.relay.openThread?.(meshId);
-            ports.relay.remoteSent?.(meshId, initialCursor, coordinatorSessionId);
+            ports.relay.remoteSent?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
         }
 
         return {
@@ -319,7 +366,9 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
         const now = Date.now();
         const updated = registry.updateFollowedRemoteProject(existing.key, {
             state: nextState,
-            ...(nextState === 'revoked' ? { revokedAt: now } : { unfollowedAt: now }),
+            ...(nextState === 'revoked'
+                ? { revokedAt: now, revokedReason: 'host_revoked', lastErrorCode: 'host_revoked' }
+                : { unfollowedAt: now }),
         });
         const remainingActiveSameMesh = registry
             .listFollowedRemoteProjects()
@@ -328,10 +377,14 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
             const nextCursor = remainingActiveSameMesh.lastCursor ?? null;
             const nextCoordSid = remainingActiveSameMesh.coordinatorSessionId ?? null;
             if (runtime) {
-                runtime.store.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid);
-                runtime.remotePoller.noteSent(existing.meshId, nextCursor, nextCoordSid);
+                runtime.store.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+                runtime.remotePoller.noteSent(existing.meshId, nextCursor, nextCoordSid, { reset: true });
             } else {
-                store?.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid);
+                store?.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+                try {
+                    const ports = await projectPortsFor(ctx);
+                    ports.relay.remoteSent?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+                } catch { /* ignore */ }
             }
         } else if (runtime) {
             runtime.relay.closeThread(existing.meshId, { suppressPending: true });

@@ -124,9 +124,15 @@ export class AssistantRemoteRelayPoller {
     }
 
     /** `project_send` or `follow` established `cursor` (the host's newest commit at that moment). */
-    noteSent(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void {
-        const prev = this.state.get(meshId);
-        const thread = !prev ? this.ports.openThreads().find((t) => t.meshId === meshId) : undefined;
+    noteSent(meshId: string, cursor: string | null, coordinatorSessionId?: string | null, opts?: { reset?: boolean }): void {
+        const rawPrev = opts?.reset ? undefined : this.state.get(meshId);
+        const prev = rawPrev && (coordinatorSessionId === undefined || rawPrev.coordinatorSessionId === coordinatorSessionId)
+            ? rawPrev
+            : undefined;
+        const rawThread = !opts?.reset && !prev ? this.ports.openThreads().find((t) => t.meshId === meshId) : undefined;
+        const thread = rawThread && (coordinatorSessionId === undefined || (rawThread.coordinatorSessionId !== undefined && rawThread.coordinatorSessionId === coordinatorSessionId))
+            ? rawThread
+            : undefined;
         const nextCursor = cursor ?? prev?.cursor ?? thread?.lastCursor ?? null;
         const nextSessionId = coordinatorSessionId !== undefined
             ? coordinatorSessionId

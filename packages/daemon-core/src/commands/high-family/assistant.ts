@@ -50,10 +50,11 @@ import { ensureCoordinator, pickCoordinator, type EnsureCoordinatorPorts } from 
 import { composeProjectMessage } from '../../assistant/project-message.js';
 import {
     PROJECT_READ_DEFAULT_TAIL, PROJECT_READ_MAX_TAIL, PROJECT_STATUS_ROUTING_DIFFICULTY,
-    compactProjectStatus, compactTranscriptTail, coordinatorState, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView,
+    compactProjectStatus, compactTranscriptTail, coordinatorState, followerStatusView, isUnmanagedRepoIdentity, machinesSummary, projectRoutingView,
     sessionRows,
     type ProjectRoutingView, type ProjectRow, type RemoteHostMachine, type SessionRow,
 } from '../../assistant/project-views.js';
+import { isLocalOwnerBindingRefusalCode } from '../../assistant/assistant-registry.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
 
@@ -146,14 +147,35 @@ async function resolveProject(ports: AssistantProjectPorts, ref: unknown): Promi
             };
         }
         if (entry.state === 'revoked') {
-            return {
-                ok: false,
-                result: fail(
-                    'host_revoked',
-                    'Remote host access for this project has been revoked.',
-                    { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId },
-                ),
-            };
+            const revokedReason = entry.revokedReason ?? entry.lastErrorCode;
+            if (isLocalOwnerBindingRefusalCode(revokedReason)) {
+                const verify = ports.verifyOwnerBinding?.();
+                if (!verify || !verify.ok) {
+                    const code = verify && !verify.ok ? verify.code : revokedReason;
+                    const error = verify && !verify.ok
+                        ? verify.error
+                        : 'Local assistant owner binding receipt is missing or mismatched; explicit owner reconciliation is required.';
+                    return {
+                        ok: false,
+                        result: fail(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }),
+                    };
+                }
+                ports.updateFollowedRemoteObservation?.(entry.key, {
+                    state: 'followed',
+                    revokedAt: undefined,
+                    revokedReason: undefined,
+                    lastErrorCode: undefined,
+                });
+            } else {
+                return {
+                    ok: false,
+                    result: fail(
+                        'host_revoked',
+                        'Remote host access for this project has been revoked.',
+                        { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId },
+                    ),
+                };
+            }
         }
         const verify = ports.verifyOwnerBinding?.();
         if (verify && !verify.ok) {
@@ -189,7 +211,7 @@ export function remoteFailure(
     followedRemote?: FollowedRemoteProjectEntry,
 ): CommandRouterResult {
     if (followedRemote && out.kind === 'refused' && (out.code === 'host_revoked' || out.code === 'remote_access_denied')) {
-        ports?.markFollowedRemoteRevoked?.(followedRemote.key);
+        ports?.markFollowedRemoteRevoked?.(followedRemote.key, out.code);
         ports?.relay.closeThread?.(where.meshId, { suppressPending: true });
     }
     if (out.kind === 'unreachable') {
@@ -407,7 +429,14 @@ const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, 
         }
         return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
     }
-    const body = remoteBody(out);
+    const rawBody = remoteBody(out);
+    const body = p.followedRemote
+        ? followerStatusView(rawBody, {
+            id: meshId,
+            name: p.mesh.name,
+            repoIdentity: p.followedRemote.sanitizedRepoIdentity || str(rawBody.repo),
+        } as LocalMeshEntry)
+        : rawBody;
     if (p.followedRemote) {
         const coordState = str(body.coordinator) || 'none';
         ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
@@ -421,7 +450,7 @@ const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, 
     // The thread and relay times live HERE (this daemon's assistant), not on the host.
     const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
     const repo = p.followedRemote
-        ? sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str(body.repo))
+        ? (typeof body.repo === 'string' ? body.repo : sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str(rawBody.repo)))
         : p.mesh.repoIdentity;
     return wrap(p.slug, meshId, {
         ...body,

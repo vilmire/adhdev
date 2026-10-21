@@ -37473,14 +37473,21 @@ ${error.message || ""}`;
     function normalizeAssistantRemoteAccessBinding(raw, expectedMeshId) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
       const rec5 = raw;
-      const hostDaemonId = typeof rec5.hostDaemonId === "string" ? rec5.hostDaemonId.trim() : "";
+      const rawHostDaemonId = typeof rec5.hostDaemonId === "string" ? rec5.hostDaemonId.trim() : "";
       const meshId = typeof rec5.meshId === "string" ? rec5.meshId.trim() : "";
-      const activeDaemonId = typeof rec5.activeDaemonId === "string" ? rec5.activeDaemonId.trim() : "";
-      if (!hostDaemonId || !meshId || !activeDaemonId) return null;
+      const rawActiveDaemonId = typeof rec5.activeDaemonId === "string" ? rec5.activeDaemonId.trim() : "";
+      if (!rawHostDaemonId || !meshId || !rawActiveDaemonId) return null;
       if (expectedMeshId && meshId !== expectedMeshId) return null;
       if (rec5.accountSlot !== ASSISTANT_ACCOUNT_SLOT) return null;
       const status = rec5.status === "active" || rec5.status === "revoked" ? rec5.status : null;
       if (!status) return null;
+      const hostDaemonId = canonicalDaemonId2(rawHostDaemonId);
+      const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
+      if (!hostDaemonId || !hostDaemonId.startsWith("daemon_mach_")) return null;
+      if (status === "active") {
+        if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return null;
+        if (daemonIdsEquivalent4(hostDaemonId, activeDaemonId)) return null;
+      }
       const bindingRevision = typeof rec5.bindingRevision === "number" && Number.isInteger(rec5.bindingRevision) && rec5.bindingRevision >= 1 ? rec5.bindingRevision : null;
       const grantRevision = typeof rec5.grantRevision === "number" && Number.isInteger(rec5.grantRevision) && rec5.grantRevision >= 1 ? rec5.grantRevision : null;
       if (bindingRevision === null || grantRevision === null) return null;
@@ -37491,10 +37498,10 @@ ${error.message || ""}`;
       const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
       if (allowedOps.length === 0) return null;
       return {
-        hostDaemonId: canonicalDaemonId2(hostDaemonId) ?? hostDaemonId,
+        hostDaemonId,
         meshId,
         accountSlot: ASSISTANT_ACCOUNT_SLOT,
-        activeDaemonId: canonicalDaemonId2(activeDaemonId) ?? activeDaemonId,
+        activeDaemonId: activeDaemonId ?? rawActiveDaemonId,
         bindingRevision,
         grantRevision,
         status,
@@ -90347,6 +90354,7 @@ ${result.stderr}`, result.code);
       busyInputModeToSendPolicy: () => busyInputModeToSendPolicy,
       findAssistantRestoreRecord: () => findAssistantRestoreRecord,
       getAssistantRegistry: () => getAssistantRegistry,
+      isLocalOwnerBindingRefusalCode: () => isLocalOwnerBindingRefusalCode,
       matchesAssistantRestore: () => matchesAssistantRestore,
       normalizeAssistantOwnerBinding: () => normalizeAssistantOwnerBinding,
       normalizeAssistantRegistryEntry: () => normalizeAssistantRegistryEntry,
@@ -90405,6 +90413,9 @@ ${result.stderr}`, result.code);
         boundAt: r.boundAt.trim()
       };
     }
+    function isLocalOwnerBindingRefusalCode(code) {
+      return typeof code === "string" && LOCAL_OWNER_BINDING_REFUSAL_CODES.has(code.trim());
+    }
     function isFollowedState(v) {
       return v === "followed" || v === "unfollowed" || v === "revoked";
     }
@@ -90422,6 +90433,10 @@ ${result.stderr}`, result.code);
       const key4 = followedRemoteProjectKey(hostDaemonId, meshId);
       const followedAt = isStr(r.followedAt) ? r.followedAt.trim() : (/* @__PURE__ */ new Date(0)).toISOString();
       const updatedAt = isStr(r.updatedAt) ? r.updatedAt.trim() : followedAt;
+      const unfollowedAt = isNum(r.unfollowedAt) || isStr(r.unfollowedAt) ? r.unfollowedAt : void 0;
+      const revokedAt = isNum(r.revokedAt) || isStr(r.revokedAt) ? r.revokedAt : void 0;
+      const revokedReason = isStr(r.revokedReason) ? r.revokedReason.trim() : void 0;
+      const lastErrorCode = isStr(r.lastErrorCode) ? r.lastErrorCode.trim() : void 0;
       const lastObservedRaw = r.lastObserved;
       const lastObserved = lastObservedRaw && typeof lastObservedRaw === "object" && isStr(lastObservedRaw.observedAt) ? {
         observedAt: lastObservedRaw.observedAt.trim(),
@@ -90443,6 +90458,10 @@ ${result.stderr}`, result.code);
         state: r.state,
         followedAt,
         updatedAt,
+        ...r.state === "unfollowed" && unfollowedAt !== void 0 ? { unfollowedAt } : {},
+        ...r.state === "revoked" && revokedAt !== void 0 ? { revokedAt } : {},
+        ...r.state === "revoked" && revokedReason ? { revokedReason } : {},
+        ...lastErrorCode ? { lastErrorCode } : {},
         ...r.lastCursor === null || isStr(r.lastCursor) ? { lastCursor: r.lastCursor } : {},
         ...r.coordinatorSessionId === null || isStr(r.coordinatorSessionId) ? { coordinatorSessionId: r.coordinatorSessionId } : {},
         ...lastObserved ? { lastObserved } : {}
@@ -90537,6 +90556,7 @@ ${result.stderr}`, result.code);
     var isPositiveSafeInt;
     var ASSISTANT_REVIEW_HISTORY_MS;
     var REVIEW_HISTORY_MAX;
+    var LOCAL_OWNER_BINDING_REFUSAL_CODES;
     var AssistantRegistry;
     var sharedRegistry;
     var sharedRegistryOverridden;
@@ -90558,6 +90578,12 @@ ${result.stderr}`, result.code);
         isPositiveSafeInt = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
         ASSISTANT_REVIEW_HISTORY_MS = 24 * 60 * 60 * 1e3;
         REVIEW_HISTORY_MAX = 16;
+        LOCAL_OWNER_BINDING_REFUSAL_CODES = /* @__PURE__ */ new Set([
+          "local_owner_binding_missing",
+          "local_owner_binding_mismatch",
+          "assistant_owner_binding_missing",
+          "assistant_owner_binding_mismatch"
+        ]);
         AssistantRegistry = class {
           path;
           cache;
@@ -90765,17 +90791,51 @@ ${result.stderr}`, result.code);
             const base = this.ensureBaseEntry(Date.now());
             const existing = base.ownerBinding;
             const bump = opts?.bumpRevision === true || opts?.forceNewRevision === true;
-            if (existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent4(existing.daemonId, canonicalSelf) && !bump) {
-              return existing;
-            }
-            const nextRevision = (existing?.bindingRevision ?? 0) + 1;
-            const receipt = {
+            const followedEntries = Object.values(base.followedRemoteProjects ?? {});
+            const maxFollowedRevision = followedEntries.reduce(
+              (max, e) => e && isPositiveSafeInt(e.bindingRevision) && e.bindingRevision > max ? e.bindingRevision : max,
+              0
+            );
+            const sameDaemon2 = Boolean(
+              existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent4(existing.daemonId, canonicalSelf)
+            );
+            const nextRevision = bump ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1 : sameDaemon2 ? existing.bindingRevision : maxFollowedRevision > 0 ? maxFollowedRevision : (existing?.bindingRevision ?? 0) + 1;
+            const receipt = sameDaemon2 && !bump ? existing : {
               accountSlot: ASSISTANT_ACCOUNT_SLOT,
               daemonId: canonicalSelf,
               bindingRevision: nextRevision,
               boundAt: nowIso
             };
-            this.write({ ...base, ownerBinding: receipt });
+            let nextFollowed = base.followedRemoteProjects;
+            if (nextFollowed) {
+              let recoveredAny = false;
+              const copy = { ...nextFollowed };
+              for (const [k, entry] of Object.entries(copy)) {
+                if (entry.state === "revoked" && isLocalOwnerBindingRefusalCode(entry.revokedReason ?? entry.lastErrorCode) && entry.bindingRevision === receipt.bindingRevision) {
+                  const recovered = normalizeFollowedRemoteProjectEntry({
+                    ...entry,
+                    state: "followed",
+                    updatedAt: nowIso,
+                    revokedAt: void 0,
+                    revokedReason: void 0,
+                    lastErrorCode: void 0
+                  });
+                  if (recovered) {
+                    copy[k] = recovered;
+                    recoveredAny = true;
+                  }
+                }
+              }
+              if (recoveredAny) nextFollowed = copy;
+            }
+            if (sameDaemon2 && !bump && nextFollowed === base.followedRemoteProjects) {
+              return existing;
+            }
+            this.write({
+              ...base,
+              ownerBinding: receipt,
+              ...nextFollowed ? { followedRemoteProjects: nextFollowed } : {}
+            });
             return { ...receipt };
           }
           listFollowedRemoteProjects() {
@@ -99540,7 +99600,7 @@ ${asText(streams.stderr)}
         };
         RemoteCallTimeout = class extends Error {
         };
-        FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
+        FOLLOWER_REFUSAL_DETAIL_RE = /^(host_revoked|remote_access_denied|remote_op_forbidden|binding_revision_stale|binding_revision_mismatch|grant_revision_stale|project_not_hosted_here):/;
       }
     });
     function resolveCoordinatorDaemonIds(components) {
@@ -100534,8 +100594,14 @@ ${asText(streams.stderr)}
         updateFollowedRemoteObservation: (key4, patch) => {
           lazy.assistantRegistry().updateFollowedRemoteProject(key4, patch);
         },
-        markFollowedRemoteRevoked: (key4) => {
-          lazy.assistantRegistry().updateFollowedRemoteProject(key4, { state: "revoked", revokedAt: Date.now() });
+        markFollowedRemoteRevoked: (key4, reason) => {
+          const code = readText2(reason) || "host_revoked";
+          lazy.assistantRegistry().updateFollowedRemoteProject(key4, {
+            state: "revoked",
+            revokedAt: Date.now(),
+            revokedReason: code,
+            lastErrorCode: code
+          });
         },
         verifyOwnerBinding: () => {
           const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);
@@ -101616,6 +101682,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       compactProjectStatus: () => compactProjectStatus,
       compactTranscriptTail: () => compactTranscriptTail,
       coordinatorState: () => coordinatorState,
+      followerStatusView: () => followerStatusView,
       isUnmanagedRepoIdentity: () => isUnmanagedRepoIdentity,
       isVisible: () => isVisible,
       machinesSummary: () => machinesSummary,
@@ -101894,6 +101961,169 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
       return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
     }
+    function followerRoutingQuotaRow(v) {
+      const r = rec2(v);
+      const providerType = readText3(r?.providerType);
+      if (!providerType) return null;
+      const snapshotStatus = readText3(r?.snapshotStatus);
+      const failureKind = readText3(r?.failureKind);
+      const zeroReason = readText3(r?.zeroReason);
+      const gateReason = readText3(r?.gateReason);
+      const remainingPercent2 = routingNum(r?.remainingPercent);
+      const axis2 = axisOf(r?.axis);
+      return {
+        providerType,
+        ...snapshotStatus ? { snapshotStatus } : {},
+        ...failureKind ? { failureKind } : {},
+        ...zeroReason ? { zeroReason } : {},
+        gateOutcome: readText3(r?.gateOutcome) || "unknown",
+        ...gateReason ? { gateReason } : {},
+        bonusValue: routingNum(r?.bonusValue) ?? 0,
+        ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
+        ...axis2 ? { axis: axis2 } : {}
+      };
+    }
+    function followerRoutingNodeRow(v) {
+      const r = rec2(v);
+      const nodeId = readText3(r?.nodeId);
+      if (!nodeId) return null;
+      const winner = rec2(r?.predictedWinner);
+      const winnerProvider = readText3(winner?.providerType);
+      const winnerModel = readText3(winner?.model);
+      const reason = readText3(r?.reason);
+      const displaced = readText3(r?.displacedFitnessWinner);
+      return {
+        nodeId,
+        machineName: readText3(r?.machineName) || null,
+        predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
+        ...reason ? { reason } : {},
+        admitted: (Array.isArray(r?.admitted) ? r.admitted : []).map(routingSlot).filter((s2) => !!s2),
+        excluded: (Array.isArray(r?.excluded) ? r.excluded : []).map((e) => {
+          const s2 = routingSlot(e);
+          const er = readText3(rec2(e)?.reason);
+          return s2 && er ? { providerType: s2.providerType, ...s2.model ? { model: s2.model } : {}, reason: er } : null;
+        }).filter((e) => !!e),
+        quota: (Array.isArray(r?.quota) ? r.quota : []).map(followerRoutingQuotaRow).filter((q) => !!q),
+        reordered: r?.reordered === true,
+        ...displaced ? { displacedFitnessWinner: displaced } : {}
+      };
+    }
+    function followerStatusView(raw, mesh) {
+      const rawRepo = readText3(mesh.repoRemoteUrl) || readText3(mesh.repoIdentity) || readText3(raw.repo);
+      const machines = (Array.isArray(raw.machines) ? raw.machines : []).map((item) => {
+        const m = rec2(item);
+        const node = readText3(m?.node);
+        if (!node) return null;
+        const branch = readText3(m?.branch);
+        return {
+          node,
+          label: readText3(m?.label) || null,
+          os: readText3(m?.os) || null,
+          build: readText3(m?.build) || null,
+          online: m?.online === true,
+          ...branch ? { branch } : {}
+        };
+      }).filter((m) => m !== null);
+      const rawQueue = rec2(raw.queue);
+      const queue = rawQueue ? {
+        pending: typeof rawQueue.pending === "number" && Number.isFinite(rawQueue.pending) ? rawQueue.pending : 0,
+        assigned: typeof rawQueue.assigned === "number" && Number.isFinite(rawQueue.assigned) ? rawQueue.assigned : 0,
+        failed: typeof rawQueue.failed === "number" && Number.isFinite(rawQueue.failed) ? rawQueue.failed : 0
+      } : null;
+      const heldTasks = (Array.isArray(raw.heldTasks) ? raw.heldTasks : []).map((item) => {
+        const t = rec2(item);
+        const taskId = readText3(t?.taskId);
+        if (!taskId) return null;
+        return {
+          taskId,
+          title: readText3(t?.title),
+          hold: readText3(t?.hold) || null
+        };
+      }).filter((t) => t !== null);
+      const heldReasonsRaw = rec2(raw.heldReasons);
+      const heldReasons = {};
+      if (heldReasonsRaw) {
+        for (const [k, v] of Object.entries(heldReasonsRaw)) {
+          if (typeof v === "number" && Number.isFinite(v)) heldReasons[k] = v;
+        }
+      }
+      const activeMissions = (Array.isArray(raw.activeMissions) ? raw.activeMissions : []).map((item) => {
+        const m = rec2(item);
+        const id4 = readText3(m?.id);
+        if (!id4) return null;
+        return {
+          id: id4,
+          title: readText3(m?.title),
+          status: readText3(m?.status)
+        };
+      }).filter((m) => m !== null);
+      const staleMissions = (Array.isArray(raw.staleMissions) ? raw.staleMissions : []).map((item) => {
+        const m = rec2(item);
+        const id4 = readText3(m?.id);
+        if (!id4) return null;
+        return {
+          id: id4,
+          title: readText3(m?.title),
+          idleDays: typeof m?.idleDays === "number" && Number.isFinite(m.idleDays) ? m.idleDays : 0
+        };
+      }).filter((m) => m !== null);
+      const sessions = (Array.isArray(raw.sessions) ? raw.sessions : []).map((item) => {
+        const s2 = rec2(item);
+        if (!s2) return null;
+        const sessionId = readText3(s2.sessionId);
+        const sessionMeshId = readText3(s2.meshId);
+        if (!sessionId || sessionMeshId !== mesh.id || s2.assistant === true) return null;
+        return {
+          sessionId,
+          provider: readText3(s2.provider),
+          status: readText3(s2.status),
+          meshId: mesh.id,
+          nodeId: readText3(s2.nodeId) || null,
+          ageMs: typeof s2.ageMs === "number" && Number.isFinite(s2.ageMs) ? s2.ageMs : null,
+          messageCount: typeof s2.messageCount === "number" && Number.isFinite(s2.messageCount) ? s2.messageCount : 0,
+          workspace: null,
+          isCoordinator: s2.isCoordinator === true,
+          assistant: false,
+          spawnedForTaskId: readText3(s2.spawnedForTaskId) || null,
+          launchedBy: readText3(s2.launchedBy) || null
+        };
+      }).filter((s2) => s2 !== null);
+      const rawRouting = rec2(raw.routing);
+      const routing = rawRouting ? {
+        strategy: readText3(rawRouting.strategy) || "unknown",
+        difficulty: readText3(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
+        predictedWinner: rec2(rawRouting.predictedWinner) && readText3(rec2(rawRouting.predictedWinner).nodeId) && readText3(rec2(rawRouting.predictedWinner).providerType) ? {
+          nodeId: readText3(rec2(rawRouting.predictedWinner).nodeId),
+          providerType: readText3(rec2(rawRouting.predictedWinner).providerType),
+          ...readText3(rec2(rawRouting.predictedWinner).model) ? { model: readText3(rec2(rawRouting.predictedWinner).model) } : {},
+          fitnessScore: routingNum(rec2(rawRouting.predictedWinner).fitnessScore) ?? 0
+        } : null,
+        perNode: (Array.isArray(rawRouting.perNode) ? rawRouting.perNode : []).map(followerRoutingNodeRow).filter((n) => !!n),
+        ...readText3(rawRouting.error) ? { error: readText3(rawRouting.error) } : {}
+      } : null;
+      const coord = readText3(raw.coordinator);
+      const coordinator = coord === "idle" || coord === "working" || coord === "waiting" ? coord : "none";
+      return {
+        name: readText3(raw.name) || readText3(mesh.name),
+        repo: sanitizeRemoteRepoIdentity(rawRepo),
+        machines,
+        machinesOnline: machines.filter((m) => m.online).length,
+        queue,
+        heldTasks,
+        heldCount: typeof raw.heldCount === "number" && Number.isFinite(raw.heldCount) ? raw.heldCount : heldTasks.length,
+        heldReasons,
+        activeMissions,
+        failedTasks: queue ? queue.failed : null,
+        pendingApprovals: typeof raw.pendingApprovals === "number" && Number.isFinite(raw.pendingApprovals) ? raw.pendingApprovals : 0,
+        coordinator,
+        threadOpen: null,
+        lastRelayAt: null,
+        ...staleMissions.length > 0 ? { staleMissions } : {},
+        ...routing ? { routing } : {},
+        sessions,
+        ...readText3(raw.statusError) ? { statusError: "mesh_status_view failed" } : {}
+      };
+    }
     function messageText(m) {
       const c = m?.content;
       if (typeof c === "string") return c;
@@ -102145,9 +102375,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 meshId,
                 openedAt: at,
                 lastSendAt: at,
-                closedAt: null,
-                ...t?.lastCursor !== void 0 ? { lastCursor: t.lastCursor } : {},
-                ...t?.coordinatorSessionId !== void 0 ? { coordinatorSessionId: t.coordinatorSessionId } : {}
+                closedAt: null
               });
             }
           }
@@ -102155,9 +102383,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             const t = this.threads.get(meshId);
             if (t && t.closedAt === null) t.stallNotifiedAt = at;
           }
-          setThreadCursor(meshId, cursor, coordinatorSessionId) {
+          setThreadCursor(meshId, cursor, coordinatorSessionId, opts) {
             const t = this.threads.get(meshId);
             if (!t) return;
+            if (opts?.reset) {
+              if (cursor !== null) t.lastCursor = cursor;
+              else delete t.lastCursor;
+              if (coordinatorSessionId !== void 0 && coordinatorSessionId !== null) t.coordinatorSessionId = coordinatorSessionId;
+              else delete t.coordinatorSessionId;
+              return;
+            }
             if (cursor !== null) t.lastCursor = cursor;
             if (coordinatorSessionId !== void 0 && coordinatorSessionId !== null) {
               t.coordinatorSessionId = coordinatorSessionId;
@@ -102324,13 +102559,24 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
                 opened_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.opened_at ELSE excluded.opened_at END,
                 last_send_at = excluded.last_send_at,
                 closed_at = NULL,
-                stall_notified_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.stall_notified_at ELSE NULL END
+                stall_notified_at = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.stall_notified_at ELSE NULL END,
+                last_cursor = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.last_cursor ELSE NULL END,
+                coordinator_session_id = CASE WHEN assistant_threads.closed_at IS NULL THEN assistant_threads.coordinator_session_id ELSE NULL END
         `).run(meshId, at, at);
           }
           markStallNotified(meshId, at) {
             this.db.prepare("UPDATE assistant_threads SET stall_notified_at = ? WHERE mesh_id = ? AND closed_at IS NULL").run(at, meshId);
           }
-          setThreadCursor(meshId, cursor, coordinatorSessionId) {
+          setThreadCursor(meshId, cursor, coordinatorSessionId, opts) {
+            if (opts?.reset) {
+              this.db.prepare(`
+                UPDATE assistant_threads
+                SET last_cursor = ?,
+                    coordinator_session_id = ?
+                WHERE mesh_id = ?
+            `).run(cursor, coordinatorSessionId ?? null, meshId);
+              return;
+            }
             this.db.prepare(`
             UPDATE assistant_threads
             SET last_cursor = COALESCE(?, last_cursor),
@@ -104409,14 +104655,33 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           };
         }
         if (entry.state === "revoked") {
-          return {
-            ok: false,
-            result: fail4(
-              "host_revoked",
-              "Remote host access for this project has been revoked.",
-              { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
-            )
-          };
+          const revokedReason = entry.revokedReason ?? entry.lastErrorCode;
+          if (isLocalOwnerBindingRefusalCode(revokedReason)) {
+            const verify2 = ports.verifyOwnerBinding?.();
+            if (!verify2 || !verify2.ok) {
+              const code = verify2 && !verify2.ok ? verify2.code : revokedReason;
+              const error = verify2 && !verify2.ok ? verify2.error : "Local assistant owner binding receipt is missing or mismatched; explicit owner reconciliation is required.";
+              return {
+                ok: false,
+                result: fail4(code, error, { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId })
+              };
+            }
+            ports.updateFollowedRemoteObservation?.(entry.key, {
+              state: "followed",
+              revokedAt: void 0,
+              revokedReason: void 0,
+              lastErrorCode: void 0
+            });
+          } else {
+            return {
+              ok: false,
+              result: fail4(
+                "host_revoked",
+                "Remote host access for this project has been revoked.",
+                { project: r.slug, meshId: entry.meshId, hostDaemonId: entry.hostDaemonId }
+              )
+            };
+          }
         }
         const verify = ports.verifyOwnerBinding?.();
         if (verify && !verify.ok) {
@@ -104442,7 +104707,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     function remoteFailure(where, remote, out, ports, followedRemote) {
       if (followedRemote && out.kind === "refused" && (out.code === "host_revoked" || out.code === "remote_access_denied")) {
-        ports?.markFollowedRemoteRevoked?.(followedRemote.key);
+        ports?.markFollowedRemoteRevoked?.(followedRemote.key, out.code);
         ports?.relay.closeThread?.(where.meshId, { suppressPending: true });
       }
       if (out.kind === "unreachable") {
@@ -104620,6 +104885,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_coordinator_lifecycle();
         init_project_message();
         init_project_views();
+        init_assistant_registry();
         init_discover_repos();
         init_mesh_config_store();
         ASSISTANT_PROJECTS_SOURCES = ["ipc", "standalone", "p2p", "ws"];
@@ -104732,7 +104998,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             }
             return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
           }
-          const body = remoteBody(out);
+          const rawBody = remoteBody(out);
+          const body = p.followedRemote ? followerStatusView(rawBody, {
+            id: meshId,
+            name: p.mesh.name,
+            repoIdentity: p.followedRemote.sanitizedRepoIdentity || str10(rawBody.repo)
+          }) : rawBody;
           if (p.followedRemote) {
             const coordState = str10(body.coordinator) || "none";
             ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
@@ -104744,10 +105015,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
           }
           const lastRelayAt = ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null;
+          const repo = p.followedRemote ? typeof body.repo === "string" ? body.repo : sanitizeRemoteRepoIdentity(p.followedRemote.sanitizedRepoIdentity ?? str10(rawBody.repo)) : p.mesh.repoIdentity;
           return wrap(p.slug, meshId, {
             ...body,
             name: p.mesh.name,
-            repo: p.mesh.repoIdentity,
+            repo,
             host: p.remote.label,
             ...p.followedRemote ? { hostDaemonId: p.followedRemote.hostDaemonId, hosting: "remote_followed" } : {},
             via: "relay",
@@ -104773,16 +105045,29 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const clientId = str10(args.messageId) || (0, import_crypto35.randomUUID)();
           const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
           if (p.remote) {
-            const out = await callRemote(ports, { ...p, remote: p.remote }, "send", { text: composed.text, clientId });
+            const expectedCoordinatorSessionId = str10(args.expectedCoordinatorSessionId) || str10(p.followedRemote?.coordinatorSessionId);
+            const out = await callRemote(ports, { ...p, remote: p.remote }, "send", {
+              text: composed.text,
+              clientId,
+              ...expectedCoordinatorSessionId ? { expectedCoordinatorSessionId } : {}
+            });
             if (!out.ok) return remoteFailure(where, p.remote, out, ports, p.followedRemote);
             const body = remoteBody(out);
+            const remoteCursor = str10(body.cursor) || null;
+            const remoteCoordSessionId = str10(body.coordinatorSessionId) || null;
             ports.relay.openThread?.(meshId);
-            ports.relay.remoteSent?.(meshId, str10(body.cursor) || null);
+            ports.relay.remoteSent?.(meshId, remoteCursor, remoteCoordSessionId);
+            if (p.followedRemote) {
+              ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
+                ...remoteCursor !== null ? { lastCursor: remoteCursor } : {},
+                ...remoteCoordSessionId !== null ? { coordinatorSessionId: remoteCoordSessionId } : {}
+              });
+            }
             if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
             return wrap(p.slug, meshId, {
               status: str10(body.status) || "accepted",
               launched: body.launched === true,
-              coordinatorSessionId: str10(body.coordinatorSessionId) || null,
+              coordinatorSessionId: remoteCoordSessionId,
               messageId: str10(body.messageId) || null,
               host: p.remote.label,
               via: "relay",
@@ -106518,7 +106803,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           "host_revoked",
           "remote_access_denied",
           "grant_revision_stale",
+          "binding_revision_stale",
           "binding_revision_mismatch",
+          "local_owner_binding_missing",
+          "local_owner_binding_mismatch",
           "assistant_owner_binding_missing",
           "assistant_owner_binding_mismatch"
         ]);
@@ -106532,10 +106820,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             return this.ports.now ? this.ports.now() : Date.now();
           }
           /** `project_send` or `follow` established `cursor` (the host's newest commit at that moment). */
-          noteSent(meshId, cursor, coordinatorSessionId) {
-            const prev = this.state.get(meshId);
-            const nextCursor = cursor ?? prev?.cursor ?? null;
-            const nextSessionId = coordinatorSessionId !== void 0 ? coordinatorSessionId : prev?.coordinatorSessionId ?? null;
+          noteSent(meshId, cursor, coordinatorSessionId, opts) {
+            const rawPrev = opts?.reset ? void 0 : this.state.get(meshId);
+            const prev = rawPrev && (coordinatorSessionId === void 0 || rawPrev.coordinatorSessionId === coordinatorSessionId) ? rawPrev : void 0;
+            const rawThread = !opts?.reset && !prev ? this.ports.openThreads().find((t) => t.meshId === meshId) : void 0;
+            const thread = rawThread && (coordinatorSessionId === void 0 || rawThread.coordinatorSessionId !== void 0 && rawThread.coordinatorSessionId === coordinatorSessionId) ? rawThread : void 0;
+            const nextCursor = cursor ?? prev?.cursor ?? thread?.lastCursor ?? null;
+            const nextSessionId = coordinatorSessionId !== void 0 ? coordinatorSessionId : prev?.coordinatorSessionId ?? thread?.coordinatorSessionId ?? null;
             this.state.set(meshId, {
               cursor: nextCursor,
               coordinatorSessionId: nextSessionId,
@@ -106929,17 +107220,35 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, "poll", args),
         relay,
-        onCursorUpdated: (meshId, cursor, coordinatorSessionId) => {
+        onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed2) => {
           store2.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
           if (followed) {
-            registry.updateFollowedRemoteProject(followed.key, { lastCursor: cursor, coordinatorSessionId });
+            registry.updateFollowedRemoteProject(followed.key, {
+              lastCursor: cursor ?? followed.lastCursor ?? null,
+              coordinatorSessionId: coordinatorSessionId ?? (observed2?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null),
+              ...observed2 ? {
+                lastObserved: {
+                  ...followed.lastObserved,
+                  observedAt: (/* @__PURE__ */ new Date()).toISOString(),
+                  ...observed2.coordinatorState ? { coordinatorState: observed2.coordinatorState } : {},
+                  ...typeof observed2.coordinatorMissing === "boolean" ? { coordinatorMissing: observed2.coordinatorMissing } : {},
+                  ...observed2.summary ? { summary: observed2.summary } : {}
+                }
+              } : {}
+            });
           }
         },
-        onAccessRevoked: (meshId) => {
+        onAccessRevoked: (meshId, code) => {
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
           if (followed) {
-            registry.updateFollowedRemoteProject(followed.key, { state: "revoked", revokedAt: Date.now() });
+            const reason = str12(code) || "host_revoked";
+            registry.updateFollowedRemoteProject(followed.key, {
+              state: "revoked",
+              revokedAt: Date.now(),
+              revokedReason: reason,
+              lastErrorCode: reason
+            });
           }
         }
       });
@@ -107057,7 +107366,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         },
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics2?.bump("skill_attaches", meshId, Date.now(), count),
-        remoteSent: (meshId, cursor) => remotePoller.noteSent(meshId, cursor)
+        remoteSent: (meshId, cursor, coordinatorSessionId, resetOpts) => remotePoller.noteSent(meshId, cursor, coordinatorSessionId, resetOpts)
       });
       const runtime = {
         registry,
@@ -107077,7 +107386,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const followed = registry.listFollowedRemoteProjects();
           const events = await relay.pullPending(callerSessionId);
           return events.map((e) => {
-            const slug = e.meshId ? slugs.get(e.meshId) ?? followed.find((f) => f.meshId === e.meshId)?.slug : void 0;
+            const activeFollowed = followed.find((f) => f.meshId === e.meshId && f.state === "followed") ?? followed.find((f) => f.meshId === e.meshId);
+            const slug = e.meshId ? slugs.get(e.meshId) ?? activeFollowed?.slug : void 0;
             return slug ? { ...e, project: slug } : e;
           });
         },
@@ -152147,8 +152457,9 @@ ${ptyResult.output.slice(-2e3)}`);
         }
       })();
       const threads = store2.openThreads().map((t) => {
-        const followed = followedRemoteProjects.find((f) => f.meshId === t.meshId && f.state === "followed");
         const localMesh = meshes.find((m) => m.id === t.meshId);
+        const activeFollowed = followedRemoteProjects.filter((f) => f.meshId === t.meshId && f.state === "followed");
+        const followed = !localMesh ? activeFollowed.find((f) => t.coordinatorSessionId && f.coordinatorSessionId === t.coordinatorSessionId) ?? activeFollowed[0] ?? followedRemoteProjects.find((f) => f.meshId === t.meshId) : void 0;
         return {
           meshId: t.meshId,
           project: slugs.get(t.meshId) ?? followed?.slug ?? null,
@@ -152178,19 +152489,39 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       const meshId = typeof args?.meshId === "string" ? args.meshId.trim() : "";
       const key4 = typeof args?.key === "string" ? args.key.trim() : "";
+      const hostDaemonId = canonicalDaemonId2(str13(args?.hostDaemonId));
       if ((!meshId || meshId.length > 200) && !key4) {
         return { success: false, code: "invalid_args", error: "meshId required" };
       }
       const runtime = await runtimeOrNull();
       const registry = runtime?.registry ?? getAssistantRegistry();
       const store2 = runtime?.store ?? fallbackRelayStore();
-      const followed = key4 ? registry.getFollowedRemoteProject(key4) : registry.listFollowedRemoteProjects().find((f) => f.meshId === meshId && f.state === "followed");
+      const lookupKey = key4 || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : "");
+      const meshMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
+      const followed = lookupKey ? registry.getFollowedRemoteProject(lookupKey) : meshMatches.find((f) => f.state === "followed") ?? meshMatches[0] ?? null;
       if (followed) {
         registry.updateFollowedRemoteProject(followed.key, { state: "unfollowed", unfollowedAt: Date.now() });
       }
       const targetMeshId = followed?.meshId || meshId;
       if (!runtime && !store2 && !followed) {
         return { success: false, code: "assistant_unavailable" };
+      }
+      const remainingActiveSameMesh = followed ? registry.listFollowedRemoteProjects().find((f) => f.key !== followed.key && f.meshId === targetMeshId && f.state === "followed") : void 0;
+      if (remainingActiveSameMesh) {
+        const nextCursor = remainingActiveSameMesh.lastCursor ?? null;
+        const nextCoordSid = remainingActiveSameMesh.coordinatorSessionId ?? null;
+        if (runtime) {
+          runtime.store.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+          runtime.remotePoller.noteSent(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+        } else {
+          store2?.setThreadCursor?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+          try {
+            const ports = await projectPortsFor(_ctx);
+            ports.relay.remoteSent?.(targetMeshId, nextCursor, nextCoordSid, { reset: true });
+          } catch {
+          }
+        }
+        return { success: true, closed: false, ...followed ? { unfollowedKey: followed.key } : {} };
       }
       const closed = runtime ? runtime.relay.closeThread(targetMeshId, { suppressPending: true }) : store2 ? (store2.closeThread(targetMeshId, Date.now()), true) : Boolean(followed);
       return { success: true, closed, ...followed ? { unfollowedKey: followed.key } : {} };
@@ -152212,10 +152543,43 @@ ${ptyResult.output.slice(-2e3)}`);
         if (!selfDaemonId) {
           return { success: false, code: "daemon_id_missing", error: "Local assistant daemonId is unavailable." };
         }
+        const recoverableBefore = new Set(
+          registry.listFollowedRemoteProjects().filter((e) => e.state === "revoked" && isLocalOwnerBindingRefusalCode(e.revokedReason ?? e.lastErrorCode)).map((e) => e.key)
+        );
         const ownerBinding = registry.reconcileOwnerBinding(selfDaemonId, {
           forceNewRevision: args?.forceNewRevision === true
         });
-        return { success: true, ownerBinding };
+        const recovered = registry.listFollowedRemoteProjects().filter((e) => recoverableBefore.has(e.key) && e.state === "followed");
+        if (recovered.length > 0) {
+          let ports = null;
+          if (!runtime) {
+            try {
+              ports = await projectPortsFor(ctx);
+            } catch {
+              ports = null;
+            }
+          }
+          for (const entry of recovered) {
+            const cur = entry.lastCursor ?? null;
+            const sid = entry.coordinatorSessionId ?? null;
+            if (runtime) {
+              runtime.activate("registry");
+              runtime.relay.openThread(entry.meshId);
+              runtime.store.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
+              runtime.remotePoller.noteSent(entry.meshId, cur, sid, { reset: true });
+            } else {
+              store2?.openThread(entry.meshId, Date.now());
+              store2?.setThreadCursor?.(entry.meshId, cur, sid, { reset: true });
+              ports?.relay.openThread?.(entry.meshId);
+              ports?.relay.remoteSent?.(entry.meshId, cur, sid, { reset: true });
+            }
+          }
+        }
+        return {
+          success: true,
+          ownerBinding,
+          ...recovered.length > 0 ? { recoveredKeys: recovered.map((e) => e.key) } : {}
+        };
       }
       if (action2 === "follow") {
         const hostDaemonId = canonicalDaemonId2(str13(args?.hostDaemonId));
@@ -152304,13 +152668,13 @@ ${ptyResult.output.slice(-2e3)}`);
         if (runtime) {
           runtime.activate("registry");
           runtime.relay.openThread(meshId);
-          runtime.store.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId);
-          runtime.remotePoller.noteSent(meshId, initialCursor);
+          runtime.store.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
+          runtime.remotePoller.noteSent(meshId, initialCursor, coordinatorSessionId, { reset: true });
         } else {
           store2?.openThread(meshId, Date.now());
-          store2?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId);
+          store2?.setThreadCursor?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
           ports.relay.openThread?.(meshId);
-          ports.relay.remoteSent?.(meshId, initialCursor);
+          ports.relay.remoteSent?.(meshId, initialCursor, coordinatorSessionId, { reset: true });
         }
         return {
           success: true,
@@ -152325,7 +152689,8 @@ ${ptyResult.output.slice(-2e3)}`);
         const hostDaemonId = canonicalDaemonId2(str13(args?.hostDaemonId));
         const meshId = str13(args?.meshId);
         const lookupKey = keyArg || (hostDaemonId && meshId ? followedRemoteProjectKey(hostDaemonId, meshId) : "");
-        const existing = lookupKey ? registry.getFollowedRemoteProject(lookupKey) : meshId ? registry.listFollowedRemoteProjects().find((f) => f.meshId === meshId) ?? null : null;
+        const allMatches = meshId ? registry.listFollowedRemoteProjects().filter((f) => f.meshId === meshId) : [];
+        const existing = lookupKey ? registry.getFollowedRemoteProject(lookupKey) : allMatches.find((f) => f.state === "followed") ?? allMatches[0] ?? null;
         if (!existing) {
           return {
             success: false,
@@ -152337,9 +152702,24 @@ ${ptyResult.output.slice(-2e3)}`);
         const now = Date.now();
         const updated = registry.updateFollowedRemoteProject(existing.key, {
           state: nextState,
-          ...nextState === "revoked" ? { revokedAt: now } : { unfollowedAt: now }
+          ...nextState === "revoked" ? { revokedAt: now, revokedReason: "host_revoked", lastErrorCode: "host_revoked" } : { unfollowedAt: now }
         });
-        if (runtime) {
+        const remainingActiveSameMesh = registry.listFollowedRemoteProjects().find((f) => f.key !== existing.key && f.meshId === existing.meshId && f.state === "followed");
+        if (remainingActiveSameMesh) {
+          const nextCursor = remainingActiveSameMesh.lastCursor ?? null;
+          const nextCoordSid = remainingActiveSameMesh.coordinatorSessionId ?? null;
+          if (runtime) {
+            runtime.store.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+            runtime.remotePoller.noteSent(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+          } else {
+            store2?.setThreadCursor?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+            try {
+              const ports = await projectPortsFor(ctx);
+              ports.relay.remoteSent?.(existing.meshId, nextCursor, nextCoordSid, { reset: true });
+            } catch {
+            }
+          }
+        } else if (runtime) {
           runtime.relay.closeThread(existing.meshId, { suppressPending: true });
         } else {
           store2?.closeThread(existing.meshId, now);
@@ -152352,7 +152732,7 @@ ${ptyResult.output.slice(-2e3)}`);
         return {
           success: true,
           entry: updated,
-          closed: true
+          closed: !remainingActiveSameMesh
         };
       }
       return {
@@ -152420,7 +152800,30 @@ ${ptyResult.output.slice(-2e3)}`);
         }
       }
     }
+    var FOLLOWER_SEND_RECEIPT_MAX_ENTRIES = 1024;
+    var FOLLOWER_SEND_RECEIPT_TTL_MS = 24 * 60 * 6e4;
     var followerSendReceipts = /* @__PURE__ */ new Map();
+    function pruneFollowerSendReceipts(now) {
+      for (const [k, entry] of followerSendReceipts) {
+        if (now - entry.recordedAt >= FOLLOWER_SEND_RECEIPT_TTL_MS) {
+          followerSendReceipts.delete(k);
+        }
+      }
+      while (followerSendReceipts.size > FOLLOWER_SEND_RECEIPT_MAX_ENTRIES) {
+        const oldestKey = followerSendReceipts.keys().next().value;
+        if (oldestKey === void 0) break;
+        followerSendReceipts.delete(oldestKey);
+      }
+    }
+    function readFollowerSendReceipt(key4, now) {
+      pruneFollowerSendReceipts(now);
+      return followerSendReceipts.get(key4);
+    }
+    function recordFollowerSendReceipt(key4, receipt, now) {
+      followerSendReceipts.delete(key4);
+      followerSendReceipts.set(key4, receipt);
+      pruneFollowerSendReceipts(now);
+    }
     async function coordinatorTail(ports, sessionId) {
       const chat = await ports.execute("read_chat", { targetSessionId: sessionId, limit: 40 });
       if (!chat.success) return null;
@@ -152569,9 +152972,10 @@ ${ptyResult.output.slice(-2e3)}`);
             { expectedCoordinatorSessionId, currentCoordinatorSessionId: live.sessionId }
           );
         }
+        const now = Date.now();
         const bodyHash = (0, import_crypto36.createHash)("sha256").update(text4, "utf8").digest("hex");
         const idempotencyKey = `${acl.hostDaemonId}::${meshId}::${acl.accountSlot}::${acl.activeDaemonId}::b${acl.bindingRevision}::g${acl.grantRevision}::${clientId}`;
-        const prior = followerSendReceipts.get(idempotencyKey);
+        const prior = readFollowerSendReceipt(idempotencyKey, now);
         if (prior) {
           if (prior.bodyHash !== bodyHash) {
             return fail5(
@@ -152622,12 +153026,13 @@ ${ptyResult.output.slice(-2e3)}`);
           );
         }
         const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
-        followerSendReceipts.set(idempotencyKey, {
+        recordFollowerSendReceipt(idempotencyKey, {
           coordinatorSessionId: live.sessionId,
           bodyHash,
           messageId,
-          cursor
-        });
+          cursor,
+          recordedAt: now
+        }, now);
         return {
           success: true,
           result: {
@@ -152645,8 +153050,10 @@ ${ptyResult.output.slice(-2e3)}`);
     async function run2(ports, op, meshId, args, isFollower, sender) {
       const mesh = ports.listMeshes().find((m) => m.id === meshId);
       switch (op) {
-        case "status":
-          return { success: true, result: await localProjectStatus(ports, mesh) };
+        case "status": {
+          const status = await localProjectStatus(ports, mesh);
+          return { success: true, result: isFollower ? followerStatusView(status, mesh) : status };
+        }
         case "send": {
           if (isFollower) {
             return followerProjectSend(ports, meshId, sender, args);
@@ -152807,8 +153214,13 @@ ${ptyResult.output.slice(-2e3)}`);
               const now = Date.now();
               if (action2 === "grant") {
                 const rawActiveDaemonId = str14(args.activeDaemonId);
-                const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId) ?? rawActiveDaemonId;
-                if (!activeDaemonId) return fail5("invalid_args", "activeDaemonId required");
+                const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
+                if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) {
+                  return fail5("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
+                }
+                if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) {
+                  return fail5("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
+                }
                 const slot = str14(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
                 if (slot !== ASSISTANT_ACCOUNT_SLOT) {
                   return fail5("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
@@ -152817,7 +153229,7 @@ ${ptyResult.output.slice(-2e3)}`);
                 if (bindingRevision === null) {
                   return fail5("invalid_args", "bindingRevision must be a positive integer");
                 }
-                if (existing && bindingRevision < existing.bindingRevision) {
+                if (existing && daemonIdsEquivalent4(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
                   return fail5(
                     "binding_revision_stale",
                     "Requested bindingRevision is older than the host ACL bindingRevision.",

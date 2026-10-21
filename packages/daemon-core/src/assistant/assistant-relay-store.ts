@@ -61,7 +61,7 @@ export interface AssistantRelayStore {
     /** Record that the stall notice for the thread's current quiet stretch went out. */
     markStallNotified(meshId: string, at: number): void;
     /** Persist remote high-water cursor and coordinatorSessionId on the thread row. */
-    setThreadCursor?(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void;
+    setThreadCursor?(meshId: string, cursor: string | null, coordinatorSessionId?: string | null, opts?: { reset?: boolean }): void;
     /** Insert a committed coordinator attempt. False when the attempt is already recorded (dedupe). */
     recordCommitted(row: Omit<AssistantRelayRow, 'deliveredAt' | 'relayedAt'>): boolean;
     /**
@@ -193,8 +193,6 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
                 openedAt: at,
                 lastSendAt: at,
                 closedAt: null,
-                ...(t?.lastCursor !== undefined ? { lastCursor: t.lastCursor } : {}),
-                ...(t?.coordinatorSessionId !== undefined ? { coordinatorSessionId: t.coordinatorSessionId } : {}),
             });
         }
     }
@@ -204,9 +202,16 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
         if (t && t.closedAt === null) t.stallNotifiedAt = at;
     }
 
-    setThreadCursor(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void {
+    setThreadCursor(meshId: string, cursor: string | null, coordinatorSessionId?: string | null, opts?: { reset?: boolean }): void {
         const t = this.threads.get(meshId);
         if (!t) return;
+        if (opts?.reset) {
+            if (cursor !== null) t.lastCursor = cursor;
+            else delete t.lastCursor;
+            if (coordinatorSessionId !== undefined && coordinatorSessionId !== null) t.coordinatorSessionId = coordinatorSessionId;
+            else delete t.coordinatorSessionId;
+            return;
+        }
         if (cursor !== null) t.lastCursor = cursor;
         if (coordinatorSessionId !== undefined && coordinatorSessionId !== null) {
             t.coordinatorSessionId = coordinatorSessionId;

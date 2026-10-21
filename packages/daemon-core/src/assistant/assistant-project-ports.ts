@@ -49,7 +49,7 @@ export interface AssistantRelayHooks {
      * turn at send time — earlier turns are never relayed) and records
      * `coordinatorSessionId` when known.
      */
-    remoteSent?(meshId: string, cursor: string | null, coordinatorSessionId?: string | null): void;
+    remoteSent?(meshId: string, cursor: string | null, coordinatorSessionId?: string | null, opts?: { reset?: boolean }): void;
 }
 
 let relayHooks: AssistantRelayHooks = {};
@@ -101,7 +101,7 @@ export interface AssistantProjectPorts {
     /** Update cached observation metadata on a followed remote project. */
     updateFollowedRemoteObservation?(key: string, patch: Partial<FollowedRemoteProjectEntry>): void;
     /** Mark a followed remote project as revoked by the host. */
-    markFollowedRemoteRevoked?(key: string): void;
+    markFollowedRemoteRevoked?(key: string, reason?: string): void;
     /** Verify local durable owner-binding receipt for this assistant daemon. */
     verifyOwnerBinding?(): { ok: true } | { ok: false; code: string; error: string };
     /**
@@ -234,8 +234,14 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         updateFollowedRemoteObservation: (key, patch) => {
             lazy.assistantRegistry().updateFollowedRemoteProject(key, patch);
         },
-        markFollowedRemoteRevoked: (key) => {
-            lazy.assistantRegistry().updateFollowedRemoteProject(key, { state: 'revoked', revokedAt: Date.now() });
+        markFollowedRemoteRevoked: (key, reason) => {
+            const code = readText(reason) || 'host_revoked';
+            lazy.assistantRegistry().updateFollowedRemoteProject(key, {
+                state: 'revoked',
+                revokedAt: Date.now(),
+                revokedReason: code,
+                lastErrorCode: code,
+            });
         },
         verifyOwnerBinding: () => {
             const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);

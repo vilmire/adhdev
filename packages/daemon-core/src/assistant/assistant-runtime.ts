@@ -421,10 +421,16 @@ export function wireAssistantRuntime(
                 });
             }
         },
-        onAccessRevoked: (meshId) => {
+        onAccessRevoked: (meshId, code) => {
             const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
             if (followed) {
-                registry.updateFollowedRemoteProject(followed.key, { state: 'revoked', revokedAt: Date.now() });
+                const reason = str(code) || 'host_revoked';
+                registry.updateFollowedRemoteProject(followed.key, {
+                    state: 'revoked',
+                    revokedAt: Date.now(),
+                    revokedReason: reason,
+                    lastErrorCode: reason,
+                });
             }
         },
     });
@@ -548,7 +554,7 @@ export function wireAssistantRuntime(
         },
         missedReports: (meshId) => relay.missedReportsFor(meshId),
         recordSkillAttaches: (meshId, count) => metrics?.bump('skill_attaches', meshId, Date.now(), count),
-        remoteSent: (meshId, cursor, coordinatorSessionId) => remotePoller.noteSent(meshId, cursor, coordinatorSessionId),
+        remoteSent: (meshId, cursor, coordinatorSessionId, resetOpts) => remotePoller.noteSent(meshId, cursor, coordinatorSessionId, resetOpts),
     });
 
     const runtime: AssistantRuntime = {

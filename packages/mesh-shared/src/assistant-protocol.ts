@@ -237,6 +237,7 @@ export interface FollowedRemoteProjectEntry {
     updatedAt: number | string
     unfollowedAt?: number | string
     revokedAt?: number | string
+    revokedReason?: string
     lastCursor?: string | null
     coordinatorSessionId?: string | null
     lastErrorCode?: string

@@ -556,7 +556,7 @@ function countVisibleBubbles(activeChat: unknown): number {
  */
 export function sessionRows(
     states: readonly unknown[],
-    opts: { meshId?: string; strictMeshScope?: boolean; stripWorkspace?: boolean; now?: number } = {},
+    opts: { meshId?: string; now?: number } = {},
 ): SessionRow[] {
     const now = opts.now ?? Date.now();
     const want = readText(opts.meshId);
@@ -569,13 +569,9 @@ export function sessionRows(
         const settings = rec(state.settings) ?? {};
         const launch = rec(state.launch);
         const meshId = readText(settings.meshNodeFor) || readText(settings.meshCoordinatorFor);
-        if (opts.strictMeshScope) {
-            if (!want || meshId !== want || settings.assistant === true) continue;
-        } else {
-            // Narrowing keeps unstamped sessions: an orphan often carries no mesh
-            // stamp, and dropping it would hide the very thing this surface is for.
-            if (want && meshId && meshId !== want) continue;
-        }
+        // Narrowing keeps unstamped sessions: an orphan often carries no mesh
+        // stamp, and dropping it would hide the very thing this surface is for.
+        if (want && meshId && meshId !== want) continue;
         const launchedAt = typeof launch?.launchedAt === 'number' && Number.isFinite(launch.launchedAt)
             ? launch.launchedAt
             : null;
@@ -587,7 +583,7 @@ export function sessionRows(
             nodeId: readText(settings.meshNodeId) || null,
             ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
             messageCount: countVisibleBubbles(state.activeChat),
-            workspace: opts.stripWorkspace ? null : (readText(state.workspace) || null),
+            workspace: readText(state.workspace) || null,
             isCoordinator: !!readText(settings.meshCoordinatorFor),
             assistant: settings.assistant === true,
             spawnedForTaskId: readText(settings.autoLaunchedForQueueTaskId) || null,
@@ -595,6 +591,59 @@ export function sessionRows(
         });
     }
     return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+function followerRoutingQuotaRow(v: unknown): RoutingQuotaRow | null {
+    const r = rec(v);
+    const providerType = readText(r?.providerType);
+    if (!providerType) return null;
+    const snapshotStatus = readText(r?.snapshotStatus);
+    const failureKind = readText(r?.failureKind);
+    const zeroReason = readText(r?.zeroReason);
+    const gateReason = readText(r?.gateReason);
+    const remainingPercent = routingNum(r?.remainingPercent);
+    const axis = axisOf(r?.axis);
+    return {
+        providerType,
+        ...(snapshotStatus ? { snapshotStatus } : {}),
+        ...(failureKind ? { failureKind } : {}),
+        ...(zeroReason ? { zeroReason } : {}),
+        gateOutcome: readText(r?.gateOutcome) || 'unknown',
+        ...(gateReason ? { gateReason } : {}),
+        bonusValue: routingNum(r?.bonusValue) ?? 0,
+        ...(remainingPercent !== undefined ? { remainingPercent } : {}),
+        ...(axis ? { axis } : {}),
+    };
+}
+
+function followerRoutingNodeRow(v: unknown): RoutingNodeRow | null {
+    const r = rec(v);
+    const nodeId = readText(r?.nodeId);
+    if (!nodeId) return null;
+    const winner = rec(r?.predictedWinner);
+    const winnerProvider = readText(winner?.providerType);
+    const winnerModel = readText(winner?.model);
+    const reason = readText(r?.reason);
+    const displaced = readText(r?.displacedFitnessWinner);
+    return {
+        nodeId,
+        machineName: readText(r?.machineName) || null,
+        predictedWinner: winnerProvider
+            ? { providerType: winnerProvider, ...(winnerModel ? { model: winnerModel } : {}), fitnessScore: routingNum(winner?.fitnessScore) ?? 0 }
+            : null,
+        ...(reason ? { reason } : {}),
+        admitted: (Array.isArray(r?.admitted) ? r.admitted : []).map(routingSlot).filter((s): s is RoutingSlot => !!s),
+        excluded: (Array.isArray(r?.excluded) ? r.excluded : [])
+            .map((e: unknown): RoutingExcludedSlot | null => {
+                const s = routingSlot(e);
+                const er = readText(rec(e)?.reason);
+                return s && er ? { providerType: s.providerType, ...(s.model ? { model: s.model } : {}), reason: er } : null;
+            })
+            .filter((e): e is RoutingExcludedSlot => !!e),
+        quota: (Array.isArray(r?.quota) ? r.quota : []).map(followerRoutingQuotaRow).filter((q): q is RoutingQuotaRow => !!q),
+        reordered: r?.reordered === true,
+        ...(displaced ? { displacedFitnessWinner: displaced } : {}),
+    };
 }
 
 /**
@@ -614,7 +663,7 @@ export function followerStatusView(
     raw: Record<string, unknown>,
     mesh: LocalMeshEntry,
 ): Record<string, unknown> {
-    const rawRepo = readText((mesh as { repoRemoteUrl?: unknown }).repoRemoteUrl) || readText(mesh.repoIdentity);
+    const rawRepo = readText((mesh as { repoRemoteUrl?: unknown }).repoRemoteUrl) || readText(mesh.repoIdentity) || readText(raw.repo);
     const machines = (Array.isArray(raw.machines) ? raw.machines : [])
         .map((item: unknown) => {
             const m = rec(item);
@@ -718,7 +767,9 @@ export function followerStatusView(
                     fitnessScore: routingNum(rec(rawRouting.predictedWinner)!.fitnessScore) ?? 0,
                 }
                 : null,
-            perNode: Array.isArray(rawRouting.perNode) ? rawRouting.perNode as RoutingNodeRow[] : [],
+            perNode: (Array.isArray(rawRouting.perNode) ? rawRouting.perNode : [])
+                .map(followerRoutingNodeRow)
+                .filter((n): n is RoutingNodeRow => !!n),
             ...(readText(rawRouting.error) ? { error: readText(rawRouting.error) } : {}),
         }
         : null;
