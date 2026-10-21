@@ -91,7 +91,12 @@ export function normalizeRefineDistList(value: unknown): { list?: string[]; erro
 
 function overlaps(a: string, b: string): boolean {
     if (a === REFINE_SCHEDULE_WILDCARD || b === REFINE_SCHEDULE_WILDCARD) return true;
-    return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+    // Case-insensitive on purpose: on macOS/Windows file systems `Shared/dist`
+    // and `shared/dist` are the same tree, so paths that differ only in case are
+    // treated as aliases (a conservative overlap → refusal), never as distinct.
+    const x = a.toLowerCase();
+    const y = b.toLowerCase();
+    return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
 }
 
 /**

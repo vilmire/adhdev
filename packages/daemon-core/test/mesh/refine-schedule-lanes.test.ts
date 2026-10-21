@@ -100,6 +100,15 @@ describe('validation.schedule — config validation', () => {
         expect(ok.errors.join('\n')).toMatch(/schedule refused: in phase "p", "w" \(lane a\) writes shared\/dist/);
     });
 
+    it('treats paths that differ only in case as aliases (case-insensitive file systems)', () => {
+        const result = validateMeshRefineConfig(config(
+            [cmd('w', { writes: ['Shared/Dist'] }), cmd('r', { writes: [], reads: ['shared'] })],
+            { phases: [{ id: 'p', lanes: [{ id: 'a', commands: ['w'] }, { id: 'b', commands: ['r'] }] }] },
+        ));
+        expect(result.valid).toBe(false);
+        expect(result.errors.join('\n')).toMatch(/schedule refused: in phase "p", "w" \(lane a\) writes Shared\/Dist while "r" \(lane b\) may touch shared/);
+    });
+
     it('planScheduledRefineRun drops scope-skipped commands and empty lanes but keeps every runnable one', () => {
         const result = validateMeshRefineConfig(config(
             [cmd('a', { writes: [] }), cmd('b', { writes: [] }), cmd('c')],
@@ -174,18 +183,17 @@ setTimeout(() => { log('${id} end ' + Date.now()); process.exit(${exitCode}); },
         expect(log.find(l => l[0] === 's1' && l[1] === 'start')![4]).toBe('-');
     });
 
-    it.skipIf(process.platform === 'win32')('first failure cancels the other lane: its process group dies, an escaped (setsid) grandchild is reported, never signalled', async () => {
+    it.skipIf(process.platform === 'win32')('first failure cancels the other lane through its handle; a descendant holding the pipes is reported, never signalled, and cannot hang the run', async () => {
         const ws = workspace({
             'fail.js': timed('fail', 300, 3),
-            // Lane S: npm-like wrapper → child → detached grandchild that would outlive a plain kill.
+            // Lane S: the gate process (held handle) plus a child that inherits its
+            // pipes. Both self-exit (lifelines) — the test never signals anything.
             'slow.js': `
 const { spawn } = require('child_process');
 const fs = require('fs');
-const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 4000)'], { detached: true, stdio: 'ignore' });
-fs.writeFileSync(__dirname + '/grandchild.pid', String(g.pid));
-const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'inherit' });
+const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: 'inherit' });
 fs.writeFileSync(__dirname + '/child.pid', String(c.pid));
-setTimeout(() => {}, 60000);
+setTimeout(() => {}, 8000);
 `,
             'after.js': timed('after', 10),
         });
@@ -199,7 +207,8 @@ setTimeout(() => {}, 60000);
 
         const started = Date.now();
         const summary: any = await runMeshRefineValidationGate(mesh, ws);
-        expect(Date.now() - started).toBeLessThan(20_000);
+        // Not held open by the pipe-holding child (5 s) or the gate's own lifeline (8 s).
+        expect(Date.now() - started).toBeLessThan(5_000);
 
         expect(summary.status).toBe('failed');
         // firstFailedCommand semantics: the first passed:false record is the real failure.
@@ -212,16 +221,11 @@ setTimeout(() => {}, 60000);
         expect(summary.commandsRun.some((c: any) => c.displayCommand === 'node after.js')).toBe(false);
         expect(existsSync(join(ws, 'log.txt')) && readFileSync(join(ws, 'log.txt'), 'utf-8').includes('after start')).toBe(false);
 
-        // signal 0 only probes existence; nothing is delivered.
-        const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+        // The descendant outlived the cancelled gate: reported from the read-only
+        // census, never signalled (it ends on its own 5 s lifeline).
         const childPid = Number(readFileSync(join(ws, 'child.pid'), 'utf-8'));
-        const grandchildPid = Number(readFileSync(join(ws, 'grandchild.pid'), 'utf-8'));
-        // The in-group child died with the group signal.
-        expect(alive(childPid), `in-group child ${childPid} survived the lane cancel`).toBe(false);
-        // The setsid'ed grandchild left the group: not signalled (it ends on its own
-        // 4 s lifeline), but reported on the run.
         expect(summary.schedule.report.escaped).toEqual(expect.arrayContaining([
-            expect.objectContaining({ pid: grandchildPid, reason: 'left_group' }),
+            expect.objectContaining({ pid: childPid, reason: 'outlived_gate' }),
         ]));
     }, 30_000);
 

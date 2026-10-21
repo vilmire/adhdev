@@ -3,30 +3,24 @@
 // (refine-schedule.ts) phase by phase, lanes in parallel, and on the first
 // failure cancels every other running lane.
 //
-// Process ownership (the rule): this module only ever signals a process GROUP
-// it created, through the ChildProcess handle it holds, and only while that
-// group's leader is still un-reaped. Every scheduled gate is spawned
-// `detached` (POSIX), so the child is the leader of its own process group and
-// pgid == child.pid. A pid — and therefore that pgid — cannot be reused while
-// the leader still exists, alive or as a zombie; and Node reaps the leader
-// only inside the same event-loop turn that sets `exitCode`/`signalCode` on
-// the handle. So "handle has no exitCode/signalCode" (checked synchronously,
-// right before each kill) proves `-pid` still names OUR group.
+// Process ownership (the rule — a standing mesh rule): this module only ever
+// signals a process through the ChildProcess HANDLE it spawned and holds,
+// via child.kill(). That is exactly what execFile does for the serial path on
+// main, so it is no regression. It never signals a numeric pid, a process
+// group or a tree: neither "the leader is still un-reaped" (libuv may reap
+// before JS sees the exit fields) nor Windows `taskkill /T` proves ownership.
 //
-// Numeric pids found any other way (ps snapshots, ppid walks) are NEVER
-// signalled — they can be reused by unrelated processes. A descendant that
-// leaves the group (setsid/daemonize) or outlives its leader is therefore not
-// killed here: gates that daemonize must tie such children to their own
-// lifeline (the cooperative-maintenance tier does). Such escapees are only
-// DETECTED (read-only ps) and reported on the run.
+// So a cancelled / timed-out / overflowing gate gets: child.kill('SIGTERM')
+// on its handle, its stdout/stderr destroyed (as execFile does on overflow),
+// a bounded wait for 'exit', then child.kill('SIGKILL') on the same handle if
+// it is still running — and the result settles on 'exit' plus a bounded grace
+// for buffered output, never on an unbounded 'close'/pipe EOF (a descendant
+// holding the pipes cannot hang the Refinery).
 //
-// win32: Node holds an OS process HANDLE for the child until it exits, and a
-// Windows pid is not reused while any handle to the process is open, so
-// `taskkill /pid <child.pid> /T /F` while the handle reports no exit targets
-// our root. Residual risk (documented, not solved): /T walks the tree by
-// parent pid, and a descendant whose parent already exited can be missed, or,
-// in theory, a reused-pid process parented to a dead tree member be included.
-// A Job Object would close that gap; not used here.
+// Descendants of the gate are NOT killed. A read-only ps census taken before
+// the kill and after the grace reports the ones still alive (`escaped`) on the
+// gate error and the schedule report. Gates that start long-lived children
+// must give them their own lifeline (the cooperative-maintenance tier does).
 //
 // This module owns only scheduling and cancellation. Spawning, output capture
 // and result recording stay in mesh-refine-gates.ts (passed in as `runCommand`)
@@ -44,13 +38,15 @@ export interface RefineGroupChild {
     exitCode: number | null;
     signalCode: NodeJS.Signals | null;
     once(event: 'exit', listener: (...args: any[]) => void): unknown;
+    kill(signal?: NodeJS.Signals): boolean;
+    stdout?: { destroy(): unknown } | null;
+    stderr?: { destroy(): unknown } | null;
 }
 
 export interface RefineEscapedProcess {
     pid: number;
-    pgid: number;
     command: string;
-    reason: 'left_group' | 'outlived_leader';
+    reason: 'outlived_gate';
 }
 
 /** Per-command handle: the executor registers its child so cancel can reach it. */
@@ -70,135 +66,134 @@ export interface ScheduledRefinePhase {
 export interface ScheduledRefineRunReport {
     aborted: boolean;
     phases: Array<{ id: string; durationMs: number; lanes: Array<{ id: string; durationMs: number; commands: string[]; outcome: 'passed' | 'failed' | 'cancelled' | 'not_started' }> }>;
-    /** Processes that left a cancelled gate's group (or outlived its leader). Reported, never signalled. */
+    /** Descendants still alive after a gate was terminated. Reported, never signalled. */
     escaped?: RefineEscapedProcess[];
 }
 
 const KILL_GRACE_MS = 3_000;
 const KILL_WAIT_MS = 5_000;
 
-export interface RefineGroupTerminationDeps {
-    platform?: NodeJS.Platform;
-    /** process.kill — injectable so tests can prove what is (not) signalled. */
-    signal?: (pid: number, signal: NodeJS.Signals) => void;
+export interface RefineChildTerminationDeps {
     /** Read-only process listing, used ONLY to report escapees. */
-    listProcesses?: () => Promise<Array<{ pid: number; ppid: number; pgid: number; command: string }>>;
-    taskkill?: (pid: number) => Promise<void>;
+    listProcesses?: () => Promise<Array<{ pid: number; ppid: number; command: string }>>;
     graceMs?: number;
 }
 
-function listProcessesPs(): Promise<Array<{ pid: number; ppid: number; pgid: number; command: string }>> {
+function listProcessesPs(): Promise<Array<{ pid: number; ppid: number; command: string }>> {
+    if (process.platform === 'win32') return Promise.resolve([]);
     return new Promise(resolve => {
-        execFile('ps', ['-A', '-o', 'pid=,ppid=,pgid=,command='], { encoding: 'utf8', windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+        execFile('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
             if (error || typeof stdout !== 'string') { resolve([]); return; }
             const rows = [];
             for (const line of stdout.split('\n')) {
-                const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
-                if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), command: m[4] });
+                const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);
+                if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), command: m[3] });
             }
             resolve(rows);
         });
     });
 }
 
-function leaderUnreaped(child: RefineGroupChild): boolean {
-    return child.exitCode === null && child.signalCode === null;
+function exited(child: RefineGroupChild): boolean {
+    return child.exitCode !== null || child.signalCode !== null;
 }
 
 function waitForExit(child: RefineGroupChild, ms: number): Promise<boolean> {
-    if (!leaderUnreaped(child)) return Promise.resolve(true);
+    if (exited(child)) return Promise.resolve(true);
     return new Promise(resolve => {
-        const timer = setTimeout(() => resolve(!leaderUnreaped(child)), ms);
+        const timer = setTimeout(() => resolve(exited(child)), ms);
         child.once('exit', () => { clearTimeout(timer); resolve(true); });
     });
 }
 
 /**
- * Terminate a scheduled gate's process group via its handle. Resolves only
- * when the leader has exited (or the bounded waits elapsed) and escapees have
- * been recorded — callers await it before returning a gate result.
+ * Terminate one scheduled gate through its handle (never a pid) and report the
+ * descendants that are still alive afterwards. Resolves after the bounded
+ * waits — callers await it before returning a gate result.
  */
-export async function terminateRefineProcessGroup(child: RefineGroupChild, deps: RefineGroupTerminationDeps = {}): Promise<{ signals: NodeJS.Signals[]; escaped: RefineEscapedProcess[] }> {
-    const platform = deps.platform ?? process.platform;
-    const signals: NodeJS.Signals[] = [];
-    const pid = child.pid;
-    if (!pid || !Number.isInteger(pid) || pid <= 1) return { signals, escaped: [] };
-    if (platform === 'win32') {
-        if (leaderUnreaped(child)) {
-            const taskkill = deps.taskkill ?? ((p: number) => new Promise<void>(resolve => {
-                execFile('taskkill', ['/pid', String(p), '/T', '/F'], { windowsHide: true, timeout: 15_000 }, () => resolve());
-            }));
-            signals.push('SIGKILL');
-            await taskkill(pid);
-            await waitForExit(child, KILL_WAIT_MS);
-        }
-        return { signals, escaped: [] };
-    }
-    const signal = deps.signal ?? ((p: number, s: NodeJS.Signals) => { process.kill(p, s); });
+export async function terminateRefineChild(child: RefineGroupChild, deps: RefineChildTerminationDeps = {}): Promise<{ signals: NodeJS.Signals[]; escaped: RefineEscapedProcess[] }> {
     const listProcesses = deps.listProcesses ?? listProcessesPs;
-    // Read-only snapshot of the tree, for escapee REPORTING only.
-    const before = await listProcesses();
-    const descendants = new Map<number, { pid: number; pgid: number; command: string }>();
-    const queue = [pid];
+    const signals: NodeJS.Signals[] = [];
+    const rootPid = child.pid;
+    // Read-only census of the gate's tree, for REPORTING only.
+    const before = rootPid ? await listProcesses() : [];
+    const tree = new Map<number, string>();
+    const queue = rootPid ? [rootPid] : [];
     while (queue.length) {
         const parent = queue.shift() as number;
         for (const row of before) {
-            if (row.ppid === parent && row.pid !== pid && !descendants.has(row.pid)) {
-                descendants.set(row.pid, row);
-                queue.push(row.pid);
-            }
+            if (row.ppid === parent && row.pid !== rootPid && !tree.has(row.pid)) { tree.set(row.pid, row.command); queue.push(row.pid); }
         }
     }
-    const sendToGroup = (s: NodeJS.Signals) => {
-        // Synchronous ownership check immediately before the signal: no await
-        // between the check and the kill, so the leader cannot be reaped in between.
-        if (!leaderUnreaped(child)) return;
-        try { signal(-pid, s); signals.push(s); } catch { /* group already gone */ }
+    const killHandle = (s: NodeJS.Signals) => {
+        if (exited(child)) return;
+        try { if (child.kill(s)) signals.push(s); } catch { /* already gone */ }
     };
-    sendToGroup('SIGTERM');
+    killHandle('SIGTERM');
+    try { child.stdout?.destroy(); } catch { /* ignore */ }
+    try { child.stderr?.destroy(); } catch { /* ignore */ }
     if (!(await waitForExit(child, deps.graceMs ?? KILL_GRACE_MS))) {
-        sendToGroup('SIGKILL');
+        killHandle('SIGKILL');
         await waitForExit(child, KILL_WAIT_MS);
     }
-    const after = await listProcesses();
     const escaped: RefineEscapedProcess[] = [];
-    for (const row of after) {
-        const seen = descendants.get(row.pid);
-        if (!seen || seen.command !== row.command) continue; // only processes we saw in OUR tree
-        escaped.push({ pid: row.pid, pgid: row.pgid, command: row.command, reason: row.pgid === pid ? 'outlived_leader' : 'left_group' });
+    if (tree.size) {
+        for (const row of await listProcesses()) {
+            if (tree.get(row.pid) === row.command) escaped.push({ pid: row.pid, command: row.command, reason: 'outlived_gate' });
+        }
     }
     return { signals, escaped };
 }
 
+const CLOSE_GRACE_MS = 2_000;
+
 /**
- * execFile-compatible runner that starts the child as its own process group
- * (POSIX `detached`; execFile itself drops that option, so it cannot be used
- * here). Same contract as execFile: a non-zero exit yields an Error carrying
- * numeric `code`, `signal`, `killed`, `stdout`, `stderr`; a spawn failure yields
- * the spawn error (e.g. ENOENT); output is decoded as a utf8 stream (split
- * multibyte sequences are joined) and each stream is limited to `maxBuffer`
- * BYTES — exceeding it truncates that stream at the byte limit, terminates the
- * group and reports ERR_CHILD_PROCESS_STDIO_MAXBUFFER. The callback runs only
- * after any termination this wrapper started has completed.
+ * execFile-compatible runner used for scheduled gates (spawn, so the lane
+ * executor gets the handle). Same contract as execFile: a non-zero exit yields
+ * an Error carrying numeric `code`, `signal`, `killed`, `stdout`, `stderr`; a
+ * spawn failure yields the spawn error (e.g. ENOENT); output is decoded as a
+ * utf8 stream (split multibyte sequences are joined) and each stream is
+ * limited to `maxBuffer` BYTES — exceeding it truncates that stream at the
+ * byte limit, terminates the child through its handle and reports
+ * ERR_CHILD_PROCESS_STDIO_MAXBUFFER (with any escaped descendants).
+ *
+ * Settles on 'exit' plus at most CLOSE_GRACE_MS for buffered output: a
+ * descendant still holding the pipes cannot keep the gate open.
  */
-export function spawnRefineProcessGroup(
+export function spawnRefineGateChild(
     file: string,
     args: string[],
     options: Record<string, unknown>,
     callback: (error: any, stdout: string, stderr: string) => void,
 ): ReturnType<typeof spawn> {
-    const { maxBuffer, timeout: _timeout, encoding: _encoding, ...spawnOptions } = options;
+    const { maxBuffer, timeout: _timeout, encoding: _encoding, detached: _detached, ...spawnOptions } = options;
     const limit = typeof maxBuffer === 'number' && maxBuffer > 0 ? maxBuffer : Infinity;
-    const child = spawn(file, args, { ...spawnOptions, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] } as any);
+    const child = spawn(file, args, { ...spawnOptions, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] } as any);
     const out = { stdout: '', stderr: '' };
     const bytes = { stdout: 0, stderr: 0 };
     let settled = false;
     let overflow: any;
-    let cleanup: Promise<unknown> | undefined;
+    let cleanup: Promise<{ escaped: RefineEscapedProcess[] }> | undefined;
+    let exitInfo: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error: any) => {
         if (settled) return;
         settled = true;
-        void Promise.resolve(cleanup).then(() => callback(error, out.stdout, out.stderr));
+        if (closeTimer) clearTimeout(closeTimer);
+        void Promise.resolve(cleanup).then(result => {
+            if (error && result?.escaped.length) error.escapedProcesses = result.escaped;
+            callback(error, out.stdout, out.stderr);
+        });
+    };
+    const settleFromExit = () => {
+        if (overflow) { finish(overflow); return; }
+        const { code, signal } = exitInfo ?? { code: null, signal: null };
+        if (code === 0) { finish(null); return; }
+        const error: any = new Error(`Command failed: ${[file, ...args].join(' ')}\n${out.stderr}`);
+        error.code = code;
+        error.signal = signal;
+        error.killed = !!signal;
+        finish(error);
     };
     const collect = (which: 'stdout' | 'stderr') => (chunk: string) => {
         if (overflow) return;
@@ -209,7 +204,7 @@ export function spawnRefineProcessGroup(
             const truncatedLen = limit - (bytes[which] - length);
             out[which] += chunk.slice(0, truncatedLen);
             overflow = Object.assign(new Error(`${which} maxBuffer length exceeded`), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' });
-            cleanup = terminateRefineProcessGroup(child);
+            cleanup = terminateRefineChild(child);
             return;
         }
         out[which] += chunk;
@@ -221,15 +216,17 @@ export function spawnRefineProcessGroup(
     child.stdout?.on('data', collect('stdout'));
     child.stderr?.on('data', collect('stderr'));
     child.on('error', error => finish(error));
-    child.on('close', (code, signal) => {
-        if (overflow) { finish(overflow); return; }
-        if (code === 0) { finish(null); return; }
-        const error: any = new Error(`Command failed: ${[file, ...args].join(' ')}\n${out.stderr}`);
-        error.code = code;
-        error.signal = signal;
-        error.killed = !!signal;
-        finish(error);
+    child.on('exit', (code, signal) => {
+        exitInfo = { code, signal };
+        // Bounded wait for the pipes to drain; a descendant holding them must
+        // not keep the gate open.
+        closeTimer = setTimeout(() => {
+            try { child.stdout?.destroy(); } catch { /* ignore */ }
+            try { child.stderr?.destroy(); } catch { /* ignore */ }
+            settleFromExit();
+        }, CLOSE_GRACE_MS);
     });
+    child.on('close', () => { if (exitInfo) settleFromExit(); });
     return child;
 }
 
@@ -241,7 +238,7 @@ export function spawnRefineProcessGroup(
 export async function runScheduledRefinePhases(
     phases: ScheduledRefinePhase[],
     runCommand: (candidate: MeshRefineValidationCommandPlan, laneEnv: Record<string, string> | undefined, handle: RefineLaneCommandHandle) => Promise<RefineLaneCommandOutcome>,
-    terminate: (child: RefineGroupChild) => Promise<{ escaped: RefineEscapedProcess[] }> = child => terminateRefineProcessGroup(child),
+    terminate: (child: RefineGroupChild) => Promise<{ escaped: RefineEscapedProcess[] }> = child => terminateRefineChild(child),
 ): Promise<ScheduledRefineRunReport> {
     let aborted = false;
     const live = new Set<RefineGroupChild>();
@@ -297,7 +294,7 @@ export async function runScheduledRefinePhases(
         await Promise.all(Array.from({ length: Math.max(1, Math.min(phase.concurrency, phase.lanes.length)) }, worker));
         report.phases.push({ id: phase.id, durationMs: Date.now() - phaseStarted, lanes: laneReports });
     }
-    // Never return while a cancelled group may still be dying.
+    // Never return while a cancelled gate may still be dying.
     await Promise.all(kills);
     report.aborted = aborted;
     if (escaped.length) report.escaped = escaped;

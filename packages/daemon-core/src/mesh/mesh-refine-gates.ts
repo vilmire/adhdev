@@ -26,7 +26,7 @@ import * as fs from 'fs';
 import { resolveWin32Executable, buildWin32ExecFileSpawn } from '../cli-adapters/resolve-executable.js';
 import { refineGateChildEnv } from './mesh-refine-worker-cap.js';
 import { sanitizeRefineGateChildEnv } from './mesh-refine-env-sanitize.js';
-import { runScheduledRefinePhases, spawnRefineProcessGroup, terminateRefineProcessGroup } from './mesh-refine-lanes.js';
+import { runScheduledRefinePhases, spawnRefineGateChild, terminateRefineChild } from './mesh-refine-lanes.js';
 import type { RefineGroupChild, RefineLaneCommandHandle, RefineLaneCommandOutcome, ScheduledRefineRunReport } from './mesh-refine-lanes.js';
 import { planScheduledRefineRun } from './refine-schedule.js';
 import { randomUUID } from 'crypto';
@@ -809,13 +809,14 @@ function selectRefineCommandsToRun(
 /**
  * REFINE-LANES: extra spawn behaviour for scheduled (lane) runs. Serial runs pass
  * none and behave exactly as before.
- *   - processGroup: spawn as its own process group (POSIX) so cancel / idle
- *     timeout can kill the whole tree, not just npm;
+ *   - scheduled: spawn through spawnRefineGateChild so the lane executor holds
+ *     the handle; cancel / idle timeout / overflow terminate it through that
+ *     handle only (see mesh-refine-lanes.ts) and report surviving descendants;
  *   - env: run-scoped + lane env, merged BEFORE the command's own env;
  *   - onSpawn: hands the child to the lane executor for cancellation.
  */
 interface RefineCommandControl {
-    processGroup?: boolean;
+    scheduled?: boolean;
     env?: Record<string, string>;
     onSpawn?: (child: RefineGroupChild | undefined) => void;
 }
@@ -836,7 +837,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
         let timer: ReturnType<typeof setTimeout> | undefined;
         let idleTimedOut = false;
         let childRef: any;
-        // REFINE-LANES: group termination started by the idle timeout; awaited
+        // REFINE-LANES: handle-only termination started by the idle timeout; awaited
         // before the gate result is returned (never fire-and-forget).
         let groupCleanup: Promise<{ escaped: unknown[] }> | undefined;
         const resetTimer = () => {
@@ -844,12 +845,12 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
             if (idleTimeoutMs > 0) {
                 timer = setTimeout(() => {
                     idleTimedOut = true;
-                    if (control?.processGroup && childRef) { groupCleanup = terminateRefineProcessGroup(childRef); return; }
+                    if (control?.scheduled && childRef) { groupCleanup = terminateRefineChild(childRef); return; }
                     try { childRef?.kill?.('SIGTERM'); } catch { /* ignore */ }
                 }, idleTimeoutMs);
             }
         };
-        const child = (control?.processGroup ? spawnRefineProcessGroup : execFileFn)(spawn.file, spawn.args, execOptions, async (error: any, stdout: string, stderr: string) => {
+        const child = (control?.scheduled ? spawnRefineGateChild : execFileFn)(spawn.file, spawn.args, execOptions, async (error: any, stdout: string, stderr: string) => {
             if (timer) clearTimeout(timer);
             const cleanup = groupCleanup ? await groupCleanup : undefined;
             if (error || idleTimedOut) {
@@ -886,7 +887,7 @@ async function execRefineCommand(execFileFn: RefineGateExecFile, candidate: Mesh
 function refineExecFailureExtras(error: any) {
     const timedOut = error?.timedOut === true || error?.code === 'ETIMEDOUT' || error?.killed === true || /timed out/i.test(String(error?.message || ''));
     return {
-        // REFINE-LANES: processes that left a terminated gate's group — reported, never signalled.
+        // REFINE-LANES: descendants still alive after a gate was terminated — reported, never signalled.
         ...(Array.isArray(error?.escapedProcesses) && error.escapedProcesses.length ? { escapedProcesses: error.escapedProcesses } : {}),
         exitCode: typeof error?.code === 'number' ? error.code : null,
         signal: typeof error?.signal === 'string' ? error.signal : null,
@@ -1074,7 +1075,7 @@ async function runScheduledRefineValidation(
     summary.schedule = { mode: 'lanes', runId, wallMs: 0, prepareRun: [] };
     for (const candidate of schedule.prepare) {
         const before = summary.commandsRun.length;
-        const outcome = await runOne(candidate, { processGroup: true, env: runEnv });
+        const outcome = await runOne(candidate, { scheduled: true, env: runEnv });
         // A prepare command is not a gate: move its record off commandsRun unless
         // it failed (then it IS the first failed command and must stay visible).
         const records = summary.commandsRun.splice(before).map(record => ({ ...record, schedulePrepare: true }));
@@ -1092,7 +1093,7 @@ async function runScheduledRefineValidation(
     }
     const phases = planScheduledRefineRun(schedule, commandsToRun);
     const report = await runScheduledRefinePhases(phases, (candidate, laneEnv, handle) => runOne(candidate, {
-        processGroup: true,
+        scheduled: true,
         env: { ...runEnv, ...(laneEnv || {}) },
         onSpawn: child => handle.attach(child),
     }, handle));
