@@ -82,6 +82,7 @@ interface SendTaskRequest {
     readonly: boolean;
     missionId: string | undefined;
     ownedPaths: unknown[] | undefined;
+    inputArtifactIds: string[] | undefined;
     difficulty: string;
     taskMode: ReturnType<typeof validateMeshTaskModeRequest>['taskMode'];
     delivery: { mode: MeshDeliveryMode; unrecognized?: string };
@@ -136,6 +137,8 @@ async function parseSendTaskRequest(ctx: MeshContext, args: MeshSendTaskArgs): P
     // avoid forwarding a non-array value.
     const rawOwnedPaths = args.ownedPaths ?? args.owned_paths;
     const ownedPaths = Array.isArray(rawOwnedPaths) ? rawOwnedPaths : undefined;
+    const rawInputArtifactIds = args.inputArtifactIds ?? args.input_artifact_ids;
+    const inputArtifactIds = Array.isArray(rawInputArtifactIds) ? (rawInputArtifactIds as string[]) : undefined;
     // MISSION-UPSERT-SILENT-CREATE: an unresolvable mission_id previously dispatched fine
     // and only produced silence — buildMissionInactiveWarning warns solely for a
     // KNOWN-but-inactive mission and returns undefined for an unknown id (see its own doc
@@ -192,6 +195,7 @@ async function parseSendTaskRequest(ctx: MeshContext, args: MeshSendTaskArgs): P
         readonly,
         missionId,
         ownedPaths,
+        inputArtifactIds,
         difficulty: difficultyRaw,
         taskMode: modeValidation.taskMode,
         delivery,
@@ -339,7 +343,7 @@ async function resolveExplicitWorkerSession(
 
 /** A pinned queue row for this send (busy-session exits and the untargeted pull). */
 async function enqueueSendTask(ctx: MeshContext, args: MeshSendTaskArgs, req: SendTaskRequest): Promise<MeshWorkQueueEntry> {
-    const { taskInput, readonly, missionId, ownedPaths } = req;
+    const { taskInput, readonly, missionId, ownedPaths, inputArtifactIds } = req;
     return (await queueEnqueue(ctx.transport, { meshId: ctx.mesh.id, message: req.message, options: {
         targetNodeId: args.node_id,
         targetSessionId: args.session_id,
@@ -351,6 +355,7 @@ async function enqueueSendTask(ctx: MeshContext, args: MeshSendTaskArgs, req: Se
         ...(readonly ? { readonly: true } : {}),
         ...(missionId ? { missionId } : {}),
         ...(ownedPaths ? { ownedPaths } : {}),
+        ...(inputArtifactIds ? { inputArtifactIds } : {}),
         // COORD-EVENT-MISROUTE (anchor preservation): stamp the originating coordinator
         // SESSION anchor exactly as meshEnqueueTask does (mesh-tools-queue.ts). Without it
         // the queued task carries no sourceCoordinatorSessionId, so at claim time
@@ -656,7 +661,7 @@ async function recordDirectDispatch(
     req: SendTaskRequest,
     p: { via: 'p2p_direct' | 'local_direct'; taskId: string; nodeId: string; sessionId: string | undefined; dispatchedAt: string; attemptRef: AttemptRef },
 ): Promise<void> {
-    const { missionId, ownedPaths, readonly } = req;
+    const { missionId, ownedPaths, inputArtifactIds, readonly } = req;
     await directDispatchRecord(ctx.transport, {
         meshId: ctx.mesh.id,
         taskId: p.taskId,
@@ -664,6 +669,7 @@ async function recordDirectDispatch(
         task: {
             ...(missionId ? { missionId } : {}),
             ...(ownedPaths ? { ownedPaths } : {}),
+            ...(inputArtifactIds ? { inputArtifactIds } : {}),
             assignedNodeId: p.nodeId,
             assignedSessionId: p.sessionId,
             taskMode: req.taskMode,
@@ -1015,6 +1021,8 @@ export async function meshSendTask(
         mission_id?: string; missionId?: string;
         /** H1 (path ownership) — see mesh-work-queue.ts MeshEnqueueTaskOptions.ownedPaths doc. */
         owned_paths?: unknown; ownedPaths?: unknown;
+        /** OD-4 (artifact sharing) — same-mission artifact IDs this worker task may read. */
+        input_artifact_ids?: unknown; inputArtifactIds?: unknown;
         difficulty?: string;
         delivery_mode?: string; deliveryMode?: string;
         /** GIT-GATE: opt out of the dirty/stale-behind refusal for a non-readonly direct dispatch. */

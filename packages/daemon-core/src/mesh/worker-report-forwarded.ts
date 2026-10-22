@@ -3,7 +3,7 @@
  * resolved from its assignment stamp, and a report forwarded by another daemon whose
  * claimed (mesh, task, session) must match an owner row here before it is accepted.
  */
-import { verifyWorkerSessionBind, findWorkerTaskTokenForSession, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
+import { verifyWorkerSessionBind, verifyWorkerTaskToken, findWorkerTaskTokenForSession, type WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
 import { resolveRecentlyTerminalAttempt, WORKER_LATE_REPORT_GRACE_MS, acceptLateWorkerCompletionReport, type LateWorkerIdentity } from './worker-report-late.js';
 import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
@@ -69,37 +69,71 @@ export interface RemoteWorkerIdentity {
  * authority: a stale stamp is refused there.
  */
 export function resolveRemoteWorkerIdentity(
-    credential: { bind?: unknown },
+    credential: { bind?: unknown; token?: unknown },
     deps: {
         readAssignmentStamp: (sessionId: string) => WorkerAssignmentStamp | null;
         isSelfDaemon: (daemonId: string) => boolean;
+        resolveMeshHostOwner?: (
+            meshId: string,
+            sessionId: string,
+            nodeId?: string,
+        ) => WorkerAssignmentStamp | null;
     },
 ): RemoteWorkerIdentity | null {
     const binding = verifyWorkerSessionBind(credential.bind);
-    if (!binding) return null;
-    let stamp: WorkerAssignmentStamp | null = null;
-    try {
-        stamp = deps.readAssignmentStamp(binding.sessionId);
-    } catch {
+    const directToken = verifyWorkerTaskToken(credential.token);
+    const sessionId = binding?.sessionId || (directToken?.sessionId ? directToken.sessionId.trim() : '');
+    const expectedMeshId = binding?.meshId || (directToken?.meshId ? directToken.meshId.trim() : '');
+    if (!sessionId || !expectedMeshId) return null;
+    if (
+        binding &&
+        directToken &&
+        (binding.meshId !== directToken.meshId ||
+            (directToken.sessionId && binding.sessionId !== directToken.sessionId))
+    ) {
         return null;
     }
-    if (!stamp) return null;
+    let stamp: WorkerAssignmentStamp | null = null;
+    try {
+        stamp = deps.readAssignmentStamp(sessionId);
+    } catch {
+        stamp = null;
+    }
     const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
-    const meshId = trim(stamp.meshId);
-    const ownerDaemonId = trim(stamp.ownerDaemonId);
+    let fallbackStamp: WorkerAssignmentStamp | null = null;
+    if ((!stamp || !trim(stamp.ownerDaemonId)) && deps.resolveMeshHostOwner) {
+        try {
+            fallbackStamp = deps.resolveMeshHostOwner(
+                expectedMeshId,
+                sessionId,
+                binding?.nodeId || directToken?.nodeId,
+            );
+        } catch {
+            fallbackStamp = null;
+        }
+    }
+    const effectiveStamp = stamp && trim(stamp.ownerDaemonId) ? stamp : fallbackStamp;
+    if (!effectiveStamp) return null;
+    const meshId = trim(effectiveStamp.meshId);
+    const ownerDaemonId = trim(effectiveStamp.ownerDaemonId);
     if (!meshId || !ownerDaemonId) return null;
-    if (meshId !== binding.meshId) return null;
+    if (meshId !== expectedMeshId) return null;
     if (deps.isSelfDaemon(ownerDaemonId)) return null;
-    const taskId = trim(stamp.taskId);
-    const attemptId = trim(stamp.attemptId);
-    const nodeId = trim(stamp.nodeId) || binding.nodeId;
+    const taskId =
+        trim(effectiveStamp.taskId) ||
+        (!stamp ? trim(directToken?.taskId) || trim(binding?.spawnedForTaskId) : '');
+    const attemptId =
+        trim(effectiveStamp.attemptId) ||
+        (!stamp ? trim(directToken?.attemptId) : '');
+    const nodeId = trim(effectiveStamp.nodeId) || binding?.nodeId || directToken?.nodeId;
+    const generation = Number.isInteger(effectiveStamp.generation) ? effectiveStamp.generation : undefined;
     return {
         meshId,
-        sessionId: binding.sessionId,
+        sessionId,
         ownerDaemonId,
         ...(taskId ? { taskId } : {}),
         ...(attemptId ? { attemptId } : {}),
-        ...(Number.isInteger(stamp.generation) ? { generation: stamp.generation } : {}),
+        ...(generation !== undefined ? { generation } : {}),
         ...(nodeId ? { nodeId } : {}),
     };
 }
@@ -207,7 +241,8 @@ export function resolveForwardedWorkerIdentity(
         if (claim.taskId && claim.taskId !== row.id) {
             return refuse('task_mismatch', `the owner has task ${row.id} assigned to session ${claim.sessionId}, not ${claim.taskId}${describeOwnerRow(store, claim.meshId, claim.taskId)}`);
         }
-        const nodeRefusal = senderOwnsNode(row.assignedNodeId);
+        const rowNodeId = row.assignedNodeId || row.targetNodeId;
+        const nodeRefusal = senderOwnsNode(rowNodeId);
         if (nodeRefusal) return nodeRefusal;
         let attemptId = row.attemptId;
         if (!attemptId) {
@@ -227,7 +262,7 @@ export function resolveForwardedWorkerIdentity(
                 taskId: row.id,
                 ...(attemptId ? { attemptId } : {}),
                 sessionId: claim.sessionId,
-                nodeId: row.assignedNodeId!,
+                nodeId: rowNodeId!,
             },
         };
     }

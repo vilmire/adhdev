@@ -243,6 +243,7 @@ export function normalizeFollowedRemoteProjectEntry(raw: unknown): FollowedRemot
         bindingRevision: r.bindingRevision,
         grantRevision: r.grantRevision,
         ...(typeof r.allowCoordinatorLaunch === 'boolean' ? { allowCoordinatorLaunch: r.allowCoordinatorLaunch } : {}),
+        ...(typeof r.allowArtifactRead === 'boolean' ? { allowArtifactRead: r.allowArtifactRead } : {}),
         state: r.state,
         followedAt,
         updatedAt,

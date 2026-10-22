@@ -34,6 +34,8 @@ export const ASSISTANT_TOOLS = [
     'launch_defaults_set',
     'driver_list',
     'driver_describe',
+    'artifact_list',
+    'artifact_read',
 ] as const
 
 export type AssistantTool = typeof ASSISTANT_TOOLS[number]
@@ -67,6 +69,8 @@ export const ASSISTANT_VERB = {
     projectNote: 'assistant_project_note',
     launchDefaults: 'assistant_launch_defaults',
     launchDefaultsSet: 'assistant_launch_defaults_set',
+    artifactList: 'assistant_artifact_list',
+    artifactRead: 'assistant_artifact_read',
     // assistant-side daemon verbs without a tool of the same name
     launch: 'launch_assistant',
     pendingRelays: 'assistant_pending_relays',
@@ -101,6 +105,8 @@ export const ASSISTANT_TOOL_VERBS: Readonly<Record<AssistantTool, AssistantVerb>
     project_note: ASSISTANT_VERB.projectNote,
     launch_defaults: ASSISTANT_VERB.launchDefaults,
     launch_defaults_set: ASSISTANT_VERB.launchDefaultsSet,
+    artifact_list: ASSISTANT_VERB.artifactList,
+    artifact_read: ASSISTANT_VERB.artifactRead,
 }
 
 /**
@@ -164,7 +170,7 @@ export const ASSISTANT_REMOTE_FOLLOW_COMMAND = 'assistant_remote_follow' as cons
  * `assistant_remote_project` when the host's `assistantRemoteAccess` ACL is active.
  * `note`, `terminal`, and `inventory` remain strictly roster-member-only.
  */
-export const ASSISTANT_FOLLOWER_ALLOWED_OPS = ['status', 'read', 'poll', 'report', 'send'] as const
+export const ASSISTANT_FOLLOWER_ALLOWED_OPS = ['status', 'read', 'poll', 'report', 'send', 'artifact_list', 'artifact_read'] as const
 export type AssistantFollowerAllowedOp = typeof ASSISTANT_FOLLOWER_ALLOWED_OPS[number]
 
 const ASSISTANT_FOLLOWER_ALLOWED_OP_SET: ReadonlySet<string> = new Set(ASSISTANT_FOLLOWER_ALLOWED_OPS)
@@ -188,6 +194,7 @@ export interface AssistantRemoteAccessBinding {
     status: 'active' | 'revoked'
     allowedOps: readonly AssistantFollowerAllowedOp[]
     allowCoordinatorLaunch?: boolean
+    allowArtifactRead?: boolean
     grantedAt: number
     revokedAt?: number
 }
@@ -234,6 +241,7 @@ export interface FollowedRemoteProjectEntry {
     bindingRevision: number
     grantRevision: number
     allowCoordinatorLaunch?: boolean
+    allowArtifactRead?: boolean
     state: FollowedRemoteProjectState
     followedAt: number | string
     updatedAt: number | string
@@ -264,6 +272,7 @@ export interface RemoteProjectCatalogItem {
     sanitizedRepoIdentity: string | null
     coordinatorState?: 'none' | 'idle' | 'working' | 'waiting' | string
     allowCoordinatorLaunch?: boolean
+    allowArtifactRead?: boolean
     capabilities: {
         status: true
         read: true
@@ -272,6 +281,7 @@ export interface RemoteProjectCatalogItem {
         send: true
         coordinatorPresent?: boolean
         allowCoordinatorLaunch?: boolean
+        allowArtifactRead?: boolean
     }
     observedAt: number | string
 }

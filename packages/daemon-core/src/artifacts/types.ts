@@ -32,6 +32,32 @@ export const MAX_PREVIEW_TEXT_CHARS = 600;
 /** Maximum number of distinct artifacts allowed per session. */
 export const MAX_ARTIFACTS_PER_SESSION = 50;
 
+/** Maximum number of distinct artifacts allowed per mission (OD-7 / brief d6a3c57e). */
+export const MAX_ARTIFACTS_PER_MISSION = 200;
+
+/** Maximum number of distinct artifacts allowed per mesh (OD-7 / brief d6a3c57e). */
+export const MAX_ARTIFACTS_PER_MESH = 500;
+
+/** Maximum page size for MCP / assistant / follower artifact reads (256 KiB, OD-7). */
+export const MAX_ARTIFACT_MCP_PAGE_BYTES = 256 * 1024;
+
+/** Metadata retention horizon for session_artifacts (30 days, OD-7). */
+export const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+export type ArtifactProducerRole = 'worker' | 'coordinator' | 'assistant' | 'user' | 'session';
+
+export const UNTRUSTED_ARTIFACT_OPEN_TAG = '<untrusted_artifact_content>';
+export const UNTRUSTED_ARTIFACT_CLOSE_TAG = '</untrusted_artifact_content>';
+
+/** Wrap untrusted artifact content in `<untrusted_artifact_content>` tags, defanging inner closing tags. */
+export function wrapUntrustedArtifactContent(content: string): string {
+    const safeBody = String(content ?? '').replace(
+        /<\/\s*untrusted_artifact_content\s*>/gi,
+        '<\\/untrusted_artifact_content>',
+    );
+    return `${UNTRUSTED_ARTIFACT_OPEN_TAG}\n${safeBody}\n${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
+}
+
 /** Allowed MIME types per ArtifactKind. SVG and HTML are intentionally excluded. */
 export const MIME_BY_KIND: Readonly<Record<ArtifactKind, readonly string[]>> = Object.freeze({
     markdown: Object.freeze(['text/markdown', 'text/plain']),
@@ -67,6 +93,10 @@ export interface ArtifactRecord {
     artifactId: string;
     sessionId: string;
     taskId: string | null;
+    meshId?: string | null;
+    missionId?: string | null;
+    producerRole?: ArtifactProducerRole | string | null;
+    originDaemonId?: string | null;
     workspaceRoot: string;
     relPath: string;
     kind: ArtifactKind;
@@ -99,9 +129,15 @@ export type ArtifactErrorCode =
     | 'not_a_regular_file'
     | 'artifact_too_large'
     | 'unsupported_mime_or_kind'
+    | 'secret_file_refused'
     | 'session_artifact_limit_reached'
+    | 'mission_artifact_limit_exceeded'
+    | 'mission_artifact_limit_reached'
+    | 'mesh_artifact_limit_exceeded'
+    | 'mesh_artifact_limit_reached'
     | 'artifact_not_found'
-    | 'artifact_session_mismatch';
+    | 'artifact_session_mismatch'
+    | 'artifact_access_denied';
 
 export class ArtifactGuardError extends Error {
     readonly code: ArtifactErrorCode;

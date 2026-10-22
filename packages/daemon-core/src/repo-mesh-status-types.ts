@@ -398,6 +398,8 @@ export interface RepoMeshQueueTask {
     dependsOn?: string[];
     /** M1/M3 mission this task belongs to (same wire-already provenance as dependsOn). */
     missionId?: string;
+    /** OD-4 same-mission artifact ids this task's worker may read. */
+    inputArtifactIds?: string[];
     /**
      * Provider type of the session that claimed this task, carried on
      * {@link MeshWorkQueueEntry} — same wire-already provenance as `difficulty`

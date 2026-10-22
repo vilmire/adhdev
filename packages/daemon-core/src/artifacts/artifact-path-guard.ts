@@ -39,6 +39,75 @@ const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TITLE_CHARS = 200;
 const WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
+const SECRET_BASENAME_PATTERNS: readonly RegExp[] = [
+    /^\.env(\..+)?$/i,
+    /\.pem$/i,
+    /\.key$/i,
+    /\.p12$/i,
+    /\.pfx$/i,
+    /\.kdbx$/i,
+    /^id_(rsa|ed25519|ecdsa|dsa)(\..+)?$/i,
+    /^\.npmrc$/i,
+    /^\.pypirc$/i,
+    /^\.netrc$/i,
+    /^credentials\.json$/i,
+    /^client_secret.*\.json$/i,
+];
+
+const SECRET_CONTENT_PATTERNS: readonly RegExp[] = [
+    /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
+    /\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}\b/,
+    /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\b/,
+    /\bgithub_pat_[A-Za-z0-9_]{16,}\b/,
+    /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
+    /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+    /\bAIza[0-9A-Za-z_-]{35}\b/,
+    /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
+    /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+    /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET))\s*[:=]\s*['"]?[A-Za-z0-9/+._-]{16,}['"]?/,
+];
+
+/**
+ * OD-6 fail-closed secret path check: refuses `.env*`, `*.pem`, `id_rsa*`, and
+ * common credential filenames before extension/MIME classification.
+ */
+export function assertNotSecretPath(candidatePathOrRel: string): void {
+    if (typeof candidatePathOrRel !== 'string' || !candidatePathOrRel) {
+        return;
+    }
+    const normalized = candidatePathOrRel.replace(/\\/g, '/');
+    const segments = normalized.split('/').filter(Boolean);
+    for (const seg of segments) {
+        for (const pattern of SECRET_BASENAME_PATTERNS) {
+            if (pattern.test(seg)) {
+                throw new ArtifactGuardError(
+                    'secret_file_refused',
+                    `Artifact path "${candidatePathOrRel}" matches secret filename pattern and is refused (secret_file_refused)`,
+                );
+            }
+        }
+    }
+}
+
+/**
+ * OD-6 fail-closed secret content check: refuses files containing private keys
+ * or credential/token patterns.
+ */
+export function assertNotSecretContent(buffer: Buffer, kind: ArtifactKind): void {
+    if (kind === 'image' || buffer.byteLength === 0) {
+        return;
+    }
+    const text = buffer.toString('utf8');
+    for (const pattern of SECRET_CONTENT_PATTERNS) {
+        if (pattern.test(text)) {
+            throw new ArtifactGuardError(
+                'secret_file_refused',
+                'Artifact content matches a secret or token pattern and is refused (secret_file_refused)',
+            );
+        }
+    }
+}
+
 export interface ArtifactTestRaceHooks {
     /** Invoked after pre-open `realpath`/`lstat` checks, right before `openSync`. */
     beforeOpen?: () => void;
@@ -478,6 +547,9 @@ export function readVerifiedArtifactFile(
         candidatePath,
         lexicalRel,
     );
+    assertNotSecretPath(rawPath);
+    assertNotSecretPath(lexicalRel);
+    assertNotSecretPath(path.relative(realWorkspaceRoot, realTargetPath));
     const { kind, mime } = validateExtensionKindAndMime(candidatePath, realTargetPath, options);
 
     let rootLstat: fs.Stats;
@@ -634,6 +706,8 @@ export function readVerifiedArtifactFile(
             // Ignore close errors on already-closing descriptor.
         }
     }
+
+    assertNotSecretContent(buffer, kind);
 
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
     const relPath = lexicalRel.split(path.sep).join('/');

@@ -54,11 +54,13 @@ import { annotateAll } from './tools/tool-annotations.js';
 import {
   STANDARD_ARTIFACT_REGISTER_TOOL,
   ARTIFACT_LIST_TOOL,
+  ARTIFACT_READ_TOOL,
   callStandardArtifactRegister,
   callStandardArtifactList,
+  callStandardArtifactRead,
 } from './tools/artifact-tools.js';
 import {
-  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerArtifactRegister, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
+  resolveWorkerModeTools, readWorkerCredentials, workerDriverTool, workerArtifactRegister, workerArtifactList, workerArtifactRead, reportCompletion, progressUpdate, peerContextPull, drainMailbox,
   describeWorkerDeliveryAnswer,
 } from './tools/worker-tools.js';
 import { WorkerReportDelivery } from './tools/worker-report-outbox.js';
@@ -275,6 +277,8 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
       driver_describe: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_describe', a)),
       driver_invoke: async (a) => asResponse(await workerDriverTool(transport, credentials, 'driver_invoke', a)),
       artifact_register: async (a) => asResponse(await workerArtifactRegister(transport, credentials, a)),
+      artifact_list: async (a) => asResponse(await workerArtifactList(transport, credentials, a)),
+      artifact_read: async (a) => asResponse(await workerArtifactRead(transport, credentials, a)),
       report_completion: async (a) => asResponse(await reportCompletion(transport, credentials, a, delivery)),
       progress_update: async (a) => asResponse(await progressUpdate(transport, credentials, a, delivery)),
       peer_context_pull: async (a) => asResponse(await peerContextPull(transport, credentials, a)),
@@ -518,6 +522,7 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
     MESH_ADD_NODE_TOOL,
     STANDARD_ARTIFACT_REGISTER_TOOL,
     ARTIFACT_LIST_TOOL,
+    ARTIFACT_READ_TOOL,
     ...(isLocal ? [SCREENSHOT_TOOL] : []),
   ]);
 
@@ -648,6 +653,14 @@ export async function startMcpServer(opts: AdhdevMcpServerOptions): Promise<void
         }
         case 'artifact_list': {
           const text = await callStandardArtifactList(transport, a);
+          let isError = false;
+          try {
+            if (JSON.parse(text)?.success === false) isError = true;
+          } catch { /* ignore */ }
+          return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
+        }
+        case 'artifact_read': {
+          const text = await callStandardArtifactRead(transport, a);
           let isError = false;
           try {
             if (JSON.parse(text)?.success === false) isError = true;

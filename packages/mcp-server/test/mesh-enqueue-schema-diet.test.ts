@@ -77,10 +77,10 @@ test('the graph fields are gone from every enqueue schema', () => {
 });
 
 test('D2: the kept surface is still published', () => {
-    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'block_duplicate', 'allow_duplicate', 'task_mode', 'readonly', 'input']) {
+    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'block_duplicate', 'allow_duplicate', 'task_mode', 'readonly', 'input', 'input_artifact_ids']) {
         assert.ok(key in taskProps, `mesh_enqueue_task.${key}`);
     }
-    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'ref']) {
+    for (const key of ['message', 'difficulty', 'depends_on', 'owned_paths', 'mission_id', 'required_tags', 'target_node_id', 'prefer_worktree', 'priority', 'model', 'thinking_level', 'not_before', 'max_retries', 'ref', 'input_artifact_ids']) {
         assert.ok(key in batchTaskProps, `mesh_enqueue_batch tasks[].${key}`);
     }
     for (const key of ['tasks', 'mission_id', 'block_duplicate', 'allow_duplicate']) {
@@ -138,6 +138,7 @@ const SAMPLE_VALUE: Record<string, unknown> = {
     max_retries: 1,
     block_duplicate: false,
     allow_duplicate: true,
+    input_artifact_ids: ['art_0123456789abcdef'],
 };
 
 test('D2: every legacy alias on mesh_enqueue_task still validates clean', () => {

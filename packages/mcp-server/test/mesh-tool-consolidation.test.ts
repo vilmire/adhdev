@@ -41,10 +41,11 @@ const published = new Set(ALL_MESH_TOOLS.map(tool => tool.name));
 // 41 with mesh_attach_remote (authenticated remote project attach, 2026-10-17);
 // 43 with local driver discovery (G1a-6, 2026-10-18); invoke is Worker-only.
 // 44 with artifact_list for coordinators (artifact viewer, 2026-10-21).
-// 43 once the deprecated mesh_ledger_query alias is dropped next release.
-test('the published surface is 44 tools and contains no retired name', () => {
-    assert.equal(ALL_MESH_TOOLS.length, 44);
-    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 44);
+// 46 with artifact_register and artifact_read for coordinators (artifact sharing, 2026-10-23).
+// 45 once the deprecated mesh_ledger_query alias is dropped next release.
+test('the published surface is 46 tools and contains no retired name', () => {
+    assert.equal(ALL_MESH_TOOLS.length, 46);
+    assert.equal(CANONICAL_MESH_TOOL_NAMES.length, 46);
     for (const name of Object.keys(RETIRED_MESH_TOOLS)) {
         assert.equal(published.has(name), false, `${name} is retired but still published`);
         assert.equal(resolveMeshToolHandler(name), undefined, `${name} is retired but still silently dispatchable`);

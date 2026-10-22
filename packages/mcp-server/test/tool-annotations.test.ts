@@ -48,7 +48,7 @@ import { GIT_LOG_TOOL } from '../src/tools/git-log.js';
 import { GIT_DIFF_TOOL } from '../src/tools/git-diff.js';
 import { GIT_CHECKPOINT_TOOL } from '../src/tools/git-checkpoint.js';
 import { GIT_PUSH_TOOL } from '../src/tools/git-push.js';
-import { STANDARD_ARTIFACT_REGISTER_TOOL, ARTIFACT_LIST_TOOL } from '../src/tools/artifact-tools.js';
+import { STANDARD_ARTIFACT_REGISTER_TOOL, ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL } from '../src/tools/artifact-tools.js';
 
 /**
  * Every tool definition the server can publish, across all three modes.
@@ -61,7 +61,7 @@ const STANDARD_MODE_TOOLS = [
   CHECK_PENDING_TOOL, READ_CHAT_TOOL, READ_CHAT_DEBUG_TOOL, SPEC_DEBUG_TOOL,
   SEND_CHAT_TOOL, APPROVE_TOOL, GIT_STATUS_TOOL, GIT_LOG_TOOL, GIT_DIFF_TOOL,
   GIT_CHECKPOINT_TOOL, GIT_PUSH_TOOL, SCREENSHOT_TOOL,
-  STANDARD_ARTIFACT_REGISTER_TOOL, ARTIFACT_LIST_TOOL,
+  STANDARD_ARTIFACT_REGISTER_TOOL, ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL,
 ];
 
 const HINT_KEYS = ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const;
@@ -78,8 +78,8 @@ test('every published mesh tool carries all four behavior hints', () => {
 });
 
 test('every published worker tool carries all four behavior hints', () => {
-  // G1a-6 adds the three driver tools + Task C adds artifact_register to the three worker report/context tools.
-  assert.equal(ALL_WORKER_TOOLS.length, 7);
+  // G1a-6 adds the three driver tools + artifact_register, artifact_list, artifact_read to the three worker report/context tools.
+  assert.equal(ALL_WORKER_TOOLS.length, 9);
   for (const tool of ALL_WORKER_TOOLS) {
     const annotations = (tool as any).annotations;
     assert.ok(annotations, `${tool.name} has no annotations`);

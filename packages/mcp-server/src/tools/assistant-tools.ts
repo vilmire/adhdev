@@ -336,6 +336,36 @@ export const ALL_ASSISTANT_TOOL_SCHEMAS: readonly AssistantToolSchema[] = [
   LAUNCH_DEFAULTS_SET_TOOL,
   DRIVER_LIST_TOOL,
   DRIVER_DESCRIBE_TOOL,
+  {
+    name: 'artifact_list',
+    description:
+      'List artifacts registered in a project (metadata and short previews only, never raw file bytes). Works for hosted and followed remote projects (when artifact reading is allowed).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...PROJECT_PROP,
+        session_id: { type: 'string', description: 'Optional session ID filter within the project.' },
+        mission_id: { type: 'string', description: 'Optional mission ID filter within the project.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Optional max artifacts to return (1..50).' },
+      },
+      required: ['project'],
+    },
+  },
+  {
+    name: 'artifact_read',
+    description:
+      'Read one project artifact by artifact_id with 256 KiB paging (OD-7). Text/markdown/diff/json content is wrapped in <untrusted_artifact_content> tags.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...PROJECT_PROP,
+        artifact_id: { type: 'string', description: 'Artifact ID (art_*) from artifact_list.' },
+        offset: { type: 'integer', minimum: 0, description: 'Optional byte offset for paging (default 0).' },
+        limit: { type: 'integer', minimum: 1, maximum: 262144, description: 'Optional max bytes to read (default/max 262144 = 256 KiB).' },
+      },
+      required: ['project', 'artifact_id'],
+    },
+  },
 ];
 
 export type AssistantModeTool = AssistantToolSchema & { annotations: ToolBehaviorAnnotations };

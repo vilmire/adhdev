@@ -317,6 +317,7 @@ const remoteFollow: HighFamilyHandler = async (ctx, args) => {
             sanitizedRepoIdentity,
             bindingRevision: bindingCheck.receipt.bindingRevision,
             grantRevision,
+            ...(typeof args?.allowArtifactRead === 'boolean' ? { allowArtifactRead: args.allowArtifactRead } : {}),
             state: 'followed',
             lastCursor: initialCursor,
             coordinatorSessionId,

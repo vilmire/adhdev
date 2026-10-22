@@ -7,6 +7,7 @@
 const ARTIFACT_COMMANDS = new Set([
     'artifact_register', 'session_artifact_register',
     'artifact_list', 'session_artifact_list',
+    'artifact_read', 'artifact_fetch', 'session_artifact_fetch',
 ]);
 
 interface McpCommandCapability {

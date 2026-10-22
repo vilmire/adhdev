@@ -9,7 +9,9 @@
     "driver_list",
     "driver_describe",
     "driver_invoke",
-    "artifact_register"
+    "artifact_register",
+    "artifact_list",
+    "artifact_read"
   ],
   "coordinator": [
     "mesh_status",
@@ -56,6 +58,8 @@
     "driver_list",
     "driver_describe",
     "artifact_list",
+    "artifact_read",
+    "artifact_register",
     "mesh_notify_worker"
   ],
   "assistant": [
@@ -76,6 +80,8 @@
     "launch_defaults",
     "launch_defaults_set",
     "driver_list",
-    "driver_describe"
+    "driver_describe",
+    "artifact_list",
+    "artifact_read"
   ]
 }

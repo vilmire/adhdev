@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as artifactsMod from '../../src/artifacts/index.js';
 import {
     ARTIFACT_KINDS,
     ArtifactGuardError,
@@ -850,6 +851,237 @@ describe('Task A — Artifact Store & File Guard', () => {
                 }
             }
             expect(violations).toEqual([]);
+        });
+
+        it('migrates legacy session_artifacts table to add mesh_id, mission_id, producer_role, origin_daemon_id and indices', () => {
+            const legacyDbPath = path.join(tempRoot, 'legacy-artifacts.db');
+            const legacyDb = new Database(legacyDbPath);
+            legacyDb.exec(`
+                CREATE TABLE session_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    task_id TEXT,
+                    workspace_root TEXT NOT NULL,
+                    rel_path TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    mime TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    preview_text TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+            `);
+            legacyDb
+                .prepare(
+                    `INSERT INTO session_artifacts (
+                        artifact_id, session_id, task_id, workspace_root, rel_path, title,
+                        kind, mime, size_bytes, sha256, preview_text, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                    'art_0123456789abcdef',
+                    'sess-legacy',
+                    'task-legacy',
+                    workspaceDir,
+                    'notes.md',
+                    'Legacy Notes',
+                    'markdown',
+                    'text/markdown',
+                    12,
+                    'a'.repeat(64),
+                    'legacy',
+                    1000,
+                    1000,
+                );
+
+            ensureSessionArtifactsSchema(legacyDb);
+
+            const columns = legacyDb
+                .prepare("PRAGMA table_info('session_artifacts')")
+                .all() as Array<{ name: string }>;
+            const colNames = columns.map((c) => c.name);
+            expect(colNames).toContain('mesh_id');
+            expect(colNames).toContain('mission_id');
+            expect(colNames).toContain('producer_role');
+            expect(colNames).toContain('origin_daemon_id');
+
+            const indices = legacyDb
+                .prepare("PRAGMA index_list('session_artifacts')")
+                .all() as Array<{ name: string }>;
+            const indexNames = indices.map((idx) => idx.name);
+            expect(indexNames).toContain('idx_session_artifacts_mesh');
+            expect(indexNames).toContain('idx_session_artifacts_mission');
+
+            const migratedStore = new ArtifactStore(legacyDb);
+            const rec = migratedStore.get('art_0123456789abcdef');
+            expect(rec).not.toBeNull();
+            expect(rec?.sessionId).toBe('sess-legacy');
+            legacyDb.close();
+        });
+    });
+
+    describe('OD-6 — Secret file & token pattern refusal (fail-closed)', () => {
+        it('refuses .env*, *.pem, and id_rsa* paths with secret_file_refused', () => {
+            const secretPaths = [
+                '.env',
+                '.env.local',
+                'config/.env.production',
+                'certs/server.pem',
+                'keys/id_rsa',
+                'keys/id_rsa.pub',
+            ];
+            for (const rel of secretPaths) {
+                const full = path.join(workspaceDir, rel);
+                fs.mkdirSync(path.dirname(full), { recursive: true });
+                fs.writeFileSync(full, 'benign looking text\n');
+                expectArtifactError(
+                    () =>
+                        store.register({
+                            sessionId: 'sess-od6',
+                            workspaceRoot: workspaceDir,
+                            path: rel,
+                        }),
+                    'secret_file_refused' as ArtifactErrorCode,
+                );
+            }
+        });
+
+        it('refuses files whose content matches secret token or private key patterns with secret_file_refused', () => {
+            const secretPayloads: Array<{ file: string; content: string }> = [
+                {
+                    file: 'notes/anthropic.md',
+                    content: 'Leaked key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789\n',
+                },
+                {
+                    file: 'notes/github.txt',
+                    content: 'Token: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n',
+                },
+                {
+                    file: 'notes/aws.txt',
+                    content: 'aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n',
+                },
+                {
+                    file: 'notes/worker-token.txt',
+                    content: 'ADHDEV_WORKER_TASK_TOKEN=wtt_secretWorkerToken123456\n',
+                },
+                {
+                    file: 'notes/private-key.txt',
+                    content: '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----\n',
+                },
+            ];
+
+            for (const item of secretPayloads) {
+                const full = path.join(workspaceDir, item.file);
+                fs.mkdirSync(path.dirname(full), { recursive: true });
+                fs.writeFileSync(full, item.content);
+                expectArtifactError(
+                    () =>
+                        store.register({
+                            sessionId: 'sess-od6-content',
+                            workspaceRoot: workspaceDir,
+                            path: item.file,
+                        }),
+                    'secret_file_refused' as ArtifactErrorCode,
+                );
+            }
+        });
+    });
+
+    describe('OD-7 — 256 KiB paged MCP reads and 30-day metadata retention', () => {
+        it('pages text artifacts at 256 KiB boundaries via readArtifactContent', () => {
+            expect((artifactsMod as any).MAX_ARTIFACT_MCP_PAGE_BYTES).toBe(256 * 1024);
+            const readArtifactContent = (artifactsMod as any).readArtifactContent;
+            expect(typeof readArtifactContent).toBe('function');
+
+            // Create a 600 KiB text artifact
+            const line = '0123456789abcdef'.repeat(4) + '\n'; // 65 bytes
+            const totalText = line.repeat(9500); // ~617,500 bytes (> 512 KiB, < 768 KiB)
+            fs.writeFileSync(path.join(workspaceDir, 'large-log.txt'), totalText);
+
+            const { record } = store.register({
+                sessionId: 'sess-page',
+                workspaceRoot: workspaceDir,
+                path: 'large-log.txt',
+            });
+
+            const page1 = readArtifactContent(record, { offset: 0 });
+            expect(page1.encoding).toBe('utf8');
+            expect(page1.offset).toBe(0);
+            expect(page1.pageBytes).toBe(256 * 1024);
+            expect(page1.hasMore).toBe(true);
+            expect(page1.nextOffset).toBe(256 * 1024);
+
+            const page2 = readArtifactContent(record, { offset: page1.nextOffset });
+            expect(page2.offset).toBe(256 * 1024);
+            expect(page2.pageBytes).toBe(256 * 1024);
+            expect(page2.hasMore).toBe(true);
+            expect(page2.nextOffset).toBe(512 * 1024);
+
+            const page3 = readArtifactContent(record, { offset: page2.nextOffset });
+            expect(page3.offset).toBe(512 * 1024);
+            expect(page3.hasMore).toBe(false);
+            expect(page3.nextOffset).toBeNull();
+            expect(page1.content + page2.content + page3.content).toBe(totalText);
+        });
+
+        it('prunes metadata rows older than 30 days while retaining fresher rows', () => {
+            expect((artifactsMod as any).ARTIFACT_RETENTION_MS).toBe(30 * 24 * 60 * 60 * 1000);
+            const now = Date.UTC(2026, 9, 23, 0, 0, 0);
+            const thirtyOneDaysAgo = now - 31 * 24 * 60 * 60 * 1000;
+            const tenDaysAgo = now - 10 * 24 * 60 * 60 * 1000;
+
+            fs.writeFileSync(path.join(workspaceDir, 'expired.md'), '# Expired\n');
+            fs.writeFileSync(path.join(workspaceDir, 'fresh.md'), '# Fresh\n');
+
+            const expired = store.register({
+                sessionId: 'sess-ret',
+                workspaceRoot: workspaceDir,
+                path: 'expired.md',
+                now: thirtyOneDaysAgo,
+            });
+            const fresh = store.register({
+                sessionId: 'sess-ret',
+                workspaceRoot: workspaceDir,
+                path: 'fresh.md',
+                now: tenDaysAgo,
+            });
+
+            const prunedCount = (store as any).pruneExpired?.(now);
+            expect(prunedCount).toBe(1);
+            expect(store.get(expired.record.artifactId)).toBeNull();
+            expect(store.get(fresh.record.artifactId)?.artifactId).toBe(fresh.record.artifactId);
+        });
+
+        it('enforces 200 per mission and 500 per mesh caps while allowing updates', () => {
+            expect((artifactsMod as any).MAX_ARTIFACTS_PER_MISSION).toBe(200);
+            expect((artifactsMod as any).MAX_ARTIFACTS_PER_MESH).toBe(500);
+
+            for (let i = 0; i < 200; i++) {
+                const rel = `m_${i}.txt`;
+                fs.writeFileSync(path.join(workspaceDir, rel), `item ${i}`);
+                (store as any).register({
+                    sessionId: `sess-mission-${Math.floor(i / 45)}`,
+                    missionId: 'mission-cap-test',
+                    meshId: 'mesh-cap-test',
+                    workspaceRoot: workspaceDir,
+                    path: rel,
+                });
+            }
+
+            fs.writeFileSync(path.join(workspaceDir, 'm_200.txt'), 'overflow');
+            expectArtifactError(
+                () =>
+                    (store as any).register({
+                        sessionId: 'sess-mission-overflow',
+                        missionId: 'mission-cap-test',
+                        meshId: 'mesh-cap-test',
+                        workspaceRoot: workspaceDir,
+                        path: 'm_200.txt',
+                    }),
+                'mission_artifact_limit_exceeded' as ArtifactErrorCode,
+            );
         });
     });
 });

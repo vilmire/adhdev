@@ -3127,6 +3127,164 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             nowSpy.mockRestore();
         }
     });
+
+    it('OD-5: follower can list and read host mesh artifacts by default (read-only, wrapped in <untrusted_artifact_content>) and owner set_policy allowArtifactRead toggle disables/enables it', async () => {
+        const artifactWorkspace = mkdtempSync(join(tmpdir(), 'adhdev-od5-art-'));
+        try {
+            writeFileSync(join(artifactWorkspace, 'design.md'), '# Shared Design\nHello follower!\n');
+
+            // Seed an artifact in Host A's MeshRuntimeStore for MESH_PREFEX_SIM
+            await withHostEnv(async () => {
+                const { ArtifactStore } = await import('../../src/artifacts/index.js');
+                const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+                (store as any).register({
+                    sessionId: 'coord-alpha-1',
+                    meshId: MESH_PREFEX_SIM,
+                    producerRole: 'coordinator',
+                    originDaemonId: HOST_A,
+                    workspaceRoot: artifactWorkspace,
+                    path: 'design.md',
+                    title: 'Shared Design',
+                });
+            });
+
+            // 1. Grant follower access on Host A (default allowArtifactRead should be true)
+            const grantRes: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            expect(grantRes).toMatchObject({
+                success: true,
+                access: {
+                    status: 'active',
+                    allowArtifactRead: true,
+                },
+            });
+
+            // 2. Follow on Assistant B
+            installAssistantEnv();
+            const asstRouter = createRouter(ASSISTANT_B);
+            await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                {
+                    action: 'follow',
+                    hostDaemonId: HOST_A,
+                    hostLabel: 'Host-A',
+                    meshId: MESH_PREFEX_SIM,
+                    name: 'AlphaSim',
+                    sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                    grantRevision: 1,
+                    bindingRevision: 1,
+                },
+                'p2p',
+                { ownerVerified: true },
+            );
+
+            // 3. Follower lists artifacts (allowed by default)
+            const listRes: any = await asstRouter.execute(
+                'assistant_artifact_list',
+                { project: 'alpha-sim' },
+                'standalone',
+            );
+            expect(listRes).toMatchObject({
+                success: true,
+                artifacts: [
+                    expect.objectContaining({
+                        title: 'Shared Design',
+                        relPath: 'design.md',
+                    }),
+                ],
+            });
+            const artifactId = listRes.artifacts[0].artifactId;
+
+            // 4. Follower reads artifact (allowed by default, wrapped in <untrusted_artifact_content>)
+            const readRes: any = await asstRouter.execute(
+                'assistant_artifact_read',
+                { project: 'alpha-sim', artifactId },
+                'standalone',
+            );
+            expect(readRes).toMatchObject({
+                success: true,
+                artifactId,
+            });
+            expect(readRes.content).toContain('<untrusted_artifact_content>');
+            expect(readRes.content).toContain('# Shared Design\nHello follower!');
+            expect(readRes.content).toContain('</untrusted_artifact_content>');
+
+            // 5. Owner toggles allowArtifactRead off via set_policy on Host A
+            const disableRes: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowArtifactRead: false },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            expect(disableRes).toMatchObject({
+                success: true,
+                access: {
+                    allowArtifactRead: false,
+                },
+            });
+
+            // 6. Follower list and read are now refused with artifact_read_disabled
+            const deniedList: any = await asstRouter.execute(
+                'assistant_artifact_list',
+                { project: 'alpha-sim' },
+                'standalone',
+            );
+            expect(deniedList).toMatchObject({
+                success: false,
+                code: 'artifact_read_disabled',
+            });
+
+            const deniedRead: any = await asstRouter.execute(
+                'assistant_artifact_read',
+                { project: 'alpha-sim', artifactId },
+                'standalone',
+            );
+            expect(deniedRead).toMatchObject({
+                success: false,
+                code: 'artifact_read_disabled',
+            });
+
+            // 7. Non-owner cannot toggle allowArtifactRead
+            const nonOwnerToggle: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowArtifactRead: true },
+                    'p2p',
+                    { ownerVerified: false },
+                ),
+            );
+            expect(nonOwnerToggle.success).toBe(false);
+
+            // 8. Owner re-enables allowArtifactRead: true -> follower read succeeds again
+            await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowArtifactRead: true },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            const reenabledRead: any = await asstRouter.execute(
+                'assistant_artifact_read',
+                { project: 'alpha-sim', artifactId },
+                'standalone',
+            );
+            expect(reenabledRead).toMatchObject({
+                success: true,
+                artifactId,
+            });
+        } finally {
+            rmSync(artifactWorkspace, { recursive: true, force: true });
+        }
+    });
 });
 
 

@@ -27,7 +27,14 @@
  */
 
 import { DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, callDriverTool, type DriverTool } from './driver-tools.js';
-import { ARTIFACT_REGISTER_TOOL, callWorkerArtifactRegister } from './artifact-tools.js';
+import {
+  ARTIFACT_REGISTER_TOOL,
+  WORKER_ARTIFACT_LIST_TOOL,
+  ARTIFACT_READ_TOOL,
+  callWorkerArtifactRegister,
+  callWorkerArtifactList,
+  callWorkerArtifactRead,
+} from './artifact-tools.js';
 import {
   WORKER_BRANCH_STATES,
   WORKER_REPORT_OUTCOMES,
@@ -201,7 +208,7 @@ export const PEER_CONTEXT_PULL_TOOL = {
  * (see tool-annotations.ts). `annotateAll` throws for an unclassified tool, so a
  * new worker tool cannot be added here without stating what it does.
  */
-export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL]);
+export const ALL_WORKER_TOOLS = annotateAll([REPORT_COMPLETION_TOOL, PROGRESS_UPDATE_TOOL, PEER_CONTEXT_PULL_TOOL, DRIVER_LIST_TOOL, DRIVER_DESCRIBE_TOOL, DRIVER_INVOKE_TOOL, ARTIFACT_REGISTER_TOOL, WORKER_ARTIFACT_LIST_TOOL, ARTIFACT_READ_TOOL]);
 
 /** Shape of a tool definition as worker mode publishes it. */
 interface WorkerModeTool {
@@ -592,6 +599,36 @@ export async function workerArtifactRegister(
   args: Record<string, unknown>,
 ): Promise<WorkerToolResult> {
   const text = await callWorkerArtifactRegister(transport, credentials, args);
+  let isError = false;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.success === false) isError = true;
+  } catch { /* ignore */ }
+  return { text, ...(isError ? { isError: true } : {}) };
+}
+
+/** List artifacts visible to this worker under its launch credentials (`transport.command('artifact_list', ...)`). */
+export async function workerArtifactList(
+  transport: CommandTransport,
+  credentials: WorkerCredentials,
+  args: Record<string, unknown>,
+): Promise<WorkerToolResult> {
+  const text = await callWorkerArtifactList(transport, credentials, args);
+  let isError = false;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.success === false) isError = true;
+  } catch { /* ignore */ }
+  return { text, ...(isError ? { isError: true } : {}) };
+}
+
+/** Read an artifact visible to this worker under its launch credentials (`transport.command('artifact_read', ...)`). */
+export async function workerArtifactRead(
+  transport: CommandTransport,
+  credentials: WorkerCredentials,
+  args: Record<string, unknown>,
+): Promise<WorkerToolResult> {
+  const text = await callWorkerArtifactRead(transport, credentials, args);
   let isError = false;
   try {
     const parsed = JSON.parse(text);

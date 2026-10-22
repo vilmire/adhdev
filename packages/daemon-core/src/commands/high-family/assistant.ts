@@ -57,6 +57,12 @@ import {
 import { isLocalOwnerBindingRefusalCode } from '../../assistant/assistant-registry.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
+import {
+    ArtifactStore,
+    MAX_ARTIFACT_MCP_PAGE_BYTES,
+    toChatAttachmentMeta,
+    wrapUntrustedArtifactContent,
+} from '../../artifacts/index.js';
 
 /** `assistant_projects` is also the dashboard's project list. */
 export const ASSISTANT_PROJECTS_SOURCES = ['ipc', 'standalone', 'p2p', 'ws'] as const;
@@ -691,6 +697,134 @@ const discover = assistantVerb(ASSISTANT_VERB.discoverRepos, async (ports, args)
     return { success: true, ...result };
 });
 
+// ── artifact_list / artifact_read ───────────────────────────────────────────
+
+const artifactList = assistantVerb(ASSISTANT_VERB.artifactList, async (ports, args) => {
+    const p = await resolveProject(ports, args.project);
+    if (!p.ok) return p.result;
+    const meshId = p.mesh.id;
+    const sessionId = str(args.sessionId ?? args.session_id) || undefined;
+    const missionId = str(args.missionId ?? args.mission_id) || undefined;
+    const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : undefined;
+    if (p.remote) {
+        const out = await callRemote(ports, { ...p, remote: p.remote }, 'artifact_list', {
+            ...(sessionId ? { sessionId } : {}),
+            ...(missionId ? { missionId } : {}),
+            ...(limit !== undefined ? { limit } : {}),
+        });
+        if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
+        const body = remoteBody(out);
+        const artifacts = Array.isArray(body.artifacts) ? body.artifacts : [];
+        const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+        return {
+            ...wrap(p.slug, meshId, { ...body, artifacts, attachments, host: p.remote.label, via: 'relay' }),
+            artifacts,
+            attachments,
+        };
+    }
+    const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+    const artifacts = store.listByMesh(meshId, { sessionId, missionId, limit });
+    const attachments = artifacts.map(toChatAttachmentMeta);
+    return {
+        ...wrap(p.slug, meshId, { meshId, artifacts, attachments }),
+        artifacts,
+        attachments,
+    };
+});
+
+const artifactRead = assistantVerb(ASSISTANT_VERB.artifactRead, async (ports, args, ctx) => {
+    const artifactId = str(args.artifactId ?? args.artifact_id);
+    if (!artifactId) return fail('invalid_args', 'artifactId required');
+    const p = await resolveProject(ports, args.project);
+    if (!p.ok) return p.result;
+    const meshId = p.mesh.id;
+    const rawOffset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
+    const rawLimit = typeof args.limit === 'number' && Number.isFinite(args.limit)
+        ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES)
+        : MAX_ARTIFACT_MCP_PAGE_BYTES;
+    if (p.remote) {
+        const out = await callRemote(ports, { ...p, remote: p.remote }, 'artifact_read', {
+            artifactId,
+            offset: rawOffset,
+            limit: rawLimit,
+        });
+        if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
+        const body = remoteBody(out);
+        return {
+            ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: 'relay' }),
+            ...body,
+        };
+    }
+    const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+    const record = store.getById(artifactId);
+    if (!record) return fail('artifact_not_found', `Artifact '${artifactId}' not found.`, { project: p.slug, meshId });
+    if (record.meshId !== meshId) {
+        return fail('cross_mesh_artifact_denied', `Artifact '${artifactId}' does not belong to mesh '${meshId}'.`, { project: p.slug, meshId });
+    }
+    const self = ports.selfDaemonId();
+    if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
+        try {
+            const p2pRaw: any = await ctx.deps.dispatchMeshCommand(record.originDaemonId, 'artifact_fetch_origin', {
+                artifactId,
+                meshId,
+                offset: rawOffset,
+                limit: rawLimit,
+                asChunks: true,
+            });
+            const p2pRes = p2pRaw && typeof p2pRaw === 'object' && 'result' in p2pRaw && p2pRaw.result && typeof p2pRaw.result === 'object'
+                ? p2pRaw.result
+                : p2pRaw;
+            if (!p2pRes || p2pRes.success === false) {
+                return fail(str(p2pRes?.code) || 'artifact_origin_unreachable', str(p2pRes?.error) || 'Failed to read artifact from origin daemon.', { project: p.slug, meshId });
+            }
+            const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
+            const rawContent = chunks.length > 0
+                ? Buffer.concat(chunks.map((c: string) => Buffer.from(String(c), 'base64'))).toString('utf8')
+                : (typeof p2pRes.content === 'string' ? p2pRes.content : '');
+            const body = {
+                artifactId,
+                artifact: record,
+                attachment: toChatAttachmentMeta(record),
+                content: wrapUntrustedArtifactContent(rawContent),
+                totalBytes: typeof p2pRes.totalBytes === 'number' ? p2pRes.totalBytes : record.sizeBytes,
+                offset: typeof p2pRes.offset === 'number' ? p2pRes.offset : rawOffset,
+                pageBytes: typeof p2pRes.pageBytes === 'number' ? p2pRes.pageBytes : Buffer.byteLength(rawContent, 'utf8'),
+                hasMore: Boolean(p2pRes.hasMore),
+                nextOffset: typeof p2pRes.nextOffset === 'number' ? p2pRes.nextOffset : null,
+                source: 'p2p_origin',
+                originDaemonId: record.originDaemonId,
+            };
+            return {
+                ...wrap(p.slug, meshId, body),
+                ...body,
+            };
+        } catch (err) {
+            return fail('artifact_origin_unreachable', err instanceof Error ? err.message : String(err), { project: p.slug, meshId });
+        }
+    }
+    try {
+        const readRes = store.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
+        const body = {
+            artifactId,
+            artifact: record,
+            attachment: toChatAttachmentMeta(record),
+            content: wrapUntrustedArtifactContent(readRes.content),
+            totalBytes: readRes.totalBytes,
+            offset: readRes.offset,
+            pageBytes: readRes.pageBytes,
+            hasMore: readRes.hasMore,
+            nextOffset: readRes.nextOffset,
+            source: 'local',
+        };
+        return {
+            ...wrap(p.slug, meshId, body),
+            ...body,
+        };
+    } catch (err: any) {
+        return fail(str(err?.code) || 'artifact_read_failed', err instanceof Error ? err.message : String(err), { project: p.slug, meshId });
+    }
+});
+
 export const assistantProjectHandlers: Record<string, HighFamilyHandler> = {
     ...remoteProjectHandlers,
     [ASSISTANT_VERB.projectAttachRemote]: assistantVerb(ASSISTANT_VERB.projectAttachRemote, async (ports, args, ctx) => {
@@ -706,6 +840,8 @@ export const assistantProjectHandlers: Record<string, HighFamilyHandler> = {
     [ASSISTANT_VERB.projectRead]: projectRead,
     [ASSISTANT_VERB.projectAdd]: projectAdd,
     [ASSISTANT_VERB.discoverRepos]: discover,
+    [ASSISTANT_VERB.artifactList]: artifactList,
+    [ASSISTANT_VERB.artifactRead]: artifactRead,
 };
 
 export const assistantProjectSpecs = defineCommandSpecs('high', assistantProjectHandlers, {
@@ -718,6 +854,8 @@ export const assistantProjectSpecs = defineCommandSpecs('high', assistantProject
     [ASSISTANT_VERB.projectRead]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.projectAdd]: { sources: [...ASSISTANT_TOOL_SOURCES] },
     [ASSISTANT_VERB.discoverRepos]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+    [ASSISTANT_VERB.artifactList]: { sources: [...ASSISTANT_TOOL_SOURCES] },
+    [ASSISTANT_VERB.artifactRead]: { sources: [...ASSISTANT_TOOL_SOURCES] },
 });
 
 /** Exact attempt recovery shared by restart relay and the roster-gated remote host. */

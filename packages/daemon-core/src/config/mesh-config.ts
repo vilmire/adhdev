@@ -77,6 +77,11 @@ export function normalizeAssistantRemoteAccessBinding(
     const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
     if (allowedOps.length === 0) return null;
     const allowCoordinatorLaunch = rec.allowCoordinatorLaunch !== false;
+    const allowArtifactRead = rec.allowArtifactRead !== false;
+    if (allowArtifactRead && allowedOps.includes('read')) {
+        if (!allowedOps.includes('artifact_list')) allowedOps.push('artifact_list');
+        if (!allowedOps.includes('artifact_read')) allowedOps.push('artifact_read');
+    }
     return {
         hostDaemonId,
         meshId,
@@ -87,6 +92,7 @@ export function normalizeAssistantRemoteAccessBinding(
         status,
         allowedOps,
         allowCoordinatorLaunch,
+        allowArtifactRead,
         grantedAt,
         ...(revokedAt !== undefined ? { revokedAt } : {}),
     };

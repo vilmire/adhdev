@@ -1,6 +1,7 @@
 /** Artifact transport admission, before authorization, I/O, forwarding or reporting. */
 import { COMMAND_SOURCE_ARG, hasRevokedTrustedOwnerIngress, isTrustedOwnerIngress, readRouterCommandIngress } from '../command-args.js';
 import { readAuthenticatedMcpCommand } from '../mcp-command-ingress.js';
+import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
 import type { CommandRouterResult } from '../router.js';
 
 function trimString(value: unknown): string {
@@ -148,17 +149,22 @@ export function verifyArtifactCommandIngress(
             };
         }
         if (routerIngress.source === 'ipc' && !ownerTrusted && !hasWorkerCredentialInput(recordArgs)) {
-            if (mode === 'fetch') {
+            const meshId = trimString(recordArgs.meshId);
+            const coordSessionId = trimString(recordArgs.callerSessionId) || trimString(recordArgs.sessionId);
+            const hasLiveCoordinatorScope =
+                Boolean(meshId && coordSessionId) &&
+                getCoordinatorForSession(coordSessionId)?.meshId === meshId;
+            if (mode === 'fetch' && !mcp.valid && !hasLiveCoordinatorScope) {
                 return {
                     ok: false,
                     result: {
                         success: false,
                         code: 'COMMAND_SOURCE_REJECTED',
-                        error: 'Artifact fetch over IPC requires verified owner or live worker credential',
+                        error: 'Artifact fetch over IPC requires verified owner, worker credential, or live coordinator scope',
                     },
                 };
             }
-            if (mode === 'list' && !mcp.valid && !trimString(recordArgs.meshId)) {
+            if (mode === 'list' && !mcp.valid && !meshId) {
                 return {
                     ok: false,
                     result: {

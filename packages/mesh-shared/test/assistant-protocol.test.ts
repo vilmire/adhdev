@@ -21,7 +21,7 @@ describe('ASSISTANT_TOOLS', () => {
         expect([...ASSISTANT_TOOLS]).toEqual([
             'projects', 'environment', 'assistant_action', 'project_watch', 'project_status', 'project_send', 'project_read', 'project_add',
             'project_attach_remote', 'discover_repos', 'memory', 'skill_view', 'skill_manage', 'project_note',
-            'launch_defaults', 'launch_defaults_set', 'driver_list', 'driver_describe',
+            'launch_defaults', 'launch_defaults_set', 'driver_list', 'driver_describe', 'artifact_list', 'artifact_read',
         ])
         expect(new Set(ASSISTANT_TOOLS).size).toBe(ASSISTANT_TOOLS.length)
     })
@@ -31,9 +31,9 @@ describe('ASSISTANT_TOOLS', () => {
         for (const t of ['mesh_status', 'report_completion', '', 'Memory', 42, null]) expect(isAssistantTool(t)).toBe(false)
     })
 
-    it('shares only driver discovery with the mesh and worker tool sets', () => {
+    it('shares only driver discovery and read-only artifact tools with the mesh and worker tool sets', () => {
         const others = new Set<string>([...CANONICAL_MESH_TOOL_NAMES, ...WORKER_TOOLS])
-        expect(ASSISTANT_TOOLS.filter((t) => others.has(t))).toEqual(['driver_list', 'driver_describe'])
+        expect(ASSISTANT_TOOLS.filter((t) => others.has(t))).toEqual(['driver_list', 'driver_describe', 'artifact_list', 'artifact_read'])
     })
 
     it('maps assistant tools and shared driver discovery to their daemon verbs', () => {
@@ -49,9 +49,9 @@ describe('ASSISTANT_TOOLS', () => {
 describe('assistant verbs', () => {
     const all = Object.values(ASSISTANT_VERB)
 
-    it('are twenty-seven distinct names: eighteen tool verbs + launch/pull/state/threads + five owner verbs', () => {
-        expect(all.length).toBe(27)
-        expect(new Set(all).size).toBe(27)
+    it('are twenty-nine distinct names: twenty tool verbs + launch/pull/state/threads + five owner verbs', () => {
+        expect(all.length).toBe(29)
+        expect(new Set(all).size).toBe(29)
         const toolVerbs = new Set<string>(Object.values(ASSISTANT_TOOL_VERBS))
         expect(all.filter((v) => !toolVerbs.has(v)).sort()).toEqual([
             'assistant_execution_settings', 'assistant_execution_state', 'assistant_import_skills', 'assistant_pending_relays', 'assistant_staged_resolve',

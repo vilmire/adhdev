@@ -49,6 +49,10 @@ import {
     registerMeshCoordinator,
     unregisterMeshCoordinator,
 } from '../../src/mesh/coordinator-registry.js';
+import { MeshRpcEndpoint } from '../../src/mesh/transport/mesh-rpc-endpoint.js';
+import { MESH_SENDER_DAEMON_ID_ARG } from '../../src/commands/mesh-sender.js';
+import { workerReportHandlers } from '../../src/commands/low-family/worker-report.js';
+import { wrapUntrustedArtifactContent } from '../../src/artifacts/index.js';
 import {
     CHAT_COMMIT_KIND,
     CHAT_META_KIND,
@@ -1862,7 +1866,11 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                     { peerId: 'peer-owner', ownerVerified: true, ownerProof: p2pProof },
                 );
                 expect(p2pFetch.success, `${fetchAlias} p2p live`).toBe(true);
-                expect(p2pFetch.content).toBe('LIVE-PROOF-CONTENT');
+                expect(p2pFetch.content).toBe(
+                    fetchAlias === 'artifact_read'
+                        ? wrapUntrustedArtifactContent('LIVE-PROOF-CONTENT')
+                        : 'LIVE-PROOF-CONTENT',
+                );
             }
 
             // Cross-source proof mismatch must fail closed even while proofs are live
@@ -2007,7 +2015,11 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 for (const fetchAlias of ['artifact_fetch', 'artifact_read', 'session_artifact_fetch'] as const) {
                     const fetched = await router.execute(fetchAlias, { ...cred, artifactId: workerArtId }, 'ipc');
                     expect(fetched.success, `worker ${fetchAlias}`).toBe(true);
-                    expect(fetched.content).toBe('WORKER-REPORT-CONTENT');
+                    expect(fetched.content).toBe(
+                        fetchAlias === 'artifact_read'
+                            ? wrapUntrustedArtifactContent('WORKER-REPORT-CONTENT')
+                            : 'WORKER-REPORT-CONTENT',
+                    );
                 }
             }
 
@@ -2132,6 +2144,551 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             } finally {
                 unregisterMeshCoordinator('coord-sess');
             }
+        });
+    });
+
+    describe('Mission b295ce35 — Artifact sharing (OD-4, Coordinator, Defects 1 & 2, P2P origin fetch, Content boundary)', () => {
+        it('OD-4: allows a worker to read another session artifact only in the same mission AND listed in inputArtifactIds; denies unlisted or cross-mission artifacts', async () => {
+            sessionRegistry.register({
+                sessionId: 'sess-worker-a',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            sessionRegistry.register({
+                sessionId: 'sess-worker-b',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceB,
+            });
+
+            // Worker A produces two artifacts in mission-od4
+            fs.writeFileSync(path.join(workspaceA, 'shared-spec.md'), '# Shared Spec\nLine 1\nLine 2\n');
+            fs.writeFileSync(path.join(workspaceA, 'unlisted-notes.md'), '# Private Notes\nDo not share\n');
+
+            const nowIso = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'task-od4-a',
+                meshId: 'mesh-od4',
+                targetNodeId: 'node-a',
+                status: 'assigned',
+                assignedSessionId: 'sess-worker-a',
+                message: 'Produce spec',
+                workspace: workspaceA,
+                missionId: 'mission-od4',
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            seedMeshAttempt({
+                attemptId: 'att-od4-a',
+                taskId: 'task-od4-a',
+                meshId: 'mesh-od4',
+                nodeId: 'node-a',
+                sessionId: 'sess-worker-a',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const bindA = mintWorkerSessionBind({
+                sessionId: 'sess-worker-a',
+                meshId: 'mesh-od4',
+                nodeId: 'node-a',
+                spawnedForTaskId: 'task-od4-a',
+            });
+            const tokenA = mintWorkerTaskToken({
+                taskId: 'task-od4-a',
+                attemptId: 'att-od4-a',
+                meshId: 'mesh-od4',
+                nodeId: 'node-a',
+                sessionId: 'sess-worker-a',
+            });
+
+            const regShared = await artifactHandlers.artifact_register(ctx, {
+                path: 'shared-spec.md',
+                title: 'Shared Spec',
+                bind: bindA.bind,
+                token: tokenA.token,
+            });
+            expect(regShared.success).toBe(true);
+
+            const regUnlisted = await artifactHandlers.artifact_register(ctx, {
+                path: 'unlisted-notes.md',
+                title: 'Unlisted Notes',
+                bind: bindA.bind,
+                token: tokenA.token,
+            });
+            expect(regUnlisted.success).toBe(true);
+
+            // Worker B is in the SAME mission (mission-od4) and coordinator named regShared.artifactId in inputArtifactIds
+            meshStore.insertQueueEntry({
+                id: 'task-od4-b',
+                meshId: 'mesh-od4',
+                targetNodeId: 'node-b',
+                status: 'assigned',
+                assignedSessionId: 'sess-worker-b',
+                message: 'Consume spec',
+                workspace: workspaceB,
+                missionId: 'mission-od4',
+                inputArtifactIds: [regShared.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            seedMeshAttempt({
+                attemptId: 'att-od4-b',
+                taskId: 'task-od4-b',
+                meshId: 'mesh-od4',
+                nodeId: 'node-b',
+                sessionId: 'sess-worker-b',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const bindB = mintWorkerSessionBind({
+                sessionId: 'sess-worker-b',
+                meshId: 'mesh-od4',
+                nodeId: 'node-b',
+                spawnedForTaskId: 'task-od4-b',
+            });
+            const tokenB = mintWorkerTaskToken({
+                taskId: 'task-od4-b',
+                attemptId: 'att-od4-b',
+                meshId: 'mesh-od4',
+                nodeId: 'node-b',
+                sessionId: 'sess-worker-b',
+            });
+
+            // ALLOW: Worker B reads regShared.artifactId
+            const allowedRead = await artifactHandlers.artifact_read(ctx, {
+                artifactId: regShared.artifactId,
+                bind: bindB.bind,
+                token: tokenB.token,
+            });
+            expect(allowedRead.success).toBe(true);
+            expect(allowedRead.content).toContain('<untrusted_artifact_content>');
+            expect(allowedRead.content).toContain('# Shared Spec\nLine 1\nLine 2');
+            expect(allowedRead.content).toContain('</untrusted_artifact_content>');
+
+            // DENY 1: Worker B tries to read regUnlisted.artifactId (same mission, but NOT in inputArtifactIds)
+            const deniedUnlisted = await artifactHandlers.artifact_read(ctx, {
+                artifactId: regUnlisted.artifactId,
+                bind: bindB.bind,
+                token: tokenB.token,
+            });
+            expect(deniedUnlisted.success).toBe(false);
+            expect(deniedUnlisted.code).toBe('artifact_access_denied');
+
+            // DENY 2: Worker C in a DIFFERENT mission tries to read regShared.artifactId even if inputArtifactIds lists it
+            const workspaceC = path.join(tempRoot, 'workspace-c');
+            fs.mkdirSync(workspaceC, { recursive: true });
+            sessionRegistry.register({
+                sessionId: 'sess-worker-c',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceC,
+            });
+            meshStore.insertQueueEntry({
+                id: 'task-od4-c',
+                meshId: 'mesh-od4',
+                targetNodeId: 'node-c',
+                status: 'assigned',
+                assignedSessionId: 'sess-worker-c',
+                message: 'Different mission worker',
+                workspace: workspaceC,
+                missionId: 'mission-different',
+                inputArtifactIds: [regShared.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            seedMeshAttempt({
+                attemptId: 'att-od4-c',
+                taskId: 'task-od4-c',
+                meshId: 'mesh-od4',
+                nodeId: 'node-c',
+                sessionId: 'sess-worker-c',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const bindC = mintWorkerSessionBind({
+                sessionId: 'sess-worker-c',
+                meshId: 'mesh-od4',
+                nodeId: 'node-c',
+                spawnedForTaskId: 'task-od4-c',
+            });
+            const tokenC = mintWorkerTaskToken({
+                taskId: 'task-od4-c',
+                attemptId: 'att-od4-c',
+                meshId: 'mesh-od4',
+                nodeId: 'node-c',
+                sessionId: 'sess-worker-c',
+            });
+
+            const deniedCrossMission = await artifactHandlers.artifact_read(ctx, {
+                artifactId: regShared.artifactId,
+                bind: bindC.bind,
+                token: tokenC.token,
+            });
+            expect(deniedCrossMission.success).toBe(false);
+            expect(deniedCrossMission.code).toBe('artifact_access_denied');
+        });
+
+        it('Defect 2: View full (artifact_fetch & artifact_read) succeeds after the producer session has ended by falling back to stored workspace_root', async () => {
+            sessionRegistry.register({
+                sessionId: 'sess-ended-1',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            fs.writeFileSync(path.join(workspaceA, 'postmortem.md'), '# Postmortem\nSession ended cleanly.\n');
+
+            const reg = await artifactHandlers.artifact_register(ctx, {
+                sessionId: 'sess-ended-1',
+                path: 'postmortem.md',
+                title: 'Postmortem',
+            });
+            expect(reg.success).toBe(true);
+
+            // End and remove the session from the live SessionRegistry
+            sessionRegistry.terminate('sess-ended-1', 'stop' as any);
+            expect(sessionRegistry.get('sess-ended-1')).toBeUndefined();
+
+            // "View full" via artifact_fetch for the ended session must still succeed using stored workspace_root
+            const fetched = await artifactHandlers.artifact_fetch(ctx, {
+                artifactId: reg.artifactId,
+                sessionId: 'sess-ended-1',
+            });
+            expect(fetched.success).toBe(true);
+            expect(fetched.content).toBe('# Postmortem\nSession ended cleanly.\n');
+
+            // artifact_read wraps in <untrusted_artifact_content>
+            const readRes = await artifactHandlers.artifact_read(ctx, {
+                artifactId: reg.artifactId,
+                sessionId: 'sess-ended-1',
+            });
+            expect(readRes.success).toBe(true);
+            expect(readRes.content).toBe(
+                '<untrusted_artifact_content>\n# Postmortem\nSession ended cleanly.\n\n</untrusted_artifact_content>',
+            );
+        });
+
+        it('Defect 1 & Remote Worker P2P: remote worker registers locally without host DB rows, forwards metadata-only (artifact_index_forwarded) to host, and host fetches >16 KB content from origin over chunked MeshRpcEndpoint', async () => {
+            const remoteDir = path.join(tempRoot, 'remote-daemon');
+            const remoteWorkspace = path.join(remoteDir, 'wt-remote');
+            fs.mkdirSync(remoteWorkspace, { recursive: true });
+
+            // Write a ~80 KB markdown artifact so P2P fetch exercises multiple 16 KB MeshRpcEndpoint chunks (> 60 KB inline ceiling)
+            const bodyBlock = 'Remote analysis paragraph with detailed telemetry data. '.repeat(20) + '\n';
+            const largeMarkdown = '# Remote Worker Report\n' + bodyBlock.repeat(75);
+            expect(Buffer.byteLength(largeMarkdown, 'utf8')).toBeGreaterThan(64 * 1024);
+            fs.writeFileSync(path.join(remoteWorkspace, 'remote-report.md'), largeMarkdown);
+
+            // Remote daemon has its OWN SQLite store with ZERO task/attempt rows (host owns the queue/attempt ledger)
+            const remoteMeshStore = new MeshRuntimeStore(path.join(remoteDir, 'remote-mesh.db'));
+            const remoteArtifactStore = new ArtifactStore(remoteMeshStore.db);
+            const remoteSessionRegistry = new SessionRegistry();
+            remoteSessionRegistry.register({
+                sessionId: 'sess-remote-worker-1',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: remoteWorkspace,
+            });
+
+            // Host has the task & attempt row in its meshStore
+            const nowIso = new Date().toISOString();
+            meshStore.insertQueueEntry({
+                id: 'task-remote-1',
+                meshId: 'mesh-p2p-1',
+                targetNodeId: 'node-remote-2',
+                assignedNodeId: 'node-remote-2',
+                status: 'assigned',
+                assignedSessionId: 'sess-remote-worker-1',
+                message: 'Remote investigation',
+                workspace: remoteWorkspace,
+                missionId: 'mission-p2p-1',
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            const seededAttempt = seedMeshAttempt({
+                attemptId: 'att-remote-1',
+                taskId: 'task-remote-1',
+                meshId: 'mesh-p2p-1',
+                nodeId: 'node-remote-2',
+                sessionId: 'sess-remote-worker-1',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            meshStore.turnStore().upsertAttempt(
+                {
+                    ...seededAttempt,
+                    ownerDaemonId: 'daemon_host_1',
+                },
+                Date.now(),
+            );
+
+            // Remote daemon minted bind + task token when spawning the worker locally
+            const remoteBind = mintWorkerSessionBind({
+                sessionId: 'sess-remote-worker-1',
+                meshId: 'mesh-p2p-1',
+                nodeId: 'node-remote-2',
+                spawnedForTaskId: 'task-remote-1',
+            });
+            const remoteToken = mintWorkerTaskToken({
+                taskId: 'task-remote-1',
+                attemptId: 'att-remote-1',
+                meshId: 'mesh-p2p-1',
+                nodeId: 'node-remote-2',
+                sessionId: 'sess-remote-worker-1',
+            });
+
+            // Defect 1 check: resolveWorkerIdentity against remoteMeshStore (which has no task/attempt rows!)
+            const resolvedRemoteIdentity = resolveWorkerIdentity(
+                remoteMeshStore,
+                remoteBind.bind,
+                remoteToken.token,
+            );
+            expect(resolvedRemoteIdentity).toMatchObject({
+                sessionId: 'sess-remote-worker-1',
+                taskId: 'task-remote-1',
+                attemptId: 'att-remote-1',
+                meshId: 'mesh-p2p-1',
+                nodeId: 'node-remote-2',
+            });
+
+            // Wire two real MeshRpcEndpoint instances (host <-> remote worker daemon) over in-memory DataChannels
+            class FakeRpcEndpoint extends MeshRpcEndpoint {
+                constructor(
+                    cb?: (sender: string, command: string, args: Record<string, unknown>) => Promise<unknown>,
+                ) {
+                    super();
+                    this.commandCallback = cb;
+                }
+                protected failure(message: string): any {
+                    return new Error(message);
+                }
+                protected noteRequestTimeout(): void {}
+                protected emitPeerOpen(): void {}
+                protected flushConnectQueue(): void {}
+                public sendRpc(peer: any, id: string, command: string, args: Record<string, unknown>): Promise<any> {
+                    return new Promise((resolve, reject) => {
+                        this.writeRequest(peer, {
+                            id,
+                            command,
+                            args,
+                            resolve,
+                            reject,
+                            queuedAt: new Date().toISOString(),
+                            resultTimeoutMs: 5000,
+                        });
+                    });
+                }
+                public deliverRaw(peer: any, raw: string): void {
+                    this.onMessage(peer, raw);
+                }
+            }
+
+            const rawFramesFromRemoteToHost: string[] = [];
+            const rawFramesFromHostToRemote: string[] = [];
+            const chunkFramesObserved: any[] = [];
+
+            let hostEndpoint!: FakeRpcEndpoint;
+            let remoteEndpoint!: FakeRpcEndpoint;
+
+            const remoteDeps: CommandRouterDeps = {
+                commandHandler: { handle: async () => ({ success: true }) } as any,
+                cliManager: {} as any,
+                cdpManagers: new Map(),
+                providerLoader: {} as any,
+                instanceManager: { getInstance: () => undefined } as any,
+                detectedIdes: { value: [] },
+                sessionRegistry: remoteSessionRegistry,
+                statusInstanceId: 'daemon_remote_worker_2',
+                dispatchMeshCommand: async (targetDaemonId: string, command: string, args: Record<string, unknown>) => {
+                    expect(targetDaemonId).toBe('daemon_host_1');
+                    return remoteEndpoint.sendRpc(hostPeerOnRemote, `rpc-r2h-${Date.now()}`, command, args);
+                },
+            };
+            setArtifactCommandRuntimeForDeps(remoteDeps, {
+                artifactStore: remoteArtifactStore,
+                meshRuntimeStore: remoteMeshStore,
+            });
+
+            deps.statusInstanceId = 'daemon_host_1';
+            deps.dispatchMeshCommand = async (targetDaemonId: string, command: string, args: Record<string, unknown>) => {
+                expect(targetDaemonId).toBe('daemon_remote_worker_2');
+                return hostEndpoint.sendRpc(remotePeerOnHost, `rpc-h2r-${Date.now()}`, command, args);
+            };
+
+            const sharedMeshTopology: any = {
+                id: 'mesh-p2p-1',
+                name: 'P2PMesh',
+                meshHost: { role: 'member', hostDaemonId: 'daemon_host_1' },
+                nodes: [
+                    { id: 'node-host-1', daemonId: 'daemon_host_1', workspace: workspaceA, role: 'host' },
+                    {
+                        id: 'node-remote-2',
+                        daemonId: 'daemon_remote_worker_2',
+                        workspace: remoteWorkspace,
+                        role: 'worker',
+                        activeSessionId: 'sess-remote-worker-1',
+                    },
+                ],
+            };
+
+            const remoteCtx: ArtifactCommandContext = {
+                deps: remoteDeps,
+                getMeshForCommand: async () => sharedMeshTopology,
+                getCachedInlineMesh: () => sharedMeshTopology,
+            };
+            const hostCtx: ArtifactCommandContext = {
+                deps,
+                getMeshForCommand: async () => ({
+                    ...sharedMeshTopology,
+                    meshHost: { role: 'host', hostDaemonId: 'daemon_host_1' },
+                }),
+                getCachedInlineMesh: () => ({
+                    ...sharedMeshTopology,
+                    meshHost: { role: 'host', hostDaemonId: 'daemon_host_1' },
+                }),
+            };
+
+            hostEndpoint = new FakeRpcEndpoint(async (senderDaemonId, command, args) => {
+                if (command === 'artifact_index_forwarded') {
+                    return (artifactHandlers as any).artifact_index_forwarded(
+                        hostCtx,
+                        { ...args, [MESH_SENDER_DAEMON_ID_ARG]: senderDaemonId },
+                    );
+                }
+                throw new Error(`Unexpected command on host: ${command}`);
+            });
+
+            remoteEndpoint = new FakeRpcEndpoint(async (senderDaemonId, command, args) => {
+                if (command === 'artifact_fetch_origin') {
+                    return (artifactHandlers as any).artifact_fetch_origin(
+                        remoteCtx,
+                        { ...args, [MESH_SENDER_DAEMON_ID_ARG]: senderDaemonId },
+                    );
+                }
+                throw new Error(`Unexpected command on remote: ${command}`);
+            });
+
+            const hostPeerOnRemote: any = {
+                daemonId: 'daemon_host_1',
+                inflight: new Map(),
+                attempt: 1,
+                dc: {
+                    isOpen: () => true,
+                    sendMessage: (json: string) => {
+                        rawFramesFromRemoteToHost.push(json);
+                        const parsed = JSON.parse(json);
+                        if (parsed.kind === 'rpc_chunk') chunkFramesObserved.push(parsed);
+                        queueMicrotask(() => hostEndpoint.deliverRaw(remotePeerOnHost, json));
+                    },
+                },
+            };
+            const remotePeerOnHost: any = {
+                daemonId: 'daemon_remote_worker_2',
+                inflight: new Map(),
+                attempt: 1,
+                dc: {
+                    isOpen: () => true,
+                    sendMessage: (json: string) => {
+                        rawFramesFromHostToRemote.push(json);
+                        const parsed = JSON.parse(json);
+                        if (parsed.kind === 'rpc_chunk') chunkFramesObserved.push(parsed);
+                        queueMicrotask(() => remoteEndpoint.deliverRaw(hostPeerOnRemote, json));
+                    },
+                },
+            };
+
+            try {
+                // 1) Remote worker registers the artifact on remote daemon
+                const remoteReg = await artifactHandlers.artifact_register(remoteCtx, {
+                    path: 'remote-report.md',
+                    title: 'Remote Report',
+                    bind: remoteBind.bind,
+                    token: remoteToken.token,
+                });
+                expect({
+                    success: remoteReg.success,
+                    code: remoteReg.code,
+                    error: remoteReg.error,
+                }).toEqual({
+                    success: true,
+                    code: undefined,
+                    error: undefined,
+                });
+
+                // Metadata was forwarded to host via artifact_index_forwarded, without sending the full file body
+                const forwardedFrames = rawFramesFromRemoteToHost.filter((f) => f.includes('artifact_index_forwarded'));
+                expect(forwardedFrames.length).toBe(1);
+                expect(forwardedFrames[0]).not.toContain(bodyBlock.repeat(5));
+
+                const hostRecord = artifactStore.get(remoteReg.artifactId);
+                expect(hostRecord).not.toBeNull();
+                expect((hostRecord as any)?.originDaemonId).toBe('daemon_remote_worker_2');
+                expect((hostRecord as any)?.missionId).toBe('mission-p2p-1');
+                expect((hostRecord as any)?.meshId).toBe('mesh-p2p-1');
+
+                // 2) Host coordinator reads the remote-origin artifact; host fetches from origin over P2P (16 KB chunks)
+                registerMeshCoordinator({
+                    meshId: 'mesh-p2p-1',
+                    sessionId: 'coord-p2p-1',
+                    workspace: workspaceA,
+                    startedAt: Date.now(),
+                    cliType: 'claude-cli',
+                });
+                const hostRead = await artifactHandlers.artifact_read(hostCtx, {
+                    artifactId: remoteReg.artifactId,
+                    callerSessionId: 'coord-p2p-1',
+                    meshId: 'mesh-p2p-1',
+                });
+                expect(hostRead.success).toBe(true);
+                expect(hostRead.content).toContain('<untrusted_artifact_content>');
+                expect(hostRead.content).toContain(largeMarkdown);
+                expect(hostRead.content).toContain('</untrusted_artifact_content>');
+                // Verify the response was split into multiple 16 KB mesh_chunk frames over MeshRpcEndpoint
+                expect(chunkFramesObserved.length).toBeGreaterThanOrEqual(2);
+            } finally {
+                unregisterMeshCoordinator('coord-p2p-1');
+                remoteMeshStore.close();
+            }
+        });
+
+        it('Content boundary: status and transcript observation payloads never carry full artifact bytes beyond previewText', async () => {
+            sessionRegistry.register({
+                sessionId: 'sess-boundary-1',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const secretSentinel = 'SENTINEL_FULL_BODY_NEVER_ON_STATUS_PATH_' + 'X'.repeat(2000);
+            const fileContent = 'Short header line.\n'.repeat(40) + secretSentinel;
+            expect(fileContent.length).toBeGreaterThan(2600);
+            fs.writeFileSync(path.join(workspaceA, 'boundary.md'), fileContent);
+
+            const reg = await artifactHandlers.artifact_register(ctx, {
+                sessionId: 'sess-boundary-1',
+                path: 'boundary.md',
+                title: 'Boundary Check',
+            });
+            expect(reg.success).toBe(true);
+            expect(reg.attachment.previewText?.length).toBeLessThanOrEqual(600);
+            expect(JSON.stringify(reg.attachment)).not.toContain('SENTINEL_FULL_BODY_NEVER_ON_STATUS_PATH_');
+            // Even when wrapped in <untrusted_artifact_content>, artifact_read is an explicit fetch verb, never status
+            const readRes = await artifactHandlers.artifact_read(ctx, {
+                sessionId: 'sess-boundary-1',
+                artifactId: reg.artifactId,
+            });
+            expect(readRes.content).toContain('<untrusted_artifact_content>');
+
+            const listRes = await artifactHandlers.artifact_list(ctx, {
+                sessionId: 'sess-boundary-1',
+            });
+            expect(listRes.success).toBe(true);
+            expect(JSON.stringify(listRes)).not.toContain('SENTINEL_FULL_BODY_NEVER_ON_STATUS_PATH_');
         });
     });
 });
