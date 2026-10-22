@@ -1,16 +1,15 @@
 /**
  * Assistant restore (design 2026-10-07-assistant-layer.md §4.5, §4.8): a hosted
- * runtime re-binds to the assistant by EXACT runtimeId only — it gets
- * `assistant: true` and stays off auto-approve even when the provider default
- * turns it on; nothing else is marked; and the full boot restore clears a
- * binding whose runtime is gone (`pruneAfterRestore`, full set only).
+ * runtime re-binds by exact ID or unambiguous persisted assistant provenance.
+ * Approval stays off by default; only its owning host may prune the binding.
  */
-import { chmodSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
+import { registerMeshCoordinator, unregisterMeshCoordinator, getCoordinatorForSession, loadMeshCoordinatorRegistry } from '../../src/mesh/coordinator-registry.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
 
 class TestProviderLoader extends ProviderLoader {
@@ -21,6 +20,8 @@ class TestProviderLoader extends ProviderLoader {
   protected override writeConfig(config: any): void { Object.assign(this.testConfig, config); }
 }
 
+const previewOwner = { endpoint: 'unix:/tmp/adhdev-preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
+const foreignOwner = { endpoint: 'unix:/tmp/adhdev-standalone.sock', managedBy: 'adhdev-standalone', clientId: 'standalone_test' };
 let root = '';
 let workspace = '';
 let configDir = '';
@@ -53,6 +54,8 @@ function setupLoader(): ProviderLoader {
 
 function manager(loader: ProviderLoader, addInstance: ReturnType<typeof vi.fn>, listHosted?: () => Promise<any[]>) {
   return new DaemonCliManager({
+    getHostedBindingOwner: () => previewOwner,
+    hostedRuntimeManagerTag: previewOwner.managedBy,
     getServerConn: () => null,
     getP2p: () => null,
     onStatusChange: vi.fn(),
@@ -71,10 +74,11 @@ beforeEach(() => {
   process.env.ADHDEV_CONFIG_DIR = configDir;
   registry = new AssistantRegistry({ configDir });
   setAssistantRegistryForTests(registry);
-  registry.bindSession({ sessionId: 'asst-runtime-1', cliType: 'sample-cli', workspace, at: 1 });
+  registry.bindSession({ sessionId: 'asst-runtime-1', cliType: 'sample-cli', workspace, hostOwner: previewOwner, at: 1 });
 });
 
 afterEach(() => {
+  for (const id of ['coord-1', 'coord-2']) unregisterMeshCoordinator(id);
   setAssistantRegistryForTests(null);
   if (prevConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR;
   else process.env.ADHDEV_CONFIG_DIR = prevConfigDir;
@@ -82,6 +86,95 @@ afterEach(() => {
 });
 
 describe('restoreHostedSessions — assistant re-bind', () => {
+  it.each([foreignOwner, { ...previewOwner, endpoint: foreignOwner.endpoint }])('a foreign empty inventory preserves assistant and both coordinator bindings across a fresh preview restore (%j)', async foreign => {
+    for (const id of ['coord-1', 'coord-2']) registerMeshCoordinator({ meshId: id, sessionId: id,
+      workspace, cliType: 'sample-cli', startedAt: 1, hostOwner: previewOwner });
+    const standalone = manager(setupLoader(), vi.fn(), async () => []);
+    standalone.deps.getHostedBindingOwner = () => foreign;
+    standalone.deps.hostedRuntimeManagerTag = foreign.managedBy;
+    await standalone.restoreHostedSessions();
+    registry = new AssistantRegistry({ configDir });
+    setAssistantRegistryForTests(registry);
+    loadMeshCoordinatorRegistry();
+    expect(registry.read()).toMatchObject({ sessionId: 'asst-runtime-1', hostOwner: previewOwner });
+    for (const id of ['coord-1', 'coord-2']) expect(getCoordinatorForSession(id)?.sessionId).toBe(id);
+    const addInstance = vi.fn();
+    await manager(setupLoader(), addInstance, async () => [{ runtimeId: 'asst-runtime-1', cliType: 'sample-cli',
+      workspace, assistant: true, providerSessionId: 'saved-native-conversation', managedBy: previewOwner.managedBy }]).restoreHostedSessions();
+    expect(addInstance.mock.calls[0][0]).toBe('asst-runtime-1');
+    expect(addInstance.mock.calls[0][2].settings).toMatchObject({ assistant: true, autoApprove: false });
+    expect(registry.read()?.sessionId).toBe('asst-runtime-1');
+  }, 15000);
+
+  it('a foreign empty inventory cannot prune either coordinator when the assistant binding is already absent', async () => {
+    registry.releaseSession('asst-runtime-1', 'pty_exit');
+    for (const id of ['coord-1', 'coord-2']) registerMeshCoordinator({ meshId: id, sessionId: id,
+      workspace, cliType: 'sample-cli', startedAt: 1, hostOwner: previewOwner });
+    const standalone = manager(setupLoader(), vi.fn(), async () => []);
+    standalone.deps.getHostedBindingOwner = () => foreignOwner;
+    standalone.deps.hostedRuntimeManagerTag = foreignOwner.managedBy;
+    await standalone.restoreHostedSessions();
+    loadMeshCoordinatorRegistry();
+    expect(['coord-1', 'coord-2'].map(id => getCoordinatorForSession(id)?.sessionId)).toEqual(['coord-1', 'coord-2']);
+  }, 15000);
+
+  it('unknown ownership and an unsuccessful inventory never prune shared bindings', async () => {
+    registry.bindSession({ sessionId: 'asst-runtime-1', cliType: 'sample-cli', workspace, at: 1 });
+    // Legacy disk record without host scope.
+    const raw = JSON.parse(readFileSync(registry.path, 'utf8'));
+    delete raw.hostOwner;
+    writeFileSync(registry.path, JSON.stringify(raw));
+    registry.reload();
+    registerMeshCoordinator({ meshId: 'coord-1', sessionId: 'coord-1', workspace, startedAt: 1 });
+    await manager(setupLoader(), vi.fn(), async () => []).restoreHostedSessions();
+    expect(registry.reload()?.sessionId).toBe('asst-runtime-1');
+    expect(getCoordinatorForSession('coord-1')).toBeDefined();
+    const failed = manager(setupLoader(), vi.fn(), async () => { throw new Error('inventory failed'); });
+    await expect(failed.restoreHostedSessions()).rejects.toThrow('inventory failed');
+    expect(failed.hostedRestoreState).toBe('failed');
+    expect(registry.reload()?.sessionId).toBe('asst-runtime-1');
+    expect(getCoordinatorForSession('coord-1')).toBeDefined();
+  }, 15000);
+
+  it('rebinds a cleared registry from persisted assistant provenance without marking an ordinary workspace sibling', async () => {
+    registry.releaseSession('asst-runtime-1', 'pty_exit');
+    registry = new AssistantRegistry({ configDir });
+    setAssistantRegistryForTests(registry);
+    const addInstance = vi.fn();
+    await manager(setupLoader(), addInstance).restoreHostedSessions([
+      { runtimeId: 'asst-runtime-1', cliType: 'sample-cli', workspace, assistant: true, providerSessionId: 'saved-native-conversation' },
+      { runtimeId: 'ordinary', cliType: 'sample-cli', workspace },
+    ]);
+    expect(addInstance.mock.calls[0][2].settings).toMatchObject({ assistant: true, autoApprove: false });
+    expect(addInstance.mock.calls[1][2].settings.assistant).toBeUndefined();
+    expect(new AssistantRegistry({ configDir }).read()).toMatchObject({ sessionId: 'asst-runtime-1', hostOwner: previewOwner });
+  }, 15000);
+
+  it('accepts validated assistant launch provenance but rejects workspace/title and mismatched launch identities', async () => {
+    registry.releaseSession('asst-runtime-1', 'pty_exit');
+    const addInstance = vi.fn();
+    const launchRecord = { sessionId: 'asst-runtime-1', providerType: 'sample-cli', launchedBy: 'assistant',
+      launchedAt: 1, model: {}, thinkingLevel: {} };
+    await manager(setupLoader(), addInstance).restoreHostedSessions([
+      { runtimeId: 'asst-runtime-1', cliType: 'sample-cli', workspace, launchRecord },
+      { runtimeId: 'ordinary', cliType: 'sample-cli', workspace, displayName: 'Assistant', launchRecord },
+    ]);
+    expect(addInstance.mock.calls[0][2].settings.assistant).toBe(true);
+    expect(addInstance.mock.calls[1][2].settings.assistant).toBeUndefined();
+    expect(registry.reload()?.sessionId).toBe('asst-runtime-1');
+  }, 15000);
+
+  it('does not bind failed attachments or conflicting assistant provenance', async () => {
+    registry.releaseSession('asst-runtime-1', 'pty_exit');
+    const m = manager(setupLoader(), vi.fn());
+    vi.spyOn(m, 'registerCliInstance').mockRejectedValue(new Error('attach failed'));
+    const record = { runtimeId: 'asst-runtime-1', cliType: 'sample-cli', workspace, assistant: true };
+    await m.restoreHostedSessions([record]);
+    expect(registry.reload()?.sessionId).toBeNull();
+    await expect(m.restoreHostedSessions([record, { ...record, runtimeId: 'conflicting' }])).rejects.toThrow('assistant_identity_conflict');
+    expect(registry.reload()?.sessionId).toBeNull();
+  }, 15000);
+
   it('marks only the exact-runtimeId record, with auto-approve forced off', async () => {
     const addInstance = vi.fn();
     const restored = await manager(setupLoader(), addInstance).restoreHostedSessions([

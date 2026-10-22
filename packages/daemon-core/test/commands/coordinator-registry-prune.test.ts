@@ -9,7 +9,10 @@ import {
   unregisterMeshCoordinator,
   getCoordinatorForSession,
   pruneDeadMeshCoordinators,
+  listCoordinatorsForWorkspace,
 } from '../../src/mesh/coordinator-registry.js';
+
+const OWNER = { endpoint: 'unix:/tmp/preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
 
 // Regression: unregisterMeshCoordinator only runs on explicit stop/exit paths
 // (auto-clean, stopSessionWithMode, orphan force-remove). A daemon upgrade
@@ -80,12 +83,14 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     process.env.ADHDEV_CONFIG_DIR = configDir;
     // The registry is module-level state shared across tests in this file —
     // flush leftovers from a previous test before pinning a fresh fixture.
-    pruneDeadMeshCoordinators(new Set());
+    for (const entry of listCoordinatorsForWorkspace(workingDir)) unregisterMeshCoordinator(entry.sessionId);
+    pruneDeadMeshCoordinators(new Set(), OWNER);
     testConfig = { machineProviders: {}, providerSettings: {} };
   });
 
   afterEach(() => {
-    pruneDeadMeshCoordinators(new Set());
+    for (const entry of listCoordinatorsForWorkspace(workingDir)) unregisterMeshCoordinator(entry.sessionId);
+    pruneDeadMeshCoordinators(new Set(), OWNER);
     if (prevConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR;
     else process.env.ADHDEV_CONFIG_DIR = prevConfigDir;
     if (providerRoot) rmSync(providerRoot, { recursive: true, force: true });
@@ -124,6 +129,7 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
       removeAgentTracking: vi.fn(),
       getInstanceManager: () => ({ addInstance: vi.fn(), removeInstance: vi.fn(), getInstance: () => null }),
       getSessionRegistry: () => ({ register: vi.fn() }),
+      getHostedBindingOwner: () => OWNER,
       listHostedCliRuntimes: async () => hostedRuntimes as any,
     }, loader);
   }
@@ -134,10 +140,10 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     // The fixture MUST mix dead and live entries — an all-dead fixture cannot
     // prove the live entry survives.
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-dead-1', sessionId: 'dead-gen-1', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
-    registerMeshCoordinator({ meshId: 'mesh-dead-2', sessionId: 'dead-gen-2', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
-    registerMeshCoordinator({ meshId: 'mesh-dead-3', sessionId: 'dead-gen-3', workspace: workingDir, startedAt: 3, cliType: 'sample-cli' });
-    registerMeshCoordinator({ meshId: 'mesh-live', sessionId: 'live-coordinator', workspace: workingDir, startedAt: 4, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-dead-1', sessionId: 'dead-gen-1', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-dead-2', sessionId: 'dead-gen-2', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-dead-3', sessionId: 'dead-gen-3', workspace: workingDir, startedAt: 3, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-live', sessionId: 'live-coordinator', workspace: workingDir, startedAt: 4, cliType: 'sample-cli' });
 
     const restored = await createManager(loader, [
       { runtimeId: 'live-coordinator', cliType: 'sample-cli', workspace: workingDir },
@@ -160,8 +166,8 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     // contamination) have no live runtime at all — they must still be reclaimed
     // on the next boot.
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-fixture-1', sessionId: 'fixture-1', workspace: '/tmp/adhdev-dead-fixture-a', startedAt: 1, cliType: 'sample-cli' });
-    registerMeshCoordinator({ meshId: 'mesh-fixture-2', sessionId: 'fixture-2', workspace: '/tmp/adhdev-dead-fixture-b', startedAt: 2, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-fixture-1', sessionId: 'fixture-1', workspace: '/tmp/adhdev-dead-fixture-a', startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-fixture-2', sessionId: 'fixture-2', workspace: '/tmp/adhdev-dead-fixture-b', startedAt: 2, cliType: 'sample-cli' });
 
     const restored = await createManager(loader, []).restoreHostedSessions();
 
@@ -176,7 +182,7 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     // [hosted]. A partial batch is not the live-runtime census — pruning
     // against it would wipe live coordinators that simply were not in it.
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-elsewhere', sessionId: 'coordinator-elsewhere', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-elsewhere', sessionId: 'coordinator-elsewhere', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
     const restored = await createManager(loader, []).restoreHostedSessions([
       { runtimeId: 'unrelated-runtime', cliType: 'sample-cli', workspace: workingDir },
@@ -194,7 +200,7 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     // the entry the fallback just used and reintroduce the badge loss on the
     // next restart.
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-renamed', sessionId: 'old-coordinator-id', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-renamed', sessionId: 'old-coordinator-id', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
     const manager = new DaemonCliManager({
       getServerConn: () => null,
@@ -203,6 +209,7 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
       removeAgentTracking: vi.fn(),
       getInstanceManager: () => ({ addInstance: vi.fn(), removeInstance: vi.fn(), getInstance: () => null }),
       getSessionRegistry: () => ({ register: vi.fn() }),
+      getHostedBindingOwner: () => OWNER,
       listHostedCliRuntimes: async () => [
         { runtimeId: 'new-coordinator-runtimeid', cliType: 'sample-cli', workspace: workingDir },
       ] as any,

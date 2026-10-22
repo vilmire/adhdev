@@ -1,3 +1,4 @@
+const PRUNE_OWNER = { endpoint: 'unix:/tmp/injection-test.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
 import * as fs from 'node:fs'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -548,6 +549,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         retainForSessionLifetime: effect.retainContextFileForSessionLifetime,
       }
       registerMeshCoordinator({
+        hostOwner: PRUNE_OWNER,
         meshId: 'mesh-reg-1',
         sessionId: 'coord-sess-1',
         workspace: ws,
@@ -557,6 +559,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         injection: { mode: 'context_file', target: 'AGENTS.md', contextFile: contextFileRecord },
       })
       registerMeshCoordinator({
+        hostOwner: PRUNE_OWNER,
         meshId: 'mesh-reg-1',
         sessionId: 'coord-sess-2',
         workspace: ws,
@@ -574,7 +577,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       }
 
       // Boot-time prune of dead coord-sess-2 strips AGENTS.md and all companion files.
-      const pruned = pruneDeadMeshCoordinators(new Set(['unrelated-live-session']))
+      const pruned = pruneDeadMeshCoordinators(new Set(['unrelated-live-session']), PRUNE_OWNER)
       expect(pruned.map((p) => p.sessionId)).toContain('coord-sess-2')
       expect(existsSync(join(ws, 'AGENTS.md'))).toBe(false)
       for (const extra of effect.additionalOwnedFiles ?? []) {
@@ -606,6 +609,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       // AGENTS.md wrapper block was previously stripped (e.g. pre-rc24 startup strip
       // or stopSession during restartSession).
       registerMeshCoordinator({
+        hostOwner: PRUNE_OWNER,
         meshId: 'mesh-restore-1',
         sessionId: 'coord-restore-sess',
         workspace: ws,
@@ -695,6 +699,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         { cliArgs: [], launchEnv: { HOME: coordHome }, workspace: ws, cliType: 'antigravity-cli' },
       )
       registerMeshCoordinator({
+        hostOwner: PRUNE_OWNER,
         meshId: 'review-active',
         sessionId: 'review-active',
         workspace: ws,
@@ -1005,6 +1010,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         '../../src/mesh/coordinator-registry.js'
       )
       registerMeshCoordinator({
+        hostOwner: PRUNE_OWNER,
         meshId: 'mesh-prod-restore',
         sessionId: 'coord-prod-restore-1',
         workspace: ws,
@@ -1071,6 +1077,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         const addInstance = vi.fn()
         const manager = new DaemonCliManager(
           {
+            getHostedBindingOwner: () => PRUNE_OWNER,
             getServerConn: () => null,
             getP2p: () => null,
             onStatusChange: vi.fn(),
@@ -1113,7 +1120,9 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       )
     const reg = (id: string, ws: string, prompt: string, e: any) =>
       registerMeshCoordinator({
-        meshId: id,
+        hostOwner: PRUNE_OWNER,
+        hostOwner: PRUNE_OWNER,
+      meshId: id,
         sessionId: id,
         workspace: ws,
         cliType: 'antigravity-cli',
@@ -1276,6 +1285,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       )
 
     const makeEntry = (id: string, ws: string, prompt: string, e: any) => ({
+      hostOwner: PRUNE_OWNER,
       meshId: id,
       sessionId: id,
       workspace: ws,
@@ -1317,7 +1327,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
 
           fs.chmodSync(target, 0o444)
           if (mode === 'prune') {
-            pruneDeadMeshCoordinators(new Set([`r1-${mode}-A`]))
+            pruneDeadMeshCoordinators(new Set([`r1-${mode}-A`]), PRUNE_OWNER)
           } else {
             unregisterMeshCoordinator(`r1-${mode}-B`)
           }
@@ -1330,7 +1340,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
           // Restore write permission and retry unregister/prune idempotently:
           fs.chmodSync(target, 0o644)
           if (mode === 'prune') {
-            pruneDeadMeshCoordinators(new Set([`r1-${mode}-A`]))
+            pruneDeadMeshCoordinators(new Set([`r1-${mode}-A`]), PRUNE_OWNER)
           } else {
             unregisterMeshCoordinator(`r1-${mode}-B`)
           }
@@ -1445,6 +1455,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
         { cliArgs: [], launchEnv: { HOME: home }, workspace: ws, cliType: 'antigravity-cli' },
       )
       oldRegistryMod.registerMeshCoordinator({
+        hostOwner: PRUNE_OWNER,
         meshId: 'legacy-from-parent',
         sessionId: 'legacy-from-parent',
         workspace: ws,

@@ -1,3 +1,4 @@
+import { readHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 /**
  * Assistant registry — `<configDir>/assistant.json`, one entry per daemon
  * (design 2026-10-07-assistant-layer.md §4.5, §4.3 restart note, §4.6).
@@ -73,6 +74,7 @@ export interface AssistantRegistryEntry {
     cliType: string;
     workspace: string;
     mcpConfigPath?: string;
+    hostOwner?: HostedBindingOwner;
     /** User aliases → meshId (§4.2). */
     aliases: Record<string, string>;
     /** First launch, epoch ms. */
@@ -124,6 +126,7 @@ export interface BindAssistantSessionInput {
     cliType: string;
     workspace: string;
     mcpConfigPath?: string;
+    hostOwner?: HostedBindingOwner;
     at: number;
 }
 
@@ -276,6 +279,7 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
     const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
     const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
     return {
+        ...(readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {}),
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
         workspace: r.workspace,
@@ -393,6 +397,7 @@ export class AssistantRegistry {
             sessionId: input.sessionId,
             cliType: input.cliType,
             workspace: input.workspace,
+            hostOwner: input.hostOwner ?? (sameSession ? prev?.hostOwner : undefined),
         };
         if (!sameSession) next.lastTurnState = { state: 'idle', at, sessionId: input.sessionId };
         if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
@@ -482,11 +487,13 @@ export class AssistantRegistry {
 
     /**
      * After the boot-time restore: clear a binding whose runtime is not among
-     * the live hosted runtimes. Callers MUST pass the full restore set.
+     * the live hosted runtimes. Callers MUST pass a successful full inventory
+     * and its verified host owner. Foreign or unknown ownership defers pruning.
      * Returns the cleared sessionId, or null.
      */
-    pruneAfterRestore(liveRuntimeIds: ReadonlySet<string>): string | null {
-        const prev = this.read();
+    pruneAfterRestore(liveRuntimeIds: ReadonlySet<string>, owner?: HostedBindingOwner): string | null {
+        const prev = this.reload();
+        if (!sameHostedBindingOwner(prev?.hostOwner, owner)) return null;
         if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
         const cleared = prev.sessionId;
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };

@@ -1,3 +1,4 @@
+import type { HostedBindingOwner } from '../session-host/binding-owner.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
@@ -62,6 +63,7 @@ export interface CliManagerDeps {
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
     listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
     hostedRuntimeManagerTag?: string;
+    getHostedBindingOwner?: () => HostedBindingOwner;
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
 }
 
@@ -96,6 +98,8 @@ export interface HostedCliRuntimeDescriptor {
     cliArgs?: string[];
     providerSessionId?: string;
     managedBy?: string;
+    /** Positive role mark persisted in session-host meta; never inferred from workspace/title. */
+    assistant?: boolean;
     /**
      * Real spawn time (ms epoch) of the underlying session-host runtime — a PAST
      * timestamp recorded when the runtime first started. Threaded through so an
@@ -156,6 +160,9 @@ const AUTO_CLEAN_DELAY_MS = 5_000;
 // ─── DaemonCliManager ────────────────────────────
 
 export class DaemonCliManager {
+    /** Set at boot before command admission, and around every restore attempt. */
+    hostedRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
+    private hostedRestoreOperation?: Promise<number>;
     readonly adapters = new Map<string, CliAdapter>();
     readonly roleRestartInputs = new Map<string, { cliArgs?: string[]; initialModel?: string; options: CliStartOptions }>();
     deps: CliManagerDeps;
@@ -575,7 +582,19 @@ export class DaemonCliManager {
         this.roleRestartInputs.clear();
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
-    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> { return restoreHostedSessions(this, records); }
+    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> {
+        if (this.hostedRestoreOperation) return this.hostedRestoreOperation;
+        this.hostedRestoreState = 'pending';
+        const operation = restoreHostedSessions(this, records).then(count => {
+            this.hostedRestoreState = 'ready';
+            return count;
+        }, error => {
+            this.hostedRestoreState = 'failed';
+            throw error;
+        }).finally(() => { this.hostedRestoreOperation = undefined; });
+        this.hostedRestoreOperation = operation;
+        return operation;
+    }
 
  // ─── Adapter search ─────────────────────────────
 

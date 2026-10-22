@@ -67112,6 +67112,21 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         GIT_TIMEOUT_MS2 = 15e3;
       }
     });
+    function readHostedBindingOwner(raw) {
+      if (!raw || typeof raw !== "object") return void 0;
+      const r = raw;
+      if (![r.endpoint, r.managedBy, r.clientId].every((v) => typeof v === "string" && v.trim())) return void 0;
+      return { endpoint: r.endpoint, managedBy: r.managedBy, clientId: r.clientId };
+    }
+    function sameHostedBindingOwner(a, b) {
+      const left = readHostedBindingOwner(a), right = readHostedBindingOwner(b);
+      return !!left && !!right && left.endpoint === right.endpoint && left.managedBy === right.managedBy && left.clientId === right.clientId;
+    }
+    var init_binding_owner = __esm2({
+      "src/session-host/binding-owner.ts"() {
+        "use strict";
+      }
+    });
     function coordinatorWrapperSentinels(wrapper) {
       const w = wrapper && wrapper.includes("{prompt}") ? wrapper : "{prompt}";
       const [before, after] = w.split("{prompt}");
@@ -68187,10 +68202,11 @@ ${includeRefs[0]}`;
     function getCoordinatorForSession(sessionId) {
       return _registry.get(sessionId);
     }
-    function pruneDeadMeshCoordinators(liveSessionIds) {
+    function pruneDeadMeshCoordinators(liveSessionIds, owner) {
+      loadMeshCoordinatorRegistry();
       const pruned = [];
       for (const entry of [..._registry.values()]) {
-        if (liveSessionIds.has(entry.sessionId)) continue;
+        if (!sameHostedBindingOwner(entry.hostOwner, owner) || liveSessionIds.has(entry.sessionId)) continue;
         _registry.delete(entry.sessionId);
         pruned.push(entry);
       }
@@ -68205,7 +68221,7 @@ ${includeRefs[0]}`;
         }
       }
       for (const [pendingSessionId, pendingEntry] of [..._pendingFailedCleanupBySessionId.entries()]) {
-        if (liveSessionIds.has(pendingSessionId)) continue;
+        if (!sameHostedBindingOwner(pendingEntry.hostOwner, owner) || liveSessionIds.has(pendingSessionId)) continue;
         if (pruned.some((p) => p.sessionId === pendingSessionId)) continue;
         if (cleanupCoordinatorEntryContextFile(pendingEntry)) {
           _pendingFailedCleanupBySessionId.delete(pendingSessionId);
@@ -68226,6 +68242,7 @@ ${includeRefs[0]}`;
     var init_coordinator_registry = __esm2({
       "src/mesh/coordinator-registry.ts"() {
         "use strict";
+        init_binding_owner();
         import_path15 = require("path");
         import_fs21 = require("fs");
         init_config();
@@ -90725,6 +90742,7 @@ ${result.stderr}`, result.code);
       const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
       const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
       return {
+        ...readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {},
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
         workspace: r.workspace,
@@ -90802,6 +90820,7 @@ ${result.stderr}`, result.code);
     var init_assistant_registry = __esm2({
       "src/assistant/assistant-registry.ts"() {
         "use strict";
+        init_binding_owner();
         import_fs29 = require("fs");
         import_path22 = require("path");
         init_dist();
@@ -90882,7 +90901,8 @@ ${result.stderr}`, result.code);
               },
               sessionId: input.sessionId,
               cliType: input.cliType,
-              workspace: input.workspace
+              workspace: input.workspace,
+              hostOwner: input.hostOwner ?? (sameSession ? prev?.hostOwner : void 0)
             };
             if (!sameSession) next.lastTurnState = { state: "idle", at, sessionId: input.sessionId };
             if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
@@ -90964,11 +90984,13 @@ ${result.stderr}`, result.code);
           }
           /**
            * After the boot-time restore: clear a binding whose runtime is not among
-           * the live hosted runtimes. Callers MUST pass the full restore set.
+           * the live hosted runtimes. Callers MUST pass a successful full inventory
+           * and its verified host owner. Foreign or unknown ownership defers pruning.
            * Returns the cleared sessionId, or null.
            */
-          pruneAfterRestore(liveRuntimeIds) {
-            const prev = this.read();
+          pruneAfterRestore(liveRuntimeIds, owner) {
+            const prev = this.reload();
+            if (!sameHostedBindingOwner(prev?.hostOwner, owner)) return null;
             if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
             const cleared = prev.sessionId;
             const next = { ...prev, sessionId: null };
@@ -97083,9 +97105,9 @@ ${out.stderr}`);
       }
       const { mkdtempSync: mkdtempSync3, rmSync: rmSync16, openSync: openSync23, closeSync: closeSync23 } = await import("fs");
       const { tmpdir: tmpdir9 } = await import("os");
-      const { join: join135 } = await import("path");
-      const scratch = mkdtempSync3(join135(tmpdir9(), "adhdev-patchid-"));
-      const patchFile = join135(scratch, "patch.diff");
+      const { join: join137 } = await import("path");
+      const scratch = mkdtempSync3(join137(tmpdir9(), "adhdev-patchid-"));
+      const patchFile = join137(scratch, "patch.diff");
       try {
         const out = openSync23(patchFile, "w");
         let diffRun;
@@ -107815,7 +107837,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           callSite,
           gitArgs,
           cwd,
-          cwdExists: (0, import_node_fs17.existsSync)(cwd),
+          cwdExists: (0, import_node_fs18.existsSync)(cwd),
           code: error?.code ?? null,
           syscall: error?.syscall ?? null,
           path: error?.path ?? null,
@@ -107922,7 +107944,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return { order: ranked.map((a) => a.nodeId), changeAreas: areaById, rationale };
     }
     var import_node_child_process16;
-    var import_node_fs17;
+    var import_node_fs18;
     var import_node_util9;
     var execFileAsync5;
     var GIT2;
@@ -107931,7 +107953,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       "src/mesh/mesh-refine-batch.ts"() {
         "use strict";
         import_node_child_process16 = require("child_process");
-        import_node_fs17 = require("fs");
+        import_node_fs18 = require("fs");
         import_node_util9 = require("util");
         init_resolve_executable();
         init_logger();
@@ -107953,7 +107975,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     }
     async function assessScope(cwd, path106, baseRef, branchRef) {
       try {
-        if (!(0, import_node_fs18.existsSync)(cwd)) return { path: path106, verdict: "unknown", error: `path does not exist: ${cwd}` };
+        if (!(0, import_node_fs19.existsSync)(cwd)) return { path: path106, verdict: "unknown", error: `path does not exist: ${cwd}` };
         const liveBaseHead = await git3(cwd, ["rev-parse", baseRef]);
         const branchHead = await git3(cwd, ["rev-parse", branchRef]);
         if (!liveBaseHead || !branchHead) {
@@ -108023,7 +108045,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
             touchedSubmodulePaths = area.touchedSubmodulePaths;
             for (const subPath of touchedSubmodulePaths) {
-              const subCwd = (0, import_node_path21.resolve)(workspace, subPath);
+              const subCwd = (0, import_node_path22.resolve)(workspace, subPath);
               const subBaseRef = await (async () => {
                 for (const ref2 of ["origin/main", "origin/master", "main", "master"]) {
                   try {
@@ -108043,13 +108065,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const verdict = scopes2.some((s2) => s2.verdict === "diverged") ? "diverged" : scopes2.some((s2) => s2.verdict === "unknown") ? "unknown" : "clear";
       return { verdict, scopes: scopes2, touchedSubmodulePaths, durationMs: Date.now() - started };
     }
-    var import_node_path21;
-    var import_node_fs18;
+    var import_node_path22;
+    var import_node_fs19;
     var init_mesh_refine_base_divergence = __esm2({
       "src/mesh/mesh-refine-base-divergence.ts"() {
         "use strict";
-        import_node_path21 = require("path");
-        import_node_fs18 = require("fs");
+        import_node_path22 = require("path");
+        import_node_fs19 = require("fs");
         init_mesh_refine_batch();
         init_git_executor();
       }
@@ -108533,7 +108555,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function refineWorktreeVanishedOutcome(ctx, nextStage) {
       const workspace = ctx?.node?.workspace;
       if (typeof workspace !== "string" || !workspace) return null;
-      if ((0, import_node_fs19.existsSync)(workspace)) return null;
+      if ((0, import_node_fs20.existsSync)(workspace)) return null;
       recordMeshRefineStage(ctx.refineStages, nextStage, "failed", Date.now(), {
         workspace,
         workspaceMissing: true,
@@ -108553,12 +108575,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         }
       };
     }
-    var import_node_fs19;
+    var import_node_fs20;
     var REFINE_INFLIGHT_FRESHNESS_MS;
     var init_mesh_refine_inflight = __esm2({
       "src/mesh/mesh-refine-inflight.ts"() {
         "use strict";
-        import_node_fs19 = require("fs");
+        import_node_fs20 = require("fs");
         init_mesh_refine_zombie_sweep();
         init_mesh_refine_landing();
         init_mesh_refine_gates();
@@ -109418,7 +109440,7 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!node.isLocalWorktree || !node.workspace) {
         return { kind: "terminal", result: { success: false, error: `Refinery requires a local worktree node`, refineStages } };
       }
-      if (!(0, import_node_fs20.existsSync)(node.workspace)) {
+      if (!(0, import_node_fs21.existsSync)(node.workspace)) {
         recordMeshRefineStage(refineStages, "resolve_refs", "failed", Date.now(), {
           workspace: node.workspace,
           workspaceMissing: true
@@ -109778,13 +109800,13 @@ ${excerpt}` : "\n--- git output ---\n(none captured)");
       if (!Array.isArray(refineStages)) return false;
       return refineStages.some((stage) => stage?.stage === "sync_base" && stage?.rebased === true);
     }
-    var import_node_fs20;
+    var import_node_fs21;
     var init_router_refine_sync_stages = __esm2({
       "src/commands/router-refine-sync-stages.ts"() {
         "use strict";
         init_mesh_refine_gates();
         init_dist();
-        import_node_fs20 = require("fs");
+        import_node_fs21 = require("fs");
         init_mesh_refine_landing();
         init_git_locale();
         init_git_status();
@@ -148062,11 +148084,11 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
-          const { dirname: dirname54, join: join135 } = await import("path");
+          const { dirname: dirname54, join: join137 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
-          const absolutePath = join135(workspace, relativePath);
+          const absolutePath = join137(workspace, relativePath);
           const validation = normalizeRepoMeshDeclarativeConfig2(scaffold);
           if (!validation.valid) {
             return { success: false, meshId, error: `invalid mesh.json scaffold: ${validation.errors.join("; ")}` };
@@ -148171,18 +148193,18 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync119, readFileSync: readFileSync109, mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
-          const { dirname: dirname54, join: join135 } = await import("path");
+          const { existsSync: existsSync119, readFileSync: readFileSync110, mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
+          const { dirname: dirname54, join: join137 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
-          let existingPath = join135(workspace, relativePath);
+          let existingPath = join137(workspace, relativePath);
           let existedAsYaml = false;
           for (const relative19 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join135(workspace, relative19);
+            const candidate = join137(workspace, relative19);
             if (!existsSync119(candidate)) continue;
             try {
-              const text4 = readFileSync109(candidate, "utf-8");
+              const text4 = readFileSync110(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text4) : yaml3.load(text4);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
@@ -149789,6 +149811,7 @@ ${ptyResult.output.slice(-2e3)}`);
             if (cliCmdSessionId) {
               const cliCmdInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
               registerMeshCoordinator({
+                hostOwner: ctx.deps.cliManager?.deps?.getHostedBindingOwner?.(),
                 meshId,
                 sessionId: cliCmdSessionId,
                 workspace,
@@ -149855,7 +149878,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync119, readFileSync: readFileSync109, writeFileSync: writeFileSync50, mkdirSync: mkdirSync60 } = await import("fs");
+          const { existsSync: existsSync119, readFileSync: readFileSync110, writeFileSync: writeFileSync50, mkdirSync: mkdirSync60 } = await import("fs");
           const { dirname: dirname54 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -149895,7 +149918,7 @@ ${ptyResult.output.slice(-2e3)}`);
             let existingMcpConfigText = "";
             if (hadExistingMcpConfig) {
               try {
-                existingMcpConfigText = readFileSync109(mcpConfigPath, "utf-8");
+                existingMcpConfigText = readFileSync110(mcpConfigPath, "utf-8");
                 const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
                 existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
               } catch (error) {
@@ -150008,6 +150031,7 @@ ${ptyResult.output.slice(-2e3)}`);
           if (launchSessionId) {
             const autoImportInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
             registerMeshCoordinator({
+              hostOwner: ctx.deps.cliManager?.deps?.getHostedBindingOwner?.(),
               meshId,
               sessionId: launchSessionId,
               workspace,
@@ -153994,6 +154018,118 @@ ${ptyResult.output.slice(-2e3)}`);
       [ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND]: { sources: [...ASSISTANT_REMOTE_OWNER_SOURCES] },
       [ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND]: { sources: [...ASSISTANT_REMOTE_OWNER_SOURCES] }
     });
+    init_owned_lock();
+    init_config();
+    function shouldRestoreHostedRuntime(record6, managerTag) {
+      if (!managerTag) return true;
+      const managedBy = typeof record6.managedBy === "string" ? record6.managedBy.trim() : "";
+      if (!managedBy) return true;
+      return managedBy === managerTag;
+    }
+    init_binding_owner();
+    var import_node_fs16 = require("fs");
+    var import_node_path20 = require("path");
+    init_dist();
+    function hasAssistantProvenance(record6) {
+      if (record6.assistant === true) return true;
+      const launch = parseSessionLaunchRecord(record6.launchRecord);
+      return !!launch && launch.sessionId === record6.runtimeId && launch.providerType === record6.cliType && (launch.launchedBy === "assistant" || launch.roleLaunch?.role === "assistant");
+    }
+    function assistantRestoreCandidate(entry, records) {
+      const marked = records.filter(hasAssistantProvenance);
+      const exact = records.find((r) => r.runtimeId === entry?.sessionId);
+      if (marked.some((r) => r.runtimeId !== exact?.runtimeId) && (exact || entry?.sessionId || marked.length > 1)) {
+        throw new Error(`assistant_identity_conflict: ${[entry?.sessionId, ...marked.map((r) => r.runtimeId)].filter(Boolean).join(", ")}`);
+      }
+      return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : void 0);
+    }
+    function persistedAssistantRuntimeIds(configDir) {
+      const ids = /* @__PURE__ */ new Set();
+      const hostRoot = (0, import_node_path20.join)(configDir, "session-host");
+      let namespaces;
+      try {
+        namespaces = (0, import_node_fs16.readdirSync)(hostRoot);
+      } catch (error) {
+        if (error.code === "ENOENT") return ids;
+        throw error;
+      }
+      for (const namespace of namespaces) {
+        const runtimes = (0, import_node_path20.join)(hostRoot, namespace, "runtimes");
+        let files;
+        try {
+          files = (0, import_node_fs16.readdirSync)(runtimes);
+        } catch (error) {
+          if (error.code === "ENOENT") continue;
+          throw error;
+        }
+        for (const file of files.filter((f) => f.endsWith(".json"))) {
+          const r = JSON.parse((0, import_node_fs16.readFileSync)((0, import_node_path20.join)(runtimes, file), "utf8"));
+          if (r.category !== "cli" || ["stopped", "failed"].includes(r.lifecycle)) continue;
+          if (hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) {
+            if (typeof r.sessionId !== "string" || !r.sessionId) throw new Error("assistant_runtime_identity_missing");
+            ids.add(r.sessionId);
+          }
+        }
+      }
+      return ids;
+    }
+    init_assistant_registry();
+    var refused2 = (code, error = code) => ({ success: false, code, error });
+    async function admitAssistantLaunch(ctx) {
+      const manager = ctx.deps.cliManager;
+      if (!manager || manager.hostedRestoreState !== "ready") return refused2("assistant_restore_pending");
+      const owner = manager.deps.getHostedBindingOwner?.();
+      if (!owner || !manager.deps.listHostedCliRuntimes) return refused2("assistant_inventory_unavailable");
+      const registry = getAssistantRegistry();
+      const entry = registry.reload();
+      if (entry?.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner)) return refused2("assistant_owned_by_other_host");
+      try {
+        const records = await manager.deps.listHostedCliRuntimes();
+        if (manager.hostedRestoreState !== "ready") return refused2("assistant_restore_pending");
+        for (const id4 of ctx.deps.instanceManager.listInstanceIds?.() ?? []) {
+          const instance = ctx.deps.instanceManager.getInstance(id4);
+          if (instance?.getState().settings.assistant === true && !records.some((r) => r.runtimeId === id4)) {
+            return refused2("assistant_restore_pending", `Attached assistant ${id4} is not yet in the hosted inventory`);
+          }
+        }
+        const candidate = assistantRestoreCandidate(entry, records);
+        const persisted = persistedAssistantRuntimeIds(getConfigDir2());
+        if ([...persisted].some((id4) => id4 !== candidate?.runtimeId)) return refused2("assistant_identity_conflict");
+        if (candidate) {
+          if (candidate.lifecycle === "starting" || candidate.lifecycle === "stopping") return refused2("assistant_restore_pending");
+          if (!shouldRestoreHostedRuntime(candidate, owner.managedBy)) return refused2("assistant_owned_by_other_host");
+          if (!ctx.deps.instanceManager.getInstance(candidate.runtimeId)) {
+            await manager.restoreHostedSessions(records);
+          }
+          const instance = ctx.deps.instanceManager.getInstance(candidate.runtimeId);
+          if (!instance) return refused2("assistant_restore_pending");
+          if (instance.getState().settings.assistant !== true) {
+            if (!instance.updateSettings) return refused2("assistant_restore_pending");
+            instance.updateSettings({ assistant: true, ...candidate.autoApproveMode ? { autoApproveMode: candidate.autoApproveMode } : { autoApprove: false, autoApproveMode: void 0 } });
+          }
+          const latest = registry.reload();
+          if (latest?.sessionId && latest.sessionId !== candidate.runtimeId || latest?.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) return refused2("assistant_identity_conflict");
+          registry.bindSession({
+            sessionId: candidate.runtimeId,
+            cliType: candidate.cliType,
+            workspace: candidate.workspace,
+            hostOwner: owner,
+            mcpConfigPath: entry?.mcpConfigPath,
+            at: Date.now()
+          });
+          return { success: true, launched: false, sessionId: candidate.runtimeId, cliType: candidate.cliType, workspace: candidate.workspace };
+        }
+        if (entry?.sessionId && ctx.deps.instanceManager.getInstance(entry.sessionId)) {
+          return { success: true, launched: false, sessionId: entry.sessionId, cliType: entry.cliType, workspace: entry.workspace };
+        }
+        if (entry?.sessionId && !sameHostedBindingOwner(entry.hostOwner, owner)) return refused2("assistant_binding_owner_unknown");
+        registry.pruneAfterRestore(new Set(records.map((r) => r.runtimeId)), owner);
+        return void 0;
+      } catch (error) {
+        const message = error.message;
+        return refused2(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", message);
+      }
+    }
     var import_crypto37 = require("crypto");
     var import_path44 = require("path");
     init_dist();
@@ -154006,9 +154142,9 @@ ${ptyResult.output.slice(-2e3)}`);
     init_mesh_coordinator();
     init_worker_private_home();
     var import_node_crypto31 = require("crypto");
-    var import_node_fs16 = require("fs");
+    var import_node_fs17 = require("fs");
     var os36 = __toESM2(require("os"));
-    var import_node_path20 = require("path");
+    var import_node_path21 = require("path");
     init_mesh_coordinator_config();
     var fs93 = __toESM2(require("fs"));
     var os35 = __toESM2(require("os"));
@@ -154070,7 +154206,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return contents.split(/\r?\n/).some((line) => line.trim() === needle);
     }
     init_assistant_launch_plan();
-    var O_NOFOLLOW_FLAG = typeof import_node_fs16.constants.O_NOFOLLOW === "number" ? import_node_fs16.constants.O_NOFOLLOW : 0;
+    var O_NOFOLLOW_FLAG = typeof import_node_fs17.constants.O_NOFOLLOW === "number" ? import_node_fs17.constants.O_NOFOLLOW : 0;
     function unsafePathError(message) {
       return new Error(`assistant_unsafe_path: ${message}`);
     }
@@ -154087,7 +154223,7 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     function lstatOrNull(targetPath) {
       try {
-        return (0, import_node_fs16.lstatSync)(targetPath);
+        return (0, import_node_fs17.lstatSync)(targetPath);
       } catch (err) {
         if (err?.code === "ENOENT") return null;
         throw err;
@@ -154097,51 +154233,51 @@ ${ptyResult.output.slice(-2e3)}`);
       const home = os36.homedir();
       const candidates = [];
       for (const rel of [".codex", ".gemini", ".claude", ".cursor"]) {
-        const p = (0, import_node_path20.join)(home, rel);
-        candidates.push((0, import_node_path20.resolve)(p));
+        const p = (0, import_node_path21.join)(home, rel);
+        candidates.push((0, import_node_path21.resolve)(p));
         try {
-          candidates.push((0, import_node_fs16.realpathSync)(p));
+          candidates.push((0, import_node_fs17.realpathSync)(p));
         } catch {
         }
       }
       for (const globalDir of candidates) {
-        if (realTarget === globalDir || realTarget.startsWith(globalDir + import_node_path20.sep)) {
+        if (realTarget === globalDir || realTarget.startsWith(globalDir + import_node_path21.sep)) {
           throw unsafePathError(`target ${realTarget} resolves inside global provider config directory ${globalDir}`);
         }
       }
     }
     function ensurePrivateAssistantDirectoryChain(rootDir, targetDir) {
-      const resolvedRoot = (0, import_node_path20.resolve)(rootDir);
-      const resolvedTarget = (0, import_node_path20.resolve)(targetDir);
-      if (!(0, import_node_path20.isAbsolute)(resolvedRoot) || !(0, import_node_path20.isAbsolute)(resolvedTarget)) {
+      const resolvedRoot = (0, import_node_path21.resolve)(rootDir);
+      const resolvedTarget = (0, import_node_path21.resolve)(targetDir);
+      if (!(0, import_node_path21.isAbsolute)(resolvedRoot) || !(0, import_node_path21.isAbsolute)(resolvedTarget)) {
         throw unsafePathError("assistant directory paths must be absolute");
       }
       if (isOverBroadTrustRoot(resolvedRoot)) {
         throw unsafePathError(`refusing over-broad assistant root directory ${resolvedRoot}`);
       }
-      const rel = (0, import_node_path20.relative)(resolvedRoot, resolvedTarget);
-      if (rel === ".." || rel.startsWith(`..${import_node_path20.sep}`) || (0, import_node_path20.isAbsolute)(rel)) {
+      const rel = (0, import_node_path21.relative)(resolvedRoot, resolvedTarget);
+      if (rel === ".." || rel.startsWith(`..${import_node_path21.sep}`) || (0, import_node_path21.isAbsolute)(rel)) {
         throw unsafePathError(`target directory ${resolvedTarget} escapes root ${resolvedRoot}`);
       }
       let rootStat = lstatOrNull(resolvedRoot);
       if (!rootStat) {
-        (0, import_node_fs16.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
+        (0, import_node_fs17.mkdirSync)(resolvedRoot, { recursive: true, mode: 448 });
         rootStat = lstatOrNull(resolvedRoot);
       }
       if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
         throw unsafePathError(`assistant root ${resolvedRoot} must be a real directory (not a symlink)`);
       }
       assertOwnedByCurrentUser(rootStat, resolvedRoot);
-      const segments = rel.split(import_node_path20.sep).filter(Boolean);
+      const segments = rel.split(import_node_path21.sep).filter(Boolean);
       let cursor = resolvedRoot;
       for (const seg of segments) {
         if (seg === "." || seg === "..") {
           throw unsafePathError(`invalid relative segment "${seg}" under ${resolvedRoot}`);
         }
-        cursor = (0, import_node_path20.join)(cursor, seg);
+        cursor = (0, import_node_path21.join)(cursor, seg);
         let stat2 = lstatOrNull(cursor);
         if (!stat2) {
-          (0, import_node_fs16.mkdirSync)(cursor, { mode: 448 });
+          (0, import_node_fs17.mkdirSync)(cursor, { mode: 448 });
           stat2 = lstatOrNull(cursor);
         }
         if (!stat2 || stat2.isSymbolicLink() || !stat2.isDirectory()) {
@@ -154149,9 +154285,9 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         assertOwnedByCurrentUser(stat2, cursor);
       }
-      const realRoot = (0, import_node_fs16.realpathSync)(resolvedRoot);
-      const realTarget = (0, import_node_fs16.realpathSync)(resolvedTarget);
-      if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path20.sep)) {
+      const realRoot = (0, import_node_fs17.realpathSync)(resolvedRoot);
+      const realTarget = (0, import_node_fs17.realpathSync)(resolvedTarget);
+      if (realTarget !== realRoot && !realTarget.startsWith(realRoot + import_node_path21.sep)) {
         throw unsafePathError(`canonical directory ${realTarget} escapes canonical root ${realRoot}`);
       }
       if (isOverBroadTrustRoot(realTarget)) {
@@ -154164,7 +154300,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return ensurePrivateAssistantDirectoryChain(configDir, workspace);
     }
     function readPrivateAssistantConfigSnapshot(requestedFilePath, canonicalFilePath, expectedRealParent) {
-      for (const candidate of /* @__PURE__ */ new Set([(0, import_node_path20.resolve)(requestedFilePath), canonicalFilePath])) {
+      for (const candidate of /* @__PURE__ */ new Set([(0, import_node_path21.resolve)(requestedFilePath), canonicalFilePath])) {
         const lstat3 = lstatOrNull(candidate);
         if (!lstat3) continue;
         if (lstat3.isSymbolicLink()) {
@@ -154184,17 +154320,17 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       let fd = null;
       try {
-        fd = (0, import_node_fs16.openSync)(canonicalFilePath, import_node_fs16.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-        const fstat = (0, import_node_fs16.fstatSync)(fd);
+        fd = (0, import_node_fs17.openSync)(canonicalFilePath, import_node_fs17.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+        const fstat = (0, import_node_fs17.fstatSync)(fd);
         if (!fstat.isFile() || fstat.nlink > 1 || fstat.ino !== lstat2.ino || fstat.dev !== lstat2.dev) {
           throw unsafePathError(`config file ${canonicalFilePath} changed or failed descriptor verification on open`);
         }
         assertOwnedByCurrentUser(fstat, canonicalFilePath);
-        const realFile = (0, import_node_fs16.realpathSync)(canonicalFilePath);
-        if (realFile !== canonicalFilePath || (0, import_node_path20.dirname)(realFile) !== expectedRealParent) {
+        const realFile = (0, import_node_fs17.realpathSync)(canonicalFilePath);
+        if (realFile !== canonicalFilePath || (0, import_node_path21.dirname)(realFile) !== expectedRealParent) {
           throw unsafePathError(`canonical config file ${realFile} does not match expected ${canonicalFilePath}`);
         }
-        const content = (0, import_node_fs16.readFileSync)(fd, "utf-8");
+        const content = (0, import_node_fs17.readFileSync)(fd, "utf-8");
         return {
           exists: true,
           content,
@@ -154206,41 +154342,41 @@ ${ptyResult.output.slice(-2e3)}`);
       } finally {
         if (fd !== null) {
           try {
-            (0, import_node_fs16.closeSync)(fd);
+            (0, import_node_fs17.closeSync)(fd);
           } catch {
           }
         }
       }
     }
     function writeProtectedAssistantConfigFile(options) {
-      const resolvedFilePath = (0, import_node_path20.resolve)(options.filePath);
-      const parentDir = (0, import_node_path20.dirname)(resolvedFilePath);
-      const fileName = (0, import_node_path20.basename)(resolvedFilePath);
+      const resolvedFilePath = (0, import_node_path21.resolve)(options.filePath);
+      const parentDir = (0, import_node_path21.dirname)(resolvedFilePath);
+      const fileName = (0, import_node_path21.basename)(resolvedFilePath);
       if (!fileName || fileName === "." || fileName === "..") {
         throw unsafePathError(`invalid config file name: ${options.filePath}`);
       }
       const maxRetries = Math.max(1, options.maxRetries ?? 3);
       const realParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
-      const canonicalFilePath = (0, import_node_path20.join)(realParent, fileName);
+      const canonicalFilePath = (0, import_node_path21.join)(realParent, fileName);
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const snapshot = readPrivateAssistantConfigSnapshot(resolvedFilePath, canonicalFilePath, realParent);
         const next = options.transform(snapshot.content);
         if (snapshot.exists && next === snapshot.content) {
           return { written: false, content: next };
         }
-        const tmpPath = (0, import_node_path20.join)(
+        const tmpPath = (0, import_node_path21.join)(
           realParent,
           `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto31.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
         try {
-          tmpFd = (0, import_node_fs16.openSync)(
+          tmpFd = (0, import_node_fs17.openSync)(
             tmpPath,
-            import_node_fs16.constants.O_CREAT | import_node_fs16.constants.O_EXCL | import_node_fs16.constants.O_WRONLY | O_NOFOLLOW_FLAG,
+            import_node_fs17.constants.O_CREAT | import_node_fs17.constants.O_EXCL | import_node_fs17.constants.O_WRONLY | O_NOFOLLOW_FLAG,
             384
           );
-          const tmpStat = (0, import_node_fs16.fstatSync)(tmpFd);
+          const tmpStat = (0, import_node_fs17.fstatSync)(tmpFd);
           if (!tmpStat.isFile() || tmpStat.nlink !== 1) {
             throw unsafePathError(`temporary config file ${tmpPath} is not an isolated regular file`);
           }
@@ -154248,14 +154384,14 @@ ${ptyResult.output.slice(-2e3)}`);
           const buf = Buffer.from(next, "utf-8");
           let offset = 0;
           while (offset < buf.length) {
-            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs16.writeSync)(tmpFd, buf, offset, buf.length - offset);
+            const writtenBytes = options.onWriteTempChunkForTest ? options.onWriteTempChunkForTest(tmpFd, buf, offset) : (0, import_node_fs17.writeSync)(tmpFd, buf, offset, buf.length - offset);
             if (!Number.isInteger(writtenBytes) || writtenBytes <= 0) {
               throw new Error("EIO: short or zero-byte write while writing temporary assistant config");
             }
             offset += writtenBytes;
           }
-          (0, import_node_fs16.fsyncSync)(tmpFd);
-          (0, import_node_fs16.closeSync)(tmpFd);
+          (0, import_node_fs17.fsyncSync)(tmpFd);
+          (0, import_node_fs17.closeSync)(tmpFd);
           tmpFd = null;
           options.onBeforeRenameForTest?.(attempt, canonicalFilePath, tmpPath);
           const recheckedParent = ensurePrivateAssistantDirectoryChain(options.rootDir, parentDir);
@@ -154266,7 +154402,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const changedConcurrently = preRenameSnapshot.exists !== snapshot.exists || snapshot.exists && (preRenameSnapshot.ino !== snapshot.ino || preRenameSnapshot.dev !== snapshot.dev || preRenameSnapshot.size !== snapshot.size || preRenameSnapshot.mtimeMs !== snapshot.mtimeMs || preRenameSnapshot.content !== snapshot.content);
           if (changedConcurrently) {
             try {
-              (0, import_node_fs16.unlinkSync)(tmpPath);
+              (0, import_node_fs17.unlinkSync)(tmpPath);
             } catch {
             }
             if (attempt + 1 < maxRetries) {
@@ -154274,18 +154410,18 @@ ${ptyResult.output.slice(-2e3)}`);
             }
             throw conflictError(`concurrent modification detected on ${canonicalFilePath} after ${maxRetries} attempts`);
           }
-          (0, import_node_fs16.renameSync)(tmpPath, canonicalFilePath);
+          (0, import_node_fs17.renameSync)(tmpPath, canonicalFilePath);
           renamed2 = true;
           if (process.platform !== "win32") {
             let dirFd = null;
             try {
-              dirFd = (0, import_node_fs16.openSync)(realParent, import_node_fs16.constants.O_RDONLY | O_NOFOLLOW_FLAG);
-              (0, import_node_fs16.fsyncSync)(dirFd);
+              dirFd = (0, import_node_fs17.openSync)(realParent, import_node_fs17.constants.O_RDONLY | O_NOFOLLOW_FLAG);
+              (0, import_node_fs17.fsyncSync)(dirFd);
             } catch {
             } finally {
               if (dirFd !== null) {
                 try {
-                  (0, import_node_fs16.closeSync)(dirFd);
+                  (0, import_node_fs17.closeSync)(dirFd);
                 } catch {
                 }
               }
@@ -154295,13 +154431,13 @@ ${ptyResult.output.slice(-2e3)}`);
         } finally {
           if (tmpFd !== null) {
             try {
-              (0, import_node_fs16.closeSync)(tmpFd);
+              (0, import_node_fs17.closeSync)(tmpFd);
             } catch {
             }
           }
           if (!renamed2) {
             try {
-              (0, import_node_fs16.unlinkSync)(tmpPath);
+              (0, import_node_fs17.unlinkSync)(tmpPath);
             } catch {
             }
           }
@@ -154310,15 +154446,15 @@ ${ptyResult.output.slice(-2e3)}`);
       throw conflictError(`failed to write ${canonicalFilePath} due to repeated concurrent modifications`);
     }
     function resolveAllowedConfigRoot(w, ctx) {
-      const target = (0, import_node_path20.resolve)(w.path);
+      const target = (0, import_node_path21.resolve)(w.path);
       const candidates = [ctx?.workspace, ctx?.privateHomeDir, ctx?.configDir].filter(
         (c) => typeof c === "string" && c.trim().length > 0
       );
       for (const candidate of candidates) {
-        const resolvedCandidate = (0, import_node_path20.resolve)(candidate);
-        const rel = (0, import_node_path20.relative)(resolvedCandidate, target);
-        if (rel !== "" && rel !== ".." && !rel.startsWith(`..${import_node_path20.sep}`) && !(0, import_node_path20.isAbsolute)(rel)) {
-          if (ctx?.configDir && resolvedCandidate !== (0, import_node_path20.resolve)(ctx.configDir)) {
+        const resolvedCandidate = (0, import_node_path21.resolve)(candidate);
+        const rel = (0, import_node_path21.relative)(resolvedCandidate, target);
+        if (rel !== "" && rel !== ".." && !rel.startsWith(`..${import_node_path21.sep}`) && !(0, import_node_path21.isAbsolute)(rel)) {
+          if (ctx?.configDir && resolvedCandidate !== (0, import_node_path21.resolve)(ctx.configDir)) {
             ensurePrivateAssistantDirectoryChain(ctx.configDir, resolvedCandidate);
           }
           return resolvedCandidate;
@@ -154327,7 +154463,7 @@ ${ptyResult.output.slice(-2e3)}`);
       if (ctx?.configDir) {
         throw unsafePathError(`config path ${w.path} is outside assistant roots under ${ctx.configDir}`);
       }
-      return (0, import_node_path20.dirname)(target);
+      return (0, import_node_path21.dirname)(target);
     }
     function writeAssistantMcpConfig(w, ctx) {
       const rootDir = resolveAllowedConfigRoot(w, ctx);
@@ -154565,13 +154701,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     var launchAssistantOnce = async (ctx, args) => {
       const registry = getAssistantRegistry();
+      const admission = await admitAssistantLaunch(ctx);
+      if (admission) {
+        if (admission.success) {
+          const { getAssistantRuntime: getAssistantRuntime3 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
+          getAssistantRuntime3()?.activate("launch");
+        }
+        return admission;
+      }
       const entry = registry.read();
       const { getAssistantRuntime: getAssistantRuntime2 } = await Promise.resolve().then(() => (init_assistant_runtime(), assistant_runtime_exports));
       const runtime = getAssistantRuntime2();
-      if (entry?.sessionId && ctx.deps.instanceManager.getInstance(entry.sessionId)) {
-        runtime?.activate("launch");
-        return { success: true, launched: false, sessionId: entry.sessionId, cliType: entry.cliType, workspace: entry.workspace };
-      }
       const resolved = resolveRoleLaunch(ctx, "assistant", {
         ...args?.cliType !== void 0 ? { provider: args.cliType } : {},
         ...args?.model !== void 0 ? { model: args.model } : {},
@@ -154603,6 +154743,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
       }
+      if (ctx.deps.cliManager.hostedRestoreState !== "ready") return fail6("assistant_restore_pending");
       const svc = getAssistantServices();
       const prompt = buildAssistantSystemPrompt({ projects: projects2, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: /* @__PURE__ */ new Date() });
       if (!prompt.withinLimit) return fail6("assistant_prompt_too_long", `assistant prompt is ${prompt.length} chars`, { cliType });
@@ -154642,6 +154783,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const { scheduleInjectionCleanup: scheduleInjectionCleanup2, localSessionReadyProbe: localSessionReadyProbe2 } = await Promise.resolve().then(() => (init_coordinator_injection_cleanup(), coordinator_injection_cleanup_exports));
       let launched;
       try {
+        if (ctx.deps.cliManager.hostedRestoreState !== "ready") {
+          void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
+          return fail6("assistant_restore_pending");
+        }
         launched = await ctx.execute("launch_cli", {
           cliType,
           dir: workspace,
@@ -154671,6 +154816,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
       const { previous } = registry.bindSession({
+        hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
         sessionId,
         cliType,
         workspace,
@@ -154690,7 +154836,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const registry = getAssistantRegistry();
       const pending = assistantStarts.get(registry);
       if (pending) return pending.then((result) => result.success ? { ...result, launched: false } : result);
-      const operation = launchAssistantOnce(ctx, args);
+      const lock = acquireOwnedLock((0, import_path44.join)((0, import_path44.dirname)(registry.path), ".assistant-launch.lock"));
+      if (!lock.ok) return Promise.resolve(fail6("assistant_launch_pending", lock.reason));
+      const operation = launchAssistantOnce(ctx, args).finally(() => lock.release());
       assistantStarts.set(registry, operation);
       void operation.finally(() => {
         if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry);
@@ -174747,18 +174895,13 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return false;
     }
+    init_binding_owner();
     init_cooperative_gate();
     init_coordinator_registry();
     init_logger();
     init_runtime_defaults();
     init_assistant_registry();
     init_launch_record();
-    function shouldRestoreHostedRuntime(record6, managerTag) {
-      if (!managerTag) return true;
-      const managedBy = typeof record6.managedBy === "string" ? record6.managedBy.trim() : "";
-      if (!managedBy) return true;
-      return managedBy === managerTag;
-    }
     init_mesh_coordinator();
     async function restoreHostedSessions(host, records) {
       if (maintenanceHeld()) {
@@ -174776,6 +174919,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const promoted = await verifyHeldObservationPromotion(host);
       const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
       if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
+      const owner = host.deps.getHostedBindingOwner?.();
+      const registry = getAssistantRegistry();
+      const entry = registry.reload();
+      const eligible = sessions.filter((r) => shouldRestoreHostedRuntime(r, host.deps.hostedRuntimeManagerTag));
+      const assistant = entry?.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner) ? void 0 : assistantRestoreCandidate(entry, eligible);
       let restored = 0;
       const restoredBindings = /* @__PURE__ */ new Set();
       const managerTag = host.deps.hostedRuntimeManagerTag;
@@ -174823,7 +174971,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           );
           continue;
         }
-        const restoredSettings = buildRestoredSettings(host, record6, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds);
+        const restoredSettings = buildRestoredSettings(host, record6, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds, assistant?.runtimeId);
         try {
           await host.registerCliInstance(
             record6.runtimeId,
@@ -174853,27 +175001,47 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
               })
             }
           );
+          if (restoredSettings.assistant === true) {
+            const latest = registry.reload();
+            if (latest?.sessionId && latest.sessionId !== record6.runtimeId || latest?.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) {
+              throw new Error("assistant_identity_conflict: binding changed during attach");
+            }
+            registry.bindSession({
+              sessionId: record6.runtimeId,
+              cliType: normalizedType,
+              workspace: record6.workspace,
+              hostOwner: owner,
+              mcpConfigPath: entry?.mcpConfigPath,
+              at: Date.now()
+            });
+          }
+          const coordinator = getCoordinatorForSession(record6.runtimeId);
+          if (coordinator && owner && (!coordinator.hostOwner || sameHostedBindingOwner(coordinator.hostOwner, owner))) {
+            registerMeshCoordinator({ ...coordinator, hostOwner: owner });
+          }
           restoredBindings.add(bindingKey);
           restored += 1;
           LOG.info("CLI", `\u267B Restored hosted runtime: ${record6.runtimeKey || record6.runtimeId} (${record6.displayName || record6.workspace})`);
         } catch (error) {
           LOG.warn("CLI", `Failed to restore hosted runtime ${record6.runtimeId}: ${error?.message || error}`);
-          if (promoted) throw error;
+          if (promoted || String(error?.message).startsWith("assistant_identity_conflict")) throw error;
         }
       }
       if (promoted && restored !== sessions.length) throw new Error("maintenance_incomplete_writable_promotion");
       if (!records && typeof host.deps.listHostedCliRuntimes === "function") {
-        pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds);
-        pruneStaleAssistantBinding(sessions, restoredRuntimeIds);
+        pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds, owner);
+        pruneStaleAssistantBinding(sessions, restoredRuntimeIds, owner);
         reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds);
       }
       return restored;
     }
-    function buildRestoredSettings(host, record6, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds) {
+    function buildRestoredSettings(host, record6, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds, assistantRuntimeId) {
       const restoredSettings = { ...host.providerLoader.getSettings(normalizedType) };
+      const owner = host.deps.getHostedBindingOwner?.();
       let coordinatorEntry = getCoordinatorForSession(record6.runtimeId);
+      if (coordinatorEntry?.hostOwner && !sameHostedBindingOwner(coordinatorEntry.hostOwner, owner)) coordinatorEntry = void 0;
       if (!coordinatorEntry?.meshId && record6.workspace) {
-        const workspaceCoordinators = listCoordinatorsForWorkspace(record6.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record6.cliType));
+        const workspaceCoordinators = listCoordinatorsForWorkspace(record6.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record6.cliType) && (!e.hostOwner || sameHostedBindingOwner(e.hostOwner, owner)));
         if (workspaceCoordinators.length === 1) {
           const candidate = workspaceCoordinators[0];
           const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
@@ -174925,17 +175093,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       if (typeof record6.autoApproveMode === "string" && record6.autoApproveMode.trim()) {
         restoredSettings.autoApproveMode = record6.autoApproveMode.trim();
       }
-      applyAssistantRestoreMark(record6, restoredSettings);
+      applyAssistantRestoreMark(record6, restoredSettings, assistantRuntimeId);
       return restoredSettings;
     }
-    function applyAssistantRestoreMark(record6, restoredSettings) {
-      let entry;
-      try {
-        entry = getAssistantRegistry().read();
-      } catch {
-        return;
-      }
-      if (!findAssistantRestoreRecord(entry, [record6])) return;
+    function applyAssistantRestoreMark(record6, restoredSettings, assistantRuntimeId) {
+      if (record6.runtimeId !== assistantRuntimeId) return;
       restoredSettings.assistant = true;
       if (typeof restoredSettings.autoApproveMode !== "string") {
         restoredSettings.autoApprove = false;
@@ -174958,23 +175120,23 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         LOG.warn("CLI", `worker session bind reconcile failed: ${e?.message || e}`);
       }
     }
-    function pruneStaleAssistantBinding(sessions, restoredRuntimeIds) {
+    function pruneStaleAssistantBinding(sessions, restoredRuntimeIds, owner) {
       const live = new Set(restoredRuntimeIds);
       for (const r of sessions) if (r?.runtimeId) live.add(r.runtimeId);
       try {
-        const cleared = getAssistantRegistry().pruneAfterRestore(live);
+        const cleared = getAssistantRegistry().pruneAfterRestore(live, owner);
         if (cleared) LOG.info("CLI", `\u{1F9F9} Cleared stale assistant binding ${cleared}: not among the ${live.size} live hosted runtime(s)`);
       } catch (e) {
         LOG.warn("CLI", `assistant binding prune failed: ${e?.message || e}`);
       }
     }
-    function pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds) {
+    function pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds, owner) {
       const liveSessionIds = new Set(restoredRuntimeIds);
       for (const r of sessions) {
         if (r?.runtimeId) liveSessionIds.add(r.runtimeId);
       }
       for (const sessionId of rebindAdoptedSessionIds) liveSessionIds.add(sessionId);
-      for (const entry of pruneDeadMeshCoordinators(liveSessionIds)) {
+      for (const entry of pruneDeadMeshCoordinators(liveSessionIds, owner)) {
         LOG.info(
           "CLI",
           `\u{1F9F9} Pruned stale mesh coordinator entry ${entry.sessionId} (mesh ${entry.meshId}${entry.workspace ? ` @ ${entry.workspace}` : ""}, started ${new Date(entry.startedAt || 0).toISOString()}): session is not among the ${liveSessionIds.size} live hosted runtime(s) after daemon restart`
@@ -175197,6 +175359,9 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     }
     var AUTO_CLEAN_DELAY_MS = 5e3;
     var DaemonCliManager = class {
+      /** Set at boot before command admission, and around every restore attempt. */
+      hostedRestoreState = "ready";
+      hostedRestoreOperation;
       adapters = /* @__PURE__ */ new Map();
       roleRestartInputs = /* @__PURE__ */ new Map();
       deps;
@@ -175502,7 +175667,19 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         return observeHeldHostedSessions(this, challenge);
       }
       restoreHostedSessions(records) {
-        return restoreHostedSessions(this, records);
+        if (this.hostedRestoreOperation) return this.hostedRestoreOperation;
+        this.hostedRestoreState = "pending";
+        const operation = restoreHostedSessions(this, records).then((count) => {
+          this.hostedRestoreState = "ready";
+          return count;
+        }, (error) => {
+          this.hostedRestoreState = "failed";
+          throw error;
+        }).finally(() => {
+          this.hostedRestoreOperation = void 0;
+        });
+        this.hostedRestoreOperation = operation;
+        return operation;
       }
       // ─── Adapter search ─────────────────────────────
       /**
@@ -181560,10 +181737,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           type: "list_sessions",
           payload: {}
         });
-        if (!response.success || !response.result) {
-          return [];
+        if (!response.success || !Array.isArray(response.result)) {
+          throw new Error(`session_host_inventory_unavailable: ${response.error || "missing list_sessions result"}`);
         }
-        return response.result.filter((record6) => record6.category === "cli" && ["running", "interrupted"].includes(record6.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record6) => ({
+        return response.result.filter((record6) => record6.category === "cli" && ["starting", "running", "stopping", "interrupted"].includes(record6.lifecycle)).sort((a, b) => b.lastActivityAt - a.lastActivityAt).map((record6) => ({
           runtimeId: record6.sessionId,
           runtimeKey: record6.runtimeKey,
           displayName: record6.displayName,
@@ -181574,6 +181751,8 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           workspace: record6.workspace,
           cliArgs: Array.isArray(record6.meta?.cliArgs) ? record6.meta.cliArgs : [],
           providerSessionId: typeof record6.meta?.providerSessionId === "string" ? String(record6.meta.providerSessionId) : void 0,
+          assistant: record6.meta?.assistant === true ? true : void 0,
+          startedAtMs: record6.startedAt,
           managedBy: typeof record6.meta?.managedBy === "string" ? String(record6.meta.managedBy) : void 0,
           // Session-level mesh membership (rc.20 rebound relay envelope) —
           // surfaced so restoreHostedSessions can re-apply it to the rebuilt
@@ -182370,11 +182549,11 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_fsm_evaluator();
     init_fsm_loader();
     var crypto17 = __toESM2(require("crypto"));
-    var import_node_fs21 = require("fs");
-    var import_node_path22 = require("path");
-    init_provider_cli_shared();
     var import_node_fs222 = require("fs");
     var import_node_path23 = require("path");
+    init_provider_cli_shared();
+    var import_node_fs23 = require("fs");
+    var import_node_path24 = require("path");
     init_manifest();
     var V1_PRIMITIVE_CATALOG = Object.freeze({
       tui: [
@@ -185791,12 +185970,14 @@ ${notice.notice}${supersededHint}`;
       const cliManager = new DaemonCliManager({
         getP2p: () => outputFanout,
         verifiedRetainedEndpoint: cfg.sessionHost.verifiedRetainedEndpoint,
+        getHostedBindingOwner: cfg.sessionHost.getBindingOwner,
         getInstanceManager: () => instanceManager,
         getSessionRegistry: () => sessionRegistry,
         ...cfg.sessionHost.createPtyTransportFactory ? { createPtyTransportFactory: cfg.sessionHost.createPtyTransportFactory } : {},
         ...cfg.sessionHost.listHostedRuntimes ? { listHostedCliRuntimes: cfg.sessionHost.listHostedRuntimes } : {},
         ...cfg.sessionHost.managedByTag ? { hostedRuntimeManagerTag: cfg.sessionHost.managedByTag } : {}
       }, providerLoader);
+      if (cfg.restoreHostedSessions) cliManager.hostedRestoreState = "pending";
       const agentStreamManager = new DaemonAgentStreamManager(
         LOG.forComponent("AgentStream").asLogFn(),
         providerLoader,
@@ -189500,14 +189681,14 @@ ${notice.notice}${supersededHint}`;
           normalized._interactionId = createInteractionId();
         }
         const interactionId = String(normalized._interactionId);
-        const refused2 = transport.admit?.({
+        const refused3 = transport.admit?.({
           command: cmd,
           spec: getDaemonCommandRegistry().get(cmd),
           source: normalizeCommandSource(source2),
           interactionId,
           args: normalized
         });
-        if (refused2) return { ...refused2, interactionId };
+        if (refused3) return { ...refused3, interactionId };
         const result = await components.router.execute(cmd, normalized, source2, opts);
         return { ...result, interactionId };
       };
@@ -189875,6 +190056,7 @@ ${notice.notice}${supersededHint}`;
           listHostedRuntimes,
           verifiedRetainedEndpoint: ensure,
           managedByTag: opts.managedBy,
+          getBindingOwner: () => ({ endpoint: `${current4.kind}:${current4.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
           control
         }),
         stop: () => control.stop()

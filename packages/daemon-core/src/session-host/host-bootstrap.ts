@@ -114,6 +114,7 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
             listHostedRuntimes,
             verifiedRetainedEndpoint: ensure,
             managedByTag: opts.managedBy,
+            getBindingOwner: () => ({ endpoint: `${current.kind}:${current.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
             control,
         }),
         stop: () => control.stop(),

@@ -1,3 +1,4 @@
+import { sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 /**
  * MeshCoordinatorRegistry — Persisted record of active mesh coordinator sessions.
  *
@@ -23,6 +24,7 @@ import {
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 
 export interface CoordinatorRegistryEntry {
+    hostOwner?: HostedBindingOwner;
     meshId: string;
     sessionId: string;
     workspace?: string;
@@ -307,16 +309,18 @@ export function getCoordinatorForSession(sessionId: string): CoordinatorRegistry
  * mesh events after a restart.
  *
  * Callers MUST pass the FULL live-runtime id set (the boot-time restore
- * batch) — never a partial/ad-hoc restore list, which would wipe live
- * coordinators that simply were not in that batch. Entries whose sessionId
+ * batch), and its verified host owner — never a partial/ad-hoc restore list.
+ * Foreign or unknown ownership defers pruning. Entries whose sessionId
  * appears in liveSessionIds are never removed; persisting happens once, only
  * when something was actually pruned. Returns the pruned entries so the
  * caller can audit-log what was removed and why.
  */
-export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>): CoordinatorRegistryEntry[] {
+export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>, owner?: HostedBindingOwner): CoordinatorRegistryEntry[] {
+    // Refresh before any destructive write; other host instances share this file.
+    loadMeshCoordinatorRegistry();
     const pruned: CoordinatorRegistryEntry[] = [];
     for (const entry of [..._registry.values()]) {
-        if (liveSessionIds.has(entry.sessionId)) continue;
+        if (!sameHostedBindingOwner(entry.hostOwner, owner) || liveSessionIds.has(entry.sessionId)) continue;
         _registry.delete(entry.sessionId);
         pruned.push(entry);
     }
@@ -331,7 +335,7 @@ export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>): 
         }
     }
     for (const [pendingSessionId, pendingEntry] of [..._pendingFailedCleanupBySessionId.entries()]) {
-        if (liveSessionIds.has(pendingSessionId)) continue;
+        if (!sameHostedBindingOwner(pendingEntry.hostOwner, owner) || liveSessionIds.has(pendingSessionId)) continue;
         if (pruned.some((p) => p.sessionId === pendingSessionId)) continue;
         if (cleanupCoordinatorEntryContextFile(pendingEntry)) {
             _pendingFailedCleanupBySessionId.delete(pendingSessionId);

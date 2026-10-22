@@ -1,3 +1,5 @@
+import { acquireOwnedLock } from '../../launch-defaults/owned-lock.js';
+import { admitAssistantLaunch } from '../../assistant/assistant-launch-admission.js';
 import { resolveRoleLaunch, roleLaunchFailure, roleLaunchProvenance } from '../../launch-defaults/consumer.js';
 import { assistantExecution } from '../../assistant/assistant-execution.js';
 /**
@@ -32,7 +34,7 @@ import { assistantExecution } from '../../assistant/assistant-execution.js';
  */
 
 import { randomUUID } from 'crypto';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
 import { getConfigDir } from '../../config/config.js';
@@ -125,13 +127,17 @@ async function queuePreviousSessionNote(
 
 const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     const registry = getAssistantRegistry();
+    const admission = await admitAssistantLaunch(ctx);
+    if (admission) {
+        if (admission.success) {
+            const { getAssistantRuntime } = await import('../../assistant/assistant-runtime.js');
+            getAssistantRuntime()?.activate('launch');
+        }
+        return admission;
+    }
     const entry = registry.read();
     const { getAssistantRuntime } = await import('../../assistant/assistant-runtime.js');
     const runtime = getAssistantRuntime();
-    if (entry?.sessionId && ctx.deps.instanceManager.getInstance(entry.sessionId)) {
-        runtime?.activate('launch');
-        return { success: true, launched: false, sessionId: entry.sessionId, cliType: entry.cliType, workspace: entry.workspace };
-    }
 
     const resolved = resolveRoleLaunch(ctx, 'assistant', {
         ...(args?.cliType !== undefined ? { provider: args.cliType } : {}),
@@ -161,6 +167,7 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
     }
+    if (ctx.deps.cliManager.hostedRestoreState !== 'ready') return fail('assistant_restore_pending');
     const svc = getAssistantServices();
     const prompt = buildAssistantSystemPrompt({ projects, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: new Date() });
     if (!prompt.withinLimit) return fail('assistant_prompt_too_long', `assistant prompt is ${prompt.length} chars`, { cliType });
@@ -212,6 +219,10 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     const { scheduleInjectionCleanup, localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
     let launched: any;
     try {
+        if (ctx.deps.cliManager.hostedRestoreState !== 'ready') {
+            void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
+            return fail('assistant_restore_pending');
+        }
         launched = await ctx.execute('launch_cli', {
             cliType,
             dir: workspace,
@@ -242,6 +253,7 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
     assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
     const { previous } = registry.bindSession({
+        hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
         sessionId, cliType, workspace, ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now(),
     });
     // A fresh process: its input log covers the whole session (review windows, §4.10.2).
@@ -263,7 +275,9 @@ const launchAssistant: HighFamilyHandler = (ctx, args) => {
     const registry = getAssistantRegistry();
     const pending = assistantStarts.get(registry);
     if (pending) return pending.then(result => result.success ? { ...result, launched: false } : result);
-    const operation = launchAssistantOnce(ctx, args);
+    const lock = acquireOwnedLock(join(dirname(registry.path), '.assistant-launch.lock'));
+    if (!lock.ok) return Promise.resolve(fail('assistant_launch_pending', lock.reason));
+    const operation = launchAssistantOnce(ctx, args).finally(() => lock.release());
     assistantStarts.set(registry, operation);
     void operation.finally(() => { if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry); }).catch(() => {});
     return operation;
