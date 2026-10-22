@@ -21,6 +21,7 @@
  *     missing completion emitted and the stall suppressed.
  */
 
+import { NATIVE_HISTORY_PENDING_MAX_WAIT_MS } from './native-history-pending.js';
 import { resolveSessionTurnPresentation, isTerminalTurnStage } from '../../mesh/mesh-turn-presentation.js';
 import { traceMeshEventDrop, traceMeshEventStage } from '../../shared/mesh-event-trace.js';
 import type { SignalSnapshot } from '../spec/signal-envelope.js';
@@ -57,6 +58,7 @@ export interface MeshStallHost {
     meshStallTurnActiveLast: boolean | undefined;
     meshStallLastFiredAt: number;
     meshStallTranscriptSignalSampled: boolean;
+    meshStallTranscriptPendingSince?: number;
     isMeshWorkerSession(): boolean;
     hasAdapterPendingResponse(): boolean;
     probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null;
@@ -100,6 +102,7 @@ export function resetMeshStallEpisode(host: MeshStallHost): void {
     host.meshStallTurnActiveLast = undefined;
     host.meshStallLastFiredAt = -1;
     host.meshStallTranscriptSignalSampled = false;
+    host.meshStallTranscriptPendingSince = undefined;
 }
 
 /** One watchdog tick. Semantics are a verbatim move from CliProviderInstance. */
@@ -143,18 +146,21 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     if (turnEnded && host.meshStallAnchorAt !== -1) {
         host.meshStallAnchorAt = Math.max(anchor, now);
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = undefined;
         return;
     }
 
     if (host.meshStallAnchorAt === -1) {
         host.meshStallAnchorAt = anchor;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = undefined;
         return;
     }
 
     if (anchor > host.meshStallAnchorAt) {
         host.meshStallAnchorAt = anchor;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = undefined;
         return;
     }
 
@@ -172,6 +178,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     if (completedTaskIsQuiet(host, turnActive)) {
         host.meshStallAnchorAt = now;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = undefined;
         return;
     }
 
@@ -221,6 +228,7 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
             + 'the session is parked at a prompt awaiting a human decision, not stalled');
         host.meshStallAnchorAt = now;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = undefined;
         return;
     }
 
@@ -328,9 +336,14 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
     // (TX-FSM Stage 1) Transcript-advancing axis: screen-quiet but transcript-live → re-arm.
     const transcriptSignals = host.probeNativeTranscriptSignals();
     // A deferred read proves neither a quiet transcript nor a new stall.
-    // Preserve the episode until its fresh observation arrives.
-    if (transcriptSignals?.pending) return;
-    if (transcriptSignals?.snapshot?.available === true) {
+    // Defer this episode briefly; after the cap, existing stall recovery resumes.
+    if (transcriptSignals?.pending) {
+        host.meshStallTranscriptPendingSince ??= now;
+        if (now - host.meshStallTranscriptPendingSince < NATIVE_HISTORY_PENDING_MAX_WAIT_MS) return;
+    } else {
+        host.meshStallTranscriptPendingSince = undefined;
+    }
+    if (!transcriptSignals?.pending && transcriptSignals?.snapshot?.available === true) {
         const firstSampleThisEpisode = !host.meshStallTranscriptSignalSampled;
         host.meshStallTranscriptSignalSampled = true;
         const signalDetail = transcriptSignals.snapshot.detail;

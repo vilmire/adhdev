@@ -8,11 +8,10 @@ import { __getParsedJsonlCacheStatsForTests, __resetParsedJsonlCacheForTests } f
 vi.mock('node:fs', async () => ({ ...await vi.importActual('node:fs') }));
 import { compileRecordShapes, compileUsageShapes, projectMessages, projectUsageRecord } from '../../../src/providers/spec/native-history-projection.js';
 import { foldUsageRecords } from '../../../src/shared/usage-normalize.js';
-import { readExternalCompletionMessages, getLiveTurnPendingEvidence, getTerminalAdmissionObservations } from '../../../src/providers/completion/evidence.js';
+import { readExternalCompletionMessages, getLiveTurnPendingEvidence } from '../../../src/providers/completion/evidence.js';
 import { publishTranscriptSignalObservation, probeNativeTranscriptSignals } from '../../../src/providers/cli-provider-transcript-signals.js';
 import { runMeshStallTick } from '../../../src/providers/completion/mesh-stall-watchdog.js';
 import { readJsonlLines, readProjectedJsonlRecords } from '../../../src/providers/spec/native-history-jsonl-cache.js';
-import { evaluateTerminalAdmission } from '../../../src/mesh/mesh-terminal-admission.js';
 const SESSION_ID = '8c6cf338-ef5c-4df5-91a5-66c1e2ed4339';
 
 describe('native JSONL parsed-result cache', () => {
@@ -316,7 +315,30 @@ describe('native JSONL parsed-result cache', () => {
         expect(completed.every(result => result?.messages.length === 2_000)).toBe(true);
     });
 
-    it.each(['loading', 'stale'])('holds evidence, admission and watchdog decisions while history is %s', async mode => {
+    it('serves an unchanged later-session cache hit even after another source exhausts the shared bucket', async () => {
+        append('assistant', 'cached final', 1_800_000_000_000);
+        const cached = createCooperativeNativeHistoryReader(config);
+        const input = { agentType: 'cache-test-cli', providerSessionId: SESSION_ID };
+        const previous = cached(input);
+        expect(previous?.messages).toHaveLength(1);
+        const otherPath = path.join(tmpDir, `cold-${SESSION_ID}.jsonl`);
+        fs.writeFileSync(otherPath, (JSON.stringify({ role: 'assistant', content: 'cold' }) + '\n').repeat(2_000));
+        const cold = createCooperativeNativeHistoryReader({ source: { ...config.source, path: otherPath } });
+        const clock = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(9);
+        expect(cold(input)?.unavailableReason).toBe('native_history_loading');
+        expect(cached({ ...input, forceRefresh: true })).toMatchObject({ messages: previous!.messages });
+        expect(cached(input)?.stale).toBeUndefined();
+        // A separate reader can reuse the stat/projection cache too.
+        expect(createCooperativeNativeHistoryReader(config)(input)?.stale).toBeUndefined();
+        expect(createCooperativeNativeHistoryReader(config)(input)?.messages).toHaveLength(1);
+        // forceRefresh still checks source metadata: an append cannot use the fast hit.
+        append('assistant', 'new tail', 1_800_000_000_001);
+        expect(cached({ ...input, forceRefresh: true })?.stale).toBe(true);
+        clock.mockRestore();
+        await Promise.all([cached.readAsync(input), cold.readAsync(input)]);
+    });
+
+    it.each(['loading', 'stale'])('preserves evidence and defers the watchdog while history is %s', async mode => {
         config.source.message_map.tools = {};
         const reader = createCooperativeNativeHistoryReader(config);
         const host: any = { type: 'claude-cli', instanceId: `runtime-${mode}`, workingDir: tmpDir, startedAt: 1,
@@ -352,12 +374,9 @@ describe('native JSONL parsed-result cache', () => {
         expect(host.lastTranscriptSignalSnapshot).toBe(snapshot);
         expect(host.lastExternalCompletionProbe).toBe(probe);
         expect(host.adapter.setSignalObservation).toHaveBeenCalledTimes(observations);
-        expect(getLiveTurnPendingEvidence(host)).toMatchObject({ pending: true,
-            kind: mode === 'stale' ? 'transcript_tool' : 'transcript_loading' });
-        const admission = getTerminalAdmissionObservations(host, Date.now());
-        expect(admission).toMatchObject({ transcriptReadPending: true, trailingActivityCount: mode === 'stale' ? 1 : 0 });
-        expect(evaluateTerminalAdmission({ ...admission, producer: 'test', providerHasNativeMarker: false,
-            providerObservedStatus: 'idle', nowMs: Date.now() })).toMatchObject({ admit: false, reason: 'native_history_loading' });
+        if (mode === 'stale') {
+            expect(getLiveTurnPendingEvidence(host)).toMatchObject({ pending: true, kind: 'transcript_tool' });
+        }
         runMeshStallTick(host, 180_001);
         expect(host.meshStallAnchorAt).toBe(1);
         expect(host.meshStallEmittedForAnchor).toBe(false);
@@ -586,7 +605,6 @@ describe('native JSONL parsed-result cache', () => {
             fs.appendFileSync(transcriptPath, JSON.stringify({ role: 'assistant', receivedAt: 1_800_000_001_000 + i,
                 content: [{ type: 'tool_use', name: 'Read', input: { file: `file-${i}` } }] }) + '\n');
             expect(getLiveTurnPendingEvidence(host)).toMatchObject({ pending: true, kind: 'transcript_tool' });
-            expect(getTerminalAdmissionObservations(host, Date.now()).trailingActivityCount).toBe(i + 1);
             runMeshStallTick(host, 180_001 + i * 180_000);
             expect(host.meshStallAnchorAt).toBe(180_001 + i * 180_000);
             expect(host.pushEvent).not.toHaveBeenCalled();

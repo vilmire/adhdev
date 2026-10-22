@@ -102,6 +102,19 @@ describe('read_chat dead-end soft response (no live adapter + native not safely 
     expect(result.error).toBeUndefined()
   })
 
+  it.each([{ unavailableReason: 'native_history_loading' }, { stale: true }])(
+    'carries deferred native read metadata even on the history-only soft-pending path: %j', async metadata => {
+      mocks.readProviderChatHistory.mockReturnValue({
+        messages: [], source: 'provider-native', ...metadata,
+      })
+      const result = await handleReadChat(createHelpers() as any, {
+        agentType: 'codex-cli', targetSessionId: 'dead-end-runtime-session',
+        historySessionId: 'explicit-requested-session-id', tailLimit: 20,
+      })
+      expect(result).toMatchObject({ success: true, pending: true, messages: [], ...metadata })
+    },
+  )
+
   it('still returns normal history (not a soft pending) when native history IS safely mapped to the requested session', async () => {
     // Regression guard: the safe-native return path must be untouched. Here the
     // native messages carry the requested historySessionId and matching

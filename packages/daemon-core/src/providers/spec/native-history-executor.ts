@@ -76,8 +76,12 @@ let jsonlWorkQueue: Promise<unknown> = Promise.resolve();
 const JSONL_TURN_BUDGET_MS = 8;
 let jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
 let jsonlBudgetReset: NodeJS.Immediate | undefined;
+const startedJsonlWork = new WeakSet<Generator<void, NativeHistoryResult | null, void>>();
 function advanceJsonlWork(work: Generator<void, NativeHistoryResult | null, void>): IteratorResult<void, NativeHistoryResult | null> | undefined {
-    if (jsonlTurnRemainingMs <= 0) return undefined;
+    // A new generator can check the stat/projection cache before spending the
+    // parsing allowance. Cache misses yield before doing work if it is empty.
+    if (jsonlTurnRemainingMs <= 0 && startedJsonlWork.has(work)) return undefined;
+    startedJsonlWork.add(work);
     if (!jsonlBudgetReset) jsonlBudgetReset = setImmediate(() => {
         jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
         jsonlBudgetReset = undefined;
@@ -101,7 +105,7 @@ function enqueueJsonlWork(work: Generator<void, NativeHistoryResult | null, void
 }
 export function executeNativeHistoryAsync(cfg: NativeHistoryConfig, input: NativeHistoryInput): Promise<NativeHistoryResult | null> {
     if (cfg?.source?.kind !== 'jsonl') return Promise.resolve(executeNativeHistory(cfg, input));
-    return enqueueJsonlWork(executeJsonl(cfg.source, input));
+    return enqueueJsonlWork(executeJsonl(cfg.source, input, undefined, true));
 }
 
 /** Small cold reads and bounded appends finish in the sampling tick. Larger
@@ -133,7 +137,7 @@ export function createCooperativeNativeHistoryReader(cfg: NativeHistoryConfig) {
         if (previous) previous.touchedAt = now;
         const stale = () => boundResult(input, previous ? { ...previous.result, stale: true } : loading);
         if (pending.has(key)) return stale();
-        const work = executeJsonl(cfg.source, input, resolution);
+        const work = executeJsonl(cfg.source, input, resolution, true);
         let step = advanceJsonlWork(work);
         // Both small cold reads and resumed appends may cross a chunk boundary.
         // Let budgeted work (including old timestamp/tool seals) finish now.
@@ -367,7 +371,7 @@ interface JsonlProjection {
 }
 const jsonlProjections = new WeakMap<CompactJsonlRecord[], Map<string, JsonlProjection>>();
 
-function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput, resolution = resolveJsonlSourcePathDetailed(src, input)): Generator<void, NativeHistoryResult | null, void> {
+function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput, resolution = resolveJsonlSourcePathDetailed(src, input), cooperative = false): Generator<void, NativeHistoryResult | null, void> {
     const outcome = resolution.outcome;
     if (outcome && (outcome.attribution === 'ambiguous' || outcome.attribution === 'already_claimed')) {
         // Fail closed under same-cwd concurrency: never surface a transcript —
@@ -429,12 +433,12 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
             workspace: i < 5 ? readSessionMetaWorkspace([rec]) : undefined,
             terminal,
         };
-    });
+    }, cooperative ? () => jsonlTurnRemainingMs > 0 : undefined);
     if (lines.length === 0) return null;
     // Seal with the revision actually read. Appends during message assembly
     // may leave a usable prefix; rewrites must restart through the digest gate.
     let revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
-    if (!revision) return yield* executeJsonl(src, input, resolution);
+    if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
     const mtime = revision.sourceMtimeMs;
     // Prefer an in-transcript session_meta cwd; fall back to the input workspace
     // only when the spec opts in AND the resolved file lives under that
@@ -468,6 +472,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
     let byContext = jsonlProjections.get(lines);
     let projection = byContext?.get(projectionContext);
     if (!projection) {
+        if (cooperative && jsonlTurnRemainingMs <= 0) yield;
         const messages: NativeHistoryMessage[] = [];
         const usageRecords: NativeUsageRecord[] = [];
         const lineage = providerSessionId || requested || sourcePath;
@@ -502,7 +507,7 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput,
         // Publish an append-validated prefix as stale; the next read catches
         // its tail. A rewrite/replacement still invalidates all assembled data.
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
-        if (!revision) return yield* executeJsonl(src, input, resolution);
+        if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
         const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal));
         projection = { messages: markNativeHistorySnapshot(messages), turnTerminalMarkers,
             ...(usageRecords.length ? { usage: foldUsageRecords(usageRecords, {

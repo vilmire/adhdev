@@ -347,6 +347,14 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
         }), POLICY).kind).toBe('emit-weak');
     });
 
+    it.each([45_000, 90_000])('resumes the existing verdict after %ims of native-history loading', waitedMs => {
+        for (const available of [false, true]) {
+            expect(decideCompletionFlush(makeArm(), makeReader({ ...floorMissing, now: T0 + waitedMs,
+                transcriptGrowth: { available, growing: true, pending: true },
+            }), POLICY).kind).toBe('emit-weak');
+        }
+    });
+
     it('CANON-C floor: floor-class weak emit waits out the min-elapsed floor, then decouples', () => {
         const early = decideCompletionFlush(makeArm(), makeReader(floorMissing), POLICY);
         expect(early.kind).toBe('hold');

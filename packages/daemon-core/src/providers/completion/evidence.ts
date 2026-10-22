@@ -29,8 +29,6 @@ import {
     extractFinalSummaryFromMessagesAfter,
     readChatMessageTimestampMs,
     hasTrailingToolActivityAfterFinalAssistant,
-    countTrailingToolActivityAfterFinalAssistant,
-    selectFinalAssistantTurnEndMessage,
 } from '../chat-message-normalization.js';
 import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/provider-native-history.js';
@@ -283,12 +281,12 @@ export function completionHasFinalAssistantMessage(messages: unknown, turnStarte
  *
  * ★ NOT a substitute for terminal admission: these three discriminators are blind to a
  * transcript that is simply still GROWING with no trailing tool bubble yet in the tail —
- * that is what getTerminalAdmissionObservations below observes, and it is the shape the
+ * the turn-ledger admission rules observe freshness separately. This is the shape the
  * 2026-08-18 10:49 false completion took.
  */
 export function getLiveTurnPendingEvidence(host: EvidenceHost): {
     pending: boolean;
-    kind?: 'adapter' | 'modal' | 'transcript_tool' | 'transcript_loading';
+    kind?: 'adapter' | 'modal' | 'transcript_tool';
     observedAt?: number;
 } {
     const adapterPending = host.hasAdapterPendingResponse();
@@ -318,101 +316,8 @@ export function getLiveTurnPendingEvidence(host: EvidenceHost): {
                 observedAt: probe.snapshot.sampledAt,
             };
         }
-        if (probe?.pending) return { pending: true, kind: 'transcript_loading' };
     } catch { /* fail open — a probe error must never fabricate pending evidence */ }
     return { pending: false };
-}
-
-/**
- * TERMINAL-ADMISSION-ALL-PATHS (provider_event path): the observation bundle the
- * mesh-side terminal-admission choke point needs, gathered HERE because this is
- * where the data lives — the mesh layer must not reach into provider internals
- * (import-boundary gate), so it duck-types this accessor off the live instance
- * instead.
- *
- * WHY THIS EXISTS AT ALL. getLiveTurnPendingEvidence above already vetoes an
- * adapter-pending, modal-parked, or trailing-tool turn. It is blind to one shape
- * the 10:49 incident actually took: a transcript that is still GROWING. The
- * completion engine DOES see that (it holds on `native_transcript_advancing`,
- * decideCompletionVerdict rule 5), but that hold is instance-local and bounded —
- * a provider-native event completion never passes through the engine flush at
- * all, and the engine's own hold releases at the growth-quiet window. So the
- * coordinator received `agent:generating_completed` for a session whose
- * transcript had grown to msgCount=542 one second earlier, and nothing on the
- * forwarding path re-asked the question.
- *
- * Every field is an OBSERVATION, never a verdict: the ordered rules stay in
- * evaluateTerminalAdmission (mesh/mesh-terminal-admission.ts), which is the one
- * place finality is decided.
- *
- * Fail-open by construction — an unavailable snapshot, a non-native-source
- * class, or a read error yields `undefined` for the field it could not observe,
- * and an undefined observation never manufactures a veto (rule 6 tests
- * `typeof newest === 'number'`). A probe error must never wedge a completion.
- */
-export interface TerminalAdmissionObservations {
-    /** Defer admission until the ongoing transcript read has settled. */
-    transcriptReadPending?: boolean;
-    activeModalPresent: boolean;
-    trailingActivityCount: number;
-    /** Newest transcript bubble of ANY kind (epoch ms) — rule 6's freshness probe. */
-    newestActivityAtMs?: number;
-    finalAssistantPresent: boolean;
-    nativeMarkersFieldPresent: boolean;
-    nativeMarkers?: NativeTurnTerminalMarker[];
-}
-
-export function getTerminalAdmissionObservations(host: EvidenceHost, nowMs: number): TerminalAdmissionObservations {
-    let activeModalPresent = false;
-    try { activeModalPresent = host.isModalParked() === true; } catch { /* fail open */ }
-
-    let trailingActivityCount = 0;
-    let newestActivityAtMs: number | undefined;
-    let finalAssistantPresent = false;
-    let transcriptReadPending = false;
-    try {
-        const probe = host.probeNativeTranscriptSignals();
-        transcriptReadPending = probe?.pending === true;
-        const messages = Array.isArray(probe?.messages) ? probe.messages as ChatMessage[] : null;
-        if (messages) {
-            trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
-            finalAssistantPresent = !!selectFinalAssistantTurnEndMessage(messages);
-            for (const msg of messages) {
-                const ts = readChatMessageTimestampMs(msg);
-                if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
-                if (newestActivityAtMs === undefined || ts > newestActivityAtMs) newestActivityAtMs = ts;
-            }
-        }
-        // TRANSCRIPT-GROWTH as a freshness observation. The snapshot's own mtime age
-        // is the authority the completion engine's growth-hold uses; when the tail
-        // carries no per-bubble timestamps (PTY-parsed providers) it is the ONLY
-        // freshness signal available. Take whichever proves the transcript is FRESHER
-        // — a newer observation can only strengthen rule 6's veto, never weaken it.
-        const snapshot = probe?.snapshot;
-        if (!transcriptReadPending && snapshot?.available === true && typeof snapshot.detail?.ageMs === 'number'
-            && Number.isFinite(snapshot.detail.ageMs)) {
-            const mtimeAtMs = nowMs - snapshot.detail.ageMs;
-            if (newestActivityAtMs === undefined || mtimeAtMs > newestActivityAtMs) {
-                newestActivityAtMs = mtimeAtMs;
-            }
-        }
-    } catch { /* fail open — a probe error must never fabricate a veto */ }
-
-    // Marker FIELD presence is the version-skew discriminator (see
-    // TerminalAdmissionInput.nativeMarkersFieldPresent): an instance that never
-    // populated the field has not proven "this turn has NOT ended", so admission
-    // must fall through to the shape rules rather than read an absent list as an
-    // authoritative empty one.
-    const markers = host.lastNativeTurnTerminalMarkers;
-    return {
-        ...(transcriptReadPending ? { transcriptReadPending: true } : {}),
-        activeModalPresent,
-        trailingActivityCount,
-        ...(newestActivityAtMs !== undefined ? { newestActivityAtMs } : {}),
-        finalAssistantPresent,
-        nativeMarkersFieldPresent: Array.isArray(markers),
-        ...(Array.isArray(markers) ? { nativeMarkers: markers } : {}),
-    };
 }
 
 export function recordPendingTranscriptProbe(host: EvidenceHost, pending: CompletedDebouncePending): ExternalTranscriptProbe | null {

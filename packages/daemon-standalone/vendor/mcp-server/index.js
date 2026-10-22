@@ -80535,6 +80535,16 @@ ${continuationNotice}` } : task,
         return out;
       }
       if (t && status === "idle") {
+        if (t.stale || t.unavailableReason === "native_history_loading") {
+          return [{
+            ...base,
+            eventId: eventId("transcript_pending"),
+            kind: "transcript_final",
+            selfAttributing: false,
+            nativeRead: t.nativeRead,
+            live: { modal: t.activeModal, adapterPending: true, trailingTool: t.trailingActivity > 0 }
+          }, liveness("alive")];
+        }
         if (t.nativeMarker?.outcome === "failed") return [{
           ...base,
           eventId: eventId("native_failure"),
@@ -125984,7 +125994,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!unchanged && !(stat2.size > entry.sourceBytes && canResumeFrom(p, entry, stat2))) return null;
       return { sourceMtimeMs: entry.sourceMtimeMs, stale: !unchanged };
     }
-    function* readProjectedJsonlRecords(p, projectionKey, project) {
+    function* readProjectedJsonlRecords(p, projectionKey, project, canStartWork) {
       let stat2;
       try {
         stat2 = fs49.statSync(p);
@@ -126003,6 +126013,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         parsedJsonlCacheStats.hits++;
         return cached5.lines;
       }
+      if (canStartWork && !canStartWork()) yield;
       parsedJsonlCacheStats.misses++;
       const resume = cached5 && stat2.size > cached5.sourceBytes && canResumeFrom(p, cached5, stat2);
       const from = resume ? cached5.committedBytes : 0;
@@ -126050,7 +126061,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           readTail = Buffer.alloc(Math.min(BOUNDARY_BYTES, from));
           const count = fs49.readSync(fd, readTail, 0, readTail.length, from - readTail.length);
           if (count !== readTail.length || (0, import_node_crypto14.createHash)("sha256").update(readTail).digest("hex") !== digest4) {
-            return yield* readProjectedJsonlRecords(p, projectionKey, project);
+            return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
           }
         }
         while (position < stat2.size) {
@@ -126121,10 +126132,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
       const changed = parsedJsonlSignature(after) !== signature;
       if (changed && !(after.size > stat2.size && canResumeFrom(p, entry, after) && boundaryDigest(p, readAnchorBytes) === readAnchorDigest)) {
-        return yield* readProjectedJsonlRecords(p, projectionKey, project);
+        return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
       }
       projectedJsonlCache.set(key4, entry);
-      if (changed) return yield* readProjectedJsonlRecords(p, projectionKey, project);
+      if (changed) return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
       return lines;
     }
     var os24 = __toESM2(require("os"));
@@ -127238,8 +127249,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var JSONL_TURN_BUDGET_MS = 8;
     var jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
     var jsonlBudgetReset;
+    var startedJsonlWork = /* @__PURE__ */ new WeakSet();
     function advanceJsonlWork(work) {
-      if (jsonlTurnRemainingMs <= 0) return void 0;
+      if (jsonlTurnRemainingMs <= 0 && startedJsonlWork.has(work)) return void 0;
+      startedJsonlWork.add(work);
       if (!jsonlBudgetReset) jsonlBudgetReset = setImmediate(() => {
         jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
         jsonlBudgetReset = void 0;
@@ -127288,7 +127301,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         if (previous) previous.touchedAt = now;
         const stale = () => boundResult(input, previous ? { ...previous.result, stale: true } : loading);
         if (pending.has(key4)) return stale();
-        const work = executeJsonl(cfg.source, input, resolution);
+        const work = executeJsonl(cfg.source, input, resolution, true);
         let step = advanceJsonlWork(work);
         while (step && !step.done && jsonlTurnRemainingMs > 0) step = advanceJsonlWork(work);
         if (step?.done) {
@@ -127413,7 +127426,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
     }
     var jsonlProjections = /* @__PURE__ */ new WeakMap();
-    function* executeJsonl(src, input, resolution = resolveJsonlSourcePathDetailed(src, input)) {
+    function* executeJsonl(src, input, resolution = resolveJsonlSourcePathDetailed(src, input), cooperative = false) {
       const outcome = resolution.outcome;
       if (outcome && (outcome.attribution === "ambiguous" || outcome.attribution === "already_claimed")) {
         return {
@@ -127468,10 +127481,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           workspace: i < 5 ? readSessionMetaWorkspace([rec5]) : void 0,
           terminal
         };
-      });
+      }, cooperative ? () => jsonlTurnRemainingMs > 0 : void 0);
       if (lines.length === 0) return null;
       let revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
-      if (!revision) return yield* executeJsonl(src, input, resolution);
+      if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
       const mtime = revision.sourceMtimeMs;
       const transcriptWorkspace = lines.slice(0, 5).find((record6) => record6.workspace)?.workspace ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : void 0) ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : void 0);
       let providerSessionId;
@@ -127489,6 +127502,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let byContext = jsonlProjections.get(lines);
       let projection = byContext?.get(projectionContext);
       if (!projection) {
+        if (cooperative && jsonlTurnRemainingMs <= 0) yield;
         const messages2 = [];
         const usageRecords = [];
         const lineage = providerSessionId || requested || sourcePath;
@@ -127516,7 +127530,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
           }
         }
         revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
-        if (!revision) return yield* executeJsonl(src, input, resolution);
+        if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
         const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec5) => rec5.terminal));
         projection = {
           messages: markNativeHistorySnapshot(messages2),
@@ -137702,7 +137716,7 @@ ${output}` : "";
       return stamped ? { ...record6, messages } : parsed;
     }
     function shouldPreserveReadChatPayloadField(key4) {
-      return key4 === "messageSource" || key4 === "transcriptProvenance";
+      return key4 === "messageSource" || key4 === "transcriptProvenance" || key4 === "stale" || key4 === "unavailableReason";
     }
     var WIRE_SAFE_ACTIVITY_KINDS = /* @__PURE__ */ new Set(["tool", "terminal", "thought"]);
     function isWireSafeActivityKind(kind) {
@@ -137890,7 +137904,9 @@ ${output}` : "";
             omittedBefore: identityCoverage === "window" && (identity2?.retainedIds.length ?? 0) > 0
           }
         });
-        if (observation) notifyTranscriptObservation(observation.sessionId, observation);
+        if (observation && payload.stale !== true && payload.unavailableReason !== "native_history_loading") {
+          notifyTranscriptObservation(observation.sessionId, observation);
+        }
       } catch {
       }
       const returnedDebugReadChat = debugReadChat ? {
@@ -138422,7 +138438,8 @@ ${output}` : "";
         coverage: snap.coverage,
         status: snap.returnedStatus,
         messageSource: primary.messageSource,
-        primaryNativeSelected: primary.nativeSelected
+        primaryNativeSelected: primary.nativeSelected,
+        selectedNativeHistory: native.nativeHistory
       };
       if (primary.nativeSelected) {
         if (native.safeMapping) {
@@ -138521,6 +138538,7 @@ ${output}` : "";
         unsafeFallback();
         return;
       }
+      selection.selectedNativeHistory = liveWorkspaceNativeHistory;
       selection.messages = finalizeStreamingMessagesWhenIdle(liveDecision.nativeMessages, snap.returnedStatus);
       selection.providerSessionId = liveWorkspaceNativeProviderSessionId || snap.providerSessionId;
       selection.transcriptAuthority = "provider";
@@ -138558,6 +138576,8 @@ ${output}` : "";
       });
       return buildReadChatCommandResult({
         messages: selection.messages,
+        ...selection.selectedNativeHistory?.stale === true ? { stale: true } : {},
+        ...selection.selectedNativeHistory?.unavailableReason ? { unavailableReason: selection.selectedNativeHistory.unavailableReason } : {},
         status: selection.status,
         activeModal: snap.activeModal,
         messageSource,
@@ -138707,6 +138727,8 @@ ${output}` : "";
               ...decision.messageSource,
               nativeOnlyContentPreserved: true
             },
+            ...history?.stale === true ? { stale: true } : {},
+            ...history?.unavailableReason ? { unavailableReason: history.unavailableReason } : {},
             ...historyTurnTerminalMarkers !== void 0 ? { turnTerminalMarkers: historyTurnTerminalMarkers } : {},
             ...typeof history?.title === "string" ? { title: history.title } : {},
             ...historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {},
@@ -138718,6 +138740,8 @@ ${output}` : "";
         return {
           success: true,
           pending: true,
+          ...history?.stale === true ? { stale: true } : {},
+          ...history?.unavailableReason ? { unavailableReason: history.unavailableReason } : {},
           // Both signals are true here: we reached the history-only path
           // because no live adapter was found (`live_adapter_not_found`),
           // and native history is not safely mappable
@@ -138737,6 +138761,8 @@ ${output}` : "";
         status: "idle",
         messageSource: decision.messageSource,
         transcriptProvenance: decision.messageSource,
+        ...history?.stale === true ? { stale: true } : {},
+        ...history?.unavailableReason ? { unavailableReason: history.unavailableReason } : {},
         ...historyTurnTerminalMarkers !== void 0 ? { turnTerminalMarkers: historyTurnTerminalMarkers } : {},
         ...typeof history?.title === "string" ? { title: history.title } : {},
         ...historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {},
@@ -169836,6 +169862,7 @@ ${JSON.stringify(replies)}
       "agent:stopped",
       "agent:ready"
     ]);
+    var NATIVE_HISTORY_PENDING_MAX_WAIT_MS = 45e3;
     var path97 = __toESM2(require("path"));
     var import_node_module2 = require("module");
     init_dist();
@@ -170110,15 +170137,15 @@ ${JSON.stringify(replies)}
       });
       if (block2.reason === "missing_final_assistant" && block2.noExternalTranscriptSource === true) {
         const growth = reader.transcriptGrowth();
-        if (growth?.pending) return hold("native_history_loading", {});
-        if (growth?.available === true && growth.growing === true) {
+        if (growth?.pending && waitedMs < NATIVE_HISTORY_PENDING_MAX_WAIT_MS) return hold("native_history_loading", {});
+        if (!growth?.pending && growth?.available === true && growth.growing === true) {
           return hold("native_transcript_advancing", {
             msgCount: growth.msgCount ?? null,
             sourceMtimeAgeMs: growth.mtimeAgeMs ?? 0,
             growthQuietMs: policy.transcriptGrowthQuietMs
           });
         }
-        if (growth?.available === true && reader.busyLeaseGateEnabled()) {
+        if (!growth?.pending && growth?.available === true && reader.busyLeaseGateEnabled()) {
           const lease = reader.busyLease();
           if (lease?.active === true) {
             return hold("busy_lease_active", {
@@ -170585,53 +170612,9 @@ ${buttons.join("\n")}`;
             observedAt: probe.snapshot.sampledAt
           };
         }
-        if (probe?.pending) return { pending: true, kind: "transcript_loading" };
       } catch {
       }
       return { pending: false };
-    }
-    function getTerminalAdmissionObservations(host, nowMs2) {
-      let activeModalPresent = false;
-      try {
-        activeModalPresent = host.isModalParked() === true;
-      } catch {
-      }
-      let trailingActivityCount = 0;
-      let newestActivityAtMs;
-      let finalAssistantPresent = false;
-      let transcriptReadPending = false;
-      try {
-        const probe = host.probeNativeTranscriptSignals();
-        transcriptReadPending = probe?.pending === true;
-        const messages = Array.isArray(probe?.messages) ? probe.messages : null;
-        if (messages) {
-          trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
-          finalAssistantPresent = !!selectFinalAssistantTurnEndMessage(messages);
-          for (const msg of messages) {
-            const ts2 = readChatMessageTimestampMs(msg);
-            if (typeof ts2 !== "number" || !Number.isFinite(ts2)) continue;
-            if (newestActivityAtMs === void 0 || ts2 > newestActivityAtMs) newestActivityAtMs = ts2;
-          }
-        }
-        const snapshot = probe?.snapshot;
-        if (!transcriptReadPending && snapshot?.available === true && typeof snapshot.detail?.ageMs === "number" && Number.isFinite(snapshot.detail.ageMs)) {
-          const mtimeAtMs = nowMs2 - snapshot.detail.ageMs;
-          if (newestActivityAtMs === void 0 || mtimeAtMs > newestActivityAtMs) {
-            newestActivityAtMs = mtimeAtMs;
-          }
-        }
-      } catch {
-      }
-      const markers = host.lastNativeTurnTerminalMarkers;
-      return {
-        ...transcriptReadPending ? { transcriptReadPending: true } : {},
-        activeModalPresent,
-        trailingActivityCount,
-        ...newestActivityAtMs !== void 0 ? { newestActivityAtMs } : {},
-        finalAssistantPresent,
-        nativeMarkersFieldPresent: Array.isArray(markers),
-        ...Array.isArray(markers) ? { nativeMarkers: markers } : {}
-      };
     }
     function recordPendingTranscriptProbe(host, pending) {
       const probe = host.lastExternalCompletionProbe;
@@ -172568,6 +172551,7 @@ ${buttons.join("\n")}`;
       host.meshStallTurnActiveLast = void 0;
       host.meshStallLastFiredAt = -1;
       host.meshStallTranscriptSignalSampled = false;
+      host.meshStallTranscriptPendingSince = void 0;
     }
     function runMeshStallTick(host, now) {
       if (!host.isMeshWorkerSession()) {
@@ -172598,16 +172582,19 @@ ${buttons.join("\n")}`;
       if (turnEnded && host.meshStallAnchorAt !== -1) {
         host.meshStallAnchorAt = Math.max(anchor, now);
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = void 0;
         return;
       }
       if (host.meshStallAnchorAt === -1) {
         host.meshStallAnchorAt = anchor;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = void 0;
         return;
       }
       if (anchor > host.meshStallAnchorAt) {
         host.meshStallAnchorAt = anchor;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = void 0;
         return;
       }
       if (host.meshStallEmittedForAnchor) return;
@@ -172617,6 +172604,7 @@ ${buttons.join("\n")}`;
       if (completedTaskIsQuiet(host, turnActive)) {
         host.meshStallAnchorAt = now;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = void 0;
         return;
       }
       let staleResolvedApprovalLatch = false;
@@ -172633,6 +172621,7 @@ ${buttons.join("\n")}`;
         );
         host.meshStallAnchorAt = now;
         host.meshStallEmittedForAnchor = false;
+        host.meshStallTranscriptPendingSince = void 0;
         return;
       }
       const turnPresentation = resolveSessionTurnPresentation({
@@ -172667,8 +172656,13 @@ ${buttons.join("\n")}`;
         }
       }
       const transcriptSignals = host.probeNativeTranscriptSignals();
-      if (transcriptSignals?.pending) return;
-      if (transcriptSignals?.snapshot?.available === true) {
+      if (transcriptSignals?.pending) {
+        host.meshStallTranscriptPendingSince ??= now;
+        if (now - host.meshStallTranscriptPendingSince < NATIVE_HISTORY_PENDING_MAX_WAIT_MS) return;
+      } else {
+        host.meshStallTranscriptPendingSince = void 0;
+      }
+      if (!transcriptSignals?.pending && transcriptSignals?.snapshot?.available === true) {
         const firstSampleThisEpisode = !host.meshStallTranscriptSignalSampled;
         host.meshStallTranscriptSignalSampled = true;
         const signalDetail = transcriptSignals.snapshot.detail;
@@ -173263,6 +173257,7 @@ ${buttons.join("\n")}`;
       // unconditionally (no episode-scoped baseline exists yet to prove stasis
       // against) — the historical `!prev → advanced` semantics, preserved.
       meshStallTranscriptSignalSampled = false;
+      meshStallTranscriptPendingSince;
       // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
       // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
       // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -173524,14 +173519,6 @@ ${buttons.join("\n")}`;
        */
       getLiveTurnPendingEvidence() {
         return getLiveTurnPendingEvidence(this);
-      }
-      /**
-       * TERMINAL-ADMISSION-ALL-PATHS: observation bundle for the mesh-side terminal-
-       * admission choke point — see completion/evidence.ts (observations only, never a
-       * verdict; the ordered rules live in mesh/mesh-terminal-admission.ts).
-       */
-      getTerminalAdmissionObservations(nowMs2) {
-        return getTerminalAdmissionObservations(this, nowMs2 ?? Date.now());
       }
       /**
        * MID-TURN-LIVE-STATE-GATE: boolean wrapper over getLiveTurnPendingEvidence above.
@@ -188917,6 +188904,8 @@ ${notice.notice}${supersededHint}`;
       const selfAttributing = !!finalSummary && !!extractJsonObjectFromSummary(finalSummary);
       const observed2 = typeof payload.providerObservedStatus === "string" && payload.providerObservedStatus.trim() ? payload.providerObservedStatus : payload.status;
       const out = {
+        ...payload.stale === true ? { stale: true } : {},
+        ...typeof payload.unavailableReason === "string" ? { unavailableReason: payload.unavailableReason } : {},
         providerObservedStatus: typeof observed2 === "string" ? observed2.trim().toLowerCase() : "",
         activeModal: hasNonEmptyModalButtons(payload.activeModal),
         selfAttributing,

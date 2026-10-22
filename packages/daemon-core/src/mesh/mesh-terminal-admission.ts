@@ -65,8 +65,6 @@ import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js';
 export const TERMINAL_FALLBACK_TRANSCRIPT_QUIET_MS = 8_000;
 
 export interface TerminalAdmissionInput {
-    /** Native history is rebuilding; previous messages cannot prove finality. */
-    transcriptReadPending?: boolean;
     /** Who is asking ('redrive_deadline_transcript_evidence' | 'early_idle_transcript_evidence' | …) — diagnostics only. */
     producer: string;
     providerType?: string;
@@ -115,9 +113,6 @@ export type TerminalAdmissionVerdict =
  */
 export function evaluateTerminalAdmission(input: TerminalAdmissionInput): TerminalAdmissionVerdict {
     const decline = (reason: string, detail: string): TerminalAdmissionVerdict => ({ admit: false, reason, detail });
-    if (input.transcriptReadPending) {
-        return decline('native_history_loading', 'native transcript read is deferred — hold the previous decision');
-    }
 
     // 1. A parked approval/question modal is positive "turn blocked" evidence —
     //    the worker is awaiting input, not finished. Refuse before anything else.

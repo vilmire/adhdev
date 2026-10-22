@@ -248,6 +248,8 @@ function buildHistoryOnlyResult(h: CommandHelpers, args: any, req: CliReadChatRe
                     ...decision.messageSource,
                     nativeOnlyContentPreserved: true,
                 },
+                ...((history as any)?.stale === true ? { stale: true } : {}),
+                ...((history as any)?.unavailableReason ? { unavailableReason: (history as any).unavailableReason } : {}),
                 ...(historyTurnTerminalMarkers !== undefined ? { turnTerminalMarkers: historyTurnTerminalMarkers } : {}),
                 ...(typeof (history as any)?.title === 'string' ? { title: (history as any).title } : {}),
                 ...(historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {}),
@@ -275,6 +277,8 @@ function buildHistoryOnlyResult(h: CommandHelpers, args: any, req: CliReadChatRe
         return {
             success: true,
             pending: true,
+            ...((history as any)?.stale === true ? { stale: true } : {}),
+            ...((history as any)?.unavailableReason ? { unavailableReason: (history as any).unavailableReason } : {}),
             // Both signals are true here: we reached the history-only path
             // because no live adapter was found (`live_adapter_not_found`),
             // and native history is not safely mappable
@@ -294,6 +298,8 @@ function buildHistoryOnlyResult(h: CommandHelpers, args: any, req: CliReadChatRe
         status: 'idle',
         messageSource: decision.messageSource,
         transcriptProvenance: decision.messageSource,
+        ...((history as any)?.stale === true ? { stale: true } : {}),
+        ...((history as any)?.unavailableReason ? { unavailableReason: (history as any).unavailableReason } : {}),
         ...(historyTurnTerminalMarkers !== undefined ? { turnTerminalMarkers: historyTurnTerminalMarkers } : {}),
         ...(typeof (history as any)?.title === 'string' ? { title: (history as any).title } : {}),
         ...(historyProviderSessionId ? { providerSessionId: historyProviderSessionId } : {}),

@@ -360,6 +360,7 @@ interface CliReadChatSelection {
     status: string;
     messageSource: Record<string, unknown>;
     primaryNativeSelected: boolean;
+    selectedNativeHistory?: any;
     /** (NATIVE-TURN-SIGNAL) Markers captured from the codex live-workspace
      *  native probe when THAT read is the one the machine selects (the
      *  primary nativeHistory may be unread/unsafe in that branch). */
@@ -744,6 +745,7 @@ async function selectCliReadChatMessages(
         status: snap.returnedStatus,
         messageSource: primary.messageSource,
         primaryNativeSelected: primary.nativeSelected,
+        selectedNativeHistory: native.nativeHistory,
     };
 
     if (primary.nativeSelected) {
@@ -874,6 +876,7 @@ async function applyNativeNotSelectedFallbacks(
         unsafeFallback();
         return;
     }
+    selection.selectedNativeHistory = liveWorkspaceNativeHistory;
     selection.messages = finalizeStreamingMessagesWhenIdle(liveDecision.nativeMessages, snap.returnedStatus);
     selection.providerSessionId = liveWorkspaceNativeProviderSessionId || snap.providerSessionId;
     selection.transcriptAuthority = 'provider';
@@ -963,6 +966,8 @@ function buildCliReadChatResult(
     });
     return buildReadChatCommandResult({
         messages: selection.messages,
+        ...(selection.selectedNativeHistory?.stale === true ? { stale: true } : {}),
+        ...(selection.selectedNativeHistory?.unavailableReason ? { unavailableReason: selection.selectedNativeHistory.unavailableReason } : {}),
         status: selection.status,
         activeModal: snap.activeModal,
         messageSource,

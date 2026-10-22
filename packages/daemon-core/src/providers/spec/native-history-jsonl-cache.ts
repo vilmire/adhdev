@@ -291,6 +291,7 @@ export function projectedJsonlSnapshotState(p: string, projectionKey: string, li
  * exactly as in readJsonlLines and replaced on the next append. */
 export function* readProjectedJsonlRecords<T>(
     p: string, projectionKey: string, project: (record: any, index: number) => T,
+    canStartWork?: () => boolean,
 ): Generator<void, T[], void> {
     let stat: fs.Stats;
     try { stat = fs.statSync(p); } catch { return []; }
@@ -306,6 +307,9 @@ export function* readProjectedJsonlRecords<T>(
         parsedJsonlCacheStats.hits++;
         return cached.lines;
     }
+    // An unchanged stat hit above is cheap even when another session spent the
+    // turn's allowance. Only parsing/projecting a miss needs that allowance.
+    if (canStartWork && !canStartWork()) yield;
     parsedJsonlCacheStats.misses++;
     // A same-size timestamp change is a rewrite, not an empty append. Compare
     // against sourceBytes, not committedBytes (which excludes a partial line).
@@ -351,7 +355,7 @@ export function* readProjectedJsonlRecords<T>(
             const count = fs.readSync(fd, readTail, 0, readTail.length, from - readTail.length);
             if (count !== readTail.length || createHash('sha256').update(readTail).digest('hex') !== digest) {
                 // Retry through the normal identity/digest gate on a racing rewrite.
-                return yield* readProjectedJsonlRecords(p, projectionKey, project);
+                return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
             }
         }
         while (position < stat.size) {
@@ -425,11 +429,11 @@ export function* readProjectedJsonlRecords<T>(
     const changed = parsedJsonlSignature(after) !== signature;
     if (changed && !(after.size > stat.size && canResumeFrom(p, entry, after)
         && boundaryDigest(p, readAnchorBytes) === readAnchorDigest)) {
-        return yield* readProjectedJsonlRecords(p, projectionKey, project);
+        return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
     }
     // A live writer must not discard a completed rebuild. Commit the prefix
     // under the START stat/offset, then digest-check and consume just its tail.
     projectedJsonlCache.set(key, entry);
-    if (changed) return yield* readProjectedJsonlRecords(p, projectionKey, project);
+    if (changed) return yield* readProjectedJsonlRecords(p, projectionKey, project, canStartWork);
     return lines;
 }
