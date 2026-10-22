@@ -33,7 +33,6 @@ export type OwnedLockResult =
 export interface OwnedLockOptions {
     isPidAlive?: (pid: number) => boolean;
     now?: () => number;
-    maxAgeMs?: number;
 }
 
 export function isPidAlive(pid: number): boolean {
@@ -56,10 +55,9 @@ function readOwner(lock: string): Observed {
     catch { return { kind: 'gone' }; }
 }
 
-function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number, maxAgeMs?: number): boolean {
+function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number): boolean {
     if (observed.kind === 'owner') {
-        return !alive(observed.owner.pid)
-            || (maxAgeMs !== undefined && observed.owner.acquiredAt > 0 && now - observed.owner.acquiredAt >= maxAgeMs);
+        return !alive(observed.owner.pid);
     }
     if (observed.kind === 'ownerless') return now - observed.mtimeMs >= OWNERLESS_STALE_MS;
     return false;
@@ -71,16 +69,16 @@ function sameInstance(a: Observed, b: Observed): boolean {
 }
 
 /** Remove an abandoned lock under the reclaim guard. True when the caller should retry mkdir. */
-function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number, maxAgeMs?: number): boolean {
+function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number): boolean {
     const observed = readOwner(lock);
     if (observed.kind === 'gone') return true;
-    if (!abandoned(observed, alive, now(), maxAgeMs)) return false;
+    if (!abandoned(observed, alive, now())) return false;
     const guard = `${lock}.reclaim`;
     try { mkdirSync(guard, { mode: 0o700 }); } catch { return false; }
     try {
         const recheck = readOwner(lock);
         if (recheck.kind === 'gone') return true;
-        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now(), maxAgeMs)) return false;
+        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now())) return false;
         try { unlinkSync(join(lock, OWNER_FILE)); } catch { /* ownerless or torn record */ }
         try { rmdirSync(lock); return true; } catch { return false; }
     } finally {
@@ -102,7 +100,7 @@ export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): 
         catch (error) {
             const errno = (error as NodeJS.ErrnoException).code;
             if (errno !== 'EEXIST') return { ok: false, busy: false, ...(errno ? { errno } : {}), reason: `write_lock_unavailable: ${lock}` };
-            if (!reclaim(lock, alive, now, options.maxAgeMs)) return held();
+            if (!reclaim(lock, alive, now)) return held();
             continue;
         }
         const owner: LockOwner = { pid: process.pid, nonce: randomBytes(16).toString('hex'), acquiredAt: now() };

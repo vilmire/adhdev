@@ -86,6 +86,59 @@ afterEach(() => {
 });
 
 describe('restoreHostedSessions — assistant re-bind', () => {
+  it('cancels background recovery before attaching when shutdown arrives during inventory', async () => {
+    let finish!: (records: any[]) => void;
+    const m = manager(setupLoader(), vi.fn(), () => new Promise(resolve => { finish = resolve; }));
+    const attach = vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
+    const abort = new AbortController();
+    const restore = m.restoreHostedSessions(undefined, abort.signal);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    abort.abort();
+    finish([{ runtimeId: 'asst-runtime-1', cliType: 'sample-cli', workspace }]);
+    await expect(restore).rejects.toMatchObject({ name: 'AbortError' });
+    expect(attach).not.toHaveBeenCalled();
+    expect(registry.reload()?.sessionId).toBe('asst-runtime-1');
+  });
+
+  it('does not claim a foreign legacy coordinator through an ordinary workspace sibling', async () => {
+    registerMeshCoordinator({ meshId: 'preview-mesh', sessionId: 'coord-1', workspace, cliType: 'sample-cli', startedAt: 1 });
+    const runtimes = join(configDir, 'session-host', previewOwner.namespace, 'runtimes');
+    mkdirSync(runtimes, { recursive: true });
+    writeFileSync(join(runtimes, 'coord-1.json'), JSON.stringify({ record: {
+      sessionId: 'coord-1', lifecycle: 'running', meta: { managedBy: previewOwner.managedBy } }, snapshot: {} }));
+    const batches = [[{ runtimeId: 'ordinary', cliType: 'sample-cli', workspace }], []];
+    const standalone = manager(setupLoader(), vi.fn(), async () => batches.shift()!);
+    standalone.deps.getHostedBindingOwner = () => foreignOwner;
+    standalone.deps.hostedRuntimeManagerTag = foreignOwner.managedBy;
+    const attach = vi.spyOn(standalone, 'registerCliInstance').mockResolvedValue(undefined);
+    await standalone.restoreHostedSessions();
+    expect(attach.mock.calls[0][6].meshCoordinatorFor).toBeUndefined();
+    expect(getCoordinatorForSession('coord-1')?.hostOwner).toBeUndefined();
+    await standalone.restoreHostedSessions();
+    loadMeshCoordinatorRegistry();
+    expect(getCoordinatorForSession('coord-1')?.sessionId).toBe('coord-1');
+    expect(getCoordinatorForSession('coord-1')?.hostOwner).toBeUndefined();
+  });
+
+  it('detaches an attachment that settles after background recovery was cancelled', async () => {
+    let finish!: () => void;
+    const m = manager(setupLoader(), vi.fn());
+    const detach = vi.fn();
+    vi.spyOn(m, 'registerCliInstance').mockImplementation(async id => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      m.adapters.set(id, { detach } as any);
+    });
+    const abort = new AbortController();
+    const restore = m.restoreHostedSessions([{ runtimeId: 'asst-runtime-1', cliType: 'sample-cli', workspace }], abort.signal);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    abort.abort();
+    finish();
+    await expect(restore).rejects.toMatchObject({ name: 'AbortError' });
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(m.adapters.size).toBe(0);
+    expect(registry.reload()?.sessionId).toBe('asst-runtime-1');
+  });
+
   it('prunes a dead self-owned binding before selecting one live marked assistant', async () => {
     const m = manager(setupLoader(), vi.fn(), async () => [{ runtimeId: 'live-replacement', cliType: 'sample-cli', workspace, assistant: true }]);
     vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
@@ -118,6 +171,10 @@ describe('restoreHostedSessions — assistant re-bind', () => {
 
   it('migrates a coordinator adopted through the workspace fallback', async () => {
     registerMeshCoordinator({ meshId: 'mesh-fallback', sessionId: 'coord-1', workspace, cliType: 'sample-cli', startedAt: 1 });
+    const runtimes = join(configDir, 'session-host', previewOwner.namespace, 'runtimes');
+    mkdirSync(runtimes, { recursive: true });
+    writeFileSync(join(runtimes, 'coord-1.json'), JSON.stringify({ record: {
+      sessionId: 'coord-1', lifecycle: 'running', meta: { managedBy: previewOwner.managedBy } } }));
     const m = manager(setupLoader(), vi.fn());
     vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
     await m.restoreHostedSessions([{ runtimeId: 'new-coordinator-id', cliType: 'sample-cli', workspace }]);

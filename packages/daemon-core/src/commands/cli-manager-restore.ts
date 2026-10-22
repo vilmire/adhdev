@@ -1,4 +1,4 @@
-import { sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
+import { resolveHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 import { assistantRestoreCandidate } from '../assistant/assistant-identity.js';
 import { maintenanceHeld, readCooperativeMaintenance, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { observeHeldHostedSessions, verifyHeldObservationPromotion } from '../maintenance/held-observation.js';
@@ -25,15 +25,16 @@ import type { DaemonCliManager, HostedCliRuntimeDescriptor } from './cli-manager
 /** The DaemonCliManager members these functions read or call (compiler-checked; no cast). */
 export type CliRestoreHost = Pick<DaemonCliManager, 'adapters' | 'deps' | 'providerLoader' | 'registerCliInstance'>;
 
-export async function restoreHostedSessions(host: CliRestoreHost, records?: HostedCliRuntimeDescriptor[]): Promise<number> {
+export async function restoreHostedSessions(host: CliRestoreHost, records?: HostedCliRuntimeDescriptor[], signal?: AbortSignal): Promise<number> {
+    signal?.throwIfAborted();
     if (maintenanceHeld()) {
         if (records) throw new Error('maintenance_complete_inventory_required');
         return (await observeHeldHostedSessions(host, 'held-boot-restore')).sessions.length;
     }
-    return withMaintenanceAdmission(() => restoreWritableHostedSessions(host, records));
+    return withMaintenanceAdmission(() => restoreWritableHostedSessions(host, records, signal));
 }
 
-async function restoreWritableHostedSessions(host: CliRestoreHost, records?: HostedCliRuntimeDescriptor[]): Promise<number> {
+async function restoreWritableHostedSessions(host: CliRestoreHost, records?: HostedCliRuntimeDescriptor[], signal?: AbortSignal): Promise<number> {
     const instanceManager = host.deps.getInstanceManager();
     if (!instanceManager) {
         if (readCooperativeMaintenance()) throw new Error('maintenance_instance_manager_required');
@@ -41,6 +42,7 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
     }
     const promoted = await verifyHeldObservationPromotion(host);
     const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+    signal?.throwIfAborted();
     if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.providerSessionId===r.providerSessionId && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
     const owner = host.deps.getHostedBindingOwner?.();
     const registry = getAssistantRegistry();
@@ -86,6 +88,7 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
     const rebindAdoptedSessionIds = new Set<string>();
 
     for (const record of sessions) {
+        signal?.throwIfAborted();
         if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
         if (record.lifecycle && !['running', 'interrupted'].includes(record.lifecycle)) continue;
         if (!shouldRestoreHostedRuntime(record, managerTag)) {
@@ -152,6 +155,14 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
                     }),
                 },
             );
+            if (signal?.aborted) {
+                // An attachment already in flight may settle after shutdown.
+                // Detach it without stopping the hosted process it recovered.
+                host.adapters.get(record.runtimeId)?.detach?.();
+                host.adapters.delete(record.runtimeId);
+                instanceManager.removeInstance(record.runtimeId);
+                signal.throwIfAborted();
+            }
             if (restoredSettings.assistant === true) {
                 const latest = registry.reload();
                 if ((latest?.sessionId && latest.sessionId !== record.runtimeId)
@@ -163,13 +174,15 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
             }
             const coordinator = getCoordinatorForSession(record.runtimeId) ?? listCoordinatorsForWorkspace(record.workspace)
                 .find(e => rebindAdoptedSessionIds.has(e.sessionId) && e.meshId === restoredSettings.meshCoordinatorFor);
-            if (coordinator && owner && (!coordinator.hostOwner || sameHostedBindingOwner(coordinator.hostOwner, owner))) {
+            if (coordinator && owner && sameHostedBindingOwner(
+                resolveHostedBindingOwner(coordinator.sessionId, coordinator.hostOwner, owner, restoredRuntimeIds), owner)) {
                 registerMeshCoordinator({ ...coordinator, hostOwner: owner });
             }
             restoredBindings.add(bindingKey);
             restored += 1;
             LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
         } catch (error: any) {
+            signal?.throwIfAborted();
             LOG.warn('CLI', `Failed to restore hosted runtime ${record.runtimeId}: ${error?.message || error}`);
             if (promoted || String(error?.message).startsWith('assistant_identity_conflict')) throw error;
         }
@@ -217,7 +230,8 @@ function buildRestoredSettings(
     // restart, see session-host runtimeId = runtimeRecord.sessionId).
     const owner = host.deps.getHostedBindingOwner?.();
     let coordinatorEntry = getCoordinatorForSession(record.runtimeId);
-    if (coordinatorEntry?.hostOwner && !sameHostedBindingOwner(coordinatorEntry.hostOwner, owner)) coordinatorEntry = undefined;
+    if (coordinatorEntry && !sameHostedBindingOwner(
+        resolveHostedBindingOwner(coordinatorEntry.sessionId, coordinatorEntry.hostOwner, owner, restoredRuntimeIds), owner)) coordinatorEntry = undefined;
     // CORDBADGE fallback: the by-id match misses when a coordinator's runtime
     // re-attaches under a different runtimeId than the one it was registered with
     // (the registry survived, but its key no longer lines up). Without a rebind the
@@ -246,7 +260,7 @@ function buildRestoredSettings(
     if (!coordinatorEntry?.meshId && record.workspace) {
         const workspaceCoordinators = listCoordinatorsForWorkspace(record.workspace)
             .filter(e => e.meshId && (!e.cliType || e.cliType === record.cliType)
-                && (!e.hostOwner || sameHostedBindingOwner(e.hostOwner, owner)));
+                && sameHostedBindingOwner(resolveHostedBindingOwner(e.sessionId, e.hostOwner, owner, restoredRuntimeIds), owner));
         if (workspaceCoordinators.length === 1) {
             const candidate = workspaceCoordinators[0];
             const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);

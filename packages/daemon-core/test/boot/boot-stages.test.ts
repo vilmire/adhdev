@@ -9,6 +9,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
 const quota = vi.hoisted(() => ({ calls: [] as string[] }))
+vi.mock('../../src/mesh/mesh-housekeeping-tick.js', async original => ({
+  ...(await original<any>()), startMeshHousekeeping: () => ({ stop() {} }),
+}))
+vi.mock('../../src/mesh/mesh-auto-fast-forward.js', async original => ({
+  ...(await original<any>()), startContinuousAutoFastForwardScheduler: () => ({ stop() {} }),
+}))
 vi.mock('../../src/quota/refresh.js', () => ({
   quotaProviderEnabledFromLoader: () => () => true,
   hydrateQuotaCacheFromDisk: () => { quota.calls.push('hydrate') },
@@ -26,7 +32,7 @@ vi.mock('../../src/quota/refresh-loop.js', async (importOriginal) => ({
 import { bootDaemonRuntime, type DaemonBootStages } from '../../src/boot/daemon-runtime.js'
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js'
 import { SessionRegistry } from '../../src/sessions/registry.js'
-import { scheduleQuotaBootRefresh } from '../../src/boot/stages/loops.js'
+import { scheduleQuotaBootRefresh, startLoops } from '../../src/boot/stages/loops.js'
 
 function recordingStages(log: string[]) {
   const bus = createSessionLifecycleBus()
@@ -67,6 +73,38 @@ function recordingStages(log: string[]) {
 }
 
 describe('bootDaemonRuntime', () => {
+  it('returns readiness while hosted recovery is pending, and retries at most twice in the background', async () => {
+    let rejectFirst!: (error: Error) => void
+    let finishSecond!: (count: number) => void
+    const restore = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject }))
+      .mockImplementationOnce(() => new Promise(resolve => { finishSecond = resolve }))
+    const noop = () => {}
+    const components: any = { providerLoader: { getAvailableProviderInfos: () => [] } }
+    const stage: any = { cfg: { restoreHostedSessions: true }, components,
+      cliManager: { hostedRestoreState: 'pending', restoreHostedSessions: restore },
+      cdpInitializer: { startPeriodicScan: noop, startDiscovery: noop, stop: noop },
+      poller: { start: noop, stop: noop }, instanceManager: { startTicking: noop, stopTicking: noop },
+      router: { resumePendingRefineJobsOnStartup: noop, resumeDeferredRestartsOnStartup: noop, resumeMeshNodeStatePushOnStartup: noop } }
+    let ready = false
+    const operation = startLoops(stage).then(dispose => { ready = true; return dispose })
+    try {
+      await new Promise(resolve => setImmediate(resolve))
+      expect(ready).toBe(true)
+      expect(stage.cliManager.hostedRestoreState).toBe('pending')
+      rejectFirst(new Error('transient inventory failure'))
+      await vi.waitFor(() => expect(restore).toHaveBeenCalledTimes(2))
+    } finally {
+      rejectFirst?.(new Error('finish fixture'))
+      await new Promise(resolve => setImmediate(resolve))
+      finishSecond?.(0)
+      ;(await operation)()
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    await new Promise(resolve => setImmediate(resolve))
+    expect(restore).toHaveBeenCalledTimes(2)
+  })
+
   it('runs S1..S8 in order, each fed by the previous stage, and returns the runtime', async () => {
     const log: string[] = []
     const { stages, bus, seqscribe } = recordingStages(log)

@@ -92678,9 +92678,9 @@ ${body}`;
         return { kind: "gone" };
       }
     }
-    function abandoned(observed2, alive, now, maxAgeMs) {
+    function abandoned(observed2, alive, now) {
       if (observed2.kind === "owner") {
-        return !alive(observed2.owner.pid) || maxAgeMs !== void 0 && observed2.owner.acquiredAt > 0 && now - observed2.owner.acquiredAt >= maxAgeMs;
+        return !alive(observed2.owner.pid);
       }
       if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= OWNERLESS_STALE_MS;
       return false;
@@ -92689,10 +92689,10 @@ ${body}`;
       if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
       return a.kind === "ownerless" && b.kind === "ownerless";
     }
-    function reclaim2(lock, alive, now, maxAgeMs) {
+    function reclaim2(lock, alive, now) {
       const observed2 = readOwner(lock);
       if (observed2.kind === "gone") return true;
-      if (!abandoned(observed2, alive, now(), maxAgeMs)) return false;
+      if (!abandoned(observed2, alive, now())) return false;
       const guard2 = `${lock}.reclaim`;
       try {
         (0, import_node_fs10.mkdirSync)(guard2, { mode: 448 });
@@ -92702,7 +92702,7 @@ ${body}`;
       try {
         const recheck = readOwner(lock);
         if (recheck.kind === "gone") return true;
-        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now(), maxAgeMs)) return false;
+        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now())) return false;
         try {
           (0, import_node_fs10.unlinkSync)((0, import_node_path11.join)(lock, OWNER_FILE));
         } catch {
@@ -92737,7 +92737,7 @@ ${body}`;
         } catch (error) {
           const errno = error.code;
           if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
-          if (!reclaim2(lock, alive, now, options.maxAgeMs)) return held();
+          if (!reclaim2(lock, alive, now)) return held();
           continue;
         }
         const owner = { pid: process.pid, nonce: (0, import_node_crypto19.randomBytes)(16).toString("hex"), acquiredAt: now() };
@@ -110953,7 +110953,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os37;
-    var import_session_host_core10;
+    var import_session_host_core11;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -110963,7 +110963,7 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os37 = __toESM2(require("os"));
-        import_session_host_core10 = require_dist();
+        import_session_host_core11 = require_dist();
         init_logger();
         init_spawn_env();
         init_resolve_executable();
@@ -111011,7 +111011,7 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core10.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core11.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
@@ -148257,7 +148257,7 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync120, readFileSync: readFileSync111, mkdirSync: mkdirSync61, writeFileSync: writeFileSync50 } = await import("fs");
+          const { existsSync: existsSync119, readFileSync: readFileSync110, mkdirSync: mkdirSync61, writeFileSync: writeFileSync50 } = await import("fs");
           const { dirname: dirname56, join: join138 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -148266,9 +148266,9 @@ ${output}` : "";
           let existedAsYaml = false;
           for (const relative19 of MESH_JSON_CONFIG_LOCATIONS2) {
             const candidate = join138(workspace, relative19);
-            if (!existsSync120(candidate)) continue;
+            if (!existsSync119(candidate)) continue;
             try {
-              const text4 = readFileSync111(candidate, "utf-8");
+              const text4 = readFileSync110(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text4) : yaml3.load(text4);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
@@ -149942,7 +149942,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync120, readFileSync: readFileSync111, writeFileSync: writeFileSync50, mkdirSync: mkdirSync61 } = await import("fs");
+          const { existsSync: existsSync119, readFileSync: readFileSync110, writeFileSync: writeFileSync50, mkdirSync: mkdirSync61 } = await import("fs");
           const { dirname: dirname56 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -149977,12 +149977,12 @@ ${ptyResult.output.slice(-2e3)}`);
               LOG.error("MeshCoordinator", message);
               return { success: false, code: "mesh_coordinator_config_write_failed", error: message, meshId, cliType, workspace };
             }
-            const hadExistingMcpConfig = existsSync120(mcpConfigPath);
+            const hadExistingMcpConfig = existsSync119(mcpConfigPath);
             let existingMcpConfig = {};
             let existingMcpConfigText = "";
             if (hadExistingMcpConfig) {
               try {
-                existingMcpConfigText = readFileSync111(mcpConfigPath, "utf-8");
+                existingMcpConfigText = readFileSync110(mcpConfigPath, "utf-8");
                 const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
                 existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
               } catch (error) {
@@ -150808,7 +150808,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const { deriveMeshReviewInboxItems: deriveMeshReviewInboxItems2 } = await Promise.resolve().then(() => (init_mesh_review_inbox(), mesh_review_inbox_exports));
           const { readLocalRecords: readLocalRecords2 } = await Promise.resolve().then(() => (init_mesh_local_records(), mesh_local_records_exports));
           const { getGitDiffSummary: getGitDiffSummary2 } = await Promise.resolve().then(() => (init_git_diff(), git_diff_exports));
-          const { existsSync: existsSync120 } = await import("fs");
+          const { existsSync: existsSync119 } = await import("fs");
           const meshRecord2 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
           const mesh = meshRecord2?.mesh;
           if (!mesh) return { success: false, error: "Mesh not found" };
@@ -150827,7 +150827,7 @@ ${ptyResult.output.slice(-2e3)}`);
           const derivation = deriveMeshReviewInboxItems2({ nodes: nodeStatuses, ledgerEntries });
           for (const item of derivation.items) {
             const workspace = item.workspace;
-            if (!workspace || !existsSync120(workspace)) continue;
+            if (!workspace || !existsSync119(workspace)) continue;
             const baseRef = item.defaultBranch ? `origin/${item.defaultBranch}` : "origin/main";
             try {
               const diffResult = await getGitDiffSummary2(workspace, { baseRef, maxFiles: 100 });
@@ -154094,10 +154094,45 @@ ${ptyResult.output.slice(-2e3)}`);
     }
     init_logger();
     init_binding_owner();
-    var import_node_fs17 = require("fs");
+    var import_promises11 = require("fs/promises");
     var import_node_path21 = require("path");
     init_dist();
     init_owned_lock();
+    var import_session_host_core10 = require_dist();
+    var import_node_fs17 = require("fs");
+    async function readPersistedRuntimeRecord(file) {
+      const stream = (0, import_node_fs17.createReadStream)(file, { encoding: "utf8", highWaterMark: 16 * 1024 });
+      let text4 = "", cursor = 0, start = -1, depth = 0;
+      let quoted = false, escaped = false;
+      try {
+        for await (const chunk of stream) {
+          text4 += chunk;
+          if (text4.length > 1024 * 1024) throw new Error("runtime_metadata_too_large");
+          if (start < 0) {
+            const envelope = /^\s*\{\s*"record"\s*:\s*/.exec(text4);
+            start = envelope ? envelope[0].length : text4.search(/\S/);
+            if (start < 0) continue;
+            if (text4[start] !== "{") throw new Error("runtime_metadata_invalid");
+            cursor = start;
+          }
+          for (; cursor < text4.length; cursor++) {
+            const c = text4[cursor];
+            if (quoted) {
+              if (escaped) escaped = false;
+              else if (c === "\\") escaped = true;
+              else if (c === '"') quoted = false;
+            } else if (c === '"') quoted = true;
+            else if (c === "{" || c === "[") depth++;
+            else if (c === "}" || c === "]") {
+              if (--depth === 0) return JSON.parse(text4.slice(start, cursor + 1));
+            }
+          }
+        }
+        throw new Error("runtime_metadata_incomplete");
+      } finally {
+        stream.destroy();
+      }
+    }
     function hasAssistantProvenance(record6) {
       if (record6.assistant === true) return true;
       const launch = parseSessionLaunchRecord(record6.launchRecord);
@@ -154111,46 +154146,80 @@ ${ptyResult.output.slice(-2e3)}`);
       }
       return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : void 0);
     }
-    function isPersistedHostAlive(configDir, namespace, record6) {
+    async function verifiedHostAssistants(configDir, namespace, ipcKey, boundSessionId) {
+      const endpoint = (0, import_session_host_core10.getDefaultSessionHostEndpoint)(namespace, { ipcKey });
+      const client = new import_session_host_core10.SessionHostClient({ endpoint, requestTimeoutMs: 500 });
+      let timer;
       try {
-        const pid = Number.parseInt((0, import_node_fs17.readFileSync)((0, import_node_path21.join)(configDir, `${namespace}-session-host.pid`), "utf8").trim(), 10);
-        if (!Number.isSafeInteger(pid) || pid <= 0 || !isPidAlive2(pid)) return false;
+        const response = await Promise.race([
+          client.request({ type: "get_host_diagnostics", payload: { includeSessions: true } }),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("assistant_host_probe_timeout")), 500);
+          })
+        ]);
+        const host = response.result;
+        if (!response.success || !host || host.endpoint !== endpoint.path || !(host.hostStartedAt > 0) || typeof host.hostEntryPath !== "string" || !isManagedSessionHostCommandLine(`node "${host.hostEntryPath.replace(/\\/g, "/")}"`) || !Array.isArray(host.sessions)) return void 0;
+        return new Set(host.sessions.filter((r) => r.category === "cli" && !r.termination && ["starting", "running", "stopping", "interrupted"].includes(r.lifecycle) && (r.sessionId === boundSessionId || hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant === true, launchRecord: r.meta?.launchRecord }))).map((r) => r.sessionId));
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (["ENOENT", "ECONNREFUSED"].includes(error.code ?? "")) {
+          try {
+            const pid = Number((await (0, import_promises11.readFile)((0, import_node_path21.join)(configDir, `${namespace}-session-host.pid`), "utf8")).trim());
+            if (Number.isSafeInteger(pid) && pid > 0 && !isPidAlive2(pid)) return /* @__PURE__ */ new Set();
+          } catch {
+          }
+        }
+        return void 0;
+      } finally {
+        if (timer) clearTimeout(timer);
+        await client.close().catch(() => {
+        });
       }
-      if (Number.isSafeInteger(record6.osPid) && record6.osPid > 0 && !isPidAlive2(record6.osPid)) return false;
-      return true;
     }
-    function persistedAssistantRuntimeIds(configDir) {
+    async function persistedAssistantRuntimeIds(configDir, options) {
       const ids = /* @__PURE__ */ new Set();
       const hostRoot = (0, import_node_path21.join)(configDir, "session-host");
       let namespaces;
       try {
-        namespaces = (0, import_node_fs17.readdirSync)(hostRoot);
+        namespaces = await (0, import_promises11.readdir)(hostRoot);
       } catch (error) {
-        if (error.code === "ENOENT") return ids;
-        throw error;
+        if (error.code === "ENOENT") namespaces = [];
+        else throw error;
       }
+      if (options.boundNamespace && !namespaces.includes(options.boundNamespace)) namespaces.push(options.boundNamespace);
       for (const namespace of namespaces) {
+        if (!/^[\w.-]+$/.test(namespace) || namespace === "." || namespace === "..") continue;
         const runtimes = (0, import_node_path21.join)(hostRoot, namespace, "runtimes");
         let files;
         try {
-          files = (0, import_node_fs17.readdirSync)(runtimes);
+          files = await (0, import_promises11.readdir)(runtimes);
         } catch (error) {
-          if (error.code === "ENOENT") continue;
-          throw error;
+          if (error.code === "ENOENT") files = [];
+          else throw error;
         }
-        for (const file of files.filter((f) => f.endsWith(".json"))) {
-          const raw = JSON.parse((0, import_node_fs17.readFileSync)((0, import_node_path21.join)(runtimes, file), "utf8"));
-          const r = raw?.record && typeof raw.record === "object" ? raw.record : raw;
-          if (!r || r.category !== "cli" || r.termination || ["stopped", "failed"].includes(r.lifecycle)) continue;
-          if (typeof r.sessionId === "string" && (0, import_node_fs17.existsSync)((0, import_node_path21.join)(hostRoot, namespace, "tombstones", `${r.sessionId}.json`))) continue;
-          if (!isPersistedHostAlive(configDir, namespace, r)) continue;
-          if (hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) {
-            if (typeof r.sessionId !== "string" || !r.sessionId) throw new Error("assistant_runtime_identity_missing");
-            ids.add(r.sessionId);
+        const candidates = new Set(options.boundSessionId ? [options.boundSessionId] : []);
+        for (const file of files.filter((f) => /^[\w-]+\.json$/.test(f))) {
+          let r;
+          try {
+            r = await readPersistedRuntimeRecord((0, import_node_path21.join)(runtimes, file));
+          } catch {
+            candidates.add(file.slice(0, -5));
+            continue;
           }
+          if (r.category !== "cli" || r.termination || ["stopped", "failed"].includes(r.lifecycle) || r.sessionId !== options.boundSessionId && !hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) continue;
+          if (typeof r.sessionId !== "string" || !/^[\w-]+$/.test(r.sessionId)) throw new Error("assistant_runtime_identity_missing");
+          try {
+            await (0, import_promises11.access)((0, import_node_path21.join)(hostRoot, namespace, "tombstones", `${r.sessionId}.json`));
+            continue;
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+          }
+          candidates.add(r.sessionId);
         }
+        if (!candidates.size) continue;
+        const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
+        if (verified) for (const id4 of verified) ids.add(id4);
+        else if (!options.allowUnverified) for (const id4 of candidates) ids.add(id4);
+        else options.onUnverified?.(namespace);
       }
       return ids;
     }
@@ -154193,7 +154262,16 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         let entry = registry.reload();
         const candidate = entry?.sessionId && entry.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner) ? void 0 : assistantRestoreCandidate(entry, records);
-        const persisted = persistedAssistantRuntimeIds(getConfigDir2());
+        const attached = candidate ? ctx.deps.instanceManager.getInstance(candidate.runtimeId) : entry?.sessionId ? ctx.deps.instanceManager.getInstance(entry.sessionId) : void 0;
+        const persisted = attached ? /* @__PURE__ */ new Set() : await persistedAssistantRuntimeIds(getConfigDir2(), {
+          ipcKey: getProcessInstanceContext({ standalone: owner.managedBy === "adhdev-standalone" }).ipcKey,
+          allowUnverified: forceRequested,
+          boundSessionId: entry?.sessionId ?? void 0,
+          boundNamespace: entry?.hostOwner?.namespace,
+          onUnverified: (namespace) => LOG.warn("Assistant", `owner_force bypassed unverified assistant evidence in ${namespace}`)
+        });
+        if (isAborted?.()) return refused2("assistant_launch_timeout");
+        if (forceRequested && !isTrustedOwnerIngress(args)) return refused2("assistant_owner_required");
         if ([...persisted].some((id4) => id4 !== candidate?.runtimeId)) return refused2("assistant_identity_conflict");
         if (candidate) {
           if (candidate.lifecycle === "starting" || candidate.lifecycle === "stopping") return refused2("assistant_restore_pending");
@@ -154906,6 +154984,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
           return fail6("assistant_restore_pending");
         }
+        fence.dispatched = true;
         launched = await ctx.execute("launch_cli", {
           cliType,
           dir: workspace,
@@ -154928,7 +155007,30 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         isReady: localSessionReadyProbe2(ctx.deps.cliManager?.adapters, sessionId),
         label: "assistant"
       });
-      if (fence.aborted) return fail6("assistant_launch_timeout");
+      if (fence.aborted) {
+        if (launched?.success && sessionId) {
+          const retainBinding = () => registry.bindSession({
+            sessionId,
+            cliType,
+            workspace,
+            hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
+            ...mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {},
+            at: Date.now()
+          });
+          retainBinding();
+          try {
+            await ctx.deps.sessionHostControl?.stopSession(sessionId);
+            await ctx.deps.cliManager.stopSessionWithMode(sessionId, "hard");
+            const remaining = await ctx.deps.cliManager.deps.listHostedCliRuntimes();
+            if (!remaining.some((r) => r.runtimeId === sessionId)) registry.releaseSession(sessionId, "assistant_launch_timeout");
+            else retainBinding();
+          } catch (error) {
+            retainBinding();
+            LOG.warn("Assistant", `Timed-out assistant ${sessionId} remains bound after cleanup failed: ${String(error)}`);
+          }
+        }
+        return fail6("assistant_launch_timeout");
+      }
       if (!launched?.success || !sessionId) {
         return fail6(str15(launched?.code) || "assistant_launch_failed", str15(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
@@ -154961,9 +155063,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         (0, import_fs45.mkdirSync)(lockDir, { recursive: true, mode: 448 });
       } catch {
       }
-      const lock = acquireOwnedLock((0, import_path44.join)(lockDir, ".assistant-launch.lock"), { maxAgeMs: ASSISTANT_LAUNCH_TIMEOUT_MS });
+      const lock = acquireOwnedLock((0, import_path44.join)(lockDir, ".assistant-launch.lock"));
       if (!lock.ok) return Promise.resolve(fail6("assistant_launch_pending", lock.reason));
-      const fence = { aborted: false };
+      const fence = { aborted: false, dispatched: false };
       let timer;
       const clear = () => {
         if (timer) {
@@ -154976,7 +155078,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const timeout = new Promise((resolve54) => {
         timer = setTimeout(() => {
           fence.aborted = true;
-          clear();
+          if (!fence.dispatched) clear();
           resolve54(fail6("assistant_launch_timeout"));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();
@@ -161874,7 +161976,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os422 = __toESM2(require("os"));
     var path95 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core11 = require_dist();
+    var import_session_host_core12 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -161895,8 +161997,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers) {
         this.opts = opts;
         this.handlers = handlers;
-        this.cols = opts.cols ?? import_session_host_core11.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core11.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core12.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core12.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -163348,7 +163450,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core12 = require_dist();
+    var import_session_host_core13 = require_dist();
     var fs101 = __toESM2(require("fs"));
     var path94 = __toESM2(require("path"));
     var fs97 = __toESM2(require("fs"));
@@ -163765,8 +163867,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core12.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core12.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core13.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core13.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -175047,14 +175149,15 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
     init_assistant_registry();
     init_launch_record();
     init_mesh_coordinator();
-    async function restoreHostedSessions(host, records) {
+    async function restoreHostedSessions(host, records, signal) {
+      signal?.throwIfAborted();
       if (maintenanceHeld()) {
         if (records) throw new Error("maintenance_complete_inventory_required");
         return (await observeHeldHostedSessions(host, "held-boot-restore")).sessions.length;
       }
-      return withMaintenanceAdmission(() => restoreWritableHostedSessions(host, records));
+      return withMaintenanceAdmission(() => restoreWritableHostedSessions(host, records, signal));
     }
-    async function restoreWritableHostedSessions(host, records) {
+    async function restoreWritableHostedSessions(host, records, signal) {
       const instanceManager = host.deps.getInstanceManager();
       if (!instanceManager) {
         if (readCooperativeMaintenance2()) throw new Error("maintenance_instance_manager_required");
@@ -175062,6 +175165,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       const promoted = await verifyHeldObservationPromotion(host);
       const sessions = records || await host.deps.listHostedCliRuntimes?.() || [];
+      signal?.throwIfAborted();
       if (promoted && (!records && sessions.length !== promoted.length || sessions.some((r) => !promoted.some((p) => p.runtimeId === r.runtimeId && p.providerType === r.cliType && p.providerSessionId === r.providerSessionId && p.workspace === r.workspace && p.startedAt === r.startedAtMs)))) throw new Error("maintenance_complete_promotion_inventory_required");
       const owner = host.deps.getHostedBindingOwner?.();
       const registry = getAssistantRegistry();
@@ -175082,6 +175186,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       const rebindAdoptedSessionIds = /* @__PURE__ */ new Set();
       for (const record6 of sessions) {
+        signal?.throwIfAborted();
         if (!record6?.runtimeId || !record6?.cliType || !record6?.workspace) continue;
         if (record6.lifecycle && !["running", "interrupted"].includes(record6.lifecycle)) continue;
         if (!shouldRestoreHostedRuntime(record6, managerTag)) {
@@ -175147,6 +175252,12 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
               })
             }
           );
+          if (signal?.aborted) {
+            host.adapters.get(record6.runtimeId)?.detach?.();
+            host.adapters.delete(record6.runtimeId);
+            instanceManager.removeInstance(record6.runtimeId);
+            signal.throwIfAborted();
+          }
           if (restoredSettings.assistant === true) {
             const latest = registry.reload();
             if (latest?.sessionId && latest.sessionId !== record6.runtimeId || latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) {
@@ -175162,13 +175273,17 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
             });
           }
           const coordinator = getCoordinatorForSession(record6.runtimeId) ?? listCoordinatorsForWorkspace(record6.workspace).find((e) => rebindAdoptedSessionIds.has(e.sessionId) && e.meshId === restoredSettings.meshCoordinatorFor);
-          if (coordinator && owner && (!coordinator.hostOwner || sameHostedBindingOwner(coordinator.hostOwner, owner))) {
+          if (coordinator && owner && sameHostedBindingOwner(
+            resolveHostedBindingOwner(coordinator.sessionId, coordinator.hostOwner, owner, restoredRuntimeIds),
+            owner
+          )) {
             registerMeshCoordinator({ ...coordinator, hostOwner: owner });
           }
           restoredBindings.add(bindingKey);
           restored += 1;
           LOG.info("CLI", `\u267B Restored hosted runtime: ${record6.runtimeKey || record6.runtimeId} (${record6.displayName || record6.workspace})`);
         } catch (error) {
+          signal?.throwIfAborted();
           LOG.warn("CLI", `Failed to restore hosted runtime ${record6.runtimeId}: ${error?.message || error}`);
           if (promoted || String(error?.message).startsWith("assistant_identity_conflict")) throw error;
         }
@@ -175185,9 +175300,12 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const restoredSettings = { ...host.providerLoader.getSettings(normalizedType) };
       const owner = host.deps.getHostedBindingOwner?.();
       let coordinatorEntry = getCoordinatorForSession(record6.runtimeId);
-      if (coordinatorEntry?.hostOwner && !sameHostedBindingOwner(coordinatorEntry.hostOwner, owner)) coordinatorEntry = void 0;
+      if (coordinatorEntry && !sameHostedBindingOwner(
+        resolveHostedBindingOwner(coordinatorEntry.sessionId, coordinatorEntry.hostOwner, owner, restoredRuntimeIds),
+        owner
+      )) coordinatorEntry = void 0;
       if (!coordinatorEntry?.meshId && record6.workspace) {
-        const workspaceCoordinators = listCoordinatorsForWorkspace(record6.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record6.cliType) && (!e.hostOwner || sameHostedBindingOwner(e.hostOwner, owner)));
+        const workspaceCoordinators = listCoordinatorsForWorkspace(record6.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record6.cliType) && sameHostedBindingOwner(resolveHostedBindingOwner(e.sessionId, e.hostOwner, owner, restoredRuntimeIds), owner));
         if (workspaceCoordinators.length === 1) {
           const candidate = workspaceCoordinators[0];
           const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
@@ -175815,7 +175933,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       observeHeldHostedSessions(challenge) {
         return observeHeldHostedSessions(this, challenge);
       }
-      restoreHostedSessions(records) {
+      restoreHostedSessions(records, signal) {
         const full = records === void 0;
         if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
         if (full || this.hostedRestoreState === "pending" && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount) {
@@ -175823,7 +175941,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         }
         if (!full) this.hostedPartialRestoreCount++;
         this.hostedRestoreState = "pending";
-        const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records)).then((count) => {
+        const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records, signal)).then((count) => {
           if (full) this.hostedFullRestoreState = "ready";
           return count;
         }, (error) => {
@@ -181075,7 +181193,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core13 = require_dist();
+    var import_session_host_core14 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record6) {
@@ -181088,7 +181206,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core13.SessionHostClient({
+        this.client = new import_session_host_core14.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -181617,7 +181735,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
     var import_crypto39 = require("crypto");
-    var import_session_host_core14 = require_dist();
+    var import_session_host_core15 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -181715,7 +181833,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto39.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core14.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core15.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -181809,7 +181927,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await attachment.close();
       }
     }
-    var import_session_host_core15 = require_dist();
+    var import_session_host_core16 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -181847,7 +181965,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function canConnect(endpoint, requiredRequestTypes = []) {
-      const client = new import_session_host_core15.SessionHostClient({ endpoint });
+      const client = new import_session_host_core16.SessionHostClient({ endpoint });
       try {
         await client.connect();
         await assertRequiredRequestTypes(client, requiredRequestTypes);
@@ -181869,7 +181987,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
     async function ensureSessionHostReady(options) {
-      const endpoint = options.endpoint || (0, import_session_host_core15.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint = options.endpoint || (0, import_session_host_core16.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const requiredRequestTypes = options.requiredRequestTypes || [];
       if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
       if (options.isExistingHostAlive?.()) {
@@ -181882,14 +182000,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
         }
       }
-      import_session_host_core15.SessionHostClient.disconnectClients?.(endpoint);
+      import_session_host_core16.SessionHostClient.disconnectClients?.(endpoint);
       await options.beforeSpawnHost?.(endpoint);
       options.spawnHost();
       await waitForReady(endpoint, options.timeoutMs, requiredRequestTypes);
       return endpoint;
     }
     async function listHostedCliRuntimes(endpoint) {
-      const client = new import_session_host_core15.SessionHostClient({ endpoint });
+      const client = new import_session_host_core16.SessionHostClient({ endpoint });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -181936,7 +182054,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs113 = __toESM2(require("fs"));
     var os46 = __toESM2(require("os"));
     var path105 = __toESM2(require("path"));
-    var import_session_host_core16 = require_dist();
+    var import_session_host_core17 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -181946,9 +182064,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => true);
       let unverifiedStopPid = null;
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core16.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core17.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core16.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core17.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         return env2;
@@ -182124,7 +182242,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch {
           return;
         }
-        const client = new import_session_host_core16.SessionHostClient({ endpoint: getEndpoint() });
+        const client = new import_session_host_core17.SessionHostClient({ endpoint: getEndpoint() });
         let reported;
         try {
           await client.connect();
@@ -182160,7 +182278,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core16.SessionHostClient({ endpoint });
+          const client = new import_session_host_core17.SessionHostClient({ endpoint });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -182233,7 +182351,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid);
         };
         const disconnectEndpointClients = (endpoint) => {
-          import_session_host_core16.SessionHostClient.disconnectClients?.(endpoint);
+          import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
         };
         const evictGraceMs = options.evictGraceMs ?? 4e3;
         const canPositivelyEscalateSigkill = (pid) => {
@@ -188934,23 +189052,35 @@ ${notice.notice}${supersededHint}`;
         s7.poller.start();
         s7.instanceManager.startTicking(cfg.tickIntervalMs ?? 5e3);
         startTurnLoops(components);
-        if (cfg.restoreHostedSessions && !enrolled) {
-          for (let attempt = 1; attempt <= 2; attempt++) {
-            try {
-              await s7.cliManager.restoreHostedSessions();
-              break;
-            } catch (e) {
-              LOG.warn("Init", `Hosted session restore failed (attempt ${attempt}/2): ${e?.message || e}`);
-            }
-          }
-        }
-        if (s7.cliManager?.hostedRestoreState !== "failed") {
+        let disposed = false;
+        const restoreAbort = new AbortController();
+        const afterRestore = () => {
+          if (disposed || ["pending", "failed"].includes(s7.cliManager?.hostedRestoreState)) return;
           try {
             reconcileOrphanedPlainAttemptsOnBoot(components);
           } catch (e) {
             LOG.warn("TurnLedger", `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
           }
-        }
+          components.composerResidueSweep = scheduleComposerResidueSweep(components);
+        };
+        let restoreStart;
+        if (cfg.restoreHostedSessions && !enrolled) {
+          restoreStart = setImmediate(() => {
+            void (async () => {
+              for (let attempt = 1; attempt <= 2; attempt++) {
+                if (disposed) return;
+                try {
+                  await s7.cliManager.restoreHostedSessions(void 0, restoreAbort.signal);
+                  break;
+                } catch (e) {
+                  if (disposed) return;
+                  LOG.warn("Init", `Hosted session restore failed (attempt ${attempt}/2): ${e?.message || e}`);
+                }
+              }
+              afterRestore();
+            })().catch((e) => LOG.warn("Init", `Background hosted recovery failed: ${String(e)}`));
+          });
+        } else afterRestore();
         scheduleQuotaBootRefresh(components);
         scheduleModelDiscovery(components);
         setImmediate(() => void s7.router.resumePendingRefineJobsOnStartup());
@@ -188959,11 +189089,11 @@ ${notice.notice}${supersededHint}`;
         setImmediate(() => {
           void s7.router.resumeMeshNodeStatePushOnStartup();
         });
-        components.composerResidueSweep = scheduleComposerResidueSweep(components);
-        let disposed = false;
         return () => {
           if (disposed) return;
           disposed = true;
+          restoreAbort.abort();
+          if (restoreStart) clearImmediate(restoreStart);
           s7.poller.stop();
           try {
             s7.instanceManager.stopTicking();
@@ -189951,13 +190081,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core17 = require_dist();
+    var import_session_host_core18 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core17.SessionHostClient({ endpoint });
-        this.plane = (0, import_session_host_core17.createSessionHostControlPlane)({
+        this.client = new import_session_host_core18.SessionHostClient({ endpoint });
+        this.plane = (0, import_session_host_core18.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }

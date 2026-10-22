@@ -585,7 +585,7 @@ export class DaemonCliManager {
         this.roleRestartInputs.clear();
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
-    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> {
+    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[], signal?: AbortSignal): Promise<number> {
         const full = records === undefined;
         if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
         if (full || (this.hostedRestoreState === 'pending' && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount)) {
@@ -594,7 +594,7 @@ export class DaemonCliManager {
         if (!full) this.hostedPartialRestoreCount++;
         this.hostedRestoreState = 'pending';
         // Serialize attachment work without letting a partial inventory satisfy a full restore.
-        const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records)).then(count => {
+        const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records, signal)).then(count => {
             if (full) this.hostedFullRestoreState = 'ready';
             return count;
         }, error => {

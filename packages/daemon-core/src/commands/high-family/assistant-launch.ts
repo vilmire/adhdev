@@ -131,7 +131,7 @@ const ASSISTANT_LAUNCH_TIMEOUT_MS = 30_000;
 const launchAssistantOnce = async (
     ctx: HighFamilyContext,
     args: any,
-    fence: { aborted: boolean } = { aborted: false },
+    fence: { aborted: boolean; dispatched?: boolean } = { aborted: false },
 ): Promise<CommandRouterResult> => {
     const registry = getAssistantRegistry();
     const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
@@ -236,6 +236,7 @@ const launchAssistantOnce = async (
             void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
             return fail('assistant_restore_pending');
         }
+        fence.dispatched = true;
         launched = await ctx.execute('launch_cli', {
             cliType,
             dir: workspace,
@@ -258,7 +259,29 @@ const launchAssistantOnce = async (
         isReady: localSessionReadyProbe(ctx.deps.cliManager?.adapters, sessionId),
         label: 'assistant',
     });
-    if (fence.aborted) return fail('assistant_launch_timeout');
+    if (fence.aborted) {
+        if (launched?.success && sessionId) {
+            // Keep the account lock until this dispatched launch has settled. Bind
+            // first so a failed stop still leaves discoverable, durable identity.
+            const retainBinding = () => registry.bindSession({ sessionId, cliType, workspace,
+                hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
+                ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now() });
+            retainBinding();
+            try {
+                // The adapter's shutdown queues a mutation; the control RPC is
+                // awaited so cleanup also covers a delayed/failed adapter stop.
+                await ctx.deps.sessionHostControl?.stopSession(sessionId);
+                await ctx.deps.cliManager.stopSessionWithMode(sessionId, 'hard');
+                const remaining = await ctx.deps.cliManager.deps.listHostedCliRuntimes!();
+                if (!remaining.some(r => r.runtimeId === sessionId)) registry.releaseSession(sessionId, 'assistant_launch_timeout');
+                else retainBinding();
+            } catch (error) {
+                retainBinding();
+                LOG.warn('Assistant', `Timed-out assistant ${sessionId} remains bound after cleanup failed: ${String(error)}`);
+            }
+        }
+        return fail('assistant_launch_timeout');
+    }
     if (!launched?.success || !sessionId) {
         return fail(str(launched?.code) || 'assistant_launch_failed', str(launched?.error) || 'Failed to launch the assistant session', { cliType, workspace });
     }
@@ -291,9 +314,9 @@ const launchAssistant: HighFamilyHandler = (ctx, args) => {
     if (pending) return pending.then(result => result.success ? { ...result, launched: false } : result);
     const lockDir = dirname(registry.path);
     try { mkdirSync(lockDir, { recursive: true, mode: 0o700 }); } catch { /* surfaced by acquireOwnedLock */ }
-    const lock = acquireOwnedLock(join(lockDir, '.assistant-launch.lock'), { maxAgeMs: ASSISTANT_LAUNCH_TIMEOUT_MS });
+    const lock = acquireOwnedLock(join(lockDir, '.assistant-launch.lock'));
     if (!lock.ok) return Promise.resolve(fail('assistant_launch_pending', lock.reason));
-    const fence = { aborted: false };
+    const fence = { aborted: false, dispatched: false };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const clear = () => {
         if (timer) { clearTimeout(timer); timer = undefined; }
@@ -303,7 +326,9 @@ const launchAssistant: HighFamilyHandler = (ctx, args) => {
     const timeout = new Promise<CommandRouterResult>(resolve => {
         timer = setTimeout(() => {
             fence.aborted = true;
-            clear();
+            // Before dispatch, all continuations check the fence. After dispatch,
+            // neither this process nor another daemon may launch until cleanup.
+            if (!fence.dispatched) clear();
             resolve(fail('assistant_launch_timeout'));
         }, ASSISTANT_LAUNCH_TIMEOUT_MS);
         timer.unref?.();

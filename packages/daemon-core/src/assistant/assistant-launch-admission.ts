@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
 import { getConfigDir } from '../config/config.js';
+import { getProcessInstanceContext } from '../config/instance-context.js';
 import { isTrustedOwnerIngress } from '../commands/command-args.js';
 import type { HighFamilyContext } from '../commands/high-family/types.js';
 import type { CommandRouterResult } from '../commands/router.js';
@@ -51,7 +52,17 @@ export async function admitAssistantLaunch(
         let entry = registry.reload();
         const candidate = entry?.sessionId && entry.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner)
             ? undefined : assistantRestoreCandidate(entry, records);
-        const persisted = persistedAssistantRuntimeIds(getConfigDir());
+        const attached = candidate ? ctx.deps.instanceManager.getInstance(candidate.runtimeId)
+            : entry?.sessionId ? ctx.deps.instanceManager.getInstance(entry.sessionId) : undefined;
+        const persisted = attached ? new Set<string>() : await persistedAssistantRuntimeIds(getConfigDir(), {
+            ipcKey: getProcessInstanceContext({ standalone: owner.managedBy === 'adhdev-standalone' }).ipcKey,
+            allowUnverified: forceRequested,
+            boundSessionId: entry?.sessionId ?? undefined,
+            boundNamespace: entry?.hostOwner?.namespace,
+            onUnverified: namespace => LOG.warn('Assistant', `owner_force bypassed unverified assistant evidence in ${namespace}`),
+        });
+        if (isAborted?.()) return refused('assistant_launch_timeout');
+        if (forceRequested && !isTrustedOwnerIngress(args)) return refused('assistant_owner_required');
         if ([...persisted].some(id => id !== candidate?.runtimeId)) return refused('assistant_identity_conflict');
         if (candidate) {
             if (candidate.lifecycle === 'starting' || candidate.lifecycle === 'stopping') return refused('assistant_restore_pending');

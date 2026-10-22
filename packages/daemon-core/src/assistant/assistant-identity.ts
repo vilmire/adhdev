@@ -1,8 +1,11 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { access, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import type { HostedCliRuntimeDescriptor } from '../commands/cli-manager.js';
 import { isPidAlive } from '../launch-defaults/owned-lock.js';
+import { getDefaultSessionHostEndpoint, SessionHostClient, type SessionHostDiagnostics } from '@adhdev/session-host-core';
+import { isManagedSessionHostCommandLine } from '../commands/process-lifecycle.js';
+import { readPersistedRuntimeRecord } from '../session-host/persisted-runtime-record.js';
 import type { AssistantRegistryEntry } from './assistant-registry.js';
 
 /** Workspace/title alone is never assistant evidence. Launch evidence must name this runtime. */
@@ -22,41 +25,84 @@ export function assistantRestoreCandidate(entry: AssistantRegistryEntry | null, 
     return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : undefined);
 }
 
-function isPersistedHostAlive(configDir: string, namespace: string, record: Record<string, any>): boolean {
+/** Verify the namespace endpoint and host's recorded identity, then use its
+ * current census. PID existence alone cannot distinguish a reused PID. */
+async function verifiedHostAssistants(configDir: string, namespace: string, ipcKey: string, boundSessionId?: string): Promise<Set<string> | undefined> {
+    const endpoint = getDefaultSessionHostEndpoint(namespace, { ipcKey });
+    const client = new SessionHostClient({ endpoint, requestTimeoutMs: 500 });
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-        const pid = Number.parseInt(readFileSync(join(configDir, `${namespace}-session-host.pid`), 'utf8').trim(), 10);
-        if (!Number.isSafeInteger(pid) || pid <= 0 || !isPidAlive(pid)) return false;
+        const response = await Promise.race([
+            client.request<SessionHostDiagnostics>({ type: 'get_host_diagnostics', payload: { includeSessions: true } }),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('assistant_host_probe_timeout')), 500); }),
+        ]);
+        const host = response.result;
+        if (!response.success || !host || host.endpoint !== endpoint.path || !(host.hostStartedAt > 0)
+            || typeof host.hostEntryPath !== 'string' || !isManagedSessionHostCommandLine(`node "${host.hostEntryPath.replace(/\\/g, '/')}"`)
+            || !Array.isArray(host.sessions)) return undefined;
+        return new Set(host.sessions.filter(r => r.category === 'cli' && !r.termination
+            && ['starting', 'running', 'stopping', 'interrupted'].includes(r.lifecycle)
+            && (r.sessionId === boundSessionId || hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant === true, launchRecord: r.meta?.launchRecord })))
+            .map(r => r.sessionId));
     } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        // A dead pid plus an absent endpoint can dismiss a stale snapshot. A
+        // live/reused/missing pid cannot establish host identity or liveness.
+        if (['ENOENT', 'ECONNREFUSED'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            try {
+                const pid = Number((await readFile(join(configDir, `${namespace}-session-host.pid`), 'utf8')).trim());
+                if (Number.isSafeInteger(pid) && pid > 0 && !isPidAlive(pid)) return new Set();
+            } catch { /* Unverified evidence remains an owner decision. */ }
+        }
+        return undefined;
+    } finally {
+        if (timer) clearTimeout(timer);
+        await client.close().catch(() => {});
     }
-    if (Number.isSafeInteger(record.osPid) && record.osPid > 0 && !isPidAlive(record.osPid)) return false;
-    return true;
 }
 
 /** Shared config can contain other hosts. Their role records block a duplicate launch,
  * but must never be attached via this daemon's endpoint. Read failure is uncertainty. */
-export function persistedAssistantRuntimeIds(configDir: string): Set<string> {
+export async function persistedAssistantRuntimeIds(configDir: string, options: {
+    /** Already derived at boot; resolving it here would perform sync realpath. */
+    ipcKey: string;
+    allowUnverified?: boolean;
+    onUnverified?: (namespace: string) => void;
+    boundSessionId?: string;
+    boundNamespace?: string;
+}): Promise<Set<string>> {
     const ids = new Set<string>();
     const hostRoot = join(configDir, 'session-host');
     let namespaces: string[];
-    try { namespaces = readdirSync(hostRoot); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ids; throw error; }
+    try { namespaces = await readdir(hostRoot); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') namespaces = []; else throw error; }
+    if (options.boundNamespace && !namespaces.includes(options.boundNamespace)) namespaces.push(options.boundNamespace);
     for (const namespace of namespaces) {
+        if (!/^[\w.-]+$/.test(namespace) || namespace === '.' || namespace === '..') continue;
         const runtimes = join(hostRoot, namespace, 'runtimes');
         let files: string[];
-        try { files = readdirSync(runtimes); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
-        for (const file of files.filter(f => f.endsWith('.json'))) {
-            const raw = JSON.parse(readFileSync(join(runtimes, file), 'utf8'));
-            const r = raw?.record && typeof raw.record === 'object' ? raw.record : raw;
-            if (!r || r.category !== 'cli' || r.termination || ['stopped', 'failed'].includes(r.lifecycle)) continue;
-            if (typeof r.sessionId === 'string' && existsSync(join(hostRoot, namespace, 'tombstones', `${r.sessionId}.json`))) continue;
-            if (!isPersistedHostAlive(configDir, namespace, r)) continue;
-            if (hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) {
-                if (typeof r.sessionId !== 'string' || !r.sessionId) throw new Error('assistant_runtime_identity_missing');
-                ids.add(r.sessionId);
-            }
+        try { files = await readdir(runtimes); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') files = []; else throw error; }
+        // The durable binding is also positive role provenance, including legacy
+        // runtimes whose metadata predates assistant:true or whose file rotated.
+        const candidates = new Set<string>(options.boundSessionId ? [options.boundSessionId] : []);
+        for (const file of files.filter(f => /^[\w-]+\.json$/.test(f))) {
+            let r: Record<string, any>;
+            try { r = await readPersistedRuntimeRecord(join(runtimes, file)); }
+            catch { candidates.add(file.slice(0, -5)); continue; }
+            if (r.category !== 'cli' || r.termination || ['stopped', 'failed'].includes(r.lifecycle)
+                || (r.sessionId !== options.boundSessionId && !hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord }))) continue;
+            if (typeof r.sessionId !== 'string' || !/^[\w-]+$/.test(r.sessionId)) throw new Error('assistant_runtime_identity_missing');
+            try { await access(join(hostRoot, namespace, 'tombstones', `${r.sessionId}.json`)); continue; }
+            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+            candidates.add(r.sessionId);
         }
+        // Ordinary sessions never cause PID/socket probes. One census per host,
+        // irrespective of the number of assistant records or snapshots.
+        if (!candidates.size) continue;
+        const verified = await verifiedHostAssistants(configDir, namespace, options.ipcKey, options.boundSessionId);
+        if (verified) for (const id of verified) ids.add(id);
+        else if (!options.allowUnverified) for (const id of candidates) ids.add(id);
+        else options.onUnverified?.(namespace);
     }
     return ids;
 }
