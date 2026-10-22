@@ -806,6 +806,8 @@ export async function refreshQuotaCacheOnce(
  * failure episode.
  */
 export const QUOTA_FAILURE_MAX_RETRIES = 4;
+/** Minimum interval between re-arms of an exhausted retry budget while the CLI is active (15 min). */
+export const QUOTA_REARM_MIN_INTERVAL_MS = QUOTA_REFRESH_INTERVAL_MS;
 
 interface FailureRetryState {
     /** Consecutive transient failures since the last success. */
@@ -824,6 +826,8 @@ interface FailureRetryState {
      * but antigravity-cli, and on any machine where the stamp is unreadable.
      */
     credentialMtimeMs?: number;
+    /** Timestamp of the most recent `rearmExhaustedFailureRetry` for this provider. */
+    lastRearmedAtMs?: number;
 }
 
 export const failureRetries = new Map<string, FailureRetryState>();
@@ -978,6 +982,19 @@ export async function resetFailureBudgetOnCredentialRenewal(
     // scheduling paths (isFailureRetryDue → the loop's backfill gate) re-probe.
     if (state.timer) clearTimeout(state.timer);
     failureRetries.set(provider, { failures: 0, timer: null, credentialMtimeMs: mtimeMs });
+    const entry = cache.get(provider);
+    if (entry && entry.status !== 'ok' && entry.metadata?.retryExhausted) {
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, {
+            ...entry,
+            metadata: {
+                ...restMetadata,
+                retryAtMs: typeof restMetadata.retryAtMs === 'number'
+                    ? Math.min(restMetadata.retryAtMs, Date.now())
+                    : Date.now(),
+            },
+        });
+    }
     LOG.info('Quota', `${provider}: credential renewed since the last failure — retry budget reset`);
     return true;
 }
@@ -1150,8 +1167,9 @@ function updateFailureRetry(
     // renewal detector compares against, and losing it on each new failure
     // would restart the "first stamp" handshake forever.
     const credentialMtimeMs = previous?.credentialMtimeMs;
+    const lastRearmedAtMs = previous?.lastRearmedAtMs;
     if (failures > QUOTA_FAILURE_MAX_RETRIES) {
-        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs, lastRearmedAtMs });
         // Tell every reader the daemon has stopped retrying: retained numbers
         // must stop reading "refreshing" (assessQuotaFreshness in mesh-shared).
         if (entry && entry.metadata) {
@@ -1177,7 +1195,8 @@ function updateFailureRetry(
     // loop's chain wake kept reading the flat 120s stamp, re-probing every 2
     // minutes and spending the 4-retry budget in ~6 min instead of ~29.
     if (entry && entry.metadata) {
-        cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryAtMs: Date.now() + delayMs } });
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, { ...entry, metadata: { ...restMetadata, retryAtMs: Date.now() + delayMs } });
     }
     const timer = setTimeout(() => {
         const state = failureRetries.get(provider);
@@ -1193,6 +1212,62 @@ function updateFailureRetry(
             .finally(() => { if (state) state.retryInFlight = false; });
     }, delayMs);
     if (typeof timer.unref === 'function') timer.unref();
-    failureRetries.set(provider, { failures, timer, credentialMtimeMs });
+    failureRetries.set(provider, { failures, timer, credentialMtimeMs, lastRearmedAtMs });
     LOG.info('Quota', `${provider}: transient failure — retry scheduled in ${Math.round(delayMs / 1000)}s (attempt ${failures}/${QUOTA_FAILURE_MAX_RETRIES})`);
+}
+
+/**
+ * Re-arm an exhausted failure retry budget when either:
+ *   - the CLI is active (`options.active === true`) and at least
+ *     `QUOTA_REARM_MIN_INTERVAL_MS` (15 min) has elapsed since the last probe
+ *     or re-arm, or
+ *   - the scheduled backfill horizon (`QUOTA_ROUTABLE_MAX_AGE_MS`, 60 min) has
+ *     elapsed since the last probe attempt on an idle machine.
+ * Arms a single probe (`failures: QUOTA_FAILURE_MAX_RETRIES`) so a permanently
+ * failing provider never triggers a fresh 4-retry cascade every tick.
+ */
+export function rearmExhaustedFailureRetry(
+    provider: QuotaProvider,
+    options: { active?: boolean; now?: number } = {},
+): boolean {
+    const now = options.now ?? Date.now();
+    const entry = cache.get(provider);
+    if (!entry || entry.status === 'ok') return false;
+    const state = failureRetries.get(provider);
+    const isExhausted = entry.metadata?.retryExhausted === true
+        || (state?.failures ?? 0) > QUOTA_FAILURE_MAX_RETRIES;
+    if (!isExhausted) return false;
+    if (entry.metadata?.failureKind === 'rate-limited'
+        && typeof entry.metadata.retryAtMs === 'number'
+        && entry.metadata.retryAtMs > now) {
+        return false;
+    }
+    const attemptedAt = lastAttemptAt(entry);
+    const lastRearmedAt = state?.lastRearmedAtMs;
+    const baselineAt = attemptedAt !== undefined && lastRearmedAt !== undefined
+        ? Math.max(attemptedAt, lastRearmedAt)
+        : (attemptedAt ?? lastRearmedAt);
+    const minIntervalMs = options.active ? QUOTA_REARM_MIN_INTERVAL_MS : QUOTA_ROUTABLE_MAX_AGE_MS;
+    if (baselineAt !== undefined && now - baselineAt < minIntervalMs) return false;
+
+    if (state?.timer) clearTimeout(state.timer);
+    failureRetries.set(provider, {
+        failures: QUOTA_FAILURE_MAX_RETRIES,
+        timer: null,
+        credentialMtimeMs: state?.credentialMtimeMs,
+        lastRearmedAtMs: now,
+    });
+    if (entry.metadata) {
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, {
+            ...entry,
+            metadata: {
+                ...restMetadata,
+                retryAtMs: typeof restMetadata.retryAtMs === 'number'
+                    ? Math.min(restMetadata.retryAtMs, now)
+                    : now,
+            },
+        });
+    }
+    return true;
 }

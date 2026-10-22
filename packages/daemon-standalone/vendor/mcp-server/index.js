@@ -24140,8 +24140,10 @@ var require_dist3 = __commonJS({
     function assessQuotaFreshness2(quota, now = Date.now()) {
       const meta = quota.metadata;
       const kind = meta?.failureKind;
-      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli" || kind === "expired-token" && ["grok-cli", "kimi", "antigravity-cli"].includes(quota.provider);
+      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli";
+      const awaitsCliUse = kind === "expired-token" && ["grok-cli", "kimi", "antigravity-cli"].includes(quota.provider);
       if (userMustAct) return hasReading(quota) ? { cue: "stale", userMustAct: true } : { userMustAct: true };
+      if (awaitsCliUse) return hasReading(quota) ? { cue: "stale", userMustAct: false } : { userMustAct: false };
       if (meta?.lastGoodWindows !== true) {
         const measuredAt = finiteMs(quota.updatedAt);
         if (hasReading(quota) && (measuredAt === void 0 || now - measuredAt >= QUOTA_BACKFILL_HORIZON_MS2)) {
@@ -32709,7 +32711,7 @@ ${res.stderr}`);
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         return { kind: "invalid", platform: platform10, reason: "Antigravity credential has no access token" };
       }
-      const expiryRaw = token.expiry ?? token.expires_at;
+      const expiryRaw = token.expiry ?? token.expires_at ?? token.expiry_date;
       let expiresAtMs = null;
       if (typeof expiryRaw === "string" && expiryRaw.trim() !== "") {
         const ms3 = new Date(expiryRaw).getTime();
@@ -32725,26 +32727,81 @@ ${res.stderr}`);
         platform: platform10
       };
     }
+    function isSameCredentialAccount(a, b) {
+      if (!a.identity || !b.identity) return false;
+      return a.identity.iss === b.identity.iss && a.identity.sub === b.identity.sub;
+    }
+    async function readOptionalAntigravityTokenFile(deps, platform10) {
+      let home = deps.env.HOME?.trim() || deps.env.USERPROFILE?.trim() || "";
+      if (!home && !isTestRuntimeEnv()) {
+        try {
+          home = os42.homedir().trim();
+        } catch {
+          home = "";
+        }
+      }
+      if (!home) return null;
+      try {
+        const raw = await deps.readFile(path8.join(home, LINUX_TOKEN_RELATIVE));
+        if (!raw?.trim()) return null;
+        const parsed = parseCredentials(decodeKeyringSecret(raw), platform10);
+        return parsed.kind === "ok" ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    function pickFreshestCredential(candidates, nowMs2) {
+      return candidates.reduce((best, candidate) => {
+        const bestUnexpired = !isExpired(best.credentials, nowMs2);
+        const candidateUnexpired = !isExpired(candidate.credentials, nowMs2);
+        if (candidateUnexpired !== bestUnexpired) return candidateUnexpired ? candidate : best;
+        const bestExpiry = best.credentials.expiresAtMs;
+        const candidateExpiry = candidate.credentials.expiresAtMs;
+        if (bestExpiry !== null && candidateExpiry !== null && candidateExpiry !== bestExpiry) {
+          return candidateExpiry > bestExpiry ? candidate : best;
+        }
+        return best;
+      });
+    }
     async function readCredentials(deps) {
       const platform10 = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
       if (platform10 !== "darwin" && platform10 !== "win32" && platform10 !== "linux") {
         return { kind: "unsupported-platform", platform: platform10 };
       }
-      let raw;
-      try {
-        if (platform10 === "linux") {
-          raw = await readLinuxTokenFile(deps);
-        } else {
-          raw = platform10 === "darwin" ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
+      if (platform10 === "linux") {
+        let raw2;
+        try {
+          raw2 = await readLinuxTokenFile(deps);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return { kind: "invalid", platform: platform10, reason: `Unable to read the Antigravity credential: ${message}` };
         }
+        if (raw2 === null || raw2 === "") {
+          return { kind: "missing", platform: platform10 };
+        }
+        return parseCredentials(decodeKeyringSecret(raw2), platform10);
+      }
+      let raw = null;
+      try {
+        raw = platform10 === "darwin" ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { kind: "invalid", platform: platform10, reason: `Unable to read the Antigravity credential: ${message}` };
       }
-      if (raw === null || raw === "") {
+      const storeResult = raw !== null && raw !== "" ? parseCredentials(decodeKeyringSecret(raw), platform10) : null;
+      if (storeResult && storeResult.kind === "invalid") {
+        return storeResult;
+      }
+      const fileCandidate = await readOptionalAntigravityTokenFile(deps, platform10);
+      const compatibleFileCandidate = fileCandidate && (storeResult?.kind !== "ok" || isSameCredentialAccount(storeResult.credentials, fileCandidate.credentials)) ? fileCandidate : null;
+      const candidates = [
+        ...storeResult?.kind === "ok" ? [storeResult] : [],
+        ...compatibleFileCandidate ? [compatibleFileCandidate] : []
+      ];
+      if (candidates.length === 0) {
         return { kind: "missing", platform: platform10 };
       }
-      return parseCredentials(decodeKeyringSecret(raw), platform10);
+      return pickFreshestCredential(candidates, deps.now());
     }
     function isExpired(credentials, nowMs2) {
       return isCredentialExpired(credentials.expiresAtMs, nowMs2, EXPIRY_SKEW_MS);
@@ -32917,8 +32974,8 @@ ${res.stderr}`);
       if (isExpired(credentials, deps.now())) {
         return quotaFailure(
           "antigravity-cli",
-          "error",
-          `Antigravity access token expired \u2014 run \`agy\` once to refresh it, then quota will report again (within ~60 min on its own, ${quotaReadNowClause()}).`,
+          "unavailable",
+          `Antigravity quota reading unavailable until next CLI use \u2014 run \`agy\` once to refresh its short-lived access token (probed again within ~60 min on its own, ${quotaReadNowClause()}).`,
           { source: source2, failureKind: "expired-token" }
         );
       }
@@ -35013,8 +35070,8 @@ child.on('exit', () => process.exit(0));
       if (isExpired2(credentials, deps.now())) {
         return quotaFailure(
           "grok-cli",
-          "error",
-          "Grok access token expired \u2014 the grok CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.",
+          "unavailable",
+          "Grok quota reading unavailable until next CLI use \u2014 the grok CLI renews it on next use; an idle CLI does not renew it in the background.",
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -35179,7 +35236,13 @@ child.on('exit', () => process.exit(0));
       }
       const expiresAtRaw = record6.expires_at;
       const expiresAt = typeof expiresAtRaw === "number" && Number.isFinite(expiresAtRaw) ? expiresAtRaw : null;
-      return { kind: "ok", credentials: { accessToken, expiresAt } };
+      return {
+        kind: "ok",
+        credentials: {
+          accessToken,
+          expiresAt
+        }
+      };
     }
     function readCredentials4(deps, oauthKey) {
       const file = credentialsPath(deps.env, oauthKey);
@@ -35298,8 +35361,8 @@ child.on('exit', () => process.exit(0));
       if (isExpired3(credentials, deps.now())) {
         return quotaFailure(
           "kimi",
-          "error",
-          "Kimi access token expired normally (~15 min lifespan) \u2014 the kimi CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.",
+          "unavailable",
+          "Kimi quota reading unavailable until next CLI use \u2014 the kimi CLI renews it on next use; an idle CLI does not renew it in the background.",
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -35704,6 +35767,7 @@ child.on('exit', () => process.exit(0));
         const at = now();
         if (at - (lastRefreshAt.get(refresher.provider) ?? -Infinity) < debounceMs) return;
         lastRefreshAt.set(refresher.provider, at);
+        rearmExhaustedFailureRetry(refresher.provider, { active: true, now: at });
         void refreshQuotaCacheOnce([refresher], isEnabled).catch((err) => LOG.warn("Quota", `Event-driven quota refresh failed: ${err?.message || err}`));
       }, { name: "quota.event-refresh" });
       LOG.info("Quota", `Event-driven quota refresh armed (turn commits, ${debounceMs}ms debounce)`);
@@ -36065,6 +36129,17 @@ child.on('exit', () => process.exit(0));
       if (mtimeMs <= previous) return false;
       if (state2.timer) clearTimeout(state2.timer);
       failureRetries.set(provider, { failures: 0, timer: null, credentialMtimeMs: mtimeMs });
+      const entry = cache.get(provider);
+      if (entry && entry.status !== "ok" && entry.metadata?.retryExhausted) {
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, {
+          ...entry,
+          metadata: {
+            ...restMetadata,
+            retryAtMs: typeof restMetadata.retryAtMs === "number" ? Math.min(restMetadata.retryAtMs, Date.now()) : Date.now()
+          }
+        });
+      }
       LOG.info("Quota", `${provider}: credential renewed since the last failure \u2014 retry budget reset`);
       return true;
     }
@@ -36105,8 +36180,9 @@ child.on('exit', () => process.exit(0));
       if (previous?.timer) clearTimeout(previous.timer);
       const failures = (previous?.failures ?? 0) + 1;
       const credentialMtimeMs = previous?.credentialMtimeMs;
+      const lastRearmedAtMs = previous?.lastRearmedAtMs;
       if (failures > QUOTA_FAILURE_MAX_RETRIES) {
-        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs, lastRearmedAtMs });
         if (entry && entry.metadata) {
           cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryExhausted: true } });
         }
@@ -36121,7 +36197,8 @@ child.on('exit', () => process.exit(0));
       );
       const delayMs = Math.max(retryAtMs - Date.now(), backoffMs, 0);
       if (entry && entry.metadata) {
-        cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryAtMs: Date.now() + delayMs } });
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, { ...entry, metadata: { ...restMetadata, retryAtMs: Date.now() + delayMs } });
       }
       const timer = setTimeout(() => {
         const state2 = failureRetries.get(provider);
@@ -36133,8 +36210,42 @@ child.on('exit', () => process.exit(0));
         });
       }, delayMs);
       if (typeof timer.unref === "function") timer.unref();
-      failureRetries.set(provider, { failures, timer, credentialMtimeMs });
+      failureRetries.set(provider, { failures, timer, credentialMtimeMs, lastRearmedAtMs });
       LOG.info("Quota", `${provider}: transient failure \u2014 retry scheduled in ${Math.round(delayMs / 1e3)}s (attempt ${failures}/${QUOTA_FAILURE_MAX_RETRIES})`);
+    }
+    function rearmExhaustedFailureRetry(provider, options = {}) {
+      const now = options.now ?? Date.now();
+      const entry = cache.get(provider);
+      if (!entry || entry.status === "ok") return false;
+      const state2 = failureRetries.get(provider);
+      const isExhausted = entry.metadata?.retryExhausted === true || (state2?.failures ?? 0) > QUOTA_FAILURE_MAX_RETRIES;
+      if (!isExhausted) return false;
+      if (entry.metadata?.failureKind === "rate-limited" && typeof entry.metadata.retryAtMs === "number" && entry.metadata.retryAtMs > now) {
+        return false;
+      }
+      const attemptedAt = lastAttemptAt(entry);
+      const lastRearmedAt = state2?.lastRearmedAtMs;
+      const baselineAt = attemptedAt !== void 0 && lastRearmedAt !== void 0 ? Math.max(attemptedAt, lastRearmedAt) : attemptedAt ?? lastRearmedAt;
+      const minIntervalMs = options.active ? QUOTA_REARM_MIN_INTERVAL_MS : QUOTA_ROUTABLE_MAX_AGE_MS;
+      if (baselineAt !== void 0 && now - baselineAt < minIntervalMs) return false;
+      if (state2?.timer) clearTimeout(state2.timer);
+      failureRetries.set(provider, {
+        failures: QUOTA_FAILURE_MAX_RETRIES,
+        timer: null,
+        credentialMtimeMs: state2?.credentialMtimeMs,
+        lastRearmedAtMs: now
+      });
+      if (entry.metadata) {
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, {
+          ...entry,
+          metadata: {
+            ...restMetadata,
+            retryAtMs: typeof restMetadata.retryAtMs === "number" ? Math.min(restMetadata.retryAtMs, now) : now
+          }
+        });
+      }
+      return true;
     }
     var QUOTA_REFRESH_INTERVAL_MS;
     var QUOTA_ACTIVITY_WINDOW_MS;
@@ -36150,6 +36261,7 @@ child.on('exit', () => process.exit(0));
     var pendingHydrationConfirmations;
     var latestQuotaAttempts;
     var QUOTA_FAILURE_MAX_RETRIES;
+    var QUOTA_REARM_MIN_INTERVAL_MS;
     var failureRetries;
     var CREDENTIAL_RENEWAL_FAILURE_KINDS;
     var CREDENTIAL_MTIME_SOURCES;
@@ -36217,6 +36329,7 @@ child.on('exit', () => process.exit(0));
         pendingHydrationConfirmations = [];
         latestQuotaAttempts = /* @__PURE__ */ new Map();
         QUOTA_FAILURE_MAX_RETRIES = 4;
+        QUOTA_REARM_MIN_INTERVAL_MS = QUOTA_REFRESH_INTERVAL_MS;
         failureRetries = /* @__PURE__ */ new Map();
         CREDENTIAL_RENEWAL_FAILURE_KINDS = /* @__PURE__ */ new Set([
           "expired-token",
@@ -143242,15 +143355,19 @@ ${output}` : "";
         if (!isEnabled(provider)) continue;
         const entry = cache.get(provider);
         if (!entry) return 0;
+        const attemptedAt = lastAttemptAt(entry);
         if (entry.status !== "ok") {
           const retryAtMs = entry.metadata?.retryAtMs;
-          if (typeof retryAtMs === "number" && !hasArmedFailureRetryTimer(provider) && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
+          const exhausted = entry.metadata?.retryExhausted === true || (failureRetries.get(provider)?.failures ?? 0) > QUOTA_FAILURE_MAX_RETRIES;
+          if (typeof retryAtMs === "number" && !hasArmedFailureRetryTimer(provider) && !exhausted) {
             nextAt = Math.min(nextAt, retryAtMs);
+          } else if (exhausted && entry.metadata?.failureKind !== "rate-limited") {
+            const firstRearmAt = attemptedAt === void 0 ? now : attemptedAt + QUOTA_REFRESH_INTERVAL_MS;
+            nextAt = Math.min(nextAt, active ? firstRearmAt : Math.max(firstRearmAt, now + QUOTA_REFRESH_INTERVAL_MS));
           }
         }
         const updatedAtMs = Number(entry.updatedAt);
         const dataDueAt = Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? updatedAtMs + QUOTA_ROUTABLE_MAX_AGE_MS : Number.NEGATIVE_INFINITY;
-        const attemptedAt = lastAttemptAt(entry);
         const attemptDueAt = attemptedAt === void 0 ? Number.NEGATIVE_INFINITY : attemptedAt + QUOTA_ROUTABLE_MAX_AGE_MS;
         nextAt = Math.min(nextAt, Math.max(dataDueAt, attemptDueAt));
         if (active) {
@@ -143319,6 +143436,7 @@ ${output}` : "";
         const backfillDue = (provider) => !!options.isEnabled && (!cache.has(provider) || isFailureRetryDue(provider) || isSnapshotStaleForRouting(provider) && isBackfillDueByAttemptClock(provider));
         const due = fetchers.filter(({ provider }) => {
           if (options.isEnabled && !options.isEnabled(provider)) return false;
+          rearmExhaustedFailureRetry(provider, { active });
           if (backfillDue(provider)) return true;
           return active && isDueByAxisTtl(provider);
         });

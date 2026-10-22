@@ -288,7 +288,7 @@ export function normalizeMeshNodeFacts(raw: unknown): MeshNodeFacts | undefined 
  * the host `agy` itself uses; the unprefixed `cloudcode-pa` host 429s Google
  * AI Pro Antigravity accounts), and its credential lives in the OS keyring,
  * not the stale on-disk token file — see the provenance note in daemon-core
- * `quota/fetchers/antigravity.ts`. Supported on macOS and Windows; other
+ * `quota/fetchers/antigravity.ts`. Supported on macOS, Windows, and Linux; other
  * platforms report `unsupported` rather than guess at a keyring backend
  * nobody has verified.
  *

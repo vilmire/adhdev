@@ -165,13 +165,13 @@ describe('fetchKimiQuota', () => {
         expect(stub.calls).toEqual([]); // never hits the network without credentials
     });
 
-    it('refuses to call the API with an expired token and never refreshes it', async () => {
+    it('refuses to call the API with an expired token', async () => {
         const home = makeKimiHome({ access_token: 'tok', expires_at: Math.floor(NOW / 1000) - 1 });
         const stub = stubFetch(jsonResponse({}));
 
         const quota = await fetchKimiQuota(deps(home, stub.fetch));
 
-        expect(quota.status).toBe('error');
+        expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('expired-token');
         expect(stub.calls).toEqual([]);
     });
@@ -203,8 +203,9 @@ describe('fetchKimiQuota', () => {
 
         const quota = await fetchKimiQuota(deps(home, stub.fetch));
 
+        expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('expired-token');
-        expect(stub.calls).toEqual([]); // still never refreshes/calls out itself
+        expect(stub.calls).toEqual([]);
         expect(quota.error).not.toMatch(/session expired|log ?in/i);
         expect(quota.error).toMatch(/renews it on next use/);
         expect(quota.error).toMatch(/idle CLI does not renew it in the background/);
@@ -353,5 +354,25 @@ describe('Kimi stable owning-CLI lineage', () => {
             expect(result.metadata?.accountLineage?.kind).toBe('account');
             if (expected === 'unavailable') expect(result.weekly).toBeNull();
         }
+    });
+});
+
+describe('Kimi expired access token neutral unavailable status (mission bcf1e31c)', () => {
+    const STALE_EXPIRY = Math.floor(NOW / 1000) - 600;
+
+    it('returns neutral status "unavailable" (not "error") without redeeming refresh_token or writing credentials', async () => {
+        const home = makeKimiHome({
+            access_token: 'expired-access-token',
+            refresh_token: 'valid-refresh-token',
+            expires_at: STALE_EXPIRY,
+        });
+        const stub = stubFetch(jsonResponse({}));
+
+        const quota = await fetchKimiQuota(deps(home, stub.fetch));
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('expired-token');
+        expect(quota.error).toMatch(/unavailable until next CLI use/i);
+        expect(stub.calls).toEqual([]);
     });
 });

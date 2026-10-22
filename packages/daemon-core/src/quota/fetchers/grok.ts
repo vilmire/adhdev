@@ -312,8 +312,8 @@ async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentialsRe
         // Deliberately do not refresh: the CLI owns the token lifecycle.
         return quotaFailure(
             'grok-cli',
-            'error',
-            'Grok access token expired — the grok CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.',
+            'unavailable',
+            'Grok quota reading unavailable until next CLI use — the grok CLI renews it on next use; an idle CLI does not renew it in the background.',
             { source: 'oauth', failureKind: 'expired-token' },
         );
     }
