@@ -131,6 +131,22 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
     expect(() => openRoot(viaAncestorJunc)).toThrowError(
       expect.objectContaining({ reason: 'SYMLINK_OR_REPARSE_REJECTED', code: 'ELOOP' }),
     );
+    expect(() => probeRoot(leafJunc)).toThrowError(
+      expect.objectContaining({ reason: 'SYMLINK_OR_REPARSE_REJECTED', code: 'ELOOP' }),
+    );
+    expect(() => probeRoot(viaAncestorJunc)).toThrowError(
+      expect.objectContaining({ reason: 'SYMLINK_OR_REPARSE_REJECTED', code: 'ELOOP' }),
+    );
+
+    // Genuine ENOTDIR (a regular file where a root directory was expected) must remain distinguishable from ELOOP
+    const regularRootFile = path.join(tmpBase, 'regular-file-not-dir.txt');
+    fs.writeFileSync(regularRootFile, 'NOT_A_DIR');
+    expect(() => openRoot(regularRootFile)).toThrowError(
+      expect.objectContaining({ reason: 'ROOT_UNAVAILABLE', code: 'ENOTDIR' }),
+    );
+    expect(() => probeRoot(regularRootFile)).toThrowError(
+      expect.objectContaining({ reason: 'ROOT_UNAVAILABLE', code: 'ENOTDIR' }),
+    );
   });
 
   it('rejects traversal, ADS (:), 8.3 short aliases (~), trailing dot/space, non-NFC, control chars, protected metadata, and DOS device names', () => {
@@ -271,6 +287,20 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
       );
       expect(() => unlinkAt(rootH, 'junc_out', true)).toThrowError(
         expect.objectContaining({ reason: 'SYMLINK_OR_REPARSE_REJECTED', code: 'ELOOP' }),
+      );
+      expect(() => unlinkAt(rootH, 'junc_out', false)).toThrowError(
+        expect.objectContaining({ reason: 'SYMLINK_OR_REPARSE_REJECTED', code: 'ELOOP' }),
+      );
+      expect(() => openFileRead(rootH, 'junc_out')).toThrowError(
+        expect.objectContaining({ reason: 'SYMLINK_OR_REPARSE_REJECTED', code: 'ELOOP' }),
+      );
+
+      // Genuine ENOTDIR (regular file where a directory was expected) remains distinguishable from ELOOP
+      expect(() => walkDir(rootH, 'real.txt')).toThrowError(
+        expect.objectContaining({ reason: 'IO_ERROR', code: 'ENOTDIR' }),
+      );
+      expect(() => unlinkAt(rootH, 'real.txt', true)).toThrowError(
+        expect.objectContaining({ reason: 'IO_ERROR', code: 'ENOTDIR' }),
       );
 
       // Hardlinked files (nNumberOfLinks === 2) must be rejected by openFileRead and readExistingFileSafe
@@ -576,5 +606,162 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
     expect(helperPublishedDirs + helperRefusedDirs).toBe(rounds);
     expect(workerResult.userCreatedFiles + helperPublishedFiles).toBe(rounds);
     expect(workerResult.userCreatedDirs + helperPublishedDirs).toBe(rounds);
+  }, 30_000);
+
+  it('prevents source-entry substitution (check-then-rename TOCTOU) and preserves linkCount === 1 during concurrent renameExcl / renameAtExcl publication', async () => {
+    const rounds = 200;
+    const outsideTarget = path.join(outsideDir, 'outside-secret.txt');
+    fs.writeFileSync(outsideTarget, 'OUTSIDE_SECRET');
+
+    const sourceSwapWorkerCode = `
+      const { parentPort, workerData } = require('node:worker_threads');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const { rootDir, outsideDir, rounds, isWin } = workerData;
+      let stop = false;
+      let substitutions = 0;
+      parentPort.on('message', (m) => { if (m === 'stop') stop = true; });
+
+      function tick() {
+        if (stop) {
+          parentPort.postMessage({ substitutions });
+          return;
+        }
+        for (let i = 0; i < rounds; i++) {
+          const stageSrcPath = path.join(rootDir, '.stage-src-' + i + '.tmp');
+          try {
+            fs.unlinkSync(stageSrcPath);
+            if (i % 2 === 0) {
+              fs.symlinkSync(outsideDir, stageSrcPath, isWin ? 'junction' : 'dir');
+            } else {
+              fs.writeFileSync(stageSrcPath, 'ATTACKER_SUBSTITUTED_' + i);
+            }
+            substitutions++;
+          } catch {}
+
+          const atSrcPath = path.join(rootDir, '.at-src-' + i + '.tmp');
+          try {
+            fs.unlinkSync(atSrcPath);
+            fs.symlinkSync(outsideDir, atSrcPath, isWin ? 'junction' : 'dir');
+            substitutions++;
+          } catch {}
+        }
+        setImmediate(tick);
+      }
+      tick();
+    `;
+
+    const worker = new Worker(sourceSwapWorkerCode, {
+      eval: true,
+      workerData: { rootDir, outsideDir, rounds, isWin: IS_WIN },
+    });
+
+    const rootH = openRoot(rootDir);
+    let publishedExcl = 0;
+    let rejectedExcl = 0;
+    let publishedAtExcl = 0;
+    let rejectedAtExcl = 0;
+
+    try {
+      for (let i = 0; i < rounds; i++) {
+        // 1. Test renameExcl against concurrent source-entry substitution
+        const stageName = `.stage-src-${i}.tmp`;
+        const dstName = `published-excl-${i}.txt`;
+        let stageH: number | null = null;
+        try {
+          stageH = createExcl(rootH, stageName, { allowProtectedMetadata: true });
+          writeHandle(stageH, Buffer.from(`GENUINE_EXCL_${i}`));
+          fullFsync(stageH);
+          renameExcl(stageH, rootH, dstName);
+          publishedExcl++;
+        } catch (err) {
+          expect(err).toBeInstanceOf(TransferFsError);
+          expect(['SYMLINK_OR_REPARSE_REJECTED', 'IO_ERROR', 'TARGET_EXISTS']).toContain(
+            (err as TransferFsError).reason,
+          );
+          rejectedExcl++;
+        } finally {
+          if (stageH !== null) {
+            close(stageH);
+          }
+          try {
+            fs.rmSync(path.join(rootDir, stageName), { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
+        }
+
+        // 2. Test renameAtExcl against concurrent source-entry substitution
+        const atSrcName = `.at-src-${i}.tmp`;
+        const atDstName = `published-at-${i}.txt`;
+        let atH: number | null = null;
+        try {
+          atH = createExcl(rootH, atSrcName, { allowProtectedMetadata: true });
+          writeHandle(atH, Buffer.from(`GENUINE_AT_${i}`));
+          fullFsync(atH);
+          close(atH);
+          atH = null;
+          renameAtExcl(rootH, atSrcName, rootH, atDstName, { allowProtectedMetadata: true });
+          publishedAtExcl++;
+        } catch (err) {
+          expect(err).toBeInstanceOf(TransferFsError);
+          expect(['SYMLINK_OR_REPARSE_REJECTED', 'HARDLINK_REJECTED', 'IO_ERROR', 'TARGET_EXISTS']).toContain(
+            (err as TransferFsError).reason,
+          );
+          rejectedAtExcl++;
+        } finally {
+          if (atH !== null) {
+            close(atH);
+          }
+          try {
+            fs.rmSync(path.join(rootDir, atSrcName), { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
+        }
+
+        if (i % 15 === 0) {
+          await new Promise((r) => setImmediate(r));
+        }
+      }
+
+      // Verify every published destination file has genuine content, is not a symlink, and has linkCount === 1
+      for (let i = 0; i < rounds; i++) {
+        const exclPath = path.join(rootDir, `published-excl-${i}.txt`);
+        if (fs.existsSync(exclPath)) {
+          const lst = fs.lstatSync(exclPath);
+          expect(lst.isSymbolicLink()).toBe(false);
+          expect(lst.isFile()).toBe(true);
+          expect(lst.nlink).toBe(1);
+          const safe = readExistingFileSafe(rootH, `published-excl-${i}.txt`);
+          expect(safe.buffer.toString('utf8')).toBe(`GENUINE_EXCL_${i}`);
+          expect(safe.identity.linkCount).toBe(1);
+        }
+
+        const atPath = path.join(rootDir, `published-at-${i}.txt`);
+        if (fs.existsSync(atPath)) {
+          const lst = fs.lstatSync(atPath);
+          expect(lst.isSymbolicLink()).toBe(false);
+          expect(lst.isFile()).toBe(true);
+          expect(lst.nlink).toBe(1);
+          const safe = readExistingFileSafe(rootH, `published-at-${i}.txt`);
+          expect(safe.buffer.toString('utf8')).toBe(`GENUINE_AT_${i}`);
+          expect(safe.identity.linkCount).toBe(1);
+        }
+      }
+    } finally {
+      close(rootH);
+    }
+
+    await new Promise<{ substitutions: number }>((resolve) => {
+      worker.once('message', (msg) => resolve(msg as { substitutions: number }));
+      worker.postMessage('stop');
+    });
+    await worker.terminate();
+
+    expect(fs.readdirSync(outsideDir)).toEqual(['outside-secret.txt']);
+    expect(fs.readFileSync(outsideTarget, 'utf8')).toBe('OUTSIDE_SECRET');
+    expect(publishedExcl + rejectedExcl).toBe(rounds);
+    expect(publishedAtExcl + rejectedAtExcl).toBe(rounds);
   }, 30_000);
 });

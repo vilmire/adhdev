@@ -3,18 +3,18 @@
   "platform": "darwin",
   "arch": "arm64",
   "apiLevel": 1,
-  "sourceDigest": "aa422cc25bc4dd30bfaa527e30d0fab3a227e4fd564ec5e2d85438a8d11f796f",
+  "sourceDigest": "73786344f3a758e27965becfe1c64a727491746e6c844aea98b78beb2f2ad79f",
   "napiVersion": 8,
-  "builtWithNode": "v22.14.0",
+  "builtWithNode": "v26.7.0",
   "release": true,
   "provenance": {
-    "cCompiler": "zig cc 0.15.2",
+    "cCompiler": "zig cc 0.16.0",
     "buildType": "Release"
   },
   "files": {
     "transfer_fs_node.node": {
-      "sha256": "dc33ea33ac2c8e01f009a56ee559756c6058df4f8262b4dc294ab37c30d428a5",
-      "size": 72168
+      "sha256": "9601aa7c15cdad1377515a06e6021ef3b42de16558ce7a1b0f89398f085bd240",
+      "size": 70968
     }
   }
 }

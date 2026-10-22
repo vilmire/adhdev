@@ -511,6 +511,12 @@ static const char *errno_to_code(int err) {
 
 static napi_value throw_posix_error(napi_env env, const char *op, int err) {
   const char *code = errno_to_code(err);
+  if (err == EINVAL && strcmp(op, "openRoot") != 0 && strcmp(op, "probeRoot") != 0) {
+    /* Segment syntax is already validated before any kernel *at() syscall;
+     * a kernel EINVAL (e.g. APFS renameatx_np on a concurrently-moved parent)
+     * is a filesystem/VFS error, not a path-traversal error. */
+    code = "EIO";
+  }
   char msg[192];
   snprintf(msg, sizeof(msg), "%s failed (%s / errno=%d: %s)", op, code, err, strerror(err));
   napi_throw_error(env, code, msg);
@@ -676,6 +682,29 @@ static bool win_case_insensitive_target_exists(HANDLE target_dir, const wchar_t 
   return false;
 }
 
+static bool win_is_reparse_point_rel(POBJECT_ATTRIBUTES oa) {
+  IO_STATUS_BLOCK io = {0};
+  HANDLE probe = NULL;
+  NTSTATUS st = pNtCreateFile(
+      &probe,
+      FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+      oa,
+      &io,
+      NULL,
+      FILE_ATTRIBUTE_NORMAL,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      FILE_OPEN,
+      FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+      NULL,
+      0);
+  if (st < 0 || !probe) return false;
+  FILE_ATTRIBUTE_TAG_INFO tag = {0};
+  bool is_reparse = GetFileInformationByHandleEx(probe, FileAttributeTagInfo, &tag, sizeof(tag)) &&
+                    (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+  CloseHandle(probe);
+  return is_reparse;
+}
+
 static HANDLE win_open_rel_internal(
     HANDLE parent,
     const wchar_t *wname,
@@ -743,6 +772,9 @@ static HANDLE win_open_rel_internal(
     if (create_excl && dos == ERROR_ACCESS_DENIED &&
         win_case_insensitive_target_exists(parent, wname, wlen)) {
       dos = ERROR_ALREADY_EXISTS;
+    } else if (!create_excl && (dos == ERROR_DIRECTORY || dos == ERROR_ACCESS_DENIED) &&
+               win_is_reparse_point_rel(&oa)) {
+      dos = ERROR_CANT_ACCESS_FILE;
     }
     *out_err = dos;
     return NULL;
@@ -832,6 +864,105 @@ static bool win_rename_handle_excl(
  * POSIX kernel primitive helpers
  * ------------------------------------------------------------------------- */
 #ifndef _WIN32
+/*
+ * On macOS (XNU) and some BSDs, open/openat with O_DIRECTORY | O_NOFOLLOW (and
+ * unlinkat with AT_REMOVEDIR) returns ENOTDIR (or EMLINK on FreeBSD) when the
+ * target entry is a symbolic link, whereas Linux returns ELOOP.
+ * Normalize symlink rejections to ELOOP while keeping genuine ENOTDIR for
+ * regular files and other non-directory entries.
+ */
+static int normalize_posix_at_errno(int dir_fd, const char *seg, int err) {
+  if (err == ENOTDIR || err == EMLINK) {
+    struct stat st;
+    if (fstatat(dir_fd, seg, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(st.st_mode)) {
+      return ELOOP;
+    }
+  }
+  return err;
+}
+
+static bool posix_path_has_symlink(const char *norm_path) {
+  char buf[PATH_MAX];
+  size_t len = strlen(norm_path);
+  if (len == 0 || len >= sizeof(buf)) return false;
+  memcpy(buf, norm_path, len + 1);
+  while (len > 1) {
+    struct stat st;
+    if (lstat(buf, &st) == 0 && S_ISLNK(st.st_mode)) {
+      return true;
+    }
+    char *slash = strrchr(buf, '/');
+    if (!slash || slash == buf) break;
+    *slash = '\0';
+    len = (size_t)(slash - buf);
+  }
+  return false;
+}
+
+static int posix_open_root_fd(const char *utf8_path, struct stat *out_st, int *out_err) {
+  if (!utf8_path || utf8_path[0] != '/' || utf8_path[1] == '/') {
+    *out_err = EINVAL;
+    return -1;
+  }
+  size_t raw_len = strlen(utf8_path);
+  if (raw_len == 0 || raw_len >= PATH_MAX) {
+    *out_err = EINVAL;
+    return -1;
+  }
+  char norm_path[PATH_MAX];
+  memcpy(norm_path, utf8_path, raw_len + 1);
+  while (raw_len > 1 && norm_path[raw_len - 1] == '/') {
+    norm_path[--raw_len] = '\0';
+  }
+
+  int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+  int fd = open(norm_path, flags);
+  if (fd < 0) {
+    int err = errno;
+    if ((err == ENOTDIR || err == EMLINK || err == ENOENT) && posix_path_has_symlink(norm_path)) {
+      err = ELOOP;
+    }
+    *out_err = err;
+    return -1;
+  }
+
+  struct stat st_fd, st_lstat, st_real;
+  char real_buf[PATH_MAX];
+  if (fstat(fd, &st_fd) != 0 ||
+      lstat(norm_path, &st_lstat) != 0 ||
+      !realpath(norm_path, real_buf) ||
+      lstat(real_buf, &st_real) != 0) {
+    int err = errno ? errno : ELOOP;
+    if (posix_path_has_symlink(norm_path)) {
+      err = ELOOP;
+    }
+    close(fd);
+    *out_err = err;
+    return -1;
+  }
+  if (!S_ISDIR(st_fd.st_mode)) {
+    close(fd);
+    *out_err = ENOTDIR;
+    return -1;
+  }
+  if (S_ISLNK(st_lstat.st_mode) ||
+      st_fd.st_dev != st_lstat.st_dev || st_fd.st_ino != st_lstat.st_ino ||
+      st_fd.st_dev != st_real.st_dev || st_fd.st_ino != st_real.st_ino ||
+      strcmp(real_buf, norm_path) != 0) {
+    close(fd);
+    *out_err = ELOOP;
+    return -1;
+  }
+  if (out_st) {
+    *out_st = st_fd;
+  }
+  *out_err = 0;
+  return fd;
+}
+
 static bool posix_case_insensitive_target_exists(int dir_fd, const char *new_name) {
   int dup_fd = dup(dir_fd);
   if (dup_fd < 0) return false;
@@ -853,35 +984,118 @@ static bool posix_case_insensitive_target_exists(int dir_fd, const char *new_nam
   return found;
 }
 
-static int posix_rename_at_excl(int src_dir_fd, const char *src_name, int dst_dir_fd, const char *dst_name) {
-  /* Reject case-folding collisions on case-sensitive POSIX filesystems too */
+static int posix_atomic_rename_noreplace(
+    int src_dir_fd,
+    const char *src_name,
+    int dst_dir_fd,
+    const char *dst_name) {
+#if defined(__APPLE__)
+  return renameatx_np(src_dir_fd, src_name, dst_dir_fd, dst_name, RENAME_EXCL);
+#elif defined(__linux__)
+  /*
+   * Require kernel atomic RENAME_NOREPLACE (Linux >= 3.15).
+   * Never fall back to linkat+unlinkat: linkat fails with EPERM on directories,
+   * is non-atomic across two syscalls, and a crash between linkat and unlinkat
+   * leaves a permanent st_nlink == 2 file that openFileRead rejects with EMLINK.
+   */
+  long rc = syscall(SYS_renameat2, src_dir_fd, src_name, dst_dir_fd, dst_name, RENAME_NOREPLACE);
+  return (rc == 0) ? 0 : -1;
+#else
+  (void)src_dir_fd;
+  (void)src_name;
+  (void)dst_dir_fd;
+  (void)dst_name;
+  errno = ENOTSUP;
+  return -1;
+#endif
+}
+
+/*
+ * Verified atomic no-replace rename on POSIX:
+ * 1. Runs the case-insensitive target scan BEFORE checking the source entry so
+ *    directory iteration cannot widen the pre-check -> rename window.
+ * 2. Requires an open file descriptor `src_fd` pinning `(expected_dev, expected_ino)`
+ *    so the kernel cannot recycle `expected_ino` while the rename is in flight.
+ * 3. Performs a tight `fstatat(AT_SYMLINK_NOFOLLOW)` pre-check followed immediately
+ *    by `renameatx_np(..., RENAME_EXCL)` / `renameat2(..., RENAME_NOREPLACE)`.
+ * 4. Performs a post-rename `fstatat` + `fstat(src_fd)` verification on `(dst_dir_fd, dst_name)`:
+ *    because step 3 used atomic no-replace and succeeded, `(dst_dir_fd, dst_name)` did not
+ *    exist prior to step 3. If a concurrent attacker substituted `src_name` in the window
+ *    between step 2 and step 3, step 4 detects the inode/link mismatch, unlinks the
+ *    substituted entry from `(dst_dir_fd, dst_name)`, and fails closed with `ELOOP`.
+ */
+static int posix_rename_verified_excl(
+    int src_fd,
+    int src_dir_fd,
+    const char *src_name,
+    int dst_dir_fd,
+    const char *dst_name,
+    uint64_t expected_dev,
+    uint64_t expected_ino,
+    bool expected_is_dir) {
   if (posix_case_insensitive_target_exists(dst_dir_fd, dst_name)) {
     errno = EEXIST;
     return -1;
   }
-#if defined(__APPLE__)
-  return renameatx_np(src_dir_fd, src_name, dst_dir_fd, dst_name, RENAME_EXCL);
-#elif defined(__linux__)
-  long rc = syscall(SYS_renameat2, src_dir_fd, src_name, dst_dir_fd, dst_name, RENAME_NOREPLACE);
-  if (rc == 0) return 0;
-  if (errno == ENOSYS || errno == EINVAL) {
-    /* Fallback for regular files on older kernels/filesystems without renameat2 */
-    if (linkat(src_dir_fd, src_name, dst_dir_fd, dst_name, 0) == 0) {
-      if (unlinkat(src_dir_fd, src_name, 0) == 0) return 0;
-      int saved = errno;
-      unlinkat(dst_dir_fd, dst_name, 0);
-      errno = saved;
-    }
-  }
-  return -1;
-#else
-  struct stat st;
-  if (fstatat(dst_dir_fd, dst_name, &st, AT_SYMLINK_NOFOLLOW) == 0) {
-    errno = EEXIST;
+
+  struct stat st_pre;
+  if (fstatat(src_dir_fd, src_name, &st_pre, AT_SYMLINK_NOFOLLOW) != 0) {
+    errno = normalize_posix_at_errno(src_dir_fd, src_name, errno);
     return -1;
   }
-  return renameat(src_dir_fd, src_name, dst_dir_fd, dst_name);
-#endif
+  if (S_ISLNK(st_pre.st_mode) ||
+      (uint64_t)st_pre.st_dev != expected_dev ||
+      (uint64_t)st_pre.st_ino != expected_ino ||
+      (expected_is_dir ? !S_ISDIR(st_pre.st_mode) : (!S_ISREG(st_pre.st_mode) || st_pre.st_nlink != 1))) {
+    errno = ELOOP;
+    return -1;
+  }
+
+  if (src_fd >= 0) {
+    struct stat st_fd;
+    if (fstat(src_fd, &st_fd) != 0) {
+      return -1;
+    }
+    if ((uint64_t)st_fd.st_dev != expected_dev ||
+        (uint64_t)st_fd.st_ino != expected_ino ||
+        S_ISLNK(st_fd.st_mode) ||
+        (expected_is_dir ? !S_ISDIR(st_fd.st_mode) : (!S_ISREG(st_fd.st_mode) || st_fd.st_nlink != 1))) {
+      errno = ELOOP;
+      return -1;
+    }
+  }
+
+  if (posix_atomic_rename_noreplace(src_dir_fd, src_name, dst_dir_fd, dst_name) != 0) {
+    return -1;
+  }
+
+  struct stat st_post;
+  bool post_ok = (fstatat(dst_dir_fd, dst_name, &st_post, AT_SYMLINK_NOFOLLOW) == 0) &&
+                 !S_ISLNK(st_post.st_mode) &&
+                 (uint64_t)st_post.st_dev == expected_dev &&
+                 (uint64_t)st_post.st_ino == expected_ino &&
+                 (expected_is_dir ? S_ISDIR(st_post.st_mode) : (S_ISREG(st_post.st_mode) && st_post.st_nlink == 1));
+  if (post_ok && src_fd >= 0) {
+    struct stat st_fd_post;
+    if (fstat(src_fd, &st_fd_post) != 0 ||
+        (uint64_t)st_fd_post.st_dev != expected_dev ||
+        (uint64_t)st_fd_post.st_ino != expected_ino ||
+        (!expected_is_dir && st_fd_post.st_nlink != 1)) {
+      post_ok = false;
+    }
+  }
+  if (!post_ok) {
+    struct stat st_cleanup;
+    if (fstatat(dst_dir_fd, dst_name, &st_cleanup, AT_SYMLINK_NOFOLLOW) == 0 &&
+        ((uint64_t)st_cleanup.st_dev != expected_dev ||
+         (uint64_t)st_cleanup.st_ino != expected_ino ||
+         S_ISLNK(st_cleanup.st_mode))) {
+      unlinkat(dst_dir_fd, dst_name, S_ISDIR(st_cleanup.st_mode) ? AT_REMOVEDIR : 0);
+    }
+    errno = ELOOP;
+    return -1;
+  }
+  return 0;
 }
 #endif
 
@@ -953,35 +1167,11 @@ static napi_value fn_openRoot(napi_env env, napi_callback_info info) {
   }
   return create_handle_value(env, tok);
 #else
-  if (utf8_path[0] != '/' || (utf8_path[1] == '/')) {
-    napi_throw_error(env, "EINVAL", "Root path must be an absolute non-UNC path");
-    return NULL;
-  }
-  int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
-#ifdef O_CLOEXEC
-  flags |= O_CLOEXEC;
-#endif
-  int fd = open(utf8_path, flags);
+  struct stat st_fd;
+  int err = 0;
+  int fd = posix_open_root_fd(utf8_path, &st_fd, &err);
   if (fd < 0) {
-    return throw_posix_error(env, "openRoot", errno);
-  }
-  struct stat st_fd, st_lstat, st_real;
-  char real_buf[PATH_MAX];
-  if (fstat(fd, &st_fd) != 0 ||
-      lstat(utf8_path, &st_lstat) != 0 ||
-      !realpath(utf8_path, real_buf) ||
-      lstat(real_buf, &st_real) != 0) {
-    int saved = errno ? errno : ELOOP;
-    close(fd);
-    return throw_posix_error(env, "openRoot", saved);
-  }
-  if (!S_ISDIR(st_fd.st_mode) || S_ISLNK(st_lstat.st_mode) ||
-      st_fd.st_dev != st_lstat.st_dev || st_fd.st_ino != st_lstat.st_ino ||
-      st_fd.st_dev != st_real.st_dev || st_fd.st_ino != st_real.st_ino ||
-      strcmp(real_buf, utf8_path) != 0) {
-    close(fd);
-    napi_throw_error(env, "ELOOP", "openRoot rejected symlink or non-canonical root path");
-    return NULL;
+    return throw_posix_error(env, "openRoot", err);
   }
   int64_t tok = alloc_posix_slot(fd, true, true, -1, 0, NULL, (uint64_t)st_fd.st_dev, (uint64_t)st_fd.st_ino);
   if (tok < 0) {
@@ -1057,7 +1247,7 @@ static napi_value fn_walkDir(napi_env env, napi_callback_info info) {
 #endif
   int fd = openat(parent_fd, utf8_seg, flags);
   if (fd < 0) {
-    return throw_posix_error(env, "walkDir", errno);
+    return throw_posix_error(env, "walkDir", normalize_posix_at_errno(parent_fd, utf8_seg, errno));
   }
   struct stat st;
   if (fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
@@ -1145,7 +1335,7 @@ static napi_value fn_mkdirExcl(napi_env env, napi_callback_info info) {
 #endif
   int fd = openat(parent_fd, utf8_seg, flags);
   if (fd < 0) {
-    return throw_posix_error(env, "mkdirExcl(openat)", errno);
+    return throw_posix_error(env, "mkdirExcl(openat)", normalize_posix_at_errno(parent_fd, utf8_seg, errno));
   }
   struct stat st;
   if (fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode)) {
@@ -1318,18 +1508,25 @@ static napi_value fn_openFileRead(napi_env env, napi_callback_info info) {
     return NULL;
   }
   int flags = O_RDONLY | O_NOFOLLOW;
+#ifdef O_NONBLOCK
+  flags |= O_NONBLOCK;
+#endif
 #ifdef O_CLOEXEC
   flags |= O_CLOEXEC;
 #endif
   int fd = openat(parent_fd, utf8_seg, flags);
   if (fd < 0) {
-    return throw_posix_error(env, "openFileRead", errno);
+    return throw_posix_error(env, "openFileRead", normalize_posix_at_errno(parent_fd, utf8_seg, errno));
   }
   struct stat st;
   if (fstat(fd, &st) != 0) {
     int saved = errno;
     close(fd);
     return throw_posix_error(env, "openFileRead(fstat)", saved);
+  }
+  if (S_ISLNK(st.st_mode)) {
+    close(fd);
+    return throw_posix_error(env, "openFileRead", ELOOP);
   }
   if (!S_ISREG(st.st_mode)) {
     close(fd);
@@ -1426,6 +1623,8 @@ static napi_value fn_renameExcl(napi_env env, napi_callback_info info) {
     napi_throw_error(env, "EBADF", "srcHandle parent directory handle is no longer open");
     return NULL;
   }
+  int src_fd = s_src->fd;
+  bool expected_is_dir = s_src->is_dir;
   int parent_fd = s_parent->fd;
   int dst_fd = s_dst->fd;
   char src_name[256];
@@ -1435,15 +1634,15 @@ static napi_value fn_renameExcl(napi_env env, napi_callback_info info) {
   uint64_t expected_ino = s_src->ino;
   UNLOCK_SLOTS();
 
-  struct stat st_at;
-  if (fstatat(parent_fd, src_name, &st_at, AT_SYMLINK_NOFOLLOW) != 0) {
-    return throw_posix_error(env, "renameExcl(fstatat)", errno);
-  }
-  if ((uint64_t)st_at.st_dev != expected_dev || (uint64_t)st_at.st_ino != expected_ino) {
-    napi_throw_error(env, "ELOOP", "Source entry identity changed before renameExcl");
-    return NULL;
-  }
-  if (posix_rename_at_excl(parent_fd, src_name, dst_fd, utf8_new) != 0) {
+  if (posix_rename_verified_excl(
+          src_fd,
+          parent_fd,
+          src_name,
+          dst_fd,
+          utf8_new,
+          expected_dev,
+          expected_ino,
+          expected_is_dir) != 0) {
     return throw_posix_error(env, "renameExcl", errno);
   }
   LOCK_SLOTS();
@@ -1554,16 +1753,53 @@ static napi_value fn_renameAtExcl(napi_env env, napi_callback_info info) {
     napi_throw_error(env, "EINVAL", "Invalid segment in renameAtExcl");
     return NULL;
   }
-  struct stat st_src;
-  if (fstatat(src_dir_fd, utf8_src, &st_src, AT_SYMLINK_NOFOLLOW) != 0) {
-    return throw_posix_error(env, "renameAtExcl(lstat)", errno);
+  struct stat st_lstat;
+  if (fstatat(src_dir_fd, utf8_src, &st_lstat, AT_SYMLINK_NOFOLLOW) != 0) {
+    return throw_posix_error(env, "renameAtExcl(lstat)", normalize_posix_at_errno(src_dir_fd, utf8_src, errno));
   }
-  if (S_ISLNK(st_src.st_mode)) {
+  if (S_ISLNK(st_lstat.st_mode)) {
     napi_throw_error(env, "ELOOP", "renameAtExcl refuses to rename symbolic links");
     return NULL;
   }
-  if (posix_rename_at_excl(src_dir_fd, utf8_src, dst_dir_fd, utf8_new) != 0) {
-    return throw_posix_error(env, "renameAtExcl", errno);
+  int open_flags = O_RDONLY | O_NOFOLLOW;
+#ifdef O_NONBLOCK
+  open_flags |= O_NONBLOCK;
+#endif
+#ifdef O_CLOEXEC
+  open_flags |= O_CLOEXEC;
+#endif
+  int tmp_fd = openat(src_dir_fd, utf8_src, open_flags);
+  if (tmp_fd < 0) {
+    return throw_posix_error(env, "renameAtExcl(openSrc)", normalize_posix_at_errno(src_dir_fd, utf8_src, errno));
+  }
+  struct stat st_fd;
+  if (fstat(tmp_fd, &st_fd) != 0 ||
+      S_ISLNK(st_fd.st_mode) ||
+      st_fd.st_dev != st_lstat.st_dev ||
+      st_fd.st_ino != st_lstat.st_ino ||
+      (!S_ISREG(st_fd.st_mode) && !S_ISDIR(st_fd.st_mode))) {
+    close(tmp_fd);
+    napi_throw_error(env, "ELOOP", "renameAtExcl source entry identity changed during open");
+    return NULL;
+  }
+  if (S_ISREG(st_fd.st_mode) && st_fd.st_nlink > 1) {
+    close(tmp_fd);
+    napi_throw_error(env, "EMLINK", "renameAtExcl refuses to rename hardlinked files");
+    return NULL;
+  }
+  int rc = posix_rename_verified_excl(
+      tmp_fd,
+      src_dir_fd,
+      utf8_src,
+      dst_dir_fd,
+      utf8_new,
+      (uint64_t)st_fd.st_dev,
+      (uint64_t)st_fd.st_ino,
+      S_ISDIR(st_fd.st_mode));
+  int saved_err = errno;
+  close(tmp_fd);
+  if (rc != 0) {
+    return throw_posix_error(env, "renameAtExcl", saved_err);
   }
   napi_value ok;
   napi_get_boolean(env, true, &ok);
@@ -1896,13 +2132,21 @@ static napi_value fn_unlinkAt(napi_env env, napi_callback_info info) {
       NULL,
       0);
   if (st < 0) {
-    return throw_win_error(env, "unlinkAt", pRtlNtStatusToDosError(st));
+    DWORD dos = pRtlNtStatusToDosError(st);
+    if ((dos == ERROR_DIRECTORY || dos == ERROR_ACCESS_DENIED) && win_is_reparse_point_rel(&oa)) {
+      dos = ERROR_CANT_ACCESS_FILE;
+    }
+    return throw_win_error(env, "unlinkAt", dos);
   }
   FILE_ATTRIBUTE_TAG_INFO tag = {0};
   if (!GetFileInformationByHandleEx(h, FileAttributeTagInfo, &tag, sizeof(tag)) ||
       (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
     CloseHandle(h);
     return throw_win_error(env, "unlinkAt", ERROR_CANT_ACCESS_FILE);
+  }
+  if (is_dir && (tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    CloseHandle(h);
+    return throw_win_error(env, "unlinkAt", ERROR_DIRECTORY);
   }
   FILE_DISPOSITION_INFO disp = {0};
   disp.DeleteFile = TRUE;
@@ -1926,8 +2170,22 @@ static napi_value fn_unlinkAt(napi_env env, napi_callback_info info) {
     napi_throw_error(env, "EINVAL", "Invalid segment in unlinkAt");
     return NULL;
   }
+  struct stat st_unlink;
+  if (fstatat(parent_fd, utf8_seg, &st_unlink, AT_SYMLINK_NOFOLLOW) != 0) {
+    return throw_posix_error(env, "unlinkAt", normalize_posix_at_errno(parent_fd, utf8_seg, errno));
+  }
+  if (S_ISLNK(st_unlink.st_mode)) {
+    napi_throw_error(env, "ELOOP", "unlinkAt refuses to unlink symbolic links");
+    return NULL;
+  }
+  if (is_dir && !S_ISDIR(st_unlink.st_mode)) {
+    return throw_posix_error(env, "unlinkAt", ENOTDIR);
+  }
+  if (!is_dir && S_ISDIR(st_unlink.st_mode)) {
+    return throw_posix_error(env, "unlinkAt", EISDIR);
+  }
   if (unlinkat(parent_fd, utf8_seg, is_dir ? AT_REMOVEDIR : 0) != 0) {
-    return throw_posix_error(env, "unlinkAt", errno);
+    return throw_posix_error(env, "unlinkAt", normalize_posix_at_errno(parent_fd, utf8_seg, errno));
   }
   napi_value ok;
   napi_get_boolean(env, true, &ok);
@@ -2132,13 +2390,10 @@ static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
   napi_set_named_property(env, obj, "caseSensitiveDir", v);
   return obj;
 #else
-  int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
-#ifdef O_CLOEXEC
-  flags |= O_CLOEXEC;
-#endif
-  int fd = open(utf8_path, flags);
+  int err = 0;
+  int fd = posix_open_root_fd(utf8_path, NULL, &err);
   if (fd < 0) {
-    return throw_posix_error(env, "probeRoot", errno);
+    return throw_posix_error(env, "probeRoot", err);
   }
   char fs_name[64] = "posix";
   uint32_t vol_flags = 0;

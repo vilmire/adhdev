@@ -3,18 +3,18 @@
   "platform": "linux",
   "arch": "x64",
   "apiLevel": 1,
-  "sourceDigest": "aa422cc25bc4dd30bfaa527e30d0fab3a227e4fd564ec5e2d85438a8d11f796f",
+  "sourceDigest": "73786344f3a758e27965becfe1c64a727491746e6c844aea98b78beb2f2ad79f",
   "napiVersion": 8,
-  "builtWithNode": "v22.14.0",
+  "builtWithNode": "v26.7.0",
   "release": true,
   "provenance": {
-    "cCompiler": "zig cc 0.15.2",
+    "cCompiler": "zig cc 0.16.0",
     "buildType": "Release"
   },
   "files": {
     "transfer_fs_node.node": {
-      "sha256": "ffaa58dda36ede5198399bfd599e85564e74b2e77d753e0b5ee971f7d28f44e7",
-      "size": 25584
+      "sha256": "815e31c55ebd491de666ee266aae207a3d8dd421f2581456eef623371a7e4b06",
+      "size": 27696
     }
   }
 }

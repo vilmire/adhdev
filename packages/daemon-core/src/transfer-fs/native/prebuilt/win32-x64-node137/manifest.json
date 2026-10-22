@@ -3,18 +3,18 @@
   "platform": "win32",
   "arch": "x64",
   "apiLevel": 1,
-  "sourceDigest": "aa422cc25bc4dd30bfaa527e30d0fab3a227e4fd564ec5e2d85438a8d11f796f",
+  "sourceDigest": "73786344f3a758e27965becfe1c64a727491746e6c844aea98b78beb2f2ad79f",
   "napiVersion": 8,
-  "builtWithNode": "v22.14.0",
+  "builtWithNode": "v26.7.0",
   "release": true,
   "provenance": {
-    "cCompiler": "MSVC 19.44.35229.0",
-    "buildType": ""
+    "cCompiler": "zig cc 0.16.0",
+    "buildType": "Release"
   },
   "files": {
     "transfer_fs_node.node": {
-      "sha256": "3e7b58a335e99615d86cda134ac3d7175dd4e95b6955ff0876800217a83152e6",
-      "size": 44544
+      "sha256": "5d9d1fe506c919ee510fed931aefec53fdf4827aa39dfee37be01d87458a6c9d",
+      "size": 119296
     }
   }
 }
