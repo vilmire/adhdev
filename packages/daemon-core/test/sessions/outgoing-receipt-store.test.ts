@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { buildSync } from 'esbuild';
 import { afterEach, expect, it, vi } from 'vitest';
 import { OutgoingReceiptStore } from '../../src/sessions/outgoing-receipt-store.js';
@@ -58,10 +58,82 @@ it('validates writer identity before publishing and exposes only complete JSON a
 
 it('does not publish a partial acceptance when the staging write fails', () => {
     const f = fixture();
-    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('synthetic disk failure'); });
+    const write = fs.writeFileSync;
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        if (typeof file === 'number') throw new Error('synthetic disk failure');
+        write(file, data, options);
+    });
     expect(() => f.store.accept('message', 'session', input)).toThrow('synthetic disk failure');
     expect(fs.existsSync(f.file)).toBe(false);
     expect(fs.readdirSync(f.directory)).toEqual([]);
+});
+
+it('recovers a receipt lock left by a dead PID and records its new owner', () => {
+    const f = fixture();
+    const child = spawnSync(process.execPath, ['-e', '']);
+    expect(child.status).toBe(0);
+    const lock = f.file + '.lock';
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: child.pid, nonce: 'dead', acquiredAt: Date.now() }));
+    const rename = fs.renameSync;
+    const owners: any[] = [];
+    vi.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
+        owners.push(JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')));
+        rename(source, destination);
+    });
+    expect(f.store.accept('message', 'session', input).fresh).toBe(true);
+    expect(owners).toEqual([expect.objectContaining({ pid: process.pid, acquiredAt: expect.any(Number), nonce: expect.any(String) })]);
+    expect(fs.existsSync(lock)).toBe(false);
+});
+
+it.each([true, false])('recovers an expired receipt lock (owner record: %s)', owned => {
+    const f = fixture();
+    const lock = f.file + '.lock';
+    fs.mkdirSync(lock);
+    if (owned) fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, nonce: 'expired', acquiredAt: Date.now() - 31_000 }));
+    else fs.utimesSync(lock, new Date(0), new Date(Date.now() - 31_000));
+    expect(f.store.accept('message', 'session', input).fresh).toBe(true);
+    expect(fs.existsSync(lock)).toBe(false);
+});
+
+it('keeps a fresh live owner and caps explicit contention waits at 10 ms', () => {
+    const f = fixture();
+    const lock = f.file + '.lock';
+    fs.mkdirSync(lock);
+    const owner = JSON.stringify({ pid: process.pid, nonce: 'live', acquiredAt: Date.now() });
+    fs.writeFileSync(path.join(lock, 'owner.json'), owner);
+    const wait = vi.spyOn(Atomics, 'wait');
+    expect(() => f.store.accept('message', 'session', input)).toThrow();
+    const waits = wait.mock.calls.map(call => Number(call[3]));
+    expect(waits.reduce((total, ms) => total + ms, 0)).toBeLessThanOrEqual(10);
+    expect(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8')).toBe(owner);
+    expect(fs.existsSync(f.file)).toBe(false);
+});
+
+it('detects tombstones across stores without scanning the directory on submit', () => {
+    const f = fixture();
+    fs.writeFileSync(f.file, '{"version":');
+    expect(f.store.get('message')).toBeUndefined();
+    const restored = new OutgoingReceiptStore(f.directory);
+    const scan = vi.spyOn(fs, 'readdirSync').mockImplementation(() => { throw new Error('unexpected journal scan'); });
+    expect(restored.isUnverified('message')).toBe(true);
+    expect(restored.hasAcceptance('message')).toBe(true);
+    expect(restored.hasAcceptance('absent')).toBe(false);
+    expect(restored.accept('message', 'session', input).fresh).toBe(false);
+    expect(scan).not.toHaveBeenCalled();
+});
+
+it('indexes legacy timestamped quarantines once at startup without deleting their bytes', () => {
+    const f = fixture();
+    const legacy = f.file + '.invalid-123';
+    fs.writeFileSync(legacy, '{"version":');
+    const restored = new OutgoingReceiptStore(f.directory);
+    const scan = vi.spyOn(fs, 'readdirSync');
+    expect(restored.hasAcceptance('message')).toBe(true);
+    expect(restored.accept('message', 'session', input).fresh).toBe(false);
+    expect(scan).not.toHaveBeenCalled();
+    expect(fs.readFileSync(legacy, 'utf8')).toBe('{"version":');
+    expect(fs.existsSync(f.file + '.invalid')).toBe(true);
 });
 
 it('serializes independent processes accepting and advancing the same ID without downgrading submitted', async () => {
@@ -74,10 +146,23 @@ it('serializes independent processes accepting and advancing the same ID without
         const child = spawn(process.execPath, ['-e', `
             const { OutgoingReceiptStore } = require(process.argv[1]);
             const store = new OutgoingReceiptStore(process.argv[2]);
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, Number(process.argv[3]) - Date.now()));
-            const {receipt, fresh} = store.accept('message', 'session', JSON.parse(process.argv[4]));
-            store.advance(receipt, process.argv[5]);
-            process.stdout.write(JSON.stringify({fresh, attemptId: receipt.attemptId}));
+            // Contending callers yield between short store attempts instead of
+            // relying on a 300 ms main-thread wait inside the store.
+            async function retry(operation) {
+                for (let attempt = 0; ; attempt++) {
+                    try { return operation(); }
+                    catch (error) {
+                        if (error.code !== 'EEXIST' || attempt >= 100) throw error;
+                        await new Promise(resolve => setTimeout(resolve, 5));
+                    }
+                }
+            }
+            (async () => {
+                await new Promise(resolve => setTimeout(resolve, Math.max(0, Number(process.argv[3]) - Date.now())));
+                const {receipt, fresh} = await retry(() => store.accept('message', 'session', JSON.parse(process.argv[4])));
+                await retry(() => store.advance(receipt, process.argv[5]));
+                process.stdout.write(JSON.stringify({fresh, attemptId: receipt.attemptId}));
+            })().catch(error => { process.stderr.write(error.stack); process.exitCode = 1; });
         `, bundle, f.directory, String(startAt), JSON.stringify(input), state]);
         let stdout = '', stderr = '';
         child.stdout.on('data', data => { stdout += data; });

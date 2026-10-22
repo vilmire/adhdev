@@ -89944,6 +89944,127 @@ ${result.stderr}`, result.code);
         globalStore = createDebugTraceStore({ enabled: false, capacity: getDebugRuntimeConfig().traceBufferSize });
       }
     });
+    function isPidAlive2(pid) {
+      if (pid === process.pid) return true;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error.code !== "ESRCH";
+      }
+    }
+    function readOwner(lock) {
+      try {
+        const value = JSON.parse((0, import_node_fs6.readFileSync)((0, import_node_path7.join)(lock, OWNER_FILE), "utf8"));
+        const v = value;
+        if (v && Number.isSafeInteger(v.pid) && v.pid > 0 && typeof v.nonce === "string" && v.nonce) {
+          return { kind: "owner", owner: { pid: v.pid, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0 } };
+        }
+      } catch {
+      }
+      try {
+        return { kind: "ownerless", mtimeMs: (0, import_node_fs6.statSync)(lock).mtimeMs };
+      } catch {
+        return { kind: "gone" };
+      }
+    }
+    function abandoned(observed2, alive, now, maxAgeMs) {
+      if (observed2.kind === "owner") return !alive(observed2.owner.pid) || maxAgeMs !== void 0 && now - observed2.owner.acquiredAt >= maxAgeMs;
+      if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
+      return false;
+    }
+    function sameInstance(a, b) {
+      if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
+      return a.kind === "ownerless" && b.kind === "ownerless";
+    }
+    function reclaim2(lock, alive, now, maxAgeMs) {
+      const observed2 = readOwner(lock);
+      if (observed2.kind === "gone") return true;
+      if (!abandoned(observed2, alive, now(), maxAgeMs)) return false;
+      const guard2 = `${lock}.reclaim`;
+      try {
+        (0, import_node_fs6.mkdirSync)(guard2, { mode: 448 });
+      } catch {
+        return false;
+      }
+      try {
+        const recheck = readOwner(lock);
+        if (recheck.kind === "gone") return true;
+        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now(), maxAgeMs)) return false;
+        try {
+          (0, import_node_fs6.unlinkSync)((0, import_node_path7.join)(lock, OWNER_FILE));
+        } catch {
+        }
+        try {
+          (0, import_node_fs6.rmdirSync)(lock);
+          return true;
+        } catch {
+          return false;
+        }
+      } finally {
+        try {
+          (0, import_node_fs6.rmdirSync)(guard2);
+        } catch {
+        }
+      }
+    }
+    function acquireOwnedLock(lock, options = {}) {
+      const alive = options.isPidAlive ?? isPidAlive2;
+      const now = options.now ?? Date.now;
+      const held = () => {
+        let reclaimGuard = false;
+        try {
+          reclaimGuard = (0, import_node_fs6.statSync)(`${lock}.reclaim`).isDirectory();
+        } catch {
+        }
+        return { ok: false, busy: true, reason: reclaimGuard ? `write_lock_reclaim_in_progress: ${lock}.reclaim` : `write_lock_held: ${lock}` };
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          (0, import_node_fs6.mkdirSync)(lock, { mode: 448 });
+        } catch (error) {
+          const errno = error.code;
+          if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
+          if (!reclaim2(lock, alive, now, options.maxAgeMs)) return held();
+          continue;
+        }
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto17.randomBytes)(16).toString("hex"), acquiredAt: now() };
+        try {
+          (0, import_node_fs6.writeFileSync)((0, import_node_path7.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
+        } catch {
+          try {
+            (0, import_node_fs6.rmdirSync)(lock);
+          } catch {
+          }
+          return { ok: false, busy: false, reason: `write_lock_unavailable: ${lock}` };
+        }
+        return { ok: true, owner, release: () => {
+          const current4 = readOwner(lock);
+          if (current4.kind !== "owner" || current4.owner.nonce !== owner.nonce) return;
+          try {
+            (0, import_node_fs6.unlinkSync)((0, import_node_path7.join)(lock, OWNER_FILE));
+            (0, import_node_fs6.rmdirSync)(lock);
+          } catch {
+          }
+        } };
+      }
+      return held();
+    }
+    var import_node_fs6;
+    var import_node_path7;
+    var import_node_crypto17;
+    var OWNERLESS_STALE_MS;
+    var OWNER_FILE;
+    var init_owned_lock = __esm2({
+      "src/launch-defaults/owned-lock.ts"() {
+        "use strict";
+        import_node_fs6 = require("fs");
+        import_node_path7 = require("path");
+        import_node_crypto17 = require("crypto");
+        OWNERLESS_STALE_MS = 6e4;
+        OWNER_FILE = "owner.json";
+      }
+    });
     function looksLikeBase64Secret(run3) {
       if (!/[0-9]/.test(run3) || !/[A-Za-z]/.test(run3)) return false;
       return /[A-Za-z0-9]{20,}/.test(run3);
@@ -92290,15 +92411,15 @@ ${body}`;
     function validDriverDigest(value) {
       return typeof value === "string" && DIGEST.test(value);
     }
-    var import_node_fs7;
-    var import_node_path8;
+    var import_node_fs8;
+    var import_node_path9;
     var DIGEST;
     var DriverActivationStore;
     var init_activation_store = __esm2({
       "src/drivers/activation-store.ts"() {
         "use strict";
-        import_node_fs7 = require("fs");
-        import_node_path8 = require("path");
+        import_node_fs8 = require("fs");
+        import_node_path9 = require("path");
         init_config();
         init_store_guards();
         init_risk_class();
@@ -92307,13 +92428,13 @@ ${body}`;
           path;
           now;
           constructor(opts = {}) {
-            this.path = (0, import_node_path8.join)(opts.configDir ?? getConfigDir2(), "drivers", "activations.json");
+            this.path = (0, import_node_path9.join)(opts.configDir ?? getConfigDir2(), "drivers", "activations.json");
             this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
           }
           list() {
             let raw;
             try {
-              raw = (0, import_node_fs7.readFileSync)(this.path, "utf8");
+              raw = (0, import_node_fs8.readFileSync)(this.path, "utf8");
             } catch (error) {
               if (error.code === "ENOENT") return [];
               throw error;
@@ -92379,18 +92500,18 @@ ${body}`;
         };
       }
     });
-    var import_node_fs8;
-    var import_node_path9;
-    var import_node_crypto18;
+    var import_node_fs9;
+    var import_node_path10;
+    var import_node_crypto19;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
     var init_driver_staging = __esm2({
       "src/assistant/driver-staging.ts"() {
         "use strict";
-        import_node_fs8 = require("fs");
-        import_node_path9 = require("path");
-        import_node_crypto18 = require("crypto");
+        import_node_fs9 = require("fs");
+        import_node_path10 = require("path");
+        import_node_crypto19 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -92402,11 +92523,11 @@ ${body}`;
           now;
           discarded = /* @__PURE__ */ new Set();
           constructor(opts = {}) {
-            this.dir = (0, import_node_path9.join)(opts.configDir ?? getConfigDir2(), "assistant", "staged");
+            this.dir = (0, import_node_path10.join)(opts.configDir ?? getConfigDir2(), "assistant", "staged");
             this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
           }
           path(id4) {
-            return (0, import_node_path9.join)(this.dir, `${id4}.json`);
+            return (0, import_node_path10.join)(this.dir, `${id4}.json`);
           }
           write(module22, digest4) {
             if (!validDriverDigest(digest4) || module22.category !== "driver") throw new Error("Invalid driver proposal");
@@ -92414,7 +92535,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto18.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto19.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -92436,20 +92557,20 @@ ${body}`;
           read(id4) {
             if (!ID.test(id4)) return null;
             try {
-              const r = JSON.parse((0, import_node_fs8.readFileSync)(this.path(id4), "utf8"));
+              const r = JSON.parse((0, import_node_fs9.readFileSync)(this.path(id4), "utf8"));
               if (r?.kind === "driver_activation" && r.id === id4 && r.origin === "driver" && typeof r.type === "string" && !!r.type && typeof r.name === "string" && !!r.name && typeof r.providerVersion === "string" && !!r.providerVersion && (r.publisher === void 0 || typeof r.publisher === "string") && validDriverDigest(r.treeDigest) && typeof r.trust === "string" && r.runtime?.kind === "mcp-stdio" && typeof r.runtime.command === "string" && r.declaredAccess && typeof r.declaredAccess === "object" && !Array.isArray(r.declaredAccess) && ["low", "elevated"].includes(r.riskClass) && Array.isArray(r.reasons) && r.reasons.every((s2) => typeof s2 === "string") && Number.isFinite(Date.parse(r.createdAt))) return r;
             } catch {
             }
             return null;
           }
           list() {
-            if (!(0, import_node_fs8.existsSync)(this.dir)) return [];
-            return (0, import_node_fs8.readdirSync)(this.dir).filter((n) => n.startsWith("driver-activation-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+            if (!(0, import_node_fs9.existsSync)(this.dir)) return [];
+            return (0, import_node_fs9.readdirSync)(this.dir).filter((n) => n.startsWith("driver-activation-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
           remove(id4) {
             if (!ID.test(id4)) return;
             try {
-              (0, import_node_fs8.unlinkSync)(this.path(id4));
+              (0, import_node_fs9.unlinkSync)(this.path(id4));
             } catch (error) {
               if (error.code !== "ENOENT") throw error;
             }
@@ -92571,127 +92692,6 @@ ${body}`;
             return dropped;
           }
         };
-      }
-    });
-    function isPidAlive2(pid) {
-      if (pid === process.pid) return true;
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (error) {
-        return error.code !== "ESRCH";
-      }
-    }
-    function readOwner(lock) {
-      try {
-        const value = JSON.parse((0, import_node_fs9.readFileSync)((0, import_node_path10.join)(lock, OWNER_FILE), "utf8"));
-        const v = value;
-        if (v && Number.isSafeInteger(v.pid) && v.pid > 0 && typeof v.nonce === "string" && v.nonce) {
-          return { kind: "owner", owner: { pid: v.pid, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0 } };
-        }
-      } catch {
-      }
-      try {
-        return { kind: "ownerless", mtimeMs: (0, import_node_fs9.statSync)(lock).mtimeMs };
-      } catch {
-        return { kind: "gone" };
-      }
-    }
-    function abandoned(observed2, alive, now) {
-      if (observed2.kind === "owner") return !alive(observed2.owner.pid);
-      if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= OWNERLESS_STALE_MS;
-      return false;
-    }
-    function sameInstance(a, b) {
-      if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
-      return a.kind === "ownerless" && b.kind === "ownerless";
-    }
-    function reclaim2(lock, alive, now) {
-      const observed2 = readOwner(lock);
-      if (observed2.kind === "gone") return true;
-      if (!abandoned(observed2, alive, now())) return false;
-      const guard2 = `${lock}.reclaim`;
-      try {
-        (0, import_node_fs9.mkdirSync)(guard2, { mode: 448 });
-      } catch {
-        return false;
-      }
-      try {
-        const recheck = readOwner(lock);
-        if (recheck.kind === "gone") return true;
-        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now())) return false;
-        try {
-          (0, import_node_fs9.unlinkSync)((0, import_node_path10.join)(lock, OWNER_FILE));
-        } catch {
-        }
-        try {
-          (0, import_node_fs9.rmdirSync)(lock);
-          return true;
-        } catch {
-          return false;
-        }
-      } finally {
-        try {
-          (0, import_node_fs9.rmdirSync)(guard2);
-        } catch {
-        }
-      }
-    }
-    function acquireOwnedLock(lock, options = {}) {
-      const alive = options.isPidAlive ?? isPidAlive2;
-      const now = options.now ?? Date.now;
-      const held = () => {
-        let reclaimGuard = false;
-        try {
-          reclaimGuard = (0, import_node_fs9.statSync)(`${lock}.reclaim`).isDirectory();
-        } catch {
-        }
-        return { ok: false, busy: true, reason: reclaimGuard ? `write_lock_reclaim_in_progress: ${lock}.reclaim` : `write_lock_held: ${lock}` };
-      };
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          (0, import_node_fs9.mkdirSync)(lock, { mode: 448 });
-        } catch (error) {
-          const errno = error.code;
-          if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
-          if (!reclaim2(lock, alive, now)) return held();
-          continue;
-        }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto19.randomBytes)(16).toString("hex"), acquiredAt: now() };
-        try {
-          (0, import_node_fs9.writeFileSync)((0, import_node_path10.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
-        } catch {
-          try {
-            (0, import_node_fs9.rmdirSync)(lock);
-          } catch {
-          }
-          return { ok: false, busy: false, reason: `write_lock_unavailable: ${lock}` };
-        }
-        return { ok: true, owner, release: () => {
-          const current4 = readOwner(lock);
-          if (current4.kind !== "owner" || current4.owner.nonce !== owner.nonce) return;
-          try {
-            (0, import_node_fs9.unlinkSync)((0, import_node_path10.join)(lock, OWNER_FILE));
-            (0, import_node_fs9.rmdirSync)(lock);
-          } catch {
-          }
-        } };
-      }
-      return held();
-    }
-    var import_node_fs9;
-    var import_node_path10;
-    var import_node_crypto19;
-    var OWNERLESS_STALE_MS;
-    var OWNER_FILE;
-    var init_owned_lock = __esm2({
-      "src/launch-defaults/owned-lock.ts"() {
-        "use strict";
-        import_node_fs9 = require("fs");
-        import_node_path10 = require("path");
-        import_node_crypto19 = require("crypto");
-        OWNERLESS_STALE_MS = 6e4;
-        OWNER_FILE = "owner.json";
       }
     });
     function isLaunchRole(value) {
@@ -139175,61 +139175,83 @@ ${output}` : "";
         truncated: result.truncated
       };
     }
-    var import_node_fs6 = __toESM2(require("fs"));
-    var import_node_path7 = __toESM2(require("path"));
-    var import_node_crypto17 = require("crypto");
+    var import_node_fs7 = __toESM2(require("fs"));
+    var import_node_path8 = __toESM2(require("path"));
+    var import_node_crypto18 = require("crypto");
     init_logger();
+    init_owned_lock();
     var OutgoingReceiptStore = class {
       constructor(directory2) {
         this.directory = directory2;
+        if (!directory2) return;
+        let names;
+        try {
+          names = import_node_fs7.default.readdirSync(directory2);
+        } catch (error) {
+          if (error.code === "ENOENT") return;
+          throw error;
+        }
+        for (const name of names) {
+          if (!/^[a-f0-9]{64}\.json\.invalid-\d+$/.test(name)) continue;
+          this.markInvalid(import_node_path8.default.join(directory2, name.slice(0, name.indexOf(".invalid-"))), import_node_path8.default.join(directory2, name));
+        }
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path7.default.join(this.directory, (0, import_node_crypto17.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path8.default.join(this.directory, (0, import_node_crypto18.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
-        const fd = import_node_fs6.default.openSync(this.directory, "r");
+        const fd = import_node_fs7.default.openSync(this.directory, "r");
         try {
-          import_node_fs6.default.fsyncSync(fd);
+          import_node_fs7.default.fsyncSync(fd);
         } finally {
-          import_node_fs6.default.closeSync(fd);
+          import_node_fs7.default.closeSync(fd);
         }
       }
       locked(id4, operation) {
         if (!this.directory) return operation();
-        import_node_fs6.default.mkdirSync(this.directory, { recursive: true });
+        import_node_fs7.default.mkdirSync(this.directory, { recursive: true });
         const lock = this.filename(id4) + ".lock";
-        const deadline = Date.now() + 300;
+        const deadline = performance.now() + 10;
+        let waitBudget = 10;
         for (; ; ) {
-          try {
-            import_node_fs6.default.mkdirSync(lock, { mode: 448 });
-            break;
-          } catch (error) {
-            if (error.code !== "EEXIST" || Date.now() >= deadline) throw error;
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+          const acquired = acquireOwnedLock(lock, { maxAgeMs: 3e4 });
+          if (acquired.ok) {
+            try {
+              return operation();
+            } finally {
+              acquired.release();
+            }
           }
-        }
-        try {
-          return operation();
-        } finally {
-          import_node_fs6.default.rmdirSync(lock);
+          const remaining = Math.min(waitBudget, deadline - performance.now());
+          if (!acquired.busy || remaining <= 0) throw Object.assign(new Error(acquired.reason), { code: acquired.errno ?? "EEXIST" });
+          const delay3 = Math.min(1, remaining);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay3);
+          waitBudget -= delay3;
         }
       }
       isUnverified(messageId) {
-        if (!this.directory || !import_node_fs6.default.existsSync(this.directory)) return false;
-        const prefix = import_node_path7.default.basename(this.filename(messageId)) + ".invalid-";
-        return import_node_fs6.default.readdirSync(this.directory).some((name) => name.startsWith(prefix));
+        return !!this.directory && import_node_fs7.default.existsSync(this.filename(messageId) + ".invalid");
+      }
+      markInvalid(file, source2 = file) {
+        try {
+          import_node_fs7.default.linkSync(source2, file + ".invalid");
+        } catch (error) {
+          if (error.code === "EEXIST") return;
+          throw error;
+        }
+        this.syncDirectory();
       }
       hasAcceptance(messageId) {
-        return this.records.has(messageId) || !!this.directory && (import_node_fs6.default.existsSync(this.filename(messageId)) || this.isUnverified(messageId));
+        return this.records.has(messageId) || !!this.directory && (import_node_fs7.default.existsSync(this.filename(messageId)) || this.isUnverified(messageId));
       }
       read(messageId) {
         if (!this.directory) return this.records.get(messageId);
         const file = this.filename(messageId);
         let bytes;
         try {
-          bytes = import_node_fs6.default.readFileSync(file, "utf8");
+          bytes = import_node_fs7.default.readFileSync(file, "utf8");
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
           const known2 = this.isUnverified(messageId) ? this.records.get(messageId) : void 0;
@@ -139246,8 +139268,9 @@ ${output}` : "";
         }
         let timestamp2 = Date.now();
         let quarantine2 = `${file}.invalid-${timestamp2}`;
-        while (import_node_fs6.default.existsSync(quarantine2)) quarantine2 = `${file}.invalid-${++timestamp2}`;
-        import_node_fs6.default.renameSync(file, quarantine2);
+        while (import_node_fs7.default.existsSync(quarantine2)) quarantine2 = `${file}.invalid-${++timestamp2}`;
+        this.markInvalid(file);
+        import_node_fs7.default.renameSync(file, quarantine2);
         LOG.warn("OutgoingReceipt", `Invalid outgoing receipt journal quarantined at ${quarantine2}; delivery unverified, automatic resend suppressed`);
         this.syncDirectory();
         const known = this.records.get(messageId);
@@ -139255,7 +139278,7 @@ ${output}` : "";
       }
       get(messageId) {
         if (!this.directory) return this.records.get(messageId);
-        if (!import_node_fs6.default.existsSync(this.directory)) return void 0;
+        if (!import_node_fs7.default.existsSync(this.directory)) return void 0;
         return this.locked(messageId, () => this.read(messageId));
       }
       write(receipt) {
@@ -139265,20 +139288,20 @@ ${output}` : "";
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto17.randomUUID)()}.tmp`;
-        const fd = import_node_fs6.default.openSync(staging, "wx", 384);
+        const staging = `${file}.${(0, import_node_crypto18.randomUUID)()}.tmp`;
+        const fd = import_node_fs7.default.openSync(staging, "wx", 384);
         try {
           try {
-            import_node_fs6.default.writeFileSync(fd, JSON.stringify(receipt));
-            import_node_fs6.default.fsyncSync(fd);
+            import_node_fs7.default.writeFileSync(fd, JSON.stringify(receipt));
+            import_node_fs7.default.fsyncSync(fd);
           } finally {
-            import_node_fs6.default.closeSync(fd);
+            import_node_fs7.default.closeSync(fd);
           }
-          import_node_fs6.default.renameSync(staging, file);
+          import_node_fs7.default.renameSync(staging, file);
           this.records.set(receipt.messageId, receipt);
           this.syncDirectory();
         } finally {
-          if (import_node_fs6.default.existsSync(staging)) import_node_fs6.default.unlinkSync(staging);
+          if (import_node_fs7.default.existsSync(staging)) import_node_fs7.default.unlinkSync(staging);
         }
       }
       accept(messageId, sessionId, input) {
@@ -139295,8 +139318,8 @@ ${output}` : "";
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto17.randomUUID)(),
-            generation: (0, import_node_crypto17.randomUUID)(),
+            attemptId: (0, import_node_crypto18.randomUUID)(),
+            generation: (0, import_node_crypto18.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"

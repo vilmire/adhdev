@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { LOG } from '../logging/logger.js';
+import { acquireOwnedLock } from '../launch-defaults/owned-lock.js';
 import { readOutgoingReceipt, sameOutgoingAttempt, outgoingInputDigest, type OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 
 /** Metadata only. A per-ID cross-process lock covers read/modify/rename, and
@@ -9,7 +10,18 @@ import { readOutgoingReceipt, sameOutgoingAttempt, outgoingInputDigest, type Out
  * dedupe tombstone: losing receipt evidence never authorizes another write. */
 export class OutgoingReceiptStore {
     private readonly records = new Map<string, OutgoingReceipt>();
-    constructor(private readonly directory?: string) {}
+    constructor(private readonly directory?: string) {
+        if (!directory) return;
+        let names: string[];
+        try { names = fs.readdirSync(directory); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+        // One startup migration for timestamped quarantines from older builds.
+        // Hot-path lookups use a fixed marker name, never a directory scan.
+        for (const name of names) {
+            if (!/^[a-f0-9]{64}\.json\.invalid-\d+$/.test(name)) continue;
+            this.markInvalid(path.join(directory, name.slice(0, name.indexOf('.invalid-'))), path.join(directory, name));
+        }
+    }
     private filename(id: string): string {
         return path.join(this.directory!, createHash('sha256').update(id).digest('hex') + '.json');
     }
@@ -22,21 +34,32 @@ export class OutgoingReceiptStore {
         if (!this.directory) return operation();
         fs.mkdirSync(this.directory, { recursive: true });
         const lock = this.filename(id) + '.lock';
-        const deadline = Date.now() + 300;
+        // These transactions never await. Expire crashed/stalled ownership after
+        // 30 seconds, but spend at most 10 ms explicitly waiting on a live peer.
+        const deadline = performance.now() + 10;
+        let waitBudget = 10;
         for (;;) {
-            try { fs.mkdirSync(lock, { mode: 0o700 }); break; }
-            catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= deadline) throw error;
-                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+            const acquired = acquireOwnedLock(lock, { maxAgeMs: 30_000 });
+            if (acquired.ok) {
+                try { return operation(); } finally { acquired.release(); }
             }
+            const remaining = Math.min(waitBudget, deadline - performance.now());
+            if (!acquired.busy || remaining <= 0) throw Object.assign(new Error(acquired.reason), { code: acquired.errno ?? 'EEXIST' });
+            const delay = Math.min(1, remaining);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+            waitBudget -= delay;
         }
-        // Never steal an abandoned lock: uncertain acceptance must not resend.
-        try { return operation(); } finally { fs.rmdirSync(lock); }
     }
     isUnverified(messageId: string): boolean {
-        if (!this.directory || !fs.existsSync(this.directory)) return false;
-        const prefix = path.basename(this.filename(messageId)) + '.invalid-';
-        return fs.readdirSync(this.directory).some(name => name.startsWith(prefix));
+        return !!this.directory && fs.existsSync(this.filename(messageId) + '.invalid');
+    }
+    private markInvalid(file: string, source = file): void {
+        // A hard link preserves the original bytes and atomically establishes a
+        // fixed-name tombstone BEFORE the timestamped quarantine rename. A crash
+        // between these operations therefore cannot permit a duplicate send.
+        try { fs.linkSync(source, file + '.invalid'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return; throw error; }
+        this.syncDirectory();
     }
     hasAcceptance(messageId: string): boolean {
         return this.records.has(messageId) || !!this.directory
@@ -61,6 +84,7 @@ export class OutgoingReceiptStore {
         let timestamp = Date.now();
         let quarantine = `${file}.invalid-${timestamp}`;
         while (fs.existsSync(quarantine)) quarantine = `${file}.invalid-${++timestamp}`;
+        this.markInvalid(file);
         fs.renameSync(file, quarantine);
         LOG.warn('OutgoingReceipt', `Invalid outgoing receipt journal quarantined at ${quarantine}; delivery unverified, automatic resend suppressed`);
         this.syncDirectory();
