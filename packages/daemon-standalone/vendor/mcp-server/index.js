@@ -32518,6 +32518,26 @@ ${renderWorkerProtocolFooter2(input)}`;
         "use strict";
       }
     });
+    function quotaPoolOf(groupLabel, bucket2) {
+      const label2 = (groupLabel ?? "").trim().toLowerCase();
+      const id4 = typeof bucket2.bucketId === "string" ? bucket2.bucketId.trim().toLowerCase() : "";
+      if (/^gemini/.test(label2) || /^gemini/.test(id4)) return "gemini";
+      if (/^(?:claude|gpt)/.test(label2) || /^3p-/.test(id4)) return "claude-gpt";
+      return null;
+    }
+    function exhaustedByOmission(bucket2) {
+      if (bucket2.remainingFraction === void 0 && bucket2.remainingAmount === void 0 && toIsoResetMs(bucket2.resetTime) !== null) {
+        return true;
+      }
+      const amount = toNumber(bucket2.remainingAmount);
+      return amount !== null && amount <= 0;
+    }
+    var init_antigravity_pools = __esm2({
+      "src/quota/fetchers/antigravity-pools.ts"() {
+        "use strict";
+        init_coerce();
+      }
+    });
     function quotaReadNowClause(provider) {
       return `or run \`${IDENTITY2.binaryName} quota refresh${provider ? ` ${provider}` : ""}\` to re-read now`;
     }
@@ -32854,6 +32874,7 @@ ${res.stderr}`);
       if (fraction !== null) {
         return clampPercent((1 - fraction) * 100);
       }
+      if (exhaustedByOmission(bucket2)) return 100;
       return null;
     }
     function bucketName(bucket2) {
@@ -32883,8 +32904,10 @@ ${res.stderr}`);
         const usedPercent = bucketUsedPercent(bucket2);
         if (usedPercent === null) return;
         const own = bucketName(bucket2);
+        const pool = quotaPoolOf(groupLabel, bucket2);
         out.push({
           name: groupLabel ? `${groupLabel} \xB7 ${own}` : own,
+          ...pool ? { group: pool } : {},
           usedPercent,
           windowMinutes: windowMinutes(bucket2.window) ?? 0,
           resetsAt: toIsoResetMs(bucket2.resetTime)
@@ -33078,6 +33101,7 @@ ${res.stderr}`);
         init_version_archive();
         init_types();
         init_deps();
+        init_antigravity_pools();
         init_coerce();
         init_refresh_command_hint();
         DEFAULT_BASE_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal";
@@ -73044,7 +73068,7 @@ ${upstream}`;
       if (!selectedPool || !Array.isArray(quota.buckets) || !quota.buckets.length) return void 0;
       const classified = [];
       for (const bucket2 of quota.buckets) {
-        const pool = antigravityPoolFromLeadingLabel(bucket2?.name);
+        const pool = bucket2?.group === "gemini" ? "gemini" : bucket2?.group === "claude-gpt" ? "claude-gpt" : antigravityPoolFromLeadingLabel(bucket2?.name);
         const usedPercent = Number(bucket2?.usedPercent);
         const windowMinutes3 = Number(bucket2?.windowMinutes);
         if (!pool || !Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes3)) return void 0;
@@ -73057,8 +73081,7 @@ ${upstream}`;
       if (!selectedBuckets.length) return void 0;
       const session = worstBucketWindow(selectedBuckets, DEFAULT_SESSION_WINDOW_MINUTES);
       const weekly = worstBucketWindow(selectedBuckets, DEFAULT_WEEKLY_WINDOW_MINUTES);
-      if (quota.session && !session || quota.weekly && !weekly) return void 0;
-      return { session, weekly };
+      return { session, weekly, group: selectedPool };
     }
     function isSessionResetImminent(session, facts, quota, imminentMs, now) {
       const resetsAt = Number(session?.resetsAt);
@@ -73125,6 +73148,24 @@ ${upstream}`;
       }
       const resolved = resolveQuotaRoutingPolicy(policy);
       const session = remainingPercent(sessionWindow);
+      const weeklyLeft = remainingPercent(weeklyWindow);
+      if (targetWindows) {
+        const groupWindows = [
+          ["weekly", weeklyLeft, weeklyTrustworthy],
+          ["session", session, sessionTrustworthy]
+        ];
+        for (const [window, left, trusted] of groupWindows) {
+          if (trusted && left !== void 0 && left < 0.5) {
+            return {
+              reason: PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON,
+              window,
+              remainingPercent: left,
+              thresholdPercent: 0,
+              group: targetWindows.group
+            };
+          }
+        }
+      }
       if (sessionTrustworthy && session !== void 0 && session < resolved.sessionMinRemainingPercent && !isSessionResetImminent(sessionWindow, facts, quota, resolved.sessionResetImminentMs, now)) {
         return {
           reason: PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON,
@@ -73225,6 +73266,7 @@ ${upstream}`;
     var PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON;
     var PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON;
     var PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON;
+    var PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON;
     var ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON;
     var DEFAULT_WEEKLY_WINDOW_MINUTES;
     var DEFAULT_SESSION_WINDOW_MINUTES;
@@ -73236,6 +73278,7 @@ ${upstream}`;
         PROVIDER_QUOTA_SESSION_LOW_SKIP_REASON = "provider_quota_session_low";
         PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON = "provider_quota_weekly_low";
         PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON = "provider_quota_exhausted";
+        PROVIDER_QUOTA_GROUP_EXHAUSTED_SKIP_REASON = "provider_quota_group_exhausted";
         ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON = "all_providers_quota_gated";
         DEFAULT_WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
         DEFAULT_SESSION_WINDOW_MINUTES = 5 * 60;
@@ -79244,7 +79287,7 @@ ${continuationNotice}` } : task,
           // that one clears on its own when the slot goes idle.
           SLOT_MODEL_ABSENT_SKIP_REASON
           // QUOTA GATE: 'provider_quota_session_low' / 'provider_quota_weekly_low' /
-          // 'provider_quota_exhausted' / 'all_providers_quota_gated' are deliberately
+          // 'provider_quota_group_exhausted' / 'provider_quota_exhausted' / 'all_providers_quota_gated' are deliberately
           // NOT listed either — an exhausted quota window RESETS, so the block
           // self-resolves exactly like the slot-busy case; the task waits in the
           // queue and the coordinator is not paged (mesh-quota-routing.ts). The
