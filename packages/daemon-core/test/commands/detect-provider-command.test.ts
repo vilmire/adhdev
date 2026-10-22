@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../src/detection/cli-detector.js', () => ({
   detectCLI: mocks.detectCLI,
+  invalidateCachedCliInventory: vi.fn(),
 }))
 
 import { DaemonCommandRouter } from '../../src/commands/router'
