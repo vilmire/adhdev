@@ -4325,6 +4325,18 @@
            viewport, not the root's padding box, so the root's padding does not
            move them and they still need their own offset. */
 
+        /* Installed PWA composer: the home-indicator inset IS the bottom padding.
+           The browser-tab rule (`.dashboard-input-area` above) keeps its 16px
+           design pad + inset; owner decision (2026-10-22) trimmed that pad in
+           standalone because the inset already supplies the clearance and the
+           extra 16px read as dead space under the composer. The inset is still
+           consumed exactly once, here, so the composer never meets the home
+           bar. Must stay after the base rule and keep !important to win over
+           its !important. */
+        .dashboard-input-area {
+            padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+        }
+
         /* Fixed elements need their own safe-area offset */
         .sidebar {
             padding-top: calc(24px + env(safe-area-inset-top, 0px));

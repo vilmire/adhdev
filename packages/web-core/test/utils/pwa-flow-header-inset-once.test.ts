@@ -45,4 +45,31 @@ describe('mobile flow header top inset is consumed once', () => {
     expect(slice).toMatch(/:root\s*\{\s*--mobile-flow-header-safe-top:\s*0px;\s*\}/)
     expect(slice).toContain('padding-top: env(safe-area-inset-top, 0px);')
   })
+
+  describe('chat composer bottom pad (owner decision 2026-10-22)', () => {
+    const css = () => read('src/index.css')
+    const standaloneSlice = () => {
+      const c = css()
+      const start = c.indexOf('@media (display-mode: standalone) {')
+      return c.slice(start, c.indexOf('/* Touch: remove hover effects', start))
+    }
+
+    it('standalone composer bottom pad is the safe-area inset only, declared once', () => {
+      const slice = standaloneSlice()
+      const rules = slice.match(/\.dashboard-input-area\s*\{[^}]*\}/g) ?? []
+      expect(rules).toHaveLength(1)
+      expect(rules[0]).toMatch(/padding-bottom:\s*env\(safe-area-inset-bottom,\s*0px\)\s*!important;/)
+      // no extra design pad, no max() floor, no second inset
+      expect(rules[0]).not.toMatch(/calc\(|max\(/)
+    })
+
+    it('preserves the browser-tab composer pad (16px + inset, 16px on flat/tab layouts)', () => {
+      const c = css()
+      const start = c.indexOf('.dashboard-input-area {')
+      const rule = c.slice(start, c.indexOf('}', start))
+      expect(rule).toMatch(/padding-bottom:\s*calc\(16px \+ env\(safe-area-inset-bottom,\s*0px\)\)\s*!important;/)
+      // the base rule precedes the standalone block, so the override wins by order
+      expect(start).toBeLessThan(c.indexOf('@media (display-mode: standalone) {'))
+    })
+  })
 })
