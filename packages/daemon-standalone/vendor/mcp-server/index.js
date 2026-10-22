@@ -37297,9 +37297,11 @@ ${error.message || ""}`;
     var mesh_config_store_exports = {};
     __export2(mesh_config_store_exports, {
       MeshConfigStrictLockError: () => MeshConfigStrictLockError,
+      MeshConfigUnreadableError: () => MeshConfigUnreadableError,
       STRICT_MESH_CONFIG_LOCK_WAIT_MS: () => STRICT_MESH_CONFIG_LOCK_WAIT_MS,
       getMeshConfigPath: () => getMeshConfigPath,
       loadMeshConfig: () => loadMeshConfig,
+      loadMeshConfigStrict: () => loadMeshConfigStrict,
       migrateMeshPolicyStorage: () => migrateMeshPolicyStorage,
       migrateProviderRolesToSlots: () => migrateProviderRolesToSlots,
       normalizeCapabilityTags: () => normalizeCapabilityTags,
@@ -37433,6 +37435,19 @@ ${error.message || ""}`;
       } catch {
         return null;
       }
+    }
+    function loadMeshConfigStrict() {
+      let raw;
+      try {
+        raw = JSON.parse((0, import_fs5.readFileSync)(getMeshConfigPath(), "utf-8"));
+      } catch (e) {
+        if (e?.code === "ENOENT") return { meshes: [] };
+        throw new MeshConfigUnreadableError(e);
+      }
+      if (!raw || !Array.isArray(raw.meshes)) throw new MeshConfigUnreadableError(new Error("unexpected meshes.json shape"));
+      const config = raw;
+      migrateLoadedMeshConfig(config);
+      return config;
     }
     function statMeshConfigFile() {
       try {
@@ -37615,6 +37630,7 @@ ${error.message || ""}`;
     var MeshConfigStrictLockError;
     var STRICT_MESH_CONFIG_LOCK_WAIT_MS;
     var strictMeshWriteDepth;
+    var MeshConfigUnreadableError;
     var init_mesh_config_store = __esm2({
       "src/config/mesh-config-store.ts"() {
         "use strict";
@@ -37638,6 +37654,15 @@ ${error.message || ""}`;
         };
         STRICT_MESH_CONFIG_LOCK_WAIT_MS = 300;
         strictMeshWriteDepth = 0;
+        MeshConfigUnreadableError = class extends Error {
+          code;
+          constructor(cause) {
+            const code = cause?.code ?? "EUNREADABLE";
+            super(`meshes.json unreadable (${code}): ${cause instanceof Error ? cause.message : String(cause)}`);
+            this.name = "MeshConfigUnreadableError";
+            this.code = String(code);
+          }
+        };
       }
     });
     function worktreeLabel(node) {
@@ -105171,7 +105196,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       return { ok: true, mesh: r.mesh, slug: r.slug, remote: ports.isHostedHere(r.mesh) ? null : ports.remoteHost(r.mesh) };
     }
     function remoteFailure(where, remote, out, ports, followedRemote) {
-      if (followedRemote && out.kind === "refused" && (out.code === "host_revoked" || out.code === "remote_access_denied")) {
+      if (followedRemote && out.kind === "refused" && out.code === "host_revoked") {
         ports?.markFollowedRemoteRevoked?.(followedRemote.key, out.code);
         ports?.relay.closeThread?.(where.meshId, { suppressPending: true });
       }
@@ -107243,6 +107268,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
+    function isSelfHealableRevocationReason(reason) {
+      const code = typeof reason === "string" ? reason.trim() : "";
+      return !REVOCATION_REFUSAL_CODES.has(code);
+    }
     function str11(v) {
       return typeof v === "string" ? v.trim() : "";
     }
@@ -107267,10 +107296,6 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         COMMIT_AGE_SLACK_MS = 5e3;
         REVOCATION_REFUSAL_CODES = /* @__PURE__ */ new Set([
           "host_revoked",
-          "remote_access_denied",
-          "grant_revision_stale",
-          "binding_revision_stale",
-          "binding_revision_mismatch",
           "local_owner_binding_missing",
           "local_owner_binding_mismatch",
           "assistant_owner_binding_missing",
@@ -107336,6 +107361,34 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (st.nextAt > now) continue;
               await this.pollOne(meshId, target, st, lastSendAt);
             }
+            await this.healStaleRevoked(now);
+          }
+          healAt = /* @__PURE__ */ new Map();
+          /** Self-heal: a follow revoked by a non-explicit refusal is restored once the host answers a cursor-only poll. */
+          async healStaleRevoked(now) {
+            let stale = [];
+            try {
+              stale = this.ports.staleRevoked?.() ?? [];
+            } catch {
+              stale = [];
+            }
+            const live = new Set(stale.map((s2) => s2.meshId));
+            for (const k of [...this.healAt.keys()]) if (!live.has(k)) this.healAt.delete(k);
+            for (const { meshId, target } of stale) {
+              if ((this.healAt.get(meshId) ?? 0) > now || !target.reachable) continue;
+              let out;
+              try {
+                out = await this.ports.poll(target, { cursorOnly: true });
+              } catch {
+                continue;
+              }
+              if (out.ok) {
+                this.healAt.delete(meshId);
+                this.ports.onAccessRecovered?.(meshId);
+              } else {
+                this.healAt.set(meshId, this.now() + POLL_BACKOFF_MS);
+              }
+            }
           }
           async pollOne(meshId, target, st, lastSendAt) {
             let out;
@@ -107355,6 +107408,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 this.state.delete(meshId);
                 return;
               }
+              if (out.kind === "refused") this.ports.onAccessRefused?.(meshId, out.code, out.error);
               st.failures += 1;
               if (st.failures >= UNREACHABLE_AFTER_FAILURES) {
                 if (!st.signaled) {
@@ -107685,6 +107739,19 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           return ports.followedRemoteHost(followed);
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, "poll", args),
+        staleRevoked: () => {
+          const ports = projectPorts;
+          if (!ports?.followedRemoteHost) return [];
+          return (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).filter((e) => e.state === "revoked" && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode)).map((e) => ({ meshId: e.meshId, target: ports.followedRemoteHost(e) }));
+        },
+        onAccessRecovered: (meshId) => {
+          const stale = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "revoked" && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode));
+          if (stale) registry.updateFollowedRemoteProject(stale.key, { state: "followed", revokedAt: void 0, revokedReason: void 0, lastErrorCode: void 0 });
+        },
+        onAccessRefused: (meshId, code) => {
+          const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
+          if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str12(code) || "host_refused" });
+        },
         relay,
         onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed2) => {
           store2.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
@@ -116925,8 +116992,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       let diskMesh;
       try {
         diskMesh = deps.getDiskMesh ? await deps.getDiskMesh(meshId) : await deps.getLocalMesh(meshId);
-      } catch {
-        diskMesh = void 0;
+      } catch (e) {
+        let local;
+        try {
+          local = await deps.getLocalMesh(meshId);
+        } catch {
+          local = void 0;
+        }
+        if (record3(local)?.assistantRemoteAccess !== void 0) {
+          diskMesh = local;
+        } else {
+          return refuse2(sender, "host_unavailable_transient", `host_unavailable_transient: host could not read mesh config for ${meshId} (${e instanceof Error ? e.message : String(e)}); retry`);
+        }
       }
       const meshRec = record3(diskMesh);
       if (!meshRec) return null;
@@ -117154,7 +117231,8 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "mesh_sender_not_session_coordinator",
       "mesh_session_not_mesh_owned",
       "mesh_coordinator_stamp_mismatch",
-      "mesh_sender_not_join_member"
+      "mesh_sender_not_join_member",
+      "host_unavailable_transient"
     ]);
     function isMeshSenderRefusalResult(result) {
       const rec5 = record3(result);
@@ -158138,12 +158216,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           getLocalMesh: async (meshId) => (await this.getMeshForCommand(meshId, void 0, { preferInline: true }))?.mesh ?? null,
           // Disk-only meshes.json lookup for host-authoritative follower ACL evaluation.
           getDiskMesh: async (meshId) => {
-            try {
-              const { getMesh: getMesh2 } = await Promise.resolve().then(() => (init_mesh_config(), mesh_config_exports));
-              return getMesh2(meshId) ?? null;
-            } catch {
-              return null;
-            }
+            const { loadMeshConfigStrict: loadMeshConfigStrict2 } = await Promise.resolve().then(() => (init_mesh_config_store(), mesh_config_store_exports));
+            return loadMeshConfigStrict2().meshes.find((m) => m.id === meshId) ?? null;
           },
           listLocalMeshes: async () => {
             this.syncInlineMeshPoliciesFromDisk();

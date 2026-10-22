@@ -52,7 +52,13 @@ export interface RemoteRelayPollerPorts {
     }>;
     /** The host of a remote-hosted mesh; null when this daemon hosts it (or it is gone). */
     remoteTarget(meshId: string): RemoteHostView | null;
-    poll(target: RemoteHostView, args: { afterAttemptId?: string }): Promise<RemoteCallOutcome>;
+    poll(target: RemoteHostView, args: { afterAttemptId?: string; cursorOnly?: boolean }): Promise<RemoteCallOutcome>;
+    /** Follows persisted `revoked` for a non-explicit reason: probed each pass, restored on the first successful poll. */
+    staleRevoked?(): Array<{ meshId: string; target: RemoteHostView }>;
+    /** A stale-revoked follow answered a poll: restore it to `followed`. */
+    onAccessRecovered?(meshId: string): void;
+    /** A non-revoking refusal (remote_access_denied, revision mismatch, …): record lastError, keep polling. */
+    onAccessRefused?(meshId: string, code: string, error: string): void;
     relay: Pick<AssistantRelay, 'onRemoteCommitted' | 'observeRemote' | 'remoteUnreachable'> & {
         closeThread?(meshId: string, opts?: { suppressPending?: boolean }): boolean;
         onRemoteGapOrBaseline?(
@@ -90,17 +96,28 @@ interface MeshPollState {
     nextAt: number;
 }
 
+/**
+ * Refusals that persist `state:'revoked'`. ONLY an explicit owner action on the host
+ * (`host_revoked`) or a LOCAL owner-binding fault that needs explicit owner
+ * reconciliation (never produced by host/transport pressure) may revoke. Everything
+ * else — `remote_access_denied`, revision stale/mismatch, timeouts, relay 403s — is
+ * potentially transient (e.g. host ENFILE once surfaced as `remote_access_denied`): it
+ * sets lastError/backoff and keeps polling. The host still enforces every request, so
+ * a stale-revision follower stays refused without being hidden.
+ */
 export const REVOCATION_REFUSAL_CODES: ReadonlySet<string> = new Set([
     'host_revoked',
-    'remote_access_denied',
-    'grant_revision_stale',
-    'binding_revision_stale',
-    'binding_revision_mismatch',
     'local_owner_binding_missing',
     'local_owner_binding_mismatch',
     'assistant_owner_binding_missing',
     'assistant_owner_binding_mismatch',
 ]);
+
+/** A persisted revocation that was NOT an explicit host/owner action and may self-heal on a successful poll. */
+export function isSelfHealableRevocationReason(reason: unknown): boolean {
+    const code = typeof reason === 'string' ? reason.trim() : '';
+    return !REVOCATION_REFUSAL_CODES.has(code);
+}
 
 function str(v: unknown): string {
     return typeof v === 'string' ? v.trim() : '';
@@ -176,6 +193,28 @@ export class AssistantRemoteRelayPoller {
             if (st.nextAt > now) continue;
             await this.pollOne(meshId, target, st, lastSendAt);
         }
+        await this.healStaleRevoked(now);
+    }
+
+    private readonly healAt = new Map<string, number>();
+
+    /** Self-heal: a follow revoked by a non-explicit refusal is restored once the host answers a cursor-only poll. */
+    private async healStaleRevoked(now: number): Promise<void> {
+        let stale: Array<{ meshId: string; target: RemoteHostView }> = [];
+        try { stale = this.ports.staleRevoked?.() ?? []; } catch { stale = []; }
+        const live = new Set(stale.map((s) => s.meshId));
+        for (const k of [...this.healAt.keys()]) if (!live.has(k)) this.healAt.delete(k);
+        for (const { meshId, target } of stale) {
+            if ((this.healAt.get(meshId) ?? 0) > now || !target.reachable) continue;
+            let out: RemoteCallOutcome;
+            try { out = await this.ports.poll(target, { cursorOnly: true }); } catch { continue; }
+            if (out.ok) {
+                this.healAt.delete(meshId);
+                this.ports.onAccessRecovered?.(meshId);
+            } else {
+                this.healAt.set(meshId, this.now() + POLL_BACKOFF_MS);
+            }
+        }
     }
 
     private async pollOne(meshId: string, target: RemoteHostView, st: MeshPollState, lastSendAt: number): Promise<void> {
@@ -196,6 +235,7 @@ export class AssistantRemoteRelayPoller {
                 this.state.delete(meshId);
                 return;
             }
+            if (out.kind === 'refused') this.ports.onAccessRefused?.(meshId, out.code, out.error);
             st.failures += 1;
             if (st.failures >= UNREACHABLE_AFTER_FAILURES) {
                 if (!st.signaled) {

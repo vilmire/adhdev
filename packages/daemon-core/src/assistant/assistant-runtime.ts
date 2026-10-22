@@ -52,7 +52,7 @@ import { AssistantDigestScheduler } from './assistant-digest-scheduler.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
 import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
-import { AssistantRemoteRelayPoller, REMOTE_POLL_MS } from './assistant-remote-relay.js';
+import { AssistantRemoteRelayPoller, REMOTE_POLL_MS, isSelfHealableRevocationReason } from './assistant-remote-relay.js';
 
 export const ASSISTANT_RELAY_TICK_MS = 60_000;
 const METRICS_PRUNE_EVERY_MS = 60 * 60_000;
@@ -399,6 +399,21 @@ export function wireAssistantRuntime(
             return ports.followedRemoteHost(followed);
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
+        staleRevoked: () => {
+            const ports = projectPorts;
+            if (!ports?.followedRemoteHost) return [];
+            return (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects())
+                .filter((e) => e.state === 'revoked' && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode))
+                .map((e) => ({ meshId: e.meshId, target: ports.followedRemoteHost!(e) }));
+        },
+        onAccessRecovered: (meshId) => {
+            const stale = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'revoked' && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode));
+            if (stale) registry.updateFollowedRemoteProject(stale.key, { state: 'followed', revokedAt: undefined, revokedReason: undefined, lastErrorCode: undefined });
+        },
+        onAccessRefused: (meshId, code) => {
+            const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+            if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str(code) || 'host_refused' });
+        },
         relay,
         onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed) => {
             store.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
