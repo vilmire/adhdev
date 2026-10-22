@@ -242,6 +242,7 @@ export function normalizeFollowedRemoteProjectEntry(raw: unknown): FollowedRemot
         accountSlot: ASSISTANT_ACCOUNT_SLOT,
         bindingRevision: r.bindingRevision,
         grantRevision: r.grantRevision,
+        ...(typeof r.allowCoordinatorLaunch === 'boolean' ? { allowCoordinatorLaunch: r.allowCoordinatorLaunch } : {}),
         state: r.state,
         followedAt,
         updatedAt,

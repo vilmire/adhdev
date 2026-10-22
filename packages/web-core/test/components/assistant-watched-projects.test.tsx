@@ -148,6 +148,22 @@ describe('AssistantWatchedProjects', () => {
             if (targetId === HOST_A && command === 'assistant_remote_project_access' && args.action === 'revoke') {
                 return { success: true, action: 'revoke', access: { status: 'revoked', grantRevision: 2 } }
             }
+            if (targetId === HOST_A && command === 'assistant_remote_project_access' && args.action === 'set_policy') {
+                return {
+                    success: true,
+                    action: 'set_policy',
+                    access: {
+                        hostDaemonId: HOST_A,
+                        meshId: args.meshId,
+                        accountSlot: 'personal',
+                        activeDaemonId: ASST_B,
+                        bindingRevision: 1,
+                        grantRevision: 1,
+                        status: 'active',
+                        allowCoordinatorLaunch: args.allowCoordinatorLaunch,
+                    },
+                }
+            }
             if (targetId === ASST_B && command === 'assistant_remote_follow' && args.action === 'mark_revoked') {
                 followedRemoteProjects = followedRemoteProjects.map(f => ({ ...f, state: 'revoked' }))
                 threads = []
@@ -195,6 +211,22 @@ describe('AssistantWatchedProjects', () => {
         await flush()
         expect(container.querySelector('[data-testid="assistant-follow-partial-success"]')).toBeNull()
         expect(container.querySelector('.assistant-watched-badge')?.textContent).toContain('Following 1')
+
+        // 2b. Owner coordinator wake toggle defaults to ON and calls assistant_remote_project_access set_policy without grantRevision bump
+        const wakeToggle = container.querySelector<HTMLInputElement>(`[data-testid="toggle-coordinator-wake-${MESH_ALPHA}"]`)!
+        expect(wakeToggle).not.toBeNull()
+        expect(wakeToggle.checked).toBe(true)
+        send.mockClear()
+        await act(async () => {
+            wakeToggle.click()
+        })
+        await flush()
+        expect(send).toHaveBeenCalledWith(HOST_A, 'assistant_remote_project_access', {
+            action: 'set_policy',
+            meshId: MESH_ALPHA,
+            allowCoordinatorLaunch: false,
+        })
+        expect(wakeToggle.checked).toBe(false)
 
         // 3. 'Stop following' is local-only (calls assistant_remote_follow unfollow, NEVER revokes host)
         send.mockClear()
