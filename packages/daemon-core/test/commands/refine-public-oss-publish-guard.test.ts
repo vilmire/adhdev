@@ -65,7 +65,7 @@ function fixture(opts: { originSubpath: string; id: typeof GOOD; content: string
   git(base, ['commit', '-q', '-m', 'gitlink -> local only'], GOOD)
   const mergedTree = git(base, ['rev-parse', 'HEAD^{tree}'], GOOD)
   const originMain = () => execFileSync('git', ['rev-list', 'main'], { cwd: origin, encoding: 'utf-8' }).split('\n').filter(Boolean)
-  return { base, mergedTree, localOnly, originMain }
+  return { base, sub, origin, mergedTree, localOnly, originMain }
 }
 
 describe('Refinery oss auto-publish runs the public-push guard itself', () => {
@@ -104,4 +104,48 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
     expect(gate.status).toBe('passed')
     expect(f.originMain()).toContain(f.localOnly)
   })
+})
+
+
+describe('round 3 destination proof and push URL regressions', () => {
+  it('F11: the assertion scans unpublished ancestry behind forged tracking refs', async () => {
+    const { assertPublishableToPublicOss } = await import('../../src/git/public-push-guard.mjs')
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: ['/', 'Users', 'mallory', 'private'].join('/') })
+    writeFileSync(join(f.sub, 'local-only.txt'), 'clean\n')
+    git(f.sub, ['commit', '-qam', 'cleanup'], GOOD)
+    const tip = git(f.sub, ['rev-parse', 'HEAD'])
+    git(f.sub, ['update-ref', 'refs/remotes/origin/main', tip])
+    git(f.sub, ['update-ref', 'refs/remotes/origin/forged', tip])
+    await expect(assertPublishableToPublicOss(f.sub, tip)).rejects.toThrow('personal path')
+  })
+
+  for (const rewrite of ['pushurl', 'url', 'insteadOf', 'pushInsteadOf']) {
+    it(`F13: a public second push destination is guarded (${rewrite})`, async () => {
+      const f = fixture({ originSubpath: 'someone/other-repo', id: BAD, content: 'clean\n' })
+      const publicOrigin = join(f.base, '..', 'vilmire', 'adhdev')
+      mkdirSync(join(f.base, '..', 'vilmire'), { recursive: true })
+      git(f.base, ['clone', '-q', '--bare', f.origin, publicOrigin])
+      const alias = 'fixture-public:repo'
+      if (rewrite === 'url') {
+        git(f.sub, ['config', '--add', 'remote.origin.url', publicOrigin])
+      } else {
+        git(f.sub, ['config', '--add', 'remote.origin.pushurl', f.origin])
+        if (rewrite === 'pushurl') git(f.sub, ['config', '--add', 'remote.origin.pushurl', publicOrigin])
+        else if (rewrite === 'insteadOf') {
+          git(f.sub, ['config', `url.${publicOrigin}.insteadOf`, alias])
+          git(f.sub, ['config', '--add', 'remote.origin.pushurl', alias])
+        } else {
+          git(f.sub, ['config', '--unset-all', 'remote.origin.pushurl'])
+          git(f.sub, ['config', `url.${publicOrigin}.pushInsteadOf`, alias])
+          git(f.sub, ['config', '--add', 'remote.origin.url', alias])
+        }
+      }
+      const before = f.originMain()
+      const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+      expect(gate.status).toBe('failed')
+      expect(gate.unreachable[0].error).toContain('public-oss push guard BLOCKED')
+      expect(f.originMain()).toEqual(before)
+      expect(git(publicOrigin, ['rev-parse', 'main'])).toBe(before[0])
+    })
+  }
 })

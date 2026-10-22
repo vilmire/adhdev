@@ -95681,7 +95681,13 @@ ${detail.join("\n")}` : stripped;
     }
     function runGit2(cwd, args, { input } = {}) {
       return new Promise((resolve54, reject) => {
-        const child = (0, import_node_child_process10.spawn)("git", args, { cwd, windowsHide: true, stdio: [input === void 0 ? "ignore" : "pipe", "pipe", "pipe"] });
+        const child = (0, import_node_child_process10.spawn)("git", ["--no-replace-objects", ...args], {
+          cwd,
+          env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os32.devNull, GIT_TERMINAL_PROMPT: "0" },
+          timeout: args[0] === "ls-remote" ? 3e4 : void 0,
+          windowsHide: true,
+          stdio: [input === void 0 ? "ignore" : "pipe", "pipe", "pipe"]
+        });
         const out = [];
         const err = [];
         child.stdout.on("data", (d) => out.push(d));
@@ -95699,18 +95705,49 @@ ${detail.join("\n")}` : stripped;
         }
       });
     }
-    async function newCommits(cwd, remoteName, localSha, remoteSha) {
+    async function pushDestinations(cwd, remoteName = "origin") {
+      const urls = (await runGit2(cwd, ["remote", "get-url", "--push", "--all", remoteName])).trim().split("\n").filter(Boolean);
+      const pushurls = await tryGit2(cwd, ["config", "--get-all", `remote.${remoteName}.pushurl`]);
+      const configured = pushurls || await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.url`]);
+      if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
+      return { urls, isPublic: [...urls, ...configured.trim().split("\n")].some(isPublicRemoteUrl) };
+    }
+    async function advertisedCommits(cwd, destination) {
+      try {
+        const refs = await runGit2(cwd, ["ls-remote", "--refs", "--", destination]);
+        const shas = new Set(refs.split("\n").map((line) => line.split(/\s+/)[0]).filter((sha6) => /^[0-9a-f]{40,64}$/.test(sha6)));
+        return await locallyReadableCommits(cwd, shas);
+      } catch {
+        return [];
+      }
+    }
+    async function destinationCommits(cwd, remoteName, remoteUrl) {
+      let destination = remoteUrl;
+      if (!destination) {
+        try {
+          const { urls } = await pushDestinations(cwd, remoteName);
+          if (urls.length === 1) destination = urls[0];
+        } catch {
+        }
+      }
+      return destination ? await advertisedCommits(cwd, destination) : [];
+    }
+    async function locallyReadableCommits(cwd, shas) {
+      const commits = [];
+      for (const sha6 of shas) {
+        if (!sha6 || ZERO3.test(sha6)) continue;
+        const commit2 = await tryGit2(cwd, ["rev-parse", "--verify", "--quiet", `${sha6}^{commit}`]);
+        if (commit2) commits.push(commit2);
+      }
+      return commits;
+    }
+    async function newCommits(cwd, remoteName, localSha, remoteSha, provenCommits) {
       const tip = await tryGit2(cwd, ["rev-parse", "--verify", "--quiet", `${localSha}^{commit}`]);
       if (!tip) throw new Error(`cannot resolve ${localSha} to a commit`);
-      const args = ["rev-list", tip, "--not"];
-      const remoteKnown = remoteSha && !ZERO3.test(remoteSha) && await tryGit2(cwd, ["cat-file", "-e", `${remoteSha}^{commit}`]) !== null;
-      if (remoteKnown) args.push(remoteSha);
-      else {
-        const base = await tryGit2(cwd, ["merge-base", tip, `${remoteName}/main`]);
-        if (base) args.push(base);
-      }
-      args.push(`--remotes=${remoteName}`);
-      return (await runGit2(cwd, args)).split("\n").filter(Boolean);
+      const proven = provenCommits ?? await destinationCommits(cwd, remoteName);
+      const bases = await locallyReadableCommits(cwd, /* @__PURE__ */ new Set([remoteSha, ...proven]));
+      const revisions = [tip, ...bases.map((sha6) => `^${sha6}`)].join("\n") + "\n";
+      return (await runGit2(cwd, ["rev-list", "--stdin"], { input: revisions })).split("\n").filter(Boolean);
     }
     async function identityViolations(cwd, shas) {
       const out = [];
@@ -95725,7 +95762,7 @@ ${detail.join("\n")}` : stripped;
     }
     async function readCommits(cwd, shas) {
       if (!shas.length) return [];
-      const raw = await runGit2(cwd, ["log", "--no-walk=unsorted", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00", ...shas]);
+      const raw = await runGit2(cwd, ["log", "--no-walk=unsorted", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00", "--stdin"], { input: shas.join("\n") + "\n" });
       const t = raw.split("\0");
       const recs = [];
       for (let i = 0; i + 5 < t.length; i += 6) {
@@ -95813,11 +95850,15 @@ ${detail.join("\n")}` : stripped;
       ], { input: shas.join("\n") + "\n" });
       return parseDiffTree(raw, scan);
     }
-    async function tagViolations(cwd, objectSha, scan) {
+    async function tagViolations(cwd, objectSha, scan, scanRef) {
       const out = [];
       let cur = objectSha;
-      for (let depth = 0; depth < 8; depth++) {
-        if (await tryGit2(cwd, ["cat-file", "-t", cur]) !== "tag") break;
+      const seen2 = /* @__PURE__ */ new Set();
+      while (true) {
+        if (seen2.has(cur)) throw new Error(`cycle in tag chain at ${cur}`);
+        if (seen2.size >= 1e5) throw new Error("unresolved tag chain exceeds safety bound");
+        seen2.add(cur);
+        if ((await runGit2(cwd, ["cat-file", "-t", cur])).trim() !== "tag") break;
         const raw = await runGit2(cwd, ["cat-file", "tag", cur]);
         const sep21 = raw.indexOf("\n\n");
         const header = sep21 === -1 ? raw : raw.slice(0, sep21);
@@ -95828,23 +95869,42 @@ ${detail.join("\n")}` : stripped;
         }
         for (const l of scanText(scan, `${header.replace(/^tagger .*$/m, "")}
 ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.line, detail: l.name || l.match });
-        const next = /^object ([0-9a-f]+)$/m.exec(header);
-        if (!next) break;
+        const tagName = /^tag (.*)$/m.exec(header);
+        if (!tagName) throw new Error(`missing name in tag ${cur}`);
+        for (const l of scanRef(tagName[1])) out.push({ kind: "path", sha: cur, file: "(tag name)", line: l.line, detail: l.name || l.match });
+        const next = /^object ([0-9a-f]{40,64})$/m.exec(header);
+        if (!next) throw new Error(`unresolved target in tag ${cur}`);
         cur = next[1];
       }
       return out;
     }
-    async function checkPush(entries, { cwd = process.cwd(), remoteName = "origin", findLeaksFn } = {}) {
+    async function checkPush(entries, { cwd = process.cwd(), remoteName = "origin", remoteUrl, findLeaksFn, ownerNames = currentUserNames() } = {}) {
       const names = currentUserNames();
       const scan = findLeaksFn || ((t) => findLeaks(t, names));
+      const refOwners = /* @__PURE__ */ new Set([REQUIRED_NAME, ...ownerNames]);
+      const scanRef = (name) => {
+        const hits = scanText(scan, `/${name}`);
+        for (const owner of refOwners) {
+          const escaped = owner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          if (new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, "i").test(name)) hits.push({ line: 1, name: owner });
+        }
+        return hits;
+      };
       const violations = [];
       const seen2 = /* @__PURE__ */ new Set();
+      const active = entries.filter((e) => e.localSha && !ZERO3.test(e.localSha));
+      const proven = active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
+      proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
       for (const e of entries) {
         if (!e.localSha || ZERO3.test(e.localSha)) continue;
         const ref2 = e.localRef || e.localSha;
         const add = (list2) => list2.forEach((v) => violations.push({ ...v, ref: ref2 }));
-        if (e.localSha !== e.remoteSha) add(await tagViolations(cwd, e.localSha, scan));
-        const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha)).filter((s2) => !seen2.has(s2));
+        for (const l of scanRef(e.remoteRef || "")) add([{ kind: "path", sha: e.localSha, file: "(destination ref)", line: l.line, detail: l.name || l.match }]);
+        if (e.localRef?.startsWith("refs/tags/")) {
+          for (const l of scanRef(e.localRef)) add([{ kind: "path", sha: e.localSha, file: "(tag name)", line: l.line, detail: l.name || l.match }]);
+        }
+        if (e.localSha !== e.remoteSha) add(await tagViolations(cwd, e.localSha, scan, scanRef));
+        const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha, proven)).filter((s2) => !seen2.has(s2));
         shas.forEach((s2) => seen2.add(s2));
         add(await identityViolations(cwd, shas));
         add(await messageViolations(cwd, shas, scan));
@@ -95856,8 +95916,8 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       if (v.kind === "identity") return `  ${v.sha.slice(0, 12)} [${v.ref}] identity: ${v.detail}`;
       return `  ${v.sha.slice(0, 12)} [${v.ref}] ${v.file}:${v.line}  personal path: ${v.detail}`;
     }
-    async function assertPublishableToPublicOss(cwd, commit2, { remoteName = "origin" } = {}) {
-      const { violations, checked } = await checkPush([{ localRef: commit2, localSha: commit2, remoteRef: "", remoteSha: "0".repeat(40) }], { cwd, remoteName });
+    async function assertPublishableToPublicOss(cwd, commit2, { remoteName = "origin", remoteUrl, remoteRef = "refs/heads/main" } = {}) {
+      const { violations, checked } = await checkPush([{ localRef: commit2, localSha: commit2, remoteRef, remoteSha: "0".repeat(40) }], { cwd, remoteName, remoteUrl });
       if (violations.length) {
         throw new Error(`public-oss push guard BLOCKED ${violations.length} violation(s) in ${checked} commit(s):
 ${violations.slice(0, 20).map(formatViolation).join("\n")}
@@ -95866,6 +95926,7 @@ ${BLOCKED_HINT}`);
       return { checked };
     }
     var import_node_child_process10;
+    var import_node_os32;
     var REQUIRED_NAME;
     var REQUIRED_EMAIL;
     var ZERO3;
@@ -95877,6 +95938,7 @@ ${BLOCKED_HINT}`);
       "src/git/public-push-guard.mjs"() {
         "use strict";
         import_node_child_process10 = require("child_process");
+        import_node_os32 = require("os");
         init_personal_paths();
         REQUIRED_NAME = "vilmire";
         REQUIRED_EMAIL = "vilmire@users.noreply.github.com";
@@ -96169,13 +96231,15 @@ ${tail}`;
         const verifyRemoteMainContainsCommit = (submodulePath, commit2, branch = "main") => verifyRemoteBranchContainsCommit(runGit5, submodulePath, commit2, branch);
         const publishCommitToRemoteMain = async (submodulePath, commit2, branch = "main") => {
           const refspec = `${commit2}:refs/heads/${branch}`;
-          let originUrl = "";
+          let destinations;
           try {
-            originUrl = (await runGit5(submodulePath, ["remote", "get-url", "--push", "origin"])).trim();
+            destinations = await pushDestinations(submodulePath, "origin");
           } catch {
           }
-          if (!originUrl || isPublicRemoteUrl(originUrl)) {
-            await assertPublishableToPublicOss(submodulePath, commit2, { remoteName: "origin" });
+          if (!destinations || destinations.isPublic) {
+            for (const remoteUrl of destinations?.urls || [void 0]) {
+              await assertPublishableToPublicOss(submodulePath, commit2, { remoteName: "origin", remoteUrl, remoteRef: `refs/heads/${branch}` });
+            }
           }
           const { stdout, stderr } = await execFileAsync6(GIT, ["push", "origin", refspec], {
             cwd: submodulePath,
@@ -99555,7 +99619,7 @@ ${asText(streams.stderr)}
       }
     });
     var import_node_crypto23;
-    var import_node_os32;
+    var import_node_os4;
     var import_node_path17;
     var refused;
     var LEASE_MS;
@@ -99564,7 +99628,7 @@ ${asText(streams.stderr)}
       "src/drivers/driver-service.ts"() {
         "use strict";
         import_node_crypto23 = require("crypto");
-        import_node_os32 = require("os");
+        import_node_os4 = require("os");
         import_node_path17 = require("path");
         init_managed_mcp_process();
         init_risk_class();
@@ -99597,7 +99661,7 @@ ${asText(streams.stderr)}
             const candidate = (0, import_node_path17.join)(baseDir, "runtime", installed.module.type);
             const rel = (0, import_node_path17.relative)((0, import_node_path17.resolve)(installed.cwd), (0, import_node_path17.resolve)(candidate));
             if (!rel || !rel.startsWith("..") && !(0, import_node_path17.isAbsolute)(rel)) {
-              return (0, import_node_path17.join)((0, import_node_os32.tmpdir)(), "adhdev-driver-runtime", installed.module.type);
+              return (0, import_node_path17.join)((0, import_node_os4.tmpdir)(), "adhdev-driver-runtime", installed.module.type);
             }
             return candidate;
           }
@@ -153532,7 +153596,7 @@ ${ptyResult.output.slice(-2e3)}`);
       return { success: false, code: "invalid_args" };
     };
     var assistantWatchSpecs = defineCommandSpecs("high", { [ASSISTANT_VERB2.watch]: watch2 }, { [ASSISTANT_VERB2.watch]: { sources: [...ASSISTANT_TOOL_SOURCES] } });
-    var import_node_os4 = require("os");
+    var import_node_os5 = require("os");
     init_dist();
     init_command_registry();
     init_assistant_store();
@@ -153542,7 +153606,7 @@ ${ptyResult.output.slice(-2e3)}`);
       const daemonId = typeof ctx.deps?.statusInstanceId === "string" ? ctx.deps.statusInstanceId : null;
       return {
         success: true,
-        machine: { daemonId, hostname: (0, import_node_os4.hostname)() },
+        machine: { daemonId, hostname: (0, import_node_os5.hostname)() },
         executionEnabled: s2.enabled,
         restriction: assistantExecution.toolRestriction() ?? "prompt_only",
         supportedActions: ["local_pty_approve", "local_pty_reject"],
@@ -156362,7 +156426,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
     }
     var fs95 = __toESM2(require("fs"));
-    var import_node_os5 = require("os");
+    var import_node_os6 = require("os");
     var import_path45 = require("path");
     init_logger();
     init_git_locale();
@@ -156453,7 +156517,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     var TRACK_CONFIG_DIR_NAMES = [".adhdev", ".adhdev-preview"];
     function looksLikeCrossTrackWorktreePath(actualPath, normalizePath2) {
-      const home = normalizePath2((0, import_node_os5.homedir)());
+      const home = normalizePath2((0, import_node_os6.homedir)());
       return TRACK_CONFIG_DIR_NAMES.some((trackDirName) => {
         const trackWorktreesDir = (0, import_path45.join)(home, trackDirName, "worktrees");
         return actualPath === normalizePath2(trackWorktreesDir) || actualPath.startsWith(normalizePath2(trackWorktreesDir) + import_path45.sep);
@@ -158675,7 +158739,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_mesh_peer_secrets();
     init_logger();
     init_mesh_host_endpoints();
-    var import_node_os6 = require("os");
+    var import_node_os7 = require("os");
     var MESH_JOIN_TRANSPORT = Object.freeze({
       wsPath: MESH_RPC_WS_PATH,
       seqscribePath: MESH_SEQSCRIBE_WS_PATH,
@@ -158715,7 +158779,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!listen) return {};
       let interfaces = {};
       try {
-        interfaces = (0, import_node_os6.networkInterfaces)();
+        interfaces = (0, import_node_os7.networkInterfaces)();
       } catch {
       }
       return computeMeshHostAddressCandidates(listen, interfaces);

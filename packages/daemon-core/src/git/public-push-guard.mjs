@@ -25,6 +25,7 @@
 //   - `diff --git a/<path> b/<path>` lines are scanned: file NAMES leak too.
 
 import { spawn } from 'node:child_process';
+import { devNull } from 'node:os';
 import { findLeaks, currentUserNames } from './personal-paths.mjs';
 
 export const REQUIRED_NAME = 'vilmire';
@@ -44,7 +45,12 @@ export function isPublicRemoteUrl(url) {
 
 function runGit(cwd, args, { input } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, { cwd, windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
+    // Read the real object graph, irrespective of local replacement refs/grafts.
+    const child = spawn('git', ['--no-replace-objects', ...args], {
+      cwd, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull, GIT_TERMINAL_PROMPT: '0' },
+      timeout: args[0] === 'ls-remote' ? 30_000 : undefined,
+      windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    });
     const out = [];
     const err = [];
     child.stdout.on('data', (d) => out.push(d));
@@ -60,20 +66,58 @@ function runGit(cwd, args, { input } = {}) {
 }
 const tryGit = async (cwd, args) => { try { return (await runGit(cwd, args)).trim(); } catch { return null; } };
 
-/** Commits introduced by one pushed ref. Throws when the ref is not a commit. */
-export async function newCommits(cwd, remoteName, localSha, remoteSha) {
-  const tip = await tryGit(cwd, ['rev-parse', '--verify', '--quiet', `${localSha}^{commit}`]); // peels annotated tags
-  if (!tip) throw new Error(`cannot resolve ${localSha} to a commit`);
-  const args = ['rev-list', tip, '--not'];
-  const remoteKnown = remoteSha && !ZERO.test(remoteSha) && (await tryGit(cwd, ['cat-file', '-e', `${remoteSha}^{commit}`])) !== null;
-  if (remoteKnown) args.push(remoteSha);
-  else {
-    const base = await tryGit(cwd, ['merge-base', tip, `${remoteName}/main`]);
-    if (base) args.push(base);
+/** All configured and rewritten push destinations; an unreadable config throws. */
+export async function pushDestinations(cwd, remoteName = 'origin') {
+  // get-url --all applies insteadOf/pushInsteadOf and Git's pushurl/url fallback.
+  const urls = (await runGit(cwd, ['remote', 'get-url', '--push', '--all', remoteName])).trim().split('\n').filter(Boolean);
+  const pushurls = await tryGit(cwd, ['config', '--get-all', `remote.${remoteName}.pushurl`]);
+  const configured = pushurls || await runGit(cwd, ['config', '--get-all', `remote.${remoteName}.url`]);
+  if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
+  return { urls, isPublic: [...urls, ...configured.trim().split('\n')].some(isPublicRemoteUrl) };
+}
+
+/** Only fresh destination advertisements prove possession, never refs/remotes/*. */
+async function advertisedCommits(cwd, destination) {
+  try {
+    const refs = await runGit(cwd, ['ls-remote', '--refs', '--', destination]);
+    const shas = new Set(refs.split('\n').map((line) => line.split(/\s+/)[0]).filter((sha) => /^[0-9a-f]{40,64}$/.test(sha)));
+    return await locallyReadableCommits(cwd, shas);
+  } catch {
+    return []; // No proof: scan full ancestry (plus any pre-push stdin proof).
   }
-  // Whatever the remote already has is not ours to re-judge.
-  args.push(`--remotes=${remoteName}`);
-  return (await runGit(cwd, args)).split('\n').filter(Boolean);
+}
+
+async function destinationCommits(cwd, remoteName, remoteUrl) {
+  // The hook URL identifies the actual destination, even for a differently named
+  // remote. A caller without that URL must supply one unambiguous push target.
+  let destination = remoteUrl;
+  if (!destination) {
+    try {
+      const { urls } = await pushDestinations(cwd, remoteName);
+      if (urls.length === 1) destination = urls[0];
+    } catch { /* no destination proof: full ancestry */ }
+  }
+  return destination ? await advertisedCommits(cwd, destination) : [];
+}
+
+async function locallyReadableCommits(cwd, shas) {
+  const commits = [];
+  for (const sha of shas) {
+    if (!sha || ZERO.test(sha)) continue;
+    const commit = await tryGit(cwd, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]);
+    if (commit) commits.push(commit);
+  }
+  return commits;
+}
+
+/** Commits introduced by one pushed ref. Throws when the ref is not a commit. */
+export async function newCommits(cwd, remoteName, localSha, remoteSha, provenCommits) {
+  const tip = await tryGit(cwd, ['rev-parse', '--verify', '--quiet', `${localSha}^{commit}`]);
+  if (!tip) throw new Error(`cannot resolve ${localSha} to a commit`);
+  const proven = provenCommits ?? await destinationCommits(cwd, remoteName);
+  const bases = await locallyReadableCommits(cwd, new Set([remoteSha, ...proven]));
+  const revisions = [tip, ...bases.map((sha) => `^${sha}`)].join('\n') + '\n';
+  return (await runGit(cwd, ['rev-list', '--stdin'], { input: revisions })).split('\n').filter(Boolean);
 }
 
 async function identityViolations(cwd, shas) {
@@ -92,7 +136,7 @@ async function identityViolations(cwd, shas) {
 // them, so (unlike \x01/\x02 markers) a message can never forge a record edge.
 async function readCommits(cwd, shas) {
   if (!shas.length) return [];
-  const raw = await runGit(cwd, ['log', '--no-walk=unsorted', '--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00', ...shas]);
+  const raw = await runGit(cwd, ['log', '--no-walk=unsorted', '--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00', '--stdin'], { input: shas.join('\n') + '\n' });
   const t = raw.split('\0');
   const recs = [];
   for (let i = 0; i + 5 < t.length; i += 6) {
@@ -170,11 +214,15 @@ async function patchViolations(cwd, shas, scan) {
 }
 
 /** Annotated tag objects: tagger identity + name/message scan (nested tags too). */
-async function tagViolations(cwd, objectSha, scan) {
+async function tagViolations(cwd, objectSha, scan, scanRef) {
   const out = [];
   let cur = objectSha;
-  for (let depth = 0; depth < 8; depth++) {
-    if ((await tryGit(cwd, ['cat-file', '-t', cur])) !== 'tag') break;
+  const seen = new Set();
+  while (true) {
+    if (seen.has(cur)) throw new Error(`cycle in tag chain at ${cur}`);
+    if (seen.size >= 100_000) throw new Error('unresolved tag chain exceeds safety bound');
+    seen.add(cur);
+    if ((await runGit(cwd, ['cat-file', '-t', cur])).trim() !== 'tag') break;
     const raw = await runGit(cwd, ['cat-file', 'tag', cur]);
     const sep = raw.indexOf('\n\n');
     const header = sep === -1 ? raw : raw.slice(0, sep);
@@ -184,8 +232,11 @@ async function tagViolations(cwd, objectSha, scan) {
       out.push({ kind: 'identity', sha: cur, detail: `tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : 'missing'}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
     }
     for (const l of scanText(scan, `${header.replace(/^tagger .*$/m, '')}\n${message}`)) out.push({ kind: 'path', sha: cur, file: '(tag object)', line: l.line, detail: l.name || l.match });
-    const next = /^object ([0-9a-f]+)$/m.exec(header);
-    if (!next) break;
+    const tagName = /^tag (.*)$/m.exec(header);
+    if (!tagName) throw new Error(`missing name in tag ${cur}`);
+    for (const l of scanRef(tagName[1])) out.push({ kind: 'path', sha: cur, file: '(tag name)', line: l.line, detail: l.name || l.match });
+    const next = /^object ([0-9a-f]{40,64})$/m.exec(header);
+    if (!next) throw new Error(`unresolved target in tag ${cur}`);
     cur = next[1];
   }
   return out;
@@ -195,17 +246,35 @@ async function tagViolations(cwd, objectSha, scan) {
  * @param entries [{ localRef, localSha, remoteRef, remoteSha }]
  * @returns {Promise<{ violations: object[], checked: number }>}
  */
-export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', findLeaksFn } = {}) {
+export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames() } = {}) {
   const names = currentUserNames();
   const scan = findLeaksFn || ((t) => findLeaks(t, names));
+  // Ref names have no public repository-owner context: owner account tokens
+  // there are identifying, even without a home-directory prefix.
+  const refOwners = new Set([REQUIRED_NAME, ...ownerNames]);
+  const scanRef = (name) => {
+    const hits = scanText(scan, `/${name}`);
+    for (const owner of refOwners) {
+      const escaped = owner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(^|[^A-Za-z0-9])${escaped}(?=$|[^A-Za-z0-9])`, 'i').test(name)) hits.push({ line: 1, name: owner });
+    }
+    return hits;
+  };
   const violations = [];
   const seen = new Set();
+  const active = entries.filter((e) => e.localSha && !ZERO.test(e.localSha));
+  const proven = active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
+  proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
   for (const e of entries) {
     if (!e.localSha || ZERO.test(e.localSha)) continue; // deleting a ref pushes no content
     const ref = e.localRef || e.localSha;
     const add = (list) => list.forEach((v) => violations.push({ ...v, ref }));
-    if (e.localSha !== e.remoteSha) add(await tagViolations(cwd, e.localSha, scan));
-    const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha)).filter((s) => !seen.has(s));
+    for (const l of scanRef(e.remoteRef || '')) add([{ kind: 'path', sha: e.localSha, file: '(destination ref)', line: l.line, detail: l.name || l.match }]);
+    if (e.localRef?.startsWith('refs/tags/')) {
+      for (const l of scanRef(e.localRef)) add([{ kind: 'path', sha: e.localSha, file: '(tag name)', line: l.line, detail: l.name || l.match }]);
+    }
+    if (e.localSha !== e.remoteSha) add(await tagViolations(cwd, e.localSha, scan, scanRef));
+    const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha, proven)).filter((s) => !seen.has(s));
     shas.forEach((s) => seen.add(s));
     add(await identityViolations(cwd, shas));
     add(await messageViolations(cwd, shas, scan));
@@ -225,8 +294,8 @@ export const BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMA
  * Refinery/auto-publish entry point: throws (message = full report) unless
  * `commit` may be published to the public oss remote. Fail-closed: scan errors throw.
  */
-export async function assertPublishableToPublicOss(cwd, commit, { remoteName = 'origin' } = {}) {
-  const { violations, checked } = await checkPush([{ localRef: commit, localSha: commit, remoteRef: '', remoteSha: '0'.repeat(40) }], { cwd, remoteName });
+export async function assertPublishableToPublicOss(cwd, commit, { remoteName = 'origin', remoteUrl, remoteRef = 'refs/heads/main' } = {}) {
+  const { violations, checked } = await checkPush([{ localRef: commit, localSha: commit, remoteRef, remoteSha: '0'.repeat(40) }], { cwd, remoteName, remoteUrl });
   if (violations.length) {
     throw new Error(`public-oss push guard BLOCKED ${violations.length} violation(s) in ${checked} commit(s):\n${violations.slice(0, 20).map(formatViolation).join('\n')}\n${BLOCKED_HINT}`);
   }

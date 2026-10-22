@@ -18,7 +18,7 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { assertPublishableToPublicOss, isPublicRemoteUrl } from '../git/public-push-guard.mjs';
+import { assertPublishableToPublicOss, pushDestinations } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
@@ -738,10 +738,14 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             // full-history personal-path scan run HERE, fail-closed, before anything is sent.
             // A throw lands in the caller's publishError path, so the publish is refused.
             // Scoped to the public oss remote — other submodules (providers) are not gated.
-            let originUrl = '';
-            try { originUrl = (await runGit(submodulePath, ['remote', 'get-url', '--push', 'origin'])).trim(); } catch { /* unknown URL → guard anyway */ }
-            if (!originUrl || isPublicRemoteUrl(originUrl)) {
-                await assertPublishableToPublicOss(submodulePath, commit, { remoteName: 'origin' });
+            let destinations: Awaited<ReturnType<typeof pushDestinations>> | undefined;
+            try { destinations = await pushDestinations(submodulePath, 'origin'); } catch { /* unknown URLs: guard full ancestry */ }
+            if (!destinations || destinations.isPublic) {
+                // Every push URL is a separate destination. Possession on one does
+                // not prove possession on another, so check each independently.
+                for (const remoteUrl of destinations?.urls || [undefined]) {
+                    await assertPublishableToPublicOss(submodulePath, commit, { remoteName: 'origin', remoteUrl, remoteRef: `refs/heads/${branch}` });
+                }
             }
             const { stdout, stderr } = await execFileAsync(GIT, ['push', 'origin', refspec], {
                 cwd: submodulePath,
