@@ -94,10 +94,28 @@ describe('antigravity-cli busy→idle on the live torn frame', () => {
         expect(ev.fired).toBeNull();
     });
 
-    it('an approval modal on screen never idles via arm 3', () => {
-        const withModal = GARBLED.replace('  Outcome: completed.', '  Requesting permission for: rm -rf build\nDo you want to proceed?\n> 1. Yes\n  2. No');
-        const ev = evaluateFsm(spec, 'busy', withModal, { row: 0, col: 0 }, undefined, clock(600_000, 600_000));
-        expect(ev.fired?.to).toBe('approval');
+    it('an approval modal on screen never idles via arm 3 (bottom-most live modal enters approval; modal-like text above composer/spinner does not)', () => {
+        const quotedAboveComposer = GARBLED.replace('  Outcome: completed.', '  Requesting permission for: rm -rf build\nDo you want to proceed?\n> 1. Yes\n  2. No');
+        const quotedEv = evaluateFsm(spec, 'busy', quotedAboveComposer, { row: 0, col: 0 }, undefined, clock(600_000, 600_000));
+        expect(quotedEv.fired?.to).not.toBe('approval');
+
+        const liveModalLines = [
+            ...GARBLED.split('\n').slice(0, 12),
+            '  Requesting permission for: rm -rf build',
+            '  Do you want to proceed?',
+            '  > 1. Yes',
+            '    2. No',
+            '  ? for shortcuts                                          Gemini 3.7 Flash · high',
+        ];
+        const liveEv = evaluateFsm(
+            spec,
+            'busy',
+            liveModalLines.join('\n'),
+            { row: liveModalLines.length - 3, col: 2 },
+            undefined,
+            clock(600_000, 600_000),
+        );
+        expect(liveEv.fired?.to).toBe('approval');
     });
 
     it('the redrawn (clean) frame idles through arm 1 once its cursor window is stable', () => {

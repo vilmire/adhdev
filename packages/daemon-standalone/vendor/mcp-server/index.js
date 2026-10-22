@@ -95464,6 +95464,8 @@ ${detail.join("\n")}` : stripped;
       let lastNonBlankRow = lines.length - 1;
       while (lastNonBlankRow >= 0 && !lines[lastNonBlankRow].trim()) lastNonBlankRow -= 1;
       if (lastNonBlankRow < 0) return empty;
+      let firstNonBlankRow = 0;
+      while (firstNonBlankRow <= lastNonBlankRow && !lines[firstNonBlankRow].trim()) firstNonBlankRow += 1;
       const choiceBlocks = [];
       const unnumberedRows = [];
       const footerRows = [];
@@ -95563,7 +95565,7 @@ ${detail.join("\n")}` : stripped;
       }
       if (modalEndRow < viewportStartRow) return empty;
       if (modalEndRow < lastNonBlankRow) return empty;
-      let minStartRow = 0;
+      let minStartRow = firstNonBlankRow;
       for (const b of choiceBlocks) {
         if (b !== lastChoiceBlock && b.endRow < choiceStartRow) {
           minStartRow = Math.max(minStartRow, b.endRow + 1);
@@ -95574,17 +95576,20 @@ ${detail.join("\n")}` : stripped;
           minStartRow = Math.max(minStartRow, f + 1);
         }
       }
-      for (let r = 0; r < choiceStartRow; r += 1) {
-        if (isComposerPromptBoundary(lines[r], lines[r + 1] ?? "")) {
+      for (let r = firstNonBlankRow; r < choiceStartRow; r += 1) {
+        const line = lines[r];
+        if (isComposerPromptBoundary(line, lines[r + 1] ?? "") || /^\s*•\s+\S/.test(line) || /(?:^|\s)(?:Working|Thinking)\s*\((?:[⠀-⣿]|\d+(?:h|m|s|ms)\b|\d+:\d)/.test(line) || /^\s*[✢✳✶✽✷✸✹✻\u2800-\u28ff]\s+\w/.test(line) && /(?:…|\.\.\.|esc to (?:interrupt|stop)|tokens?\b|\[stop\])/i.test(line)) {
           minStartRow = Math.max(minStartRow, r + 1);
         }
       }
-      if (cursor !== void 0 && !(cursor.row === 0 && cursor.col === 0)) {
-        const effectiveCursorRow = cursor.row >= lines.length ? lastNonBlankRow + 1 : Math.max(0, cursor.row);
+      const interactiveStartRow = choiceEndRow !== -1 ? Math.max(minStartRow, choiceStartRow > 0 ? Math.max(1, choiceStartRow - 1) : 0) : Math.max(minStartRow, firstNonBlankRow);
+      if (cursor !== void 0) {
+        if (cursor.row < 0) return empty;
+        const effectiveCursorRow = cursor.row;
         if (effectiveCursorRow <= lastNonBlankRow && isComposerOrSpinnerOrBulletLine(lines[effectiveCursorRow], lines[effectiveCursorRow + 1] ?? "")) {
           return empty;
         }
-        if (effectiveCursorRow < Math.max(0, minStartRow - 1) || effectiveCursorRow > modalEndRow + 1) {
+        if (effectiveCursorRow < interactiveStartRow || effectiveCursorRow > modalEndRow + 1) {
           return empty;
         }
       }
@@ -95704,7 +95709,7 @@ ${detail.join("\n")}` : stripped;
         init_logger();
         NUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→●○◉◯▶]\s*)?(?:\(\s*[●○xX ]\s*\)\s*)?(?:\[[ xX]\]|[☐☒◻◼])?\s*(\d+)(?:\.\s*(?:\[[ xX]\]|[☐☒◻◼])?\s*\S|\s*\([●○xX ]\)\s*\S)/;
         UNNUMBERED_CHOICE_LINE_RE = /^\s*(?:[┃│|]\s*)?(?:[❯›➜>→]\s*)?(?:Yes,\s*I trust this folder|No,\s*exit)\s*$|Allow once\s+Allow always\s+Reject|\bConfirm\s+Cancel\b|^\s*Yes,\s*proceed\s+y\s*$|^\s*No,\s*quit\s+n\s*$/i;
-        MODAL_FOOTER_LINE_RE = /enter to submit|Press enter to confirm or esc to cancel|Enter to confirm\s*[·•|]\s*Esc to cancel|Esc to cancel\b|escape to cancel\b|press\s+esc(?:ape)?\b|Enter to select\b|(?:↑|↓|up|down)[\s/]+(?:↑|↓)?\s*to navigate\b|↑\/↓\s*(?:Navigate|select)\b|\d+\/\d+:select\b|Space to select\b|Tab to amend\b|ctrl\+e to explain\b/i;
+        MODAL_FOOTER_LINE_RE = /enter to submit|press\s+enter\s+to\s+(?:continue|confirm|submit|select)\b|Press enter to confirm or esc to cancel|Enter to confirm\s*[·•|]\s*Esc to cancel|Esc to cancel\b|escape to cancel\b|press\s+esc(?:ape)?\b|Enter to select\b|(?:↑|↓|up|down)[\s/]+(?:↑|↓)?\s*to navigate\b|↑\/↓\s*(?:Navigate|select)\b|\d+\/\d+:select\b|Space to select\b|Tab to amend\b|ctrl\+e to explain\b/i;
       }
     });
     function unavailableSignalSnapshot(now, reason, profile) {

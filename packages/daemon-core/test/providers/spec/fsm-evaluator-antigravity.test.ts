@@ -574,11 +574,11 @@ describe('antigravity-cli v4 FSM — background command keeps session generating
 
     it('screen with approval plus background task → approval wins', () => {
         for (const from of ['idle', 'busy']) {
-            const ev = evaluateFsm(spec, from, bgWithApprovalScreen, { row: 35, col: 2 }, undefined, clk(20000, 0));
+            const ev = evaluateFsm(spec, from, bgWithApprovalScreen, { row: 8, col: 2 }, undefined, clk(20000, 0));
             expect(ev.fired?.to).toBe('approval');
         }
         // And while the approval modal remains open, approval stays sticky (does not flip back to busy).
-        const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row: 35, col: 2 }, undefined, clk(20000, 0));
+        const hold = evaluateFsm(spec, 'approval', bgWithApprovalScreen, { row: 8, col: 2 }, undefined, clk(20000, 0));
         expect(hold.fired).toBeNull();
     });
 });

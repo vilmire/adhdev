@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { resolveSections } from '../../../src/providers/spec/evaluator.js';
-import { deriveModal } from '../../../src/providers/spec/fsm-driver-modal.js';
+import { deriveModal, resolveLiveModalSlice } from '../../../src/providers/spec/fsm-driver-modal.js';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
 import { projectAdapterStatus } from '../../../src/providers/spec/adapter-status-projection.js';
@@ -265,15 +265,22 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
     });
 
     describe('real-modal and GhosttyVT rendered counterexamples', () => {
-        function runDriver(spec: CliSpecV4, scrollback: string, viewport: string, cursor = { row: 20, col: 1 }) {
+        function runDriver(
+            spec: CliSpecV4,
+            scrollback: string,
+            viewport: string,
+            cursor?: { row: number; col: number },
+        ) {
             const fullText = scrollback ? `${scrollback}\n${viewport}` : viewport;
             const viewportLines = viewport.split('\n');
             const viewportStartRow = scrollback ? scrollback.split('\n').length : 0;
-            const ev = evaluateFsm(spec, 'busy', fullText, cursor, undefined, clk(5000, 1000), undefined, viewportStartRow);
+            const viewportCursor = cursor ?? { row: Math.max(0, viewportLines.length - 1), col: 1 };
+            const guardCursor = { row: viewportCursor.row + viewportStartRow, col: viewportCursor.col };
+            const ev = evaluateFsm(spec, 'busy', fullText, guardCursor, undefined, clk(5000, 1000), undefined, viewportStartRow);
             const stateId = ev.fired?.to ?? 'busy';
             const stateObj = spec.states.find(s => s.id === stateId) ?? null;
             const sections = resolveSections(spec.sections ?? {}, viewportLines);
-            const modal = stateObj ? deriveModal(stateObj, sections, viewportLines.join('\n'), () => {}) : null;
+            const modal = stateObj ? deriveModal(stateObj, sections, viewportLines.join('\n'), () => {}, viewportCursor) : null;
             const state = stateObj
                 ? { id: stateObj.id, label: stateObj.label, title: modal?.title ?? null, status: stateObj.status ?? (stateObj.modal ? ('approval' as const) : ('idle' as const)) }
                 : null;
@@ -336,6 +343,10 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
                 driver.start();
                 for (const c of chunks) pty.feed(c);
                 await vi.advanceTimersByTimeAsync(500);
+                const lifecycle = new ProviderApprovalLifecycle();
+                if (latestState) {
+                    lifecycle.observe(latestState, latestModal, 1000);
+                }
                 const status = projectAdapterStatus({
                     providerSessionId: 'p1',
                     providerFailure: null,
@@ -348,7 +359,12 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
                     lastOutputAt: undefined,
                     lastScreenChangeAt: undefined,
                 });
-                return { state: latestState?.id, modal: latestModal, status: status.status };
+                return {
+                    state: latestState?.id,
+                    modal: latestModal,
+                    status: status.status,
+                    providerApproval: lifecycle.read() ?? undefined,
+                };
             } finally {
                 driver.shutdown();
                 vi.useRealTimers();
@@ -544,6 +560,116 @@ describe('nested approval-text false positive regressions (codex-cli & claude-cl
             ]);
             expect(ghosttyResult.status).not.toBe('waiting_approval');
             expect(ghosttyResult.modal).toBeNull();
+        });
+
+        it('does NOT enter waiting_approval when cursor is at row 23 below a short 8-10 row snapshot for Codex, Claude, and quoted Codex', async () => {
+            const codexShortLines = [
+                'Would you like to run the following command?',
+                '',
+                '  $ git status --porcelain',
+                '',
+                '› 1. Yes, proceed (y)',
+                "  2. Yes, and don't ask again for git status commands (a)",
+                '  3. No, and tell Codex what to do differently (esc)',
+                '',
+                '  enter to submit | esc to cancel',
+            ];
+            const codexShort = codexShortLines.join('\n');
+            const farCursor = { row: 23, col: 0 };
+
+            expect(resolveLiveModalSlice(codexShortLines, farCursor, 0).hasLiveModal).toBe(false);
+            expect(evaluateFsm(codexSpec, 'busy', codexShort, farCursor, undefined, clk(10_000, 0), undefined, 0).fired?.to).not.toBe('approval');
+            expect(deriveModal(codexApprovalState, resolveSections(codexSpec.sections ?? {}, codexShortLines), codexShort, () => {}, farCursor)).toBeNull();
+            const codexFarDriver = runDriver(codexSpec, '', codexShort, farCursor);
+            expect(codexFarDriver.status).not.toBe('waiting_approval');
+            expect(codexFarDriver.modal).toBeNull();
+
+            const claudeShortLines = [
+                '────────────────────────────────────────',
+                ' Bash command',
+                '   git status --porcelain',
+                ' Do you want to proceed?',
+                ' ❯ 1. Yes',
+                "   2. Yes, and don't ask again",
+                '   3. No',
+                ' Esc to cancel · Tab to amend',
+            ];
+            const claudeShort = claudeShortLines.join('\n');
+
+            expect(resolveLiveModalSlice(claudeShortLines, farCursor, 0).hasLiveModal).toBe(false);
+            expect(evaluateFsm(claudeSpec, 'busy', claudeShort, farCursor, undefined, clk(10_000, 0), undefined, 0).fired?.to).not.toBe('approval');
+            expect(deriveModal(claudeApprovalState, resolveSections(claudeSpec.sections ?? {}, claudeShortLines), claudeShort, () => {}, farCursor)).toBeNull();
+            const claudeFarDriver = runDriver(claudeSpec, '', claudeShort, farCursor);
+            expect(claudeFarDriver.status).not.toBe('waiting_approval');
+            expect(claudeFarDriver.modal).toBeNull();
+
+            const quotedCodexShortLines = [
+                '• Ran adhdev-mesh.read_chat({"session_id":"worker-1"})',
+                '  Would you like to run the following command?',
+                '  $ git status --porcelain',
+                '  › 1. Yes, proceed (y)',
+                "    2. Yes, and don't ask again for git status commands (a)",
+                '    3. No, and tell Codex what to do differently (esc)',
+                '  enter to submit | esc to cancel',
+            ];
+            const quotedCodexShort = quotedCodexShortLines.join('\n');
+            expect(resolveLiveModalSlice(quotedCodexShortLines, farCursor, 0).hasLiveModal).toBe(false);
+            const quotedCodexFarDriver = runDriver(codexSpec, '', quotedCodexShort, farCursor);
+            expect(quotedCodexFarDriver.status).not.toBe('waiting_approval');
+            expect(quotedCodexFarDriver.modal).toBeNull();
+
+            const ghosttyQuotedFar = await runGhostty('codex-cli', [
+                '\x1b[2J\x1b[H'
+                + quotedCodexShortLines.join('\r\n')
+                + '\x1b[24;1H',
+            ]);
+            expect(ghosttyQuotedFar.status).not.toBe('waiting_approval');
+            expect(ghosttyQuotedFar.modal).toBeNull();
+            expect(ghosttyQuotedFar.providerApproval).toBeUndefined();
+        });
+
+        it('does NOT treat native { row: 0, col: 0 } after ESC[H as unavailable and rejects quoted modal output', async () => {
+            const quotedCodexLines = [
+                '• Ran adhdev-mesh.read_chat({"session_id":"worker-1"})',
+                '  Would you like to run the following command?',
+                '  $ git status --porcelain',
+                '  › 1. Yes, proceed (y)',
+                "    2. Yes, and don't ask again for git status commands (a)",
+                '    3. No, and tell Codex what to do differently (esc)',
+                '  enter to submit | esc to cancel',
+            ];
+            const quotedCodex = quotedCodexLines.join('\n');
+            const homeCursor = { row: 0, col: 0 };
+
+            expect(resolveLiveModalSlice(quotedCodexLines, homeCursor, 0).hasLiveModal).toBe(false);
+            expect(evaluateFsm(codexSpec, 'busy', quotedCodex, homeCursor, undefined, clk(10_000, 0), undefined, 0).fired?.to).not.toBe('approval');
+            expect(deriveModal(codexApprovalState, resolveSections(codexSpec.sections ?? {}, quotedCodexLines), quotedCodex, () => {}, homeCursor)).toBeNull();
+
+            const ghosttyEscH = await runGhostty('codex-cli', [
+                '\x1b[2J\x1b[H'
+                + quotedCodexLines.join('\r\n')
+                + '\x1b[H',
+            ]);
+            expect(ghosttyEscH.status).not.toBe('waiting_approval');
+            expect(ghosttyEscH.modal).toBeNull();
+            expect(ghosttyEscH.providerApproval).toBeUndefined();
+
+            const ghosttyClaudeEscH = await runGhostty('claude-cli', [
+                '\x1b[2J\x1b[H'
+                + '⏺ Read(test/fixtures/modal.txt)\r\n'
+                + '────────────────────────────────────────\r\n'
+                + ' Bash command\r\n'
+                + '   git status\r\n'
+                + ' Do you want to proceed?\r\n'
+                + ' ❯ 1. Yes\r\n'
+                + "   2. Yes, and don't ask again\r\n"
+                + '   3. No\r\n'
+                + ' Esc to cancel · Tab to amend'
+                + '\x1b[H',
+            ]);
+            expect(ghosttyClaudeEscH.status).not.toBe('waiting_approval');
+            expect(ghosttyClaudeEscH.modal).toBeNull();
+            expect(ghosttyClaudeEscH.providerApproval).toBeUndefined();
         });
     });
 

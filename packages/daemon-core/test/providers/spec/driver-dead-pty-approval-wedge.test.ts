@@ -53,7 +53,6 @@ const MODAL_SCREEN = [
     '',
     ' ❯ 1. Yes',
     '   2. No',
-    '',
 ];
 
 /**
