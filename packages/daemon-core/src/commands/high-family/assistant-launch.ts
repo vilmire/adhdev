@@ -34,6 +34,7 @@ import { assistantExecution } from '../../assistant/assistant-execution.js';
  */
 
 import { randomUUID } from 'crypto';
+import { mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
@@ -125,9 +126,16 @@ async function queuePreviousSessionNote(
     }
 }
 
-const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
+const ASSISTANT_LAUNCH_TIMEOUT_MS = 30_000;
+
+const launchAssistantOnce = async (
+    ctx: HighFamilyContext,
+    args: any,
+    fence: { aborted: boolean } = { aborted: false },
+): Promise<CommandRouterResult> => {
     const registry = getAssistantRegistry();
-    const admission = await admitAssistantLaunch(ctx);
+    const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
+    if (fence.aborted) return fail('assistant_launch_timeout');
     if (admission) {
         if (admission.success) {
             const { getAssistantRuntime } = await import('../../assistant/assistant-runtime.js');
@@ -167,6 +175,7 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
     }
+    if (fence.aborted) return fail('assistant_launch_timeout');
     if (ctx.deps.cliManager.hostedRestoreState !== 'ready') return fail('assistant_restore_pending');
     const svc = getAssistantServices();
     const prompt = buildAssistantSystemPrompt({ projects, memory: svc.memory.read(), skills: svc.skills.list(), frozenAt: new Date() });
@@ -219,6 +228,10 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     const { scheduleInjectionCleanup, localSessionReadyProbe } = await import('../coordinator-injection-cleanup.js');
     let launched: any;
     try {
+        if (fence.aborted) {
+            void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
+            return fail('assistant_launch_timeout');
+        }
         if (ctx.deps.cliManager.hostedRestoreState !== 'ready') {
             void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
             return fail('assistant_restore_pending');
@@ -241,10 +254,11 @@ const launchAssistantOnce: HighFamilyHandler = async (ctx, args) => {
     }
     const sessionId = str(launched?.sessionId) || str(launched?.id);
     void scheduleInjectionCleanup(injection, {
-        launched: launched?.success === true && !!sessionId,
+        launched: launched?.success === true && !!sessionId && !fence.aborted,
         isReady: localSessionReadyProbe(ctx.deps.cliManager?.adapters, sessionId),
         label: 'assistant',
     });
+    if (fence.aborted) return fail('assistant_launch_timeout');
     if (!launched?.success || !sessionId) {
         return fail(str(launched?.code) || 'assistant_launch_failed', str(launched?.error) || 'Failed to launch the assistant session', { cliType, workspace });
     }
@@ -275,11 +289,31 @@ const launchAssistant: HighFamilyHandler = (ctx, args) => {
     const registry = getAssistantRegistry();
     const pending = assistantStarts.get(registry);
     if (pending) return pending.then(result => result.success ? { ...result, launched: false } : result);
-    const lock = acquireOwnedLock(join(dirname(registry.path), '.assistant-launch.lock'));
+    const lockDir = dirname(registry.path);
+    try { mkdirSync(lockDir, { recursive: true, mode: 0o700 }); } catch { /* surfaced by acquireOwnedLock */ }
+    const lock = acquireOwnedLock(join(lockDir, '.assistant-launch.lock'), { maxAgeMs: ASSISTANT_LAUNCH_TIMEOUT_MS });
     if (!lock.ok) return Promise.resolve(fail('assistant_launch_pending', lock.reason));
-    const operation = launchAssistantOnce(ctx, args).finally(() => lock.release());
+    const fence = { aborted: false };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const clear = () => {
+        if (timer) { clearTimeout(timer); timer = undefined; }
+        lock.release();
+        if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry);
+    };
+    const timeout = new Promise<CommandRouterResult>(resolve => {
+        timer = setTimeout(() => {
+            fence.aborted = true;
+            clear();
+            resolve(fail('assistant_launch_timeout'));
+        }, ASSISTANT_LAUNCH_TIMEOUT_MS);
+        timer.unref?.();
+    });
+    const operation = Promise.race([
+        launchAssistantOnce(ctx, args, fence).finally(clear),
+        timeout,
+    ]);
     assistantStarts.set(registry, operation);
-    void operation.finally(() => { if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry); }).catch(() => {});
+    void operation.catch(() => {});
     return operation;
 };
 

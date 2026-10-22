@@ -1121,8 +1121,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
     const reg = (id: string, ws: string, prompt: string, e: any) =>
       registerMeshCoordinator({
         hostOwner: PRUNE_OWNER,
-        hostOwner: PRUNE_OWNER,
-      meshId: id,
+        meshId: id,
         sessionId: id,
         workspace: ws,
         cliType: 'antigravity-cli',

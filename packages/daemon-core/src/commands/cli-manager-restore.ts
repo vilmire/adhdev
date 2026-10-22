@@ -44,10 +44,12 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
     if (promoted && ((!records && sessions.length !== promoted.length) || sessions.some(r=>!promoted.some(p=>p.runtimeId===r.runtimeId && p.providerType===r.cliType && p.providerSessionId===r.providerSessionId && p.workspace===r.workspace && p.startedAt===r.startedAtMs)))) throw new Error('maintenance_complete_promotion_inventory_required');
     const owner = host.deps.getHostedBindingOwner?.();
     const registry = getAssistantRegistry();
+    // Full verified inventory must reconcile a dead binding before candidate selection.
+    if (!records && host.deps.listHostedCliRuntimes) registry.pruneAfterRestore(new Set(sessions.map(r => r.runtimeId)), owner);
     const entry = registry.reload();
-    const eligible = sessions.filter(r => shouldRestoreHostedRuntime(r, host.deps.hostedRuntimeManagerTag));
+    const eligible = sessions.filter(r => (!r.lifecycle || ['running', 'interrupted'].includes(r.lifecycle)) && shouldRestoreHostedRuntime(r, host.deps.hostedRuntimeManagerTag));
     // A known foreign binding cannot be claimed through this endpoint.
-    const assistant = entry?.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner)
+    const assistant = entry?.sessionId && entry.hostOwner && !sameHostedBindingOwner(entry.hostOwner, owner)
         ? undefined : assistantRestoreCandidate(entry, eligible);
     let restored = 0;
     const restoredBindings = new Set<string>();
@@ -85,6 +87,7 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
 
     for (const record of sessions) {
         if (!record?.runtimeId || !record?.cliType || !record?.workspace) continue;
+        if (record.lifecycle && !['running', 'interrupted'].includes(record.lifecycle)) continue;
         if (!shouldRestoreHostedRuntime(record, managerTag)) {
             LOG.info(
                 'CLI',
@@ -152,13 +155,14 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
             if (restoredSettings.assistant === true) {
                 const latest = registry.reload();
                 if ((latest?.sessionId && latest.sessionId !== record.runtimeId)
-                    || (latest?.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner))) {
+                    || (latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner))) {
                     throw new Error('assistant_identity_conflict: binding changed during attach');
                 }
                 registry.bindSession({ sessionId: record.runtimeId, cliType: normalizedType, workspace: record.workspace,
                     hostOwner: owner, mcpConfigPath: entry?.mcpConfigPath, at: Date.now() });
             }
-            const coordinator = getCoordinatorForSession(record.runtimeId);
+            const coordinator = getCoordinatorForSession(record.runtimeId) ?? listCoordinatorsForWorkspace(record.workspace)
+                .find(e => rebindAdoptedSessionIds.has(e.sessionId) && e.meshId === restoredSettings.meshCoordinatorFor);
             if (coordinator && owner && (!coordinator.hostOwner || sameHostedBindingOwner(coordinator.hostOwner, owner))) {
                 registerMeshCoordinator({ ...coordinator, hostOwner: owner });
             }

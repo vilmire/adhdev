@@ -162,7 +162,10 @@ const AUTO_CLEAN_DELAY_MS = 5_000;
 export class DaemonCliManager {
     /** Set at boot before command admission, and around every restore attempt. */
     hostedRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
-    private hostedRestoreOperation?: Promise<number>;
+    private hostedFullRestoreOperation?: Promise<number>;
+    private hostedRestoreQueue: Promise<unknown> = Promise.resolve();
+    private hostedFullRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
+    private hostedPartialRestoreCount = 0;
     readonly adapters = new Map<string, CliAdapter>();
     readonly roleRestartInputs = new Map<string, { cliArgs?: string[]; initialModel?: string; options: CliStartOptions }>();
     deps: CliManagerDeps;
@@ -583,16 +586,28 @@ export class DaemonCliManager {
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
     restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> {
-        if (this.hostedRestoreOperation) return this.hostedRestoreOperation;
+        const full = records === undefined;
+        if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
+        if (full || (this.hostedRestoreState === 'pending' && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount)) {
+            this.hostedFullRestoreState = 'pending';
+        }
+        if (!full) this.hostedPartialRestoreCount++;
         this.hostedRestoreState = 'pending';
-        const operation = restoreHostedSessions(this, records).then(count => {
-            this.hostedRestoreState = 'ready';
+        // Serialize attachment work without letting a partial inventory satisfy a full restore.
+        const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records)).then(count => {
+            if (full) this.hostedFullRestoreState = 'ready';
             return count;
         }, error => {
-            this.hostedRestoreState = 'failed';
+            if (full) this.hostedFullRestoreState = 'failed';
             throw error;
-        }).finally(() => { this.hostedRestoreOperation = undefined; });
-        this.hostedRestoreOperation = operation;
+        }).finally(() => {
+            if (full) this.hostedFullRestoreOperation = undefined;
+            else this.hostedPartialRestoreCount--;
+            this.hostedRestoreState = this.hostedPartialRestoreCount || this.hostedFullRestoreState === 'pending'
+                ? 'pending' : this.hostedFullRestoreState;
+        });
+        this.hostedRestoreQueue = operation.catch(() => {});
+        if (full) this.hostedFullRestoreOperation = operation;
         return operation;
     }
 

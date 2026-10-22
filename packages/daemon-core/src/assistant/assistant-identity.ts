@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseSessionLaunchRecord } from '@adhdev/mesh-shared';
 import type { HostedCliRuntimeDescriptor } from '../commands/cli-manager.js';
+import { isPidAlive } from '../launch-defaults/owned-lock.js';
 import type { AssistantRegistryEntry } from './assistant-registry.js';
 
 /** Workspace/title alone is never assistant evidence. Launch evidence must name this runtime. */
@@ -21,6 +22,17 @@ export function assistantRestoreCandidate(entry: AssistantRegistryEntry | null, 
     return exact ?? (!entry?.sessionId && marked.length === 1 ? marked[0] : undefined);
 }
 
+function isPersistedHostAlive(configDir: string, namespace: string, record: Record<string, any>): boolean {
+    try {
+        const pid = Number.parseInt(readFileSync(join(configDir, `${namespace}-session-host.pid`), 'utf8').trim(), 10);
+        if (!Number.isSafeInteger(pid) || pid <= 0 || !isPidAlive(pid)) return false;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (Number.isSafeInteger(record.osPid) && record.osPid > 0 && !isPidAlive(record.osPid)) return false;
+    return true;
+}
+
 /** Shared config can contain other hosts. Their role records block a duplicate launch,
  * but must never be attached via this daemon's endpoint. Read failure is uncertainty. */
 export function persistedAssistantRuntimeIds(configDir: string): Set<string> {
@@ -35,8 +47,11 @@ export function persistedAssistantRuntimeIds(configDir: string): Set<string> {
         try { files = readdirSync(runtimes); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
         for (const file of files.filter(f => f.endsWith('.json'))) {
-            const r = JSON.parse(readFileSync(join(runtimes, file), 'utf8'));
-            if (r.category !== 'cli' || ['stopped', 'failed'].includes(r.lifecycle)) continue;
+            const raw = JSON.parse(readFileSync(join(runtimes, file), 'utf8'));
+            const r = raw?.record && typeof raw.record === 'object' ? raw.record : raw;
+            if (!r || r.category !== 'cli' || r.termination || ['stopped', 'failed'].includes(r.lifecycle)) continue;
+            if (typeof r.sessionId === 'string' && existsSync(join(hostRoot, namespace, 'tombstones', `${r.sessionId}.json`))) continue;
+            if (!isPersistedHostAlive(configDir, namespace, r)) continue;
             if (hasAssistantProvenance({ runtimeId: r.sessionId, cliType: r.providerType, assistant: r.meta?.assistant, launchRecord: r.meta?.launchRecord })) {
                 if (typeof r.sessionId !== 'string' || !r.sessionId) throw new Error('assistant_runtime_identity_missing');
                 ids.add(r.sessionId);

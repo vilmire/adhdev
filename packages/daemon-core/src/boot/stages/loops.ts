@@ -310,18 +310,23 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     // `registered{origin:'restore'}` reaches the mesh / liveness consumers; the
     // composer-residue sweep is scheduled only after the restore batch settled.
     if (cfg.restoreHostedSessions && !enrolled) {
-        try {
-            await s7.cliManager.restoreHostedSessions();
-        } catch (e: any) {
-            LOG.warn('Init', `Hosted session restore failed: ${e?.message || e}`);
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                await s7.cliManager.restoreHostedSessions();
+                break;
+            } catch (e: any) {
+                LOG.warn('Init', `Hosted session restore failed (attempt ${attempt}/2): ${e?.message || e}`);
+            }
         }
     }
     // Orphaned-plain-attempt closure (wiring-unification follow-up, design §5):
     // MUST run after restore resolves — restore is what tells this reconciliation
     // which sessions are legitimately still alive (an earlier check would see an
     // empty registry and misclassify every one of them as orphaned).
-    try { reconcileOrphanedPlainAttemptsOnBoot(components as TurnWiredComponents); } catch (e: any) {
-        LOG.warn('TurnLedger', `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
+    if (s7.cliManager?.hostedRestoreState !== 'failed') {
+        try { reconcileOrphanedPlainAttemptsOnBoot(components as TurnWiredComponents); } catch (e: any) {
+            LOG.warn('TurnLedger', `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
+        }
     }
 
     scheduleQuotaBootRefresh(components);

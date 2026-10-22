@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
+import { issueTrustedOwnerIngressProof, markTrustedOwnerIngress } from '../../src/commands/command-args.js';
 import { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { assistantLaunchHandlers } from '../../src/commands/high-family/assistant-launch.js';
 import { writeProtectedAssistantConfigFile } from '../../src/assistant/assistant-config-io.js';
@@ -39,7 +40,7 @@ import { wireAssistantRuntime, type AssistantRuntime } from '../../src/assistant
 import { ASSISTANT_SAFETY_TAIL } from '../../src/assistant/assistant-prompt.js';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
 
-const HOST_OWNER = { endpoint: 'unix:/tmp/preview-test.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_mach_self' };
+const HOST_OWNER = { namespace: 'review-preview', endpoint: 'unix:/tmp/preview-test.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_mach_self' };
 const SELF = 'daemon_mach_self';
 let dir: string;
 let prevConfigDir: string | undefined;
@@ -129,6 +130,90 @@ afterEach(() => {
 });
 
 describe('launch_assistant', () => {
+    it('prunes a dead legacy assistant resolved by a local tombstone and launches', async () => {
+        registry.bindSession({ sessionId: 'legacy-dead', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1 });
+        const tombstones = join(dir, 'session-host', HOST_OWNER.namespace, 'tombstones');
+        mkdirSync(tombstones, { recursive: true });
+        writeFileSync(join(tombstones, 'legacy-dead.json'), JSON.stringify({ sessionId: 'legacy-dead', termination: { lifecycle: 'stopped' } }));
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: true, launched: true });
+    });
+
+    it('recovers from a failed full restore on the next launch', async () => {
+        const c = ctx();
+        const list = vi.fn().mockRejectedValueOnce(new Error('transient inventory failure')).mockResolvedValue([]);
+        const m = new DaemonCliManager({ ...c.deps.cliManager.deps, getInstanceManager: () => c.deps.instanceManager,
+            getP2p: () => null, listHostedCliRuntimes: list }, { ...loader(provider), getSettings: () => ({}) } as any);
+        await expect(m.restoreHostedSessions()).rejects.toThrow('transient inventory failure');
+        c.deps.cliManager = m;
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: true });
+        expect(m.hostedRestoreState).toBe('ready');
+    });
+
+    it('a released binding permits a different host to launch', async () => {
+        registry.bindSession({ sessionId: 'released', cliType: 'claude-cli', workspace: join(dir, 'assistant'), hostOwner: HOST_OWNER, at: 1 });
+        registry.releaseSession('released', 'pty_exit');
+        const c = ctx();
+        c.deps.cliManager.deps.getHostedBindingOwner = () => ({ ...HOST_OWNER, namespace: 'foreign', endpoint: 'unix:/tmp/foreign.sock' });
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: true });
+    });
+
+    it.each(['terminated', 'crashed'])('does not block launch on a %s foreign persisted runtime', async kind => {
+        const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        const record = { sessionId: 'foreign', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', meta: { assistant: true },
+            ...(kind === 'terminated' ? { termination: { lifecycle: 'stopped' } } : {}) };
+        writeFileSync(join(runtimes, 'foreign.json'), JSON.stringify(record));
+        if (kind === 'crashed') writeFileSync(join(dir, 'foreign-session-host.pid'), '2147483647');
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: true, launched: true });
+    });
+
+    it('blocks a live foreign runtime in the actual wrapped storage format', async () => {
+        const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        writeFileSync(join(runtimes, 'foreign.json'), JSON.stringify({ record: {
+            sessionId: 'foreign', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', meta: { assistant: true } }, snapshot: {}, updatedAt: 1 }));
+        writeFileSync(join(dir, 'foreign-session-host.pid'), String(process.pid));
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_identity_conflict' });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('allows only verified owner force to clear a stale unknown binding, and audits it', async () => {
+        registry.bindSession({ sessionId: 'unknown-stale', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1 });
+        expect(await run(ASSISTANT_VERB.launch, { force: true })).toMatchObject({ success: false, code: 'assistant_owner_required' });
+        expect(registry.reload()?.sessionId).toBe('unknown-stale');
+        const args = markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+        const { LOG } = await import('../../src/logging/logger.js');
+        const audit = vi.spyOn(LOG, 'warn');
+        try {
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](ctx(), args)).toMatchObject({ success: true, launched: true });
+            expect(audit).toHaveBeenCalledWith('Assistant', expect.stringContaining('owner_force'));
+        } finally { audit.mockRestore(); }
+    });
+
+    it('creates a missing config directory before acquiring the launch lock', async () => {
+        const missing = join(dir, 'missing-config');
+        setAssistantRegistryForTests(new AssistantRegistry({ configDir: missing }));
+        expect(await run(ASSISTANT_VERB.launch, { cliType: 'claude-cli' })).toMatchObject({ success: true, launched: true });
+    });
+
+    it('times out a hung inventory and releases the lock while fencing its late completion', async () => {
+        vi.useFakeTimers();
+        let finish!: (records: any[]) => void;
+        const c = ctx();
+        c.deps.cliManager.deps.listHostedCliRuntimes = () => new Promise<any[]>(resolve => { finish = resolve; });
+        try {
+            const pending = assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+            await vi.advanceTimersByTimeAsync(30_001);
+            expect(await pending).toMatchObject({ success: false, code: 'assistant_launch_timeout' });
+            expect(existsSync(join(dir, '.assistant-launch.lock'))).toBe(false);
+            finish([]);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(launchCalls()).toHaveLength(0);
+            c.deps.cliManager.deps.listHostedCliRuntimes = async () => [];
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: true });
+        } finally { vi.useRealTimers(); }
+    });
+
     it('blocks a real delayed restore, then returns the restored runtime with its original provider conversation', async () => {
         const c = ctx();
         const record = { runtimeId: 'delayed-assistant', cliType: 'claude-cli', workspace: join(dir, 'assistant'), assistant: true, providerSessionId: '364da694-b0e6-421e-802a-8ea938be2b85' };

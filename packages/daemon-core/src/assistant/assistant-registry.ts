@@ -1,4 +1,4 @@
-import { readHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
+import { readHostedBindingOwner, resolveHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 /**
  * Assistant registry — `<configDir>/assistant.json`, one entry per daemon
  * (design 2026-10-07-assistant-layer.md §4.5, §4.3 restart note, §4.6).
@@ -20,7 +20,7 @@ import { readHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner
  */
 
 import { existsSync, readFileSync, renameSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import {
     ASSISTANT_ACCOUNT_SLOT,
     canonicalDaemonId,
@@ -279,7 +279,7 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
     const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
     const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
     return {
-        ...(readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {}),
+        ...(isStr(r.sessionId) && readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {}),
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
         workspace: r.workspace,
@@ -481,6 +481,7 @@ export class AssistantRegistry {
         if (!prev || !prev.sessionId || prev.sessionId !== sessionId) return false;
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
+        delete next.hostOwner;
         this.write(next);
         return true;
     }
@@ -493,11 +494,13 @@ export class AssistantRegistry {
      */
     pruneAfterRestore(liveRuntimeIds: ReadonlySet<string>, owner?: HostedBindingOwner): string | null {
         const prev = this.reload();
-        if (!sameHostedBindingOwner(prev?.hostOwner, owner)) return null;
+        if (!prev?.sessionId || !sameHostedBindingOwner(
+            resolveHostedBindingOwner(prev.sessionId, prev.hostOwner, owner, liveRuntimeIds, dirname(this.path)), owner)) return null;
         if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
         const cleared = prev.sessionId;
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
+        delete next.hostOwner;
         this.write(next);
         return cleared;
     }

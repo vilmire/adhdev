@@ -138,7 +138,7 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
             throw new Error(`session_host_inventory_unavailable: ${response.error || 'missing list_sessions result'}`);
         }
         return response.result
-            .filter((record) => record.category === 'cli' && ['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle))
+            .filter((record) => record.category === 'cli' && !record.termination && ['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle))
             .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
             .map((record) => ({
                 runtimeId: record.sessionId,

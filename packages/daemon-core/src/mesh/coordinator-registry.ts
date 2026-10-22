@@ -1,4 +1,4 @@
-import { sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
+import { hasTerminalBindingEvidence, resolveHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 /**
  * MeshCoordinatorRegistry — Persisted record of active mesh coordinator sessions.
  *
@@ -319,12 +319,15 @@ export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>, o
     // Refresh before any destructive write; other host instances share this file.
     loadMeshCoordinatorRegistry();
     const pruned: CoordinatorRegistryEntry[] = [];
+    let migrated = false;
     for (const entry of [..._registry.values()]) {
-        if (!sameHostedBindingOwner(entry.hostOwner, owner) || liveSessionIds.has(entry.sessionId)) continue;
+        if (!sameHostedBindingOwner(resolveHostedBindingOwner(entry.sessionId, entry.hostOwner, owner, liveSessionIds), owner)) continue;
+        if (!entry.hostOwner) { entry.hostOwner = owner; migrated = true; }
+        if (liveSessionIds.has(entry.sessionId)) continue;
         _registry.delete(entry.sessionId);
         pruned.push(entry);
     }
-    if (pruned.length > 0) {
+    if (pruned.length > 0 || migrated) {
         saveRegistry();
         for (const entry of pruned) {
             if (!cleanupCoordinatorEntryContextFile(entry)) {
@@ -346,7 +349,7 @@ export function pruneDeadMeshCoordinators(liveSessionIds: ReadonlySet<string>, o
 
 /** List all coordinator entries for a given workspace path. */
 export function listCoordinatorsForWorkspace(workspace: string): CoordinatorRegistryEntry[] {
-    return [..._registry.values()].filter(e => e.workspace === workspace);
+    return [..._registry.values()].filter(e => e.workspace === workspace && !hasTerminalBindingEvidence(e.sessionId));
 }
 
 /** Coordinator entries for a mesh, newest started first — the inverse join a
@@ -356,6 +359,6 @@ export function listCoordinatorsForWorkspace(workspace: string): CoordinatorRegi
  *  recently started one is the live owner. */
 export function listCoordinatorsForMesh(meshId: string): CoordinatorRegistryEntry[] {
     return [..._registry.values()]
-        .filter(e => e.meshId === meshId)
+        .filter(e => e.meshId === meshId && !hasTerminalBindingEvidence(e.sessionId))
         .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
 }

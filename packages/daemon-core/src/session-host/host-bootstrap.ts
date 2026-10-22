@@ -1,3 +1,4 @@
+import { resolveSessionHostAppName } from './app-name.js';
 import { maintenanceHeld } from '../maintenance/cooperative-gate.js';
 /**
  * bootSessionHost — one session-host bring-up for both hosts
@@ -114,7 +115,7 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
             listHostedRuntimes,
             verifiedRetainedEndpoint: ensure,
             managedByTag: opts.managedBy,
-            getBindingOwner: () => ({ endpoint: `${current.kind}:${current.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
+            getBindingOwner: () => ({ namespace: opts.appName ?? resolveSessionHostAppName({ standalone: opts.managedBy === 'adhdev-standalone' }), endpoint: `${current.kind}:${current.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
             control,
         }),
         stop: () => control.stop(),

@@ -20,8 +20,8 @@ class TestProviderLoader extends ProviderLoader {
   protected override writeConfig(config: any): void { Object.assign(this.testConfig, config); }
 }
 
-const previewOwner = { endpoint: 'unix:/tmp/adhdev-preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
-const foreignOwner = { endpoint: 'unix:/tmp/adhdev-standalone.sock', managedBy: 'adhdev-standalone', clientId: 'standalone_test' };
+const previewOwner = { namespace: 'review-preview', endpoint: 'unix:/tmp/adhdev-preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
+const foreignOwner = { namespace: 'review-foreign', endpoint: 'unix:/tmp/adhdev-standalone.sock', managedBy: 'adhdev-standalone', clientId: 'standalone_test' };
 let root = '';
 let workspace = '';
 let configDir = '';
@@ -86,6 +86,44 @@ afterEach(() => {
 });
 
 describe('restoreHostedSessions — assistant re-bind', () => {
+  it('prunes a dead self-owned binding before selecting one live marked assistant', async () => {
+    const m = manager(setupLoader(), vi.fn(), async () => [{ runtimeId: 'live-replacement', cliType: 'sample-cli', workspace, assistant: true }]);
+    vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
+    expect(await m.restoreHostedSessions()).toBe(1);
+    expect(registry.reload()?.sessionId).toBe('live-replacement');
+  });
+
+  it.each(['starting', 'stopping'])('does not attach %s runtimes', async lifecycle => {
+    const m = manager(setupLoader(), vi.fn());
+    const attach = vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
+    expect(await m.restoreHostedSessions([{ runtimeId: 'asst-runtime-1', cliType: 'sample-cli', workspace, lifecycle } as any])).toBe(0);
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it('a partial restore cannot satisfy or finish the pending full restore', async () => {
+    let finish!: (records: any[]) => void;
+    const list = vi.fn(() => new Promise<any[]>(resolve => { finish = resolve; }));
+    const m = manager(setupLoader(), vi.fn(), list);
+    m.hostedRestoreState = 'pending';
+    vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
+    const partial = m.restoreHostedSessions([{ runtimeId: 'partial', cliType: 'sample-cli', workspace }]);
+    const full = m.restoreHostedSessions();
+    await partial;
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+    expect(m.hostedRestoreState).toBe('pending');
+    finish([]);
+    await full;
+    expect(m.hostedRestoreState).toBe('ready');
+  });
+
+  it('migrates a coordinator adopted through the workspace fallback', async () => {
+    registerMeshCoordinator({ meshId: 'mesh-fallback', sessionId: 'coord-1', workspace, cliType: 'sample-cli', startedAt: 1 });
+    const m = manager(setupLoader(), vi.fn());
+    vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
+    await m.restoreHostedSessions([{ runtimeId: 'new-coordinator-id', cliType: 'sample-cli', workspace }]);
+    expect(getCoordinatorForSession('coord-1')?.hostOwner).toEqual(previewOwner);
+  });
+
   it.each([foreignOwner, { ...previewOwner, endpoint: foreignOwner.endpoint }])('a foreign empty inventory preserves assistant and both coordinator bindings across a fresh preview restore (%j)', async foreign => {
     for (const id of ['coord-1', 'coord-2']) registerMeshCoordinator({ meshId: id, sessionId: id,
       workspace, cliType: 'sample-cli', startedAt: 1, hostOwner: previewOwner });
@@ -134,6 +172,14 @@ describe('restoreHostedSessions — assistant re-bind', () => {
     expect(failed.hostedRestoreState).toBe('failed');
     expect(registry.reload()?.sessionId).toBe('asst-runtime-1');
     expect(getCoordinatorForSession('coord-1')).toBeDefined();
+    const localTombstones = join(configDir, 'session-host', previewOwner.namespace, 'tombstones');
+    mkdirSync(localTombstones, { recursive: true });
+    for (const sessionId of ['asst-runtime-1', 'coord-1']) {
+      writeFileSync(join(localTombstones, `${sessionId}.json`), JSON.stringify({ sessionId, termination: { lifecycle: 'stopped' } }));
+    }
+    await manager(setupLoader(), vi.fn(), async () => []).restoreHostedSessions();
+    expect(registry.reload()?.sessionId).toBeNull();
+    expect(getCoordinatorForSession('coord-1')).toBeUndefined();
   }, 15000);
 
   it('rebinds a cleared registry from persisted assistant provenance without marking an ordinary workspace sibling', async () => {

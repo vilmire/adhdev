@@ -12,7 +12,7 @@ import {
   listCoordinatorsForWorkspace,
 } from '../../src/mesh/coordinator-registry.js';
 
-const OWNER = { endpoint: 'unix:/tmp/preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
+const OWNER = { namespace: 'review-preview', endpoint: 'unix:/tmp/preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
 
 // Regression: unregisterMeshCoordinator only runs on explicit stop/exit paths
 // (auto-clean, stopSessionWithMode, orphan force-remove). A daemon upgrade
@@ -121,6 +121,12 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     return loader;
   }
 
+  function seedLegacyTombstones(ids: string[]) {
+    const tombstones = join(configDir, 'session-host', OWNER.namespace, 'tombstones');
+    mkdirSync(tombstones, { recursive: true });
+    for (const sessionId of ids) writeFileSync(join(tombstones, `${sessionId}.json`), JSON.stringify({ sessionId, termination: { lifecycle: 'stopped' } }));
+  }
+
   function createManager(loader: ProviderLoader, hostedRuntimes: Array<Record<string, unknown>>) {
     return new DaemonCliManager({
       getServerConn: () => null,
@@ -140,11 +146,12 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     // The fixture MUST mix dead and live entries — an all-dead fixture cannot
     // prove the live entry survives.
     const loader = setupLoader();
-    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-dead-1', sessionId: 'dead-gen-1', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
-    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-dead-2', sessionId: 'dead-gen-2', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
-    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-dead-3', sessionId: 'dead-gen-3', workspace: workingDir, startedAt: 3, cliType: 'sample-cli' });
+    registerMeshCoordinator({ meshId: 'mesh-dead-1', sessionId: 'dead-gen-1', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ meshId: 'mesh-dead-2', sessionId: 'dead-gen-2', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
+    registerMeshCoordinator({ meshId: 'mesh-dead-3', sessionId: 'dead-gen-3', workspace: workingDir, startedAt: 3, cliType: 'sample-cli' });
     registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-live', sessionId: 'live-coordinator', workspace: workingDir, startedAt: 4, cliType: 'sample-cli' });
 
+    seedLegacyTombstones(['dead-gen-1', 'dead-gen-2', 'dead-gen-3']);
     const restored = await createManager(loader, [
       { runtimeId: 'live-coordinator', cliType: 'sample-cli', workspace: workingDir },
     ]).restoreHostedSessions();
@@ -166,9 +173,10 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     // contamination) have no live runtime at all — they must still be reclaimed
     // on the next boot.
     const loader = setupLoader();
-    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-fixture-1', sessionId: 'fixture-1', workspace: '/tmp/adhdev-dead-fixture-a', startedAt: 1, cliType: 'sample-cli' });
-    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-fixture-2', sessionId: 'fixture-2', workspace: '/tmp/adhdev-dead-fixture-b', startedAt: 2, cliType: 'sample-cli' });
+    registerMeshCoordinator({ meshId: 'mesh-fixture-1', sessionId: 'fixture-1', workspace: '/tmp/adhdev-dead-fixture-a', startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ meshId: 'mesh-fixture-2', sessionId: 'fixture-2', workspace: '/tmp/adhdev-dead-fixture-b', startedAt: 2, cliType: 'sample-cli' });
 
+    seedLegacyTombstones(['fixture-1', 'fixture-2']);
     const restored = await createManager(loader, []).restoreHostedSessions();
 
     expect(restored).toBe(0);
