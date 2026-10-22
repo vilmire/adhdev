@@ -407,6 +407,38 @@ describe('launch_assistant', () => {
         } finally { child.kill(); await new Promise(resolve => child.once('exit', resolve)); }
     });
 
+    describe('launch lock hard ceiling', () => {
+        const ownerArgs = () => markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+        const plantLock = (record: Record<string, unknown>) => {
+            const lock = join(dir, '.assistant-launch.lock');
+            mkdirSync(lock);
+            writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, nonce: 'wedged', ...record }));
+        };
+
+        it('lets an owner-force launch reclaim a lock held past the ceiling when no assistant is live', async () => {
+            plantLock({ acquiredAt: Date.now() - 6 * 60_000 });
+            expect(await run(ASSISTANT_VERB.launch, ownerArgs())).toMatchObject({ success: true, launched: true });
+            expect(launchCalls()).toHaveLength(1);
+        });
+
+        it('keeps refusing an owner-force launch while the lock is younger than the ceiling', async () => {
+            plantLock({ acquiredAt: Date.now() - 30_000 });
+            expect(await run(ASSISTANT_VERB.launch, ownerArgs())).toMatchObject({ success: false, code: 'assistant_launch_pending' });
+            expect(launchCalls()).toHaveLength(0);
+        });
+
+        it('never reclaims an over-ceiling lock without owner force', async () => {
+            plantLock({ acquiredAt: Date.now() - 6 * 60_000 });
+            expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_launch_pending' });
+            expect(launchCalls()).toHaveLength(0);
+        });
+
+        it('reclaims a lock whose recorded pid was reused by a different process (no force needed)', async () => {
+            plantLock({ acquiredAt: Date.now(), startId: 'Thu Jan  1 00:00:00 1970' });
+            expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: true, launched: true });
+        });
+    });
+
     it('launches claude-cli in <configDir>/assistant with the assistant stamp, prompt and MCP wiring', async () => {
         const r: any = await run(ASSISTANT_VERB.launch, { model: 'opus', thinkingLevel: 'high' });
         expect(r).toMatchObject({ success: true, launched: true, sessionId: 'asst-1', cliType: 'claude-cli', workspace: join(dir, 'assistant') });

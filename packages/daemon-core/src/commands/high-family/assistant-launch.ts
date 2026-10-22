@@ -40,6 +40,7 @@ import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
 import { getConfigDir } from '../../config/config.js';
 import { defineCommandSpecs } from '../command-registry.js';
+import { isTrustedOwnerIngress } from '../command-args.js';
 import { componentsNotReadyResult, isDaemonComponentsNotReady } from '../daemon-components-port.js';
 import type { CommandRouterResult } from '../router.js';
 import type { HighFamilyContext, HighFamilyHandler } from './types.js';
@@ -308,21 +309,52 @@ const launchAssistantOnce = async (
 // A second start arriving during launch joins that operation. It must never
 // bind over the assistant the first start is still bringing up.
 const assistantStarts = new WeakMap<ReturnType<typeof getAssistantRegistry>, Promise<CommandRouterResult>>();
+const assistantStartMeta = new WeakMap<ReturnType<typeof getAssistantRegistry>, { startedAt: number; abandon(): void }>();
+/** An owner-force launch may reclaim a launch lock held longer than this. */
+export const ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS = 5 * 60_000;
+
+/** True when no attached runtime is (or claims to be) the assistant. */
+function noLiveAssistant(ctx: Parameters<HighFamilyHandler>[0], registry: ReturnType<typeof getAssistantRegistry>): boolean {
+    const im = ctx.deps.instanceManager;
+    const bound = registry.reload()?.sessionId;
+    if (bound && im.getInstance(bound)) return false;
+    for (const id of im.listInstanceIds?.() ?? []) {
+        if (im.getInstance(id)?.getState().settings.assistant === true) return false;
+    }
+    return true;
+}
 const launchAssistant: HighFamilyHandler = (ctx, args) => {
     const registry = getAssistantRegistry();
-    const pending = assistantStarts.get(registry);
+    let pending = assistantStarts.get(registry);
+    const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
+    const meta = assistantStartMeta.get(registry);
+    if (pending && meta && forced && Date.now() - meta.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS
+        && noLiveAssistant(ctx, registry)) {
+        LOG.warn('Assistant', 'owner_force abandoned a launch that exceeded the hard ceiling');
+        meta.abandon();
+        pending = undefined;
+    }
     if (pending) return pending.then(result => result.success ? { ...result, launched: false } : result);
     const lockDir = dirname(registry.path);
     try { mkdirSync(lockDir, { recursive: true, mode: 0o700 }); } catch { /* surfaced by acquireOwnedLock */ }
-    const lock = acquireOwnedLock(join(lockDir, '.assistant-launch.lock'));
+    const lockPath = join(lockDir, '.assistant-launch.lock');
+    let lock = acquireOwnedLock(lockPath);
+    if (!lock.ok && lock.busy && forced) {
+        // Another process (or a crashed one with a reused pid) holds the lock: reclaim only
+        // past the hard ceiling and with no live assistant to protect.
+        if (noLiveAssistant(ctx, registry)) {
+            lock = acquireOwnedLock(lockPath, { maxAgeMs: ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS });
+        }
+    }
     if (!lock.ok) return Promise.resolve(fail('assistant_launch_pending', lock.reason));
     const fence = { aborted: false, dispatched: false };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const clear = () => {
         if (timer) { clearTimeout(timer); timer = undefined; }
         lock.release();
-        if (assistantStarts.get(registry) === operation) assistantStarts.delete(registry);
+        if (assistantStarts.get(registry) === operation) { assistantStarts.delete(registry); assistantStartMeta.delete(registry); }
     };
+    assistantStartMeta.set(registry, { startedAt: Date.now(), abandon: () => { fence.aborted = true; clear(); } });
     const timeout = new Promise<CommandRouterResult>(resolve => {
         timer = setTimeout(() => {
             fence.aborted = true;
