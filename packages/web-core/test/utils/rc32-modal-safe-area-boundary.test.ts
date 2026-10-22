@@ -108,6 +108,8 @@ describe('RC32 modal safe-area hardening (audited peers)', () => {
 
     expect(standaloneHtml).not.toContain('viewport-fit=cover')
     expect(machineScreenSource).toContain('isStandalone')
-    expect(machineScreenSource).toContain('env(safe-area-inset-top,0px)')
+    // The inset now flows through --mobile-flow-header-safe-top (raw env() by
+    // default, zeroed under display-mode: standalone where the root consumes it).
+    expect(machineScreenSource).toContain('var(--mobile-flow-header-safe-top,0px)')
   })
 })

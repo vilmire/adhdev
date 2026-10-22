@@ -502,7 +502,7 @@ export default function DashboardMobileChatInbox({
         : t('mobileInbox.chats')
     const headerPaddingClass = isStandalone
         ? 'px-5 pt-4 pb-4'
-        : 'px-5 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-4'
+        : 'px-5 pt-[calc(16px+var(--mobile-flow-header-safe-top,0px))] pb-4'
     const contentPaddingClass = isStandalone
         ? 'px-3 pb-3'
         : 'px-3 pb-[calc(12px+env(safe-area-inset-bottom,0px))]'

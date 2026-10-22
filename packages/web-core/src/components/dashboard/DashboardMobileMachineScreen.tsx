@@ -162,7 +162,7 @@ export default function DashboardMobileMachineScreen({
     const hasCurrentChats = conversationCards.length > 0
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-4 pb-3'
-        : 'px-4 pt-[calc(16px+env(safe-area-inset-top,0px))] pb-3'
+        : 'px-4 pt-[calc(16px+var(--mobile-flow-header-safe-top,0px))] pb-3'
 
     return (
         <>

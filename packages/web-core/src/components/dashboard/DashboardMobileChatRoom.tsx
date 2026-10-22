@@ -62,7 +62,7 @@ export default function DashboardMobileChatRoom({
     const handleOpenTerminal = useCallback(() => onSetCliViewMode('terminal'), [onSetCliViewMode])
     const headerPaddingClass = isStandalone
         ? 'px-4 pt-3.5 pb-2.5'
-        : 'px-4 pt-[calc(14px+env(safe-area-inset-top,0px))] pb-2.5'
+        : 'px-4 pt-[calc(14px+var(--mobile-flow-header-safe-top,0px))] pb-2.5'
 
     return (
         <>
