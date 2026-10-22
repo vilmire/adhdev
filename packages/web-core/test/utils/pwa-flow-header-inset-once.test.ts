@@ -54,13 +54,14 @@ describe('mobile flow header top inset is consumed once', () => {
       return c.slice(start, c.indexOf('/* Touch: remove hover effects', start))
     }
 
-    it('standalone composer bottom pad is the safe-area inset only, declared once', () => {
+    it('standalone composer bottom pad is max(8px, inset), consumed once', () => {
       const slice = standaloneSlice()
       const rules = slice.match(/\.dashboard-input-area\s*\{[^}]*\}/g) ?? []
       expect(rules).toHaveLength(1)
-      expect(rules[0]).toMatch(/padding-bottom:\s*env\(safe-area-inset-bottom,\s*0px\)\s*!important;/)
-      // no extra design pad, no max() floor, no second inset
-      expect(rules[0]).not.toMatch(/calc\(|max\(/)
+      expect(rules[0]).toMatch(/padding-bottom:\s*max\(8px,\s*env\(safe-area-inset-bottom,\s*0px\)\)\s*!important;/)
+      // floor only: no additive design pad, and the inset appears exactly once
+      expect(rules[0]).not.toContain('calc(')
+      expect(rules[0].split('safe-area-inset-bottom')).toHaveLength(2)
     })
 
     it('preserves the browser-tab composer pad (16px + inset, 16px on flat/tab layouts)', () => {

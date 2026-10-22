@@ -4325,7 +4325,9 @@
            viewport, not the root's padding box, so the root's padding does not
            move them and they still need their own offset. */
 
-        /* Installed PWA composer: the home-indicator inset IS the bottom padding.
+        /* Installed PWA composer: the home-indicator inset IS the bottom padding,
+           with an 8px floor so zero-inset standalone devices (desktop PWA,
+           Android without a gesture bar) are not left flush at the edge.
            The browser-tab rule (`.dashboard-input-area` above) keeps its 16px
            design pad + inset; owner decision (2026-10-22) trimmed that pad in
            standalone because the inset already supplies the clearance and the
@@ -4334,7 +4336,7 @@
            bar. Must stay after the base rule and keep !important to win over
            its !important. */
         .dashboard-input-area {
-            padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+            padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
         }
 
         /* Fixed elements need their own safe-area offset */
