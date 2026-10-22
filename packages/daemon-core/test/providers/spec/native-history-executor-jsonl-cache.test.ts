@@ -11,7 +11,8 @@ import { foldUsageRecords } from '../../../src/shared/usage-normalize.js';
 import { readExternalCompletionMessages, getLiveTurnPendingEvidence, getTerminalAdmissionObservations } from '../../../src/providers/completion/evidence.js';
 import { publishTranscriptSignalObservation, probeNativeTranscriptSignals } from '../../../src/providers/cli-provider-transcript-signals.js';
 import { runMeshStallTick } from '../../../src/providers/completion/mesh-stall-watchdog.js';
-import { readJsonlLines } from '../../../src/providers/spec/native-history-jsonl-cache.js';
+import { readJsonlLines, readProjectedJsonlRecords } from '../../../src/providers/spec/native-history-jsonl-cache.js';
+import { evaluateTerminalAdmission } from '../../../src/mesh/mesh-terminal-admission.js';
 const SESSION_ID = '8c6cf338-ef5c-4df5-91a5-66c1e2ed4339';
 
 describe('native JSONL parsed-result cache', () => {
@@ -31,7 +32,8 @@ describe('native JSONL parsed-result cache', () => {
         });
     }
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        await new Promise<void>(resolve => setImmediate(resolve));
         __resetParsedJsonlCacheForTests();
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-jsonl-cache-'));
         transcriptPath = path.join(tmpDir, `${SESSION_ID}.jsonl`);
@@ -225,6 +227,144 @@ describe('native JSONL parsed-result cache', () => {
         expect(reader(input)!.messages.at(-1)!.content).toBe('new tail');
         expect(reader(input)!.stale).toBeUndefined();
         clock.mockRestore();
+    });
+
+    it('finishes a cold rebuild under a live writer and catches up without replaying the prefix', () => {
+        const row = JSON.stringify({ role: 'assistant', content: 'x'.repeat(200) }) + '\n';
+        fs.writeFileSync(transcriptPath, row.repeat(60_000));
+        const work = readProjectedJsonlRecords(transcriptPath, 'live-writer', rec => rec);
+        let step = work.next();
+        let steps = 0;
+        let appends = 0;
+        while (!step.done && steps < 2_000) {
+            if (++steps % 5 === 0) { fs.appendFileSync(transcriptPath, row); appends++; }
+            step = work.next();
+        }
+        expect(step.done).toBe(true);
+        expect(step.value).toHaveLength(60_000 + appends);
+        process.stdout.write('live-writer rebuild ' + JSON.stringify({ steps, appends, records: step.value?.length }) + '\n');
+        expect(__getParsedJsonlCacheStatsForTests()).toMatchObject({ fullReads: 1, recordsParsed: 60_000 + appends });
+        fs.appendFileSync(transcriptPath, row);
+        const tail = readProjectedJsonlRecords(transcriptPath, 'live-writer', rec => rec).next();
+        expect(tail.done).toBe(true);
+        expect(tail.value).toHaveLength(60_001 + appends);
+    });
+
+    it('finishes message assembly under continuous appends, then catches up after the writer stops', async () => {
+        const row = JSON.stringify({ role: 'assistant', content: 'x'.repeat(200), receivedAt: 1_800_000_000_000 }) + '\n';
+        fs.writeFileSync(transcriptPath, row.repeat(60_000));
+        const reader = createCooperativeNativeHistoryReader(config);
+        const input = { agentType: 'cache-test-cli', providerSessionId: SESSION_ID };
+        let finished = false;
+        const pending = reader.readAsync(input).then(value => { finished = true; return value; });
+        let turns = 0;
+        let appends = 0;
+        while (!finished && turns < 3_000) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            if (++turns % 5 === 0) { fs.appendFileSync(transcriptPath, row); appends++; }
+        }
+        const prefix = await pending;
+        expect(turns).toBeLessThan(3_000);
+        expect(prefix!.stale).toBe(true);
+        expect(prefix!.messages.length).toBeGreaterThanOrEqual(60_000);
+        const caughtUp = (await reader.readAsync(input))!;
+        expect(caughtUp.stale).toBeUndefined();
+        expect(caughtUp.messages).toHaveLength(60_000 + appends);
+        expect(__getParsedJsonlCacheStatsForTests()).toMatchObject({ fullReads: 1, recordsParsed: 60_000 + appends });
+        process.stdout.write('live-writer executor ' + JSON.stringify({ turns, appends, prefix: prefix!.messages.length, caughtUp: caughtUp.messages.length }) + '\n');
+    });
+
+    it.each(['rewrite', 'replacement'])('discards a prefix changed by %s while its rebuild yields', mode => {
+        const row = JSON.stringify({ content: 'old'.repeat(70) }) + '\n';
+        fs.writeFileSync(transcriptPath, row.repeat(2_000));
+        const work = readProjectedJsonlRecords(transcriptPath, 'rewrite-race', rec => rec.content);
+        expect(work.next().done).toBe(false);
+        const next = row.replaceAll('old', 'new').repeat(2_001);
+        if (mode === 'replacement') {
+            fs.writeFileSync(transcriptPath + '.new', next);
+            fs.renameSync(transcriptPath + '.new', transcriptPath);
+        } else fs.writeFileSync(transcriptPath, next);
+        let step = work.next();
+        while (!step.done) step = work.next();
+        expect(step.value).toEqual(Array(2_001).fill('new'.repeat(70)));
+        expect(__getParsedJsonlCacheStatsForTests().fullReads).toBe(2);
+    });
+
+    it('shares one synchronous work budget across twenty sources in the same event-loop turn', async () => {
+        const row = JSON.stringify({ role: 'assistant', content: 'answer' }) + '\n';
+        const readers = Array.from({ length: 20 }, (_, i) => {
+            const file = path.join(tmpDir, `source-${i}-${SESSION_ID}.jsonl`);
+            fs.writeFileSync(file, row.repeat(2_000));
+            return createCooperativeNativeHistoryReader({ source: { ...config.source, path: file } });
+        });
+        let elapsed = 0;
+        const parse = JSON.parse;
+        const parseSpy = vi.spyOn(JSON, 'parse').mockImplementation((...args) => { elapsed += 0.01; return parse(...args); });
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+        const input = { agentType: 'cache-test-cli', providerSessionId: SESSION_ID };
+        const results = readers.map(reader => reader(input));
+        const syncMs = elapsed;
+        process.stdout.write('shared-turn budget ' + JSON.stringify({ sources: readers.length, modeledSyncMs: syncMs,
+            syncRecordsParsed: __getParsedJsonlCacheStatsForTests().recordsParsed }) + '\n');
+        clock.mockRestore();
+        parseSpy.mockRestore();
+        expect(results.every(result => result?.unavailableReason === 'native_history_loading')).toBe(true);
+        // 8ms shared allowance plus at most one 256-record atomic step.
+        expect(syncMs).toBeLessThanOrEqual(10.6);
+        expect(__getParsedJsonlCacheStatsForTests().recordsParsed).toBeLessThanOrEqual(1_024);
+        const completed = await Promise.all(readers.map(reader => reader.readAsync(input)));
+        expect(completed.every(result => result?.messages.length === 2_000)).toBe(true);
+    });
+
+    it.each(['loading', 'stale'])('holds evidence, admission and watchdog decisions while history is %s', async mode => {
+        config.source.message_map.tools = {};
+        const reader = createCooperativeNativeHistoryReader(config);
+        const host: any = { type: 'claude-cli', instanceId: `runtime-${mode}`, workingDir: tmpDir, startedAt: 1,
+            providerSessionId: SESSION_ID, adapter: { chatMessagesOwnedExternally: true, setSignalObservation: vi.fn(),
+                getLastApprovalResolvedAt: () => 0, getStatus: () => ({ lastOutputAt: 1, status: 'idle' }) },
+            provider: { nativeHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } }, scripts: { readNativeHistory: reader } },
+            spawnedEnvOverrides: () => ({}), hasAdapterPendingResponse: () => false, isModalParked: () => false,
+            completionHasFinalAssistantMessage: () => true,
+            meshStallAnchorAt: 1, meshStallEmittedForAnchor: false, meshStallLastFiredAt: -1,
+            meshStallTranscriptSignalSampled: true, isMeshWorkerSession: () => true,
+            meshTraceCtx: () => ({}), completingTurnTaskId: () => undefined, pushEvent: vi.fn() };
+        host.publishTranscriptSignalObservation = (messages: any) => publishTranscriptSignalObservation(host, messages);
+        host.readExternalCompletionMessages = () => readExternalCompletionMessages(host);
+        host.probeNativeTranscriptSignals = () => probeNativeTranscriptSignals(host);
+        if (mode === 'stale') {
+            append('assistant', 'interim narration', 1_800_000_000_000);
+            fs.appendFileSync(transcriptPath, JSON.stringify({ role: 'assistant', receivedAt: 1_800_000_000_001,
+                content: [{ type: 'tool_use', name: 'Read', input: { file: 'first' } }] }) + '\n');
+            host.probeNativeTranscriptSignals();
+            expect(getLiveTurnPendingEvidence(host)).toMatchObject({ pending: true, kind: 'transcript_tool' });
+            // Even a previously quiet signal must not authorize a stall while rebuilding.
+            host.lastTranscriptSignalSnapshot.signals.in_turn_progress = false;
+            host.lastTranscriptSignalSnapshot.signals.transcript_growing = false;
+        }
+        const snapshot = host.lastTranscriptSignalSnapshot;
+        const probe = host.lastExternalCompletionProbe;
+        const observations = host.adapter.setSignalObservation.mock.calls.length;
+        for (let i = 0; i < 600; i++) append('assistant', `appended ${i}`, 1_800_000_001_000 + i);
+        const clock = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(9);
+        const deferred = host.probeNativeTranscriptSignals();
+        clock.mockRestore();
+        expect(deferred.pending).toBe(true);
+        expect(host.lastTranscriptSignalSnapshot).toBe(snapshot);
+        expect(host.lastExternalCompletionProbe).toBe(probe);
+        expect(host.adapter.setSignalObservation).toHaveBeenCalledTimes(observations);
+        expect(getLiveTurnPendingEvidence(host)).toMatchObject({ pending: true,
+            kind: mode === 'stale' ? 'transcript_tool' : 'transcript_loading' });
+        const admission = getTerminalAdmissionObservations(host, Date.now());
+        expect(admission).toMatchObject({ transcriptReadPending: true, trailingActivityCount: mode === 'stale' ? 1 : 0 });
+        expect(evaluateTerminalAdmission({ ...admission, producer: 'test', providerHasNativeMarker: false,
+            providerObservedStatus: 'idle', nowMs: Date.now() })).toMatchObject({ admit: false, reason: 'native_history_loading' });
+        runMeshStallTick(host, 180_001);
+        expect(host.meshStallAnchorAt).toBe(1);
+        expect(host.meshStallEmittedForAnchor).toBe(false);
+        expect(host.pushEvent).not.toHaveBeenCalled();
+        await reader.readAsync({ agentType: host.type, providerSessionId: SESSION_ID });
+        expect(host.probeNativeTranscriptSignals().pending).not.toBe(true);
+        expect(host.lastExternalCompletionProbe.msgCount).toBe(mode === 'stale' ? 602 : 600);
     });
 
     it('cooperatively rebuilds, coalesces readers, and keeps read_chat paging byte-identical', async () => {

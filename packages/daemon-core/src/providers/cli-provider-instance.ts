@@ -503,7 +503,7 @@ export class CliProviderInstance implements ProviderInstance {
      */
     getLiveTurnPendingEvidence(): {
         pending: boolean;
-        kind?: 'adapter' | 'modal' | 'transcript_tool';
+        kind?: 'adapter' | 'modal' | 'transcript_tool' | 'transcript_loading';
         observedAt?: number;
     } {
         return evidence.getLiveTurnPendingEvidence(this);
@@ -620,6 +620,8 @@ export class CliProviderInstance implements ProviderInstance {
     cancelledCompletionRecheck: CancelledCompletionRecheck | null = null;
     cancelledCompletionRecheckTimer: NodeJS.Timeout | null = null;
     lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
+    nativeHistoryReadPending = false;
+    lastExternalCompletionMessages: { historySessionId: string; messages: unknown[] } | null = null;
     // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
     // on every completion probe; null when the provider surfaces none.
     lastNativeTurnTerminalMarkers: NativeTurnTerminalMarker[] | null = null;
@@ -824,7 +826,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     /** MESH-STALL-WATCH — see checkMeshWorkerStall (cli-provider-mesh-session.ts). */
     checkMeshWorkerStall(now: number = Date.now()): void { checkMeshWorkerStall(this, now); }
-    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null { return probeNativeTranscriptSignals(this); }
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null { return probeNativeTranscriptSignals(this); }
 
     /**
      * TX-FSM Stage 2: is the bounded busy lease enabled for THIS provider?

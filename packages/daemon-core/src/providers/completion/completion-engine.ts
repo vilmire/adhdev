@@ -96,7 +96,7 @@ export interface CompletionSignalReader {
     /** External-native tail probe (recordPendingTranscriptProbe result), only meaningful for external-native evidence. */
     externalNativeTailProbe(): { lastRole?: string; contentLen?: number } | null;
     /** TX-FSM Stage 1 growth snapshot; null = unavailable (fail-open). */
-    transcriptGrowth(): { available: boolean; growing: boolean; msgCount?: number; mtimeAgeMs?: number } | null;
+    transcriptGrowth(): { available: boolean; growing: boolean; pending?: boolean; msgCount?: number; mtimeAgeMs?: number } | null;
     busyLeaseGateEnabled(): boolean;
     /** TX-FSM Stage 2 lease; null = no lease issued. */
     busyLease(): { active: boolean; lastLiveAt?: number; expiresAt?: number; remainingMs?: number } | null;
@@ -586,6 +586,7 @@ export function decideCompletionVerdict(
     // the last append. Fail-open when no snapshot.
     if (block.reason === 'missing_final_assistant' && block.noExternalTranscriptSource === true) {
         const growth = reader.transcriptGrowth();
+        if (growth?.pending) return hold('native_history_loading', {});
         if (growth?.available === true && growth.growing === true) {
             return hold('native_transcript_advancing', {
                 msgCount: growth.msgCount ?? null,

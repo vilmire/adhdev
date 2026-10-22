@@ -125971,6 +125971,19 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var projectedJsonlCache = /* @__PURE__ */ new Map();
     var READ_CHUNK_BYTES = 256 * 1024;
     var PROJECTED_IDLE_MS = 10 * 6e4;
+    function projectedJsonlSnapshotState(p, projectionKey, lines) {
+      const entry = projectedJsonlCache.get(`${p}\0${projectionKey}`);
+      if (!entry || entry.lines !== lines) return null;
+      let stat2;
+      try {
+        stat2 = fs49.statSync(p);
+      } catch {
+        return null;
+      }
+      const unchanged = parsedJsonlSignature(stat2) === entry.signature;
+      if (!unchanged && !(stat2.size > entry.sourceBytes && canResumeFrom(p, entry, stat2))) return null;
+      return { sourceMtimeMs: entry.sourceMtimeMs, stale: !unchanged };
+    }
     function* readProjectedJsonlRecords(p, projectionKey, project) {
       let stat2;
       try {
@@ -125981,8 +125994,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       const key4 = `${p}\0${projectionKey}`;
       const signature = parsedJsonlSignature(stat2);
       const now = Date.now();
-      for (const [k, entry] of projectedJsonlCache) {
-        if (now - entry.touchedAt > PROJECTED_IDLE_MS) projectedJsonlCache.delete(k);
+      for (const [k, entry2] of projectedJsonlCache) {
+        if (now - entry2.touchedAt > PROJECTED_IDLE_MS) projectedJsonlCache.delete(k);
       }
       const cached5 = projectedJsonlCache.get(key4);
       if (cached5?.signature === signature) {
@@ -126027,11 +126040,28 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let fragmentBytes = 0;
       let position = from;
       let recordsSinceYield = 0;
+      let sliceStartedAt = performance.now();
+      let readTail = Buffer.alloc(0);
+      let digest4 = resume ? cached5.boundaryDigest : (0, import_node_crypto14.createHash)("sha256").update("").digest("hex");
+      let readAnchorBytes = from;
+      let readAnchorDigest = digest4;
       try {
+        if (resume && from > 0) {
+          readTail = Buffer.alloc(Math.min(BOUNDARY_BYTES, from));
+          const count = fs49.readSync(fd, readTail, 0, readTail.length, from - readTail.length);
+          if (count !== readTail.length || (0, import_node_crypto14.createHash)("sha256").update(readTail).digest("hex") !== digest4) {
+            return yield* readProjectedJsonlRecords(p, projectionKey, project);
+          }
+        }
         while (position < stat2.size) {
           const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, stat2.size - position));
           const count = fs49.readSync(fd, chunk, 0, chunk.length, position);
           if (!count) break;
+          if (position === from) {
+            const length = Math.min(BOUNDARY_BYTES, count);
+            readAnchorBytes = from + length;
+            readAnchorDigest = (0, import_node_crypto14.createHash)("sha256").update(Buffer.concat([readTail, chunk.subarray(0, length)]).subarray(-BOUNDARY_BYTES)).digest("hex");
+          }
           parsedJsonlCacheStats.bytesRead += count;
           position += count;
           let start = 0;
@@ -126044,9 +126074,11 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             committedBytes = position - count + end + 1;
             committedLineCount = lines.length;
             start = end + 1;
-            if (++recordsSinceYield >= 256 && (end + 1 < count || position < stat2.size)) {
+            recordsSinceYield++;
+            if ((recordsSinceYield >= 256 || recordsSinceYield % 16 === 0 && performance.now() - sliceStartedAt >= 1) && (end + 1 < count || position < stat2.size)) {
               recordsSinceYield = 0;
               yield;
+              sliceStartedAt = performance.now();
             }
           }
           if (start < count) {
@@ -126054,23 +126086,28 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             fragments.push(fragment);
             fragmentBytes += fragment.length;
           }
-          if (position < stat2.size) yield;
+          const settledEnd = committedBytes - (position - count);
+          if (settledEnd > 0) {
+            const boundary = settledEnd >= BOUNDARY_BYTES ? chunk.subarray(settledEnd - BOUNDARY_BYTES, settledEnd) : Buffer.concat([readTail, chunk.subarray(0, settledEnd)]).subarray(-BOUNDARY_BYTES);
+            digest4 = (0, import_node_crypto14.createHash)("sha256").update(boundary).digest("hex");
+          }
+          readTail = count >= BOUNDARY_BYTES ? Buffer.from(chunk.subarray(count - BOUNDARY_BYTES, count)) : Buffer.concat([readTail, chunk.subarray(0, count)]).subarray(-BOUNDARY_BYTES);
+          if (position < stat2.size) {
+            yield;
+            sliceStartedAt = performance.now();
+          }
         }
         if (fragmentBytes) parse2(Buffer.concat(fragments, fragmentBytes));
       } finally {
         fs49.closeSync(fd);
       }
-      const digest4 = boundaryDigest(p, committedBytes);
       let after;
       try {
         after = fs49.statSync(p);
       } catch {
         return [];
       }
-      if (parsedJsonlSignature(after) !== signature) {
-        return yield* readProjectedJsonlRecords(p, projectionKey, project);
-      }
-      projectedJsonlCache.set(key4, {
+      const entry = {
         signature,
         sourceBytes: stat2.size,
         lines,
@@ -126079,8 +126116,15 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         dev: stat2.dev,
         ino: stat2.ino,
         touchedAt: Date.now(),
-        boundaryDigest: digest4
-      });
+        boundaryDigest: digest4,
+        sourceMtimeMs: Math.floor(stat2.mtimeMs)
+      };
+      const changed = parsedJsonlSignature(after) !== signature;
+      if (changed && !(after.size > stat2.size && canResumeFrom(p, entry, after) && boundaryDigest(p, readAnchorBytes) === readAnchorDigest)) {
+        return yield* readProjectedJsonlRecords(p, projectionKey, project);
+      }
+      projectedJsonlCache.set(key4, entry);
+      if (changed) return yield* readProjectedJsonlRecords(p, projectionKey, project);
       return lines;
     }
     var os24 = __toESM2(require("os"));
@@ -127191,13 +127235,29 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return null;
     }
     var jsonlWorkQueue = Promise.resolve();
+    var JSONL_TURN_BUDGET_MS = 8;
+    var jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
+    var jsonlBudgetReset;
+    function advanceJsonlWork(work) {
+      if (jsonlTurnRemainingMs <= 0) return void 0;
+      if (!jsonlBudgetReset) jsonlBudgetReset = setImmediate(() => {
+        jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
+        jsonlBudgetReset = void 0;
+      });
+      const start = performance.now();
+      try {
+        return work.next();
+      } finally {
+        jsonlTurnRemainingMs -= Math.max(0, performance.now() - start);
+      }
+    }
     function enqueueJsonlWork(work) {
       const run3 = async () => {
         let step;
         do {
           await new Promise((resolve54) => setImmediate(resolve54));
-          step = work.next();
-        } while (!step.done);
+          step = advanceJsonlWork(work);
+        } while (!step?.done);
         return step.value;
       };
       const result = jsonlWorkQueue.then(run3, run3);
@@ -127229,10 +127289,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const stale = () => boundResult(input, previous ? { ...previous.result, stale: true } : loading);
         if (pending.has(key4)) return stale();
         const work = executeJsonl(cfg.source, input, resolution);
-        const start = performance.now();
-        let step = work.next();
-        while (!step.done && performance.now() - start < 8) step = work.next();
-        if (step.done) {
+        let step = advanceJsonlWork(work);
+        while (step && !step.done && jsonlTurnRemainingMs > 0) step = advanceJsonlWork(work);
+        if (step?.done) {
           if (step.value) snapshots2.set(key4, { result: step.value, touchedAt: now });
           else snapshots2.delete(key4);
           return step.value;
@@ -127411,7 +127470,9 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         };
       });
       if (lines.length === 0) return null;
-      const mtime = safeMtimeMs(sourcePath);
+      let revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
+      if (!revision) return yield* executeJsonl(src, input, resolution);
+      const mtime = revision.sourceMtimeMs;
       const transcriptWorkspace = lines.slice(0, 5).find((record6) => record6.workspace)?.workspace ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : void 0) ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : void 0);
       let providerSessionId;
       if (src.session_id_from === "first_record" && src.session_id_path) {
@@ -127431,6 +127492,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const messages2 = [];
         const usageRecords = [];
         const lineage = providerSessionId || requested || sourcePath;
+        let sliceStartedAt = performance.now();
         for (let i = 0; i < lines.length; i++) {
           const rec5 = lines[i];
           if (rec5.usage) usageRecords.push(rec5.fallbackUsageTime ? { ...rec5.usage, receivedAt: mtime } : rec5.usage);
@@ -127448,9 +127510,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
             messages2.push(msg);
           }
-          if ((i + 1) % 256 === 0 && i + 1 < lines.length) yield;
+          if (i + 1 < lines.length && ((i + 1) % 256 === 0 || (i + 1) % 16 === 0 && performance.now() - sliceStartedAt >= 1)) {
+            yield;
+            sliceStartedAt = performance.now();
+          }
         }
-        if (safeMtimeMs(sourcePath) !== mtime) return yield* executeJsonl(src, input, resolution);
+        revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
+        if (!revision) return yield* executeJsonl(src, input, resolution);
         const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec5) => rec5.terminal));
         projection = {
           messages: markNativeHistorySnapshot(messages2),
@@ -127481,6 +127547,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       );
       return {
         messages,
+        ...revision.stale ? { stale: true } : {},
         providerSessionId,
         sourcePath,
         sourceMtimeMs: mtime,
@@ -170043,6 +170110,7 @@ ${JSON.stringify(replies)}
       });
       if (block2.reason === "missing_final_assistant" && block2.noExternalTranscriptSource === true) {
         const growth = reader.transcriptGrowth();
+        if (growth?.pending) return hold("native_history_loading", {});
         if (growth?.available === true && growth.growing === true) {
           return hold("native_transcript_advancing", {
             msgCount: growth.msgCount ?? null,
@@ -170517,6 +170585,7 @@ ${buttons.join("\n")}`;
             observedAt: probe.snapshot.sampledAt
           };
         }
+        if (probe?.pending) return { pending: true, kind: "transcript_loading" };
       } catch {
       }
       return { pending: false };
@@ -170530,8 +170599,10 @@ ${buttons.join("\n")}`;
       let trailingActivityCount = 0;
       let newestActivityAtMs;
       let finalAssistantPresent = false;
+      let transcriptReadPending = false;
       try {
         const probe = host.probeNativeTranscriptSignals();
+        transcriptReadPending = probe?.pending === true;
         const messages = Array.isArray(probe?.messages) ? probe.messages : null;
         if (messages) {
           trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
@@ -170543,7 +170614,7 @@ ${buttons.join("\n")}`;
           }
         }
         const snapshot = probe?.snapshot;
-        if (snapshot?.available === true && typeof snapshot.detail?.ageMs === "number" && Number.isFinite(snapshot.detail.ageMs)) {
+        if (!transcriptReadPending && snapshot?.available === true && typeof snapshot.detail?.ageMs === "number" && Number.isFinite(snapshot.detail.ageMs)) {
           const mtimeAtMs = nowMs2 - snapshot.detail.ageMs;
           if (newestActivityAtMs === void 0 || mtimeAtMs > newestActivityAtMs) {
             newestActivityAtMs = mtimeAtMs;
@@ -170553,6 +170624,7 @@ ${buttons.join("\n")}`;
       }
       const markers = host.lastNativeTurnTerminalMarkers;
       return {
+        ...transcriptReadPending ? { transcriptReadPending: true } : {},
         activeModalPresent,
         trailingActivityCount,
         ...newestActivityAtMs !== void 0 ? { newestActivityAtMs } : {},
@@ -170573,6 +170645,7 @@ ${buttons.join("\n")}`;
       return probe;
     }
     function readExternalCompletionMessages(host, opts) {
+      host.nativeHistoryReadPending = false;
       const adapterOwnsMessagesElsewhere = host.adapter?.chatMessagesOwnedExternally === true;
       const manifestNativeSource = opts?.allowManifestNativeSource === true && isNativeSourceCanonicalHistory(host.provider?.nativeHistory);
       if (!adapterOwnsMessagesElsewhere && !manifestNativeSource) return null;
@@ -170624,16 +170697,22 @@ ${buttons.join("\n")}`;
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
       });
-      if (restoredHistory.unavailableReason === "native_history_loading") return [];
+      if (restoredHistory.stale || restoredHistory.unavailableReason === "native_history_loading") {
+        host.nativeHistoryReadPending = true;
+        const previous = host.lastExternalCompletionMessages;
+        return restoredHistory.stale ? restoredHistory.messages : resolvedHandle && previous?.historySessionId === resolvedHandle ? previous.messages : [];
+      }
       if (host.type === "codex-cli" && !resolvedHandle && restoredHistory.ownerConfirmed !== true) {
         host.lastNativeTurnTerminalMarkers = null;
         host.lastExternalCompletionProbe = null;
+        host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
       }
       host.lastNativeTurnTerminalMarkers = Array.isArray(restoredHistory.turnTerminalMarkers) ? restoredHistory.turnTerminalMarkers : null;
       if (restoredHistory.source !== "provider-native") {
         host.lastExternalCompletionProbe = null;
+        host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
       }
@@ -170642,6 +170721,7 @@ ${buttons.join("\n")}`;
         restoredHistory.sourcePath,
         restoredHistory.sourceMtimeMs
       );
+      host.lastExternalCompletionMessages = { historySessionId: resolvedHandle, messages: restoredHistory.messages };
       host.publishTranscriptSignalObservation(restoredHistory.messages);
       return restoredHistory.messages;
     }
@@ -171706,11 +171786,15 @@ ${buttons.join("\n")}`;
         }),
         transcriptGrowth: () => once("transcriptGrowth", () => {
           let snapshot = null;
+          let readPending = false;
           try {
-            snapshot = host.probeNativeTranscriptSignals()?.snapshot ?? null;
+            const probe = host.probeNativeTranscriptSignals();
+            snapshot = probe?.snapshot ?? null;
+            readPending = probe?.pending === true;
           } catch {
             snapshot = null;
           }
+          if (readPending) return { available: false, growing: false, pending: true };
           if (!snapshot) return null;
           const available = snapshot.available === true;
           return {
@@ -172583,6 +172667,7 @@ ${buttons.join("\n")}`;
         }
       }
       const transcriptSignals = host.probeNativeTranscriptSignals();
+      if (transcriptSignals?.pending) return;
       if (transcriptSignals?.snapshot?.available === true) {
         const firstSampleThisEpisode = !host.meshStallTranscriptSignalSampled;
         host.meshStallTranscriptSignalSampled = true;
@@ -173071,7 +173156,7 @@ ${buttons.join("\n")}`;
       } catch {
         return { snapshot: null, messages: null };
       }
-      return { snapshot: host.lastTranscriptSignalSnapshot, messages };
+      return { snapshot: host.lastTranscriptSignalSnapshot, messages, ...host.nativeHistoryReadPending ? { pending: true } : {} };
     }
     function nativeTurnTerminalMarker(host, turnStartedAt) {
       try {
@@ -173544,6 +173629,8 @@ ${buttons.join("\n")}`;
       cancelledCompletionRecheck = null;
       cancelledCompletionRecheckTimer = null;
       lastExternalCompletionProbe = null;
+      nativeHistoryReadPending = false;
+      lastExternalCompletionMessages = null;
       // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
       // on every completion probe; null when the provider surfaces none.
       lastNativeTurnTerminalMarkers = null;

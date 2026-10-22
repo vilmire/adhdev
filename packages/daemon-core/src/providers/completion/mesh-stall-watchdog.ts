@@ -59,7 +59,7 @@ export interface MeshStallHost {
     meshStallTranscriptSignalSampled: boolean;
     isMeshWorkerSession(): boolean;
     hasAdapterPendingResponse(): boolean;
-    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null;
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null;
     meshTraceCtx(event?: string): Record<string, unknown>;
     completingTurnTaskId(): string | undefined;
     pushEvent(event: Record<string, unknown>): void;
@@ -327,6 +327,9 @@ export function runMeshStallTick(host: MeshStallHost, now: number): void {
 
     // (TX-FSM Stage 1) Transcript-advancing axis: screen-quiet but transcript-live → re-arm.
     const transcriptSignals = host.probeNativeTranscriptSignals();
+    // A deferred read proves neither a quiet transcript nor a new stall.
+    // Preserve the episode until its fresh observation arrives.
+    if (transcriptSignals?.pending) return;
     if (transcriptSignals?.snapshot?.available === true) {
         const firstSampleThisEpisode = !host.meshStallTranscriptSignalSampled;
         host.meshStallTranscriptSignalSampled = true;

@@ -155,6 +155,9 @@ export interface EvidenceHost {
     };
     // Mutable evidence state (instance-owned).
     lastExternalCompletionProbe: ExternalTranscriptProbe | null;
+    /** A cooperative rebuild has not produced a fresh observation yet. */
+    nativeHistoryReadPending?: boolean;
+    lastExternalCompletionMessages?: { historySessionId: string; messages: unknown[] } | null;
     /** (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. */
     lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
@@ -178,7 +181,7 @@ export interface EvidenceHost {
     // Instance-owned helpers the moved methods call.
     hasAdapterPendingResponse(): boolean;
     isModalParked(): boolean;
-    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null;
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null;
     busyLeaseGateEnabled(): boolean;
     /**
      * (NATIVE-TURN-SIGNAL) The provider's own terminal record for THIS turn, or null
@@ -285,7 +288,7 @@ export function completionHasFinalAssistantMessage(messages: unknown, turnStarte
  */
 export function getLiveTurnPendingEvidence(host: EvidenceHost): {
     pending: boolean;
-    kind?: 'adapter' | 'modal' | 'transcript_tool';
+    kind?: 'adapter' | 'modal' | 'transcript_tool' | 'transcript_loading';
     observedAt?: number;
 } {
     const adapterPending = host.hasAdapterPendingResponse();
@@ -315,6 +318,7 @@ export function getLiveTurnPendingEvidence(host: EvidenceHost): {
                 observedAt: probe.snapshot.sampledAt,
             };
         }
+        if (probe?.pending) return { pending: true, kind: 'transcript_loading' };
     } catch { /* fail open — a probe error must never fabricate pending evidence */ }
     return { pending: false };
 }
@@ -347,6 +351,8 @@ export function getLiveTurnPendingEvidence(host: EvidenceHost): {
  * `typeof newest === 'number'`). A probe error must never wedge a completion.
  */
 export interface TerminalAdmissionObservations {
+    /** Defer admission until the ongoing transcript read has settled. */
+    transcriptReadPending?: boolean;
     activeModalPresent: boolean;
     trailingActivityCount: number;
     /** Newest transcript bubble of ANY kind (epoch ms) — rule 6's freshness probe. */
@@ -363,8 +369,10 @@ export function getTerminalAdmissionObservations(host: EvidenceHost, nowMs: numb
     let trailingActivityCount = 0;
     let newestActivityAtMs: number | undefined;
     let finalAssistantPresent = false;
+    let transcriptReadPending = false;
     try {
         const probe = host.probeNativeTranscriptSignals();
+        transcriptReadPending = probe?.pending === true;
         const messages = Array.isArray(probe?.messages) ? probe.messages as ChatMessage[] : null;
         if (messages) {
             trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
@@ -381,7 +389,7 @@ export function getTerminalAdmissionObservations(host: EvidenceHost, nowMs: numb
         // freshness signal available. Take whichever proves the transcript is FRESHER
         // — a newer observation can only strengthen rule 6's veto, never weaken it.
         const snapshot = probe?.snapshot;
-        if (snapshot?.available === true && typeof snapshot.detail?.ageMs === 'number'
+        if (!transcriptReadPending && snapshot?.available === true && typeof snapshot.detail?.ageMs === 'number'
             && Number.isFinite(snapshot.detail.ageMs)) {
             const mtimeAtMs = nowMs - snapshot.detail.ageMs;
             if (newestActivityAtMs === undefined || mtimeAtMs > newestActivityAtMs) {
@@ -397,6 +405,7 @@ export function getTerminalAdmissionObservations(host: EvidenceHost, nowMs: numb
     // authoritative empty one.
     const markers = host.lastNativeTurnTerminalMarkers;
     return {
+        ...(transcriptReadPending ? { transcriptReadPending: true } : {}),
         activeModalPresent,
         trailingActivityCount,
         ...(newestActivityAtMs !== undefined ? { newestActivityAtMs } : {}),
@@ -419,6 +428,7 @@ export function recordPendingTranscriptProbe(host: EvidenceHost, pending: Comple
 }
 
 export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allowManifestNativeSource?: boolean }): unknown[] | null {
+    host.nativeHistoryReadPending = false;
     const adapterOwnsMessagesElsewhere = (host.adapter as any)?.chatMessagesOwnedExternally === true;
     // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: production kimi routes
     // through ProviderCliAdapter (provider dir ships provider.v1.json, no
@@ -510,15 +520,24 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
     });
-    // Loading is a deferred read, not evidence that prior markers vanished.
-    // Preserve the last published snapshot until the first rebuild completes.
-    if (restoredHistory.unavailableReason === 'native_history_loading') return [];
+    // Deferred snapshots are not fresh samples: old mtime/messages cannot prove
+    // no growth or clear a trailing-tool veto. Keep the previous observation
+    // and expose pending to watchdog/completion/admission decision sites.
+    if (restoredHistory.stale || restoredHistory.unavailableReason === 'native_history_loading') {
+        host.nativeHistoryReadPending = true;
+        // A stale reader snapshot has already passed source/session binding.
+        // Cold loading may reuse an older veto only for the same concrete pin.
+        const previous = host.lastExternalCompletionMessages;
+        return restoredHistory.stale ? restoredHistory.messages
+            : resolvedHandle && previous?.historySessionId === resolvedHandle ? previous.messages : [];
+    }
     // (NATIVE-TURN-SIGNAL) Capture the provider's own turn-terminal records from THIS read,
     // before the source check below can early-return. Refreshed on every probe so a stale
     // marker from a previous read can never satisfy a later turn's gate.
     if (host.type === 'codex-cli' && !resolvedHandle && restoredHistory.ownerConfirmed !== true) {
         host.lastNativeTurnTerminalMarkers = null;
         host.lastExternalCompletionProbe = null;
+        host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
     }
@@ -528,6 +547,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
 
     if (restoredHistory.source !== 'provider-native') {
         host.lastExternalCompletionProbe = null;
+        host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
     }
@@ -536,6 +556,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         restoredHistory.sourcePath,
         restoredHistory.sourceMtimeMs,
     );
+    host.lastExternalCompletionMessages = { historySessionId: resolvedHandle, messages: restoredHistory.messages };
     host.publishTranscriptSignalObservation(restoredHistory.messages);
     return restoredHistory.messages;
 }

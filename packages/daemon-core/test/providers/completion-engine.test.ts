@@ -337,6 +337,16 @@ describe('decideCompletionFlush — hold pipeline ordering and release', () => {
         expect((d as any).reason).toBe('busy_lease_active');
     });
 
+    it('holds a deferred native read past the weak-completion timeout until a fresh quiet sample arrives', () => {
+        const reader = { ...floorMissing, now: T0 + POLICY.finalizationMaxWaitMs + 1 };
+        expect(decideCompletionFlush(makeArm(), makeReader({ ...reader,
+            transcriptGrowth: { available: false, growing: false, pending: true },
+        }), POLICY)).toMatchObject({ kind: 'hold', reason: 'native_history_loading' });
+        expect(decideCompletionFlush(makeArm(), makeReader({ ...reader,
+            transcriptGrowth: { available: true, growing: false },
+        }), POLICY).kind).toBe('emit-weak');
+    });
+
     it('CANON-C floor: floor-class weak emit waits out the min-elapsed floor, then decouples', () => {
         const early = decideCompletionFlush(makeArm(), makeReader(floorMissing), POLICY);
         expect(early.kind).toBe('hold');
