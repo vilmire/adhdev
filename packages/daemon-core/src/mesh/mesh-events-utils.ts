@@ -486,6 +486,28 @@ export function buildMeshSystemMessage(args: {
         const error = readText(args.metadataEvent.error);
         return `[System] ${args.nodeLabel} worktree bootstrap failed${error ? `: ${error}` : '.'}. Use \`mesh_retry_node_bootstrap\` to retry or inspect the node state.`;
     }
+    if (args.event === 'clone_failed') {
+        const branch = readText(args.metadataEvent.branch);
+        const sourceNodeId = readText(args.metadataEvent.sourceNodeId);
+        const code = readText(args.metadataEvent.code);
+        const error = readText(args.metadataEvent.error);
+        const nodeLimit = readOptionalRecord(args.metadataEvent.nodeLimit);
+        const maxNodes = typeof args.metadataEvent.maxNodes === 'number'
+            ? args.metadataEvent.maxNodes
+            : (typeof nodeLimit?.limit === 'number' ? nodeLimit.limit : undefined);
+        const currentCount = typeof args.metadataEvent.currentCount === 'number'
+            ? args.metadataEvent.currentCount
+            : (typeof nodeLimit?.count === 'number' ? nodeLimit.count : undefined);
+        const details = [
+            branch ? `branch=${branch}` : '',
+            sourceNodeId ? `source_node=${sourceNodeId}` : '',
+            code ? `code=${code}` : '',
+            maxNodes !== undefined
+                ? `maxNodes=${currentCount !== undefined ? `${currentCount}/${maxNodes}` : String(maxNodes)}`
+                : '',
+        ].filter(Boolean).join('; ');
+        return `[System] Worktree clone failed${details ? ` (${details})` : ''}${error ? `: ${error}` : '.'} Next step: inspect with mesh_status; retry mesh_clone_node.`;
+    }
     if (args.event === 'refine:accepted') {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
         return `[System] Refinery accepted async job${jobId ? ` ${jobId}` : ''} for ${args.nodeLabel}. Completion/failure will be delivered as a terminal refine event; do not poll repeatedly.`;

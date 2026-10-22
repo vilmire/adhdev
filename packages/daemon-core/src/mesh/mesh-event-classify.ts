@@ -26,6 +26,7 @@ const MESH_COORDINATOR_EVENTS = new Set([
     'refine:failed',
     'worktree_bootstrap_complete',
     'worktree_bootstrap_failed',
+    'clone_failed',
     // G3: mission-hygiene nudge. Emitted once when all of a mission's tasks first
     // become terminal — a "consider closing this mission" hint for the coordinator.
     // Purely informational: NOT force-injected (no blocked coordinator waits on it)
@@ -66,6 +67,7 @@ export const MESH_FORCE_INJECT_EVENTS: ReadonlySet<string> = new Set([
     'refine:failed',
     'worktree_bootstrap_complete',
     'worktree_bootstrap_failed',
+    'clone_failed',
 ]);
 
 export function shouldForceInjectMeshEvent(eventName: unknown): boolean {

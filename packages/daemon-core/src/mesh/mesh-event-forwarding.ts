@@ -376,6 +376,7 @@ const NOTICE_EVENTS = new Set([
     'refine:failed',
     'worktree_bootstrap_complete',
     'worktree_bootstrap_failed',
+    'clone_failed',
     'mission_close_candidate',
 ]);
 
@@ -716,9 +717,26 @@ export function buildRelayMetadataEvent(payload: Record<string, unknown>): Recor
         ...(readText(payload.observedStatus) ? { observedStatus: readText(payload.observedStatus) } : {}),
         ...(readText(payload.prevStatus) ? { prevStatus: readText(payload.prevStatus) } : {}),
         ...(readText(payload.nextStatus) ? { nextStatus: readText(payload.nextStatus) } : {}),
-        ...(readText(payload.worktreePath) ? { worktreePath: readText(payload.worktreePath) } : {}),
-        ...(typeof payload.durationMs === 'number' ? { durationMs: payload.durationMs } : {}),
-        ...(readText(payload.error) ? { error: readText(payload.error) } : {}),
+        ...(readText(payload.worktreePath) || readText(inner?.worktreePath) ? { worktreePath: readText(payload.worktreePath) || readText(inner?.worktreePath) } : {}),
+        ...(typeof payload.durationMs === 'number'
+            ? { durationMs: payload.durationMs }
+            : (typeof inner?.durationMs === 'number' ? { durationMs: inner.durationMs } : {})),
+        ...(readText(payload.error) || readText(inner?.error) ? { error: readText(payload.error) || readText(inner?.error) } : {}),
+        ...(readText(payload.branch) || readText(inner?.branch) ? { branch: readText(payload.branch) || readText(inner?.branch) } : {}),
+        ...(readText(payload.sourceNodeId) || readText(inner?.sourceNodeId) ? { sourceNodeId: readText(payload.sourceNodeId) || readText(inner?.sourceNodeId) } : {}),
+        ...(readText(payload.code) || readText(inner?.code) ? { code: readText(payload.code) || readText(inner?.code) } : {}),
+        ...(readOptionalRecord(payload.nodeLimit) || readOptionalRecord(inner?.nodeLimit)
+            ? { nodeLimit: readOptionalRecord(payload.nodeLimit) || readOptionalRecord(inner?.nodeLimit) }
+            : {}),
+        ...(typeof payload.maxNodes === 'number'
+            ? { maxNodes: payload.maxNodes }
+            : (typeof inner?.maxNodes === 'number' ? { maxNodes: inner.maxNodes } : {})),
+        ...(typeof payload.currentCount === 'number'
+            ? { currentCount: payload.currentCount }
+            : (typeof inner?.currentCount === 'number' ? { currentCount: inner.currentCount } : {})),
+        ...(Array.isArray(payload.cleanupCandidates)
+            ? { cleanupCandidates: payload.cleanupCandidates }
+            : (Array.isArray(inner?.cleanupCandidates) ? { cleanupCandidates: inner.cleanupCandidates } : {})),
         intentional: payload.intentional === true,
         intentionalStop: payload.intentionalStop === true,
         operatorCleanup: payload.operatorCleanup === true,

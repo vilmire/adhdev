@@ -46807,6 +46807,22 @@ Do NOT retry on this node. Consider reassigning to a different node or asking th
         const error = readText(args.metadataEvent.error);
         return `[System] ${args.nodeLabel} worktree bootstrap failed${error ? `: ${error}` : "."}. Use \`mesh_retry_node_bootstrap\` to retry or inspect the node state.`;
       }
+      if (args.event === "clone_failed") {
+        const branch = readText(args.metadataEvent.branch);
+        const sourceNodeId = readText(args.metadataEvent.sourceNodeId);
+        const code = readText(args.metadataEvent.code);
+        const error = readText(args.metadataEvent.error);
+        const nodeLimit = readOptionalRecord2(args.metadataEvent.nodeLimit);
+        const maxNodes = typeof args.metadataEvent.maxNodes === "number" ? args.metadataEvent.maxNodes : typeof nodeLimit?.limit === "number" ? nodeLimit.limit : void 0;
+        const currentCount = typeof args.metadataEvent.currentCount === "number" ? args.metadataEvent.currentCount : typeof nodeLimit?.count === "number" ? nodeLimit.count : void 0;
+        const details = [
+          branch ? `branch=${branch}` : "",
+          sourceNodeId ? `source_node=${sourceNodeId}` : "",
+          code ? `code=${code}` : "",
+          maxNodes !== void 0 ? `maxNodes=${currentCount !== void 0 ? `${currentCount}/${maxNodes}` : String(maxNodes)}` : ""
+        ].filter(Boolean).join("; ");
+        return `[System] Worktree clone failed${details ? ` (${details})` : ""}${error ? `: ${error}` : "."} Next step: inspect with mesh_status; retry mesh_clone_node.`;
+      }
       if (args.event === "refine:accepted") {
         const jobId = readRefineJobId({ metadataEvent: args.metadataEvent });
         return `[System] Refinery accepted async job${jobId ? ` ${jobId}` : ""} for ${args.nodeLabel}. Completion/failure will be delivered as a terminal refine event; do not poll repeatedly.`;
@@ -46923,6 +46939,7 @@ Next step: ${nextStep}`;
           "refine:failed",
           "worktree_bootstrap_complete",
           "worktree_bootstrap_failed",
+          "clone_failed",
           // G3: mission-hygiene nudge. Emitted once when all of a mission's tasks first
           // become terminal — a "consider closing this mission" hint for the coordinator.
           // Purely informational: NOT force-injected (no blocked coordinator waits on it)
@@ -46941,7 +46958,8 @@ Next step: ${nextStep}`;
           "refine:completed",
           "refine:failed",
           "worktree_bootstrap_complete",
-          "worktree_bootstrap_failed"
+          "worktree_bootstrap_failed",
+          "clone_failed"
         ]);
       }
     });
@@ -85950,9 +85968,16 @@ ${cleanBody}`;
         ...readText(payload.observedStatus) ? { observedStatus: readText(payload.observedStatus) } : {},
         ...readText(payload.prevStatus) ? { prevStatus: readText(payload.prevStatus) } : {},
         ...readText(payload.nextStatus) ? { nextStatus: readText(payload.nextStatus) } : {},
-        ...readText(payload.worktreePath) ? { worktreePath: readText(payload.worktreePath) } : {},
-        ...typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {},
-        ...readText(payload.error) ? { error: readText(payload.error) } : {},
+        ...readText(payload.worktreePath) || readText(inner?.worktreePath) ? { worktreePath: readText(payload.worktreePath) || readText(inner?.worktreePath) } : {},
+        ...typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : typeof inner?.durationMs === "number" ? { durationMs: inner.durationMs } : {},
+        ...readText(payload.error) || readText(inner?.error) ? { error: readText(payload.error) || readText(inner?.error) } : {},
+        ...readText(payload.branch) || readText(inner?.branch) ? { branch: readText(payload.branch) || readText(inner?.branch) } : {},
+        ...readText(payload.sourceNodeId) || readText(inner?.sourceNodeId) ? { sourceNodeId: readText(payload.sourceNodeId) || readText(inner?.sourceNodeId) } : {},
+        ...readText(payload.code) || readText(inner?.code) ? { code: readText(payload.code) || readText(inner?.code) } : {},
+        ...readOptionalRecord2(payload.nodeLimit) || readOptionalRecord2(inner?.nodeLimit) ? { nodeLimit: readOptionalRecord2(payload.nodeLimit) || readOptionalRecord2(inner?.nodeLimit) } : {},
+        ...typeof payload.maxNodes === "number" ? { maxNodes: payload.maxNodes } : typeof inner?.maxNodes === "number" ? { maxNodes: inner.maxNodes } : {},
+        ...typeof payload.currentCount === "number" ? { currentCount: payload.currentCount } : typeof inner?.currentCount === "number" ? { currentCount: inner.currentCount } : {},
+        ...Array.isArray(payload.cleanupCandidates) ? { cleanupCandidates: payload.cleanupCandidates } : Array.isArray(inner?.cleanupCandidates) ? { cleanupCandidates: inner.cleanupCandidates } : {},
         intentional: payload.intentional === true,
         intentionalStop: payload.intentionalStop === true,
         operatorCleanup: payload.operatorCleanup === true,
@@ -86124,6 +86149,7 @@ ${cleanBody}`;
           "refine:failed",
           "worktree_bootstrap_complete",
           "worktree_bootstrap_failed",
+          "clone_failed",
           "mission_close_candidate"
         ]);
       }
@@ -147358,8 +147384,9 @@ ${output}` : "";
     async function appendCloneLedger(target, sourceNodeId, branch, submodulesInitialized, bootstrapState, extraPayload) {
       try {
         const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
+        const nodeId = typeof target.node?.id === "string" && target.node.id.trim() ? target.node.id.trim() : void 0;
         meshRecord2(target.meshId, "node_cloned", {
-          nodeId: target.node.id,
+          ...nodeId ? { nodeId } : {},
           payload: {
             sourceNodeId,
             branch,
@@ -147653,7 +147680,7 @@ ${output}` : "";
           const target = {
             meshId,
             mesh: resolvedMesh,
-            node: { id: `clone_failed:${branch}` },
+            node: { id: "" },
             worktreePath: "",
             daemonId: ctx.deps.statusInstanceId,
             machineId: void 0
@@ -147666,13 +147693,41 @@ ${output}` : "";
             ...Array.isArray(limitFailure.cleanupCandidates) ? { cleanupCandidates: limitFailure.cleanupCandidates } : {}
           } : {};
           await appendCloneLedger(target, sourceNodeId, branch, false, failedState, limitExtra);
-          emitCloneBootstrapEvent(ctx, target, "bootstrap_failed", failedState, cloneStartedAtMs, {
+          const hostDaemonId = readText(resolvedMesh?.meshHost?.hostDaemonId);
+          const originDaemonId = readText(ctx.deps.statusInstanceId);
+          const metadataEvent = {
             source: "clone_mesh_node",
             status: "clone_failed",
             branch,
             sourceNodeId,
+            durationMs: Date.now() - cloneStartedAtMs,
             error: errorMsg,
+            ...hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {},
+            ...originDaemonId ? { originDaemonId } : {},
             ...limitExtra
+          };
+          if (typeof ctx.deps.instanceManager?.getByCategory === "function") {
+            try {
+              const forwarded = handleMeshForwardEvent(
+                ctx.components(),
+                {
+                  event: "clone_failed",
+                  meshId,
+                  metadataEvent,
+                  ...metadataEvent
+                }
+              );
+              if (forwarded?.success === true) return;
+            } catch {
+            }
+          }
+          notifyMeshCoordinator({
+            event: "clone_failed",
+            meshId,
+            nodeLabel: `Clone '${branch}'`,
+            metadataEvent,
+            queuedAt: Date.now(),
+            ...hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {}
           });
         };
         try {

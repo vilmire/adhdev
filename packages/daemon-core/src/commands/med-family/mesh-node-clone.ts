@@ -422,8 +422,9 @@ async function appendCloneLedger(
 ): Promise<void> {
     try {
         const { meshRecord } = await import('../../mesh/mesh-record.js');
+        const nodeId = typeof target.node?.id === 'string' && target.node.id.trim() ? target.node.id.trim() : undefined;
         meshRecord(target.meshId, 'node_cloned', {
-            nodeId: target.node.id,
+            ...(nodeId ? { nodeId } : {}),
             payload: {
                 sourceNodeId,
                 branch,
@@ -821,7 +822,7 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             const target: CloneBootstrapTarget = {
                 meshId,
                 mesh: resolvedMesh,
-                node: { id: `clone_failed:${branch}` },
+                node: { id: '' },
                 worktreePath: '',
                 daemonId: ctx.deps.statusInstanceId,
                 machineId: undefined,
@@ -836,13 +837,40 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                 }
                 : {};
             await appendCloneLedger(target, sourceNodeId, branch, false, failedState, limitExtra);
-            emitCloneBootstrapEvent(ctx, target, 'bootstrap_failed', failedState, cloneStartedAtMs, {
+            const hostDaemonId = readText((resolvedMesh as { meshHost?: { hostDaemonId?: unknown } })?.meshHost?.hostDaemonId);
+            const originDaemonId = readText(ctx.deps.statusInstanceId);
+            const metadataEvent: Record<string, unknown> = {
                 source: 'clone_mesh_node',
                 status: 'clone_failed',
                 branch,
                 sourceNodeId,
+                durationMs: Date.now() - cloneStartedAtMs,
                 error: errorMsg,
+                ...(hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {}),
+                ...(originDaemonId ? { originDaemonId } : {}),
                 ...limitExtra,
+            };
+            if (typeof ctx.deps.instanceManager?.getByCategory === 'function') {
+                try {
+                    const forwarded = handleMeshForwardEvent(
+                        ctx.components(),
+                        {
+                            event: 'clone_failed',
+                            meshId,
+                            metadataEvent,
+                            ...metadataEvent,
+                        },
+                    );
+                    if (forwarded?.success === true) return;
+                } catch { /* falls through to the queue fallback below */ }
+            }
+            notifyMeshCoordinator({
+                event: 'clone_failed',
+                meshId,
+                nodeLabel: `Clone '${branch}'`,
+                metadataEvent,
+                queuedAt: Date.now(),
+                ...(hostDaemonId ? { targetCoordinatorDaemonId: hostDaemonId } : {}),
             });
         };
 
