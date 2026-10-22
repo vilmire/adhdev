@@ -1,3 +1,4 @@
+import { MAX_OUTGOING_MESSAGE_ID_LENGTH } from '../seqscribe/outgoing-receipt.js';
 import { OutgoingReceiptStore } from '../sessions/outgoing-receipt-store.js';
 import { resolveConfigDir } from '../config/config-dir.js';
 import { matchesProviderApprovalTarget, projectProviderApproval } from '../status/provider-approval.js';
@@ -205,6 +206,17 @@ export function sendChatResultFromOutcome(outcome: SubmitOutcome, messageId: str
     }
 }
 
+/** Receipt evidence is optional after the service has accepted native input. */
+function chatReceipt(service: SessionInputService, sessionId: string, messageId: string): Record<string, unknown> {
+    try {
+        const outgoingReceipt = service.getReceipts(sessionId, [messageId])[0];
+        if (outgoingReceipt && !service.isReceiptUnverified?.(messageId)) return { outgoingReceipt };
+    } catch (error) {
+        LOG.warn('OutgoingReceipt', `Receipt unverified for ${messageId}: ${(error as Error).message}`);
+    }
+    return { receiptUnverified: true, deliveryNote: 'Receipt unverified. Retain the same messageId for any retry.' };
+}
+
 async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope, provider: ProviderModule | undefined, transport: 'pty'): Promise<CommandResult> {
     const sessionKey = resolveInputSessionKey(h, args, provider?.type);
     if (!sessionKey) {
@@ -275,13 +287,13 @@ async function submitCliChat(h: CommandHelpers, args: any, input: InputEnvelope,
             parts: [...input.parts, { type: 'text' as const, text: hasTextPart ? prepared.text.slice(input.textFallback.length) : prepared.text }] };
     });
     if (prepared && !prepared.success) return { ...prepared, error: prepared.code, sent: false,
-        messageId, outgoingReceipt: service.getReceipts(sessionKey, [messageId])[0] };
+        messageId, ...chatReceipt(service, sessionKey, messageId) };
     // Assistant input attribution (§4.10.2 check 5): the hook keeps only
     // router-stamped dashboard sources and only the bound assistant session.
     const requested = typeof args?.targetSessionId === 'string' ? args.targetSessionId.trim() : '';
     reportSessionChatInput({ sessionIds: requested && requested !== sessionKey ? [sessionKey, requested] : [sessionKey], messageId, source: readCommandSource(args), outcome });
     return { ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
-        outgoingReceipt: service.getReceipts(sessionKey, [messageId])[0],
+        ...chatReceipt(service, sessionKey, messageId),
         ...(prepared && 'expiresAt' in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: 'If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically.' } : {}) };
 }
 
@@ -1190,6 +1202,6 @@ export async function handleResolveAction(h: CommandHelpers, args: any): Promise
 export async function handleOutgoingReceipts(h: CommandHelpers, args: any): Promise<CommandResult> {
     const sessionKey = resolveInputSessionKey(h, args, h.getProvider(args?.agentType)?.type);
     if (!sessionKey) return { success: false, error: 'Session not found' };
-    const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id: unknown) => typeof id === 'string' && id.length <= 256).slice(0, 32) : [];
+    const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id: unknown) => typeof id === 'string' && id.length <= MAX_OUTGOING_MESSAGE_ID_LENGTH).slice(0, 32) : [];
     return { success: true, receipts: sessionInputFor(h).getReceipts(sessionKey, ids) };
 }

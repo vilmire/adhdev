@@ -125,6 +125,8 @@ export const FOLLOWER_SEND_RECEIPT_MAX_ENTRIES = 1_024;
 export const FOLLOWER_SEND_RECEIPT_TTL_MS = 24 * 60 * 60_000;
 
 interface FollowerSendReceipt {
+    receiptUnverified?: boolean;
+    deliveryNote?: string;
     coordinatorSessionId: string;
     bodyHash: string;
     messageId: string;
@@ -403,6 +405,7 @@ async function followerProjectSend(
                     status: 'duplicate',
                     launched: false,
                     coordinatorSessionId: live.sessionId,
+                    ...(prior.receiptUnverified ? { receiptUnverified: true, deliveryNote: prior.deliveryNote } : {}),
                     messageId: prior.messageId,
                     cursor: prior.cursor,
                 },
@@ -430,11 +433,13 @@ async function followerProjectSend(
             messageId,
             cursor,
             recordedAt: now,
+            ...(sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str(sent.deliveryNote) } : {}),
         }, now);
         return {
             success: true,
             result: {
                 status,
+                ...(sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {}),
                 launched: false,
                 coordinatorSessionId: live.sessionId,
                 messageId,

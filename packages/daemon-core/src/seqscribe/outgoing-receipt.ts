@@ -12,6 +12,9 @@ export interface OutgoingReceipt {
     revision: number;
     proof: 'acceptance' | 'native_write_ack' | 'none' | 'not_written';
 }
+// Follower IDs include host/mesh/account/coordinator/client identity. Preserve
+// those IDs for durable retries, including journals written by older daemons.
+export const MAX_OUTGOING_MESSAGE_ID_LENGTH = 4096;
 export function readOutgoingReceipt(value: unknown): OutgoingReceipt | null {
     if (!value || typeof value !== 'object') return null;
     const r = value as Record<string, unknown>;
@@ -19,7 +22,7 @@ export function readOutgoingReceipt(value: unknown): OutgoingReceipt | null {
         || !['acceptance', 'native_write_ack', 'none', 'not_written'].includes(String(r.proof))
         || !Number.isSafeInteger(r.revision) || Number(r.revision) < 1) return null;
     for (const k of ['messageId', 'sessionId', 'attemptId', 'generation', 'inputDigest']) {
-        if (typeof r[k] !== 'string' || !r[k] || (r[k] as string).length > 256) return null;
+        if (typeof r[k] !== 'string' || !r[k] || (r[k] as string).length > (k === 'messageId' ? MAX_OUTGOING_MESSAGE_ID_LENGTH : 256)) return null;
     }
     if (r.state === 'submitted' && r.proof !== 'native_write_ack') return null;
     if (r.state === 'failed' && r.proof !== 'not_written') return null;

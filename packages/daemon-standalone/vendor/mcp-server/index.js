@@ -105163,7 +105163,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
       const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
-      return { ok: true, status, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
+      return { ok: true, status, ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str10(sent.deliveryNote) } : {}, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
     }
     function readTailArg(raw) {
       const n = Number(raw);
@@ -105418,6 +105418,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
             return wrap(p.slug, meshId, {
               status: str10(body.status) || "accepted",
+              ...body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {},
               launched: body.launched === true,
               coordinatorSessionId: remoteCoordSessionId,
               messageId: str10(body.messageId) || null,
@@ -122525,12 +122526,13 @@ ${marker2}`,
     init_control_effects();
     init_dist();
     init_dist2();
+    var MAX_OUTGOING_MESSAGE_ID_LENGTH = 4096;
     function readOutgoingReceipt(value) {
       if (!value || typeof value !== "object") return null;
       const r = value;
       if (r.version !== 1 || !["accepted", "submitted", "uncertain", "failed"].includes(String(r.state)) || !["acceptance", "native_write_ack", "none", "not_written"].includes(String(r.proof)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 1) return null;
       for (const k of ["messageId", "sessionId", "attemptId", "generation", "inputDigest"]) {
-        if (typeof r[k] !== "string" || !r[k] || r[k].length > 256) return null;
+        if (typeof r[k] !== "string" || !r[k] || r[k].length > (k === "messageId" ? MAX_OUTGOING_MESSAGE_ID_LENGTH : 256)) return null;
       }
       if (r.state === "submitted" && r.proof !== "native_write_ack") return null;
       if (r.state === "failed" && r.proof !== "not_written") return null;
@@ -139176,6 +139178,7 @@ ${output}` : "";
     var import_node_fs6 = __toESM2(require("fs"));
     var import_node_path7 = __toESM2(require("path"));
     var import_node_crypto17 = require("crypto");
+    init_logger();
     var OutgoingReceiptStore = class {
       constructor(directory2) {
         this.directory = directory2;
@@ -139193,77 +139196,130 @@ ${output}` : "";
           import_node_fs6.default.closeSync(fd);
         }
       }
-      get(messageId) {
+      locked(id4, operation) {
+        if (!this.directory) return operation();
+        import_node_fs6.default.mkdirSync(this.directory, { recursive: true });
+        const lock = this.filename(id4) + ".lock";
+        const deadline = Date.now() + 300;
+        for (; ; ) {
+          try {
+            import_node_fs6.default.mkdirSync(lock, { mode: 448 });
+            break;
+          } catch (error) {
+            if (error.code !== "EEXIST" || Date.now() >= deadline) throw error;
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+          }
+        }
+        try {
+          return operation();
+        } finally {
+          import_node_fs6.default.rmdirSync(lock);
+        }
+      }
+      isUnverified(messageId) {
+        if (!this.directory || !import_node_fs6.default.existsSync(this.directory)) return false;
+        const prefix = import_node_path7.default.basename(this.filename(messageId)) + ".invalid-";
+        return import_node_fs6.default.readdirSync(this.directory).some((name) => name.startsWith(prefix));
+      }
+      hasAcceptance(messageId) {
+        return this.records.has(messageId) || !!this.directory && (import_node_fs6.default.existsSync(this.filename(messageId)) || this.isUnverified(messageId));
+      }
+      read(messageId) {
         if (!this.directory) return this.records.get(messageId);
         const file = this.filename(messageId);
-        if (!import_node_fs6.default.existsSync(file)) return void 0;
-        const receipt = readOutgoingReceipt(JSON.parse(import_node_fs6.default.readFileSync(file, "utf8")));
-        if (!receipt || receipt.messageId !== messageId) throw new Error("Invalid outgoing receipt journal");
-        return receipt;
+        let bytes;
+        try {
+          bytes = import_node_fs6.default.readFileSync(file, "utf8");
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          const known2 = this.isUnverified(messageId) ? this.records.get(messageId) : void 0;
+          return known2 ? { ...known2, state: "uncertain", proof: "none", revision: known2.revision + 1 } : void 0;
+        }
+        let receipt = null;
+        try {
+          receipt = readOutgoingReceipt(JSON.parse(bytes));
+        } catch {
+        }
+        if (receipt?.messageId === messageId) {
+          this.records.set(messageId, receipt);
+          return receipt;
+        }
+        let timestamp2 = Date.now();
+        let quarantine2 = `${file}.invalid-${timestamp2}`;
+        while (import_node_fs6.default.existsSync(quarantine2)) quarantine2 = `${file}.invalid-${++timestamp2}`;
+        import_node_fs6.default.renameSync(file, quarantine2);
+        LOG.warn("OutgoingReceipt", `Invalid outgoing receipt journal quarantined at ${quarantine2}; delivery unverified, automatic resend suppressed`);
+        this.syncDirectory();
+        const known = this.records.get(messageId);
+        return known ? { ...known, state: "uncertain", proof: "none", revision: known.revision + 1 } : void 0;
       }
-      accept(messageId, sessionId, input) {
-        const inputDigest = outgoingInputDigest(input);
-        const existing = () => {
-          const prior2 = this.get(messageId);
-          if (!prior2 || prior2.sessionId !== sessionId || prior2.inputDigest !== inputDigest) throw new Error("Outgoing message identity conflict");
-          return { receipt: prior2, fresh: false };
-        };
-        const prior = this.get(messageId);
-        if (prior && (this.directory || prior.state !== "failed")) return existing();
-        const receipt = {
-          version: 1,
-          messageId,
-          sessionId,
-          inputDigest,
-          attemptId: (0, import_node_crypto17.randomUUID)(),
-          generation: (0, import_node_crypto17.randomUUID)(),
-          state: "accepted",
-          revision: 1,
-          proof: "acceptance"
-        };
-        if (this.directory) {
-          import_node_fs6.default.mkdirSync(this.directory, { recursive: true });
-          let fd;
-          try {
-            fd = import_node_fs6.default.openSync(this.filename(messageId), "wx", 384);
-          } catch (error) {
-            if (error.code === "EEXIST") return existing();
-            throw error;
-          }
+      get(messageId) {
+        if (!this.directory) return this.records.get(messageId);
+        if (!import_node_fs6.default.existsSync(this.directory)) return void 0;
+        return this.locked(messageId, () => this.read(messageId));
+      }
+      write(receipt) {
+        if (!readOutgoingReceipt(receipt)) throw new Error("Invalid outgoing receipt identity");
+        if (!this.directory) {
+          this.records.set(receipt.messageId, receipt);
+          return;
+        }
+        const file = this.filename(receipt.messageId);
+        const staging = `${file}.${(0, import_node_crypto17.randomUUID)()}.tmp`;
+        const fd = import_node_fs6.default.openSync(staging, "wx", 384);
+        try {
           try {
             import_node_fs6.default.writeFileSync(fd, JSON.stringify(receipt));
             import_node_fs6.default.fsyncSync(fd);
           } finally {
             import_node_fs6.default.closeSync(fd);
           }
+          import_node_fs6.default.renameSync(staging, file);
+          this.records.set(receipt.messageId, receipt);
           this.syncDirectory();
-        } else this.records.set(messageId, receipt);
-        return { receipt, fresh: true };
+        } finally {
+          if (import_node_fs6.default.existsSync(staging)) import_node_fs6.default.unlinkSync(staging);
+        }
+      }
+      accept(messageId, sessionId, input) {
+        return this.locked(messageId, () => {
+          const inputDigest = outgoingInputDigest(input);
+          const prior = this.read(messageId);
+          if (prior && (this.directory || prior.state !== "failed")) {
+            if (prior.sessionId !== sessionId || prior.inputDigest !== inputDigest) throw new Error("Outgoing message identity conflict");
+            return { receipt: prior, fresh: false };
+          }
+          const unverified = this.isUnverified(messageId);
+          const receipt = {
+            version: 1,
+            messageId,
+            sessionId,
+            inputDigest,
+            attemptId: (0, import_node_crypto17.randomUUID)(),
+            generation: (0, import_node_crypto17.randomUUID)(),
+            state: unverified ? "uncertain" : "accepted",
+            revision: 1,
+            proof: unverified ? "none" : "acceptance"
+          };
+          this.write(receipt);
+          return { receipt, fresh: !unverified };
+        });
       }
       advance(expected, state2) {
-        const current4 = this.get(expected.messageId);
-        if (!current4 || !sameOutgoingAttempt(current4, expected)) return void 0;
-        if (current4.state === "submitted" || current4.state === "failed" || state2 === "accepted" || state2 === current4.state) return current4;
-        const next = {
-          ...current4,
-          state: state2,
-          revision: current4.revision + 1,
-          proof: state2 === "submitted" ? "native_write_ack" : state2 === "failed" ? "not_written" : "none"
-        };
-        if (this.directory) {
-          const file = this.filename(current4.messageId);
-          const staging = `${file}.${(0, import_node_crypto17.randomUUID)()}.tmp`;
-          const fd = import_node_fs6.default.openSync(staging, "wx", 384);
-          try {
-            import_node_fs6.default.writeFileSync(fd, JSON.stringify(next));
-            import_node_fs6.default.fsyncSync(fd);
-          } finally {
-            import_node_fs6.default.closeSync(fd);
-          }
-          import_node_fs6.default.renameSync(staging, file);
-          this.syncDirectory();
-        } else this.records.set(current4.messageId, next);
-        return next;
+        return this.locked(expected.messageId, () => {
+          const current4 = this.read(expected.messageId);
+          if (!current4 || !sameOutgoingAttempt(current4, expected)) return void 0;
+          if (this.isUnverified(expected.messageId)) return { ...current4, state: "uncertain", proof: "none" };
+          if (current4.state === "submitted" || current4.state === "failed" || state2 === "accepted" || state2 === current4.state) return current4;
+          const next = {
+            ...current4,
+            state: state2,
+            revision: current4.revision + 1,
+            proof: state2 === "submitted" ? "native_write_ack" : state2 === "failed" ? "not_written" : "none"
+          };
+          this.write(next);
+          return next;
+        });
       }
       list(sessionId, ids) {
         return ids.slice(0, 32).flatMap((id4) => {
@@ -139581,22 +139637,28 @@ ${output}` : "";
     function createSessionInputService(deps) {
       const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
       const freshOutgoing = /* @__PURE__ */ new Set();
+      const unverifiedReceipts = /* @__PURE__ */ new Set();
       const outgoingAttempts = /* @__PURE__ */ new Map();
       const now = deps.clock ?? Date.now;
       const log = deps.log ?? (() => {
       });
       const tuning = deps.interrupt ?? {};
+      function receiptFailure(messageId, error) {
+        unverifiedReceipts.add(messageId);
+        log("warn", `submit(${messageId}) receipt unverified; preserving delivery/dedupe: ${error?.message ?? error}`);
+      }
       const settled = /* @__PURE__ */ new Map();
       const inFlight4 = /* @__PURE__ */ new Map();
       const parkedText = /* @__PURE__ */ new Map();
-      function remember(messageId, kind) {
+      function remember(msg, kind) {
+        const messageId = msg.messageId;
         const at = now();
         for (const [id4, entry] of settled) {
           if (at - entry.at <= DEDUPE_WINDOW_MS && settled.size < DEDUPE_MAX_ENTRIES) break;
           settled.delete(id4);
         }
         settled.delete(messageId);
-        settled.set(messageId, { kind, at });
+        settled.set(messageId, { kind, at, sessionId: msg.sessionId, inputDigest: outgoingInputDigest(msg.input) });
       }
       function settledKind(messageId) {
         const entry = settled.get(messageId);
@@ -139661,7 +139723,8 @@ ${output}` : "";
             const updated = receiptStore.advance(receipt, state2 === "submitted" ? "submitted" : "uncertain");
             if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
             if (state2 !== "started") outgoingAttempts.delete(msg.messageId);
-          } catch {
+          } catch (error) {
+            receiptFailure(msg.messageId, error);
           }
         });
         assertMaintenanceAdmission();
@@ -139708,7 +139771,8 @@ ${output}` : "";
             const updated = receiptStore.advance(receipt, state2 === "submitted" ? "submitted" : "uncertain");
             if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
             if (state2 !== "started") outgoingAttempts.delete(msg.messageId);
-          } catch {
+          } catch (error) {
+            receiptFailure(msg.messageId, error);
           }
         });
         let outcome;
@@ -139799,18 +139863,28 @@ ${output}` : "";
         }
       }
       async function run3(msg, prepareInput, noticeObserver) {
-        if (prepareInput || msg.origin === "dashboard" || receiptStore.get(msg.messageId)) {
-          const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
-          if (fresh) freshOutgoing.add(msg.messageId);
-          if (!fresh) {
-            const liveTarget = await deps.resolveSession(msg.sessionId);
-            if (msg.policy.mode === "queue" || receipt.state !== "accepted" || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
-              return { kind: "duplicate", of: msg.messageId };
-            }
-          }
-          outgoingAttempts.set(msg.messageId, receipt);
+        if (settledKind(msg.messageId) === "delivered") {
+          const prior2 = settled.get(msg.messageId);
+          if (prior2.sessionId !== msg.sessionId || prior2.inputDigest !== outgoingInputDigest(msg.input)) throw new Error("Outgoing message identity conflict");
+          return { kind: "duplicate", of: msg.messageId };
         }
-        if (settledKind(msg.messageId) === "delivered") return { kind: "duplicate", of: msg.messageId };
+        try {
+          if (prepareInput || msg.origin === "dashboard" || receiptStore.hasAcceptance(msg.messageId)) {
+            const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
+            if (fresh) freshOutgoing.add(msg.messageId);
+            if (!fresh) {
+              const liveTarget = await deps.resolveSession(msg.sessionId);
+              if (msg.policy.mode === "queue" || receipt.state !== "accepted" || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
+                return { kind: "duplicate", of: msg.messageId };
+              }
+            }
+            outgoingAttempts.set(msg.messageId, receipt);
+          }
+        } catch (error) {
+          if (error.message === "Outgoing message identity conflict" || !receiptStore.hasAcceptance(msg.messageId)) throw error;
+          receiptFailure(msg.messageId, error);
+          return { kind: "duplicate", of: msg.messageId };
+        }
         let target;
         try {
           target = await deps.resolveSession(msg.sessionId);
@@ -139859,8 +139933,9 @@ ${output}` : "";
           await pending.catch(() => void 0);
           try {
             if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
-          } catch {
-            return refuse3("internal_error", { message: "Outgoing message identity conflict" });
+          } catch (error) {
+            if (error.message === "Outgoing message identity conflict") return refuse3("internal_error", { message: "Outgoing message identity conflict" });
+            receiptFailure(msg.messageId, error);
           }
           return { kind: "duplicate", of: msg.messageId };
         }
@@ -139871,16 +139946,20 @@ ${output}` : "";
         inFlight4.set(msg.messageId, promise);
         try {
           const outcome = await promise;
-          const receipt = outgoingAttempts.get(msg.messageId);
-          if (receipt && outcome.kind === "refused") {
-            const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === "accepted" && ["no_target", "unsupported_input", "session_exited", "paused", "waiting_external"].includes(outcome.reason);
-            receiptStore.advance(receipt, notWritten ? "failed" : "uncertain");
-          }
-          if (receipt && outcome.kind === "delivered" && receiptStore.get(msg.messageId)?.state === "accepted") {
-            receiptStore.advance(receipt, "uncertain");
-          }
-          if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg.messageId, outcome.kind);
+          if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg, outcome.kind);
           if (outcome.kind === "delivered") parkedText.delete(msg.messageId);
+          try {
+            const receipt = outgoingAttempts.get(msg.messageId);
+            if (receipt && outcome.kind === "refused") {
+              const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === "accepted" && ["no_target", "unsupported_input", "session_exited", "paused", "waiting_external"].includes(outcome.reason);
+              receiptStore.advance(receipt, notWritten ? "failed" : "uncertain");
+            }
+            if (receipt && outcome.kind === "delivered" && receiptStore.get(msg.messageId)?.state === "accepted") {
+              receiptStore.advance(receipt, "uncertain");
+            }
+          } catch (error) {
+            receiptFailure(msg.messageId, error);
+          }
           return outcome;
         } finally {
           inFlight4.delete(msg.messageId);
@@ -139891,6 +139970,7 @@ ${output}` : "";
         async submitNotice(msg, observe) {
           return submitOwned({ ...msg }, void 0, observe);
         },
+        isReceiptUnverified: (messageId) => unverifiedReceipts.has(messageId) || receiptStore.isUnverified(messageId),
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map((receipt) => {
           return receipt.state === "accepted" && !outgoingAttempts.has(receipt.messageId) ? { ...receipt, state: "uncertain", proof: "none", revision: receipt.revision + 1 } : receipt;
         }),
@@ -140245,6 +140325,15 @@ ${output}` : "";
           };
       }
     }
+    function chatReceipt(service, sessionId, messageId) {
+      try {
+        const outgoingReceipt = service.getReceipts(sessionId, [messageId])[0];
+        if (outgoingReceipt && !service.isReceiptUnverified?.(messageId)) return { outgoingReceipt };
+      } catch (error) {
+        LOG.warn("OutgoingReceipt", `Receipt unverified for ${messageId}: ${error.message}`);
+      }
+      return { receiptUnverified: true, deliveryNote: "Receipt unverified. Retain the same messageId for any retry." };
+    }
     async function submitCliChat(h, args, input, provider, transport) {
       const sessionKey2 = resolveInputSessionKey(h, args, provider?.type);
       if (!sessionKey2) {
@@ -140294,13 +140383,13 @@ ${output}` : "";
         error: prepared.code,
         sent: false,
         messageId,
-        outgoingReceipt: service.getReceipts(sessionKey2, [messageId])[0]
+        ...chatReceipt(service, sessionKey2, messageId)
       };
       const requested = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
       reportSessionChatInput({ sessionIds: requested && requested !== sessionKey2 ? [sessionKey2, requested] : [sessionKey2], messageId, source: readCommandSource(args), outcome });
       return {
         ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
-        outgoingReceipt: service.getReceipts(sessionKey2, [messageId])[0],
+        ...chatReceipt(service, sessionKey2, messageId),
         ...prepared && "expiresAt" in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: "If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically." } : {}
       };
     }
@@ -141047,7 +141136,7 @@ ${output}` : "";
     async function handleOutgoingReceipts(h, args) {
       const sessionKey2 = resolveInputSessionKey(h, args, h.getProvider(args?.agentType)?.type);
       if (!sessionKey2) return { success: false, error: "Session not found" };
-      const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id4) => typeof id4 === "string" && id4.length <= 256).slice(0, 32) : [];
+      const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id4) => typeof id4 === "string" && id4.length <= MAX_OUTGOING_MESSAGE_ID_LENGTH).slice(0, 32) : [];
       return { success: true, receipts: sessionInputFor(h).getReceipts(sessionKey2, ids) };
     }
     var fs75 = __toESM2(require("fs"));
@@ -153701,6 +153790,7 @@ ${ptyResult.output.slice(-2e3)}`);
               status: "duplicate",
               launched: false,
               coordinatorSessionId: live.sessionId,
+              ...prior.receiptUnverified ? { receiptUnverified: true, deliveryNote: prior.deliveryNote } : {},
               messageId: prior.messageId,
               cursor: prior.cursor
             }
@@ -153726,12 +153816,14 @@ ${ptyResult.output.slice(-2e3)}`);
           bodyHash,
           messageId,
           cursor,
-          recordedAt: now
+          recordedAt: now,
+          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str14(sent.deliveryNote) } : {}
         }, now);
         return {
           success: true,
           result: {
             status,
+            ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {},
             launched: false,
             coordinatorSessionId: live.sessionId,
             messageId,
