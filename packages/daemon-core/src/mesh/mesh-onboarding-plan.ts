@@ -12,7 +12,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { gitChildEnv } from '../git/git-locale.js';
-import type { CLIInfo } from '../detection/cli-detector.js';
+import { isCliInventoryDegraded, type CLIInfo } from '../detection/cli-detector.js';
 import type { LocalMeshEntry, LocalMeshNodeEntry } from '../repo-mesh-types.js';
 import { listMeshesReadOnly } from '../config/mesh-config.js';
 import { normalizeRepoIdentity } from '../config/mesh-config-store.js';
@@ -603,10 +603,14 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
         );
     }
 
+    const planWarnings: string[] = [];
+    if (isCliInventoryDegraded(options.detectedProviders)) {
+        planWarnings.push(
+            'CLI provider inventory timed out (status: unknown / degraded); providerPriority could not be determined from live detection.',
+        );
+    }
+
     if (operation === 'clone_worktree') {
-        // Advisories accumulated while planning; surfaced on the successful plan so the
-        // operator approves with full knowledge rather than being blocked outright.
-        const planWarnings: string[] = [];
         if (!compatibleMesh) {
             return failure(
                 'mesh_not_found',
@@ -713,6 +717,7 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
             },
             suggestedConfig,
             note: 'Read-only plan only. Adding the node and writing suggested configs require separate explicit approved calls.',
+            ...(planWarnings.length ? { warnings: planWarnings } : {}),
         };
     }
 
@@ -760,5 +765,6 @@ export async function planMeshOnboarding(options: PlanMeshOnboardingOptions): Pr
         },
         suggestedConfig,
         note: 'Read-only plan only. No mesh/config/worktree writes occurred; execute each write step separately after approval.',
+        ...(planWarnings.length ? { warnings: planWarnings } : {}),
     };
 }

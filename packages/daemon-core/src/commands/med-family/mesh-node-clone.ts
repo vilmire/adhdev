@@ -27,6 +27,18 @@ import type { MedFamilyContext, MedFamilyHandler } from './types.js';
 import { readMeshDirectDispatchFlag, withMeshDirectDispatch } from '../command-args.js';
 import { rosterEvidenceExtra } from '../mesh-sender.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
+import {
+    CLONE_SYNC_BUDGET_RELAY_MARGIN_MS,
+    CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS,
+    MAX_CLONE_SYNC_BUDGET_MS,
+    DEFAULT_CLONE_SYNC_BUDGET_MS,
+} from '../../mesh/transport/mesh-rpc-timeouts.js';
+export {
+    CLONE_SYNC_BUDGET_RELAY_MARGIN_MS,
+    CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS,
+    MAX_CLONE_SYNC_BUDGET_MS,
+    DEFAULT_CLONE_SYNC_BUDGET_MS,
+};
 
 /**
  * Decision for syncing a freshly-cloned worktree's `oss` submodule to its clone
@@ -225,9 +237,18 @@ async function checkCloneAfterIdleReminder(meshId: string, args: any): Promise<C
  * FALSE-BLOCKER-CLONE-QUEUE: the transient grace window opens too — the remote
  * bootstrap may still be 'running', so a task pinned to it can transiently defer.
  */
-async function forwardCloneToSourceDaemon(ctx: MedFamilyContext, meshId: string, args: any, mesh: any, sourceDaemonId: string): Promise<CommandRouterResult> {
+async function forwardCloneToSourceDaemon(
+    ctx: MedFamilyContext,
+    meshId: string,
+    args: any,
+    mesh: any,
+    sourceDaemonId: string,
+    localSyncBudgetMs: number,
+): Promise<CommandRouterResult> {
+    const forwardedSyncBudgetMs = Math.max(10, localSyncBudgetMs - CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS);
+    const forwardedArgs = { ...args, syncBudgetMs: forwardedSyncBudgetMs };
     const forwarded = unwrapMeshRelayResult(
-        await ctx.deps.dispatchMeshCommand!(sourceDaemonId, 'clone_mesh_node', withMeshDirectDispatch(args, rosterEvidenceExtra(args, mesh))),
+        await ctx.deps.dispatchMeshCommand!(sourceDaemonId, 'clone_mesh_node', withMeshDirectDispatch(forwardedArgs, rosterEvidenceExtra(forwardedArgs, mesh))),
         { command: 'clone_mesh_node', peerDaemonId: sourceDaemonId },
     );
     const forwardedNode = forwarded.success ? (forwarded as { node?: unknown }).node : undefined;
@@ -397,6 +418,7 @@ async function appendCloneLedger(
     branch: string,
     submodulesInitialized: boolean,
     bootstrapState: WorktreeBootstrapState,
+    extraPayload?: Record<string, unknown>,
 ): Promise<void> {
     try {
         const { meshRecord } = await import('../../mesh/mesh-record.js');
@@ -414,7 +436,9 @@ async function appendCloneLedger(
                     configSourceType: bootstrapState.configSourceType,
                     lastCommand: bootstrapState.lastCommand,
                     exitCode: bootstrapState.exitCode,
+                    ...(bootstrapState.error ? { error: bootstrapState.error } : {}),
                 },
+                ...(extraPayload || {}),
             },
         }, { local: true });
     } catch { /* ledger append is best-effort */ }
@@ -488,8 +512,8 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
         const cloneStartedAtMs = Date.now();
         const requestedSyncBudgetMs = Number(args?.syncBudgetMs);
         const syncBudgetMs = Number.isFinite(requestedSyncBudgetMs) && requestedSyncBudgetMs > 0
-            ? Math.min(Math.max(requestedSyncBudgetMs, 10), 90_000)
-            : 75_000;
+            ? Math.min(Math.max(requestedSyncBudgetMs, 10), MAX_CLONE_SYNC_BUDGET_MS)
+            : DEFAULT_CLONE_SYNC_BUDGET_MS;
 
         const runClonePipeline = async (): Promise<CommandRouterResult> => {
             // Resolve with preferInline so the clone writes the new node into the
@@ -614,7 +638,7 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             });
             if (!prepared.ready) {
                 if ('forward' in prepared && prepared.forward) {
-                    return await forwardCloneToSourceDaemon(ctx, meshId, args, prepared.forward.mesh, prepared.forward.sourceDaemonId);
+                    return await forwardCloneToSourceDaemon(ctx, meshId, args, prepared.forward.mesh, prepared.forward.sourceDaemonId, syncBudgetMs);
                 }
                 return prepared.done as CommandRouterResult;
             }
@@ -701,7 +725,10 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             if (!setupResult.completed) {
                 setupPromise
                     .then(({ bootstrapState }) => {
-                        emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs);
+                        emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs, {
+                            branch: result.branch,
+                            sourceNodeId,
+                        });
                     })
                     .catch((error: any) => {
                         const failedState: WorktreeBootstrapState = {
@@ -712,7 +739,11 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                         };
                         void persistWorktreeSetupState(failedState);
                         void appendCloneLedger(target, sourceNodeId, result.branch, false, failedState);
-                        emitBootstrapEvent('bootstrap_failed', failedState, bootstrapStartedMs, { error: error?.message || String(error) });
+                        emitBootstrapEvent('bootstrap_failed', failedState, bootstrapStartedMs, {
+                            branch: result.branch,
+                            sourceNodeId,
+                            error: error?.message || String(error),
+                        });
                     });
                 return {
                     success: true,
@@ -739,7 +770,10 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             }
 
             const { submodulesInitialized, bootstrapState } = setupResult.value;
-            emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs);
+            emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs, {
+                branch: result.branch,
+                sourceNodeId,
+            });
             return {
                 success: true,
                 node,
@@ -750,6 +784,66 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                 submodulesInitialized,
                 worktreeBootstrap: bootstrapState,
             };
+        };
+
+        const emitBackgroundPipelineFailure = async (errOrFailure: any) => {
+            let limitFailure: Record<string, unknown> | null = null;
+            if (isMeshNodeLimitError(errOrFailure)) {
+                limitFailure = await nodeLimitFailureFromError(errOrFailure, {
+                    meshId,
+                    inlineNodes: ctx.getCachedInlineMesh?.(meshId)?.nodes,
+                    selfDaemonId: ctx.deps.statusInstanceId,
+                });
+            } else if (errOrFailure && typeof errOrFailure === 'object' && typeof errOrFailure.code === 'string') {
+                limitFailure = errOrFailure;
+            }
+            const errorMsg = String(
+                (limitFailure as any)?.error
+                || errOrFailure?.error
+                || errOrFailure?.message
+                || errOrFailure
+                || 'Background worktree clone failed',
+            );
+            LOG.warn('Mesh', `[clone] background clone pipeline failed for ${meshId}/${branch}: ${errorMsg}`);
+            const failedState: WorktreeBootstrapState = {
+                status: 'failed',
+                required: true,
+                completedAt: new Date().toISOString(),
+                error: errorMsg,
+            };
+            let resolvedMesh = ctx.getCachedInlineMesh?.(meshId) || args?.inlineMesh;
+            if (!resolvedMesh) {
+                try {
+                    const rec = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+                    resolvedMesh = rec?.mesh;
+                } catch { /* best-effort */ }
+            }
+            const target: CloneBootstrapTarget = {
+                meshId,
+                mesh: resolvedMesh,
+                node: { id: `clone_failed:${branch}` },
+                worktreePath: '',
+                daemonId: ctx.deps.statusInstanceId,
+                machineId: undefined,
+            };
+            const limitExtra: Record<string, unknown> = limitFailure
+                ? {
+                    ...(typeof (limitFailure as any).code === 'string' ? { code: (limitFailure as any).code } : {}),
+                    ...((limitFailure as any).nodeLimit ? { nodeLimit: (limitFailure as any).nodeLimit } : {}),
+                    ...(typeof (limitFailure as any)?.nodeLimit?.limit === 'number' ? { maxNodes: (limitFailure as any).nodeLimit.limit } : {}),
+                    ...(typeof (limitFailure as any)?.nodeLimit?.count === 'number' ? { currentCount: (limitFailure as any).nodeLimit.count } : {}),
+                    ...(Array.isArray((limitFailure as any).cleanupCandidates) ? { cleanupCandidates: (limitFailure as any).cleanupCandidates } : {}),
+                }
+                : {};
+            await appendCloneLedger(target, sourceNodeId, branch, false, failedState, limitExtra);
+            emitCloneBootstrapEvent(ctx, target, 'bootstrap_failed', failedState, cloneStartedAtMs, {
+                source: 'clone_mesh_node',
+                status: 'clone_failed',
+                branch,
+                sourceNodeId,
+                error: errorMsg,
+                ...limitExtra,
+            });
         };
 
         try {
@@ -768,9 +862,15 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             } finally {
                 if (budgetTimer) clearTimeout(budgetTimer);
             }
-            void pipelinePromise.catch((err) => {
-                LOG.warn('Mesh', `[clone] background clone pipeline failed for ${meshId}/${branch}: ${err?.message || err}`);
-            });
+            void pipelinePromise
+                .then(async (res: any) => {
+                    if (res && res.success === false) {
+                        await emitBackgroundPipelineFailure(res);
+                    }
+                })
+                .catch(async (err) => {
+                    await emitBackgroundPipelineFailure(err);
+                });
             return {
                 success: true,
                 async: true,

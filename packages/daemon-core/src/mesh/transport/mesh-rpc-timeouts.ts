@@ -33,6 +33,14 @@ export const REQUEST_TIMEOUT_MS = readTimeoutEnv('MESH_RPC_REQUEST_TIMEOUT_MS', 
 // but the round trip just edged past 30s), and needlessly long for a cheap probe.
 // Classification is by command name; anything unmatched uses REQUEST_TIMEOUT_MS.
 export const GIT_COMMAND_TIMEOUT_MS = readTimeoutEnv('MESH_RPC_GIT_TIMEOUT_MS', 90_000);
+/** Margin reserved between `clone_mesh_node`'s responder `syncBudgetMs` and the 90s P2P relay ceiling. */
+export const CLONE_SYNC_BUDGET_RELAY_MARGIN_MS = 10_000;
+/** Margin subtracted from the local `syncBudgetMs` when forwarding `clone_mesh_node` to a remote source daemon. */
+export const CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS = 10_000;
+/** Maximum allowed local `syncBudgetMs` so the responder always answers before the 90s P2P relay timeout. */
+export const MAX_CLONE_SYNC_BUDGET_MS = Math.max(10_000, GIT_COMMAND_TIMEOUT_MS - CLONE_SYNC_BUDGET_RELAY_MARGIN_MS);
+/** Default synchronous wait budget for `clone_mesh_node`. */
+export const DEFAULT_CLONE_SYNC_BUDGET_MS = Math.min(75_000, MAX_CLONE_SYNC_BUDGET_MS);
 export const PROBE_COMMAND_TIMEOUT_MS = readTimeoutEnv('MESH_RPC_PROBE_TIMEOUT_MS', 15_000);
 // Sender-side deadline for a remote `git_status` probe. This MUST NOT be smaller
 // than the responder's own git-status budget (daemon-core GIT_STATUS_TIMEOUT_MS:

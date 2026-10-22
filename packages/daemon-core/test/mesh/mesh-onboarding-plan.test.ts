@@ -460,19 +460,29 @@ describe('plan_mesh_onboarding cached CLI inventory & hot-path budget', () => {
             return [];
         };
 
-        const startedAt = Date.now();
-        const result: any = await meshOnboardingHandlers.plan_mesh_onboarding(
-            { deps: { providerLoader: stubLoader } } as any,
-            {
-                workspace: repo,
-                meshId: 'mesh_cached',
-                operation: 'clone_worktree',
-                branch: 'feat/fast-clone',
-                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_cached'),
-                _detectCLIs: slowDetect,
-            },
-        );
-        const elapsedMs = Date.now() - startedAt;
+        const setTestOverrides = (cliDetector as any).__setCliInventoryTestOverridesForTests as
+            | ((overrides: any) => void)
+            | undefined;
+        if (typeof setTestOverrides === 'function') setTestOverrides({ detectFn: slowDetect });
+
+        let result: any;
+        let elapsedMs = 0;
+        try {
+            const startedAt = Date.now();
+            result = await meshOnboardingHandlers.plan_mesh_onboarding(
+                { deps: { providerLoader: stubLoader } } as any,
+                {
+                    workspace: repo,
+                    meshId: 'mesh_cached',
+                    operation: 'clone_worktree',
+                    branch: 'feat/fast-clone',
+                    inlineMesh: mesh('github.com/acme/project', repo, 'mesh_cached'),
+                },
+            );
+            elapsedMs = Date.now() - startedAt;
+        } finally {
+            if (typeof setTestOverrides === 'function') setTestOverrides(null);
+        }
 
         expect(result.success).toBe(true);
         expect(result.plan?.kind).toBe('clone_new_worktree');
@@ -529,87 +539,104 @@ describe('plan_mesh_onboarding cached CLI inventory & hot-path budget', () => {
             return currentInstalled.map((entry) => ({ ...entry }));
         };
 
+        const setTestOverrides = (cliDetector as any).__setCliInventoryTestOverridesForTests as
+            | ((overrides: any) => void)
+            | undefined;
+        expect(typeof setTestOverrides).toBe('function');
+        setTestOverrides!({ detectFn: fakeDetect });
         invalidateCachedCliInventory!(stubLoader);
 
-        // First call: cold cache -> triggers 1 fresh detection with includeVersion: false
-        const first: any = await meshOnboardingHandlers.plan_mesh_onboarding(
-            { deps: { providerLoader: stubLoader } } as any,
-            {
-                workspace: repo,
-                meshId: 'mesh_inv',
-                operation: 'clone_worktree',
-                branch: 'feat/inv-1',
-                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
-                _detectCLIs: fakeDetect,
-            },
-        );
-        expect(first.success).toBe(true);
-        expect(detectCalls).toEqual([{ includeVersion: false }]);
-        expect(first.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli']);
+        try {
+            // First call: cold cache -> triggers 1 fresh detection with includeVersion: false
+            const first: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+                { deps: { providerLoader: stubLoader } } as any,
+                {
+                    workspace: repo,
+                    meshId: 'mesh_inv',
+                    operation: 'clone_worktree',
+                    branch: 'feat/inv-1',
+                    inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
+                },
+            );
+            expect(first.success).toBe(true);
+            expect(detectCalls).toEqual([{ includeVersion: false }]);
+            expect(first.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli']);
 
-        // Second call without invalidation: served from cache
-        const second: any = await meshOnboardingHandlers.plan_mesh_onboarding(
-            { deps: { providerLoader: stubLoader } } as any,
-            {
-                workspace: repo,
-                meshId: 'mesh_inv',
-                operation: 'clone_worktree',
-                branch: 'feat/inv-2',
-                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
-                _detectCLIs: fakeDetect,
-            },
-        );
-        expect(second.success).toBe(true);
-        expect(detectCalls).toHaveLength(1);
+            // Second call without invalidation: served from cache
+            const second: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+                { deps: { providerLoader: stubLoader } } as any,
+                {
+                    workspace: repo,
+                    meshId: 'mesh_inv',
+                    operation: 'clone_worktree',
+                    branch: 'feat/inv-2',
+                    inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
+                },
+            );
+            expect(second.success).toBe(true);
+            expect(detectCalls).toHaveLength(1);
 
-        // Provider change / explicit invalidation -> next call re-detects with includeVersion: false
-        currentInstalled = [
-            ...currentInstalled,
-            {
-                id: 'codex-cli',
-                displayName: 'Codex CLI',
-                icon: '⚡',
-                command: 'codex',
-                category: 'cli',
-                installed: true,
-                path: '/usr/local/bin/codex',
-            },
-        ];
-        invalidateCachedCliInventory!(stubLoader);
+            // Provider change / explicit invalidation -> next call re-detects with includeVersion: false
+            currentInstalled = [
+                ...currentInstalled,
+                {
+                    id: 'codex-cli',
+                    displayName: 'Codex CLI',
+                    icon: '⚡',
+                    command: 'codex',
+                    category: 'cli',
+                    installed: true,
+                    path: '/usr/local/bin/codex',
+                },
+            ];
+            invalidateCachedCliInventory!(stubLoader);
 
-        const third: any = await meshOnboardingHandlers.plan_mesh_onboarding(
-            { deps: { providerLoader: stubLoader } } as any,
-            {
-                workspace: repo,
-                meshId: 'mesh_inv',
-                operation: 'clone_worktree',
-                branch: 'feat/inv-3',
-                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
-                _detectCLIs: fakeDetect,
-            },
-        );
-        expect(third.success).toBe(true);
-        expect(detectCalls).toEqual([{ includeVersion: false }, { includeVersion: false }]);
-        expect(third.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli', 'codex-cli']);
+            const third: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+                { deps: { providerLoader: stubLoader } } as any,
+                {
+                    workspace: repo,
+                    meshId: 'mesh_inv',
+                    operation: 'clone_worktree',
+                    branch: 'feat/inv-3',
+                    inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
+                },
+            );
+            expect(third.success).toBe(true);
+            expect(detectCalls).toEqual([{ includeVersion: false }, { includeVersion: false }]);
+            expect(third.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli', 'codex-cli']);
+        } finally {
+            setTestOverrides!(null);
+        }
     });
 
-    it('bounds cold-cache CLI detection wait so a hung detectCLIs falls back within budget', async () => {
+    it('marks cold-cache timeout inventory as degraded/unknown, surfaces unknown in planMeshOnboarding, refuses runMeshInit write:true, and never serves stale items after revision change', async () => {
+        const repo = makeRepo('mesh-plan-degraded');
         const cliDetector = await import('../../src/detection/cli-detector.js');
+        const { runMeshInit } = await import('../../src/mesh/mesh-init.js');
         const getCachedCliInventory = (cliDetector as any).getCachedCliInventory as
             | ((loader?: any, opts?: any) => Promise<any[]>)
             | undefined;
+        const isCliInventoryDegraded = (cliDetector as any).isCliInventoryDegraded as
+            | ((items: any[]) => boolean)
+            | undefined;
         expect(typeof getCachedCliInventory).toBe('function');
+        expect(typeof isCliInventoryDegraded).toBe('function');
 
+        let revision = 1;
+        let cliEntries = [{
+            id: 'hung-cli',
+            displayName: 'Hung CLI',
+            icon: '🔧',
+            command: 'hung-cli',
+            category: 'cli',
+            enabled: true,
+        }];
         const stubLoader: any = {
+            getCliDetectionRevision() {
+                return revision;
+            },
             getCliDetectionList() {
-                return [{
-                    id: 'hung-cli',
-                    displayName: 'Hung CLI',
-                    icon: '🔧',
-                    command: 'hung-cli',
-                    category: 'cli',
-                    enabled: true,
-                }];
+                return cliEntries;
             },
         };
         const hungDetect = async () => {
@@ -620,7 +647,7 @@ describe('plan_mesh_onboarding cached CLI inventory & hot-path budget', () => {
         const startedAt = Date.now();
         const detected = await getCachedCliInventory!(stubLoader, {
             forceRefresh: true,
-            budgetMs: 80,
+            budgetMs: 60,
             detectFn: hungDetect,
         });
         const elapsedMs = Date.now() - startedAt;
@@ -628,6 +655,61 @@ describe('plan_mesh_onboarding cached CLI inventory & hot-path budget', () => {
         expect(elapsedMs).toBeLessThan(500);
         expect(Array.isArray(detected)).toBe(true);
         expect(detected[0]?.id).toBe('hung-cli');
+        expect(detected[0]?.degraded).toBe(true);
+        expect(detected[0]?.installState).toBe('unknown');
+        expect(isCliInventoryDegraded!(detected)).toBe(true);
+
+        // planMeshOnboarding surfaces degraded/unknown status and warns
+        const plan = await planMeshOnboarding({
+            workspace: repo,
+            operation: 'clone_worktree',
+            branch: 'feat/degraded-plan',
+            meshes: [mesh('github.com/acme/project', repo, 'mesh_deg')],
+            detectedProviders: detected,
+        });
+        expect(plan.success).toBe(true);
+        if (plan.success) {
+            expect((plan.suggestedConfig.providers as any).degraded).toBe(true);
+            expect((plan.suggestedConfig.providers as any).status).toBe('unknown');
+            expect(plan.warnings?.some((w) => /unknown|degraded|timed out/i.test(w))).toBe(true);
+        }
+
+        // runMeshInit with write:true refuses to persist an empty providerPriority derived from degraded inventory
+        expect(() =>
+            runMeshInit({}, repo, detected, { write: true }),
+        ).toThrow(/degraded|unknown/i);
+
+        // Now warm the cache at revision=1, then bump revision=2 + change CLI list, and time out:
+        // must NOT serve stale revision=1 items!
+        await getCachedCliInventory!(stubLoader, {
+            forceRefresh: true,
+            budgetMs: 200,
+            detectFn: async () => [{
+                id: 'old-cli',
+                displayName: 'Old CLI',
+                icon: '🔧',
+                command: 'old-cli',
+                category: 'cli',
+                installed: true,
+                path: '/usr/bin/old-cli',
+            }],
+        });
+        revision = 2;
+        cliEntries = [{
+            id: 'new-cli',
+            displayName: 'New CLI',
+            icon: '✨',
+            command: 'new-cli',
+            category: 'cli',
+            enabled: true,
+        }];
+        const afterRevisionTimeout = await getCachedCliInventory!(stubLoader, {
+            budgetMs: 50,
+            detectFn: hungDetect,
+        });
+        expect(afterRevisionTimeout.map((c) => c.id)).toEqual(['new-cli']);
+        expect(afterRevisionTimeout[0]?.degraded).toBe(true);
+        expect(afterRevisionTimeout[0]?.installState).toBe('unknown');
     });
 });
 

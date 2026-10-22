@@ -12,11 +12,7 @@ export const meshOnboardingHandlers: Record<string, MedFamilyHandler> = {
             ? args.workspace.trim()
             : process.cwd();
         try {
-            const detectedProviders = await getCachedCliInventory(ctx.deps.providerLoader, {
-                ...(typeof args?._detectCLIs === 'function' ? { detectFn: args._detectCLIs } : {}),
-                ...(typeof args?._cliDetectBudgetMs === 'number' ? { budgetMs: args._cliDetectBudgetMs } : {}),
-                ...(typeof args?._cliCacheTtlMs === 'number' ? { ttlMs: args._cliCacheTtlMs } : {}),
-            });
+            const detectedProviders = await getCachedCliInventory(ctx.deps.providerLoader);
             return await planMeshOnboarding({
                 workspace,
                 meshId: typeof args?.meshId === 'string' ? args.meshId.trim() || undefined : undefined,

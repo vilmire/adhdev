@@ -481,8 +481,30 @@ export async function meshCloneNode(
         inlineMesh: ctx.mesh,
     };
 
-    const isCloneTimeout = (message: unknown): boolean =>
-        typeof message === 'string' && /timed?\s*out/i.test(message);
+    const preExistingNodeIds = new Set(
+        (Array.isArray(ctx.mesh.nodes) ? ctx.mesh.nodes : [])
+            .map((n) => (typeof n?.id === 'string' ? n.id.trim() : ''))
+            .filter(Boolean),
+    );
+
+    const isCloneTimeout = (candidate: unknown): boolean => {
+        if (candidate && typeof candidate === 'object') {
+            const obj = candidate as Record<string, unknown>;
+            if (obj.ipcTimeout === true || obj.code === 'REQUEST_TIMEOUT' || obj.code === 'IPC_TIMEOUT') {
+                return true;
+            }
+            if (typeof obj.error === 'string' && isCloneTimeout(obj.error)) return true;
+            if (typeof obj.message === 'string' && isCloneTimeout(obj.message)) return true;
+            return false;
+        }
+        if (typeof candidate !== 'string') return false;
+        const text = candidate.trim();
+        return (
+            /^Daemon IPC \S+ timed out after \d+s \(requestId=[^)]+\)$/.test(text)
+            || /^Command 'clone_mesh_node' timed out after \d+s \(standalone daemon did not respond\)$/.test(text)
+            || /^P2P mesh command 'clone_mesh_node' to \S+ timed out after \d+ms$/.test(text)
+        );
+    };
 
     const recoverBackgroundCloneFromTimeout = async (timeoutReason: string): Promise<Record<string, unknown>> => {
         let recoveredNode: LocalMeshNodeEntry | undefined;
@@ -492,13 +514,29 @@ export async function meshCloneNode(
                 ? refreshed.mesh.nodes
                 : [];
             recoveredNode = candidateNodes.find((n) => {
+                const nodeId = typeof n?.id === 'string' ? n.id.trim() : '';
+                if (!nodeId || preExistingNodeIds.has(nodeId)) return false;
                 const wtBranch = readNodeString(n, 'worktreeBranch', 'worktree_branch', 'branch');
                 if (wtBranch !== args.branch) return false;
                 const clonedFrom = readNodeString(n, 'clonedFromNodeId', 'cloned_from_node_id');
-                return !clonedFrom || meshNodeIdMatches(sourceNode as any, clonedFrom) || clonedFrom === args.source_node_id;
+                if (!clonedFrom) return false;
+                return meshNodeIdMatches(sourceNode as any, clonedFrom) || clonedFrom === args.source_node_id;
             });
         } catch {
             // Best-effort recovery probe only.
+        }
+        if (!recoveredNode) {
+            return {
+                success: false,
+                accepted: false,
+                status: 'unknown',
+                code: 'clone_timeout_unverified',
+                meshId: ctx.mesh.id,
+                sourceNodeId: args.source_node_id,
+                branch: args.branch,
+                error: `clone_mesh_node timed out (${timeoutReason}) and get_mesh shows no newly registered node for branch '${args.branch}' cloned from '${args.source_node_id}'.`,
+                action: 'Verify with mesh_status whether the worktree node finished registering in the background before retrying mesh_clone_node.',
+            };
         }
         return {
             success: true,
@@ -508,12 +546,11 @@ export async function meshCloneNode(
             meshId: ctx.mesh.id,
             sourceNodeId: args.source_node_id,
             branch: args.branch,
-            ...(recoveredNode ? { node: recoveredNode, worktreePath: recoveredNode.workspace } : {}),
+            node: recoveredNode,
+            worktreePath: recoveredNode.workspace,
             worktreeSetup: {
                 status: 'running',
-                message: recoveredNode
-                    ? 'Worktree node was registered in the background after the synchronous clone RPC timed out.'
-                    : `Worktree clone exceeded the synchronous RPC window (${timeoutReason}) and is continuing in the background.`,
+                message: 'Worktree node was registered in the background after the synchronous clone RPC timed out.',
             },
         };
     };
@@ -522,11 +559,11 @@ export async function meshCloneNode(
     try {
         result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', cloneArgs);
         const unwrapped = unwrapCommandPayload(result) as any;
-        if (unwrapped?.success === false && isCloneTimeout(unwrapped?.error)) {
-            result = await recoverBackgroundCloneFromTimeout(String(unwrapped.error));
+        if (unwrapped?.success === false && isCloneTimeout(unwrapped)) {
+            result = await recoverBackgroundCloneFromTimeout(String(unwrapped.error || unwrapped.code || 'timeout'));
         }
     } catch (error: any) {
-        if (isCloneTimeout(error?.message || String(error))) {
+        if (isCloneTimeout(error)) {
             result = await recoverBackgroundCloneFromTimeout(error?.message || String(error));
         } else {
             throw error;

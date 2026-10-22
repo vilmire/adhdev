@@ -657,6 +657,8 @@ export class DaemonCommandHandler implements CommandHelpers {
             if (this._ctx.providerLoader) {
                 this._ctx.providerLoader.reload();
                 this._ctx.providerLoader.registerToDetector();
+                const { invalidateCachedCliInventory } = await import('../detection/cli-detector.js');
+                invalidateCachedCliInventory(this._ctx.providerLoader);
             }
 
             return {

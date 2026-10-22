@@ -47,7 +47,7 @@ import {
     validateChangeImpactConfig,
     type ChangeImpactConfig,
 } from '../git/change-impact-config.js';
-import type { CLIInfo } from '../detection/cli-detector.js';
+import { isCliInventoryDegraded, type CLIInfo } from '../detection/cli-detector.js';
 
 /** Canonical write targets — the first/preferred location for each config family. */
 export const MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
@@ -154,11 +154,22 @@ export function suggestMeshWorktreeBootstrapConfig(
 export function suggestNodeProviderPriority(detected: CLIInfo[]): {
     providerPriority: string[];
     installedProviders: Array<{ id: string; displayName: string; version?: string }>;
+    degraded?: boolean;
+    status?: 'unknown';
+    unknownProviders?: Array<{ id: string; displayName: string; status: 'unknown' }>;
 } {
-    const installed = detected.filter((cli) => cli.installed);
+    const degraded = isCliInventoryDegraded(detected);
+    const installed = detected.filter((cli) => cli.installed && !cli.degraded && cli.installState !== 'unknown');
     const providerPriority = installed
         .map((cli) => cli.id)
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const unknownProviders = detected
+        .filter((cli) => cli.degraded === true || cli.installState === 'unknown')
+        .map((cli) => ({
+            id: cli.id,
+            displayName: cli.displayName,
+            status: 'unknown' as const,
+        }));
 
     return {
         providerPriority,
@@ -167,6 +178,7 @@ export function suggestNodeProviderPriority(detected: CLIInfo[]): {
             displayName: cli.displayName,
             ...(cli.version ? { version: cli.version } : {}),
         })),
+        ...(degraded ? { degraded: true, status: 'unknown' as const, unknownProviders } : {}),
     };
 }
 
@@ -208,6 +220,9 @@ export interface RunMeshInitResult {
     providers: {
         providerPriority: string[];
         installedProviders: Array<{ id: string; displayName: string; version?: string }>;
+        degraded?: boolean;
+        status?: 'unknown';
+        unknownProviders?: Array<{ id: string; displayName: string; status: 'unknown' }>;
     };
     /**
      * Read-only snapshot of the currently-saved config per domain (repo files).
@@ -235,6 +250,13 @@ export function runMeshInit(
 ): RunMeshInitResult {
     const write = options.write === true;
     const overwrite = options.overwrite === true;
+    const providers = suggestNodeProviderPriority(detected);
+
+    if (write && providers.degraded && providers.providerPriority.length === 0) {
+        throw new Error(
+            'Cannot run mesh_init with write=true while CLI provider inventory is degraded/unknown (cold-cache detection timed out with empty providerPriority). Wait for CLI detection to finish and retry.',
+        );
+    }
 
     const refine = applyConfigSuggestion({
         workspace,
@@ -270,8 +292,6 @@ export function runMeshInit(
         write,
         overwrite,
     });
-
-    const providers = suggestNodeProviderPriority(detected);
 
     // Read-only echo of the currently-saved config per domain so the coordinator can
     // present a current-vs-suggested diff before any overwrite (init vs reinit). This

@@ -6,6 +6,7 @@
  */
 import { loadConfig } from '../config/config.js';
 import { resolveRegistryBaseUrl } from '../config/registry-resolver.js';
+import { invalidateCachedCliInventory } from '../detection/cli-detector.js';
 import type { CommandResult, DaemonCommandHandler } from './handler.js';
 
 /** The DaemonCommandHandler members these functions read or call (compiler-checked; no cast). */
@@ -111,6 +112,7 @@ export async function handleInstallProviderManifest(host: ProviderCatalogCommand
     // detection so a freshly installed provider resolves detected/not_detected
     // instead of sitting unchecked.
     loader.registerToDetector();
+    invalidateCachedCliInventory(loader);
     return {
         success: true,
         installed: {
@@ -472,6 +474,9 @@ export async function handleActivateProviderUpdates(host: ProviderCatalogCommand
         return { success: false, error: e?.message ?? String(e) };
     }
     const after = host._ctx.providerLoader?.listVerifiedChannelPins?.() ?? new Map();
+    if (host._ctx.providerLoader) {
+        invalidateCachedCliInventory(host._ctx.providerLoader);
+    }
 
     // Report what actually moved. "The sync succeeded" and "this machine
     // now runs a different spec" are different statements, and the second
@@ -513,6 +518,9 @@ export async function handleRollbackProviderUpdate(host: ProviderCatalogCommandH
         return { success: false, error: `no rollback target for ${providerType}` };
     }
     const pin = host._ctx.providerLoader?.listVerifiedChannelPins?.()?.get(providerType);
+    if (host._ctx.providerLoader) {
+        invalidateCachedCliInventory(host._ctx.providerLoader);
+    }
     return {
         success: true,
         providerType,

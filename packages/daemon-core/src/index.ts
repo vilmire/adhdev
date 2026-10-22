@@ -271,6 +271,8 @@ export {
     getCachedCliInventory,
     primeCachedCliInventory,
     invalidateCachedCliInventory,
+    isCliInventoryDegraded,
+    __setCliInventoryTestOverridesForTests,
 } from './detection/cli-detector.js';
 export { getHostMemorySnapshot } from './system/host-memory.js';
 export type { HostMemorySnapshot } from './system/host-memory.js';

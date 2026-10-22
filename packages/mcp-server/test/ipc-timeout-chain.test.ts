@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { getTimeoutMs } from '../src/transports/ipc.js';
-import { CLI_INVENTORY_DETECT_BUDGET_MS, resultTimeoutForCommand } from '@adhdev/daemon-core';
+import * as daemonCore from '@adhdev/daemon-core';
+const { CLI_INVENTORY_DETECT_BUDGET_MS, resultTimeoutForCommand } = daemonCore;
 
 // Q-E: IPC (layer-1) timeout chain. The invariant for each heavy verb is
 //   IPC (layer-1, here) >= relay (layer-2, daemon-cloud resultTimeoutForCommand) >= responder.
@@ -140,11 +141,23 @@ test('invariant sweep: IPC deadline >= documented relay/responder floor for ever
   }
 });
 
-test('clone / onboarding-plan IPC deadlines dominate relay resultTimeoutForCommand and cold CLI-inventory detect budget', () => {
+test('clone / onboarding-plan IPC deadlines dominate relay resultTimeoutForCommand, responder MAX_CLONE_SYNC_BUDGET_MS, and cold CLI-inventory detect budget', () => {
   const planRelay = resultTimeoutForCommand('plan_mesh_onboarding');
   const cloneRelay = resultTimeoutForCommand('clone_mesh_node');
+  const cloneIpc = getTimeoutMs('clone_mesh_node', '');
+  const maxCloneSyncBudgetMs = (daemonCore as any).MAX_CLONE_SYNC_BUDGET_MS as number;
+  const defaultCloneSyncBudgetMs = (daemonCore as any).DEFAULT_CLONE_SYNC_BUDGET_MS as number;
+  const remoteForwardMarginMs = (daemonCore as any).CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS as number;
+
+  assert.equal(typeof maxCloneSyncBudgetMs, 'number');
+  assert.equal(typeof defaultCloneSyncBudgetMs, 'number');
+  assert.equal(typeof remoteForwardMarginMs, 'number');
+  assert.ok(defaultCloneSyncBudgetMs <= maxCloneSyncBudgetMs, 'default syncBudgetMs <= max syncBudgetMs');
+  assert.ok(maxCloneSyncBudgetMs <= cloneRelay - 10_000, 'max syncBudgetMs <= GIT_COMMAND_TIMEOUT_MS - 10s');
+  assert.ok(maxCloneSyncBudgetMs < cloneRelay, `responder max syncBudget (${maxCloneSyncBudgetMs}) < relay (${cloneRelay})`);
+  assert.ok(cloneRelay < cloneIpc, `relay (${cloneRelay}) < IPC (${cloneIpc})`);
+  assert.ok(remoteForwardMarginMs >= 10_000, 'remote forward subtracts >= 10s margin');
   assert.ok(getTimeoutMs('plan_mesh_onboarding', '') >= planRelay);
   assert.ok(planRelay > CLI_INVENTORY_DETECT_BUDGET_MS);
-  assert.ok(getTimeoutMs('clone_mesh_node', '') >= cloneRelay);
 });
 

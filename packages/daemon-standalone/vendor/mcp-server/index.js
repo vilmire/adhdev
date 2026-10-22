@@ -31293,6 +31293,25 @@ ${renderWorkerProtocolFooter2(input)}`;
         "use strict";
       }
     });
+    var cli_detector_exports = {};
+    __export2(cli_detector_exports, {
+      CLI_INVENTORY_DETECT_BUDGET_MS: () => CLI_INVENTORY_DETECT_BUDGET_MS,
+      CLI_INVENTORY_TTL_MS: () => CLI_INVENTORY_TTL_MS,
+      __setCliInventoryTestOverridesForTests: () => __setCliInventoryTestOverridesForTests,
+      buildProviderVersions: () => buildProviderVersions,
+      detectCLI: () => detectCLI,
+      detectCLIs: () => detectCLIs,
+      getCachedCliInventory: () => getCachedCliInventory,
+      getCachedProviderVersions: () => getCachedProviderVersions,
+      getProviderEnablementFacts: () => getProviderEnablementFacts,
+      getProviderSpecPins: () => getProviderSpecPins,
+      invalidateCachedCliInventory: () => invalidateCachedCliInventory,
+      isCliInventoryDegraded: () => isCliInventoryDegraded,
+      primeCachedCliInventory: () => primeCachedCliInventory,
+      readCachedProviderInventory: () => readCachedProviderInventory,
+      readDetectedProviderVersion: () => readDetectedProviderVersion,
+      setDefaultProviderLoader: () => setDefaultProviderLoader
+    });
     function parseVersion(raw) {
       const match = raw.match(/v?(\d+\.\d+(?:\.\d+)?(?:-[a-zA-Z0-9.]+)?)/);
       return match ? match[1] : raw.split("\n")[0].slice(0, 100);
@@ -31524,31 +31543,42 @@ ${renderWorkerProtocolFooter2(input)}`;
         defaultCliInventorySlot = void 0;
       }
     }
+    function __setCliInventoryTestOverridesForTests(overrides) {
+      cliInventoryTestOverrides = overrides;
+    }
+    function isCliInventoryDegraded(detected) {
+      if (!Array.isArray(detected) || detected.length === 0) return false;
+      return detected.some((cli) => cli?.degraded === true || cli?.installState === "unknown");
+    }
     async function getCachedCliInventory(providerLoader, options) {
       const loader2 = providerLoader ?? defaultProviderLoader;
       if (!loader2) return [];
-      const now = options?.now ?? Date.now();
-      const ttlMs = options?.ttlMs ?? CLI_INVENTORY_TTL_MS;
-      const budgetMs = Math.max(1, options?.budgetMs ?? CLI_INVENTORY_DETECT_BUDGET_MS);
+      const effectiveOptions = cliInventoryTestOverrides ? { ...cliInventoryTestOverrides, ...options } : options;
+      const now = effectiveOptions?.now ?? Date.now();
+      const ttlMs = effectiveOptions?.ttlMs ?? CLI_INVENTORY_TTL_MS;
+      const budgetMs = Math.max(1, effectiveOptions?.budgetMs ?? CLI_INVENTORY_DETECT_BUDGET_MS);
       const { revision, signature } = getCliInventorySignature(loader2);
       const existing = readCliInventorySlot(loader2);
-      if (!options?.forceRefresh && existing && existing.revision === revision && existing.signature === signature && now - existing.observedAt <= ttlMs) {
+      const sameRevisionAndSignature = Boolean(
+        existing && existing.revision === revision && existing.signature === signature
+      );
+      if (!effectiveOptions?.forceRefresh && sameRevisionAndSignature && existing && now - existing.observedAt <= ttlMs) {
         return enrichCliInventoryVersions(existing.items, loader2);
       }
       const loaderWithCache = loader2;
-      if (!options?.forceRefresh && typeof loaderWithCache.getCachedCliDetectionInventory === "function") {
+      if (!effectiveOptions?.forceRefresh && typeof loaderWithCache.getCachedCliDetectionInventory === "function") {
         const fromLoader = loaderWithCache.getCachedCliDetectionInventory(ttlMs, now);
         if (fromLoader) {
           primeCachedCliInventory(fromLoader, loader2, now);
           return enrichCliInventoryVersions(fromLoader, loader2);
         }
       }
-      const detectFn = options?.detectFn ?? detectCLIs;
-      let inFlight4 = !options?.forceRefresh && !options?.detectFn ? existing?.inFlight : void 0;
+      const detectFn = effectiveOptions?.detectFn ?? detectCLIs;
+      let inFlight4 = !effectiveOptions?.forceRefresh && !effectiveOptions?.detectFn && sameRevisionAndSignature ? existing?.inFlight : void 0;
       if (!inFlight4) {
         const refreshPromise = (async () => {
           const detected = await detectFn(loader2, { includeVersion: false });
-          if (!options?.detectFn && typeof loaderWithCache.setCliDetectionResults === "function") {
+          if (!effectiveOptions?.detectFn && typeof loaderWithCache.setCliDetectionResults === "function") {
             try {
               loaderWithCache.setCliDetectionResults(detected, true);
             } catch {
@@ -31557,12 +31587,12 @@ ${renderWorkerProtocolFooter2(input)}`;
           primeCachedCliInventory(detected, loader2, Date.now());
           return detected;
         })();
-        if (!options?.detectFn) {
+        if (!effectiveOptions?.detectFn) {
           writeCliInventorySlot(loader2, {
-            observedAt: existing?.observedAt ?? 0,
+            observedAt: sameRevisionAndSignature ? existing?.observedAt ?? 0 : 0,
             revision,
             signature,
-            items: existing?.items ?? [],
+            items: sameRevisionAndSignature ? existing?.items ?? [] : [],
             inFlight: refreshPromise
           });
           void refreshPromise.finally(() => {
@@ -31588,13 +31618,15 @@ ${renderWorkerProtocolFooter2(input)}`;
       } finally {
         if (timer) clearTimeout(timer);
       }
-      if (existing?.items?.length) {
+      if (sameRevisionAndSignature && existing?.items?.length) {
         return enrichCliInventoryVersions(existing.items, loader2);
       }
       const fallbackList = loader2.getCliDetectionList?.() ?? [];
       return fallbackList.map((cli) => ({
         ...cli,
-        installed: false
+        installed: false,
+        degraded: true,
+        installState: "unknown"
       }));
     }
     function getProviderSpecPins(providerLoader) {
@@ -31642,6 +31674,7 @@ ${renderWorkerProtocolFooter2(input)}`;
     var CLI_INVENTORY_DETECT_BUDGET_MS;
     var cliInventoryByLoader;
     var defaultCliInventorySlot;
+    var cliInventoryTestOverrides;
     var init_cli_detector = __esm2({
       "src/detection/cli-detector.ts"() {
         "use strict";
@@ -31661,6 +31694,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         CLI_INVENTORY_TTL_MS = PROVIDER_VERSIONS_TTL_MS;
         CLI_INVENTORY_DETECT_BUDGET_MS = 5e3;
         cliInventoryByLoader = /* @__PURE__ */ new WeakMap();
+        cliInventoryTestOverrides = null;
       }
     });
     function isSecretLikeEnvKey(key4) {
@@ -66412,20 +66446,33 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
       };
     }
     function suggestNodeProviderPriority(detected) {
-      const installed = detected.filter((cli) => cli.installed);
+      const degraded = isCliInventoryDegraded(detected);
+      const installed = detected.filter((cli) => cli.installed && !cli.degraded && cli.installState !== "unknown");
       const providerPriority = installed.map((cli) => cli.id).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+      const unknownProviders = detected.filter((cli) => cli.degraded === true || cli.installState === "unknown").map((cli) => ({
+        id: cli.id,
+        displayName: cli.displayName,
+        status: "unknown"
+      }));
       return {
         providerPriority,
         installedProviders: installed.map((cli) => ({
           id: cli.id,
           displayName: cli.displayName,
           ...cli.version ? { version: cli.version } : {}
-        }))
+        })),
+        ...degraded ? { degraded: true, status: "unknown", unknownProviders } : {}
       };
     }
     function runMeshInit(mesh, workspace, detected, options = {}) {
       const write = options.write === true;
       const overwrite = options.overwrite === true;
+      const providers = suggestNodeProviderPriority(detected);
+      if (write && providers.degraded && providers.providerPriority.length === 0) {
+        throw new Error(
+          "Cannot run mesh_init with write=true while CLI provider inventory is degraded/unknown (cold-cache detection timed out with empty providerPriority). Wait for CLI detection to finish and retry."
+        );
+      }
       const refine = applyConfigSuggestion({
         workspace,
         relativePath: MESH_INIT_REFINE_CONFIG_PATH,
@@ -66455,7 +66502,6 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         write,
         overwrite
       });
-      const providers = suggestNodeProviderPriority(detected);
       const refineLoaded = loadMeshRefineConfig(mesh, workspace);
       const bootstrapLoaded = loadMeshWorktreeBootstrapConfig(mesh, workspace);
       const currentConfig2 = {
@@ -66509,6 +66555,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         init_refine_config();
         init_worktree_bootstrap_config();
         init_change_impact_config();
+        init_cli_detector();
         MESH_INIT_REFINE_CONFIG_PATH = MESH_REFINE_CONFIG_LOCATIONS[0];
         MESH_INIT_WORKTREE_BOOTSTRAP_CONFIG_PATH = MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS[0];
         MESH_INIT_CHANGE_IMPACT_CONFIG_PATH = CHANGE_IMPACT_CONFIG_LOCATIONS[0];
@@ -66881,8 +66928,13 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           { discovery, membership }
         );
       }
+      const planWarnings = [];
+      if (isCliInventoryDegraded(options.detectedProviders)) {
+        planWarnings.push(
+          "CLI provider inventory timed out (status: unknown / degraded); providerPriority could not be determined from live detection."
+        );
+      }
       if (operation === "clone_worktree") {
-        const planWarnings = [];
         if (!compatibleMesh) {
           return failure2(
             "mesh_not_found",
@@ -66968,7 +67020,8 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
             }]
           },
           suggestedConfig,
-          note: "Read-only plan only. Adding the node and writing suggested configs require separate explicit approved calls."
+          note: "Read-only plan only. Adding the node and writing suggested configs require separate explicit approved calls.",
+          ...planWarnings.length ? { warnings: planWarnings } : {}
         };
       }
       const identityRepoName = discovery.repoIdentity.split("/").filter(Boolean).at(-1);
@@ -67014,7 +67067,8 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           alternatives: []
         },
         suggestedConfig,
-        note: "Read-only plan only. No mesh/config/worktree writes occurred; execute each write step separately after approval."
+        note: "Read-only plan only. No mesh/config/worktree writes occurred; execute each write step separately after approval.",
+        ...planWarnings.length ? { warnings: planWarnings } : {}
       };
     }
     var import_node_child_process6;
@@ -67031,6 +67085,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
         import_node_path3 = require("path");
         import_node_util5 = require("util");
         init_git_locale();
+        init_cli_detector();
         init_mesh_config();
         init_mesh_config_store();
         init_mesh_init();
@@ -110911,6 +110966,8 @@ ${tail}` : ""
       CHAT_TOMBSTONE_KIND: () => CHAT_TOMBSTONE_KIND,
       CLI_INVENTORY_DETECT_BUDGET_MS: () => CLI_INVENTORY_DETECT_BUDGET_MS,
       CLI_INVENTORY_TTL_MS: () => CLI_INVENTORY_TTL_MS,
+      CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS: () => CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS,
+      CLONE_SYNC_BUDGET_RELAY_MARGIN_MS: () => CLONE_SYNC_BUDGET_RELAY_MARGIN_MS,
       COMMAND_PREFIX_DEFAULTS: () => COMMAND_PREFIX_DEFAULTS,
       COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
@@ -110925,6 +110982,7 @@ ${tail}` : ""
       DASHBOARD_WIRE_VERSION: () => DASHBOARD_WIRE_VERSION,
       DEFAULT_CDP_DISCOVERY_INTERVAL_MS: () => DEFAULT_CDP_DISCOVERY_INTERVAL_MS,
       DEFAULT_CDP_SCAN_INTERVAL_MS: () => DEFAULT_CDP_SCAN_INTERVAL_MS,
+      DEFAULT_CLONE_SYNC_BUDGET_MS: () => DEFAULT_CLONE_SYNC_BUDGET_MS,
       DEFAULT_DAEMON_BOOT_STAGES: () => DEFAULT_DAEMON_BOOT_STAGES,
       DEFAULT_DAEMON_PORT: () => DEFAULT_DAEMON_PORT,
       DEFAULT_DELIVERY_MODE: () => DEFAULT_DELIVERY_MODE,
@@ -110991,6 +111049,7 @@ ${tail}` : ""
       LowDiskSpaceError: () => LowDiskSpaceError,
       MAX_CAPTURE_LOG_GENERATIONS: () => MAX_CAPTURE_LOG_GENERATIONS,
       MAX_CAPTURE_LOG_SIZE: () => MAX_CAPTURE_LOG_SIZE,
+      MAX_CLONE_SYNC_BUDGET_MS: () => MAX_CLONE_SYNC_BUDGET_MS,
       MAX_CONNECT_QUEUE: () => MAX_CONNECT_QUEUE,
       MAX_CONSECUTIVE_TIMEOUTS: () => MAX_CONSECUTIVE_TIMEOUTS,
       MAX_LEDGER_SLICE_LIMIT: () => MAX_LEDGER_SLICE_LIMIT,
@@ -111130,6 +111189,7 @@ ${tail}` : ""
       __inFlightStatusReadCountForTests: () => __inFlightStatusReadCountForTests,
       __resetGitStatusCacheForTests: () => __resetGitStatusCacheForTests,
       __resetMeshPublisherForTests: () => __resetMeshPublisherForTests,
+      __setCliInventoryTestOverridesForTests: () => __setCliInventoryTestOverridesForTests,
       __writeTaskStatusForTests: () => __writeTaskStatusForTests,
       activateKnownMeshTopics: () => activateKnownMeshTopics,
       activateMeshTopicsAtBoot: () => activateMeshTopicsAtBoot,
@@ -111414,6 +111474,7 @@ ${tail}` : ""
       isAlwaysOnTraceCategory: () => isAlwaysOnTraceCategory,
       isBuiltinChatMessageKind: () => isBuiltinChatMessageKind,
       isCdpConnected: () => isCdpConnected,
+      isCliInventoryDegraded: () => isCliInventoryDegraded,
       isCommandSource: () => isCommandSource,
       isCoordinatorSpawnedHiddenWorker: () => isCoordinatorSpawnedHiddenWorker,
       isCrossTrackConfigDirOverride: () => isCrossTrackConfigDirOverride,
@@ -114745,6 +114806,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     }
     var REQUEST_TIMEOUT_MS6 = readTimeoutEnv("MESH_RPC_REQUEST_TIMEOUT_MS", 3e4);
     var GIT_COMMAND_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_GIT_TIMEOUT_MS", 9e4);
+    var CLONE_SYNC_BUDGET_RELAY_MARGIN_MS = 1e4;
+    var CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS = 1e4;
+    var MAX_CLONE_SYNC_BUDGET_MS = Math.max(1e4, GIT_COMMAND_TIMEOUT_MS - CLONE_SYNC_BUDGET_RELAY_MARGIN_MS);
+    var DEFAULT_CLONE_SYNC_BUDGET_MS = Math.min(75e3, MAX_CLONE_SYNC_BUDGET_MS);
     var PROBE_COMMAND_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_PROBE_TIMEOUT_MS", 15e3);
     var GIT_STATUS_PROBE_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_GIT_STATUS_PROBE_TIMEOUT_MS", 3e4);
     var REPO_MUTATION_COMMAND_TIMEOUT_MS = readTimeoutEnv("MESH_RPC_REPO_MUTATION_TIMEOUT_MS", 6e4);
@@ -133464,6 +133529,7 @@ ${output}` : "";
           installed: !!detected,
           path: detected?.path
         }], false);
+        invalidateCachedCliInventory(ctx.deps.providerLoader);
         ctx.deps.onStatusChange?.();
         return {
           success: true,
@@ -147174,9 +147240,11 @@ ${output}` : "";
         error: 'An idle-mission reminder just fired for this mesh. Pass an explicit `reason` (or `taskId`) explaining why this clone is needed, or wait for the guard window to elapse. This is not a refusal to clone \u2014 it exists so an idle nudge to "check state and report" cannot be read as license to clone/launch/enqueue on its own.'
       };
     }
-    async function forwardCloneToSourceDaemon(ctx, meshId, args, mesh, sourceDaemonId) {
+    async function forwardCloneToSourceDaemon(ctx, meshId, args, mesh, sourceDaemonId, localSyncBudgetMs) {
+      const forwardedSyncBudgetMs = Math.max(10, localSyncBudgetMs - CLONE_REMOTE_FORWARD_BUDGET_MARGIN_MS);
+      const forwardedArgs = { ...args, syncBudgetMs: forwardedSyncBudgetMs };
       const forwarded = unwrapMeshRelayResult(
-        await ctx.deps.dispatchMeshCommand(sourceDaemonId, "clone_mesh_node", withMeshDirectDispatch(args, rosterEvidenceExtra(args, mesh))),
+        await ctx.deps.dispatchMeshCommand(sourceDaemonId, "clone_mesh_node", withMeshDirectDispatch(forwardedArgs, rosterEvidenceExtra(forwardedArgs, mesh))),
         { command: "clone_mesh_node", peerDaemonId: sourceDaemonId }
       );
       const forwardedNode = forwarded.success ? forwarded.node : void 0;
@@ -147287,7 +147355,7 @@ ${output}` : "";
       } catch {
       }
     }
-    async function appendCloneLedger(target, sourceNodeId, branch, submodulesInitialized, bootstrapState) {
+    async function appendCloneLedger(target, sourceNodeId, branch, submodulesInitialized, bootstrapState, extraPayload) {
       try {
         const { meshRecord: meshRecord2 } = await Promise.resolve().then(() => (init_mesh_record(), mesh_record_exports));
         meshRecord2(target.meshId, "node_cloned", {
@@ -147303,8 +147371,10 @@ ${output}` : "";
               configSource: bootstrapState.configSource,
               configSourceType: bootstrapState.configSourceType,
               lastCommand: bootstrapState.lastCommand,
-              exitCode: bootstrapState.exitCode
-            }
+              exitCode: bootstrapState.exitCode,
+              ...bootstrapState.error ? { error: bootstrapState.error } : {}
+            },
+            ...extraPayload || {}
           }
         }, { local: true });
       } catch {
@@ -147363,7 +147433,7 @@ ${output}` : "";
         if (ownerFailure) return ownerFailure;
         const cloneStartedAtMs = Date.now();
         const requestedSyncBudgetMs = Number(args?.syncBudgetMs);
-        const syncBudgetMs = Number.isFinite(requestedSyncBudgetMs) && requestedSyncBudgetMs > 0 ? Math.min(Math.max(requestedSyncBudgetMs, 10), 9e4) : 75e3;
+        const syncBudgetMs = Number.isFinite(requestedSyncBudgetMs) && requestedSyncBudgetMs > 0 ? Math.min(Math.max(requestedSyncBudgetMs, 10), MAX_CLONE_SYNC_BUDGET_MS) : DEFAULT_CLONE_SYNC_BUDGET_MS;
         const runClonePipeline = async () => {
           const prepared = await withMeshCloneLock(meshId, async () => {
             const meshRecord3 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -147450,7 +147520,7 @@ ${output}` : "";
           });
           if (!prepared.ready) {
             if ("forward" in prepared && prepared.forward) {
-              return await forwardCloneToSourceDaemon(ctx, meshId, args, prepared.forward.mesh, prepared.forward.sourceDaemonId);
+              return await forwardCloneToSourceDaemon(ctx, meshId, args, prepared.forward.mesh, prepared.forward.sourceDaemonId, syncBudgetMs);
             }
             return prepared.done;
           }
@@ -147498,7 +147568,10 @@ ${output}` : "";
           const terminalBootstrapEvent = (state2) => state2.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
           if (!setupResult.completed) {
             setupPromise.then(({ bootstrapState: bootstrapState2 }) => {
-              emitBootstrapEvent(terminalBootstrapEvent(bootstrapState2), bootstrapState2, bootstrapStartedMs);
+              emitBootstrapEvent(terminalBootstrapEvent(bootstrapState2), bootstrapState2, bootstrapStartedMs, {
+                branch: result.branch,
+                sourceNodeId
+              });
             }).catch((error) => {
               const failedState = {
                 ...runningBootstrapState,
@@ -147508,7 +147581,11 @@ ${output}` : "";
               };
               void persistWorktreeSetupState(failedState);
               void appendCloneLedger(target, sourceNodeId, result.branch, false, failedState);
-              emitBootstrapEvent("bootstrap_failed", failedState, bootstrapStartedMs, { error: error?.message || String(error) });
+              emitBootstrapEvent("bootstrap_failed", failedState, bootstrapStartedMs, {
+                branch: result.branch,
+                sourceNodeId,
+                error: error?.message || String(error)
+              });
             });
             return {
               success: true,
@@ -147529,7 +147606,10 @@ ${output}` : "";
             };
           }
           const { submodulesInitialized, bootstrapState } = setupResult.value;
-          emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs);
+          emitBootstrapEvent(terminalBootstrapEvent(bootstrapState), bootstrapState, bootstrapStartedMs, {
+            branch: result.branch,
+            sourceNodeId
+          });
           return {
             success: true,
             node,
@@ -147540,6 +147620,60 @@ ${output}` : "";
             submodulesInitialized,
             worktreeBootstrap: bootstrapState
           };
+        };
+        const emitBackgroundPipelineFailure = async (errOrFailure) => {
+          let limitFailure = null;
+          if (isMeshNodeLimitError(errOrFailure)) {
+            limitFailure = await nodeLimitFailureFromError(errOrFailure, {
+              meshId,
+              inlineNodes: ctx.getCachedInlineMesh?.(meshId)?.nodes,
+              selfDaemonId: ctx.deps.statusInstanceId
+            });
+          } else if (errOrFailure && typeof errOrFailure === "object" && typeof errOrFailure.code === "string") {
+            limitFailure = errOrFailure;
+          }
+          const errorMsg = String(
+            limitFailure?.error || errOrFailure?.error || errOrFailure?.message || errOrFailure || "Background worktree clone failed"
+          );
+          LOG.warn("Mesh", `[clone] background clone pipeline failed for ${meshId}/${branch}: ${errorMsg}`);
+          const failedState = {
+            status: "failed",
+            required: true,
+            completedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            error: errorMsg
+          };
+          let resolvedMesh = ctx.getCachedInlineMesh?.(meshId) || args?.inlineMesh;
+          if (!resolvedMesh) {
+            try {
+              const rec5 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
+              resolvedMesh = rec5?.mesh;
+            } catch {
+            }
+          }
+          const target = {
+            meshId,
+            mesh: resolvedMesh,
+            node: { id: `clone_failed:${branch}` },
+            worktreePath: "",
+            daemonId: ctx.deps.statusInstanceId,
+            machineId: void 0
+          };
+          const limitExtra = limitFailure ? {
+            ...typeof limitFailure.code === "string" ? { code: limitFailure.code } : {},
+            ...limitFailure.nodeLimit ? { nodeLimit: limitFailure.nodeLimit } : {},
+            ...typeof limitFailure?.nodeLimit?.limit === "number" ? { maxNodes: limitFailure.nodeLimit.limit } : {},
+            ...typeof limitFailure?.nodeLimit?.count === "number" ? { currentCount: limitFailure.nodeLimit.count } : {},
+            ...Array.isArray(limitFailure.cleanupCandidates) ? { cleanupCandidates: limitFailure.cleanupCandidates } : {}
+          } : {};
+          await appendCloneLedger(target, sourceNodeId, branch, false, failedState, limitExtra);
+          emitCloneBootstrapEvent(ctx, target, "bootstrap_failed", failedState, cloneStartedAtMs, {
+            source: "clone_mesh_node",
+            status: "clone_failed",
+            branch,
+            sourceNodeId,
+            error: errorMsg,
+            ...limitExtra
+          });
         };
         try {
           const pipelinePromise = runClonePipeline();
@@ -147557,8 +147691,12 @@ ${output}` : "";
           } finally {
             if (budgetTimer) clearTimeout(budgetTimer);
           }
-          void pipelinePromise.catch((err) => {
-            LOG.warn("Mesh", `[clone] background clone pipeline failed for ${meshId}/${branch}: ${err?.message || err}`);
+          void pipelinePromise.then(async (res) => {
+            if (res && res.success === false) {
+              await emitBackgroundPipelineFailure(res);
+            }
+          }).catch(async (err) => {
+            await emitBackgroundPipelineFailure(err);
           });
           return {
             success: true,
@@ -148748,11 +148886,7 @@ ${output}` : "";
       plan_mesh_onboarding: async (ctx, args) => {
         const workspace = typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
         try {
-          const detectedProviders = await getCachedCliInventory(ctx.deps.providerLoader, {
-            ...typeof args?._detectCLIs === "function" ? { detectFn: args._detectCLIs } : {},
-            ...typeof args?._cliDetectBudgetMs === "number" ? { budgetMs: args._cliDetectBudgetMs } : {},
-            ...typeof args?._cliCacheTtlMs === "number" ? { ttlMs: args._cliCacheTtlMs } : {}
-          });
+          const detectedProviders = await getCachedCliInventory(ctx.deps.providerLoader);
           return await planMeshOnboarding({
             workspace,
             meshId: typeof args?.meshId === "string" ? args.meshId.trim() || void 0 : void 0,
@@ -159324,6 +159458,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       "open_panel"
     ]);
     init_config();
+    init_cli_detector();
     function handleListProviderAvailability(host, _args) {
       if (!host._ctx.providerLoader) {
         return { success: false, error: "ProviderLoader not initialized" };
@@ -159387,6 +159522,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         };
       }
       loader2.registerToDetector();
+      invalidateCachedCliInventory(loader2);
       return {
         success: true,
         installed: {
@@ -159610,6 +159746,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { success: false, error: e?.message ?? String(e) };
       }
       const after = host._ctx.providerLoader?.listVerifiedChannelPins?.() ?? /* @__PURE__ */ new Map();
+      if (host._ctx.providerLoader) {
+        invalidateCachedCliInventory(host._ctx.providerLoader);
+      }
       const activated = [];
       for (const [type2, pointer] of after) {
         const wasVersion = before.get(type2)?.active?.providerVersion ?? null;
@@ -159629,6 +159768,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return { success: false, error: `no rollback target for ${providerType}` };
       }
       const pin = host._ctx.providerLoader?.listVerifiedChannelPins?.()?.get(providerType);
+      if (host._ctx.providerLoader) {
+        invalidateCachedCliInventory(host._ctx.providerLoader);
+      }
       return {
         success: true,
         providerType,
@@ -160272,6 +160414,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           if (this._ctx.providerLoader) {
             this._ctx.providerLoader.reload();
             this._ctx.providerLoader.registerToDetector();
+            const { invalidateCachedCliInventory: invalidateCachedCliInventory2 } = await Promise.resolve().then(() => (init_cli_detector(), cli_detector_exports));
+            invalidateCachedCliInventory2(this._ctx.providerLoader);
           }
           return {
             success: true,
@@ -200864,19 +201008,51 @@ async function meshCloneNode(ctx, args) {
     ...args.reason ? { reason: args.reason } : {},
     inlineMesh: ctx.mesh
   };
-  const isCloneTimeout = (message) => typeof message === "string" && /timed?\s*out/i.test(message);
+  const preExistingNodeIds = new Set(
+    (Array.isArray(ctx.mesh.nodes) ? ctx.mesh.nodes : []).map((n) => typeof n?.id === "string" ? n.id.trim() : "").filter(Boolean)
+  );
+  const isCloneTimeout = (candidate) => {
+    if (candidate && typeof candidate === "object") {
+      const obj = candidate;
+      if (obj.ipcTimeout === true || obj.code === "REQUEST_TIMEOUT" || obj.code === "IPC_TIMEOUT") {
+        return true;
+      }
+      if (typeof obj.error === "string" && isCloneTimeout(obj.error)) return true;
+      if (typeof obj.message === "string" && isCloneTimeout(obj.message)) return true;
+      return false;
+    }
+    if (typeof candidate !== "string") return false;
+    const text = candidate.trim();
+    return /^Daemon IPC \S+ timed out after \d+s \(requestId=[^)]+\)$/.test(text) || /^Command 'clone_mesh_node' timed out after \d+s \(standalone daemon did not respond\)$/.test(text) || /^P2P mesh command 'clone_mesh_node' to \S+ timed out after \d+ms$/.test(text);
+  };
   const recoverBackgroundCloneFromTimeout = async (timeoutReason) => {
     let recoveredNode;
     try {
       const refreshed = unwrapCommandPayload(await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id }));
       const candidateNodes = Array.isArray(refreshed?.mesh?.nodes) ? refreshed.mesh.nodes : [];
       recoveredNode = candidateNodes.find((n) => {
+        const nodeId = typeof n?.id === "string" ? n.id.trim() : "";
+        if (!nodeId || preExistingNodeIds.has(nodeId)) return false;
         const wtBranch = readNodeString(n, "worktreeBranch", "worktree_branch", "branch");
         if (wtBranch !== args.branch) return false;
         const clonedFrom = readNodeString(n, "clonedFromNodeId", "cloned_from_node_id");
-        return !clonedFrom || (0, import_daemon_core29.meshNodeIdMatches)(sourceNode, clonedFrom) || clonedFrom === args.source_node_id;
+        if (!clonedFrom) return false;
+        return (0, import_daemon_core29.meshNodeIdMatches)(sourceNode, clonedFrom) || clonedFrom === args.source_node_id;
       });
     } catch {
+    }
+    if (!recoveredNode) {
+      return {
+        success: false,
+        accepted: false,
+        status: "unknown",
+        code: "clone_timeout_unverified",
+        meshId: ctx.mesh.id,
+        sourceNodeId: args.source_node_id,
+        branch: args.branch,
+        error: `clone_mesh_node timed out (${timeoutReason}) and get_mesh shows no newly registered node for branch '${args.branch}' cloned from '${args.source_node_id}'.`,
+        action: "Verify with mesh_status whether the worktree node finished registering in the background before retrying mesh_clone_node."
+      };
     }
     return {
       success: true,
@@ -200886,10 +201062,11 @@ async function meshCloneNode(ctx, args) {
       meshId: ctx.mesh.id,
       sourceNodeId: args.source_node_id,
       branch: args.branch,
-      ...recoveredNode ? { node: recoveredNode, worktreePath: recoveredNode.workspace } : {},
+      node: recoveredNode,
+      worktreePath: recoveredNode.workspace,
       worktreeSetup: {
         status: "running",
-        message: recoveredNode ? "Worktree node was registered in the background after the synchronous clone RPC timed out." : `Worktree clone exceeded the synchronous RPC window (${timeoutReason}) and is continuing in the background.`
+        message: "Worktree node was registered in the background after the synchronous clone RPC timed out."
       }
     };
   };
@@ -200897,11 +201074,11 @@ async function meshCloneNode(ctx, args) {
   try {
     result = await commandForNode(ctx, sourceNode, "clone_mesh_node", cloneArgs);
     const unwrapped = unwrapCommandPayload(result);
-    if (unwrapped?.success === false && isCloneTimeout(unwrapped?.error)) {
-      result = await recoverBackgroundCloneFromTimeout(String(unwrapped.error));
+    if (unwrapped?.success === false && isCloneTimeout(unwrapped)) {
+      result = await recoverBackgroundCloneFromTimeout(String(unwrapped.error || unwrapped.code || "timeout"));
     }
   } catch (error) {
-    if (isCloneTimeout(error?.message || String(error))) {
+    if (isCloneTimeout(error)) {
       result = await recoverBackgroundCloneFromTimeout(error?.message || String(error));
     } else {
       throw error;

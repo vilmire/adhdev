@@ -19,7 +19,7 @@ import { loadState, saveState } from '../../config/state-store.js';
 import { resolveIdeLaunchWorkspace } from '../../config/workspaces.js';
 import { appendRecentActivity } from '../../config/recent-activity.js';
 import { detectIDEs } from '../../detection/ide-detector.js';
-import { detectCLI } from '../../detection/cli-detector.js';
+import { detectCLI, invalidateCachedCliInventory } from '../../detection/cli-detector.js';
 import { LOG } from '../../logging/logger.js';
 import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyContext, MedFamilyHandler } from './types.js';
@@ -145,6 +145,7 @@ export const ideHandlers: Record<string, MedFamilyHandler> = {
             installed: !!detected,
             path: detected?.path,
         }], false);
+        invalidateCachedCliInventory(ctx.deps.providerLoader);
         ctx.deps.onStatusChange?.();
         return {
             success: true,
