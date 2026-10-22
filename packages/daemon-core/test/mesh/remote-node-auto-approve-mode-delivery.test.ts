@@ -57,7 +57,7 @@ describe('remote node auto-approve MODE delivery', () => {
   });
 
   // A remote node's workspace path does not exist on the coordinator filesystem.
-  const REMOTE_WORKSPACE = '/Users/moltbot/Documents/Work/adhdev';
+  const REMOTE_WORKSPACE = '/Users/botuser/Documents/Work/adhdev';
 
   describe('coordinator-side resolution (the defect)', () => {
     it('REPRO: a remote node workspace is unreadable on the coordinator, so the repo-requested mode is lost', () => {

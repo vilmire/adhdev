@@ -2,7 +2,7 @@
  * QUEUE-WEDGE — a send the CLI never consumed must not strand the sends queued
  * behind it when the terminal is quiet.
  *
- * Live defect, 2026-10-10 (MainPC, win32, claude-cli assistant): the first
+ * Live defect, 2026-10-10 (DesktopA, win32, claude-cli assistant): the first
  * message was typed into a startup dialog, so its submit was never confirmed
  * ("SUBMIT NOT CONFIRMED after 14 submit-key attempts"). Two more messages were
  * queued behind it and stayed there: the in-flight latch does expire, but the

@@ -209,7 +209,7 @@ type InstalledProviderRow = {
  * CHANNEL-STORE ROWS (live 2026-10-10): a daemon that installs through the
  * verified channel store — the default for a fresh config — has an EMPTY
  * `.upstream`, so check_provider_updates (built on that listing alone)
- * returned `providers: []` (MainPC, MoltBook). The Providers tab then had no
+ * returned `providers: []` (DesktopA, DevLaptop). The Providers tab then had no
  * pin for any row: no active version, no inline Update when the channel had a
  * newer bundle, no rollback, and no auto-update line. `.upstream` rows keep
  * their exact legacy shape and win for their type.

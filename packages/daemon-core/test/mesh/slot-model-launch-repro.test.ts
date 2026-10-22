@@ -2,7 +2,7 @@
  * Reproduction + lifecycle for the SLOT MODEL GUARD, through the assignment
  * path's own slot ranking and live capacity computation.
  *
- * Mirrors the real production config (node vilmire-Jupiter):
+ * Mirrors the real production config (node dev-BuildBox):
  *   mesh difficultyBrains = null → DEFAULT_DIFFICULTY_BRAINS
  *   node.policy.slots = [{ provider: 'claude-cli', model: 'sonnet' }]
  *
@@ -103,7 +103,7 @@ describe('slot-constrained launch model (production repro)', () => {
 describe('assignment path decision (real node shapes)', () => {
     const meshId = () => createMesh({ name: 'm', repoIdentity: `id_${randomUUID().slice(0, 8)}` }).id;
 
-    it('vilmire-Jupiter (sonnet only) → notify, never a substituted launch', () => {
+    it('dev-BuildBox (sonnet only) → notify, never a substituted launch', () => {
         const d = __decideSlotForModelForTests(meshId(), 'node_sonnet_only', SONNET_ONLY_NODE, {
             model: 'opus', difficulty: 'difficult',
         });

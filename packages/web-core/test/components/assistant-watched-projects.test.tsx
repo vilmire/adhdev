@@ -162,7 +162,7 @@ describe('AssistantWatchedProjects', () => {
                     daemonId={ASST_B}
                     sendCommand={send}
                     remoteHosts={[
-                        { id: HOST_A, label: 'MoltBook-Sim', online: true },
+                        { id: HOST_A, label: 'DevLaptop-Sim', online: true },
                         { id: HOST_OFFLINE, label: 'OfflineMac', online: false },
                     ]}
                 />,

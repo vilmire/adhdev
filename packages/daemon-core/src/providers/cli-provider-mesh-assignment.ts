@@ -56,7 +56,7 @@ function turnInFlight(host: MeshAssignmentHost): boolean {
  * per-session `[EvtTrace]` line and completion-event taskId — reads FIRST. It
  * used to grow on every stamp and shrink only on a detach, so a re-stamp of the
  * same task left a duplicate and a task that ended without a local detach left
- * its entry at the head: MainPC traced `task=441a2f87` for four minutes after
+ * its entry at the head: DesktopA traced `task=441a2f87` for four minutes after
  * the session had been re-stamped to 9315fa4d. Now: (1) a new task stamped
  * while no turn is in flight drops every older entry — nothing is left to
  * complete for them; (2) a re-stamp of a task already in the history updates
@@ -152,7 +152,7 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
  * Session-host record meta key holding the attempt ref this session's turn
  * evidence carries (`{ attemptId, generation }`, or null once released).
  *
- * Live 2026-10-09 (preview, Jupiter → Mac): a worker whose task the Mac owned
+ * Live 2026-10-09 (preview, BuildBox → Mac): a worker whose task the Mac owned
  * survived a restart of ITS daemon mid-turn. The restored settings had the
  * membership and the owner id but no attempt ref, so the session's idle edge
  * (`turn_end`) was built with no `attemptRef`; the worker's ledger cannot

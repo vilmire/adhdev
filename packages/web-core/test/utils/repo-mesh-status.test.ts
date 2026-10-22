@@ -238,7 +238,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('prefers fresh result status over stale upstream-unverified wrapper status', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const staleWrapperStatus = {
       ...status,
       meshId: 'mesh_upstream_freshness_precedence',
@@ -416,7 +416,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('hydrates remote submodule repo paths from live repoRoot so graph/detail do not drop them', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const response = {
       success: true,
       result: {
@@ -600,7 +600,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('clears pending git and derives health when direct mesh peer status coexists with live git fields', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -694,7 +694,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('uses nested live git status when an outer pending wrapper is present', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -750,7 +750,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('keeps node-scoped live git evidence when another peer has failed mesh transport', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -870,7 +870,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('normalizes live git and launch readiness over stale bootstrap pending snapshot fields', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -996,7 +996,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('prefers live aggregate nodes over stale nested pending status wrappers', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -1102,7 +1102,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('deduplicates stale pending and live peer rows for the same node before graph/detail derivation', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -1207,7 +1207,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('does not carry stale follow-up convergence from a lower-ranked duplicate node', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -1333,7 +1333,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('does not let a failed mesh peer status row erase canonical live aggregate git truth', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const normalized = extractRepoMeshStatus({
       success: true,
       result: {
@@ -1458,7 +1458,7 @@ describe('extractRepoMeshStatus', () => {
   })
 
   it('prefers the latest command result over stale top-level status even when the stale snapshot has more truthy fields', () => {
-    const repoRoot = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+    const repoRoot = '/Users/botuser/.openclaw/workspace/projects/adhdev'
     const cleanNode = (nodeId: string, headCommit: string) => ({
       nodeId,
       machineLabel: nodeId,

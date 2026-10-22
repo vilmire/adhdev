@@ -926,7 +926,7 @@ describe('buildMeshGraph', () => {
                 {
                     nodeId: 'node_7',
                     machineLabel: 'node_7',
-                    workspace: '/Users/vilmire/Work/adhdev',
+                    workspace: '/Users/dev/Work/adhdev',
                     health: 'online',
                     providers: [],
                     activeSessions: [],
@@ -949,7 +949,7 @@ describe('buildMeshGraph', () => {
                 {
                     nodeId: 'node_1171c7758bbdb3f751295c9ba844e289',
                     machineLabel: 'node_117',
-                    workspace: '/Users/moltbot/Documents/Work/adhdev',
+                    workspace: '/Users/botuser/Documents/Work/adhdev',
                     health: 'online',
                     providers: [],
                     activeSessions: [],

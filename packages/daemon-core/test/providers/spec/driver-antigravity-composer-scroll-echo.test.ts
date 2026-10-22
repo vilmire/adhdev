@@ -3,7 +3,7 @@
  * send on the composer TAIL, because agy scrolls a tall body inside its own
  * composer box.
  *
- * Live defect (preview fleet, 1.0.79-rc.5, MainPC win32 + MoltBook darwin):
+ * Live defect (preview fleet, 1.0.79-rc.5, DesktopA win32 + DevLaptop darwin):
  * every agy dispatch logged `body never confirmed in composer after ~20070ms
  * (len≈1680) — firing submit key blind`, i.e. each task prompt sat out the
  * WIN32_ECHO_MAX_WAIT_MS blind-fire backstop before its submit key.

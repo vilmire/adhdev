@@ -139,7 +139,7 @@ from `ps -o pid,ppid,ni,command -p <saved-pids>`:
 The test asserts every descendant's niceness and that the parent stayed normal.
 It passed. No live CLI session was inspected for mutation or reprioritized.
 
-## Windows MainPC follow-up task
+## Windows DesktopA follow-up task
 
 1. Use an unelevated account and a separate test config directory/IPC endpoint.
    Do not restart or attach to existing daemon sessions. Record Windows, Node

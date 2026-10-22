@@ -302,7 +302,7 @@ describe('attach_remote_project (source host)', () => {
 
     it('rejects a non-canonical target before anything else', async () => {
         const bridge = vi.fn();
-        for (const targetDaemonId of ['MainPC', 'mach_target1', 'daemon_mach_x/../y', '', undefined]) {
+        for (const targetDaemonId of ['DesktopA', 'mach_target1', 'daemon_mach_x/../y', '', undefined]) {
             expect(await attach({ meshId: 'mesh_batrp', targetDaemonId }, { attachRemoteProject: bridge })).toMatchObject({ success: false, code: 'INVALID_TARGET' });
         }
         expect(bridge).not.toHaveBeenCalled();

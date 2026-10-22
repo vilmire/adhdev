@@ -96,7 +96,7 @@ describe('managed session-host conpty pre-spawn guard', () => {
 
   describe('resolveConptyPrebuildCandidates (shared with the install-time gate)', () => {
     it('lists both the nested and hoisted node-pty layouts under a given prefix', () => {
-      const activePrefix = path.join('C:', 'Users', 'kjs0116', '.adhdev', 'npm-installs', 'version-current')
+      const activePrefix = path.join('C:', 'Users', 'dev', '.adhdev', 'npm-installs', 'version-current')
       const candidates = resolveConptyPrebuildCandidates(activePrefix)
       expect(candidates).toEqual([
         path.join(activePrefix, 'node_modules', 'adhdev', 'node_modules', 'node-pty', 'prebuilds', 'win32-x64', 'conpty.node'),
@@ -140,14 +140,14 @@ describe('managed session-host conpty pre-spawn guard', () => {
     }
 
     it('derives the exact active prefix from the production incident require-stack shape', () => {
-      const entry = 'C:\\Users\\kjs0116\\.adhdev\\npm-installs\\version-1784879721933-13212-ab0a5a54b6905\\node_modules\\adhdev\\vendor\\session-host-daemon\\index.js'
+      const entry = 'C:\\Users\\dev\\.adhdev\\npm-installs\\version-1784879721933-13212-ab0a5a54b6905\\node_modules\\adhdev\\vendor\\session-host-daemon\\index.js'
       expect(deriveActivePrefix(entry)).toBe(
-        'C:\\Users\\kjs0116\\.adhdev\\npm-installs\\version-1784879721933-13212-ab0a5a54b6905',
+        'C:\\Users\\dev\\.adhdev\\npm-installs\\version-1784879721933-13212-ab0a5a54b6905',
       )
     })
 
     it('returns null (skip) for a workspace/monorepo package path with no packaged-layout marker', () => {
-      const entry = '/Users/vilmire/Work/adhdev/oss/packages/session-host-daemon/dist/index.js'
+      const entry = '/Users/dev/Work/adhdev/oss/packages/session-host-daemon/dist/index.js'
       expect(deriveActivePrefix(entry)).toBeNull()
     })
   })

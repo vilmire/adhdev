@@ -487,7 +487,7 @@ describe('CLI version invalidation & self-updating CLI rediscovery', () => {
 
     it('legacy snapshot without a version → rediscovery (reason=no_version)', async () => {
         const now = 1_792_297_626_253;
-        // Exact shape of MainPC's legacy discovery.json (no cliVersion field, well within 24h TTL).
+        // Exact shape of DesktopA's legacy discovery.json (no cliVersion field, well within 24h TTL).
         saveModelCache({
             'antigravity-cli': {
                 provider: 'antigravity-cli',

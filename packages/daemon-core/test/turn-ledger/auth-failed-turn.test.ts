@@ -5,7 +5,7 @@ import { renderNotice } from '../../src/mesh/turn-ledger/deliver.js';
 import { NOW, POLICY, REF, ev, expired, makeAttempt, makeHold } from './fixtures.js';
 import { T0, dispatch, evd, fakePublisher, ledgerOn, memDb, recordingHost, recordingPorts, rowsOf } from './ledger-harness.js';
 
-// Live incident 2026-10-06 (preview mesh_271444af…, task ec7017b3 on MainPC):
+// Live incident 2026-10-06 (preview mesh_271444af…, task ec7017b3 on DesktopA):
 // a claude-cli worker answered ONLY "Login expired · Please run /login". The
 // worker's daemon emitted a turn_end (the idle edge), R9r opened await_report,
 // and 10 min later the scheduler's hold expiry committed R13r

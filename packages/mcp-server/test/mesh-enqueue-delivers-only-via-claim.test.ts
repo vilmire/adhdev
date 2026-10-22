@@ -11,7 +11,7 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 
 // rc.37 Finding B — a task the claim gates leave `pending` must never reach a session.
 //
-// LIVE (preview, 2026-09-24). Task 2cb0ab79 was mesh_send_task'd to MainPC session
+// LIVE (preview, 2026-09-24). Task 2cb0ab79 was mesh_send_task'd to DesktopA session
 // db6935bd and was mid-turn. The coordinator then mesh_enqueue_task'd 5470f2e1 pinned
 // to the same node. The daemon's claim path answered correctly —
 // queueTrigger `pending_no_idle_mesh_session`, auto-launch `node_has_active_assignment`
@@ -27,7 +27,7 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 // through the daemon's claim (tryAssignQueueTask), which opens the attempt
 // (dispatch_accepted) before it sends the body.
 
-const NODE_MAINPC = 'node_695e6d077c0142c09de01170b5dbca34';
+const NODE_DESKTOPA = 'node_695e6d077c0142c09de01170b5dbca34';
 const NODE_MAC = 'node_mac_base';
 const BUSY_SESSION = 'db6935bd-c237-4403-9dd3-ac53ef20c34e';
 
@@ -63,7 +63,7 @@ function recordingIpcTransport(sessionStatus: 'generating' | 'idle' = 'generatin
           success: true,
           sessions: [{
             id: BUSY_SESSION, sessionId: BUSY_SESSION, providerType: 'claude-cli', status: sessionStatus,
-            settings: { meshNodeFor: 'x', meshNodeId: NODE_MAINPC, meshActiveTaskId: 'task-in-flight' },
+            settings: { meshNodeFor: 'x', meshNodeId: NODE_DESKTOPA, meshActiveTaskId: 'task-in-flight' },
           }],
         };
       }
@@ -82,7 +82,7 @@ function makeCtx(meshId: string, transport: any) {
       nodes: [
         { id: NODE_MAC, workspace: '/repo/mac', daemonId: 'daemon_mac', policy: { providerPriority: ['claude-cli'] } },
         {
-          id: NODE_MAINPC, workspace: 'C:/repo', daemonId: 'daemon_mach_ab349e9e520044a388be5f5122a240c6',
+          id: NODE_DESKTOPA, workspace: 'C:/repo', daemonId: 'daemon_mach_ab349e9e520044a388be5f5122a240c6',
           reportedPlatform: 'win32', policy: { providerPriority: ['claude-cli'] },
         },
       ],
@@ -100,21 +100,21 @@ test('★LIVE SHAPE: a pinned enqueue while the node has an active assignment se
     // Task 1: the in-flight direct dispatch that owns the busy session.
     recordDirectDispatchTask(meshId, 'task one — in flight', {
       id: `direct-${randomUUID().slice(0, 8)}`,
-      assignedNodeId: NODE_MAINPC, assignedSessionId: BUSY_SESSION,
+      assignedNodeId: NODE_DESKTOPA, assignedSessionId: BUSY_SESSION,
       taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['README.md'],
     });
     const transport = recordingIpcTransport();
     const ctx = makeCtx(meshId, transport);
 
     const res = JSON.parse(await meshEnqueueTask(ctx, {
-      message: 'task two — pinned to the busy node', target_node_id: NODE_MAINPC,
+      message: 'task two — pinned to the busy node', target_node_id: NODE_DESKTOPA,
       owned_paths: ['README.md'], task_mode: 'code_change', difficulty: 'medium',
     } as any));
     await new Promise(resolve => setImmediate(resolve));
     await new Promise(resolve => setTimeout(resolve, 10));
 
     assert.equal(res.success, true, JSON.stringify(res));
-    assert.equal(res.targetNodeId, NODE_MAINPC);
+    assert.equal(res.targetNodeId, NODE_DESKTOPA);
     assert.deepEqual(agentCommands(transport), [], 'no task body may reach any session at enqueue');
     const row = getQueue(meshId).find(t => t.id === res.taskId)!;
     assert.equal(row.status, 'pending', 'the row stays pending until a session claims it');

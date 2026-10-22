@@ -1251,8 +1251,8 @@ describe('rankProvidersByQuotaGate — session (5h) expiry axis, the 2′ condit
  * requiredTags, where only grok carries a current reading. Under the old
  * unconditional unknown-last partition grok was `clear[0]` DETERMINISTICALLY —
  * not merely likely — so claude and kimi could never be selected on this node,
- * and the same shape held on every node in the fleet (MoltBook, Jupiter,
- * MainPC, and this Mac all reported claude stale).
+ * and the same shape held on every node in the fleet (DevLaptop, BuildBox,
+ * DesktopA, and this Mac all reported claude stale).
  *
  * For claude the partition additionally closed a self-reinforcing loop: its
  * quota only refreshes while a Claude Code session is open, so "never

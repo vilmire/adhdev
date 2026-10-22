@@ -248,7 +248,7 @@ function cleanExecBasename(execToken: string): string {
 /**
  * Strip paths, leading login-shell dashes (`-zsh`), and all command-line arguments
  * so only the bare executable/command name is returned (never leaking secrets in args).
- * When `comm` is truncated or a path prefix (e.g. macOS 16-char MAXCOMLEN `"/Users/vilmire/."`),
+ * When `comm` is truncated or a path prefix (e.g. macOS 16-char MAXCOMLEN `"/Users/devuser/."`),
  * prefer the executable token from `args` (`argv[0]`).
  */
 export function sanitizeProcessCommandName(comm?: string | null, args?: string | null): string {

@@ -1,5 +1,5 @@
 /**
- * REDRAW-NUDGE (live preview defect 2026-09-24, antigravity-cli on MoltBook).
+ * REDRAW-NUDGE (live preview defect 2026-09-24, antigravity-cli on DevLaptop).
  *
  * A finished agy worker was left showing a torn frame — a frozen
  * `⡿  Running command...` spinner line and a stale `esc to cancel` row above

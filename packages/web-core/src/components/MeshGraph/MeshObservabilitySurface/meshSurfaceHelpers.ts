@@ -489,7 +489,7 @@ export function resolveMachineLabel(status: RepoMeshStatus, machineKey: string):
         if (key !== machineKey) continue
         const nickname = node.nodeFacts?.machineNickname
         if (typeof nickname === 'string' && nickname.trim()) nicknames.push(nickname.trim())
-        // Hostname beats the derived node label: "vilmire-MacBookAir" names the
+        // Hostname beats the derived node label: "dev-DevMac" names the
         // MACHINE, while the derived label ("adhdev · claude-cli") is really
         // checkout+provider context wearing a machine costume.
         const machine = node.machine

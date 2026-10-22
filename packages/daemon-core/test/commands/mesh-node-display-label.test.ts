@@ -39,7 +39,7 @@ describe('buildMeshNodeMachineLabel — machine axis only', () => {
     })
 
     it('strips the mDNS .local suffix from a raw hostname, but never from an explicit label', () => {
-        expect(buildMeshNodeMachineLabel({ hostname: 'vilmire-MacBookAir.local' }, 'node_a')).toBe('vilmire-MacBookAir')
+        expect(buildMeshNodeMachineLabel({ hostname: 'dev-DevMac.local' }, 'node_a')).toBe('dev-DevMac')
         expect(buildMeshNodeMachineLabel({ machineNickname: 'box.local' }, 'node_a')).toBe('box.local')
     })
 

@@ -112,13 +112,13 @@ describe('machine-scoped quota grouping', () => {
   it('keeps genuinely different machines apart', () => {
     const groups = collectMachineQuotaGroups(statusOf([
       node({ nodeId: 'n1', daemonId: 'daemon_mach_aaa', nodeFacts: facts(OK_QUOTA, { machineNickname: 'Air' }) }),
-      node({ nodeId: 'n2', daemonId: 'daemon_mach_bbb', nodeFacts: facts(null, { machineNickname: 'Jupiter' }) }),
+      node({ nodeId: 'n2', daemonId: 'daemon_mach_bbb', nodeFacts: facts(null, { machineNickname: 'BuildBox' }) }),
     ]))
 
-    expect(groups.map(g => g.label)).toEqual(['Air', 'Jupiter'])
+    expect(groups.map(g => g.label)).toEqual(['Air', 'BuildBox'])
     expect(groups.find(g => g.label === 'Air')!.quota).toHaveLength(1)
     // Reported facts but no quota key = the "not collected yet" state, kept.
-    expect(groups.find(g => g.label === 'Jupiter')!.quota).toEqual([])
+    expect(groups.find(g => g.label === 'BuildBox')!.quota).toEqual([])
   })
 
   // ── Contract ①: a machine with nodes always gets a card ───────────────────
@@ -157,17 +157,17 @@ describe('machine-scoped quota grouping', () => {
   it('names a machine by nickname, then node label, then a short machine key', () => {
     // 1. nickname wins over any node label.
     const withNickname = collectMachineQuotaGroups(statusOf([
-      node({ nodeId: 'n1', machineLabel: 'adhdev · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'vilmire-Jupiter' }) }),
-      node({ nodeId: 'n2', machineLabel: 'adhdev-wt · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'vilmire-Jupiter' }) }),
+      node({ nodeId: 'n1', machineLabel: 'adhdev · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'dev-BuildBox' }) }),
+      node({ nodeId: 'n2', machineLabel: 'adhdev-wt · host', daemonId: 'daemon_mach_abc', nodeFacts: facts(OK_QUOTA, { machineNickname: 'dev-BuildBox' }) }),
     ]))
-    expect(withNickname[0].label).toBe('vilmire-Jupiter')
+    expect(withNickname[0].label).toBe('dev-BuildBox')
 
     // 2. No nickname (this Mac has none set) → use the name the Nodes section
     //    already shows, instead of the raw daemon id.
     const byNodeLabel = collectMachineQuotaGroups(statusOf([
-      node({ nodeId: 'n1', machineLabel: 'vilmireui-MacBookAir-4', daemonId: 'daemon_mach_zzz', nodeFacts: facts(OK_QUOTA) }),
+      node({ nodeId: 'n1', machineLabel: 'user-DevMac-4', daemonId: 'daemon_mach_zzz', nodeFacts: facts(OK_QUOTA) }),
     ]))
-    expect(byNodeLabel[0].label).toBe('vilmireui-MacBookAir-4')
+    expect(byNodeLabel[0].label).toBe('user-DevMac-4')
 
     // 3. Neither → a shortened machine key, never the full 40-hex id.
     const bare = collectMachineQuotaGroups(statusOf([

@@ -818,7 +818,7 @@ describe('antigravity worker-private HOME', () => {
     // from the keychain, and the file being absent (the ordinary case on a
     // machine that has never fallen back to it) must not abort the private
     // root — that was the `worker_private_home_missing_required_import`
-    // regression reported live on node MoltBook (preview, 2026-09-25).
+    // regression reported live on node DevLaptop (preview, 2026-09-25).
     setPlatform('darwin')
     const realHome = tmp('adhdev-noauth-darwin-')
     const spec = findWorkerPrivateHomeSpec('antigravity-cli')!
@@ -972,12 +972,12 @@ describe('cursor worker-private HOME', () => {
     expect(deriveCursorWorkspaceSlug('/private/tmp/foo/bar')).toBe('private-tmp-foo-bar')
 
     // ★The case that a naive "separator → dash" rule gets WRONG, and the reason
-    // this test exists. Real ADHDev worktree paths contain `/-Users-vilmire--`;
+    // this test exists. Real ADHDev worktree paths contain `/-Users-dev--`;
     // cursor collapses the run, the naive rule doubles it. The first live probe
     // used a dash-free path and could not distinguish the two.
     expect(deriveCursorWorkspaceSlug('/tmp/x/-lead--double/y')).toBe('tmp-x-lead-double-y')
-    expect(deriveCursorWorkspaceSlug('/private/tmp/claude-501/-Users-vilmire--adhdev/ws'))
-      .toBe('private-tmp-claude-501-Users-vilmire-adhdev-ws')
+    expect(deriveCursorWorkspaceSlug('/private/tmp/claude-501/-Users-dev--adhdev/ws'))
+      .toBe('private-tmp-claude-501-Users-dev-adhdev-ws')
     // Never a leading or trailing dash.
     expect(deriveCursorWorkspaceSlug('/-a-/')).toBe('a')
 

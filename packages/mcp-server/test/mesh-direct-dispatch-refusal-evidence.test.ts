@@ -120,7 +120,7 @@ function makeCtx(
 async function sendUntargetedTask(ctx: any) {
     return JSON.parse(await meshSendTask(ctx, {
         node_id: NODE_REMOTE,
-        message: 'do the thing on MainPC',
+        message: 'do the thing on DesktopA',
         difficulty: 'medium',
     } as any));
 }

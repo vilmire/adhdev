@@ -73,7 +73,7 @@ export function createCliChildPriorityPolicy(deps: PriorityDependencies = {
  * registering listeners/doing other work. There is a spawn-to-setPriority race:
  * a child can run (and fork) before this call. Later descendants inherit nice
  * on POSIX; early descendants are not retroactively changed. Windows creation
- * and ConPTY inheritance require verification on the MainPC.
+ * and ConPTY inheritance require verification on the DesktopA.
  * Optional darwin-bg is applied asynchronously by taskpolicy after nice; the
  * extra helper startup adds a further race before the background class takes
  * effect. It also throttles I/O, so nice alone remains the default.

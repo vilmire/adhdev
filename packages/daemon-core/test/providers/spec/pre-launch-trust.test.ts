@@ -302,7 +302,7 @@ describe('applyPreLaunchTrust — claude_json_projects', () => {
     it('preserves every other top-level key and every sibling project entry', () => {
         fs.writeFileSync(storePath, JSON.stringify({
             theme: 'dark',
-            oauthAccount: { emailAddress: 'kjs0116@dstrict.com' },
+            oauthAccount: { emailAddress: 'user@example.com' },
             projects: {
                 '/already/trusted': { hasTrustDialogAccepted: true, lastSessionId: 'abc-123' },
             },
@@ -310,7 +310,7 @@ describe('applyPreLaunchTrust — claude_json_projects', () => {
         applyPreLaunchTrust({ scheme: 'claude_json_projects' }, claudePlan());
         const json = JSON.parse(fs.readFileSync(storePath, 'utf8'));
         expect(json.theme).toBe('dark');
-        expect(json.oauthAccount).toEqual({ emailAddress: 'kjs0116@dstrict.com' });
+        expect(json.oauthAccount).toEqual({ emailAddress: 'user@example.com' });
         expect(json.projects['/already/trusted']).toEqual({ hasTrustDialogAccepted: true, lastSessionId: 'abc-123' });
         expect(json.projects[fs.realpathSync(workspace)]).toEqual({ hasTrustDialogAccepted: true });
     });

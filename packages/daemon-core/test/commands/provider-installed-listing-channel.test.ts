@@ -9,8 +9,8 @@ import * as path from 'node:path';
 // A daemon that installs through the verified channel store (every fresh
 // config since the store became the default) has an EMPTY `.upstream`, so the
 // listing returned `providers: []` and `check_provider_updates` — which builds
-// its rows from that listing — returned no rows either (measured on MainPC and
-// MoltBook: `providers: []`). The Providers tab then had no pin for any row: no
+// its rows from that listing — returned no rows either (measured on DesktopA and
+// DevLaptop: `providers: []`). The Providers tab then had no pin for any row: no
 // active version, no inline Update when the channel had a newer bundle, no
 // rollback, and none of the new auto-update verdict lines. Standalone's
 // first-run gate (`GET /api/v1/providers/installed`, "0 installed → onboarding")

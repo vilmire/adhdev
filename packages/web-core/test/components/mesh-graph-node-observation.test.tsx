@@ -43,10 +43,10 @@ function remoteStatus(nodeOverrides: Record<string, unknown> = {}) {
                 gitObservation: { source: 'self', observedAt: NOW, refreshing: false, unreachableSince: null },
             },
             {
-                nodeId: 'node_mainpc',
-                machineLabel: 'MainPC',
+                nodeId: 'node_desktopa',
+                machineLabel: 'DesktopA',
                 workspace: 'C:/work/adhdev',
-                daemonId: 'daemon_mainpc',
+                daemonId: 'daemon_desktopa',
                 health: 'online',
                 providers: [],
                 activeSessions: [],
@@ -81,16 +81,16 @@ describe('topology — coordinator-held remote node state', () => {
     it('renders cached remote submodule children immediately, each inheriting the parent observation', () => {
         // Through the same wire extraction the dashboard uses (daemon response envelope).
         const extracted = extractRepoMeshStatus({ success: true, result: remoteStatus() } as any)!
-        expect(extracted.nodes.find(node => node.nodeId === 'node_mainpc')?.gitObservation).toMatchObject({ source: 'member_push' })
+        expect(extracted.nodes.find(node => node.nodeId === 'node_desktopa')?.gitObservation).toMatchObject({ source: 'member_push' })
         const graph = buildMeshGraph(extracted)
-        const submodules = graph.nodes.filter(node => node.parentNodeId === 'node_mainpc')
+        const submodules = graph.nodes.filter(node => node.parentNodeId === 'node_desktopa')
         expect(submodules.map(node => node.submodulePath).sort()).toEqual(['adhdev-providers', 'oss'])
         for (const submodule of submodules) {
             expect(submodule.gitObservation).toMatchObject({ source: 'member_push' })
         }
-        const mainpc = graph.nodes.find(node => node.id === 'node_mainpc')!
-        expect(getMeshGraphObservationHint(mainpc, NOW)).toMatchObject({ kind: 'aged' })
-        const html = renderCard(mainpc)
+        const desktopa = graph.nodes.find(node => node.id === 'node_desktopa')!
+        expect(getMeshGraphObservationHint(desktopa, NOW)).toMatchObject({ kind: 'aged' })
+        const html = renderCard(desktopa)
         // Degraded observations get a short chip; the age rides in its tooltip.
         expect(html).toContain('title="as of 12m ago">Stale</span>')
     })
@@ -100,20 +100,20 @@ describe('topology — coordinator-held remote node state', () => {
             gitObservation: { source: 'member_push', observedAt: NOW - 30 * 60_000, refreshing: false, unreachableSince: NOW - 5 * 60_000, lastRefreshError: 'P2P timeout' },
         })
         const graph = buildMeshGraph(canonicalizeRepoMeshStatus(status as any))
-        const mainpc = graph.nodes.find(node => node.id === 'node_mainpc')!
-        expect(mainpc.branch).toBe('main')
-        expect(getMeshGraphObservationHint(mainpc, NOW)).toMatchObject({ kind: 'unreachable' })
+        const desktopa = graph.nodes.find(node => node.id === 'node_desktopa')!
+        expect(desktopa.branch).toBe('main')
+        expect(getMeshGraphObservationHint(desktopa, NOW)).toMatchObject({ kind: 'unreachable' })
         // A visible chip on the card (not only the card tooltip); detail in the chip title.
-        expect(renderCard(mainpc)).toContain('title="unreachable · last known 30m ago">Unreachable</span>')
+        expect(renderCard(desktopa)).toContain('title="unreachable · last known 30m ago">Unreachable</span>')
     })
 
     it('says nothing on the card while the coordinator re-reads a node, nor for local/fresh nodes', () => {
         const refreshing = buildMeshGraph(canonicalizeRepoMeshStatus(remoteStatus({
             gitObservation: { source: 'coordinator_probe', observedAt: NOW - 4 * 60_000, refreshing: true, unreachableSince: null },
         }) as any))
-        const mainpc = refreshing.nodes.find(node => node.id === 'node_mainpc')!
+        const desktopa = refreshing.nodes.find(node => node.id === 'node_desktopa')!
         // Refreshing is not a degraded state: no chip (the card tooltip keeps the detail).
-        const html = renderCard(mainpc)
+        const html = renderCard(desktopa)
         expect(html).not.toContain('>as of 4m ago · refreshing</span>')
         expect(html).not.toContain('>Stale</span>')
         expect(html).toContain('as of 4m ago · refreshing')
@@ -121,7 +121,7 @@ describe('topology — coordinator-held remote node state', () => {
         expect(getMeshGraphObservationHint(local, NOW)).toBeNull()
         const fresh = buildMeshGraph(canonicalizeRepoMeshStatus(remoteStatus({
             gitObservation: { source: 'member_push', observedAt: NOW - 5_000, refreshing: false, unreachableSince: null },
-        }) as any)).nodes.find(node => node.id === 'node_mainpc')!
+        }) as any)).nodes.find(node => node.id === 'node_desktopa')!
         expect(getMeshGraphObservationHint(fresh, NOW)).toBeNull()
     })
 
@@ -130,7 +130,7 @@ describe('topology — coordinator-held remote node state', () => {
             git: { isGitRepo: true, workspace: 'C:/work/adhdev' },
             branchConvergence: { status: 'blocked_review', needsConvergence: true, reason: 'branch_unknown', nextStep: 'Inspect node' },
         })
-        const skeletal = buildMeshGraph(canonicalizeRepoMeshStatus(unknownGit as any)).nodes.find(node => node.id === 'node_mainpc')!
+        const skeletal = buildMeshGraph(canonicalizeRepoMeshStatus(unknownGit as any)).nodes.find(node => node.id === 'node_desktopa')!
         expect(skeletal.branchConvergence).toBeNull()
         expect(getMeshGraphAttentionBadge(skeletal)?.label).not.toBe('blocked review')
 
@@ -138,7 +138,7 @@ describe('topology — coordinator-held remote node state', () => {
             git: { workspace: 'C:/work/adhdev', upstreamStatus: 'unchecked' },
             branchConvergence: { status: 'blocked_review', needsConvergence: true, reason: 'git_status_unavailable', nextStep: 'Resolve git status' },
         })
-        const missing = buildMeshGraph(canonicalizeRepoMeshStatus(noGit as any)).nodes.find(node => node.id === 'node_mainpc')!
+        const missing = buildMeshGraph(canonicalizeRepoMeshStatus(noGit as any)).nodes.find(node => node.id === 'node_desktopa')!
         expect(missing.branchConvergence).toBeNull()
 
         // A REAL "not a git repo" observation keeps its verdict.
@@ -146,7 +146,7 @@ describe('topology — coordinator-held remote node state', () => {
             git: { isGitRepo: false, workspace: 'C:/work/adhdev' },
             branchConvergence: { status: 'blocked_review', needsConvergence: true, reason: 'git_status_unavailable', nextStep: 'Resolve git status' },
         })
-        const real = buildMeshGraph(canonicalizeRepoMeshStatus(notRepo as any)).nodes.find(node => node.id === 'node_mainpc')!
+        const real = buildMeshGraph(canonicalizeRepoMeshStatus(notRepo as any)).nodes.find(node => node.id === 'node_desktopa')!
         expect(real.branchConvergence?.status).toBe('blocked_review')
     })
 })
@@ -157,7 +157,7 @@ describe('attention badge — daemon upstream-unverified reasons', () => {
             git: { isGitRepo: true, workspace: 'C:/work/adhdev', branch: 'main', headCommit: 'bbb', upstream: 'origin/main', upstreamStatus: 'unchecked', ahead: 0, behind: 0 },
             branchConvergence: { status: 'blocked_review', needsConvergence: true, reason: 'default_branch_upstream_unverified', nextStep: 'Refresh main upstream' },
         })
-        const node = buildMeshGraph(canonicalizeRepoMeshStatus(status as any)).nodes.find(n => n.id === 'node_mainpc')!
+        const node = buildMeshGraph(canonicalizeRepoMeshStatus(status as any)).nodes.find(n => n.id === 'node_desktopa')!
         expect(getMeshGraphAttentionBadge(node)).toEqual({ label: 'upstream unverified', tone: 'warn' })
     })
 })

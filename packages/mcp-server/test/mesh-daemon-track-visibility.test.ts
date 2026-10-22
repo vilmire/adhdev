@@ -28,11 +28,11 @@ function buildMesh() {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     nodes: [{
-      id: 'node-mainpc-stable',
+      id: 'node-desktopa-stable',
       workspace: 'C:\\src\\adhdev',
       repoRoot: 'C:\\src\\adhdev',
-      daemonId: 'daemon_mainpc_stable',
-      machineId: 'machine-mainpc-stable',
+      daemonId: 'daemon_desktopa_stable',
+      machineId: 'machine-desktopa-stable',
       userOverrides: {},
       policy: { providerPriority: ['codex-cli'] },
     }],
@@ -64,7 +64,7 @@ test('mesh_status exposes the release track explicitly under daemonBuilds', asyn
       return heldMeshStatusResponse(buildMesh(), () => cleanGit, {
         localDaemonId: 'daemon-coordinator-preview',
         runtimeFor: () => ({
-          source: 'member_push', observedAt: Date.now(), refreshing: false, daemonId: 'daemon_mainpc_stable', sessions: [],
+          source: 'member_push', observedAt: Date.now(), refreshing: false, daemonId: 'daemon_desktopa_stable', sessions: [],
           daemonBuild: { commit: 'abc1234abc1234', commitShort: 'abc1234', version: '1.0.49-rc.2', track: 'stable' },
         }),
       });
@@ -74,7 +74,7 @@ test('mesh_status exposes the release track explicitly under daemonBuilds', asyn
     if (command === 'get_status_metadata') {
       return {
         success: true,
-        status: { instanceId: 'daemon_mainpc_stable', sessions: [] },
+        status: { instanceId: 'daemon_desktopa_stable', sessions: [] },
         daemonBuild: {
           commit: 'abc1234abc1234',
           commitShort: 'abc1234',
@@ -88,10 +88,10 @@ test('mesh_status exposes the release track explicitly under daemonBuilds', asyn
 
   const status = JSON.parse(await meshStatus(ctx as any));
 
-  assert.equal(status.daemonBuilds['daemon_mainpc_stable'].track, 'stable');
+  assert.equal(status.daemonBuilds['daemon_desktopa_stable'].track, 'stable');
   // The rc suffix is deliberately present: track identity came from the daemon,
   // not from guessing based on its version string.
-  assert.equal(status.daemonBuilds['daemon_mainpc_stable'].version, '1.0.49-rc.2');
+  assert.equal(status.daemonBuilds['daemon_desktopa_stable'].version, '1.0.49-rc.2');
 });
 
 test('a legacy daemon with no track is reported as unknown, never assumed stable', () => {
@@ -117,7 +117,7 @@ test('incident regression: stable mesh daemon vs preview upgrade target is loud 
           source: 'member_push',
           observedAt: Date.now(),
           refreshing: false,
-          daemonId: 'daemon_mainpc_stable',
+          daemonId: 'daemon_desktopa_stable',
           daemonBuild: { commit: 'stable123', commitShort: 'stable1', version: '1.0.49-rc.2', track: 'stable' },
           sessions: [],
         }),
@@ -143,15 +143,15 @@ test('incident regression: stable mesh daemon vs preview upgrade target is loud 
   });
 
   const result = JSON.parse(await meshRestartDaemon(ctx as any, {
-    node_id: 'node-mainpc-stable',
+    node_id: 'node-desktopa-stable',
     mode: 'upgrade',
   }));
 
   assert.equal(result.success, true, 'track mismatch must not block the upgrade');
   assert.equal(result.outcome, 'scheduled');
   assert.deepEqual(result.meshAttachedDaemon, {
-    daemonId: 'daemon_mainpc_stable',
-    configuredDaemonId: 'daemon_mainpc_stable',
+    daemonId: 'daemon_desktopa_stable',
+    configuredDaemonId: 'daemon_desktopa_stable',
     track: 'stable',
   });
   assert.deepEqual(result.restartTargetDaemon, {

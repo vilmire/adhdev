@@ -86,14 +86,14 @@ const relayed = (sender: string, args: Record<string, unknown>) => ({ ...args, _
 
 const launchArgs = (coordinator: string) => ({
     cliType: 'claude-cli',
-    dir: '/w/mainpc',
-    settings: { role: 'worker', meshNodeFor: MESH, meshNodeId: 'node-mainpc', meshCoordinatorDaemonId: coordinator },
+    dir: '/w/desktopa',
+    settings: { role: 'worker', meshNodeFor: MESH, meshNodeId: 'node-desktopa', meshCoordinatorDaemonId: coordinator },
 });
 
 const sessionlessDispatch = (coordinator: string) => ({
-    agentType: 'claude-cli', cliType: 'claude-cli', action: 'send_chat', message: 'task', dir: '/w/mainpc',
+    agentType: 'claude-cli', cliType: 'claude-cli', action: 'send_chat', message: 'task', dir: '/w/desktopa',
     dispatchSource: 'mesh_send_task:direct',
-    meshContext: { meshId: MESH, nodeId: 'node-mainpc', taskId: 'task-1', coordinatorDaemonId: coordinator },
+    meshContext: { meshId: MESH, nodeId: 'node-desktopa', taskId: 'task-1', coordinatorDaemonId: coordinator },
 });
 
 describe('roster-less worker: pairing record names the host', () => {
@@ -145,7 +145,7 @@ describe('roster-less worker: no pairing record, no stamp (the live rc.42 case)'
     it('the first sessionless dispatch naming its sender as coordinator is accepted and records the host; a second sender is refused', async () => {
         const warn = vi.spyOn(LOG, 'warn');
         // A session restored after the upgrade restart: meshNodeFor only.
-        const { router, agentCommand } = workerDaemon({ 'sess-restored': { meshNodeFor: MESH, meshNodeId: 'node-mainpc', launchedByCoordinator: true } });
+        const { router, agentCommand } = workerDaemon({ 'sess-restored': { meshNodeFor: MESH, meshNodeId: 'node-desktopa', launchedByCoordinator: true } });
 
         const first: any = await router.execute('agent_command', relayed(HOST, sessionlessDispatch(HOST)), 'mesh');
         expect(first.success).toBe(true);
@@ -192,7 +192,7 @@ describe('roster-less worker: the host evidence survives a daemon restart', () =
 
         // Restart: session settings are in-memory; restore re-applies meshNodeFor /
         // meshNodeId / launchedByCoordinator only (cli-manager restoreHostedSessions).
-        const after = workerDaemon({ [launch.sessionId]: { meshNodeFor: MESH, meshNodeId: 'node-mainpc', launchedByCoordinator: true } });
+        const after = workerDaemon({ [launch.sessionId]: { meshNodeFor: MESH, meshNodeId: 'node-desktopa', launchedByCoordinator: true } });
         const targeted: any = await after.router.execute('agent_command', relayed(HOST, { ...sessionlessDispatch(HOST), targetSessionId: launch.sessionId }), 'mesh');
         expect(targeted.success).toBe(true);
         const sessionless: any = await after.router.execute('agent_command', relayed(HOST, sessionlessDispatch(HOST)), 'mesh');
@@ -226,7 +226,7 @@ describe('any_member_mesh on a roster-less worker (host → worker restart/ff/re
     const from = (sender: string, args: Record<string, unknown>) => ({ ...args, [MESH_SENDER_DAEMON_ID_ARG]: sender });
 
     it('accepts the recorded host for the named mesh and for an unnamed one; refuses others', async () => {
-        expect(await evaluateMeshSender('any_member_mesh', from(HOST, { meshId: MESH, nodeId: 'node-mainpc' }), d({ [MESH]: HOST })))
+        expect(await evaluateMeshSender('any_member_mesh', from(HOST, { meshId: MESH, nodeId: 'node-desktopa' }), d({ [MESH]: HOST })))
             .toMatchObject({ ok: true, evidence: `mesh_host_record:${MESH}` });
         expect(await evaluateMeshSender('any_member_mesh', from(HOST, {}), d({ [MESH]: HOST })))
             .toMatchObject({ ok: true, evidence: `mesh_host_record:${MESH}` });

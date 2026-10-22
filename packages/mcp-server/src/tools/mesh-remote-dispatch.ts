@@ -145,7 +145,7 @@ function buildProviderPinUnsatisfiableFailure(
  * DIRECT dispatch (this file, naming a node/session_id explicitly) went
  * straight to `agent_command`/local inject with no such check. Live evidence:
  * the owner ledger's mesh_direct attempt `ed31090f…` spent ~10 minutes
- * talking to a MainPC claude-cli worker session whose own chat already showed
+ * talking to a DesktopA claude-cli worker session whose own chat already showed
  * "You've hit your session limit · resets 10:10pm (Asia/Seoul)" — the claim
  * path would have diverted this candidate; the direct path had nothing to
  * divert it.
@@ -268,7 +268,7 @@ interface RemoteDispatchProvider {
  * caller's node filter asks "could SOME provider here satisfy the pin?" and a node
  * declaring several slots answers yes — then this picked priority[0] with no idea
  * a pin existed. Live: required_tags ["provider=antigravity-cli"] resolved to
- * `claude-cli` (Jupiter's priority[0]) and the ledger recorded the pin as honored.
+ * `claude-cli` (BuildBox's priority[0]) and the ledger recorded the pin as honored.
  * Whichever provider names reach `resolvedProviderType`, they are now intersected
  * with the pin first, so an unpinnable candidate can never be selected.
  */
@@ -311,7 +311,7 @@ function resolveRemoteDispatchProvider(node: LocalMeshNodeEntry, args: RemoteDis
  * The named session's OWN provider is authoritative: it is what the dispatch
  * will actually run on, so it replaces any provider resolved from the caller
  * hint or the node's providerPriority (live 2026-10-09/10: a dispatch to a
- * MainPC antigravity-cli session reported — and sent as agentType —
+ * DesktopA antigravity-cli session reported — and sent as agentType —
  * providerPriority[0] `claude-cli`). A session provider outside a provider pin
  * is still adopted here so the pin assert in resolveRemoteDispatchTarget
  * refuses it, instead of naming the pinned provider on a session that does not

@@ -7,7 +7,7 @@ import { meshSendTask } from '../src/tools/mesh-tools.js';
 import { armTestTurnLedger, answerTurnIpc, isTurnIpcCommand } from './helpers/turn-ledger-ipc.js';
 
 /**
- * Live (2026-10-09 / 2026-10-10, MainPC win32): `mesh_send_task(session_id: <agy
+ * Live (2026-10-09 / 2026-10-10, DesktopA win32): `mesh_send_task(session_id: <agy
  * session>)` delivered correctly to the antigravity-cli session, but the result
  * reported `"providerType":"claude-cli"` — the node's providerPriority[0]. On the
  * remote route the provider was resolved from the priority list BEFORE the named
@@ -15,9 +15,9 @@ import { armTestTurnLedger, answerTurnIpc, isTurnIpcCommand } from './helpers/tu
  * nothing had resolved yet. An explicitly named session's provider is the truth.
  */
 
-const NODE_REMOTE = 'node-mainpc';
+const NODE_REMOTE = 'node-desktopa';
 const COORDINATOR_DAEMON = 'daemon-coordinator';
-const WORKER_DAEMON = 'daemon-mainpc';
+const WORKER_DAEMON = 'daemon-desktopa';
 const AGY_SESSION = 'sess-agy';
 
 function makeCtx(meshId: string) {
@@ -37,10 +37,10 @@ function makeCtx(meshId: string) {
         updatedAt: new Date().toISOString(),
         nodes: [{
             id: NODE_REMOTE,
-            workspace: '/tmp/mainpc-repo',
-            repoRoot: '/tmp/mainpc-repo',
+            workspace: '/tmp/desktopa-repo',
+            repoRoot: '/tmp/desktopa-repo',
             daemonId: WORKER_DAEMON,
-            machineId: 'machine-mainpc',
+            machineId: 'machine-desktopa',
             userOverrides: {},
             // claude-cli FIRST: priority[0] is the wrong answer for the agy session.
             policy: { providerPriority: ['claude-cli', 'antigravity-cli'] },

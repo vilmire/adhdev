@@ -1,7 +1,7 @@
 /**
  * AGY-ASSISTANT-EXTRACTION (M-MESH-INFRA-0829 defect 2)
  *
- * Live 2026-08-29 (Jupiter session ed1a0ec5, spec=antigravity-cli 4.0.json):
+ * Live 2026-08-29 (BuildBox session ed1a0ec5, spec=antigravity-cli 4.0.json):
  * the worker finished, FSM fired busy→idle, the TUI showed the final JSON
  * report under a `● Bash(...)` tool list — and Spec Debug's
  * "Last Assistant Message" was blank. Mesh turn stayed generating because

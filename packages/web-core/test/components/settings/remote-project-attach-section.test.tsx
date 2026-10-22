@@ -64,7 +64,7 @@ describe('RemoteProjectAttachSection (owner-only per-machine switch)', () => {
 
         const machines: RemoteProjectAttachMachine[] = [
             { id: 'daemon_mach_source1', name: 'SourceMac', hostname: 'source-mac', online: true },
-            { id: 'daemon_mach_target1', name: 'MainPC', hostname: 'mainpc-win', online: true },
+            { id: 'daemon_mach_target1', name: 'DesktopA', hostname: 'desktopa-win', online: true },
             { id: 'daemon_mach_offline1', name: 'Laptop', hostname: 'laptop', online: false },
         ]
 
@@ -85,7 +85,7 @@ describe('RemoteProjectAttachSection (owner-only per-machine switch)', () => {
 
         const switches = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="switch"]'))
         expect(switches).toHaveLength(3)
-        // SourceMac starts OFF (false), MainPC loaded ON (true), Laptop is offline (disabled & OFF)
+        // SourceMac starts OFF (false), DesktopA loaded ON (true), Laptop is offline (disabled & OFF)
         expect(switches[0].getAttribute('aria-checked')).toBe('false')
         expect(switches[1].getAttribute('aria-checked')).toBe('true')
         expect(switches[2].getAttribute('aria-checked')).toBe('false')
@@ -102,7 +102,7 @@ describe('RemoteProjectAttachSection (owner-only per-machine switch)', () => {
         })
         expect(switches[0].getAttribute('aria-checked')).toBe('true')
 
-        // Owner toggles MainPC OFF
+        // Owner toggles DesktopA OFF
         await act(async () => {
             switches[1].click()
             await flush()

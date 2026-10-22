@@ -2,7 +2,7 @@
  * MESHAPPROVE-STALE-MODAL — mesh_approve reported success six times over 56
  * minutes while nothing was ever approved.
  *
- * Live defect (2026-09-18, MoltBook / claude-cli spec 4.0). The coordinator
+ * Live defect (2026-09-18, DevLaptop / claude-cli spec 4.0). The coordinator
  * approved session c8c084ac six times and got
  * `{success:true, buttonIndex:0, button:"Yes"}` every time. The FSM traced:
  *

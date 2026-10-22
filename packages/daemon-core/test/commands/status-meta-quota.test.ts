@@ -240,13 +240,13 @@ describe('get_session_info — coordinator-spawn linkage (meshWorker)', () => {
         // Remote node: listCoordinatorsForMesh is machine-local and misses, but
         // the dispatch stamped meshCoordinatorSessionId/DaemonId onto the worker.
         const res = await statusMetaHandlers.get_session_info(
-            { deps: workerDeps({ meshNodeFor: 'mesh_remote', meshCoordinatorSessionId: 'remote-coord-1', meshCoordinatorDaemonId: 'daemon-jupiter' }) },
+            { deps: workerDeps({ meshNodeFor: 'mesh_remote', meshCoordinatorSessionId: 'remote-coord-1', meshCoordinatorDaemonId: 'daemon-buildbox' }) },
             { targetSessionId: 'worker-1' },
         ) as any
         expect(res.success).toBe(true)
         expect(res.meshWorker.meshId).toBe('mesh_remote')
         expect(res.meshWorker.coordinatorSessionId).toBe('remote-coord-1')
-        expect(res.meshWorker.coordinatorDaemonId).toBe('daemon-jupiter')
+        expect(res.meshWorker.coordinatorDaemonId).toBe('daemon-buildbox')
         // Remote liveness is unknowable — undefined (optimistic jump), not false.
         expect(res.meshWorker.coordinatorAlive).toBeUndefined()
         expect(res.meshWorker.coordinatorCliType).toBeUndefined()

@@ -455,8 +455,8 @@ test('mesh_list_nodes exposes explicit machine identity without treating matchin
     nodes: [
       {
         id: 'node-m4',
-        workspace: '/Users/vilmire/Work/repo',
-        repoRoot: '/Users/vilmire/Work/repo',
+        workspace: '/Users/dev/Work/repo',
+        repoRoot: '/Users/dev/Work/repo',
         daemonId: 'daemon-m4',
         machineId: 'machine-m4',
         hostname: 'M4',
@@ -465,8 +465,8 @@ test('mesh_list_nodes exposes explicit machine identity without treating matchin
       },
       {
         id: 'node-m1',
-        workspace: '/Users/vilmire/Work/remote/repo',
-        repoRoot: '/Users/vilmire/Work/remote/repo',
+        workspace: '/Users/dev/Work/remote/repo',
+        repoRoot: '/Users/dev/Work/remote/repo',
         daemonId: 'daemon-m1',
         machineId: 'machine-m1',
         hostname: 'M1',
@@ -531,8 +531,8 @@ test('mesh_list_nodes treats configured local coordinator node as same-machine w
     nodes: [
       {
         id: 'node-local',
-        workspace: '/Users/vilmire/Work/adhdev',
-        repoRoot: '/Users/vilmire/Work/adhdev',
+        workspace: '/Users/dev/Work/adhdev',
+        repoRoot: '/Users/dev/Work/adhdev',
         userOverrides: {},
         policy: {},
       },

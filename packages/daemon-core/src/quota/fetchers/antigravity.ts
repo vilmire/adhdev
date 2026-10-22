@@ -108,7 +108,7 @@
  *         in which case quota is never even asked for. A genuine detection
  *         gap, deliberately not fixed here.
  *
- *   linux — RESOLVED 2026-08-24 by a machine survey on Jupiter (recon
+ *   linux — RESOLVED 2026-08-24 by a machine survey on BuildBox (recon
  *     f24cc9bb). That host is a headless SSH server (`XDG_SESSION_TYPE=tty`)
  *     where Secret Service is STRUCTURALLY unavailable: `org.freedesktop.secrets`
  *     is not registered on the session bus, gnome-keyring is UID 120 gdm-only,
@@ -512,7 +512,7 @@ function storeSource(platform: string): string {
 /**
  * Why this platform is not supported, in the user's words. Only unrecognized
  * platforms land here: linux moved to SUPPORTED after the 2026-08-24
- * Jupiter survey found the credential as a plaintext JSON file — see the
+ * BuildBox survey found the credential as a plaintext JSON file — see the
  * PLATFORM SCOPE note in the header. darwin/win32 never reach this.
  */
 function unsupportedPlatformReason(platform: string): string {

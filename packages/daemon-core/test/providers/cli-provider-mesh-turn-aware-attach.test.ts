@@ -214,7 +214,7 @@ describe('CliProviderInstance — WORKER-MCP T2 precursor: turn-aware task attac
   })
 })
 
-// Live rc.40 (2026-09-24, MainPC session 515e64ae): after the session was re-stamped
+// Live rc.40 (2026-09-24, DesktopA session 515e64ae): after the session was re-stamped
 // to task 9315fa4d, every `[EvtTrace] [stage:fired]` line still named the previous
 // task 441a2f87 — the attachment history (read FIRST by completingTurnTaskId(), and
 // so by meshTraceCtx()) kept a stale head: a re-stamp of the same task queued a

@@ -217,8 +217,8 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
 
   it('owned_paths_conflict — MESH-WIDE: overlap across two DIFFERENT DAEMONS (no shared daemonNodeIds) is refused', () => {
     // Live finding (preview rc.41, runs 3–7): T1 (direct dispatch, owned_paths
-    // ["docs/CONCEPTS.md"], assigned on node MainPC) did not stop T2 (enqueued with
-    // the same owned_paths, pinned to node MoltBook on a DIFFERENT daemon) from being
+    // ["docs/CONCEPTS.md"], assigned on node DesktopA) did not stop T2 (enqueued with
+    // the same owned_paths, pinned to node DevLaptop on a DIFFERENT daemon) from being
     // claimed immediately. The old gate built inFlightOwnership from
     // assignedRowsForDaemon — scoped to the CLAIMING node's own daemonNodeIds — so a
     // row `assigned` on a completely different machine was invisible. Neither claim
@@ -226,29 +226,29 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
     // cross-daemon case the capacity gates correctly do NOT widen to, but path
     // ownership must.
     const meshId = `mesh_refuse_ownedpaths_crossdaemon_${randomUUID().slice(0, 8)}`
-    const NODE_MAINPC = 'node_mainpc'
-    const NODE_MOLTBOOK = 'node_moltbook'
+    const NODE_DESKTOPA = 'node_desktopa'
+    const NODE_DEVLAPTOP = 'node_devlaptop'
     try {
-      // T1: direct dispatch, already `assigned` on MainPC — mirrors the live repro,
+      // T1: direct dispatch, already `assigned` on DesktopA — mirrors the live repro,
       // which used mesh_direct (recordDirectDispatchTask), not the enqueue+claim path.
       const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch', {
         id: `t1_${randomUUID().slice(0, 8)}`,
-        assignedNodeId: NODE_MAINPC,
-        assignedSessionId: 'session_mainpc',
+        assignedNodeId: NODE_DESKTOPA,
+        assignedSessionId: 'session_desktopa',
         taskMode: 'code_change',
         difficulty: 'medium',
         ownedPaths: ['docs/CONCEPTS.md'],
       })
       expect(t1).not.toBeNull()
 
-      // T2: enqueued, pinned to MoltBook, on a DIFFERENT daemon than MainPC. No
+      // T2: enqueued, pinned to DevLaptop, on a DIFFERENT daemon than DesktopA. No
       // daemonNodeIds passed for either side — each node's own capacity scope, exactly
       // as the live claim call sites resolve it.
       const t2 = enqueueTask(meshId, 'T2 enqueued', {
-        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_DEVLAPTOP,
         ownedPaths: ['docs/CONCEPTS.md'],
       })
-      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_DEVLAPTOP, sessionId: 'session_devlaptop' })
       expect(task).toBeNull()
       expect(refusal.reason).toBe('owned_paths_conflict')
       expect(refusal.detail).toContain(t1!.id)
@@ -260,13 +260,13 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
 
   it('owned_paths non-overlapping declarations across DIFFERENT daemons both claim fine', () => {
     const meshId = `mesh_refuse_ownedpaths_crossdaemon_ok_${randomUUID().slice(0, 8)}`
-    const NODE_MAINPC = 'node_mainpc'
-    const NODE_MOLTBOOK = 'node_moltbook'
+    const NODE_DESKTOPA = 'node_desktopa'
+    const NODE_DEVLAPTOP = 'node_devlaptop'
     try {
       const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch', {
         id: `t1_${randomUUID().slice(0, 8)}`,
-        assignedNodeId: NODE_MAINPC,
-        assignedSessionId: 'session_mainpc',
+        assignedNodeId: NODE_DESKTOPA,
+        assignedSessionId: 'session_desktopa',
         taskMode: 'code_change',
         difficulty: 'medium',
         ownedPaths: ['docs/CONCEPTS.md'],
@@ -274,10 +274,10 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
       expect(t1).not.toBeNull()
 
       const t2 = enqueueTask(meshId, 'T2 enqueued', {
-        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_DEVLAPTOP,
         ownedPaths: ['docs/OTHER.md'],
       })
-      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_DEVLAPTOP, sessionId: 'session_devlaptop' })
       expect(task?.id).toBe(t2.id)
       expect(refusal.reason).toBeUndefined()
     } finally {
@@ -287,13 +287,13 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
 
   it('owned_paths_conflict — MESH-WIDE gate never refuses a READONLY in-flight task across daemons', () => {
     const meshId = `mesh_refuse_ownedpaths_crossdaemon_readonly_${randomUUID().slice(0, 8)}`
-    const NODE_MAINPC = 'node_mainpc'
-    const NODE_MOLTBOOK = 'node_moltbook'
+    const NODE_DESKTOPA = 'node_desktopa'
+    const NODE_DEVLAPTOP = 'node_devlaptop'
     try {
       const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch readonly', {
         id: `t1_${randomUUID().slice(0, 8)}`,
-        assignedNodeId: NODE_MAINPC,
-        assignedSessionId: 'session_mainpc',
+        assignedNodeId: NODE_DESKTOPA,
+        assignedSessionId: 'session_desktopa',
         taskMode: 'live_debug_readonly',
         readonly: true,
         difficulty: 'medium',
@@ -302,10 +302,10 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
       expect(t1).not.toBeNull()
 
       const t2 = enqueueTask(meshId, 'T2 enqueued', {
-        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_DEVLAPTOP,
         ownedPaths: ['docs/CONCEPTS.md'],
       })
-      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_DEVLAPTOP, sessionId: 'session_devlaptop' })
       expect(task?.id).toBe(t2.id)
       expect(refusal.reason).toBeUndefined()
     } finally {
@@ -315,23 +315,23 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
 
   it('owned_paths_conflict across daemons is OPT-IN — an in-flight task with no declaration never conflicts', () => {
     const meshId = `mesh_refuse_ownedpaths_crossdaemon_optin_${randomUUID().slice(0, 8)}`
-    const NODE_MAINPC = 'node_mainpc'
-    const NODE_MOLTBOOK = 'node_moltbook'
+    const NODE_DESKTOPA = 'node_desktopa'
+    const NODE_DEVLAPTOP = 'node_devlaptop'
     try {
       const t1 = recordDirectDispatchTask(meshId, 'T1 direct dispatch, no declaration', {
         id: `t1_${randomUUID().slice(0, 8)}`,
-        assignedNodeId: NODE_MAINPC,
-        assignedSessionId: 'session_mainpc',
+        assignedNodeId: NODE_DESKTOPA,
+        assignedSessionId: 'session_desktopa',
         taskMode: 'code_change',
         difficulty: 'medium',
       })
       expect(t1).not.toBeNull()
 
       const t2 = enqueueTask(meshId, 'T2 enqueued', {
-        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_MOLTBOOK,
+        taskMode: 'code_change', difficulty: 'medium', targetNodeId: NODE_DEVLAPTOP,
         ownedPaths: ['docs/CONCEPTS.md'],
       })
-      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_MOLTBOOK, sessionId: 'session_moltbook' })
+      const { task, refusal } = claim(meshId, {}, { nodeId: NODE_DEVLAPTOP, sessionId: 'session_devlaptop' })
       expect(task?.id).toBe(t2.id)
       expect(refusal.reason).toBeUndefined()
     } finally {

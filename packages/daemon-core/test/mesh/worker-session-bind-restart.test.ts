@@ -168,7 +168,7 @@ describe('worker session bind — restart survival', () => {
   })
 
   it('a session still hosted but whose restore failed keeps its persisted bind (no prune), and reports once it is re-registered', async () => {
-    // Live 2026-10-08 (Jupiter, 1.0.77-rc.1 → 1.0.78-rc.1): the boot restore of a
+    // Live 2026-10-08 (BuildBox, 1.0.77-rc.1 → 1.0.78-rc.1): the boot restore of a
     // hosted claude worker threw (ghostty-vt binding unavailable) while the worker
     // kept running in the session host. The reconcile saw the session in the live
     // runtime list but not registered here and PRUNED its row; when a later restore

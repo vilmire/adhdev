@@ -17,7 +17,7 @@ import { closeOpenTestAttempts, isTurnIpcCommand, answerTurnIpc } from './helper
 // already refuses to pull a pending task onto an idle session whose provider is
 // measurably quota-exhausted, but `mesh_send_task` direct dispatch (session_id
 // explicit) went straight to send with no such check. Live evidence: the owner
-// ledger's mesh_direct attempt ed31090f… spent ~10 minutes talking to a MainPC
+// ledger's mesh_direct attempt ed31090f… spent ~10 minutes talking to a DesktopA
 // claude-cli worker whose own chat already showed "You've hit your session
 // limit · resets 10:10pm (Asia/Seoul)". This suite pins the tool-boundary
 // refusal added to meshSendTask (mesh-tools-session.ts) + resolveRemoteDispatchTarget

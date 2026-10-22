@@ -119,7 +119,7 @@ function wrappedPathApproval(cursor: string): string {
     return [
         '  Do you want to proceed?',
         '',
-        `${cursor} 1. Yes, run command 'node /Users/vilmire/Work/adhdev/.cache/build-`,
+        `${cursor} 1. Yes, run command 'node /Users/dev/Work/adhdev/.cache/build-`,
         "     1790054.3821/emit.mjs'",
         "  2. Yes, and don't ask again for this command",
         '  3. No, and tell agent what to do differently',

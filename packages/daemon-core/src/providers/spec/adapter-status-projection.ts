@@ -219,7 +219,7 @@ export function projectAdapterStatus(input: AdapterStatusInputs): CliAdapterStat
     // their previous projection.
     const readySeen = input.readySeen();
     if (readySeen === false) {
-        // RESTORED MID-TURN (live 2026-10-09, preview rc.3, Jupiter worker):
+        // RESTORED MID-TURN (live 2026-10-09, preview rc.3, BuildBox worker):
         // a session re-attached after a daemon restart can be in the middle of
         // a turn, so its FSM goes starting → busy without ever drawing a ready
         // prompt in this daemon's lifetime. The boot-phase hold above then

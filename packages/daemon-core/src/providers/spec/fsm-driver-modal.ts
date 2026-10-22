@@ -209,7 +209,7 @@ export function pressModalButton(ctx: ModalPressContext, index: number): boolean
 
     const rule = ctx.state?.extract?.buttons;
     if (rule?.select_mode === 'arrow_keys') {
-        // MESHAPPROVE-STALE-MODAL (live 2026-09-18, MoltBook claude-cli):
+        // MESHAPPROVE-STALE-MODAL (live 2026-09-18, DevLaptop claude-cli):
         // an `arrow_keys` modal is a LIVE cursor list, and claude-cli always
         // paints `❯` on the focused row while one is open. So "no row carries
         // the cursor marker" is not a formatting quirk — it means the choice

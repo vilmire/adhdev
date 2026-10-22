@@ -146,7 +146,7 @@ export function nodeSatisfiesRequiredTags(requiredTags: unknown, capabilityTags:
  * that reads that as "yes" and then resolves the provider independently (e.g. from
  * providerPriority[0]) lands the task on claude-cli while believing the pin held.
  *
- * ★That is not hypothetical. Live (2026-09-21, task 1c225a59, node Jupiter):
+ * ★That is not hypothetical. Live (2026-09-21, task 1c225a59, node BuildBox):
  * required_tags ["provider=antigravity-cli"] → auto_launch correctly SKIPPED
  * (`task_difficulty_floor_unavailable:medium`, the antigravity slot being easy-only)
  * → the enqueue-and-push accelerator then dispatched to `claude-cli`, the node's

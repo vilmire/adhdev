@@ -12,13 +12,13 @@ import { applyKimiWorkspaceTrust, __test__ } from '../../src/providers/kimi-work
 const { workspaceTrustKey } = __test__;
 
 describe('workspaceTrustKey', () => {
-    it('matches the known real key for /Users/vilmire/Work/adhdev', () => {
-        expect(workspaceTrustKey('/Users/vilmire/Work/adhdev')).toBe('wd_adhdev_78117b8afba9');
+    it('pins the derived key for /Users/dev/Work/adhdev', () => {
+        expect(workspaceTrustKey('/Users/dev/Work/adhdev')).toBe('wd_adhdev_707492f83d60');
     });
 
-    it('matches known real keys for other captured workspaces', () => {
+    it('pins derived keys for other workspaces', () => {
         expect(workspaceTrustKey('/private/tmp/adhdev-kimi-flip-ws')).toBe('wd_adhdev-kimi-flip-ws_5b16883ed3bf');
-        expect(workspaceTrustKey('/Users/vilmire')).toBe('wd_vilmire_0decb91fc05d');
+        expect(workspaceTrustKey('/Users/dev')).toBe('wd_dev_0b34ca0d949f');
     });
 
     it('truncates a long basename slug to 40 chars', () => {

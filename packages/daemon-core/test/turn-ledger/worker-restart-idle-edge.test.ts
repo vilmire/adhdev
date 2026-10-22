@@ -5,8 +5,8 @@ import { readPersistedAttemptRef } from '../../src/session-host/runtime-support.
 import { createTurnIngestHandler } from '../../src/mesh/turn-ledger/deliver.js';
 import { SUMMARY, dispatch, evd, fakePublisher, ledgerOn, memDb } from './ledger-harness.js';
 
-// Live 2026-10-09 (preview): a claude-cli worker on Jupiter ran a task the Mac
-// owned (attempt mesh_direct:<task> g0). Jupiter's daemon restarted mid-turn; the
+// Live 2026-10-09 (preview): a claude-cli worker on BuildBox ran a task the Mac
+// owned (attempt mesh_direct:<task> g0). BuildBox's daemon restarted mid-turn; the
 // session survived in the session host and was restored with its membership and
 // owner id (oss 6dd2103ba) but NO attempt ref. The worker's report reached the
 // Mac (R17g: "awaiting the idle edge"), but the session's busy→idle at 02:28:43

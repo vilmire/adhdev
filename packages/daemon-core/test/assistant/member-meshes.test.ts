@@ -40,8 +40,8 @@ function hostRecord(): Record<string, unknown> {
         policy: {},
         coordinator: {},
         nodes: [
-            { id: 'node_mac', workspace: '/Users/v/adhdev', daemonId: HOST_CORE, machineNickname: 'mac-studio', role: 'host' },
-            { id: 'node_f289402a016548388cae3db962527439', workspace: '/home/vilmire/adhdev', daemonId: SELF_CORE, machineNickname: 'jupiter' },
+            { id: 'node_mac', workspace: '/Users/dev/adhdev', daemonId: HOST_CORE, machineNickname: 'mac-studio', role: 'host' },
+            { id: 'node_f289402a016548388cae3db962527439', workspace: '/home/dev/adhdev', daemonId: SELF_CORE, machineNickname: 'buildbox' },
         ],
     };
 }
@@ -71,10 +71,10 @@ describe('collectMemberMeshes', () => {
         const [m] = collectMemberMeshes({
             selfDaemonId: SELF, configMeshIds: new Set(), inlineMeshes: [],
             hostRecords: [{ meshId: MESH, hostDaemonId: HOST }],
-            pushTargets: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/vilmire/adhdev' }],
+            pushTargets: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/dev/adhdev' }],
         });
         expect(m).toMatchObject({ id: MESH, name: 'adhdev', repoIdentity: '', meshHost: { role: 'member', hostDaemonId: HOST } });
-        expect(m!.nodes).toEqual([{ id: 'node_j', workspace: '/home/vilmire/adhdev', daemonId: SELF }]);
+        expect(m!.nodes).toEqual([{ id: 'node_j', workspace: '/home/dev/adhdev', daemonId: SELF }]);
     });
 });
 
@@ -161,7 +161,7 @@ describe('a member daemon with no meshes.json entry', () => {
 
     it('after a restart (host record + push subscription only) asks the host once for the record, then lists and resolves it by slug', async () => {
         writeFileSync(join(tmp, 'mesh-host-records.json'), JSON.stringify({ version: 1, meshes: { [MESH]: { hostDaemonId: HOST, source: 'session_stamp', recordedAt: '' } } }));
-        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_f289402a016548388cae3db962527439', workspace: '/home/vilmire/adhdev' }] }));
+        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_f289402a016548388cae3db962527439', workspace: '/home/dev/adhdev' }] }));
         hostAnswers.get_mesh = (args) => ({ success: true, mesh: args.meshId === MESH ? hostRecord() : null, membershipOnly: true });
         const listed: any = await run(ASSISTANT_VERB.projects);
         expect(listed.projects).toEqual([expect.objectContaining({ slug: 'adhdev', meshId: MESH, name: 'adhdev-cloud-mesh', repo: 'github.com/vilmire/adhdev', hosting: 'remote', host: 'mac-studio', reachability: 'relay' })]);
@@ -177,12 +177,12 @@ describe('a member daemon with no meshes.json entry', () => {
     it('machines on a member list the remote host too, deduped across the mach_ / daemon_mach_ forms', async () => {
         inline = [hostRecord()];
         const listed: any = await run(ASSISTANT_VERB.projects);
-        expect(listed.machines.map((m: any) => [m.label, m.self])).toEqual([['jupiter', true], ['mac-studio', false]]);
+        expect(listed.machines.map((m: any) => [m.label, m.self])).toEqual([['buildbox', true], ['mac-studio', false]]);
     });
 
     it('machines on a member whose host never answered still list the host (from the remote-host resolution), not only "this machine"', async () => {
         writeFileSync(join(tmp, 'mesh-host-records.json'), JSON.stringify({ version: 1, meshes: { [MESH]: { hostDaemonId: HOST, source: 'session_stamp' } } }));
-        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/vilmire/adhdev' }] }));
+        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/dev/adhdev' }] }));
         const listed: any = await run(ASSISTANT_VERB.projects);
         expect(listed.machines).toHaveLength(2);
         expect(listed.machines[0]).toMatchObject({ label: 'this machine', self: true });
@@ -192,7 +192,7 @@ describe('a member daemon with no meshes.json entry', () => {
 
     it('an unreachable host still lists the project (named after the workspace), never as scratch', async () => {
         writeFileSync(join(tmp, 'mesh-host-records.json'), JSON.stringify({ version: 1, meshes: { [MESH]: { hostDaemonId: HOST, source: 'session_stamp' } } }));
-        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/vilmire/adhdev' }] }));
+        writeFileSync(join(tmp, 'mesh-node-push-subscriptions.json'), JSON.stringify({ version: 1, subscriptions: [{ coordinatorDaemonId: HOST, meshId: MESH, nodeId: 'node_j', workspace: '/home/dev/adhdev' }] }));
         const listed: any = await run(ASSISTANT_VERB.projects);
         expect(listed.unmanaged).toEqual([]);
         expect(listed.projects).toEqual([expect.objectContaining({ slug: 'adhdev', meshId: MESH, name: 'adhdev', hosting: 'remote', reachability: 'relay' })]);

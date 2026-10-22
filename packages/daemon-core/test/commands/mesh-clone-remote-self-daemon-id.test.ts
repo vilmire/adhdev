@@ -74,7 +74,7 @@ describe('clone_mesh_node — self/base node with no stored daemonId', () => {
       expect(sourceNode?.id).toBeTruthy()
       expect(sourceNode?.daemonId).toBeUndefined()
 
-      // This router IS the worker daemon (e.g. "Jupiter") receiving a forwarded clone
+      // This router IS the worker daemon (e.g. "BuildBox") receiving a forwarded clone
       // request from a different coordinator machine.
       const router = createRouter('daemon-worktree-remote')
 

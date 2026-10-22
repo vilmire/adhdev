@@ -111,7 +111,7 @@ function makeDriver(specPath: string) {
  */
 const GROK_TRUST = [
     '                  Do you trust the contents of this directory?',
-    '                           /Users/vilmire/Work/adhdev',
+    '                           /Users/dev/Work/adhdev',
     '',
     '            Grok Build may run or modify contents in this directory,',
     '                             posing security risks.',

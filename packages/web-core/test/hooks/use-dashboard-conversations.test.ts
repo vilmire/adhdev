@@ -180,7 +180,7 @@ describe('dedupeChatIdes', () => {
 
 describe('mesh ghost-tab dedup → build pipeline', () => {
     const machineDaemons: DaemonData[] = [
-        { id: 'coord-daemon', daemonId: 'coord-daemon', type: 'adhdev-daemon', machineNickname: 'vilmireui-MacBookAir-4' } as unknown as DaemonData,
+        { id: 'coord-daemon', daemonId: 'coord-daemon', type: 'adhdev-daemon', machineNickname: 'user-DevMac-4' } as unknown as DaemonData,
         { id: 'worker-daemon', daemonId: 'worker-daemon', type: 'adhdev-daemon', machineNickname: 'M1-Server' } as unknown as DaemonData,
     ]
 
@@ -215,7 +215,7 @@ describe('mesh ghost-tab dedup → build pipeline', () => {
         expect(conversations).toHaveLength(1)
         // Labeled with the REMOTE worker machine, never the coordinator's local machine.
         expect(conversations[0]?.machineName).toBe('M1-Server')
-        expect(conversations[0]?.machineName).not.toBe('vilmireui-MacBookAir-4')
+        expect(conversations[0]?.machineName).not.toBe('user-DevMac-4')
     })
 
     it('labels the single tab with the worker machine even when coordinator attribution failed', () => {
@@ -249,7 +249,7 @@ describe('mesh ghost-tab dedup → build pipeline', () => {
 
         expect(conversations).toHaveLength(1)
         expect(conversations[0]?.machineName).toBe('M1-Server')
-        expect(conversations[0]?.machineName).not.toBe('vilmireui-MacBookAir-4')
+        expect(conversations[0]?.machineName).not.toBe('user-DevMac-4')
     })
 
     it('keeps a genuine local session labeled with its own machine and as its own tab', () => {
@@ -276,7 +276,7 @@ describe('mesh ghost-tab dedup → build pipeline', () => {
 
         expect(conversations).toHaveLength(2)
         const byMachine = conversations.map(c => c.machineName).sort()
-        expect(byMachine).toEqual(['M1-Server', 'vilmireui-MacBookAir-4'])
+        expect(byMachine).toEqual(['M1-Server', 'user-DevMac-4'])
     })
 })
 

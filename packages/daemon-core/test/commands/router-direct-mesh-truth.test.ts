@@ -53,8 +53,8 @@ function createRouter(
 
 const REMOTE_GIT_STATUS = {
   isGitRepo: true,
-  workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-  repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+  workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+  repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
   branch: 'main',
   ahead: 0,
   behind: 0,
@@ -98,8 +98,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
     const router = createRouter(dispatchMeshCommand)
     seedHeldGit(router, 'mesh_303', 'node_303', {
       isGitRepo: true,
-      workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-      repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+      repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
       branch: 'main',
       ahead: 0,
       behind: 6,
@@ -112,7 +112,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       headCommit: '710e11de',
       submodules: [{
         path: 'oss',
-        repoPath: '/Users/moltbot/.openclaw/workspace/projects/adhdev/oss',
+        repoPath: '/Users/botuser/.openclaw/workspace/projects/adhdev/oss',
         commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
         dirty: false,
         outOfSync: false,
@@ -135,8 +135,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
           id: 'node_303',
           daemonId: 'daemon-remote',
           machineId: 'machine-remote',
-          workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-          repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+          repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
           policy: {},
         },
       ],
@@ -335,8 +335,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
         policy: {},
       })
       const remoteNodeEntry = addNode(localMesh.id, {
-        workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-        repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+        repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
         daemonId: 'daemon-remote',
         machineId: 'machine-remote',
         policy: {},
@@ -346,8 +346,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       const router = createRouter(dispatchMeshCommand)
       seedHeldGit(router, localMesh.id, remoteNodeEntry!.id, {
           isGitRepo: true,
-          workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-          repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+          repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
           branch: 'main',
           ahead: 0,
           behind: 0,
@@ -360,7 +360,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
           headCommit: '5aa1284d',
           submodules: [{
             path: 'oss',
-            repoPath: '/Users/moltbot/.openclaw/workspace/projects/adhdev/oss',
+            repoPath: '/Users/botuser/.openclaw/workspace/projects/adhdev/oss',
             commit: '2ec6a14d6668b75318da109413505b92749d4f7c',
             dirty: false,
             outOfSync: false,
@@ -405,7 +405,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       expect(result.mesh.nodes).toHaveLength(2)
       expect(result.mesh.nodes.map((node: any) => node.workspace)).toEqual([
         localRepo,
-        '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        '/Users/botuser/.openclaw/workspace/projects/adhdev',
       ])
       const remoteNode = result.mesh.nodes.find((node: any) => node.id === remoteNodeEntry?.id)
       expect(remoteNode?.lastGit?.status?.submodules).toMatchObject([
@@ -429,8 +429,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
 
     const remoteGit = {
       isGitRepo: true,
-      workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-      repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+      repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
       branch: 'main',
       ahead: 0,
       behind: 6,
@@ -443,7 +443,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       headCommit: '710e11de',
       submodules: [{
         path: 'oss',
-        repoPath: '/Users/moltbot/.openclaw/workspace/projects/adhdev/oss',
+        repoPath: '/Users/botuser/.openclaw/workspace/projects/adhdev/oss',
         commit: 'c3c722f858bd0a01652ed7d9d5de25b27d233b8a',
         dirty: false,
         outOfSync: false,
@@ -470,8 +470,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
           id: 'node_303',
           daemonId: 'daemon-remote',
           machineId: 'machine-remote',
-          workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-          repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+          workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+          repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
           policy: {},
         },
       ],
@@ -521,8 +521,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
 
     const remoteGit = {
       isGitRepo: true,
-      workspace: '/Users/moltbot/Documents/Work/adhdev',
-      repoRoot: '/Users/moltbot/Documents/Work/adhdev',
+      workspace: '/Users/botuser/Documents/Work/adhdev',
+      repoRoot: '/Users/botuser/Documents/Work/adhdev',
       branch: 'main',
       upstream: 'origin/main',
       upstreamStatus: 'fresh',
@@ -538,7 +538,7 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
       headCommit: '4909dcbf',
       submodules: [{
         path: 'oss',
-        repoPath: '/Users/moltbot/Documents/Work/adhdev/oss',
+        repoPath: '/Users/botuser/Documents/Work/adhdev/oss',
         commit: '3fbbafedb5ad21ce1fcae815b5909873bb176fdf',
         dirty: false,
         outOfSync: false,
@@ -567,8 +567,8 @@ describe('DaemonCommandRouter direct Repo Mesh truth', () => {
           id: 'node_117',
           daemonId: 'daemon-remote',
           machineId: 'machine-remote',
-          workspace: '/Users/moltbot/Documents/Work/adhdev',
-          repoRoot: '/Users/moltbot/Documents/Work/adhdev',
+          workspace: '/Users/botuser/Documents/Work/adhdev',
+          repoRoot: '/Users/botuser/Documents/Work/adhdev',
           policy: {},
         },
       ],

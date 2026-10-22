@@ -5,7 +5,7 @@ import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js'
 
 // D4 — AUTH-EXPIRY-GENERALIZATION.
 //
-// Live incident: claude-cli session b23d10ee (Jupiter) answered
+// Live incident: claude-cli session b23d10ee (BuildBox) answered
 // "Login expired · Please run /login" in 34s with finalContentLength 0 on
 // 2026-09-20, then stayed dispatch-eligible and swallowed task 1c225a59 on
 // 09-21 with the identical empty fingerprint.

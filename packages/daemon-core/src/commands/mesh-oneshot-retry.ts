@@ -5,7 +5,7 @@
  *
  * ── The gap this closes ───────────────────────────────────────────────────
  * Live (2026-10-10): an ops script fired `restart_daemon_node` once at a
- * MoltBook node whose ICE link had just dropped. The daemon's own ICE-disconnect
+ * DevLaptop node whose ICE link had just dropped. The daemon's own ICE-disconnect
  * detection takes 15-30s to notice and recover; the P2P ACK timeout
  * (mesh-rpc-protocol.ts ACK_TIMEOUT_MS) is a flat 10s. So there is a "blackhole
  * window" — roughly [10s, 30s] after a disconnect — where a command sent lands

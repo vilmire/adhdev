@@ -339,7 +339,7 @@ export function revokeWorkerSessionBind(bind: string): boolean {
  *
  * ★A row whose session IS in the live-runtime list but is NOT registered here
  * is KEPT (`deferred`), neither adopted nor pruned. That is a restore that
- * failed for this daemon (live 2026-10-08, Jupiter: `ghostty-vt binding
+ * failed for this daemon (live 2026-10-08, BuildBox: `ghostty-vt binding
  * unavailable` on the 1.0.77 → 1.0.78-rc.1 upgrade) while the worker process
  * kept running in the session host. Pruning it there made the worker's
  * spawn-time bind permanently unknown: a later restore re-registered the

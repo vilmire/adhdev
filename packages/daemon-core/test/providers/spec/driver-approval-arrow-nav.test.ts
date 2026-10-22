@@ -127,7 +127,7 @@ describe('FsmDriver — approval modal arrow-nav SELECT', () => {
         expect(sent).toEqual(expectKeys([`${UP}${UP}`, '\r']));
     });
 
-    // MESHAPPROVE-STALE-MODAL (live 2026-09-18, MoltBook claude-cli): this case
+    // MESHAPPROVE-STALE-MODAL (live 2026-09-18, DevLaptop claude-cli): this case
     // USED to "fall back to stepping down from row 1", on the assumption that a
     // missing cursor marker just meant the marker was not rendered yet. Live
     // measurement disproved it: an `arrow_keys` picker always paints `❯` on its

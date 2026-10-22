@@ -56,7 +56,7 @@ function authoritativeDaemon(): DaemonData {
     status: 'online',
     _sessionListAuthoritative: true,
     machine: {
-      hostname: 'vilmireui-MacBookAir-4',
+      hostname: 'user-DevMac-4',
       platform: 'darwin',
       arch: 'arm64',
       cpus: 8,
@@ -131,9 +131,9 @@ function pendingFor(api: { panels: Array<{ id: string }> }, visibleTabKeys: stri
 describe('authoritative dock prune of stored ghost tabs', () => {
   it('drops the seven 000300 panels on the first authoritative snapshot and persists that layout', () => {
     const sessions = [
-      cliEntry(LIVE_ASSISTANT, '/Users/vilmire/.adhdev-preview/assistant', { assistant: true }),
-      cliEntry(LIVE_ADHDEV, '/Users/vilmire/Work/adhdev', { coordinator: { meshId: 'mesh_271444af', role: 'coordinator' } }),
-      cliEntry(LIVE_BATRP, '/Users/vilmire/Work/BATRP', { coordinator: { meshId: 'mesh_dbe0718d', role: 'coordinator' } }),
+      cliEntry(LIVE_ASSISTANT, '/Users/dev/.adhdev-preview/assistant', { assistant: true }),
+      cliEntry(LIVE_ADHDEV, '/Users/dev/Work/adhdev', { coordinator: { meshId: 'mesh_271444af', role: 'coordinator' } }),
+      cliEntry(LIVE_BATRP, '/Users/dev/Work/BATRP', { coordinator: { meshId: 'mesh_dbe0718d', role: 'coordinator' } }),
     ]
     const ides = [authoritativeDaemon(), ...sessions]
     const conversations = buildConversations(sessions, ides)
@@ -179,7 +179,7 @@ describe('authoritative dock prune of stored ghost tabs', () => {
 
   it('grace-timeout early return leaves no stored ghosts when the retain ref is already null', () => {
     const sessions = [
-      cliEntry(LIVE_ASSISTANT, '/Users/vilmire/.adhdev-preview/assistant', { assistant: true }),
+      cliEntry(LIVE_ASSISTANT, '/Users/dev/.adhdev-preview/assistant', { assistant: true }),
     ]
     const conversations = buildConversations(sessions, [authoritativeDaemon(), ...sessions])
     const api = restoredFromJSON(STORED_GHOSTS)
@@ -200,8 +200,8 @@ describe('authoritative dock prune of stored ghost tabs', () => {
     const otherLive = 'fe3587e9-8d8a-4bf5-9c00-4889ea5d77c9'
     const storedGhost = '0997c202-02cc-496e-9463-76cc42f3548a'
     const sessions = [
-      cliEntry(sameBasename, '/Users/vilmire/Work/adhdev'),
-      cliEntry(otherLive, '/Users/vilmire/Work/adhdev'),
+      cliEntry(sameBasename, '/Users/dev/Work/adhdev'),
+      cliEntry(otherLive, '/Users/dev/Work/adhdev'),
     ]
     const ides = [authoritativeDaemon(), ...sessions]
     const conversations = buildConversations(sessions, ides)

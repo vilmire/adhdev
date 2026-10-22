@@ -443,7 +443,7 @@ describe('antigravity-cli coordinator per-turn context_file lifecycle & >24KB sp
       const basePrompt = buildCoordinatorSystemPrompt({
         mesh: {
           id: 'mesh_prefex',
-          name: 'MoltBook Prefex',
+          name: 'DevLaptop Prefex',
           repoIdentity: 'github.com/acme/prefex',
           nodes: [{ id: 'node_1', workspace: ws, daemonId: 'daemon_1', userOverrides: {}, policy: {} }],
           createdAt: '2026-01-01T00:00:00Z',

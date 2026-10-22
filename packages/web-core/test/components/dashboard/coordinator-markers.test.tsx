@@ -44,7 +44,7 @@ function conversation(overrides: Partial<ActiveConversation> = {}): ActiveConver
         displaySecondary: 'Claude Code',
         streamSource: 'native',
         tabKey: 'tab-1',
-        machineName: 'vilmire-MacBookAir',
+        machineName: 'dev-DevMac',
         connectionState: 'connected',
         ...overrides,
     }

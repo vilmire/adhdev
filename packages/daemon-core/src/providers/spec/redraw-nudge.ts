@@ -1,7 +1,7 @@
 /**
  * REDRAW-NUDGE — generic false-busy recovery for PTY-driven spec sessions.
  *
- * Live defect (preview, 2026-09-24, antigravity-cli on MoltBook): a worker
+ * Live defect (preview, 2026-09-24, antigravity-cli on DevLaptop): a worker
  * finished its turn, but the terminal emulator's screen was left in a garbled
  * frame — a stale `⡿  Running command...` spinner line and a stale
  * `esc to cancel` row from an earlier frame, the cursor parked at (0,0), and

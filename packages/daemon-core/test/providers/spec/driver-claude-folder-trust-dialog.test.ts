@@ -1,7 +1,7 @@
 /**
  * claude-cli folder-trust dialog (Claude Code 2.1.295/2.1.296).
  *
- * Live defect, 2026-10-10 (MainPC, win32): the dialog is now an UNNUMBERED
+ * Live defect, 2026-10-10 (DesktopA, win32): the dialog is now an UNNUMBERED
  * cursor list with the refusal first and focused. →approval needs a `1.` row,
  * so nothing matched; startup-grace carried the session to `idle` with the
  * dialog still on screen, the dashboard showed a ready session with no approval
@@ -45,7 +45,7 @@ function trustDialog(rows: string[]): string[] {
         RULE,
         ' Accessing workspace:',
         '',
-        ' C:\\Users\\vilmi\\.adhdev-preview\\assistant',
+        ' C:\\Users\\dev\\.adhdev-preview\\assistant',
         '',
         ' Quick safety check: Is this a project you created or one you trust? (Like your',
         ' own code, a well-known open source project, or work from your team). If not,',
@@ -131,7 +131,7 @@ describe('claude-cli spec — folder-trust dialog', () => {
             [2, 'Yes, I trust this folder', false],
         ]);
         expect(modal?.title).toContain('Accessing workspace:');
-        expect(modal?.title).toContain('C:\\Users\\vilmi\\.adhdev-preview\\assistant');
+        expect(modal?.title).toContain('C:\\Users\\dev\\.adhdev-preview\\assistant');
 
         const numbered = DIALOG_NUMBERED.join('\n');
         const m2 = deriveModal(st, resolveSections(spec.sections, DIALOG_NUMBERED, { row: 0, col: 0 }), numbered, () => {});

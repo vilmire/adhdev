@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * Answer buttons for an assistant question (2026-10-18 review: the assistant
- * asked "bring MainPC online, or stop?" and the owner had to type the answer).
+ * asked "bring DesktopA online, or stop?" and the owner had to type the answer).
  */
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -13,11 +13,11 @@ import { resolveChatRow } from '../../src/components/ChatMessageList/chat-row-mo
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- loose props for render helpers
 type Loose = ComponentType<any>
-const question = 'batrp is blocked on MainPC.\n\nWhat should I do?\n[[choices: Bring MainPC online | Stop the migration]]'
+const question = 'batrp is blocked on DesktopA.\n\nWhat should I do?\n[[choices: Bring DesktopA online | Stop the migration]]'
 
 describe('extractReplyChoices', () => {
     it('takes the options from the last line and strips it', () => {
-        expect(extractReplyChoices(question)).toEqual({ text: 'batrp is blocked on MainPC.\n\nWhat should I do?', choices: ['Bring MainPC online', 'Stop the migration'] })
+        expect(extractReplyChoices(question)).toEqual({ text: 'batrp is blocked on DesktopA.\n\nWhat should I do?', choices: ['Bring DesktopA online', 'Stop the migration'] })
     })
     it('ignores a choices line that is not last, and plain text', () => {
         expect(extractReplyChoices('[[choices: a | b]]\nmore text').choices).toEqual([])
@@ -28,7 +28,7 @@ describe('extractReplyChoices', () => {
     })
     it('the row model hides the line from the assistant bubble', () => {
         const row = resolveChatRow({ role: 'assistant', content: question } as never)
-        expect(row.replyChoices).toEqual(['Bring MainPC online', 'Stop the migration'])
+        expect(row.replyChoices).toEqual(['Bring DesktopA online', 'Stop the migration'])
         expect('text' in row.body && row.body.text).not.toContain('[[choices')
     })
 })
@@ -44,7 +44,7 @@ describe('ChatMessageList answer buttons', () => {
     it('shows the options under the latest assistant question and sends the tapped one', () => {
         const onChooseReply = vi.fn()
         render([{ role: 'user', content: 'status?' }, { role: 'assistant', content: question }], { onChooseReply })
-        expect(buttons().map(b => b.textContent)).toEqual(['Bring MainPC online', 'Stop the migration'])
+        expect(buttons().map(b => b.textContent)).toEqual(['Bring DesktopA online', 'Stop the migration'])
         expect(container.textContent).not.toContain('[[choices')
         act(() => buttons()[1]!.click())
         expect(onChooseReply).toHaveBeenCalledWith('Stop the migration')

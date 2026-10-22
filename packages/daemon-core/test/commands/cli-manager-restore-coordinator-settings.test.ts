@@ -356,8 +356,8 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     expect(context.settings.meshActiveDispatchNonce).toBeUndefined();
   }, 15000);
 
-  // Live 2026-10-08 (preview 1.0.79-rc.1): a claude-cli worker on Jupiter whose
-  // task the Mac owned survived a forced restart of Jupiter's daemon with its
+  // Live 2026-10-08 (preview 1.0.79-rc.1): a claude-cli worker on BuildBox whose
+  // task the Mac owned survived a forced restart of BuildBox's daemon with its
   // bind intact, but its report_completion was refused "the bind is live, but its
   // session holds no assigned task here" — the restored settings had membership
   // and no meshCoordinatorDaemonId, so the remote-owner forward path could not
@@ -382,7 +382,7 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     expect(plain?.settings.meshCoordinatorDaemonId).toBeUndefined();
   }, 15000);
 
-  // Live 2026-10-09 (preview): the same Jupiter worker restarted MID-TURN. The
+  // Live 2026-10-09 (preview): the same BuildBox worker restarted MID-TURN. The
   // restored session had membership + owner but no attempt ref, so its idle edge
   // was an untagged turn_end the worker ledger refused to forward
   // (forward_without_attempt_ref) and the Mac logged "no idle edge within 60s of

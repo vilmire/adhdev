@@ -200,7 +200,7 @@ describe('★ the core contract — N worktrees on one daemon SHARE a maxParalle
         occupy(meshId, [[BASE, 'claude-cli', 'opus', 1], [WT_1, 'claude-cli', 'opus', 1]]);
         addPending(meshId, 'pending_1');
 
-        // …but MainPC/MoltBook/Jupiter each have their own CPU, auth file and rate
+        // …but DesktopA/DevLaptop/BuildBox each have their own CPU, auth file and rate
         // limit. This is a machine axis, NOT a mesh-global one.
         const claimed = claimNextTask(meshId, REMOTE, 'sess_remote', [], {
             providerType: 'claude-cli',

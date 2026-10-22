@@ -186,7 +186,7 @@ describe('helpers', () => {
 });
 
 /**
- * Live defect 2026-10-10 (MainPC, win32, Claude Code 2.1.295): the daemon logged
+ * Live defect 2026-10-10 (DesktopA, win32, Claude Code 2.1.295): the daemon logged
  * "pre-trusted workspace C:\Users\…\assistant" and the CLI still opened its
  * folder-trust dialog. Claude Code keys `projects` by the forward-slashed path
  * on Windows; `~/.claude.json` ended up with both `C:\\Users\\…` (ours, one
@@ -196,9 +196,9 @@ describe('win32 project key', () => {
     const { claudeProjectKey, claudeConfigDir } = __test__;
 
     it('uses the forward-slashed key Claude Code looks up on Windows', () => {
-        expect(claudeProjectKey('C:\\Users\\vilmi\\.adhdev-preview\\assistant', 'win32'))
-            .toBe('C:/Users/vilmi/.adhdev-preview/assistant');
-        expect(claudeProjectKey('C:\\Users\\vilmi\\repo\\', 'win32')).toBe('C:/Users/vilmi/repo/');
+        expect(claudeProjectKey('C:\\Users\\dev\\.adhdev-preview\\assistant', 'win32'))
+            .toBe('C:/Users/dev/.adhdev-preview/assistant');
+        expect(claudeProjectKey('C:\\Users\\dev\\repo\\', 'win32')).toBe('C:/Users/dev/repo/');
         expect(claudeProjectKey('\\\\server\\share\\repo', 'win32')).toBe('//server/share/repo');
     });
 

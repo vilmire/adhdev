@@ -520,7 +520,7 @@ export interface CliSpecV4 {
          */
         win32_input_mode_non_ascii?: boolean;
         /**
-         * BLANK-ENTER-PILEUP (2026-10-10, Jupiter live sample): the verified-submit
+         * BLANK-ENTER-PILEUP (2026-10-10, BuildBox live sample): the verified-submit
          * resend loop (scheduleVerifiedSubmit) used to fire a FIXED
          * WIN32_SUBMIT_MAX_RESENDS(14) submit-key attempts on a flat
          * WIN32_SUBMIT_RESEND_GAP_MS(350) cadence regardless of how long this CLI

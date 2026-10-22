@@ -3,7 +3,7 @@
  *
  * The assistant prompt (daemon-core assistant-prompt.ts, Style) asks it to end
  * a question that has a few fixed answers with ONE last line:
- *   [[choices: Bring MainPC online | Stop the migration]]
+ *   [[choices: Bring DesktopA online | Stop the migration]]
  * The line is never shown; the chat offers the options as buttons under the
  * latest assistant message, and a tap sends that option as the owner's reply.
  *

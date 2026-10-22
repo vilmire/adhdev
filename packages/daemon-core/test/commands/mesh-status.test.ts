@@ -1190,7 +1190,7 @@ describe('mesh_status', () => {
   it('returns cached coordinator-owned aggregate mesh_status without refreshing peer git on default requests', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-cache-')
     try {
-      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const remoteWorkspace = '/Users/botuser/.openclaw/workspace/projects/adhdev'
       const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
         if (command !== 'git_status') return { success: false, error: 'not handled' }
         return {
@@ -1605,7 +1605,7 @@ describe('mesh_status', () => {
   it('a stale pending cache is replaced by the held truth once the background probe lands (no request-path probe)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-stale-cache-refresh-')
     try {
-      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const remoteWorkspace = '/Users/botuser/.openclaw/workspace/projects/adhdev'
       let allowRemoteGit = false
       const dispatchMeshCommand = vi.fn(async (_daemonId: string, command: string) => {
         if (command !== 'git_status') return { success: false, error: 'not handled' }
@@ -1711,7 +1711,7 @@ describe('mesh_status', () => {
   it('hydrates a cached pending aggregate from later inline live git truth before returning cache hits', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-cache-hydrate-')
     try {
-      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const remoteWorkspace = '/Users/botuser/.openclaw/workspace/projects/adhdev'
       const { router, sessionHostControl } = createRouter()
       const pendingInlineMesh = {
         id: 'mesh_cache_hydrate',
@@ -2050,7 +2050,7 @@ describe('mesh_status', () => {
   it('an explicit refresh answers from held truth and never hard-fails on an unreachable peer (no request-path probe)', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-single-aggregate-')
     try {
-      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const remoteWorkspace = '/Users/botuser/.openclaw/workspace/projects/adhdev'
       const failedDaemonId = '9f061b89ce435a06666a3e70db28d6230b1b3081b370fbd5766e631ea0a6e78d'
       const heldRemoteGit = {
         isGitRepo: true,
@@ -2191,7 +2191,7 @@ describe('mesh_status', () => {
   it('default (non-refresh) load renders the graph from held standing-state truth without fanning out to a slow peer', async () => {
     const { dir, repoRoot } = await createTempGitRepo('mesh-status-standing-state-default-')
     try {
-      const remoteWorkspace = '/Users/moltbot/.openclaw/workspace/projects/adhdev'
+      const remoteWorkspace = '/Users/botuser/.openclaw/workspace/projects/adhdev'
       // Any fan-out would call this and (like a slow/TURN-relayed peer) hang or
       // throw. The default load must not call it at all.
       const dispatchMeshCommand = vi.fn(async () => {
@@ -2700,8 +2700,8 @@ describe('inline mesh node tombstone', () => {
             id: 'node_remote_pending',
             daemonId: 'daemon_remote',
             machineLabel: 'Remote',
-            workspace: '/Users/moltbot/does-not-exist-locally/repo',
-            repoRoot: '/Users/moltbot/does-not-exist-locally/repo',
+            workspace: '/Users/botuser/does-not-exist-locally/repo',
+            repoRoot: '/Users/botuser/does-not-exist-locally/repo',
             machineStatus: 'online',
             providers: [],
             policy: {},
@@ -2760,8 +2760,8 @@ describe('inline mesh node tombstone', () => {
             id: 'node_remote_pending',
             daemonId: 'daemon_remote',
             machineLabel: 'Remote',
-            workspace: '/Users/moltbot/does-not-exist-locally/repo',
-            repoRoot: '/Users/moltbot/does-not-exist-locally/repo',
+            workspace: '/Users/botuser/does-not-exist-locally/repo',
+            repoRoot: '/Users/botuser/does-not-exist-locally/repo',
             machineStatus: 'online',
             providers: [],
             policy: {},

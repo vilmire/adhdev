@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { detectAuthFailureOnlyReply, detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js'
 
 // Live incident 2026-10-06 (preview mesh): three delegated claude-cli workers
-// (MainPC win32, MoltBook darwin, Jupiter linux) answered a task with ONLY
+// (DesktopA win32, DevLaptop darwin, BuildBox linux) answered a task with ONLY
 //   "Login expired · Please run /login"
-// and the MainPC task was then committed `task_completed` (weak_end_confirmed).
+// and the DesktopA task was then committed `task_completed` (weak_end_confirmed).
 // The turn's final reply is the verdict input here, so the bar is stricter than
 // detectProviderFailure: the WHOLE reply must be auth-failure wording. A
 // completed turn whose summary merely mentions the banner must never be failed.

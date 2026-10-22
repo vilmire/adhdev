@@ -68,11 +68,11 @@ describe('machinesSummary — remote hosts', () => {
         ];
         const out = machinesSummary(meshes, 'daemon_mach_self', undefined, [
             { daemonId: 'daemon_mach_host', label: 'host-label' },
-            { daemonId: 'daemon_mach_other', label: 'jupiter' },
+            { daemonId: 'daemon_mach_other', label: 'buildbox' },
             { daemonId: null, label: 'unknown host' },
             { daemonId: 'mach_self', label: 'me' },
         ]);
-        expect(out.map((m) => [m.label, m.self])).toEqual([['this machine', true], ['jupiter', false], ['mac-studio', false]]);
+        expect(out.map((m) => [m.label, m.self])).toEqual([['this machine', true], ['buildbox', false], ['mac-studio', false]]);
     });
 });
 

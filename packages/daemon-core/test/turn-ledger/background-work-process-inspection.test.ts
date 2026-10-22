@@ -516,20 +516,20 @@ describe('7b & 7c: provider lazy sidecars (codex-code-mode-host) and macOS MAXCO
   it('7c: macOS 16-char MAXCOMLEN truncated comm prefers argv[0] from args without leaking arguments', () => {
     // Prompt regression case: truncated comm with args `/Users/x/.nvm/versions/node/v22/bin/node script.js` → "node"
     expect(sanitizeProcessCommandName('/Users/x/.nvm/ve', '/Users/x/.nvm/versions/node/v22/bin/node script.js')).toBe('node');
-    // Live standalone case: comm `/Users/vilmire/.` (basename ".") with full node/codex args → "node", never "."
-    expect(sanitizeProcessCommandName('/Users/vilmire/.', '/Users/vilmire/.nvm/versions/node/v22.17.0/bin/node /repo/script.js --secret=123')).toBe('node');
+    // Live standalone case: comm `/Users/devuser/.` (basename ".") with full node/codex args → "node", never "."
+    expect(sanitizeProcessCommandName('/Users/devuser/.', '/Users/devuser/.nvm/versions/node/v22.17.0/bin/node /repo/script.js --secret=123')).toBe('node');
     // Truncated binary name in comm with full binary name in args:
     expect(sanitizeProcessCommandName('codex-code-mode-', '/opt/codex/bin/codex-code-mode-host --token=secret')).toBe('codex-code-mode-host');
     // Bare "." without args falls back to "unknown", never "."
-    expect(sanitizeProcessCommandName('/Users/vilmire/.')).toBe('unknown');
+    expect(sanitizeProcessCommandName('/Users/devuser/.')).toBe('unknown');
 
-    // Full tree inspection when macOS ps -o comm= truncates paths to `/Users/vilmire/.`:
+    // Full tree inspection when macOS ps -o comm= truncates paths to `/Users/devuser/.`:
     const macTruncatedTable: ProcessNodeInfo[] = [
       { pid: 100, ppid: 1, comm: '-zsh', args: '-zsh' },
-      { pid: 101, ppid: 100, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/bin/node /Users/vilmire/.nvm/versions/node/v22/lib/node_modules/@openai/codex/bin/codex.js' },
-      { pid: 102, ppid: 101, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex' },
-      { pid: 103, ppid: 102, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex-code-mode-host' },
-      { pid: 110, ppid: 102, comm: '/Users/vilmire/.', args: '/Users/vilmire/.nvm/versions/node/v22/bin/node script.js --secret=xyz' },
+      { pid: 101, ppid: 100, comm: '/Users/devuser/.', args: '/Users/devuser/.nvm/versions/node/v22/bin/node /Users/devuser/.nvm/versions/node/v22/lib/node_modules/@openai/codex/bin/codex.js' },
+      { pid: 102, ppid: 101, comm: '/Users/devuser/.', args: '/Users/devuser/.nvm/versions/node/v22/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex' },
+      { pid: 103, ppid: 102, comm: '/Users/devuser/.', args: '/Users/devuser/.nvm/versions/node/v22/lib/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex-code-mode-host' },
+      { pid: 110, ppid: 102, comm: '/Users/devuser/.', args: '/Users/devuser/.nvm/versions/node/v22/bin/node script.js --secret=xyz' },
     ];
     expect(names(macTruncatedTable)).toEqual(['node']);
   });

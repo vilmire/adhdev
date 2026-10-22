@@ -52,7 +52,7 @@ const COMMAND_MODAL = [
     '   $ touch /tmp/kimi-modal-probe.txt',
     ' ──────────────────────────────────────────────────────────────────────────────',
     '   ▶ Run this command?',
-    '   cwd: /Users/vilmire/Work/adhdev',
+    '   cwd: /Users/dev/Work/adhdev',
     '   $ touch /tmp/kimi-modal-probe.txt',
     '   ▶ 1. Approve once',
     '     2. Approve for this session',

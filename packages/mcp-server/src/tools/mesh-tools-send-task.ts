@@ -771,7 +771,7 @@ async function resolveDirectDispatchTarget(
     // QUOTA GATE (direct dispatch, local session) — preview rc.43 run 10: see
     // checkDirectDispatchQuotaGate's doc comment (mesh-remote-dispatch.ts). This is
     // the exact case that motivated the fix — a LOCAL explicit session_id dispatch
-    // to a MainPC worker whose provider had already reported "session limit" — so
+    // to a DesktopA worker whose provider had already reported "session limit" — so
     // it is checked as early as the provider is known, before the delivery
     // admission gate and before anything is sent.
     if (!req.allowQuotaExhausted) {

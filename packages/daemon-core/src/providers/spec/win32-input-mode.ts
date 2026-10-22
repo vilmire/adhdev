@@ -2,7 +2,7 @@
  * win32 "win32-input-mode" encoding of non-ASCII body text (opt-in per spec via
  * `send_message.win32_input_mode_non_ascii`).
  *
- * WHY (live, preview fleet, 2026-10-09, MainPC win32 + agy 1.3.x): antigravity
+ * WHY (live, preview fleet, 2026-10-09, DesktopA win32 + agy 1.3.x): antigravity
  * CLI (a Go/bubbletea TUI that reads console INPUT_RECORDs) silently drops every
  * non-ASCII character that is not a letter when it arrives as plain UTF-8 through
  * ConPTY — `— – ‘ ’ “ ” … € ★ → ✓ · ×` and emoji vanished, while `é ñ ü ß Ω я 中

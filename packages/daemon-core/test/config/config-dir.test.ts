@@ -270,8 +270,8 @@ describe('resolveConfigDir test-runtime fail-fast gate', () => {
 // explicitly makes every fixture identical regardless of which OS runs the
 // suite.
 describe('isCrossTrackConfigDirOverride (cross-track uninstall-guard predicate)', () => {
-  const homeWin = 'C:\\Users\\vilmi';
-  const homePosix = '/home/vilmi';
+  const homeWin = 'C:\\Users\\dev';
+  const homePosix = '/home/dev';
 
   it('returns false when ADHDEV_CONFIG_DIR is unset', () => {
     expect(isCrossTrackConfigDirOverride({}, homePosix, 'linux')).toBe(false);
@@ -331,7 +331,7 @@ describe('isCrossTrackConfigDirOverride (cross-track uninstall-guard predicate)'
   });
 
   it('normalizes a trailing slash and mixed forward-slash override against a native win32 join', () => {
-    const withTrailingSlashAndForwardSlashes = 'C:/Users/vilmi/.adhdev-preview/';
+    const withTrailingSlashAndForwardSlashes = 'C:/Users/dev/.adhdev-preview/';
     expect(isCrossTrackConfigDirOverride({ ADHDEV_CONFIG_DIR: withTrailingSlashAndForwardSlashes, ADHDEV_BUILD_CHANNEL: 'stable' }, homeWin, 'win32')).toBe(true);
   });
 });
@@ -342,9 +342,9 @@ describe('isCrossTrackConfigDirOverride (cross-track uninstall-guard predicate)'
 // — same fully-injected style as isCrossTrackConfigDirOverride above — so no
 // process.env mutation or temp dirs are needed here either.
 describe('configDirChannelMismatch (config-dir/provider-channel axis warning)', () => {
-  const previewDir = posix.join('/home/vilmi', '.adhdev-preview');
-  const stableDir = posix.join('/home/vilmi', '.adhdev');
-  const customDir = posix.join('/home/vilmi', 'my-custom-config');
+  const previewDir = posix.join('/home/dev', '.adhdev-preview');
+  const stableDir = posix.join('/home/dev', '.adhdev');
+  const customDir = posix.join('/home/dev', 'my-custom-config');
 
   it('is silent when the config dir implies stable and the channel is stable', () => {
     expect(configDirChannelMismatch(stableDir, 'stable', false)).toBeNull();
@@ -473,14 +473,14 @@ describe('detectOccupiedConfigDir (inherited-config-dir occupancy)', () => {
 
   it('names the occupant, the dir, the risk and the escape hatch in the warning', () => {
     const message = formatOccupiedConfigDirWarning({
-      configDir: '/home/vilmi/.adhdev-preview',
+      configDir: '/home/dev/.adhdev-preview',
       pid: 24845,
       track: 'preview',
     });
     // The whole point of the fix: the 2026-08-21/22 incidents were misdiagnosed
     // because the cross-track write was silent. An unattributable warning would
     // repeat that failure, so pin the parts an operator needs.
-    expect(message).toContain('/home/vilmi/.adhdev-preview');
+    expect(message).toContain('/home/dev/.adhdev-preview');
     expect(message).toContain('24845');
     expect(message).toContain('meshes.json');
     expect(message).toContain(ALLOW_TRACK_MISMATCH_ENV_VAR);

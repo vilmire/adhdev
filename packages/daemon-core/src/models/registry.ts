@@ -149,7 +149,7 @@ export function getModelSnapshotDueReason(
 
     if (!recordedVersion) {
         // Legacy snapshots (`status === 'ok'` with no recorded `cliVersion`,
-        // like MainPC's 2026-10-18 discovery.json) are always treated as stale
+        // like DesktopA's 2026-10-18 discovery.json) are always treated as stale
         // so existing machines repair themselves on the next daemon start
         // without manual file deletion. Non-ok snapshots with no version also
         // invalidate as soon as a CLI version is detected.

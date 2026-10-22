@@ -51,7 +51,7 @@ Enter to select
   })
 
   // PERMANENT mesh_answer_question FAILURE ON WRAPPED QUESTIONS (live defect,
-  // 2026-09-18, Jupiter / claude-cli, session 10717dca).
+  // 2026-09-18, BuildBox / claude-cli, session 10717dca).
   //
   // A question too wide for the TUI wraps onto a second physical row, and
   // claude draws that continuation flush-left starting with a bare box

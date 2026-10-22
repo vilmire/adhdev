@@ -604,7 +604,7 @@ describe('fetchAntigravityQuota', () => {
     });
 
     it('reports unsupported on unrecognized platforms WITHOUT touching any credential store', async () => {
-        // linux moved to the file-source tests below (Jupiter survey
+        // linux moved to the file-source tests below (BuildBox survey
         // f24cc9bb). freebsd stays the honest "not this OS" case.
         for (const platform of ['freebsd', 'android']) {
             const spawn = stubSpawn(keyringBlob(credentialPayload()));
@@ -629,7 +629,7 @@ describe('fetchAntigravityQuota', () => {
         expect(other.error).toMatch(/freebsd/);
     });
 
-    // ── linux file source (Jupiter survey f24cc9bb) ──────────────────────
+    // ── linux file source (BuildBox survey f24cc9bb) ──────────────────────
     // Injection tests: reverting the linux branch of readCredentials to
     // `unsupported-platform` turns these red. HOME is a sentinel path and
     // the bytes come from deps.readFile — never the live token file.

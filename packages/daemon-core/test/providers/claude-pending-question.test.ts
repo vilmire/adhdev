@@ -2,7 +2,7 @@
  * claude-pending-question — native JSONL AskUserQuestion pending detector.
  *
  * Record shapes below are the LITERAL live Claude Code transcript shapes,
- * captured from ~/.claude/projects/-Users-vilmire-Work-adhdev/
+ * captured from ~/.claude/projects/-Users-dev-Work-adhdev/
  * f0ef0fb3-928c-4337-a2ad-5466b45f9bd6.jsonl (plain TUI session, no
  * --ax-screen-reader):
  *
@@ -37,7 +37,7 @@ function askUseRow(toolUseId: string, questions: unknown[], timestamp = '2026-09
         uuid: `uuid-${toolUseId}`,
         timestamp,
         sessionId: 'f0ef0fb3-928c-4337-a2ad-5466b45f9bd6',
-        cwd: '/Users/vilmire/Work/adhdev',
+        cwd: '/Users/dev/Work/adhdev',
         message: {
             id: `msg_${toolUseId}`,
             role: 'assistant',

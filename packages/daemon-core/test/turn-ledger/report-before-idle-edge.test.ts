@@ -6,7 +6,7 @@ import { observeAcceptedWorkerReport } from '../../src/mesh/turn-ledger/worker-r
 import { LIVE_IDLE, T0, dispatch, evd, fakePublisher, ledgerOn, memDb, recordingHost, recordingPorts, rowsOf } from './ledger-harness.js';
 
 // Live preview rc.44, run 12 (2026-09-24 UTC, owner ledger, attempt
-// mesh_direct:081e9cb8…, MainPC claude-cli worker with a live worker-MCP bind):
+// mesh_direct:081e9cb8…, DesktopA claude-cli worker with a live worker-MCP bind):
 //   15:07:12 turn_started R4 → 15:07:19 progress → 15:07:34 turn_end R9r (false
 //   idle during `sleep 300`, await_report 600 s — correct) → 15:12:25
 //   turn_started R12r (correct) → 15:12:29 progress → 15:12:36 report ACCEPTED

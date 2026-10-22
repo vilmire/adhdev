@@ -54,7 +54,7 @@ describe('isPhantomDaemonEntry', () => {
     // Condition (2) is the safety condition: a legacy / not-yet-reauthed daemon
     // keyed by a raw DO id that ACTUALLY reports itself must still render.
     it.each([
-        ['machineNickname', { machineNickname: 'vilmireui-MacBookAir-4' }],
+        ['machineNickname', { machineNickname: 'user-DevMac-4' }],
         ['nickname', { nickname: 'work-laptop' }],
         ['hostname', { hostname: 'macbook.local' }],
         ['platform', { platform: 'darwin' }],

@@ -23,7 +23,7 @@ describe('opencode quota lineage', () => {
 
   it('isolates a different store', () => {
     const a = readOpencodeQuotaAccountLineage({ env: { HOME: '/home/u' } })
-    const other = readOpencodeQuotaAccountLineage({ env: { HOME: '/home/v' } })
+    const other = readOpencodeQuotaAccountLineage({ env: { HOME: '/home/dev' } })
     expect(other).not.toEqual(a)
     expect(canTransferQuotaReading(reading(a), reading(other))).toBe(false)
   })

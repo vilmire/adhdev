@@ -23,23 +23,23 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 // Finding B — enqueue now delivers only through a claim — but dispatchToRemoteNode's
 // provider resolution, which the fix hardened, is exercised directly below.)
 //
-// LIVE REPRO (2026-09-21, task 1c225a59, node Jupiter). Three consecutive ledger entries:
+// LIVE REPRO (2026-09-21, task 1c225a59, node BuildBox). Three consecutive ledger entries:
 //   ① session_auto_launch  phase=skipped  reason=task_difficulty_floor_unavailable:medium
-//        — Jupiter's antigravity-cli slot is difficulty:["easy"], so no antigravity slot
+//        — BuildBox's antigravity-cli slot is difficulty:["easy"], so no antigravity slot
 //          could take a `medium` task. Auto-launch was RIGHT to skip.
 //   ② task_dispatched      via=p2p_direct  providerType=claude-cli   ← ★the pin is gone
 //   ③ task_completed       finalContentLength=0, evidenceLevel=insufficient (34s)
 //
 // MECHANISM (three links, each individually reasonable):
 //   1. buildMeshNodeCapabilityTags(node) with NO provider pinned advertises a
-//      `provider=<type>` tag for EVERY slot the node declares. Jupiter declares
+//      `provider=<type>` tag for EVERY slot the node declares. BuildBox declares
 //      [claude-cli, antigravity-cli], so it advertises BOTH — and therefore
 //      "satisfies" provider=antigravity-cli. Correct for a NODE filter; it answers
 //      "could some provider here satisfy the pin?".
 //   2. selectEagerPushReceiver used exactly that node-level predicate to pick a
 //      receiver — also correct, that IS the question it needs answered.
 //   3. dispatchToRemoteNode then chose the concrete provider on its own, from
-//      `providerPriority[0]` — with no knowledge a pin existed. Jupiter's priority[0]
+//      `providerPriority[0]` — with no knowledge a pin existed. BuildBox's priority[0]
 //      is claude-cli. Nothing compared the answer back against the pin.
 //
 // The node-level "yes" is not a guarantee about the provider ultimately selected, and
@@ -52,7 +52,7 @@ import { fakeCoordinatorTransport } from './helpers/fake-coordinator-tool-answer
 // still dispatch. Only the unsatisfiable case declines, and it declines to `pending`
 // (the claim path's job) rather than failing the task.
 
-const NODE_JUPITER = 'node_f289402a016548388cae3db962527439';
+const NODE_BUILDBOX = 'node_f289402a016548388cae3db962527439';
 const NODE_MAC = 'node_mac_base';
 
 const createdMeshes: string[] = [];
@@ -94,16 +94,16 @@ function dispatchedProviders(transport: any): string[] {
 }
 
 /**
- * Jupiter as configured live: claude-cli FIRST in providerPriority (so priority[0] is
+ * BuildBox as configured live: claude-cli FIRST in providerPriority (so priority[0] is
  * the wrong answer for an antigravity pin) and both providers present in slots (so the
  * node-level tag predicate says "yes" to either pin). These exact values are what made
  * the live bypass possible — the test is worthless if they drift.
  */
-function jupiterNode() {
+function buildboxNode() {
   return {
-    id: NODE_JUPITER,
-    workspace: '/repo/jupiter',
-    daemonId: 'daemon_jupiter',
+    id: NODE_BUILDBOX,
+    workspace: '/repo/buildbox',
+    daemonId: 'daemon_buildbox',
     reportedPlatform: 'win32',
     reportedArch: 'x64',
     policy: {
@@ -151,7 +151,7 @@ test.after(() => {
 // ── the premise: why the node-level predicate cannot be the pin enforcer ───────────
 
 test('PREMISE: the node-level tag predicate says YES to a pin the node may not honor', () => {
-  const node = jupiterNode();
+  const node = buildboxNode();
   // This is the exact call selectEagerPushReceiver makes. It passes — correctly, as a
   // NODE question — even though the dispatch may still select claude-cli.
   assert.equal(
@@ -201,9 +201,9 @@ test('filterProvidersByRequiredTags: a pin narrows, and an unsatisfiable pin yie
 test('★LIVE REPRO: a provider-pinned task is NOT dispatched to providerPriority[0]', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
-  await dispatchWithTags(ctx, jupiterNode(), 'antigravity-pinned work', ['provider=antigravity-cli']);
+  await dispatchWithTags(ctx, buildboxNode(), 'antigravity-pinned work', ['provider=antigravity-cli']);
 
   const providers = dispatchedProviders(transport);
   assert.ok(
@@ -218,7 +218,7 @@ test('★LIVE REPRO: a provider-pinned task is NOT dispatched to providerPriorit
 test('enqueue of a pinned task leaves it PENDING and sends nothing — the claim path routes it (rc.37 Finding B)', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
   const res = JSON.parse(await meshEnqueueTask(ctx, {
     message: 'antigravity-pinned work',
@@ -235,9 +235,9 @@ test('enqueue of a pinned task leaves it PENDING and sends nothing — the claim
 test('★PIN-OBSERVABILITY: an unsatisfiable pin is refused with a typed, recoverable reason', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
-  const result: any = await dispatchWithTags(ctx, jupiterNode(), 'antigravity-pinned work', ['provider=antigravity-cli']);
+  const result: any = await dispatchWithTags(ctx, buildboxNode(), 'antigravity-pinned work', ['provider=antigravity-cli']);
   const providers = dispatchedProviders(transport);
   if (providers.length === 0) {
     assert.equal(result.success, false);
@@ -251,7 +251,7 @@ test('★PIN-OBSERVABILITY: an unsatisfiable pin is refused with a typed, recove
 test('★PIN-OBSERVABILITY: the enqueue response labels requiredTags as a REQUEST echo', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
   const res = JSON.parse(await meshEnqueueTask(ctx, {
     message: 'pinned work',
@@ -271,9 +271,9 @@ test('★PIN-OBSERVABILITY: the enqueue response labels requiredTags as a REQUES
 test('CONTROL: an UNPINNED task still falls back to providerPriority[0] (unchanged)', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
-  await dispatchWithTags(ctx, jupiterNode(), 'unpinned work', []);
+  await dispatchWithTags(ctx, buildboxNode(), 'unpinned work', []);
 
   // THE over-correction guard. With no pin there is no constraint, so the previous
   // behavior must survive byte for byte — a fix that strands unpinned work is worse
@@ -287,9 +287,9 @@ test('CONTROL: an UNPINNED task still falls back to providerPriority[0] (unchang
 test('CONTROL: a NON-PROVIDER tag (os=) does not constrain provider selection', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
-  await dispatchWithTags(ctx, jupiterNode(), 'windows work', ['os=win32']);
+  await dispatchWithTags(ctx, buildboxNode(), 'windows work', ['os=win32']);
 
   // os=/arch=/worktree= are node axes. Reading them as provider constraints would make
   // every platform-tagged task undispatchable.
@@ -302,9 +302,9 @@ test('CONTROL: a NON-PROVIDER tag (os=) does not constrain provider selection', 
 test('CONTROL: a SATISFIED pin still dispatches (pinning priority[0] is not blocked)', async () => {
   const meshId = nextMeshId();
   const transport = recordingIpcTransport();
-  const ctx = makeCtx(meshId, transport, [jupiterNode()]);
+  const ctx = makeCtx(meshId, transport, [buildboxNode()]);
 
-  await dispatchWithTags(ctx, jupiterNode(), 'claude-pinned work', ['provider=claude-cli']);
+  await dispatchWithTags(ctx, buildboxNode(), 'claude-pinned work', ['provider=claude-cli']);
 
   // A pin that the node CAN honor must behave exactly as an unpinned dispatch would.
   assert.deepEqual(

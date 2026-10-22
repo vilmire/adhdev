@@ -40,7 +40,7 @@
  *   3. otherwise the LOCAL daemon bucket — consistent with `isLocalAutoLaunchNode`,
  *      which already treats a node carrying neither id as this machine's.
  *
- * Step 3 is what keeps REMOTE nodes separate: MainPC/MoltBook/Jupiter each report
+ * Step 3 is what keeps REMOTE nodes separate: DesktopA/DevLaptop/BuildBox each report
  * their own `daemonId`, so they resolve to distinct keys at step 1 and never share
  * a budget. Only genuinely unidentified nodes — which are local by the existing
  * convention — land in the local bucket together.

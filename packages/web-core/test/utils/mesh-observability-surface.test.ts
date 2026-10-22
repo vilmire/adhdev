@@ -239,8 +239,8 @@ describe('MeshObservabilitySurface', () => {
     const node: any = {
       nodeId: 'node_303',
       machineLabel: 'node_303',
-      workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-      repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+      workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+      repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
       health: 'online',
       providers: [],
       providerPriority: ['hermes-cli', 'antigravity-cli'],
@@ -255,8 +255,8 @@ describe('MeshObservabilitySurface', () => {
       },
       git: {
         isGitRepo: true,
-        workspace: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
-        repoRoot: '/Users/moltbot/.openclaw/workspace/projects/adhdev',
+        workspace: '/Users/botuser/.openclaw/workspace/projects/adhdev',
+        repoRoot: '/Users/botuser/.openclaw/workspace/projects/adhdev',
         branch: 'main',
         upstream: 'origin/main',
         upstreamStatus: 'fresh',

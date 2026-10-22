@@ -275,9 +275,9 @@ export interface WorkerPrivateMcpConfigSpec {
  * The first probe used a workspace whose path contained no dashes, so
  * "replace each separator with a dash" and "collapse runs of non-alphanumerics"
  * produced identical output and the probe could not tell them apart. Against a
- * real ADHDev worktree path — which contains `/-Users-vilmire--adhdev-…` — the
- * two rules diverge: cursor writes `…-501-Users-vilmire-adhdev-…` where the
- * naive rule yields `…-501--Users-vilmire--adhdev-…`. A second probe with a
+ * real ADHDev worktree path — which contains `/-Users-dev--adhdev-…` — the
+ * two rules diverge: cursor writes `…-501-Users-dev-adhdev-…` where the
+ * naive rule yields `…-501--Users-dev--adhdev-…`. A second probe with a
  * deliberately dash-laden path (`/-lead--double/x` → `…-lead-double-x`) settled
  * it, and the collapse rule then reproduced all three live observations exactly,
  * including a 186-character slug.

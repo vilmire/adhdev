@@ -71,10 +71,10 @@ describe('routePreviewKey', () => {
 })
 
 describe('routePreviewNextSlotLabel / buildPinnedSlotLabels', () => {
-    // The owner's case: unpinned 'difficult' predicts Jupiter, the pinned
+    // The owner's case: unpinned 'difficult' predicts BuildBox, the pinned
     // preview for the same difficulty predicts the worktree node instead.
     const matrix = {
-        difficult: [previewNode('node-jupiter', 'claude-cli', 'claude-sonnet')],
+        difficult: [previewNode('node-buildbox', 'claude-cli', 'claude-sonnet')],
         'difficult::node-wt': [previewNode('node-wt', 'kimi', 'k3')],
     }
 
