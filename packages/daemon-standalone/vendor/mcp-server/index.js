@@ -58392,22 +58392,22 @@ CREATE TABLE IF NOT EXISTS sq_archive (
     function taskStatsFromFacts(queue, entries, targetIds) {
       const queueById = new Map(queue.map((task) => [task.id, task]));
       const targetSet = new Set(targetIds);
-      const dispatches = /* @__PURE__ */ new Map();
+      const dispatches2 = /* @__PURE__ */ new Map();
       const terminals = /* @__PURE__ */ new Map();
       for (const entry of entries) {
         const taskId = readPayloadTaskId(entry);
         if (!taskId || !targetSet.has(taskId)) continue;
         if (entry.kind === "task_dispatched") {
-          const existing = dispatches.get(taskId);
+          const existing = dispatches2.get(taskId);
           if (existing) existing.count += 1;
-          else dispatches.set(taskId, { first: entry.timestamp, count: 1 });
+          else dispatches2.set(taskId, { first: entry.timestamp, count: 1 });
         } else if (entry.kind === "task_completed" || entry.kind === "task_failed" || entry.kind === "task_cancelled") {
           terminals.set(taskId, { at: entry.timestamp, kind: entry.kind });
         }
       }
       return targetIds.map((taskId) => {
         const queueEntry = queueById.get(taskId);
-        const dispatch2 = dispatches.get(taskId);
+        const dispatch2 = dispatches2.get(taskId);
         const terminal = terminals.get(taskId);
         const status = queueEntry?.status ?? (terminal ? terminal.kind === "task_completed" ? "completed" : "failed" : "unknown");
         const isTerminalStatus = isMeshTerminalTaskStatus2(status);
@@ -81108,8 +81108,8 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       }
       return {
         entries,
-        matchDirectDispatchTerminals(dispatches) {
-          const sortedDispatches = dispatches.slice().sort((a, b) => timestampByEntry.get(a) - timestampByEntry.get(b));
+        matchDirectDispatchTerminals(dispatches2) {
+          const sortedDispatches = dispatches2.slice().sort((a, b) => timestampByEntry.get(a) - timestampByEntry.get(b));
           const taskQueries = /* @__PURE__ */ new Map();
           const sessionQueries = /* @__PURE__ */ new Map();
           const nodeQueries = /* @__PURE__ */ new Map();
@@ -90129,17 +90129,34 @@ ${result.stderr}`, result.code);
       }
     });
     function processStartId(pid) {
-      if (process.platform === "win32") return void 0;
       try {
-        const out = (0, import_node_child_process10.execFileSync)(
-          "ps",
-          ["-o", "lstart=", "-p", String(pid)],
-          { encoding: "utf8", timeout: 2e3, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }
-        ).trim();
-        return out || void 0;
+        if (process.platform === "linux") {
+          const boot = (0, import_node_fs7.readFileSync)("/proc/sys/kernel/random/boot_id", "utf8").trim();
+          const stat2 = (0, import_node_fs7.readFileSync)(`/proc/${pid}/stat`, "utf8");
+          const ticks = stat2.slice(stat2.lastIndexOf(")") + 2).trim().split(/\s+/)[19];
+          if (/^[a-f0-9-]{36}$/.test(boot) && /^\d+$/.test(ticks ?? "")) return `linux-start-ticks-v1:${boot}:${ticks}`;
+        } else if (process.platform === "darwin") {
+          const out = (0, import_node_child_process10.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+            encoding: "utf8",
+            timeout: 2e3,
+            windowsHide: true,
+            env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+            stdio: ["ignore", "pipe", "ignore"]
+          }).trim();
+          const match = /^\w{3} (\w{3})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(out);
+          if (!match) return void 0;
+          const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(match[1]);
+          const epochMs = Date.UTC(Number(match[6]), month, Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5]));
+          if (month >= 0 && Number.isFinite(epochMs) && epochMs > 0) return `darwin-epoch-seconds-v1:${epochMs / 1e3}`;
+        }
       } catch {
-        return void 0;
       }
+      return void 0;
+    }
+    function identityFormat(value) {
+      if (/^linux-start-ticks-v1:[a-f0-9-]{36}:\d+$/.test(value ?? "")) return "linux-start-ticks-v1";
+      if (/^darwin-epoch-seconds-v1:\d+$/.test(value ?? "")) return "darwin-epoch-seconds-v1";
+      return void 0;
     }
     function isPidAlive2(pid) {
       if (pid === process.pid) return true;
@@ -90170,15 +90187,16 @@ ${result.stderr}`, result.code);
         return { kind: "gone" };
       }
     }
-    function abandoned(observed2, alive, now, maxAgeMs, startOf = processStartId) {
-      if (observed2.kind === "owner") return !alive(observed2.owner.pid) || pidReused(observed2.owner, startOf) || maxAgeMs !== void 0 && now - observed2.owner.acquiredAt >= maxAgeMs;
+    function abandoned(observed2, alive, now, maxAgeMs, startOf) {
+      if (observed2.kind === "owner") return !alive(observed2.owner.pid) || (observed2.owner.pid === process.pid || now - observed2.owner.acquiredAt >= OWNERLESS_STALE_MS) && pidReused(observed2.owner, startOf) || maxAgeMs !== void 0 && now - observed2.owner.acquiredAt >= maxAgeMs;
       if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
       return false;
     }
     function pidReused(owner, startOf) {
-      if (!owner.startId) return false;
+      const format = identityFormat(owner.startId);
+      if (!format) return false;
       const current4 = startOf(owner.pid);
-      return current4 !== void 0 && current4 !== owner.startId;
+      return identityFormat(current4) === format && current4 !== owner.startId;
     }
     function sameInstance(a, b) {
       if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
@@ -90218,6 +90236,7 @@ ${result.stderr}`, result.code);
     function acquireOwnedLock(lock, options = {}) {
       const alive = options.isPidAlive ?? isPidAlive2;
       const now = options.now ?? Date.now;
+      const startOf = options.processStartId ?? ((pid) => pid === process.pid ? ownProcessStartId : options.probePeerIdentity ? processStartId(pid) : void 0);
       const held = () => {
         let reclaimGuard = false;
         try {
@@ -90232,10 +90251,10 @@ ${result.stderr}`, result.code);
         } catch (error) {
           const errno = error.code;
           if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
-          if (!reclaim2(lock, alive, now, options.maxAgeMs, options.processStartId)) return held();
+          if (!reclaim2(lock, alive, now, options.maxAgeMs, startOf)) return held();
           continue;
         }
-        const startId = (options.processStartId ?? processStartId)(process.pid);
+        const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;
         const owner = { pid: process.pid, nonce: (0, import_node_crypto17.randomBytes)(16).toString("hex"), acquiredAt: now(), ...startId ? { startId } : {} };
         try {
           (0, import_node_fs7.writeFileSync)((0, import_node_path8.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
@@ -90264,6 +90283,7 @@ ${result.stderr}`, result.code);
     var import_node_crypto17;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
+    var ownProcessStartId;
     var init_owned_lock = __esm2({
       "src/launch-defaults/owned-lock.ts"() {
         "use strict";
@@ -90273,6 +90293,7 @@ ${result.stderr}`, result.code);
         import_node_crypto17 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
+        ownProcessStartId = processStartId(process.pid);
       }
     });
     function looksLikeBase64Secret(run3) {
@@ -154339,6 +154360,40 @@ ${ptyResult.output.slice(-2e3)}`);
       [ASSISTANT_REMOTE_PROJECT_CATALOG_COMMAND]: { sources: [...ASSISTANT_REMOTE_OWNER_SOURCES] },
       [ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND]: { sources: [...ASSISTANT_REMOTE_OWNER_SOURCES] }
     });
+    var AssistantLaunchFence = class {
+      aborted = false;
+      dispatched = false;
+      cleanupPending = false;
+      sessionId;
+      onCleanupAcknowledged;
+      spawning = false;
+      /** Synchronous acknowledgement: all future spawn entries consult this fence.
+       * Once registration/spawning starts we cannot prove cancellation; keep the
+       * account lock until the dispatched operation and cleanup have settled. */
+      cancelBeforeSpawn() {
+        if (this.spawning) return false;
+        this.aborted = true;
+        return true;
+      }
+      get spawnStarted() {
+        return this.spawning;
+      }
+      beginSpawn() {
+        if (this.aborted) throw Object.assign(new Error("assistant_launch_cancelled"), { code: "assistant_launch_cancelled" });
+        this.spawning = true;
+      }
+    };
+    var dispatches = /* @__PURE__ */ new Map();
+    function registerAssistantLaunchFence(sessionId, fence) {
+      fence.sessionId = sessionId;
+      dispatches.set(sessionId, fence);
+    }
+    function beginAssistantSpawn(sessionId) {
+      dispatches.get(sessionId)?.beginSpawn();
+    }
+    function retireAssistantLaunchFence(fence) {
+      if (fence.sessionId && dispatches.get(fence.sessionId) === fence) dispatches.delete(fence.sessionId);
+    }
     init_owned_lock();
     var import_node_path22 = require("path");
     init_config();
@@ -155148,7 +155203,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
     }
     var ASSISTANT_LAUNCH_TIMEOUT_MS = 3e4;
-    var launchAssistantOnce = async (ctx, args, fence = { aborted: false }) => {
+    var launchAssistantOnce = async (ctx, args, fence) => {
       const registry = getAssistantRegistry();
       const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
       if (fence.aborted) return fail6("assistant_launch_timeout");
@@ -155242,6 +155297,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
           return fail6("assistant_restore_pending");
         }
+        registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
         launched = await ctx.execute("launch_cli", {
           cliType,
@@ -155257,7 +155313,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }, "ipc", { inProcess: true });
       } catch (e) {
         void scheduleInjectionCleanup2(injection, { launched: false, label: "assistant" });
-        throw e;
+        if (!fence.spawnStarted) throw e;
+        fence.aborted = true;
+        launched = { success: true, sessionId: assistantSessionKey };
+      }
+      if (fence.spawnStarted && launched?.success !== true) {
+        fence.aborted = true;
+        launched = { success: true, sessionId: assistantSessionKey };
       }
       const sessionId = str15(launched?.sessionId) || str15(launched?.id);
       void scheduleInjectionCleanup2(injection, {
@@ -155265,33 +155327,54 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         isReady: localSessionReadyProbe2(ctx.deps.cliManager?.adapters, sessionId),
         label: "assistant"
       });
-      if (fence.aborted) {
+      const isCurrent = () => assistantGenerations.get(registry) === fence;
+      const mayBind = () => isCurrent() && (!registry.reload()?.sessionId || registry.read()?.sessionId === sessionId);
+      if (fence.aborted || !mayBind()) {
         if (launched?.success && sessionId) {
-          const retainBinding = () => registry.bindSession({
-            sessionId,
-            cliType,
-            workspace,
-            hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
-            ...mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {},
-            at: Date.now()
-          });
-          retainBinding();
-          try {
-            await ctx.deps.sessionHostControl?.stopSession(sessionId);
-            await ctx.deps.cliManager.stopSessionWithMode(sessionId, "hard");
-            const remaining = await ctx.deps.cliManager.deps.listHostedCliRuntimes();
-            if (!remaining.some((r) => r.runtimeId === sessionId)) registry.releaseSession(sessionId, "assistant_launch_timeout");
-            else retainBinding();
-          } catch (error) {
+          const retainBinding = () => {
+            if (mayBind()) registry.bindSession({
+              sessionId,
+              cliType,
+              workspace,
+              hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
+              ...mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {},
+              at: Date.now()
+            });
+          };
+          const cleanup = async () => {
             retainBinding();
-            LOG.warn("Assistant", `Timed-out assistant ${sessionId} remains bound after cleanup failed: ${String(error)}`);
+            try {
+              await ctx.deps.sessionHostControl?.stopSession(sessionId);
+              await ctx.deps.cliManager.stopSessionWithMode(sessionId, "hard");
+              const remaining = await ctx.deps.cliManager.deps.listHostedCliRuntimes();
+              if (remaining.some((r) => r.runtimeId === sessionId)) {
+                retainBinding();
+                return false;
+              }
+              if (isCurrent() && registry.reload()?.sessionId === sessionId) registry.releaseSession(sessionId, "assistant_launch_timeout");
+              return true;
+            } catch (error) {
+              retainBinding();
+              LOG.warn("Assistant", `Timed-out assistant ${sessionId} cleanup remains pending: ${String(error)}`);
+              return false;
+            }
+          };
+          fence.cleanupPending = !await cleanup();
+          if (fence.cleanupPending) {
+            let failures = assistantCleanupFailures.get(registry);
+            if (!failures) {
+              failures = /* @__PURE__ */ new Map();
+              assistantCleanupFailures.set(registry, failures);
+            }
+            failures.set(sessionId, { fence, cleanup });
           }
         }
-        return fail6("assistant_launch_timeout");
+        return fail6(fence.cleanupPending ? "assistant_launch_cleanup_pending" : "assistant_launch_timeout");
       }
       if (!launched?.success || !sessionId) {
         return fail6(str15(launched?.code) || "assistant_launch_failed", str15(launched?.error) || "Failed to launch the assistant session", { cliType, workspace });
       }
+      if (!mayBind()) return fail6("assistant_identity_conflict");
       const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
       const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
       assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -155312,25 +155395,30 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       return { success: true, launched: true, sessionId, cliType, workspace, promptLength: prompt.length, restartNote, ...provenance };
     };
     var assistantStarts = /* @__PURE__ */ new WeakMap();
+    var assistantGenerations = /* @__PURE__ */ new WeakMap();
     var assistantStartMeta = /* @__PURE__ */ new WeakMap();
+    var assistantCleanupFailures = /* @__PURE__ */ new WeakMap();
     var ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS = 5 * 6e4;
-    function noLiveAssistant(ctx, registry) {
-      const im = ctx.deps.instanceManager;
-      const bound = registry.reload()?.sessionId;
-      if (bound && im.getInstance(bound)) return false;
-      for (const id4 of im.listInstanceIds?.() ?? []) {
-        if (im.getInstance(id4)?.getState().settings.assistant === true) return false;
-      }
-      return true;
-    }
-    var launchAssistant = (ctx, args) => {
+    var launchAssistant = async (ctx, args) => {
       const registry = getAssistantRegistry();
-      let pending = assistantStarts.get(registry);
       const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
+      const failures = assistantCleanupFailures.get(registry);
+      if (failures?.size) {
+        if (!forced) return fail6("assistant_launch_cleanup_pending");
+        for (const [id4, failure7] of failures) {
+          if (!await failure7.cleanup()) return fail6("assistant_launch_cleanup_pending");
+          failure7.fence.cleanupPending = false;
+          failure7.fence.onCleanupAcknowledged?.();
+          failures.delete(id4);
+        }
+      }
+      let pending = assistantStarts.get(registry);
       const meta = assistantStartMeta.get(registry);
-      if (pending && meta && forced && Date.now() - meta.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS && noLiveAssistant(ctx, registry)) {
-        LOG.warn("Assistant", "owner_force abandoned a launch that exceeded the hard ceiling");
-        meta.abandon();
+      if (pending && meta && forced && Date.now() - meta.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS) {
+        if (!meta.fence.cancelBeforeSpawn()) return fail6("assistant_launch_cancellation_pending");
+        LOG.warn("Assistant", "owner_force cancelled a launch before spawning after the hard ceiling");
+        assistantGenerations.delete(registry);
+        meta.clear();
         pending = void 0;
       }
       if (pending) return pending.then((result) => result.success ? { ...result, launched: false } : result);
@@ -155340,14 +155428,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       } catch {
       }
       const lockPath = (0, import_path44.join)(lockDir, ".assistant-launch.lock");
-      let lock = acquireOwnedLock(lockPath);
-      if (!lock.ok && lock.busy && forced) {
-        if (noLiveAssistant(ctx, registry)) {
-          lock = acquireOwnedLock(lockPath, { maxAgeMs: ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS });
-        }
-      }
-      if (!lock.ok) return Promise.resolve(fail6("assistant_launch_pending", lock.reason));
-      const fence = { aborted: false, dispatched: false };
+      const lock = acquireOwnedLock(lockPath, { probePeerIdentity: true });
+      if (!lock.ok) return fail6(forced && lock.busy ? "assistant_launch_cancellation_pending" : "assistant_launch_pending", lock.reason);
+      const fence = new AssistantLaunchFence();
+      assistantGenerations.set(registry, fence);
       let timer;
       const clear = () => {
         if (timer) {
@@ -155360,10 +155444,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           assistantStartMeta.delete(registry);
         }
       };
-      assistantStartMeta.set(registry, { startedAt: Date.now(), abandon: () => {
-        fence.aborted = true;
-        clear();
-      } });
+      fence.onCleanupAcknowledged = clear;
+      assistantStartMeta.set(registry, { startedAt: Date.now(), fence, clear });
       const timeout = new Promise((resolve54) => {
         timer = setTimeout(() => {
           fence.aborted = true;
@@ -155373,7 +155455,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         timer.unref?.();
       });
       const operation = Promise.race([
-        launchAssistantOnce(ctx, args, fence).finally(clear),
+        launchAssistantOnce(ctx, args, fence).finally(() => {
+          retireAssistantLaunchFence(fence);
+          if (!fence.cleanupPending) clear();
+        }),
         timeout
       ]);
       assistantStarts.set(registry, operation);
@@ -175107,6 +175192,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         const resolvedProvider = launchProvider;
         assertMaintenanceCommandIdentity({ settings: launchSettings });
         assertMaintenanceAdmission();
+        beginAssistantSpawn(key4);
         await host.registerCliInstance(
           key4,
           normalizedType,
@@ -175157,6 +175243,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         try {
           assertMaintenanceCommandIdentity({ settings: launchSettings });
           assertMaintenanceAdmission();
+          beginAssistantSpawn(key4);
           await adapter.spawn();
         } catch (spawnErr) {
           LOG.error("CLI", `[${cliType}] Spawn failed: ${spawnErr?.message}`);

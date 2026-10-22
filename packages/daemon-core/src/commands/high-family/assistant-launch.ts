@@ -1,3 +1,4 @@
+import { AssistantLaunchFence, registerAssistantLaunchFence, retireAssistantLaunchFence } from '../../assistant/assistant-launch-fence.js';
 import { acquireOwnedLock } from '../../launch-defaults/owned-lock.js';
 import { admitAssistantLaunch } from '../../assistant/assistant-launch-admission.js';
 import { resolveRoleLaunch, roleLaunchFailure, roleLaunchProvenance } from '../../launch-defaults/consumer.js';
@@ -132,7 +133,7 @@ const ASSISTANT_LAUNCH_TIMEOUT_MS = 30_000;
 const launchAssistantOnce = async (
     ctx: HighFamilyContext,
     args: any,
-    fence: { aborted: boolean; dispatched?: boolean } = { aborted: false },
+    fence: AssistantLaunchFence,
 ): Promise<CommandRouterResult> => {
     const registry = getAssistantRegistry();
     const admission = await admitAssistantLaunch(ctx, args, () => fence.aborted);
@@ -237,6 +238,7 @@ const launchAssistantOnce = async (
             void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
             return fail('assistant_restore_pending');
         }
+        registerAssistantLaunchFence(assistantSessionKey, fence);
         fence.dispatched = true;
         launched = await ctx.execute('launch_cli', {
             cliType,
@@ -252,7 +254,15 @@ const launchAssistantOnce = async (
         }, 'ipc', { inProcess: true });
     } catch (e) {
         void scheduleInjectionCleanup(injection, { launched: false, label: 'assistant' });
-        throw e;
+        if (!fence.spawnStarted) throw e;
+        // Registration may have created a host runtime before failing. Its UUID
+        // is already known; retain exclusion until cleanup confirms absence.
+        fence.aborted = true;
+        launched = { success: true, sessionId: assistantSessionKey };
+    }
+    if (fence.spawnStarted && launched?.success !== true) {
+        fence.aborted = true;
+        launched = { success: true, sessionId: assistantSessionKey };
     }
     const sessionId = str(launched?.sessionId) || str(launched?.id);
     void scheduleInjectionCleanup(injection, {
@@ -260,33 +270,46 @@ const launchAssistantOnce = async (
         isReady: localSessionReadyProbe(ctx.deps.cliManager?.adapters, sessionId),
         label: 'assistant',
     });
-    if (fence.aborted) {
+    const isCurrent = () => assistantGenerations.get(registry) === fence;
+    // Reload before every binding mutation: an older generation (or another
+    // host) must never replace or clear the session a newer launch owns.
+    const mayBind = () => isCurrent() && (!registry.reload()?.sessionId || registry.read()?.sessionId === sessionId);
+    if (fence.aborted || !mayBind()) {
         if (launched?.success && sessionId) {
-            // Keep the account lock until this dispatched launch has settled. Bind
-            // first so a failed stop still leaves discoverable, durable identity.
-            const retainBinding = () => registry.bindSession({ sessionId, cliType, workspace,
-                hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
-                ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now() });
-            retainBinding();
-            try {
-                // The adapter's shutdown queues a mutation; the control RPC is
-                // awaited so cleanup also covers a delayed/failed adapter stop.
-                await ctx.deps.sessionHostControl?.stopSession(sessionId);
-                await ctx.deps.cliManager.stopSessionWithMode(sessionId, 'hard');
-                const remaining = await ctx.deps.cliManager.deps.listHostedCliRuntimes!();
-                if (!remaining.some(r => r.runtimeId === sessionId)) registry.releaseSession(sessionId, 'assistant_launch_timeout');
-                else retainBinding();
-            } catch (error) {
+            const retainBinding = () => {
+                if (mayBind()) registry.bindSession({ sessionId, cliType, workspace,
+                    hostOwner: ctx.deps.cliManager.deps.getHostedBindingOwner?.(),
+                    ...(mcp.configWrite ? { mcpConfigPath: mcp.configWrite.path } : {}), at: Date.now() });
+            };
+            const cleanup = async (): Promise<boolean> => {
                 retainBinding();
-                LOG.warn('Assistant', `Timed-out assistant ${sessionId} remains bound after cleanup failed: ${String(error)}`);
+                try {
+                    await ctx.deps.sessionHostControl?.stopSession(sessionId);
+                    await ctx.deps.cliManager.stopSessionWithMode(sessionId, 'hard');
+                    const remaining = await ctx.deps.cliManager.deps.listHostedCliRuntimes!();
+                    if (remaining.some(r => r.runtimeId === sessionId)) { retainBinding(); return false; }
+                    if (isCurrent() && registry.reload()?.sessionId === sessionId) registry.releaseSession(sessionId, 'assistant_launch_timeout');
+                    return true;
+                } catch (error) {
+                    retainBinding();
+                    LOG.warn('Assistant', `Timed-out assistant ${sessionId} cleanup remains pending: ${String(error)}`);
+                    return false;
+                }
+            };
+            fence.cleanupPending = !await cleanup();
+            if (fence.cleanupPending) {
+                let failures = assistantCleanupFailures.get(registry);
+                if (!failures) { failures = new Map(); assistantCleanupFailures.set(registry, failures); }
+                failures.set(sessionId, { fence, cleanup });
             }
         }
-        return fail('assistant_launch_timeout');
+        return fail(fence.cleanupPending ? 'assistant_launch_cleanup_pending' : 'assistant_launch_timeout');
     }
     if (!launched?.success || !sessionId) {
         return fail(str(launched?.code) || 'assistant_launch_failed', str(launched?.error) || 'Failed to launch the assistant session', { cliType, workspace });
     }
 
+    if (!mayBind()) return fail('assistant_identity_conflict');
     const instance = ctx.components().instanceManager?.getInstance?.(sessionId);
     const adapter = ctx.components().cliManager?.adapters?.get(sessionId);
     assistantExecution.attest(sessionId, instance ?? null, adapter ?? null, cliType, cliArgs, mcp.toolRestriction);
@@ -309,52 +332,52 @@ const launchAssistantOnce = async (
 // A second start arriving during launch joins that operation. It must never
 // bind over the assistant the first start is still bringing up.
 const assistantStarts = new WeakMap<ReturnType<typeof getAssistantRegistry>, Promise<CommandRouterResult>>();
-const assistantStartMeta = new WeakMap<ReturnType<typeof getAssistantRegistry>, { startedAt: number; abandon(): void }>();
-/** An owner-force launch may reclaim a launch lock held longer than this. */
+const assistantGenerations = new WeakMap<ReturnType<typeof getAssistantRegistry>, AssistantLaunchFence>();
+const assistantStartMeta = new WeakMap<ReturnType<typeof getAssistantRegistry>, { startedAt: number; fence: AssistantLaunchFence; clear(): void }>();
+const assistantCleanupFailures = new WeakMap<ReturnType<typeof getAssistantRegistry>, Map<string, { fence: AssistantLaunchFence; cleanup(): Promise<boolean> }>>();
+/** An owner may request acknowledged cancellation after this ceiling. */
 export const ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS = 5 * 60_000;
 
-/** True when no attached runtime is (or claims to be) the assistant. */
-function noLiveAssistant(ctx: Parameters<HighFamilyHandler>[0], registry: ReturnType<typeof getAssistantRegistry>): boolean {
-    const im = ctx.deps.instanceManager;
-    const bound = registry.reload()?.sessionId;
-    if (bound && im.getInstance(bound)) return false;
-    for (const id of im.listInstanceIds?.() ?? []) {
-        if (im.getInstance(id)?.getState().settings.assistant === true) return false;
-    }
-    return true;
-}
-const launchAssistant: HighFamilyHandler = (ctx, args) => {
+const launchAssistant: HighFamilyHandler = async (ctx, args) => {
     const registry = getAssistantRegistry();
-    let pending = assistantStarts.get(registry);
     const forced = (args?.force === true || args?.replace === true) && isTrustedOwnerIngress(args);
+    const failures = assistantCleanupFailures.get(registry);
+    if (failures?.size) {
+        if (!forced) return fail('assistant_launch_cleanup_pending');
+        for (const [id, failure] of failures) {
+            if (!await failure.cleanup()) return fail('assistant_launch_cleanup_pending');
+            failure.fence.cleanupPending = false;
+            failure.fence.onCleanupAcknowledged?.();
+            failures.delete(id);
+        }
+    }
+    let pending = assistantStarts.get(registry);
     const meta = assistantStartMeta.get(registry);
-    if (pending && meta && forced && Date.now() - meta.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS
-        && noLiveAssistant(ctx, registry)) {
-        LOG.warn('Assistant', 'owner_force abandoned a launch that exceeded the hard ceiling');
-        meta.abandon();
+    if (pending && meta && forced && Date.now() - meta.startedAt >= ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS) {
+        if (!meta.fence.cancelBeforeSpawn()) return fail('assistant_launch_cancellation_pending');
+        LOG.warn('Assistant', 'owner_force cancelled a launch before spawning after the hard ceiling');
+        assistantGenerations.delete(registry);
+        meta.clear();
         pending = undefined;
     }
     if (pending) return pending.then(result => result.success ? { ...result, launched: false } : result);
     const lockDir = dirname(registry.path);
     try { mkdirSync(lockDir, { recursive: true, mode: 0o700 }); } catch { /* surfaced by acquireOwnedLock */ }
     const lockPath = join(lockDir, '.assistant-launch.lock');
-    let lock = acquireOwnedLock(lockPath);
-    if (!lock.ok && lock.busy && forced) {
-        // Another process (or a crashed one with a reused pid) holds the lock: reclaim only
-        // past the hard ceiling and with no live assistant to protect.
-        if (noLiveAssistant(ctx, registry)) {
-            lock = acquireOwnedLock(lockPath, { maxAgeMs: ASSISTANT_LAUNCH_LOCK_HARD_CEILING_MS });
-        }
-    }
-    if (!lock.ok) return Promise.resolve(fail('assistant_launch_pending', lock.reason));
-    const fence = { aborted: false, dispatched: false };
+    // Age is not proof that another daemon's dispatched launch was cancelled.
+    // Reclaim only dead/reused owners; a live peer requires its own recovery.
+    const lock = acquireOwnedLock(lockPath, { probePeerIdentity: true });
+    if (!lock.ok) return fail(forced && lock.busy ? 'assistant_launch_cancellation_pending' : 'assistant_launch_pending', lock.reason);
+    const fence = new AssistantLaunchFence();
+    assistantGenerations.set(registry, fence);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const clear = () => {
         if (timer) { clearTimeout(timer); timer = undefined; }
         lock.release();
         if (assistantStarts.get(registry) === operation) { assistantStarts.delete(registry); assistantStartMeta.delete(registry); }
     };
-    assistantStartMeta.set(registry, { startedAt: Date.now(), abandon: () => { fence.aborted = true; clear(); } });
+    fence.onCleanupAcknowledged = clear;
+    assistantStartMeta.set(registry, { startedAt: Date.now(), fence, clear });
     const timeout = new Promise<CommandRouterResult>(resolve => {
         timer = setTimeout(() => {
             fence.aborted = true;
@@ -366,7 +389,10 @@ const launchAssistant: HighFamilyHandler = (ctx, args) => {
         timer.unref?.();
     });
     const operation = Promise.race([
-        launchAssistantOnce(ctx, args, fence).finally(clear),
+        launchAssistantOnce(ctx, args, fence).finally(() => {
+            retireAssistantLaunchFence(fence);
+            if (!fence.cleanupPending) clear();
+        }),
         timeout,
     ]);
     assistantStarts.set(registry, operation);
