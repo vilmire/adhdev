@@ -3,13 +3,14 @@
  * and launch-default Inbox proposals.
  *
  * The lock is a directory (atomic create); right after creating it the holder
- * writes `owner.json` ({pid, nonce, acquiredAt}). A lock is reclaimed only when
- * its holder is provably gone:
+ * writes `owner.json` ({pid, nonce, acquiredAt}). By default a lock is reclaimed
+ * only when its holder is provably gone:
  *   - the recorded pid no longer exists (`process.kill(pid, 0)` → ESRCH), or
  *   - there is no owner record and the directory is older than
  *     OWNERLESS_STALE_MS (a lock left by a build that predates owner records;
  *     a live holder writes its record microseconds after mkdir).
- * A live pid — including one that may have been reused — is never stolen.
+ * A live pid — including one that may have been reused — is never stolen
+ * unless the caller explicitly opts into a maximum lock age.
  *
  * Reclaim runs under a second mkdir guard (`<lock>.reclaim`) and re-reads the
  * owner record there: only the exact abandoned instance (same nonce, or still
@@ -33,6 +34,9 @@ export type OwnedLockResult =
 export interface OwnedLockOptions {
     isPidAlive?: (pid: number) => boolean;
     now?: () => number;
+    /** Opt-in expiry for bounded synchronous transactions. Other callers retain
+     * the default of never reclaiming a known live owner. */
+    maxAgeMs?: number;
 }
 
 export function isPidAlive(pid: number): boolean {
@@ -55,11 +59,10 @@ function readOwner(lock: string): Observed {
     catch { return { kind: 'gone' }; }
 }
 
-function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number): boolean {
-    if (observed.kind === 'owner') {
-        return !alive(observed.owner.pid);
-    }
-    if (observed.kind === 'ownerless') return now - observed.mtimeMs >= OWNERLESS_STALE_MS;
+function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number, maxAgeMs?: number): boolean {
+    if (observed.kind === 'owner') return !alive(observed.owner.pid)
+        || (maxAgeMs !== undefined && now - observed.owner.acquiredAt >= maxAgeMs);
+    if (observed.kind === 'ownerless') return now - observed.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
     return false;
 }
 
@@ -69,16 +72,16 @@ function sameInstance(a: Observed, b: Observed): boolean {
 }
 
 /** Remove an abandoned lock under the reclaim guard. True when the caller should retry mkdir. */
-function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number): boolean {
+function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number, maxAgeMs?: number): boolean {
     const observed = readOwner(lock);
     if (observed.kind === 'gone') return true;
-    if (!abandoned(observed, alive, now())) return false;
+    if (!abandoned(observed, alive, now(), maxAgeMs)) return false;
     const guard = `${lock}.reclaim`;
     try { mkdirSync(guard, { mode: 0o700 }); } catch { return false; }
     try {
         const recheck = readOwner(lock);
         if (recheck.kind === 'gone') return true;
-        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now())) return false;
+        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now(), maxAgeMs)) return false;
         try { unlinkSync(join(lock, OWNER_FILE)); } catch { /* ownerless or torn record */ }
         try { rmdirSync(lock); return true; } catch { return false; }
     } finally {
@@ -100,7 +103,7 @@ export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): 
         catch (error) {
             const errno = (error as NodeJS.ErrnoException).code;
             if (errno !== 'EEXIST') return { ok: false, busy: false, ...(errno ? { errno } : {}), reason: `write_lock_unavailable: ${lock}` };
-            if (!reclaim(lock, alive, now)) return held();
+            if (!reclaim(lock, alive, now, options.maxAgeMs)) return held();
             continue;
         }
         const owner: LockOwner = { pid: process.pid, nonce: randomBytes(16).toString('hex'), acquiredAt: now() };

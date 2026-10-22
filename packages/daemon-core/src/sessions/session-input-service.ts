@@ -1,6 +1,6 @@
 import { assertMaintenanceAdmission, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 import { OutgoingReceiptStore } from './outgoing-receipt-store.js';
-import type { OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
+import { outgoingInputDigest, type OutgoingReceipt } from '../seqscribe/outgoing-receipt.js';
 /**
  * SessionInputService — the ONE path from any origin into a session's input.
  *
@@ -131,6 +131,7 @@ export interface SessionInputService {
     /** turn.deliver metadata only; native ACK survives a queued submit return. */
     submitNotice(msg: OutboundMessage, observe: (state: 'started'|'submitted'|'uncertain') => void): Promise<SubmitOutcome>;
     getReceipts(sessionId: string, ids: readonly string[]): OutgoingReceipt[];
+    isReceiptUnverified?(messageId: string): boolean;
     submit(msg: OutboundMessage, prepareInput?: PrepareSessionInput): Promise<SubmitOutcome>;
     /**
      * Withdraw a parked body (dashboard cancel). `removed: false` is the honest
@@ -239,26 +240,32 @@ function hasNonTextParts(input: OutboundMessage['input']): boolean {
 export function createSessionInputService(deps: SessionInputServiceDeps): SessionInputService {
     const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
     const freshOutgoing = new Set<string>();
+    const unverifiedReceipts = new Set<string>();
     const outgoingAttempts = new Map<string, OutgoingReceipt>();
     const now = deps.clock ?? Date.now;
     const log = deps.log ?? (() => {});
     const tuning = deps.interrupt ?? {};
+    function receiptFailure(messageId: string, error: unknown): void {
+        unverifiedReceipts.add(messageId);
+        log('warn', `submit(${messageId}) receipt unverified; preserving delivery/dedupe: ${(error as Error)?.message ?? error}`);
+    }
 
     /** messageId → settled delivered/queued outcome + when. */
-    const settled = new Map<string, { kind: 'delivered' | 'queued'; at: number }>();
+    const settled = new Map<string, { kind: 'delivered' | 'queued'; at: number; sessionId: string; inputDigest: string }>();
     /** messageId → the first submit's promise while it runs. */
     const inFlight = new Map<string, Promise<SubmitOutcome>>();
     /** messageId → where/what it was parked as (legacy text lookup + withdraw bookkeeping). */
     const parkedText = new Map<string, { sessionId: string; text: string }>();
 
-    function remember(messageId: string, kind: 'delivered' | 'queued'): void {
+    function remember(msg: OutboundMessage, kind: 'delivered' | 'queued'): void {
+        const messageId = msg.messageId;
         const at = now();
         for (const [id, entry] of settled) {
             if (at - entry.at <= DEDUPE_WINDOW_MS && settled.size < DEDUPE_MAX_ENTRIES) break;
             settled.delete(id);
         }
         settled.delete(messageId);
-        settled.set(messageId, { kind, at });
+        settled.set(messageId, { kind, at, sessionId: msg.sessionId, inputDigest: outgoingInputDigest(msg.input) });
     }
 
     function settledKind(messageId: string): 'delivered' | 'queued' | undefined {
@@ -330,7 +337,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
                 if (state !== 'started') outgoingAttempts.delete(msg.messageId);
             }
-            catch { /* Native write is never retried when receipt persistence is uncertain. */ }
+            catch (error) { receiptFailure(msg.messageId, error); }
         });
         assertMaintenanceAdmission();
         const result = await target.sendMessage(body.text, {
@@ -375,7 +382,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
                 const updated = receiptStore.advance(receipt, state === 'submitted' ? 'submitted' : 'uncertain');
                 if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
                 if (state !== 'started') outgoingAttempts.delete(msg.messageId);
-            } catch { /* Native write is never retried when receipt persistence is uncertain. */ }
+            } catch (error) { receiptFailure(msg.messageId, error); }
         });
         let outcome: { accepted: boolean; reason?: string };
         try {
@@ -481,18 +488,28 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
     }
 
     async function run(msg: OutboundMessage, prepareInput?: PrepareSessionInput, noticeObserver?: (state:'started'|'submitted'|'uncertain')=>void): Promise<SubmitOutcome> {
-        if (prepareInput || msg.origin === 'dashboard' || receiptStore.get(msg.messageId)) {
-            const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
-            if (fresh) freshOutgoing.add(msg.messageId);
-            if (!fresh) {
-                const liveTarget = await deps.resolveSession(msg.sessionId);
-                if (msg.policy.mode === 'queue' || receipt.state !== 'accepted' || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
-                    return { kind: 'duplicate', of: msg.messageId };
-                }
-            }
-            outgoingAttempts.set(msg.messageId, receipt);
+        if (settledKind(msg.messageId) === 'delivered') {
+            const prior = settled.get(msg.messageId)!;
+            if (prior.sessionId !== msg.sessionId || prior.inputDigest !== outgoingInputDigest(msg.input)) throw new Error('Outgoing message identity conflict');
+            return { kind: 'duplicate', of: msg.messageId };
         }
-        if (settledKind(msg.messageId) === 'delivered') return { kind: 'duplicate', of: msg.messageId };
+        try {
+            if (prepareInput || msg.origin === 'dashboard' || receiptStore.hasAcceptance(msg.messageId)) {
+                const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
+                if (fresh) freshOutgoing.add(msg.messageId);
+                if (!fresh) {
+                    const liveTarget = await deps.resolveSession(msg.sessionId);
+                    if (msg.policy.mode === 'queue' || receipt.state !== 'accepted' || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
+                        return { kind: 'duplicate', of: msg.messageId };
+                    }
+                }
+                outgoingAttempts.set(msg.messageId, receipt);
+            }
+        } catch (error) {
+            if ((error as Error).message === 'Outgoing message identity conflict' || !receiptStore.hasAcceptance(msg.messageId)) throw error;
+            receiptFailure(msg.messageId, error);
+            return { kind: 'duplicate', of: msg.messageId };
+        }
 
         let target: SessionInputTarget | null | undefined;
         try {
@@ -551,7 +568,10 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             await pending.catch(() => undefined);
             // Concurrent replay must still match the full original identity.
             try { if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input); }
-            catch { return refuse('internal_error', { message: 'Outgoing message identity conflict' }); }
+            catch (error) {
+                if ((error as Error).message === 'Outgoing message identity conflict') return refuse('internal_error', { message: 'Outgoing message identity conflict' });
+                receiptFailure(msg.messageId, error);
+            }
             return { kind: 'duplicate', of: msg.messageId };
         }
         const promise = withMaintenanceAdmission(() => run(msg, prepareInput, noticeObserver)).catch((e): SubmitOutcome => {
@@ -561,17 +581,21 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
         inFlight.set(msg.messageId, promise);
         try {
             const outcome = await promise;
-            const receipt = outgoingAttempts.get(msg.messageId);
-            if (receipt && outcome.kind === 'refused') {
-                const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === 'accepted'
-                    && ['no_target', 'unsupported_input', 'session_exited', 'paused', 'waiting_external'].includes(outcome.reason);
-                receiptStore.advance(receipt, notWritten ? 'failed' : 'uncertain');
-            }
-            if (receipt && outcome.kind === 'delivered' && receiptStore.get(msg.messageId)?.state === 'accepted') {
-                receiptStore.advance(receipt, 'uncertain');
-            }
-            if (outcome.kind === 'delivered' || outcome.kind === 'queued') remember(msg.messageId, outcome.kind);
+            // Remember the native disposition BEFORE optional receipt I/O. A
+            // journal fault after acceptance cannot turn delivery into refusal.
+            if (outcome.kind === 'delivered' || outcome.kind === 'queued') remember(msg, outcome.kind);
             if (outcome.kind === 'delivered') parkedText.delete(msg.messageId);
+            try {
+                const receipt = outgoingAttempts.get(msg.messageId);
+                if (receipt && outcome.kind === 'refused') {
+                    const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === 'accepted'
+                        && ['no_target', 'unsupported_input', 'session_exited', 'paused', 'waiting_external'].includes(outcome.reason);
+                    receiptStore.advance(receipt, notWritten ? 'failed' : 'uncertain');
+                }
+                if (receipt && outcome.kind === 'delivered' && receiptStore.get(msg.messageId)?.state === 'accepted') {
+                    receiptStore.advance(receipt, 'uncertain');
+                }
+            } catch (error) { receiptFailure(msg.messageId, error); }
             return outcome;
         } finally {
             inFlight.delete(msg.messageId);
@@ -586,6 +610,7 @@ export function createSessionInputService(deps: SessionInputServiceDeps): Sessio
             // to the original write, and late ACKs retain this exact callback.
             return submitOwned({...msg},undefined,observe);
         },
+        isReceiptUnverified: messageId => unverifiedReceipts.has(messageId) || receiptStore.isUnverified(messageId),
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map(receipt => {
             // A restored write-ahead acceptance has no surviving FIFO/observer
             // authority. Replay explicit uncertainty, never infer delivery or retry.

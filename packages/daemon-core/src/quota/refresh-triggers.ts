@@ -3,7 +3,7 @@
  * refresh on session lifecycle events, stale-while-revalidate reads, and the
  * operator's forced refresh (which bypasses TTLs and reports per-provider results).
  */
-import { hasFreshlyMeasuredQuota, REFRESHERS, isRateLimitedSnapshot, cache, refreshQuotaCacheOnce, quotaProviderEnabledFromLoader, readQuotaCache, ambientIsEnabled, isRateLimitedCooldownActive, isDueBySwrTtl, type QuotaProviderEnabled } from './refresh.js';
+import { hasFreshlyMeasuredQuota, REFRESHERS, isRateLimitedSnapshot, cache, refreshQuotaCacheOnce, quotaProviderEnabledFromLoader, readQuotaCache, ambientIsEnabled, isRateLimitedCooldownActive, isDueBySwrTtl, rearmExhaustedFailureRetry, type QuotaProviderEnabled } from './refresh.js';
 import { LOG } from '../logging/logger.js';
 import type { SessionLifecycleBus } from '../sessions/lifecycle-bus.js';
 import type { ProviderState } from '../providers/provider-instance.js';
@@ -178,6 +178,7 @@ export function setupQuotaEventRefresh(
         const at = now();
         if (at - (lastRefreshAt.get(refresher.provider) ?? -Infinity) < debounceMs) return;
         lastRefreshAt.set(refresher.provider, at);
+        rearmExhaustedFailureRetry(refresher.provider, { active: true, now: at });
         void refreshQuotaCacheOnce([refresher], isEnabled)
             .catch((err: any) => LOG.warn('Quota', `Event-driven quota refresh failed: ${err?.message || err}`));
     }, { name: 'quota.event-refresh' });

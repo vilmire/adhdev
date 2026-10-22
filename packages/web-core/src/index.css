@@ -4259,6 +4259,10 @@
         }
     }
 
+    :root {
+        --mobile-flow-header-safe-top: env(safe-area-inset-top, 0px);
+    }
+
     /* PWA standalone */
     @media (display-mode: standalone) {
         .landing-nav {
@@ -4302,12 +4306,38 @@
             box-sizing: border-box;
         }
 
+        /* The root above now consumes inset-top for the whole in-flow tree, so
+           the three mobile flow headers (Inbox, Room, Machine) must not add it
+           again. They read this variable instead of env() directly; it defaults
+           to the raw inset (browser tabs, where the root rule does not apply)
+           and is zeroed here, under the same query as the root reservation, so
+           each edge is consumed exactly once. Fixed overlays (menus, sheets,
+           dialogs, sidebar, toasts) position against the viewport and keep
+           their own raw env() handling. */
+        :root {
+            --mobile-flow-header-safe-top: 0px;
+        }
+
         /* `.landing` and `.main-content` used to carry `padding-top: inset-top`
            themselves. The root now reserves it once for the whole in-flow tree,
            so repeating it here would indent those surfaces by two status bars.
            The fixed elements below are exempt: they position against the
            viewport, not the root's padding box, so the root's padding does not
            move them and they still need their own offset. */
+
+        /* Installed PWA composer: the home-indicator inset IS the bottom padding,
+           with an 8px floor so zero-inset standalone devices (desktop PWA,
+           Android without a gesture bar) are not left flush at the edge.
+           The browser-tab rule (`.dashboard-input-area` above) keeps its 16px
+           design pad + inset; owner decision (2026-10-22) trimmed that pad in
+           standalone because the inset already supplies the clearance and the
+           extra 16px read as dead space under the composer. The inset is still
+           consumed exactly once, here, so the composer never meets the home
+           bar. Must stay after the base rule and keep !important to win over
+           its !important. */
+        .dashboard-input-area {
+            padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
+        }
 
         /* Fixed elements need their own safe-area offset */
         .sidebar {

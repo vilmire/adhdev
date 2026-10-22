@@ -681,4 +681,77 @@ describe('transient-failure retry window — timer and refresh-loop chain agree 
         // 2 min after failure #2 the entry must NOT read as due (it did before the fix).
         expect(isFailureRetryDue('kimi', t2 + 2 * 60_000 + 1)).toBe(false)
     })
+
+    it('re-arms retryExhausted on schedule (60m horizon) and immediately when the CLI becomes active', async () => {
+        vi.useFakeTimers()
+        let active = false
+        fetchKimiQuota.mockImplementation(async () =>
+            quotaFailure('kimi', 'unavailable', 'Kimi quota reading unavailable until next CLI use', {
+                accountLineage: CONFIRMED_FIXTURE_LINEAGE,
+                failureKind: 'expired-token',
+            }),
+        )
+
+        await refreshQuotaCacheOnce([{ provider: 'kimi', fetch: fetchKimiQuota }], allEnabled)
+        const loop = startQuotaRefreshLoop({
+            hasRecentCliActivity: () => active,
+            isEnabled: allEnabled,
+            fetchers: [{ provider: 'kimi', fetch: fetchKimiQuota }] as any,
+        })
+        try {
+            // Exhaust the 4-retry budget (+2, +4, +8, +15 = 29m).
+            await vi.advanceTimersByTimeAsync(29 * 60_000 + 5_000)
+            expect(fetchKimiQuota).toHaveBeenCalledTimes(5)
+            expect(readQuotaCache()?.['kimi']?.metadata?.retryExhausted).toBe(true)
+
+            // When the CLI becomes active, retryExhausted re-arms after the minimum
+            // re-arm interval without waiting for the 60m idle horizon.
+            active = true
+            fetchKimiQuota.mockResolvedValueOnce(okQuota('kimi'))
+            await vi.advanceTimersByTimeAsync(31 * 60_000)
+            expect(fetchKimiQuota.mock.calls.length).toBeGreaterThanOrEqual(6)
+            expect(readQuotaCache()?.['kimi']?.status).toBe('ok')
+            expect(readQuotaCache()?.['kimi']?.metadata?.retryExhausted).toBeUndefined()
+        } finally {
+            loop.stop()
+        }
+    })
+
+    it('bounds attempts per hour when the CLI stays active with a permanently failing fetch', async () => {
+        vi.useFakeTimers()
+        fetchKimiQuota.mockImplementation(async () =>
+            quotaFailure('kimi', 'unavailable', 'Kimi quota reading unavailable until next CLI use', {
+                accountLineage: CONFIRMED_FIXTURE_LINEAGE,
+                failureKind: 'expired-token',
+            }),
+        )
+
+        await refreshQuotaCacheOnce([{ provider: 'kimi', fetch: fetchKimiQuota }], allEnabled)
+        const loop = startQuotaRefreshLoop({
+            hasRecentCliActivity: () => true,
+            isEnabled: allEnabled,
+            // Include a file-axis provider so the active loop wakes every 60s;
+            // kimi must STILL be rate-limited by the 15-minute re-arm floor.
+            fetchers: [
+                { provider: 'kimi', fetch: fetchKimiQuota },
+                { provider: 'claude-cli', fetch: async () => okQuota('claude-cli') },
+            ] as any,
+        })
+        try {
+            // Exhaust the initial 4-retry episode (+2, +4, +8, +15 = 29m -> 5 calls).
+            await vi.advanceTimersByTimeAsync(29 * 60_000 + 5_000)
+            expect(fetchKimiQuota).toHaveBeenCalledTimes(5)
+            expect(readQuotaCache()?.['kimi']?.metadata?.retryExhausted).toBe(true)
+
+            const callsAfterExhaustion = fetchKimiQuota.mock.calls.length
+            // Advance a full active hour (60 one-minute wakes from claude-cli):
+            // kimi may re-arm at most once per 15-minute interval (<= 4 probes/hour).
+            await vi.advanceTimersByTimeAsync(60 * 60_000)
+            const extraCallsInActiveHour = fetchKimiQuota.mock.calls.length - callsAfterExhaustion
+            expect(extraCallsInActiveHour).toBeGreaterThanOrEqual(1)
+            expect(extraCallsInActiveHour).toBeLessThanOrEqual(4)
+        } finally {
+            loop.stop()
+        }
+    })
 })

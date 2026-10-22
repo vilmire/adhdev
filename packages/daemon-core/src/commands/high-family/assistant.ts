@@ -504,6 +504,7 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
         if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
         return wrap(p.slug, meshId, {
             status: str(body.status) || 'accepted',
+            ...(body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {}),
             launched: body.launched === true,
             coordinatorSessionId: remoteCoordSessionId,
             messageId: str(body.messageId) || null,
@@ -522,7 +523,7 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
 });
 
 export type LocalSendResult =
-    | { ok: true; status: 'duplicate' | 'queued' | 'accepted'; launched: boolean; coordinatorSessionId: string; messageId: string; cursor: string | null }
+    | { ok: true; receiptUnverified?: boolean; deliveryNote?: string; status: 'duplicate' | 'queued' | 'accepted'; launched: boolean; coordinatorSessionId: string; messageId: string; cursor: string | null }
     | { ok: false; code: string; error: string; detail: Record<string, unknown> };
 
 /**
@@ -554,7 +555,7 @@ export async function localProjectSend(ports: AssistantProjectPorts, mesh: Local
         };
     }
     const status = sent.deduplicated === true ? 'duplicate' : sent.queued === true ? 'queued' : 'accepted';
-    return { ok: true, status, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
+    return { ok: true, status, ...(sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str(sent.deliveryNote) } : {}), launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
 }
 
 // ── project_read ────────────────────────────────────────────────────────────

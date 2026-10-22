@@ -72,10 +72,10 @@ describe('assessQuotaFreshness', () => {
         expect(f.nextCheckAt).toBeGreaterThan(NOW)
     })
 
-    it.each(['antigravity-cli', 'grok-cli', 'kimi'])('%s expired access token awaits CLI use even with a quota retry pending', (provider) => {
+    it.each(['antigravity-cli', 'grok-cli', 'kimi'])('%s expired access token awaits CLI use without reporting a user auth failure', (provider) => {
         const q = retained(provider, { failureKind: 'expired-token', retryAtMs: NOW + 2 * MIN })
-        expect(assessQuotaFreshness(q, NOW)).toEqual({ cue: 'stale', userMustAct: true })
-        expect(assessQuotaFreshness({ ...q, session: null, weekly: null }, NOW)).toEqual({ userMustAct: true })
+        expect(assessQuotaFreshness(q, NOW)).toEqual({ cue: 'stale', userMustAct: false })
+        expect(assessQuotaFreshness({ ...q, session: null, weekly: null }, NOW)).toEqual({ userMustAct: false })
     })
 
     it('stale successful Grok 76% remaining never reads as current, even after a recent attempt', () => {
