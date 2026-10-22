@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "platform": "linux",
+  "arch": "x64",
+  "apiLevel": 1,
+  "sourceDigest": "aa422cc25bc4dd30bfaa527e30d0fab3a227e4fd564ec5e2d85438a8d11f796f",
+  "napiVersion": 8,
+  "builtWithNode": "v22.14.0",
+  "release": true,
+  "provenance": {
+    "cCompiler": "zig cc 0.15.2",
+    "buildType": "Release"
+  },
+  "files": {
+    "transfer_fs_node.node": {
+      "sha256": "ffaa58dda36ede5198399bfd599e85564e74b2e77d753e0b5ee971f7d28f44e7",
+      "size": 25584
+    }
+  }
+}

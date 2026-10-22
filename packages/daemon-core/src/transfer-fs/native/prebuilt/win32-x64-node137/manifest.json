@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "platform": "win32",
+  "arch": "x64",
+  "apiLevel": 1,
+  "sourceDigest": "aa422cc25bc4dd30bfaa527e30d0fab3a227e4fd564ec5e2d85438a8d11f796f",
+  "napiVersion": 8,
+  "builtWithNode": "v22.14.0",
+  "release": true,
+  "provenance": {
+    "cCompiler": "MSVC 19.44.35229.0",
+    "buildType": ""
+  },
+  "files": {
+    "transfer_fs_node.node": {
+      "sha256": "3e7b58a335e99615d86cda134ac3d7175dd4e95b6955ff0876800217a83152e6",
+      "size": 44544
+    }
+  }
+}
