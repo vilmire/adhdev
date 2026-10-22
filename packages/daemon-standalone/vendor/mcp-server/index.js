@@ -170008,6 +170008,8 @@ ${buttons.join("\n")}`;
       host.pendingAutoApprovalSignature = "";
       host.pendingAutoApprovalSince = 0;
       host.autoApproveInactiveSince = 0;
+      host.autoApproveMaskSince = 0;
+      host.stalledApprovalNudgeEpisode = 0;
       host.autoApproveLastModalSeenAt = 0;
       if (host.autoApproveBusyTimer) clearTimeout(host.autoApproveBusyTimer);
       host.autoApproveBusyTimer = setTimeout(() => {

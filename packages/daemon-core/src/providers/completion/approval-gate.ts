@@ -436,9 +436,9 @@ export function maybeAutoApproveStatus(host: ApprovalGateHost, adapterStatus: an
     host.pendingAutoApprovalSignature = '';
     host.pendingAutoApprovalSince = 0;
     host.autoApproveInactiveSince = 0;
-    // Keep autoApproveMaskSince and stalledApprovalNudgeEpisode active until the
-    // approval state actually exits so a keystroke that fails to close the modal
-    // cannot restart the mask/nudge episode loop.
+    // Fired (resolveModal in flight) — end the pending mask/nudge episode.
+    host.autoApproveMaskSince = 0;
+    host.stalledApprovalNudgeEpisode = 0;
     host.autoApproveLastModalSeenAt = 0;
     if (host.autoApproveBusyTimer) clearTimeout(host.autoApproveBusyTimer);
     host.autoApproveBusyTimer = setTimeout(() => {
