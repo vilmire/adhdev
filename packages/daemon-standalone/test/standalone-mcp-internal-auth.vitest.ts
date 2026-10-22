@@ -674,6 +674,20 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         expect(body.artifacts).toBeUndefined();
         expect(body.history).toBeUndefined();
       }
+      // On a no-auth daemon, an invalid, rotated, or expired MCP credential
+      // header must still return 401 and never fall back to the anonymous
+      // standalone owner read grant.
+      for (const alias of noAuthReadAliases) {
+        for (const badHeaders of [
+          { [INTERNAL_HEADER]: INTERNAL },
+          { [INTERNAL_HEADER]: '' },
+          { [WORKER_HEADER]: 'wsb_expired_or_rotated' },
+          { [WORKER_HEADER]: '' },
+        ] as Array<Record<string, string>>) {
+          const denied = await postCmd(alias, { sessionId: 'worker-sa', artifactId: workerArtId }, badHeaders);
+          expect(denied.status, `no-auth bad MCP header ${alias}`).toBe(401);
+        }
+      }
       // Rotate the actual authenticated token after HTTP admission, retaining
       // a live same-session bind and a fresh current token. The old header may
       // not silently fall back to that different credential in the consumer.

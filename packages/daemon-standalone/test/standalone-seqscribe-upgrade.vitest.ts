@@ -150,6 +150,23 @@ describe('/ws/seqscribe upgrade gate', () => {
     expect(h.accepted).toEqual([]);
   });
 
+  it('refuses a DNS-rebinding Host header with 403 on both /ws and /ws/seqscribe (with or without Origin)', async () => {
+    const h = await startServer({ token: null });
+    for (const path of ['/ws', SEQSCRIBE_PATH]) {
+      const withMatchingRebindOrigin = await dial(`${h.base}${path}`, {
+        Host: 'rebind.example:3847',
+        Origin: 'http://rebind.example:3847',
+      });
+      expect(withMatchingRebindOrigin.outcome, `${path} with rebind Origin`).toBe(403);
+      const withoutOrigin = await dial(`${h.base}${path}`, {
+        Host: 'rebind.example:3847',
+      });
+      expect(withoutOrigin.outcome, `${path} without Origin`).toBe(403);
+    }
+    expect(h.accepted).toEqual([]);
+    expect(h.dashboard).toBe(0);
+  });
+
   it('answers 503 when the lane is unavailable (node closed / kill switch), after auth', async () => {
     const h = await startServer({ token: null, laneAvailable: false });
     expect((await dial(`${h.base}${SEQSCRIBE_PATH}`)).outcome).toBe(503);

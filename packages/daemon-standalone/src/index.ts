@@ -162,7 +162,7 @@ interface WsMessage {
 
 // ─── Standalone Server ───
 
-class StandaloneServer {
+export class StandaloneServer {
   private httpServer: ReturnType<typeof createServer> | null = null;
   private wss: WebSocketServer | null = null;
   /**
@@ -621,7 +621,12 @@ class StandaloneServer {
           const requestId = msg.requestId;
           // A no-auth daemon has no owner credential; its artifact READ verbs
           // get a narrow owner grant instead (captureUnauthenticatedArtifactReadGuard).
-          const ownerGuard = source === 'standalone' && typeof isOwnerAuthorized === 'function'
+          // Re-evaluate `isOwnerAuthorized()` per message so a `/ws` opened while
+          // authenticated falls back to `captureReadGuard` after password/token
+          // auth is cleared at runtime.
+          const ownerGuard = source === 'standalone'
+            && typeof isOwnerAuthorized === 'function'
+            && isOwnerAuthorized()
             ? isOwnerAuthorized
             : captureReadGuard?.(type) ?? undefined;
           const liveOwnerAuthorized = Boolean(ownerGuard && ownerGuard());
@@ -979,7 +984,11 @@ async function main(): Promise<void> {
   await new Promise<void>(() => {});
 }
 
-main().catch((e) => {
-  console.error('Fatal error:', e);
-  process.exit(1);
-});
+const isDirectEntry = !process.env.VITEST_WORKER_ID
+  || /(?:^|[\\/])index\.[cm]?[jt]s$/.test(process.argv[1] || '');
+if (isDirectEntry) {
+  main().catch((e) => {
+    console.error('Fatal error:', e);
+    process.exit(1);
+  });
+}
