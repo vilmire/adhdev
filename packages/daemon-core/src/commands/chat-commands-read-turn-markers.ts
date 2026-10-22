@@ -25,7 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ProviderModule, ProviderScripts } from '../providers/contracts.js';
-import { readProviderChatHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
+import { readProviderChatHistory, readProviderChatHistoryAsync, hasAsyncProviderHistoryReader } from '../config/provider-native-history.js';
 
 // The codex live-workspace native probe. Its result feeds the marker selection
 // below (liveSelected) when the machine selects THAT read as the source.
@@ -41,7 +41,7 @@ export async function readLiveCodexWorkspaceNativeHistory(agentStr: string, args
     if (agentStr !== 'codex-cli') return null;
     const workspace = typeof args.workspace === 'string' ? args.workspace.trim() : '';
     if (!workspace) return null;
-    const history = await readProviderChatHistoryAsync(agentStr, {
+    const history = await (hasAsyncProviderHistoryReader(args.canonicalHistory, args.scripts as any) ? readProviderChatHistoryAsync : readProviderChatHistory)(agentStr, {
         canonicalHistory: args.canonicalHistory,
         workspace,
         offset: args.offset,

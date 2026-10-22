@@ -430,7 +430,7 @@ export class CliProviderInstance implements ProviderInstance {
     getActionState() {
         const status = this.adapter.getStatus({ allowParse: false });
         return { type: this.type, category: 'cli', settings: this.settings,
-            activeChat: { activeModal: status.activeModal, activeInteractivePrompt: status.activeInteractivePrompt } };
+            activeChat: { activeModal: status.activeModal, activeInteractivePrompt: this.activeInteractivePrompt ?? status.activeInteractivePrompt } };
     }
 
     getState(): ProviderState {

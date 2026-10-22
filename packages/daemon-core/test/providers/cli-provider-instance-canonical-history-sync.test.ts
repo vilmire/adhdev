@@ -62,6 +62,16 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     mockHomeDir = ''
   })
 
+  it('includes the instance interactive prompt in cheap action state', async () => {
+    const { CliProviderInstance } = await import('../../src/providers/cli-provider-instance.js')
+    const instance = Object.create(CliProviderInstance.prototype) as any
+    const prompt = { id: 'instance-prompt', kind: 'choice' }
+    instance.activeInteractivePrompt = prompt
+    instance.adapter = { getStatus: vi.fn(() => ({ activeModal: null, activeInteractivePrompt: null })) }
+    expect(instance.getActionState().activeChat.activeInteractivePrompt).toBe(prompt)
+    expect(instance.adapter.getStatus).toHaveBeenCalledWith({ allowParse: false })
+  })
+
   it('prefers provider-owned native history over parsed synthetic terminal/tool history for hermes saved-history', async () => {
     const historySessionId = '20260422_002711_293d9a'
 

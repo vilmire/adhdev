@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 interface ParsedJsonlCacheEntry {
     signature: string;
@@ -21,6 +22,7 @@ interface ParsedJsonlCacheEntry {
     /** File identity the committed prefix belongs to (see canResumeFrom). */
     dev: number;
     ino: number;
+    boundaryDigest: string | null;
 }
 
 interface ParsedJsonlCacheStats {
@@ -86,25 +88,26 @@ function storeParsedJsonlCache(p: string, entry: ParsedJsonlCacheEntry): void {
     }
 }
 
-/**
- * Whether `cached`'s committed prefix is still a byte-prefix of the file `stat`
- * describes, i.e. the file only grew.
- *
- * This is deliberately conservative. Anything that is not "same file, same
- * inode, not shorter than what we already committed" falls back to a full
- * re-read: truncation, rotation, atomic replace (new ino), or a same-path file
- * on a different device. We do NOT verify the retained prefix byte-for-byte —
- * a rewrite that preserves length and inode while changing earlier bytes would
- * be missed — because that is precisely what dev+ino+size+mtime+ctime already
- * guards against for the whole-file path, and no JSONL store this cache serves
- * (claude / codex / cursor / kimi) rewrites in place. Stores that DO mutate in
- * place (hermes sqlite, antigravity .db) never reach this module.
- */
-function canResumeFrom(cached: ParsedJsonlCacheEntry, stat: fs.Stats): boolean {
-    if (cached.dev !== stat.dev || cached.ino !== stat.ino) return false;
-    // A shrink means bytes we already committed are gone — the prefix is void.
-    if (stat.size < cached.committedBytes) return false;
-    return true;
+// Validate a bounded window immediately before the committed cursor. Inodes
+// alone cannot distinguish an in-place growing rewrite or Windows ino === 0.
+const BOUNDARY_BYTES = 4096;
+function boundaryDigest(p: string, committedBytes: number): string | null {
+    let fd: number | undefined;
+    try {
+        fd = fs.openSync(p, 'r');
+        const length = Math.min(BOUNDARY_BYTES, committedBytes);
+        const bytes = Buffer.allocUnsafe(length);
+        if (fs.readSync(fd, bytes, 0, length, committedBytes - length) !== length) return null;
+        return createHash('sha256').update(bytes).digest('hex');
+    } catch { return null; }
+    finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function canResumeFrom(p: string, cached: ParsedJsonlCacheEntry, stat: fs.Stats): boolean {
+    if (cached.dev !== stat.dev) return false;
+    if (cached.ino !== 0 && stat.ino !== 0 && cached.ino !== stat.ino) return false;
+    if (stat.size < cached.committedBytes || cached.boundaryDigest === null) return false;
+    return boundaryDigest(p, cached.committedBytes) === cached.boundaryDigest;
 }
 
 /**
@@ -187,7 +190,7 @@ export function readJsonlLines(p: string, forceRefresh = false): any[] {
     // the bytes we already parsed are still a prefix of it, so parse just the
     // tail and extend the existing record array. `forceRefresh` opts out — a
     // completion-contract probe wants a genuinely fresh read of the whole file.
-    if (!forceRefresh && cached && canResumeFrom(cached, stat)) {
+    if (!forceRefresh && cached && canResumeFrom(p, cached, stat)) {
         const tail = readTailBytes(p, cached.committedBytes, stat.size);
         if (tail !== null) {
             parsedJsonlCacheStats.fileReads++;
@@ -209,6 +212,7 @@ export function readJsonlLines(p: string, forceRefresh = false): any[] {
                 committedLineCount: parsed.committedLineCount,
                 dev: stat.dev,
                 ino: stat.ino,
+                boundaryDigest: boundaryDigest(p, cached.committedBytes + parsed.committedBytes),
             });
             return lines;
         }
@@ -233,6 +237,7 @@ export function readJsonlLines(p: string, forceRefresh = false): any[] {
         committedLineCount: parsed.committedLineCount,
         dev: stat.dev,
         ino: stat.ino,
+        boundaryDigest: boundaryDigest(p, parsed.committedBytes),
     });
     return out;
 }
@@ -289,11 +294,10 @@ export function* readProjectedJsonlRecords<T>(
         parsedJsonlCacheStats.hits++;
         return cached.lines;
     }
-    yield; // Let a synchronous lifecycle sampler defer a cold/changed source.
     parsedJsonlCacheStats.misses++;
     // A same-size timestamp change is a rewrite, not an empty append. Compare
     // against sourceBytes, not committedBytes (which excludes a partial line).
-    const resume = cached && stat.size > cached.sourceBytes && canResumeFrom(cached, stat);
+    const resume = cached && stat.size > cached.sourceBytes && canResumeFrom(p, cached, stat);
     const from = resume ? cached.committedBytes : 0;
     const lines: T[] = resume ? cached.lines.slice(0, cached.committedLineCount) : [];
     let committedBytes = from;
@@ -321,6 +325,7 @@ export function* readProjectedJsonlRecords<T>(
     let fragments: Buffer[] = [];
     let fragmentBytes = 0;
     let position = from;
+    let recordsSinceYield = 0;
     try {
         while (position < stat.size) {
             const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, stat.size - position));
@@ -338,20 +343,34 @@ export function* readProjectedJsonlRecords<T>(
                 committedBytes = position - count + end + 1;
                 committedLineCount = lines.length;
                 start = end + 1;
-                if (lines.length % 256 === 0) yield;
+                // Do useful work before yielding, and finish small tails in
+                // this tick. Malformed/filtered records still consume budget.
+                if (++recordsSinceYield >= 256 && (end + 1 < count || position < stat.size)) {
+                    recordsSinceYield = 0;
+                    yield;
+                }
             }
             if (start < count) {
                 const fragment = chunk.subarray(start, count);
                 fragments.push(fragment);
                 fragmentBytes += fragment.length;
             }
-            yield;
+            if (position < stat.size) yield;
         }
         if (fragmentBytes) parse(Buffer.concat(fragments, fragmentBytes));
     } finally { fs.closeSync(fd); }
+    const digest = boundaryDigest(p, committedBytes);
+    // A writer may replace/rewrite the file while we yield. Never publish a
+    // mixed revision or seal its cursor with a digest from different bytes.
+    let after: fs.Stats;
+    try { after = fs.statSync(p); } catch { return []; }
+    if (parsedJsonlSignature(after) !== signature) {
+        return yield* readProjectedJsonlRecords(p, projectionKey, project);
+    }
     projectedJsonlCache.set(key, {
         signature, sourceBytes: stat.size, lines, committedBytes,
         committedLineCount, dev: stat.dev, ino: stat.ino, touchedAt: Date.now(),
+        boundaryDigest: digest,
     });
     return lines;
 }

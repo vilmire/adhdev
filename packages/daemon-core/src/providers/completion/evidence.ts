@@ -510,6 +510,9 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
     });
+    // Loading is a deferred read, not evidence that prior markers vanished.
+    // Preserve the last published snapshot until the first rebuild completes.
+    if (restoredHistory.unavailableReason === 'native_history_loading') return [];
     // (NATIVE-TURN-SIGNAL) Capture the provider's own turn-terminal records from THIS read,
     // before the source check below can early-return. Refreshed on every probe so a stale
     // marker from a previous read can never satisfy a later turn's gate.
@@ -526,10 +529,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
     if (restoredHistory.source !== 'provider-native') {
         host.lastExternalCompletionProbe = null;
         host.publishTranscriptSignalObservation(null);
-        // A cooperative rebuild is pending, rather than an absent transcript.
-        // Keep the existing external-native hold; do not fall back to weaker
-        // parsed evidence while the current signature is still being read.
-        return restoredHistory.unavailableReason === 'native_history_loading' ? [] : null;
+        return null;
     }
     host.lastExternalCompletionProbe = buildExternalTranscriptProbe(
         restoredHistory.messages,

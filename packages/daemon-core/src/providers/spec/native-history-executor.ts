@@ -67,51 +67,80 @@ export function executeNativeHistory(cfg: NativeHistoryConfig, input: NativeHist
     return null;
 }
 
-// Serialize cooperative rebuilds globally. Multiple status/publisher/completion
-// consumers share a source cursor and cannot start overlapping prefix rebuilds.
+// Serialize cooperative rebuilds globally; continue the work already started
+// by a sync sampler instead of discarding and replaying its first chunk.
 let jsonlWorkQueue: Promise<unknown> = Promise.resolve();
-export function executeNativeHistoryAsync(cfg: NativeHistoryConfig, input: NativeHistoryInput): Promise<NativeHistoryResult | null> {
-    if (cfg?.source?.kind !== 'jsonl') return Promise.resolve(executeNativeHistory(cfg, input));
+function enqueueJsonlWork(work: Generator<void, NativeHistoryResult | null, void>): Promise<NativeHistoryResult | null> {
     const run = async () => {
-        const work = executeJsonl(cfg.source as NativeHistoryJsonlSource, input);
-        let step = work.next();
-        while (!step.done) {
+        let step: IteratorResult<void, NativeHistoryResult | null>;
+        do {
             await new Promise<void>(resolve => setImmediate(resolve));
             step = work.next();
-        }
+        } while (!step.done);
         return step.value;
     };
     const result = jsonlWorkQueue.then(run, run);
     jsonlWorkQueue = result.catch(() => {});
     return result;
 }
+export function executeNativeHistoryAsync(cfg: NativeHistoryConfig, input: NativeHistoryInput): Promise<NativeHistoryResult | null> {
+    if (cfg?.source?.kind !== 'jsonl') return Promise.resolve(executeNativeHistory(cfg, input));
+    return enqueueJsonlWork(executeJsonl(cfg.source, input));
+}
 
-/** Synchronous provider lifecycle hooks may sample a completed snapshot, but
- * must never drain a cold large transcript. Chat commands await readAsync;
- * status/completion get unavailable until the same cooperative job completes. */
+/** Small cold reads and bounded appends finish in the sampling tick. Larger
+ * rebuilds run cooperatively and keep serving the last good source snapshot. */
 export function createCooperativeNativeHistoryReader(cfg: NativeHistoryConfig) {
     const pending = new Map<string, Promise<NativeHistoryResult | null>>();
-    const keyFor = (input: NativeHistoryInput) => JSON.stringify({ ...input, forceRefresh: undefined,
-        args: { ...input.args, forceRefresh: undefined, excludeInProgressTurn: undefined }, excludeInProgressTurn: undefined });
+    const snapshots = new Map<string, { result: NativeHistoryResult; touchedAt: number }>();
     const loading: NativeHistoryResult = { messages: [], sourcePath: '', sourceMtimeMs: 0, unavailableReason: 'native_history_loading' };
+    const sourceFor = (input: NativeHistoryInput) => cfg.source?.kind === 'jsonl'
+        ? resolveJsonlSourcePathDetailed(cfg.source, input) : undefined;
+    // Resolve under EACH caller's attribution rules before sharing source work.
+    // Paging, forceRefresh, adapter status and completion flags aren't identity.
+    const keyFor = (input: NativeHistoryInput, resolution = sourceFor(input)) =>
+        resolution?.path ? JSON.stringify([input.agentType, claimKeyForPath(resolution.path)]) : undefined;
+    const boundResult = (input: NativeHistoryInput, result: NativeHistoryResult | null) => {
+        const requested = readRequestedSessionId(input);
+        return requested && result?.providerSessionId && !sameSessionUuid(requested, result.providerSessionId) ? null : result;
+    };
     const reader = (input: NativeHistoryInput): NativeHistoryResult | null => {
-        const key = keyFor(input);
-        if (pending.has(key)) return loading;
         if (cfg?.source?.kind !== 'jsonl') return executeNativeHistory(cfg, input);
-        const work = executeJsonl(cfg.source, input);
-        const first = work.next();
-        if (first.done) return first.value;
-        work.return(null);
-        // Re-enter after earlier jobs finish: another consumer may have already
-        // advanced this same source while this request waited in the queue.
-        const result = executeNativeHistoryAsync(cfg, input);
+        const resolution = sourceFor(input)!;
+        const key = keyFor(input, resolution);
+        if (!key) return executeNativeHistory(cfg, input);
+        const now = Date.now();
+        for (const [k, snapshot] of snapshots) {
+            if (now - snapshot.touchedAt > 10 * 60_000) snapshots.delete(k);
+        }
+        const previous = snapshots.get(key);
+        if (previous) previous.touchedAt = now;
+        const stale = () => boundResult(input, previous ? { ...previous.result, stale: true } : loading);
+        if (pending.has(key)) return stale();
+        const work = executeJsonl(cfg.source, input, resolution);
+        const start = performance.now();
+        let step = work.next();
+        // Both small cold reads and resumed appends may cross a chunk boundary.
+        // Let budgeted work (including old timestamp/tool seals) finish now.
+        while (!step.done && performance.now() - start < 8) step = work.next();
+        if (step.done) {
+            if (step.value) snapshots.set(key, { result: step.value, touchedAt: now });
+            else snapshots.delete(key);
+            return step.value;
+        }
+        const result = enqueueJsonlWork(work).then(value => {
+            if (value) snapshots.set(key, { result: value, touchedAt: Date.now() });
+            else snapshots.delete(key);
+            return value;
+        });
         pending.set(key, result);
-        void result.finally(() => pending.delete(key)).catch(() => {});
-        return loading;
+        void result.finally(() => { if (pending.get(key) === result) pending.delete(key); }).catch(() => {});
+        return stale();
     };
     reader.readAsync = async (input: NativeHistoryInput) => {
         const result = reader(input);
-        return pending.get(keyFor(input)) ?? result;
+        const key = keyFor(input);
+        return boundResult(input, await ((key && pending.get(key)) || result));
     };
     return reader;
 }
@@ -314,6 +343,7 @@ interface CompactJsonlRecord {
     sessionId?: unknown;
     workspace?: string;
     terminal?: any;
+    sourceAddresses?: { lineage: string; values: NativeHistoryMessage['_src'][] };
 }
 interface JsonlProjection {
     messages: NativeHistoryMessage[];
@@ -322,8 +352,7 @@ interface JsonlProjection {
 }
 const jsonlProjections = new WeakMap<CompactJsonlRecord[], Map<string, JsonlProjection>>();
 
-function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput): Generator<void, NativeHistoryResult | null, void> {
-    const resolution = resolveJsonlSourcePathDetailed(src, input);
+function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput, resolution = resolveJsonlSourcePathDetailed(src, input)): Generator<void, NativeHistoryResult | null, void> {
     const outcome = resolution.outcome;
     if (outcome && (outcome.attribution === 'ambiguous' || outcome.attribution === 'already_claimed')) {
         // Fail closed under same-cwd concurrency: never surface a transcript —
@@ -354,7 +383,6 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput)
         return null;
     }
 
-    const mtime = safeMtimeMs(sourcePath);
     const shapes = compileRecordShapes(src);
     const pickUsage = compileUsageShapes(src);
     const requested = readRequestedSessionId(input) || '';
@@ -388,6 +416,9 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput)
         };
     });
     if (lines.length === 0) return null;
+    // The source may have advanced during cooperative I/O. Seal tool refs and
+    // fallback clocks with metadata sampled after that work, never before it.
+    const mtime = safeMtimeMs(sourcePath);
     // Prefer an in-transcript session_meta cwd; fall back to the input workspace
     // only when the spec opts in AND the resolved file lives under that
     // workspace's project slug (cursor-agent writes no session_meta and hides the
@@ -422,10 +453,16 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput)
     if (!projection) {
         const messages: NativeHistoryMessage[] = [];
         const usageRecords: NativeUsageRecord[] = [];
+        const lineage = providerSessionId || requested || sourcePath;
         for (let i = 0; i < lines.length; i++) {
             const rec = lines[i];
             if (rec.usage) usageRecords.push(rec.fallbackUsageTime ? { ...rec.usage, receivedAt: mtime } : rec.usage);
-            for (const original of rec.messages) {
+            // Committed records survive appends; hash their lineage once.
+            if (rec.sourceAddresses?.lineage !== lineage) {
+                rec.sourceAddresses = { lineage, values: rec.messages.map(original => original._src?.cls === 'n'
+                    ? nativeSourceAddress(lineage, original._src.addr) : original._src) };
+            }
+            for (const [messageIndex, original] of rec.messages.entries()) {
                 const msg = { ...original };
                 if (rec.fallbackTime) msg.receivedAt += mtime - ((lines.length - 1 - i) * 1000) - 1;
                 if (msg.toolBlockRef) {
@@ -433,12 +470,15 @@ function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput)
                     else delete msg.toolBlockRef;
                 }
                 // Stamp the same source lineage as the original full projection.
-                if (original._src?.cls === 'n') msg._src = nativeSourceAddress(providerSessionId || requested || sourcePath, original._src.addr);
+                if (original._src?.cls === 'n') msg._src = rec.sourceAddresses.values[messageIndex];
                 if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
                 messages.push(msg);
             }
-            if (i % 256 === 0) yield;
+            if ((i + 1) % 256 === 0 && i + 1 < lines.length) yield;
         }
+        // Projection can also yield; re-check after all cooperative work. If
+        // the source advanced, refresh its tail before publishing/sealing it.
+        if (safeMtimeMs(sourcePath) !== mtime) return yield* executeJsonl(src, input, resolution);
         const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal));
         projection = { messages: markNativeHistorySnapshot(messages), turnTerminalMarkers,
             ...(usageRecords.length ? { usage: foldUsageRecords(usageRecords, {

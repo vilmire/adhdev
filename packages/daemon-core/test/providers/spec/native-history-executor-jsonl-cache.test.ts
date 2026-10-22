@@ -8,7 +8,10 @@ import { __getParsedJsonlCacheStatsForTests, __resetParsedJsonlCacheForTests } f
 vi.mock('node:fs', async () => ({ ...await vi.importActual('node:fs') }));
 import { compileRecordShapes, compileUsageShapes, projectMessages, projectUsageRecord } from '../../../src/providers/spec/native-history-projection.js';
 import { foldUsageRecords } from '../../../src/shared/usage-normalize.js';
-import { readExternalCompletionMessages } from '../../../src/providers/completion/evidence.js';
+import { readExternalCompletionMessages, getLiveTurnPendingEvidence, getTerminalAdmissionObservations } from '../../../src/providers/completion/evidence.js';
+import { publishTranscriptSignalObservation, probeNativeTranscriptSignals } from '../../../src/providers/cli-provider-transcript-signals.js';
+import { runMeshStallTick } from '../../../src/providers/completion/mesh-stall-watchdog.js';
+import { readJsonlLines } from '../../../src/providers/spec/native-history-jsonl-cache.js';
 const SESSION_ID = '8c6cf338-ef5c-4df5-91a5-66c1e2ed4339';
 
 describe('native JSONL parsed-result cache', () => {
@@ -212,6 +215,18 @@ describe('native JSONL parsed-result cache', () => {
         expect(JSON.stringify(read())).toBe(JSON.stringify(incremental));
     });
 
+    it('finishes cold and appended work synchronously across chunk boundaries within budget', () => {
+        for (let i = 0; i < 600; i++) append('assistant', `message ${i}`, 1_800_000_000_000 + i);
+        const reader = createCooperativeNativeHistoryReader(config);
+        const input = { agentType: 'cache-test-cli', providerSessionId: SESSION_ID };
+        const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+        expect(reader(input)!.messages).toHaveLength(600);
+        append('assistant', 'new tail', 1_800_000_001_000);
+        expect(reader(input)!.messages.at(-1)!.content).toBe('new tail');
+        expect(reader(input)!.stale).toBeUndefined();
+        clock.mockRestore();
+    });
+
     it('cooperatively rebuilds, coalesces readers, and keeps read_chat paging byte-identical', async () => {
         for (let i = 0; i < 600; i++) append(i % 2 ? 'assistant' : 'user', `message ${i}`, 1_800_000_000_000 + i * 1000);
         const synchronous = executeNativeHistory(config, { agentType: 'cache-test-cli', providerSessionId: SESSION_ID });
@@ -223,7 +238,9 @@ describe('native JSONL parsed-result cache', () => {
         const expected = [0, 10, 60, 550].map(offset => JSON.stringify(readProviderChatHistory('cache-test-cli', { ...options, offset, limit: 30 })));
         __resetParsedJsonlCacheForTests();
         const reader = createCooperativeNativeHistoryReader(config);
+        const clock = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(9);
         expect(reader({ agentType: 'cache-test-cli', providerSessionId: SESSION_ID })).toMatchObject({ unavailableReason: 'native_history_loading' });
+        clock.mockRestore();
         let heartbeats = 0;
         const timer = setInterval(() => heartbeats++, 0);
         const [a, b] = await Promise.all([
@@ -283,7 +300,7 @@ describe('native JSONL parsed-result cache', () => {
         }
     });
 
-    it('holds completion evidence while loading and observes an appended terminal record without prefix replay', async () => {
+    it('observes completion appends and terminal markers synchronously in the same tick without prefix replay', () => {
         config.source.message_filter = { where: "$.type == 'message'" };
         const write = (rec: any) => fs.appendFileSync(transcriptPath, JSON.stringify(rec) + '\n');
         write({ type: 'message', role: 'assistant', content: 'answer', receivedAt: 1_800_000_000_000 });
@@ -292,22 +309,149 @@ describe('native JSONL parsed-result cache', () => {
             providerSessionId: SESSION_ID, adapter: { chatMessagesOwnedExternally: true },
             provider: { nativeHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } }, scripts: { readNativeHistory: reader } },
             spawnedEnvOverrides: () => ({}), publishTranscriptSignalObservation: vi.fn() };
-        expect(readExternalCompletionMessages(host)).toEqual([]);
-        await new Promise(resolve => setImmediate(resolve));
-        // Await the same source via the async boundary (the queue serializes differing caller contexts).
-        await readProviderChatHistoryAsync(host.type, { canonicalHistory: host.provider.nativeHistory, scripts: host.provider.scripts, historySessionId: SESSION_ID, workspace: tmpDir, instanceId: 'runtime', sessionStartedAtMs: 0, envOverrides: {} });
         expect(readExternalCompletionMessages(host)).toHaveLength(1);
         const before = __getParsedJsonlCacheStatsForTests();
         const terminal = { type: 'event_msg', timestamp: '2027-01-15T08:00:01.000Z', payload: { type: 'task_complete', turn_id: 'turn', last_agent_message: 'done' } };
         write(terminal);
-        expect(readExternalCompletionMessages(host)).toEqual([]);
-        await readProviderChatHistoryAsync(host.type, { canonicalHistory: host.provider.nativeHistory, scripts: host.provider.scripts, historySessionId: SESSION_ID, workspace: tmpDir, instanceId: 'runtime', sessionStartedAtMs: 0, envOverrides: {} });
-        readExternalCompletionMessages(host);
+        expect(readExternalCompletionMessages(host)).toHaveLength(1);
         expect(host.lastNativeTurnTerminalMarkers).toMatchObject([{ outcome: 'completed', turnId: 'turn', summary: 'done' }]);
         const after = __getParsedJsonlCacheStatsForTests();
         expect(after.fullReads).toBe(before.fullReads);
         expect(after.recordsParsed - before.recordsParsed).toBe(1);
         expect(after.bytesRead - before.bytesRead).toBe(Buffer.byteLength(JSON.stringify(terminal) + '\n'));
+    });
+
+    it.each(['growing rewrite', 'same-size rewrite', 'ino-zero replacement'])('rebuilds a %s instead of resuming the wrong prefix', mode => {
+        if (mode === 'ino-zero replacement') {
+            const realStat = fs.statSync;
+            vi.spyOn(fs, 'statSync').mockImplementation(((...args: any[]) => {
+                const stat = (realStat as any)(...args);
+                Object.defineProperty(stat, 'ino', { value: 0 });
+                return stat;
+            }) as any);
+        }
+        append('user', 'old prefix', 1_800_000_000_000);
+        readJsonlLines(transcriptPath);
+        read();
+        const before = __getParsedJsonlCacheStatsForTests();
+        const replacement = JSON.stringify({ role: 'user', content: 'new prefix', receivedAt: 1_800_000_000_000 }) + '\n';
+        const extra = JSON.stringify({ role: 'assistant', content: 'new tail', receivedAt: 1_800_000_001_000 }) + '\n';
+        if (mode === 'ino-zero replacement') {
+            fs.writeFileSync(transcriptPath + '.new', replacement + extra);
+            fs.renameSync(transcriptPath + '.new', transcriptPath);
+        } else {
+            fs.writeFileSync(transcriptPath, replacement + (mode === 'growing rewrite' ? extra : ''));
+        }
+        const future = new Date(Date.now() + 10_000);
+        fs.utimesSync(transcriptPath, future, future);
+        const expected = mode === 'same-size rewrite' ? ['new prefix'] : ['new prefix', 'new tail'];
+        expect(readJsonlLines(transcriptPath).map(rec => rec.content)).toEqual(expected);
+        const rebuilt = read();
+        expect(rebuilt!.messages.map(msg => msg.content)).toEqual(expected);
+        expect(__getParsedJsonlCacheStatsForTests().fullReads - before.fullReads).toBe(1);
+        __resetParsedJsonlCacheForTests();
+        expect(read()).toEqual(rebuilt);
+    });
+
+    it('serves a marked stale snapshot during a budgeted rebuild and coalesces callers by source', async () => {
+        append('assistant', 'last good answer', 1_800_000_000_000);
+        const reader = createCooperativeNativeHistoryReader(config);
+        const input = { agentType: 'cache-test-cli', providerSessionId: SESSION_ID };
+        const first = reader(input)!;
+        for (let i = 0; i < 600; i++) append('assistant', `appended ${i}`, 1_800_000_001_000 + i);
+        // Deterministic budget exhaustion after the first useful chunk.
+        const clock = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(9);
+        const stale = reader(input)!;
+        clock.mockRestore();
+        expect(stale).toMatchObject({ stale: true, sourcePath: transcriptPath });
+        expect(stale.messages).toBe(first.messages);
+        expect(stale.unavailableReason).toBeUndefined();
+        const options: any = { canonicalHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } },
+            historySessionId: SESSION_ID, scripts: { readNativeHistory: reader } };
+        expect(readProviderChatHistory(input.agentType, options)).toMatchObject({ source: 'provider-native', stale: true });
+        // Coalescing source work must still enforce each caller's session pin.
+        const foreign = { ...input, providerSessionId: '11111111-1111-4111-9111-111111111111' };
+        expect(reader(foreign)).toBeNull();
+        const foreignRead = reader.readAsync(foreign);
+        const [status, completion, chat] = await Promise.all([
+            reader.readAsync(input),
+            reader.readAsync({ agentType: input.agentType, historySessionId: SESSION_ID, forceRefresh: true, workspace: tmpDir, args: { forceRefresh: true } }),
+            reader.readAsync({ agentType: input.agentType, sessionId: SESSION_ID, instanceId: 'read-chat', args: { offset: 20, limit: 30 } }),
+        ]);
+        expect(await foreignRead).toBeNull();
+        expect(status).toBe(completion);
+        expect(status).toBe(chat);
+        expect(status!.messages).toHaveLength(601);
+        expect(status!.stale).toBeUndefined();
+        expect(status!.messages[0]._src).toBe(first.messages[0]._src);
+        expect(__getParsedJsonlCacheStatsForTests()).toMatchObject({ fullReads: 1, incrementalReads: 1, recordsParsed: 601 });
+    });
+
+    it('preserves existing completion markers and snapshots while a cold large source is loading', async () => {
+        for (let i = 0; i < 600; i++) append('assistant', `message ${i}`, 1_800_000_000_000 + i);
+        const reader = createCooperativeNativeHistoryReader(config);
+        const markers = [{ outcome: 'completed', turnId: 'previous' }];
+        const snapshot = { msgCount: 1 };
+        const host: any = { type: 'codex-cli', instanceId: 'runtime', workingDir: tmpDir, startedAt: 0,
+            providerSessionId: SESSION_ID, adapter: { chatMessagesOwnedExternally: true },
+            provider: { nativeHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } }, scripts: { readNativeHistory: reader } },
+            lastNativeTurnTerminalMarkers: markers, lastExternalCompletionProbe: snapshot,
+            spawnedEnvOverrides: () => ({}), publishTranscriptSignalObservation: vi.fn() };
+        const clock = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(9);
+        expect(readExternalCompletionMessages(host)).toEqual([]);
+        clock.mockRestore();
+        expect(host.lastNativeTurnTerminalMarkers).toBe(markers);
+        expect(host.lastExternalCompletionProbe).toBe(snapshot);
+        expect(host.publishTranscriptSignalObservation).not.toHaveBeenCalled();
+        await reader.readAsync({ agentType: host.type, providerSessionId: SESSION_ID });
+        expect(readExternalCompletionMessages(host)).toHaveLength(600);
+    });
+
+    it('re-stats after cooperative work and seals tool references with the completed revision', async () => {
+        config.source.message_map.tools = {};
+        for (let i = 0; i < 600; i++) append('assistant', `message ${i}`, 1_800_000_000_000 + i);
+        fs.appendFileSync(transcriptPath, JSON.stringify({ role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: { text: 'a'.repeat(5000) } }] }) + '\n');
+        const reader = createCooperativeNativeHistoryReader(config);
+        const input = { agentType: 'cache-test-cli', providerSessionId: SESSION_ID };
+        const clock = vi.spyOn(performance, 'now').mockReturnValueOnce(0).mockReturnValue(9);
+        expect(reader(input)).toMatchObject({ unavailableReason: 'native_history_loading' });
+        clock.mockRestore();
+        const future = new Date(Date.now() + 10_000);
+        fs.utimesSync(transcriptPath, future, future);
+        const result = (await reader.readAsync(input))!;
+        const mtime = Math.floor(fs.statSync(transcriptPath).mtimeMs);
+        expect(result.sourceMtimeMs).toBe(mtime);
+        expect(result.messages.at(-1)!.toolBlockRef!.sourceMtimeMs).toBe(mtime);
+        expect(reader(input)!.sourceMtimeMs).toBe(mtime);
+    });
+
+    it('keeps trailing-tool admission vetoes and watchdog progress while the real JSONL grows', () => {
+        config.source.message_map.tools = {};
+        append('assistant', 'interim narration', 1_800_000_000_000);
+        const reader = createCooperativeNativeHistoryReader(config);
+        const host: any = { type: 'claude-cli', instanceId: 'runtime-growing', workingDir: tmpDir, startedAt: 1,
+            providerSessionId: SESSION_ID, adapter: { chatMessagesOwnedExternally: true, setSignalObservation: vi.fn(),
+                getLastApprovalResolvedAt: () => 0, getStatus: () => ({ lastOutputAt: 1, status: 'idle' }) },
+            provider: { nativeHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } }, scripts: { readNativeHistory: reader } },
+            spawnedEnvOverrides: () => ({}), hasAdapterPendingResponse: () => false, isModalParked: () => false,
+            completionHasFinalAssistantMessage: () => true,
+            meshStallAnchorAt: 1, meshStallEmittedForAnchor: false, meshStallLastFiredAt: -1,
+            meshStallTranscriptSignalSampled: true, isMeshWorkerSession: () => true,
+            meshTraceCtx: () => ({}), pushEvent: vi.fn() };
+        host.publishTranscriptSignalObservation = (messages: any) => publishTranscriptSignalObservation(host, messages);
+        host.readExternalCompletionMessages = () => readExternalCompletionMessages(host);
+        host.probeNativeTranscriptSignals = () => probeNativeTranscriptSignals(host);
+        host.probeNativeTranscriptSignals();
+        for (let i = 0; i < 3; i++) {
+            fs.appendFileSync(transcriptPath, JSON.stringify({ role: 'assistant', receivedAt: 1_800_000_001_000 + i,
+                content: [{ type: 'tool_use', name: 'Read', input: { file: `file-${i}` } }] }) + '\n');
+            expect(getLiveTurnPendingEvidence(host)).toMatchObject({ pending: true, kind: 'transcript_tool' });
+            expect(getTerminalAdmissionObservations(host, Date.now()).trailingActivityCount).toBe(i + 1);
+            runMeshStallTick(host, 180_001 + i * 180_000);
+            expect(host.meshStallAnchorAt).toBe(180_001 + i * 180_000);
+            expect(host.pushEvent).not.toHaveBeenCalled();
+        }
+        expect(__getParsedJsonlCacheStatsForTests()).toMatchObject({ fullReads: 1, incrementalReads: 3, recordsParsed: 4 });
     });
 
     it('preserves adjacent and last-turn duplicate removal after signature memoization', () => {

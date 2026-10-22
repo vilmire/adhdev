@@ -7,7 +7,7 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import { type ProviderModule } from '../providers/contracts.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistory, readProviderChatHistoryAsync, hasAsyncProviderHistoryReader } from '../config/provider-native-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { isActivityChatMessage, normalizeChatMessages } from '../providers/chat-message-normalization.js';
@@ -212,7 +212,7 @@ async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace
                 allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
                 excludeActivity: !includeActivity,
             })
-            : await readProviderChatHistoryAsync(agentStr, {
+            : await (hasAsyncProviderHistoryReader(provider?.nativeHistory, provider?.scripts as any) ? readProviderChatHistoryAsync : readProviderChatHistory)(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
                 historySessionId,
                 workspace,

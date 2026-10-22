@@ -104,6 +104,8 @@ export interface NativeHistoryInput {
 
 
 export interface NativeHistoryResult {
+    /** Last good snapshot served while a newer source revision is rebuilding. */
+    stale?: boolean;
     messages: NativeHistoryMessage[];
     providerSessionId?: string;
     sourcePath: string;

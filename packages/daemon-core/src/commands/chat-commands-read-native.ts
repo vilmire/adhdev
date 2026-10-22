@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import type { ChatMessage } from '../types.js';
 import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
-import { readProviderChatHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
+import { readProviderChatHistory, readProviderChatHistoryAsync, hasAsyncProviderHistoryReader } from '../config/provider-native-history.js';
 import type { CommandHelpers } from './handler.js';
 import { getTargetedCliAdapter } from './chat-commands-shared.js';
 
@@ -333,5 +333,5 @@ export function readCliProviderNativeHistory(agent: string, args: Parameters<typ
 export async function readCliProviderNativeHistoryAsync(agent: string, args: Parameters<typeof readCliProviderNativeHistoryWork>[1]) {
     const work = readCliProviderNativeHistoryWork(agent, args);
     const step = work.next();
-    return step.done ? step.value : work.next(await readProviderChatHistoryAsync(...step.value)).value as ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' };
+    return step.done ? step.value : work.next(await (hasAsyncProviderHistoryReader(step.value[1]?.canonicalHistory, step.value[1]?.scripts) ? readProviderChatHistoryAsync : readProviderChatHistory)(...step.value)).value as ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' };
 }

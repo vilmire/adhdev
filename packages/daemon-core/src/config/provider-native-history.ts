@@ -27,6 +27,7 @@ type ProviderNativeHistoryReadResult = {
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
     sourcePath: string;
     sourceMtimeMs: number;
+    stale?: boolean;
     providerSessionId?: string;
     workspace?: string;
     nativeHistoryCoverage?: string;
@@ -227,6 +228,7 @@ function callProviderNativeHistoryRead(
         turnTerminalMarkers: Array.isArray((result as any).turnTerminalMarkers) ? (result as any).turnTerminalMarkers : undefined,
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
         sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
+        stale: (result as any).stale === true || undefined,
         providerSessionId: typeof (result as any).providerSessionId === 'string' ? (result as any).providerSessionId.trim() : undefined,
         workspace: typeof (result as any).workspace === 'string' ? (result as any).workspace.trim() : undefined,
         nativeHistoryCoverage: typeof (result as any).nativeHistoryCoverage === 'string' ? (result as any).nativeHistoryCoverage.trim() : undefined,
@@ -375,6 +377,7 @@ export function readProviderChatHistory(
     source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable';
     sourcePath?: string;
     sourceMtimeMs?: number;
+    stale?: boolean;
     providerSessionId?: string;
     workspace?: string;
     nativeHistoryCoverage?: string;
@@ -406,6 +409,7 @@ export function readProviderChatHistory(
             source: 'provider-native',
             sourcePath: nativeResult.sourcePath,
             sourceMtimeMs: nativeResult.sourceMtimeMs,
+            stale: nativeResult.stale,
             providerSessionId: nativeResult.providerSessionId,
             workspace: nativeResult.workspace,
             nativeHistoryCoverage: nativeResult.nativeHistoryCoverage,

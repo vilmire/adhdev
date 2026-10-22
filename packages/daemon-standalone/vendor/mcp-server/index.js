@@ -72584,6 +72584,7 @@ ${upstream}`;
         turnTerminalMarkers: Array.isArray(result.turnTerminalMarkers) ? result.turnTerminalMarkers : void 0,
         sourcePath: typeof result.sourcePath === "string" ? result.sourcePath : "",
         sourceMtimeMs: Number(result.sourceMtimeMs) || 0,
+        stale: result.stale === true || void 0,
         providerSessionId: typeof result.providerSessionId === "string" ? result.providerSessionId.trim() : void 0,
         workspace: typeof result.workspace === "string" ? result.workspace.trim() : void 0,
         nativeHistoryCoverage: typeof result.nativeHistoryCoverage === "string" ? result.nativeHistoryCoverage.trim() : void 0,
@@ -72674,6 +72675,7 @@ ${upstream}`;
           source: "provider-native",
           sourcePath: nativeResult.sourcePath,
           sourceMtimeMs: nativeResult.sourceMtimeMs,
+          stale: nativeResult.stale,
           providerSessionId: nativeResult.providerSessionId,
           workspace: nativeResult.workspace,
           nativeHistoryCoverage: nativeResult.nativeHistoryCoverage,
@@ -92442,7 +92444,7 @@ ${body}`;
     });
     var import_node_fs8;
     var import_node_path9;
-    var import_node_crypto18;
+    var import_node_crypto19;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -92451,7 +92453,7 @@ ${body}`;
         "use strict";
         import_node_fs8 = require("fs");
         import_node_path9 = require("path");
-        import_node_crypto18 = require("crypto");
+        import_node_crypto19 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -92475,7 +92477,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto18.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto19.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -92718,7 +92720,7 @@ ${body}`;
           if (!reclaim2(lock, alive, now)) return held();
           continue;
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto19.randomBytes)(16).toString("hex"), acquiredAt: now() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto20.randomBytes)(16).toString("hex"), acquiredAt: now() };
         try {
           (0, import_node_fs9.writeFileSync)((0, import_node_path10.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -92742,7 +92744,7 @@ ${body}`;
     }
     var import_node_fs9;
     var import_node_path10;
-    var import_node_crypto19;
+    var import_node_crypto20;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var init_owned_lock = __esm2({
@@ -92750,7 +92752,7 @@ ${body}`;
         "use strict";
         import_node_fs9 = require("fs");
         import_node_path10 = require("path");
-        import_node_crypto19 = require("crypto");
+        import_node_crypto20 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
       }
@@ -92847,7 +92849,7 @@ ${body}`;
     }
     var import_node_fs10;
     var import_node_path11;
-    var import_node_crypto20;
+    var import_node_crypto21;
     var entryKeys;
     var origins;
     var integer;
@@ -92857,7 +92859,7 @@ ${body}`;
         "use strict";
         import_node_fs10 = require("fs");
         import_node_path11 = require("path");
-        import_node_crypto20 = require("crypto");
+        import_node_crypto21 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -92942,7 +92944,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto20.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto21.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs10.openSync)(temp, "wx", 384);
@@ -93081,7 +93083,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto21.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto222.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -93094,7 +93096,7 @@ ${body}`;
     }
     var import_node_fs11;
     var import_node_path12;
-    var import_node_crypto21;
+    var import_node_crypto222;
     var ID2;
     var proposalKeys;
     var text2;
@@ -93105,7 +93107,7 @@ ${body}`;
         "use strict";
         import_node_fs11 = require("fs");
         import_node_path12 = require("path");
-        import_node_crypto21 = require("crypto");
+        import_node_crypto222 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -93137,7 +93139,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto21.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto222.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -93148,7 +93150,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs11.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto21.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto222.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs11.openSync)(tmp, "wx", 384);
               try {
@@ -99231,7 +99233,7 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
-    var import_node_crypto23;
+    var import_node_crypto24;
     var import_node_os22;
     var import_node_path16;
     var refused;
@@ -99240,7 +99242,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto23 = require("crypto");
+        import_node_crypto24 = require("crypto");
         import_node_os22 = require("os");
         import_node_path16 = require("path");
         init_managed_mcp_process();
@@ -99445,7 +99447,7 @@ ${asText(streams.stderr)}
               this.instances.set(input.type, instance);
             }
             const record6 = {
-              invocationId: (0, import_node_crypto23.randomUUID)(),
+              invocationId: (0, import_node_crypto24.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
@@ -99517,7 +99519,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto24;
+    var import_node_crypto25;
     var import_node_fs14;
     var import_node_path17;
     var ID3;
@@ -99526,7 +99528,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto24 = require("crypto");
+        import_node_crypto25 = require("crypto");
         import_node_fs14 = require("fs");
         import_node_path17 = require("path");
         init_config();
@@ -99546,7 +99548,7 @@ ${asText(streams.stderr)}
             const record6 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto24.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto25.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -99615,7 +99617,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto25.createHash)("sha256");
+      const hash3 = (0, import_node_crypto26.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs15.readFileSync)((0, import_node_path18.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path18.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -99638,13 +99640,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta._sourceTrust }, treeDigest: digest4 };
     }
-    var import_node_crypto25;
+    var import_node_crypto26;
     var import_node_fs15;
     var import_node_path18;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto25 = require("crypto");
+        import_node_crypto26 = require("crypto");
         import_node_fs15 = require("fs");
         import_node_path18 = require("path");
         init_manifest();
@@ -103452,7 +103454,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises10.lstat)(root)).isSymbolicLink() || await (0, import_promises10.realpath)(root) !== (0, import_node_path19.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key4 = (0, import_node_crypto26.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
+      const key4 = (0, import_node_crypto27.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
       return (0, import_node_path19.join)(root, key4);
     }
     async function verifyCheckout(workspace, identity2) {
@@ -103521,7 +103523,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         throw busy();
       }
       const ownerPath = (0, import_node_path19.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
       try {
         await (0, import_promises10.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -103547,7 +103549,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises10.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
         await (0, import_promises10.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -103669,7 +103671,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process14;
     var import_node_util8;
-    var import_node_crypto26;
+    var import_node_crypto27;
     var import_promises10;
     var import_node_path19;
     var exec5;
@@ -103688,7 +103690,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process14 = require("child_process");
         import_node_util8 = require("util");
-        import_node_crypto26 = require("crypto");
+        import_node_crypto27 = require("crypto");
         import_promises10 = require("fs/promises");
         import_node_path19 = require("path");
         init_config();
@@ -103733,13 +103735,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity2) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key4 = (0, import_node_crypto27.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto27.createHmac)("sha256", key4).update(`${grant.target}
+      const key4 = (0, import_node_crypto28.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto28.createHmac)("sha256", key4).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto27.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto28.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity2) {
       const hostId = str9(args?.hostDaemonId);
@@ -103768,7 +103770,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto27;
+    var import_node_crypto28;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -103777,7 +103779,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto27 = require("crypto");
+        import_node_crypto28 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -104009,7 +104011,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest4 = (0, import_node_crypto28.createHash)("sha256").update(body).digest("hex");
+        const digest4 = (0, import_node_crypto29.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
       } catch {
         return false;
@@ -104046,7 +104048,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto28.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -104240,7 +104242,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto28.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto29.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -104317,7 +104319,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto28;
+    var import_node_crypto29;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -104328,7 +104330,7 @@ ${b.text}`).join("\n\n");
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
-        import_node_crypto28 = require("crypto");
+        import_node_crypto29 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -105700,15 +105702,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
     }
-    var import_node_crypto29;
+    var import_node_crypto30;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto29 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto30 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto30.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -105894,7 +105896,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    var import_node_crypto30;
+    var import_node_crypto31;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -105910,7 +105912,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto30 = require("crypto");
+        import_node_crypto31 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -105922,7 +105924,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto30.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto31.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -125808,6 +125810,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       }
     }
     var fs49 = __toESM2(require("fs"));
+    var import_node_crypto14 = require("crypto");
     var PARSED_JSONL_CACHE_MAX_ENTRIES = 8;
     var PARSED_JSONL_CACHE_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
     var parsedJsonlCache = /* @__PURE__ */ new Map();
@@ -125842,10 +125845,26 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         parsedJsonlCache.delete(oldestKey);
       }
     }
-    function canResumeFrom(cached5, stat2) {
-      if (cached5.dev !== stat2.dev || cached5.ino !== stat2.ino) return false;
-      if (stat2.size < cached5.committedBytes) return false;
-      return true;
+    var BOUNDARY_BYTES = 4096;
+    function boundaryDigest(p, committedBytes) {
+      let fd;
+      try {
+        fd = fs49.openSync(p, "r");
+        const length = Math.min(BOUNDARY_BYTES, committedBytes);
+        const bytes = Buffer.allocUnsafe(length);
+        if (fs49.readSync(fd, bytes, 0, length, committedBytes - length) !== length) return null;
+        return (0, import_node_crypto14.createHash)("sha256").update(bytes).digest("hex");
+      } catch {
+        return null;
+      } finally {
+        if (fd !== void 0) fs49.closeSync(fd);
+      }
+    }
+    function canResumeFrom(p, cached5, stat2) {
+      if (cached5.dev !== stat2.dev) return false;
+      if (cached5.ino !== 0 && stat2.ino !== 0 && cached5.ino !== stat2.ino) return false;
+      if (stat2.size < cached5.committedBytes || cached5.boundaryDigest === null) return false;
+      return boundaryDigest(p, cached5.committedBytes) === cached5.boundaryDigest;
     }
     function parseJsonlInto(out, text4) {
       const lastNewline = text4.lastIndexOf("\n");
@@ -125905,7 +125924,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         return cached5.lines;
       }
       parsedJsonlCacheStats.misses++;
-      if (!forceRefresh && cached5 && canResumeFrom(cached5, stat2)) {
+      if (!forceRefresh && cached5 && canResumeFrom(p, cached5, stat2)) {
         const tail = readTailBytes(p, cached5.committedBytes, stat2.size);
         if (tail !== null) {
           parsedJsonlCacheStats.fileReads++;
@@ -125921,7 +125940,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             committedBytes: cached5.committedBytes + parsed2.committedBytes,
             committedLineCount: parsed2.committedLineCount,
             dev: stat2.dev,
-            ino: stat2.ino
+            ino: stat2.ino,
+            boundaryDigest: boundaryDigest(p, cached5.committedBytes + parsed2.committedBytes)
           });
           return lines;
         }
@@ -125943,7 +125963,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         committedBytes: parsed.committedBytes,
         committedLineCount: parsed.committedLineCount,
         dev: stat2.dev,
-        ino: stat2.ino
+        ino: stat2.ino,
+        boundaryDigest: boundaryDigest(p, parsed.committedBytes)
       });
       return out;
     }
@@ -125969,9 +125990,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         parsedJsonlCacheStats.hits++;
         return cached5.lines;
       }
-      yield;
       parsedJsonlCacheStats.misses++;
-      const resume = cached5 && stat2.size > cached5.sourceBytes && canResumeFrom(cached5, stat2);
+      const resume = cached5 && stat2.size > cached5.sourceBytes && canResumeFrom(p, cached5, stat2);
       const from = resume ? cached5.committedBytes : 0;
       const lines = resume ? cached5.lines.slice(0, cached5.committedLineCount) : [];
       let committedBytes = from;
@@ -126006,6 +126026,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       let fragments = [];
       let fragmentBytes = 0;
       let position = from;
+      let recordsSinceYield = 0;
       try {
         while (position < stat2.size) {
           const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, stat2.size - position));
@@ -126023,18 +126044,31 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
             committedBytes = position - count + end + 1;
             committedLineCount = lines.length;
             start = end + 1;
-            if (lines.length % 256 === 0) yield;
+            if (++recordsSinceYield >= 256 && (end + 1 < count || position < stat2.size)) {
+              recordsSinceYield = 0;
+              yield;
+            }
           }
           if (start < count) {
             const fragment = chunk.subarray(start, count);
             fragments.push(fragment);
             fragmentBytes += fragment.length;
           }
-          yield;
+          if (position < stat2.size) yield;
         }
         if (fragmentBytes) parse2(Buffer.concat(fragments, fragmentBytes));
       } finally {
         fs49.closeSync(fd);
+      }
+      const digest4 = boundaryDigest(p, committedBytes);
+      let after;
+      try {
+        after = fs49.statSync(p);
+      } catch {
+        return [];
+      }
+      if (parsedJsonlSignature(after) !== signature) {
+        return yield* readProjectedJsonlRecords(p, projectionKey, project);
       }
       projectedJsonlCache.set(key4, {
         signature,
@@ -126044,7 +126078,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         committedLineCount,
         dev: stat2.dev,
         ino: stat2.ino,
-        touchedAt: Date.now()
+        touchedAt: Date.now(),
+        boundaryDigest: digest4
       });
       return lines;
     }
@@ -127156,15 +127191,13 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       return null;
     }
     var jsonlWorkQueue = Promise.resolve();
-    function executeNativeHistoryAsync(cfg, input) {
-      if (cfg?.source?.kind !== "jsonl") return Promise.resolve(executeNativeHistory(cfg, input));
+    function enqueueJsonlWork(work) {
       const run3 = async () => {
-        const work = executeJsonl(cfg.source, input);
-        let step = work.next();
-        while (!step.done) {
+        let step;
+        do {
           await new Promise((resolve54) => setImmediate(resolve54));
           step = work.next();
-        }
+        } while (!step.done);
         return step.value;
       };
       const result = jsonlWorkQueue.then(run3, run3);
@@ -127174,30 +127207,52 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function createCooperativeNativeHistoryReader(cfg) {
       const pending = /* @__PURE__ */ new Map();
-      const keyFor = (input) => JSON.stringify({
-        ...input,
-        forceRefresh: void 0,
-        args: { ...input.args, forceRefresh: void 0, excludeInProgressTurn: void 0 },
-        excludeInProgressTurn: void 0
-      });
+      const snapshots2 = /* @__PURE__ */ new Map();
       const loading = { messages: [], sourcePath: "", sourceMtimeMs: 0, unavailableReason: "native_history_loading" };
+      const sourceFor = (input) => cfg.source?.kind === "jsonl" ? resolveJsonlSourcePathDetailed(cfg.source, input) : void 0;
+      const keyFor = (input, resolution = sourceFor(input)) => resolution?.path ? JSON.stringify([input.agentType, claimKeyForPath(resolution.path)]) : void 0;
+      const boundResult = (input, result) => {
+        const requested = readRequestedSessionId(input);
+        return requested && result?.providerSessionId && !sameSessionUuid(requested, result.providerSessionId) ? null : result;
+      };
       const reader = (input) => {
-        const key4 = keyFor(input);
-        if (pending.has(key4)) return loading;
         if (cfg?.source?.kind !== "jsonl") return executeNativeHistory(cfg, input);
-        const work = executeJsonl(cfg.source, input);
-        const first = work.next();
-        if (first.done) return first.value;
-        work.return(null);
-        const result = executeNativeHistoryAsync(cfg, input);
-        pending.set(key4, result);
-        void result.finally(() => pending.delete(key4)).catch(() => {
+        const resolution = sourceFor(input);
+        const key4 = keyFor(input, resolution);
+        if (!key4) return executeNativeHistory(cfg, input);
+        const now = Date.now();
+        for (const [k, snapshot] of snapshots2) {
+          if (now - snapshot.touchedAt > 10 * 6e4) snapshots2.delete(k);
+        }
+        const previous = snapshots2.get(key4);
+        if (previous) previous.touchedAt = now;
+        const stale = () => boundResult(input, previous ? { ...previous.result, stale: true } : loading);
+        if (pending.has(key4)) return stale();
+        const work = executeJsonl(cfg.source, input, resolution);
+        const start = performance.now();
+        let step = work.next();
+        while (!step.done && performance.now() - start < 8) step = work.next();
+        if (step.done) {
+          if (step.value) snapshots2.set(key4, { result: step.value, touchedAt: now });
+          else snapshots2.delete(key4);
+          return step.value;
+        }
+        const result = enqueueJsonlWork(work).then((value) => {
+          if (value) snapshots2.set(key4, { result: value, touchedAt: Date.now() });
+          else snapshots2.delete(key4);
+          return value;
         });
-        return loading;
+        pending.set(key4, result);
+        void result.finally(() => {
+          if (pending.get(key4) === result) pending.delete(key4);
+        }).catch(() => {
+        });
+        return stale();
       };
       reader.readAsync = async (input) => {
         const result = reader(input);
-        return pending.get(keyFor(input)) ?? result;
+        const key4 = keyFor(input);
+        return boundResult(input, await (key4 && pending.get(key4) || result));
       };
       return reader;
     }
@@ -127299,8 +127354,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
     }
     var jsonlProjections = /* @__PURE__ */ new WeakMap();
-    function* executeJsonl(src, input) {
-      const resolution = resolveJsonlSourcePathDetailed(src, input);
+    function* executeJsonl(src, input, resolution = resolveJsonlSourcePathDetailed(src, input)) {
       const outcome = resolution.outcome;
       if (outcome && (outcome.attribution === "ambiguous" || outcome.attribution === "already_claimed")) {
         return {
@@ -127326,7 +127380,6 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         LOG.debug("NativeHistory", `jsonl unresolved: tried=${JSON.stringify(resolved)} sessionId=${requestedSessionId || "(none)"} wsRaw=${JSON.stringify(wsRaw)} wsReal=${JSON.stringify(wsReal)} rawSlug=${JSON.stringify(claudeProjectDirName(wsRaw))} realSlug=${JSON.stringify(claudeProjectDirName(wsReal))} (concrete miss + raw-slug retry + projects scan all failed)`);
         return null;
       }
-      const mtime = safeMtimeMs(sourcePath);
       const shapes = compileRecordShapes(src);
       const pickUsage = compileUsageShapes(src);
       const requested = readRequestedSessionId(input) || "";
@@ -127358,6 +127411,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         };
       });
       if (lines.length === 0) return null;
+      const mtime = safeMtimeMs(sourcePath);
       const transcriptWorkspace = lines.slice(0, 5).find((record6) => record6.workspace)?.workspace ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : void 0) ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : void 0);
       let providerSessionId;
       if (src.session_id_from === "first_record" && src.session_id_path) {
@@ -127376,22 +127430,27 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!projection) {
         const messages2 = [];
         const usageRecords = [];
+        const lineage = providerSessionId || requested || sourcePath;
         for (let i = 0; i < lines.length; i++) {
           const rec5 = lines[i];
           if (rec5.usage) usageRecords.push(rec5.fallbackUsageTime ? { ...rec5.usage, receivedAt: mtime } : rec5.usage);
-          for (const original of rec5.messages) {
+          if (rec5.sourceAddresses?.lineage !== lineage) {
+            rec5.sourceAddresses = { lineage, values: rec5.messages.map((original) => original._src?.cls === "n" ? nativeSourceAddress(lineage, original._src.addr) : original._src) };
+          }
+          for (const [messageIndex, original] of rec5.messages.entries()) {
             const msg = { ...original };
             if (rec5.fallbackTime) msg.receivedAt += mtime - (lines.length - 1 - i) * 1e3 - 1;
             if (msg.toolBlockRef) {
               if (mtime > 0) msg.toolBlockRef = { ...msg.toolBlockRef, sourceMtimeMs: mtime };
               else delete msg.toolBlockRef;
             }
-            if (original._src?.cls === "n") msg._src = nativeSourceAddress(providerSessionId || requested || sourcePath, original._src.addr);
+            if (original._src?.cls === "n") msg._src = rec5.sourceAddresses.values[messageIndex];
             if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
             messages2.push(msg);
           }
-          if (i % 256 === 0) yield;
+          if ((i + 1) % 256 === 0 && i + 1 < lines.length) yield;
         }
+        if (safeMtimeMs(sourcePath) !== mtime) return yield* executeJsonl(src, input, resolution);
         const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec5) => rec5.terminal));
         projection = {
           messages: markNativeHistorySnapshot(messages2),
@@ -133972,7 +134031,7 @@ ${output}` : "";
     }
     var fs71 = __toESM2(require("fs"));
     var path77 = __toESM2(require("path"));
-    var import_node_crypto16 = require("crypto");
+    var import_node_crypto17 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -134135,7 +134194,7 @@ ${output}` : "";
     async function readCliProviderNativeHistoryAsync(agent, args) {
       const work = readCliProviderNativeHistoryWork(agent, args);
       const step = work.next();
-      return step.done ? step.value : work.next(await readProviderChatHistoryAsync(...step.value)).value;
+      return step.done ? step.value : work.next(await (hasAsyncProviderHistoryReader(step.value[1]?.canonicalHistory, step.value[1]?.scripts) ? readProviderChatHistoryAsync : readProviderChatHistory)(...step.value)).value;
     }
     init_contracts2();
     init_coordinator_registry();
@@ -134883,7 +134942,7 @@ ${output}` : "";
       if (agentStr !== "codex-cli") return null;
       const workspace = typeof args.workspace === "string" ? args.workspace.trim() : "";
       if (!workspace) return null;
-      const history = await readProviderChatHistoryAsync(agentStr, {
+      const history = await (hasAsyncProviderHistoryReader(args.canonicalHistory, args.scripts) ? readProviderChatHistoryAsync : readProviderChatHistory)(agentStr, {
         canonicalHistory: args.canonicalHistory,
         workspace,
         offset: args.offset,
@@ -134962,7 +135021,7 @@ ${output}` : "";
       };
     }
     var fs70 = __toESM2(require("fs"));
-    var import_node_crypto15 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     init_logger();
     var import_crypto24 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -136046,10 +136105,10 @@ ${output}` : "";
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto15 = require("crypto");
     init_dist2();
     function sha1(text4) {
-      return (0, import_node_crypto14.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto15.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -136923,7 +136982,7 @@ ${output}` : "";
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto15.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto16.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     var TranscriptProjectionService = class {
       deps;
@@ -138495,7 +138554,7 @@ ${output}` : "";
         // Last-resort only when no pin was ever recorded AND the
         // runtime fallback did not resolve a real provider session.
         allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback
-      }) : await readProviderChatHistoryAsync(agentStr, {
+      }) : await (hasAsyncProviderHistoryReader(provider?.nativeHistory, provider?.scripts) ? readProviderChatHistoryAsync : readProviderChatHistory)(agentStr, {
         canonicalHistory: provider?.nativeHistory,
         historySessionId,
         workspace,
@@ -138888,7 +138947,7 @@ ${output}` : "";
           pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
           allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
           excludeActivity: !includeActivity
-        }) : await readProviderChatHistoryAsync(agentStr, {
+        }) : await (hasAsyncProviderHistoryReader(provider?.nativeHistory, provider?.scripts) ? readProviderChatHistoryAsync : readProviderChatHistory)(agentStr, {
           canonicalHistory: provider?.nativeHistory,
           historySessionId,
           workspace,
@@ -139148,7 +139207,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto16.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto17.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -139440,14 +139499,14 @@ ${output}` : "";
     }
     var import_node_fs6 = __toESM2(require("fs"));
     var import_node_path7 = __toESM2(require("path"));
-    var import_node_crypto17 = require("crypto");
+    var import_node_crypto18 = require("crypto");
     var OutgoingReceiptStore = class {
       constructor(directory2) {
         this.directory = directory2;
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path7.default.join(this.directory, (0, import_node_crypto17.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path7.default.join(this.directory, (0, import_node_crypto18.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -139480,8 +139539,8 @@ ${output}` : "";
           messageId,
           sessionId,
           inputDigest,
-          attemptId: (0, import_node_crypto17.randomUUID)(),
-          generation: (0, import_node_crypto17.randomUUID)(),
+          attemptId: (0, import_node_crypto18.randomUUID)(),
+          generation: (0, import_node_crypto18.randomUUID)(),
           state: "accepted",
           revision: 1,
           proof: "acceptance"
@@ -139517,7 +139576,7 @@ ${output}` : "";
         };
         if (this.directory) {
           const file = this.filename(current4.messageId);
-          const staging = `${file}.${(0, import_node_crypto17.randomUUID)()}.tmp`;
+          const staging = `${file}.${(0, import_node_crypto18.randomUUID)()}.tmp`;
           const fd = import_node_fs6.default.openSync(staging, "wx", 384);
           try {
             import_node_fs6.default.writeFileSync(fd, JSON.stringify(next));
@@ -145239,7 +145298,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db) {
@@ -145247,7 +145306,7 @@ ${output}` : "";
     }
     function key3(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto222.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto23.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db, credential, claim) {
       schema2(db);
@@ -154273,7 +154332,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto31 = require("crypto");
+    var import_node_crypto322 = require("crypto");
     var import_node_fs16 = require("fs");
     var os36 = __toESM2(require("os"));
     var import_node_path20 = require("path");
@@ -154498,7 +154557,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const tmpPath = (0, import_node_path20.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto31.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto322.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -161761,7 +161820,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs105 = __toESM2(require("fs"));
     var path96 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto322 = require("crypto");
+    var import_node_crypto33 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -161802,7 +161861,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto322.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto33.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -166210,7 +166269,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs104 = __toESM2(require("fs"));
-    var import_node_crypto33 = require("crypto");
+    var import_node_crypto34 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -166237,7 +166296,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto33.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto34.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -168816,7 +168875,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process18 = require("child_process");
-    var import_node_crypto34 = require("crypto");
+    var import_node_crypto35 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -168826,7 +168885,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto34.randomUUID)();
+      generation = (0, import_node_crypto35.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -168887,7 +168946,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto34.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto35.randomUUID)()}`;
         return new Promise((resolve54, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -168923,7 +168982,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto35 = require("crypto");
+    var import_node_crypto36 = require("crypto");
     init_dist();
     function record5(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -169054,7 +169113,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto35.randomUUID)(),
+          promptId: (0, import_node_crypto36.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -170565,6 +170624,7 @@ ${buttons.join("\n")}`;
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
       });
+      if (restoredHistory.unavailableReason === "native_history_loading") return [];
       if (host.type === "codex-cli" && !resolvedHandle && restoredHistory.ownerConfirmed !== true) {
         host.lastNativeTurnTerminalMarkers = null;
         host.lastExternalCompletionProbe = null;
@@ -170575,7 +170635,7 @@ ${buttons.join("\n")}`;
       if (restoredHistory.source !== "provider-native") {
         host.lastExternalCompletionProbe = null;
         host.publishTranscriptSignalObservation(null);
-        return restoredHistory.unavailableReason === "native_history_loading" ? [] : null;
+        return null;
       }
       host.lastExternalCompletionProbe = buildExternalTranscriptProbe(
         restoredHistory.messages,
@@ -170699,7 +170759,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto36 = require("crypto");
+    var import_node_crypto37 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -170897,7 +170957,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto36.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto37.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -173325,7 +173385,7 @@ ${buttons.join("\n")}`;
           type: this.type,
           category: "cli",
           settings: this.settings,
-          activeChat: { activeModal: status.activeModal, activeInteractivePrompt: status.activeInteractivePrompt }
+          activeChat: { activeModal: status.activeModal, activeInteractivePrompt: this.activeInteractivePrompt ?? status.activeInteractivePrompt }
         };
       }
       getState() {
@@ -187464,7 +187524,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto37 = require("crypto");
+    var import_node_crypto38 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -187473,7 +187533,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto37.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto38.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -187483,7 +187543,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto37.randomUUID)();
+          const id4 = (0, import_node_crypto38.randomUUID)();
           active.add(id4);
           try {
             return await run3();

@@ -9,7 +9,7 @@
 
 import type { CommandHelpers, CommandResult } from './handler.js';
 import type { ChatMessage } from '../types.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistory, readProviderChatHistoryAsync, hasAsyncProviderHistoryReader } from '../config/provider-native-history.js';
 import { LOG } from '../logging/logger.js';
 import { getCurrentProviderType } from './chat-commands-shared.js';
 import { normalizeReadChatTailLimit } from './read-chat-message-filters.js';
@@ -104,7 +104,7 @@ async function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadC
             // runtime fallback did not resolve a real provider session.
             allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
         })
-        : await readProviderChatHistoryAsync(agentStr, {
+        : await (hasAsyncProviderHistoryReader(provider?.nativeHistory, provider?.scripts as any) ? readProviderChatHistoryAsync : readProviderChatHistory)(agentStr, {
             canonicalHistory: provider?.nativeHistory,
             historySessionId,
             workspace,
