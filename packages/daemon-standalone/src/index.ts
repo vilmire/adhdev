@@ -424,7 +424,12 @@ class StandaloneServer {
         case 'dashboard': {
           const ownerGuard = this.http.captureOwnerAuthGuard(req, req.url || '/');
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
-            this.handleWsConnection(ws, ownerGuard ? 'standalone' : 'ipc', ownerGuard ?? undefined);
+            this.handleWsConnection(
+              ws,
+              ownerGuard ? 'standalone' : 'ipc',
+              ownerGuard ?? undefined,
+              (commandType) => this.http.captureUnauthenticatedArtifactReadGuard(req, commandType),
+            );
           });
           return;
         }
@@ -566,7 +571,12 @@ class StandaloneServer {
 
   // ─── WebSocket Handler ───
 
-  private handleWsConnection(ws: WebSocket, source: 'standalone' | 'ipc', isOwnerAuthorized?: () => boolean): void {
+  private handleWsConnection(
+    ws: WebSocket,
+    source: 'standalone' | 'ipc',
+    isOwnerAuthorized?: () => boolean,
+    captureReadGuard?: (commandType: string) => (() => boolean) | null,
+  ): void {
     // Max client limit to prevent connection storms
     const MAX_WS_CLIENTS = 10;
     if (this.clients.size >= MAX_WS_CLIENTS) {
@@ -609,13 +619,16 @@ class StandaloneServer {
             : (msg as any);
           const { type, payload } = normalizeCommandEnvelope(envelope);
           const requestId = msg.requestId;
-          const liveOwnerAuthorized = source === 'standalone'
-            && typeof isOwnerAuthorized === 'function'
-            && Boolean(isOwnerAuthorized());
+          // A no-auth daemon has no owner credential; its artifact READ verbs
+          // get a narrow owner grant instead (captureUnauthenticatedArtifactReadGuard).
+          const ownerGuard = source === 'standalone' && typeof isOwnerAuthorized === 'function'
+            ? isOwnerAuthorized
+            : captureReadGuard?.(type) ?? undefined;
+          const liveOwnerAuthorized = Boolean(ownerGuard && ownerGuard());
           const effectiveSource: 'standalone' | 'ipc' = liveOwnerAuthorized ? 'standalone' : 'ipc';
           const result = await this.executeCommand(type, payload || {}, effectiveSource, {
             ownerVerified: liveOwnerAuthorized,
-            verifyCurrentOwner: liveOwnerAuthorized ? isOwnerAuthorized : undefined,
+            verifyCurrentOwner: liveOwnerAuthorized ? ownerGuard : undefined,
           });
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
         }

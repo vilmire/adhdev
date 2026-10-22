@@ -183,6 +183,12 @@ function readMeshJoinString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** Artifact read verbs a no-auth daemon serves to the open dashboard (see captureUnauthenticatedArtifactReadGuard). */
+const UNAUTHENTICATED_ARTIFACT_READ_VERBS: ReadonlySet<string> = new Set([
+  'artifact_fetch', 'artifact_read', 'session_artifact_fetch',
+  'artifact_list', 'session_artifact_list',
+]);
+
 export class StandaloneHttpApi {
   authToken: string | null = null;
   /**
@@ -274,6 +280,26 @@ export class StandaloneHttpApi {
 
   isOwnerRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean {
     return this.hasAnyAuth() && !this.resolveInternalAuthScope(req) && this.isRequestAuthenticated(req, rawUrl);
+  }
+
+  /**
+   * Read-only owner grant for the artifact READ verbs on a daemon that has NO
+   * dashboard credential configured. Owner authority normally needs a token or
+   * password session, so a no-auth daemon demoted every dashboard command to an
+   * unverified `ipc` source — and `artifact_fetch` / `artifact_list` refuse that
+   * ("downgraded unverified owner ingress"), which broke the viewer's "View
+   * full". The open dashboard already reads status, chat and transcripts
+   * without credentials; artifact reads are the same class. Narrow on purpose:
+   * only the read verbs (never `artifact_register`), never when any auth is
+   * configured, never for an MCP-scope credential, never cross-origin, and it
+   * is revoked the instant auth is configured.
+   */
+  captureUnauthenticatedArtifactReadGuard(req: IncomingMessage, commandType: string): (() => boolean) | null {
+    if (!UNAUTHENTICATED_ARTIFACT_READ_VERBS.has(commandType)) return null;
+    if (this.hasAnyAuth() || this.resolveInternalAuthScope(req)) return null;
+    if (!this.isAllowedOrigin(req)) return null;
+    const capturedEpoch = this.authEpoch;
+    return () => !this.hasAnyAuth() && this.authEpoch === capturedEpoch;
   }
 
   /**
@@ -898,7 +924,8 @@ export class StandaloneHttpApi {
               && verify(credential, commandPayload) === true,
             );
           }
-          const ownerGuard = this.captureOwnerAuthGuard(req, url);
+          const ownerGuard = this.captureOwnerAuthGuard(req, url)
+            ?? this.captureUnauthenticatedArtifactReadGuard(req, type);
           const isOwner = Boolean(ownerGuard && ownerGuard());
           const ownerProof = isOwner && ownerGuard
             ? issueTrustedOwnerIngressProof({
