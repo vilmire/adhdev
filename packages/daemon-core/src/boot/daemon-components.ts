@@ -42,6 +42,7 @@ export interface SessionHostBoot {
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
     managedByTag?: string;
     control?: SessionHostControlPlane | null;
+    onHostReplaced?: (listener: () => Promise<void> | void) => void;
 }
 
 export interface DaemonBootConfig {

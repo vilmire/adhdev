@@ -155,6 +155,20 @@ export function disconnectSessionHostClients(endpoint?: SessionHostEndpoint, err
   }
 }
 
+export function findConnectedSessionHostClient(endpoint?: SessionHostEndpoint): SessionHostClient | null {
+  for (const ref of activeClientRefs) {
+    const client = ref.deref();
+    if (!client) {
+      activeClientRefs.delete(ref);
+      continue;
+    }
+    if ((!endpoint || client.endpoint.path === endpoint.path) && client.isConnected()) {
+      return client;
+    }
+  }
+  return null;
+}
+
 export interface SessionHostDisconnectInfo {
   reason: SessionHostDisconnectReason;
   endpointPath: string;
@@ -197,6 +211,14 @@ export class SessionHostClient {
 
   static disconnectClients(endpoint?: SessionHostEndpoint, error?: Error): void {
     disconnectSessionHostClients(endpoint, error);
+  }
+
+  static findConnectedClient(endpoint?: SessionHostEndpoint): SessionHostClient | null {
+    return findConnectedSessionHostClient(endpoint);
+  }
+
+  isConnected(): boolean {
+    return Boolean(this.socket && !this.socket.destroyed && establishedSockets.has(this.socket));
   }
 
   /**

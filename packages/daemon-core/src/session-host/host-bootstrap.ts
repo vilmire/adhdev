@@ -67,6 +67,15 @@ export interface SessionHostHandle {
 
 export async function bootSessionHost(opts: SessionHostBootOptions): Promise<SessionHostHandle> {
     let current = await opts.ensureReady();
+    const replacedListeners = new Set<() => Promise<void> | void>();
+    const notifyHostReplaced = async (): Promise<void> => {
+        if (maintenanceHeld()) return;
+        for (const listener of replacedListeners) {
+            try {
+                await listener();
+            } catch { /* best-effort */ }
+        }
+    };
     // Single-flight: the PTY factory and the controller's dead-host respawn can both
     // land here at once, and two concurrent ensureReady calls would spawn two hosts.
     let inFlight: Promise<SessionHostEndpoint> | null = null;
@@ -76,10 +85,15 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
             .finally(() => { inFlight = null; });
         return inFlight;
     };
+    const respawnAndReconcile = async (): Promise<SessionHostEndpoint> => {
+        const endpoint = await ensure();
+        await notifyHostReplaced();
+        return endpoint;
+    };
     const onEvent = (event: SessionHostEvent) => { if (!maintenanceHeld()) opts.onHostEvent?.(event); };
     const control = opts.createController
-        ? opts.createController(current, onEvent, ensure)
-        : new SessionHostController(current, onEvent, ensure);
+        ? opts.createController(current, onEvent, respawnAndReconcile)
+        : new SessionHostController(current, onEvent, respawnAndReconcile);
     await control.start();
 
     const listHostedRuntimes = () => (opts.listHostedRuntimes ?? listHostedCliRuntimes)(current);
@@ -115,6 +129,9 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
             verifiedRetainedEndpoint: ensure,
             managedByTag: opts.managedBy,
             control,
+            onHostReplaced: (listener) => {
+                replacedListeners.add(listener);
+            },
         }),
         stop: () => control.stop(),
     };

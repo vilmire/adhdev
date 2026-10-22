@@ -443,3 +443,22 @@ test('L3: create_session without clientId does not invent a daemon clientId on r
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
   }
 })
+
+test('findConnectedClient returns an established client for the endpoint and clears after disconnectClients', async () => {
+  const h = await makeHarness()
+  const endpoint = { kind: 'unix' as const, path: h.sockPath }
+  try {
+    assert.equal(h.client.isConnected(), false)
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), null)
+
+    await h.client.connect()
+    assert.equal(h.client.isConnected(), true)
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), h.client)
+
+    SessionHostClient.disconnectClients(endpoint)
+    assert.equal(h.client.isConnected(), false)
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), null)
+  } finally {
+    await h.cleanup()
+  }
+})

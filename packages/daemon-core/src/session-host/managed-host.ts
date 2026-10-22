@@ -19,7 +19,11 @@ import { resolveInstanceDir } from '../commands/upgrade-log.js';
 import { getProcessInstanceContext } from '../config/instance-context.js';
 import { LOG } from '../logging/logger.js';
 import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
-import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
+import {
+    ensureSessionHostReady as ensureSharedSessionHostReady,
+    isResourceExhaustionError,
+    isSessionHostUnavailableTransientError,
+} from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 import { isPidAlive } from '../system/process-utils.js';
 
@@ -97,6 +101,11 @@ export interface ManagedSessionHostOptions {
      * old host has time to flush persistence cleanly).
      */
     evictGraceMs?: number;
+    /**
+     * Callback invoked whenever a replacement session-host is spawned so the
+     * caller can immediately reconcile or terminate sessions from the old host.
+     */
+    onHostReplaced?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
 }
 
 export interface ManagedSessionHost {
@@ -448,10 +457,15 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             return; // Cannot determine our own entry — nothing to compare against.
         }
 
-        const client = new SessionHostClient({ endpoint: getEndpoint() });
+        const endpoint = getEndpoint();
+        const existingClient = (SessionHostClient as { findConnectedClient?: (ep?: SessionHostEndpoint) => SessionHostClient | null }).findConnectedClient?.(endpoint) ?? null;
+        const client = existingClient || new SessionHostClient({ endpoint });
+        const shouldClose = !existingClient;
         let reported: string | undefined;
         try {
-            await client.connect();
+            if (!existingClient) {
+                await client.connect();
+            }
             const response = await client.request<SessionHostDiagnostics>({
                 type: 'get_host_diagnostics',
                 payload: { includeSessions: false },
@@ -464,7 +478,9 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             // to stop here; the normal spawn/ready path handles it.
             return;
         } finally {
-            await client.close().catch(() => {});
+            if (shouldClose) {
+                await client.close().catch(() => {});
+            }
         }
 
         if (!reported) return; // Pre-D5 host: unknown, not mismatched.
@@ -698,11 +714,15 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 endpoint: getEndpoint(),
                 spawnHost,
                 beforeSpawnHost,
+                onHostReplaced: options.onHostReplaced,
                 isExistingHostAlive,
                 timeoutMs,
                 requiredRequestTypes: options.requiredRequestTypes,
             });
         } catch (error) {
+            if (isSessionHostUnavailableTransientError(error) || isResourceExhaustionError(error)) {
+                throw error;
+            }
             stopManagedSessionHostProcess();
             disconnectEndpointClients(getEndpoint());
             return ensureSharedSessionHostReady({
@@ -710,10 +730,14 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 endpoint: getEndpoint(),
                 spawnHost,
                 beforeSpawnHost,
+                onHostReplaced: options.onHostReplaced,
                 isExistingHostAlive,
                 timeoutMs,
                 requiredRequestTypes: options.requiredRequestTypes,
             }).catch((retryError) => {
+                if (isSessionHostUnavailableTransientError(retryError) || isResourceExhaustionError(retryError)) {
+                    throw retryError;
+                }
                 const initialMessage = error instanceof Error ? error.message : String(error);
                 const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
                 throw new Error(`Session host failed to start after retry (${initialMessage}; retry: ${retryMessage})`);

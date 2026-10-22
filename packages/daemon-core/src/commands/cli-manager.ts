@@ -168,7 +168,7 @@ export class DaemonCliManager {
      */
     readonly input: SessionInputService;
 
-    constructor(deps: CliManagerDeps, providerLoader: ProviderLoader) {
+    constructor(deps: CliManagerDeps, providerLoader: ProviderLoader = new ProviderLoader()) {
         this.deps = deps;
         this.providerLoader = providerLoader;
         this.input = createSessionInputService({
@@ -442,7 +442,7 @@ export class DaemonCliManager {
             await instanceManager.addInstance(key, cliInstance, {
                 settings,
                 onPtyData: (data: string) => {
-                    this.deps.getP2p()?.broadcastSessionOutput(cliInstance.instanceId, data);
+                    this.deps.getP2p?.()?.broadcastSessionOutput(cliInstance.instanceId, data);
                 },
             });
             sessionRegistry?.register({
@@ -483,7 +483,15 @@ export class DaemonCliManager {
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
             instanceManager.removeInstance(key);
-            throw new Error(`Failed to start ${provider.displayName || provider.name || cliType}: ${spawnErr?.message}`);
+            const wrapped = new Error(`Failed to start ${provider.displayName || provider.name || cliType}: ${spawnErr?.message}`) as Error & {
+                code?: string;
+                cause?: unknown;
+            };
+            if (typeof spawnErr?.code === 'string' && spawnErr.code) {
+                wrapped.code = spawnErr.code;
+                wrapped.cause = spawnErr;
+            }
+            throw wrapped;
         }
 
         this.adapters.set(key, cliInstance.getAdapter());
@@ -576,6 +584,65 @@ export class DaemonCliManager {
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
     restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> { return restoreHostedSessions(this, records); }
+
+    /**
+     * Reconcile daemon-tracked CLI sessions after a session-host replacement.
+     *
+     * Either re-adopts runtimes the active host still owns, or immediately marks
+     * sessions missing from the host as terminated and removes them from
+     * `adapters`, `instanceManager`, `sessionRegistry`, and the mesh coordinator
+     * registry so `pickCoordinator` and the follower wake path never select a
+     * ghost coordinator from the replaced host.
+     */
+    async reconcileHostedSessionsAfterHostReplace(
+        liveRecords?: HostedCliRuntimeDescriptor[],
+    ): Promise<{ readopted: number; terminated: string[] }> {
+        const records = liveRecords ?? (await this.deps.listHostedCliRuntimes?.()) ?? [];
+        const liveIds = new Set(
+            records
+                .map((r) => r.runtimeId)
+                .filter((id): id is string => typeof id === 'string' && Boolean(id.trim())),
+        );
+        const instanceManager = this.deps.getInstanceManager();
+        const sessionRegistry = this.deps.getSessionRegistry?.() ?? null;
+        const trackedKeys = new Set<string>([
+            ...this.adapters.keys(),
+            ...(instanceManager?.getByCategory('cli') ?? [])
+                .map((inst) => (inst as { instanceId?: unknown }).instanceId ?? inst.getState?.()?.instanceId)
+                .filter((id): id is string => typeof id === 'string' && Boolean(id)),
+        ]);
+
+        const { pruneDeadMeshCoordinators, unregisterMeshCoordinator } = await import('../mesh/coordinator-registry.js');
+        const terminated: string[] = [];
+
+        for (const key of trackedKeys) {
+            if (liveIds.has(key)) continue;
+            this.roleRestartInputs.delete(key);
+            const adapter = this.adapters.get(key);
+            if (adapter) {
+                this.adapters.delete(key);
+                try {
+                    if (typeof adapter.detach === 'function') adapter.detach();
+                    else adapter.shutdown();
+                } catch { /* best-effort */ }
+            }
+            sessionRegistry?.terminateByInstanceKey(key, 'pty_exit');
+            try {
+                instanceManager?.removeInstance(key);
+            } catch { /* best-effort */ }
+            unregisterMeshCoordinator(key);
+            terminated.push(key);
+        }
+
+        try {
+            pruneDeadMeshCoordinators(liveIds);
+        } catch { /* best-effort */ }
+
+        const readopted = records.length > 0
+            ? await this.restoreHostedSessions(records)
+            : 0;
+        return { readopted, terminated };
+    }
 
  // ─── Adapter search ─────────────────────────────
 

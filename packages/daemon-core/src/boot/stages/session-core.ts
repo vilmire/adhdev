@@ -83,6 +83,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
         ...(cfg.sessionHost.listHostedRuntimes ? { listHostedCliRuntimes: cfg.sessionHost.listHostedRuntimes } : {}),
         ...(cfg.sessionHost.managedByTag ? { hostedRuntimeManagerTag: cfg.sessionHost.managedByTag } : {}),
     }, providerLoader);
+    cfg.sessionHost.onHostReplaced?.(() => cliManager.reconcileHostedSessionsAfterHostReplace().then(() => undefined));
 
     const agentStreamManager = new DaemonAgentStreamManager(
         LOG.forComponent('AgentStream').asLogFn(),
