@@ -31390,6 +31390,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         },
         { concurrency: DETECT_CLIS_CONCURRENCY }
       );
+      if (!options?.includeDisabled) {
+        primeCachedCliInventory(results, providerLoader);
+      }
       return results;
     }
     async function detectCLI(cliId, providerLoader, options) {
@@ -31472,6 +31475,128 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       return { ...cachedProviderVersions };
     }
+    function getCliInventorySignature(providerLoader) {
+      const loader2 = providerLoader;
+      const revision = typeof loader2?.getCliDetectionRevision === "function" ? loader2.getCliDetectionRevision() : 0;
+      const list2 = loader2?.getCliDetectionList?.() ?? [];
+      const signature = list2.map((c) => `${c.id}:${c.command}:${c.detectCommand ?? ""}:${c.enabled !== false ? "1" : "0"}`).join("|");
+      return { revision, signature };
+    }
+    function readCliInventorySlot(providerLoader) {
+      if (providerLoader && typeof providerLoader === "object") {
+        return cliInventoryByLoader.get(providerLoader);
+      }
+      return defaultCliInventorySlot;
+    }
+    function writeCliInventorySlot(providerLoader, slot) {
+      if (providerLoader && typeof providerLoader === "object") {
+        if (slot) cliInventoryByLoader.set(providerLoader, slot);
+        else cliInventoryByLoader.delete(providerLoader);
+        return;
+      }
+      defaultCliInventorySlot = slot;
+    }
+    function enrichCliInventoryVersions(items, providerLoader) {
+      return items.map((cli) => {
+        if (!cli.installed) return { ...cli };
+        const version2 = cli.version || readDetectedProviderVersion(cli.id, providerLoader) || void 0;
+        return {
+          ...cli,
+          ...version2 ? { version: version2 } : {}
+        };
+      });
+    }
+    function primeCachedCliInventory(detected, providerLoader, observedAt = Date.now()) {
+      const loader2 = providerLoader ?? defaultProviderLoader;
+      const { revision, signature } = getCliInventorySignature(loader2);
+      writeCliInventorySlot(loader2, {
+        observedAt,
+        revision,
+        signature,
+        items: detected.map((cli) => ({ ...cli }))
+      });
+    }
+    function invalidateCachedCliInventory(providerLoader) {
+      const loader2 = providerLoader ?? defaultProviderLoader;
+      loader2?.invalidateCliDetectionCache?.();
+      writeCliInventorySlot(loader2, void 0);
+      if (!providerLoader) {
+        defaultCliInventorySlot = void 0;
+      }
+    }
+    async function getCachedCliInventory(providerLoader, options) {
+      const loader2 = providerLoader ?? defaultProviderLoader;
+      if (!loader2) return [];
+      const now = options?.now ?? Date.now();
+      const ttlMs = options?.ttlMs ?? CLI_INVENTORY_TTL_MS;
+      const budgetMs = Math.max(1, options?.budgetMs ?? CLI_INVENTORY_DETECT_BUDGET_MS);
+      const { revision, signature } = getCliInventorySignature(loader2);
+      const existing = readCliInventorySlot(loader2);
+      if (!options?.forceRefresh && existing && existing.revision === revision && existing.signature === signature && now - existing.observedAt <= ttlMs) {
+        return enrichCliInventoryVersions(existing.items, loader2);
+      }
+      const loaderWithCache = loader2;
+      if (!options?.forceRefresh && typeof loaderWithCache.getCachedCliDetectionInventory === "function") {
+        const fromLoader = loaderWithCache.getCachedCliDetectionInventory(ttlMs, now);
+        if (fromLoader) {
+          primeCachedCliInventory(fromLoader, loader2, now);
+          return enrichCliInventoryVersions(fromLoader, loader2);
+        }
+      }
+      const detectFn = options?.detectFn ?? detectCLIs;
+      let inFlight4 = !options?.forceRefresh && !options?.detectFn ? existing?.inFlight : void 0;
+      if (!inFlight4) {
+        const refreshPromise = (async () => {
+          const detected = await detectFn(loader2, { includeVersion: false });
+          if (!options?.detectFn && typeof loaderWithCache.setCliDetectionResults === "function") {
+            try {
+              loaderWithCache.setCliDetectionResults(detected, true);
+            } catch {
+            }
+          }
+          primeCachedCliInventory(detected, loader2, Date.now());
+          return detected;
+        })();
+        if (!options?.detectFn) {
+          writeCliInventorySlot(loader2, {
+            observedAt: existing?.observedAt ?? 0,
+            revision,
+            signature,
+            items: existing?.items ?? [],
+            inFlight: refreshPromise
+          });
+          void refreshPromise.finally(() => {
+            const current4 = readCliInventorySlot(loader2);
+            if (current4?.inFlight === refreshPromise) {
+              delete current4.inFlight;
+            }
+          });
+        }
+        inFlight4 = refreshPromise;
+      }
+      let timer;
+      try {
+        const timedResult = await Promise.race([
+          inFlight4.then((items) => ({ timedOut: false, items })),
+          new Promise((resolve54) => {
+            timer = setTimeout(() => resolve54({ timedOut: true }), budgetMs);
+          })
+        ]);
+        if (!timedResult.timedOut) {
+          return enrichCliInventoryVersions(timedResult.items, loader2);
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (existing?.items?.length) {
+        return enrichCliInventoryVersions(existing.items, loader2);
+      }
+      const fallbackList = loader2.getCliDetectionList?.() ?? [];
+      return fallbackList.map((cli) => ({
+        ...cli,
+        installed: false
+      }));
+    }
     function getProviderSpecPins(providerLoader) {
       const loader2 = providerLoader ?? defaultProviderLoader;
       const out = {};
@@ -31513,6 +31638,10 @@ ${renderWorkerProtocolFooter2(input)}`;
     var cachedProviderInventory;
     var providerVersionsRefreshInFlight;
     var defaultProviderLoader;
+    var CLI_INVENTORY_TTL_MS;
+    var CLI_INVENTORY_DETECT_BUDGET_MS;
+    var cliInventoryByLoader;
+    var defaultCliInventorySlot;
     var init_cli_detector = __esm2({
       "src/detection/cli-detector.ts"() {
         "use strict";
@@ -31529,6 +31658,9 @@ ${renderWorkerProtocolFooter2(input)}`;
         cachedProviderVersions = {};
         cachedProviderVersionsAt = 0;
         providerVersionsRefreshInFlight = null;
+        CLI_INVENTORY_TTL_MS = PROVIDER_VERSIONS_TTL_MS;
+        CLI_INVENTORY_DETECT_BUDGET_MS = 5e3;
+        cliInventoryByLoader = /* @__PURE__ */ new WeakMap();
       }
     });
     function isSecretLikeEnvKey(key4) {
@@ -110777,6 +110909,8 @@ ${tail}` : ""
       CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES: () => CHAT_MESSAGE_TRANSCRIPT_VISIBILITIES,
       CHAT_MESSAGE_VISIBILITIES: () => CHAT_MESSAGE_VISIBILITIES,
       CHAT_TOMBSTONE_KIND: () => CHAT_TOMBSTONE_KIND,
+      CLI_INVENTORY_DETECT_BUDGET_MS: () => CLI_INVENTORY_DETECT_BUDGET_MS,
+      CLI_INVENTORY_TTL_MS: () => CLI_INVENTORY_TTL_MS,
       COMMAND_PREFIX_DEFAULTS: () => COMMAND_PREFIX_DEFAULTS,
       COMPACT_STATUS_GOAL_PREVIEW_MAX: () => COMPACT_STATUS_GOAL_PREVIEW_MAX,
       CONFIG_SETTINGS_TOPIC: () => CONFIG_SETTINGS_TOPIC,
@@ -111209,6 +111343,7 @@ ${tail}` : ""
       getActiveMeshMissionSummaries: () => getActiveMeshMissionSummaries,
       getActiveTurnLedger: () => getActiveTurnLedger,
       getAvailableIdeIds: () => getAvailableIdeIds,
+      getCachedCliInventory: () => getCachedCliInventory,
       getConfigDir: () => getConfigDir2,
       getConsoleLogLevel: () => getConsoleLogLevel,
       getCoordinatorForSession: () => getCoordinatorForSession,
@@ -111274,6 +111409,7 @@ ${tail}` : ""
       installExtensions: () => installExtensions,
       installGlobalInterceptor: () => installGlobalInterceptor,
       interactivePromptFromClaudeAskUserQuestion: () => interactivePromptFromClaudeAskUserQuestion,
+      invalidateCachedCliInventory: () => invalidateCachedCliInventory,
       isActivityChatMessage: () => isActivityChatMessage,
       isAlwaysOnTraceCategory: () => isAlwaysOnTraceCategory,
       isBuiltinChatMessageKind: () => isBuiltinChatMessageKind,
@@ -111441,6 +111577,7 @@ ${tail}` : ""
       preserveAuthenticatedMcpCommand: () => preserveAuthenticatedMcpCommand,
       preserveTrustedOwnerTransportProof: () => preserveTrustedOwnerTransportProof,
       previewOperatingNoteText: () => previewOperatingNoteText,
+      primeCachedCliInventory: () => primeCachedCliInventory,
       printClaudeInstallResult: () => printClaudeInstallResult,
       printClaudeStatuslineStatus: () => printClaudeStatuslineStatus,
       printClaudeUninstallResult: () => printClaudeUninstallResult,
@@ -131340,6 +131477,8 @@ ${output}` : "";
     var ProviderRegistry = class {
       providers = /* @__PURE__ */ new Map();
       providerAvailability = /* @__PURE__ */ new Map();
+      cliDetectionUpdatedAt = 0;
+      cliDetectionRevision = 0;
       /**
       * Get raw provider metadata by type (NO scripts loaded).
       * Safe for: category checks, icon, displayName, targetFilter, cdpPorts.
@@ -131635,6 +131774,12 @@ ${output}` : "";
           config.machineProviders[providerType] = next;
           if (next.enabled !== true) {
             this.providerAvailability.set(providerType, { installed: false, detectedPath: null });
+          } else if (enabledChanged || executableChanged || argsChanged) {
+            this.providerAvailability.delete(providerType);
+          }
+          if (enabledChanged || executableChanged || argsChanged) {
+            this.cliDetectionUpdatedAt = 0;
+            this.cliDetectionRevision += 1;
           }
           this.writeConfig(config);
           this.log(`Machine provider config updated: ${providerType}`);
@@ -131679,6 +131824,39 @@ ${output}` : "";
           installed: !!state2.installed,
           detectedPath: state2.detectedPath ?? null
         });
+        this.cliDetectionRevision += 1;
+      }
+      getCliDetectionRevision() {
+        return this.cliDetectionRevision;
+      }
+      getCliDetectionUpdatedAt() {
+        return this.cliDetectionUpdatedAt;
+      }
+      invalidateCliDetectionCache() {
+        this.cliDetectionUpdatedAt = 0;
+        this.cliDetectionRevision += 1;
+      }
+      /**
+       * Read the cached CLI detection inventory populated at boot / provider sync
+       * (`setCliDetectionResults(..., true)`). Returns `null` when cold, expired,
+       * or invalidated by a provider reload / machine-config change.
+       */
+      getCachedCliDetectionInventory(ttlMs = 5 * 60 * 1e3, now = Date.now()) {
+        if (this.cliDetectionUpdatedAt <= 0 || now - this.cliDetectionUpdatedAt > ttlMs) {
+          return null;
+        }
+        const cliList = this.getCliDetectionList();
+        const out = [];
+        for (const cli of cliList) {
+          const availability = this.providerAvailability.get(cli.id);
+          if (!availability) return null;
+          out.push({
+            ...cli,
+            installed: availability.installed === true,
+            ...availability.detectedPath ? { path: availability.detectedPath } : {}
+          });
+        }
+        return out;
       }
       setCliDetectionResults(results, replace = true) {
         const resultByType = /* @__PURE__ */ new Map();
@@ -131695,6 +131873,8 @@ ${output}` : "";
               if (this.isMachineProviderEnabled(provider.type)) this.stampLastDetection(provider, installed, detectedPath);
             }
           }
+          this.cliDetectionUpdatedAt = Date.now();
+          this.cliDetectionRevision += 1;
           return;
         }
         for (const result of results) {
@@ -132245,6 +132425,7 @@ ${output}` : "";
       loadAll() {
         this.providers.clear();
         this.providerAvailability.clear();
+        this.invalidateCliDetectionCache();
         let upstreamCount = 0;
         if (!this.disableUpstream && fs68.existsSync(this.upstreamDir)) {
           upstreamCount = this.loadDir(this.upstreamDir);
@@ -147180,7 +147361,10 @@ ${output}` : "";
         if (reminderRefusal) return reminderRefusal;
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, "worktree clone");
         if (ownerFailure) return ownerFailure;
-        try {
+        const cloneStartedAtMs = Date.now();
+        const requestedSyncBudgetMs = Number(args?.syncBudgetMs);
+        const syncBudgetMs = Number.isFinite(requestedSyncBudgetMs) && requestedSyncBudgetMs > 0 ? Math.min(Math.max(requestedSyncBudgetMs, 10), 9e4) : 75e3;
+        const runClonePipeline = async () => {
           const prepared = await withMeshCloneLock(meshId, async () => {
             const meshRecord3 = await ctx.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
             const mesh2 = meshRecord3?.mesh;
@@ -147302,12 +147486,14 @@ ${output}` : "";
             return { submodulesInitialized: submodulesInitialized2, bootstrapState: bootstrapState2 };
           };
           const requestedSetupWaitMs = Number(args?.setupWaitMs ?? args?.bootstrapWaitMs ?? 8e3);
-          const setupWaitMs = Number.isFinite(requestedSetupWaitMs) ? Math.min(Math.max(requestedSetupWaitMs, 0), 14e3) : 8e3;
+          const rawSetupWaitMs = Number.isFinite(requestedSetupWaitMs) ? Math.min(Math.max(requestedSetupWaitMs, 0), 14e3) : 8e3;
+          const remainingSyncBudgetMs = Math.max(0, syncBudgetMs - (Date.now() - cloneStartedAtMs));
+          const setupWaitMs = Math.min(rawSetupWaitMs, remainingSyncBudgetMs);
           const setupPromise = finishWorktreeSetup();
-          const setupResult = await Promise.race([
+          const setupResult = setupWaitMs > 0 ? await Promise.race([
             setupPromise.then((value) => ({ completed: true, value })),
             new Promise((resolve54) => setTimeout(() => resolve54({ completed: false }), setupWaitMs))
-          ]);
+          ]) : { completed: false };
           const bootstrapStartedMs = Date.now();
           const terminalBootstrapEvent = (state2) => state2.status === "failed" ? "bootstrap_failed" : "bootstrap_complete";
           if (!setupResult.completed) {
@@ -147353,6 +147539,39 @@ ${output}` : "";
             ...result.baseSync?.warning ? { baseStaleWarning: result.baseSync.warning } : {},
             submodulesInitialized,
             worktreeBootstrap: bootstrapState
+          };
+        };
+        try {
+          const pipelinePromise = runClonePipeline();
+          let budgetTimer;
+          try {
+            const raced = await Promise.race([
+              pipelinePromise.then((res) => ({ completed: true, res })),
+              new Promise((resolve54) => {
+                budgetTimer = setTimeout(() => resolve54({ completed: false }), syncBudgetMs);
+              })
+            ]);
+            if (raced.completed) {
+              return raced.res;
+            }
+          } finally {
+            if (budgetTimer) clearTimeout(budgetTimer);
+          }
+          void pipelinePromise.catch((err) => {
+            LOG.warn("Mesh", `[clone] background clone pipeline failed for ${meshId}/${branch}: ${err?.message || err}`);
+          });
+          return {
+            success: true,
+            async: true,
+            status: "accepted",
+            meshId,
+            sourceNodeId,
+            branch,
+            worktreeSetup: {
+              status: "running",
+              setupWaitMs: syncBudgetMs,
+              message: "Worktree clone accepted; worktree creation and bootstrap are continuing in the background."
+            }
           };
         } catch (e) {
           if (isMeshNodeLimitError(e)) {
@@ -148347,7 +148566,7 @@ ${output}` : "";
         const workspace = typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
         const mesh = args?.inlineMesh || {};
         try {
-          const detected = await detectCLIs(ctx.deps.providerLoader, { includeVersion: true });
+          const detected = await getCachedCliInventory(ctx.deps.providerLoader);
           return { ...runMeshInit(mesh, workspace, detected, {
             write: args?.write === true,
             overwrite: args?.overwrite === true
@@ -148529,7 +148748,11 @@ ${output}` : "";
       plan_mesh_onboarding: async (ctx, args) => {
         const workspace = typeof args?.workspace === "string" && args.workspace.trim() ? args.workspace.trim() : process.cwd();
         try {
-          const detectedProviders = await detectCLIs(ctx.deps.providerLoader, { includeVersion: true });
+          const detectedProviders = await getCachedCliInventory(ctx.deps.providerLoader, {
+            ...typeof args?._detectCLIs === "function" ? { detectFn: args._detectCLIs } : {},
+            ...typeof args?._cliDetectBudgetMs === "number" ? { budgetMs: args._cliDetectBudgetMs } : {},
+            ...typeof args?._cliCacheTtlMs === "number" ? { ttlMs: args._cliCacheTtlMs } : {}
+          });
           return await planMeshOnboarding({
             workspace,
             meshId: typeof args?.meshId === "string" ? args.meshId.trim() || void 0 : void 0,
@@ -191019,13 +191242,12 @@ var IPC_COMMAND_TIMEOUTS_MS = {
   // LOCAL node (no relay layer wraps a local dispatch — see the module comment above).
   //
   // plan_mesh_onboarding: relay classifies it as a git-status probe (30s, daemon-cloud
-  // GIT_STATUS_PROBE_COMMANDS) but the responder's own worst case can exceed that —
-  // detectCLIs(includeVersion:true) fans out across providers in parallel, but EACH
-  // provider runs its --version/-V/-v/custom fallback chain SEQUENTIALLY, up to 4 x 3s
-  // = 12s for a single slow/hanging provider (cli-detector.ts), stacked on top of
-  // mesh-onboarding-plan.ts's sequential git probes (each capped at GIT_TIMEOUT_MS 15s).
-  // 45s covers the relay's 30s plus headroom for that responder spike; see the
-  // detectCLIs parallelization fix below for the actual root-cause mitigation.
+  // GIT_STATUS_PROBE_COMMANDS). Server-side CLI inventory detection reuses the cached
+  // CLI inventory (5m TTL, invalidated on provider reload/config change) and bounds
+  // cold-cache detection (`includeVersion: false`, CLI_INVENTORY_DETECT_BUDGET_MS = 5s)
+  // without spawning `--version` probes on the clone hot path, stacked with
+  // mesh-onboarding-plan.ts's git discovery probes (GIT_TIMEOUT_MS 15s).
+  // 45s covers the relay's 30s plus headroom for local git discovery.
   plan_mesh_onboarding: 45e3,
   // get_runtime_snapshot / session_host_get_diagnostics: both are answered by the
   // session-host process via SessionHostClient.request(), which has its own hard 30s
@@ -200630,7 +200852,7 @@ async function meshCloneNode(ctx, args) {
       raw: planned
     }, null, 2);
   }
-  const result = await commandForNode(ctx, sourceNode, "clone_mesh_node", {
+  const cloneArgs = {
     meshId: ctx.mesh.id,
     sourceNodeId: args.source_node_id,
     branch: args.branch,
@@ -200641,7 +200863,50 @@ async function meshCloneNode(ctx, args) {
     ...args.task_id ? { taskId: args.task_id } : {},
     ...args.reason ? { reason: args.reason } : {},
     inlineMesh: ctx.mesh
-  });
+  };
+  const isCloneTimeout = (message) => typeof message === "string" && /timed?\s*out/i.test(message);
+  const recoverBackgroundCloneFromTimeout = async (timeoutReason) => {
+    let recoveredNode;
+    try {
+      const refreshed = unwrapCommandPayload(await ctx.transport.command("get_mesh", { meshId: ctx.mesh.id }));
+      const candidateNodes = Array.isArray(refreshed?.mesh?.nodes) ? refreshed.mesh.nodes : [];
+      recoveredNode = candidateNodes.find((n) => {
+        const wtBranch = readNodeString(n, "worktreeBranch", "worktree_branch", "branch");
+        if (wtBranch !== args.branch) return false;
+        const clonedFrom = readNodeString(n, "clonedFromNodeId", "cloned_from_node_id");
+        return !clonedFrom || (0, import_daemon_core29.meshNodeIdMatches)(sourceNode, clonedFrom) || clonedFrom === args.source_node_id;
+      });
+    } catch {
+    }
+    return {
+      success: true,
+      async: true,
+      status: "accepted",
+      recoveredFromTimeout: true,
+      meshId: ctx.mesh.id,
+      sourceNodeId: args.source_node_id,
+      branch: args.branch,
+      ...recoveredNode ? { node: recoveredNode, worktreePath: recoveredNode.workspace } : {},
+      worktreeSetup: {
+        status: "running",
+        message: recoveredNode ? "Worktree node was registered in the background after the synchronous clone RPC timed out." : `Worktree clone exceeded the synchronous RPC window (${timeoutReason}) and is continuing in the background.`
+      }
+    };
+  };
+  let result;
+  try {
+    result = await commandForNode(ctx, sourceNode, "clone_mesh_node", cloneArgs);
+    const unwrapped = unwrapCommandPayload(result);
+    if (unwrapped?.success === false && isCloneTimeout(unwrapped?.error)) {
+      result = await recoverBackgroundCloneFromTimeout(String(unwrapped.error));
+    }
+  } catch (error) {
+    if (isCloneTimeout(error?.message || String(error))) {
+      result = await recoverBackgroundCloneFromTimeout(error?.message || String(error));
+    } else {
+      throw error;
+    }
+  }
   const clonePayload = extractCloneNodePayload(result);
   let sharedBaseWorktreeAdvisory = null;
   if (clonePayload?.success && clonePayload.node?.id) {

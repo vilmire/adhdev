@@ -50,4 +50,42 @@ describe('clone_mesh_node forwarding', () => {
     expect(reentered).toBe('reentered')
     expect(result.success).not.toBe(false)
   })
+
+  it('returns an accepted/async response when worktree creation is queued behind a slow lock holder past syncBudgetMs', async () => {
+    let releaseHolder!: () => void
+    const holderReady = new Promise<void>(resolve => {
+      void withMeshCloneLock('mesh_budget', async () => {
+        resolve()
+        await new Promise<void>(r => { releaseHolder = r })
+      })
+    })
+    await holderReady
+
+    const mesh = {
+      id: 'mesh_budget',
+      name: 'Budget Mesh',
+      nodes: [{ id: 'node_base', workspace: '/repo', daemonId: 'daemon_self' }],
+    }
+    const ctx: any = {
+      getMeshForCommand: async () => ({ mesh, inline: true, source: 'inline_cache' }),
+      requireMeshHostMutationOwner: async () => null,
+      deps: { statusInstanceId: 'daemon_self' },
+    }
+
+    const startedAt = Date.now()
+    const result: any = await meshNodeCloneHandlers.clone_mesh_node(ctx, {
+      meshId: 'mesh_budget',
+      sourceNodeId: 'node_base',
+      branch: 'feat/budget-test',
+      syncBudgetMs: 60,
+    })
+    const elapsedMs = Date.now() - startedAt
+    releaseHolder()
+
+    expect(elapsedMs).toBeLessThan(600)
+    expect(result.success).toBe(true)
+    expect(result.async).toBe(true)
+    expect(result.status).toBe('accepted')
+    expect(result.branch).toBe('feat/budget-test')
+  })
 })

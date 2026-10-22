@@ -410,3 +410,224 @@ describe('planMeshOnboarding', () => {
         expect(result.code).toBe('nested_worktree');
     });
 });
+
+describe('plan_mesh_onboarding cached CLI inventory & hot-path budget', () => {
+    it('reuses the cached CLI inventory on clone_worktree so a slow detectCLIs never blocks past budget and never probes --version', async () => {
+        const repo = makeRepo('mesh-plan-cache-hit');
+        const cliDetector = await import('../../src/detection/cli-detector.js');
+        const { meshOnboardingHandlers } = await import('../../src/commands/med-family/mesh-onboarding.js');
+
+        const primeCachedCliInventory = (cliDetector as any).primeCachedCliInventory as
+            | ((detected: any[], loader?: any, observedAt?: number) => void)
+            | undefined;
+        expect(typeof primeCachedCliInventory).toBe('function');
+
+        let slowDetectCalls = 0;
+        const seenIncludeVersion: Array<boolean | undefined> = [];
+        const stubLoader: any = {
+            getCliDetectionList() {
+                return [{
+                    id: 'claude-cli',
+                    displayName: 'Claude Code',
+                    icon: '🤖',
+                    command: 'claude',
+                    category: 'cli',
+                    enabled: true,
+                }];
+            },
+            getDetectedVersion(id: string) {
+                return id === 'claude-cli' ? '2.1.0' : null;
+            },
+        };
+
+        primeCachedCliInventory!(
+            [{
+                id: 'claude-cli',
+                displayName: 'Claude Code',
+                icon: '🤖',
+                command: 'claude',
+                category: 'cli',
+                installed: true,
+                path: '/usr/local/bin/claude',
+            }],
+            stubLoader,
+        );
+
+        const slowDetect = async (_loader?: any, opts?: { includeVersion?: boolean }) => {
+            slowDetectCalls += 1;
+            seenIncludeVersion.push(opts?.includeVersion);
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            return [];
+        };
+
+        const startedAt = Date.now();
+        const result: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+            { deps: { providerLoader: stubLoader } } as any,
+            {
+                workspace: repo,
+                meshId: 'mesh_cached',
+                operation: 'clone_worktree',
+                branch: 'feat/fast-clone',
+                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_cached'),
+                _detectCLIs: slowDetect,
+            },
+        );
+        const elapsedMs = Date.now() - startedAt;
+
+        expect(result.success).toBe(true);
+        expect(result.plan?.kind).toBe('clone_new_worktree');
+        expect(slowDetectCalls).toBe(0);
+        expect(elapsedMs).toBeLessThan(1_500);
+        expect(result.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli']);
+        expect(result.suggestedConfig?.providers?.installedProviders?.[0]?.version).toBe('2.1.0');
+    });
+
+    it('invalidates the CLI inventory cache when providers change or expire and re-detects with includeVersion:false', async () => {
+        const repo = makeRepo('mesh-plan-cache-invalidate');
+        const cliDetector = await import('../../src/detection/cli-detector.js');
+        const { meshOnboardingHandlers } = await import('../../src/commands/med-family/mesh-onboarding.js');
+
+        const invalidateCachedCliInventory = (cliDetector as any).invalidateCachedCliInventory as
+            | ((loader?: any) => void)
+            | undefined;
+        expect(typeof invalidateCachedCliInventory).toBe('function');
+
+        let revision = 1;
+        let currentInstalled = [
+            {
+                id: 'claude-cli',
+                displayName: 'Claude Code',
+                icon: '🤖',
+                command: 'claude',
+                category: 'cli',
+                installed: true,
+                path: '/usr/local/bin/claude',
+            },
+        ];
+        const stubLoader: any = {
+            getCliDetectionRevision() {
+                return revision;
+            },
+            invalidateCliDetectionCache() {
+                revision += 1;
+            },
+            getCliDetectionList() {
+                return currentInstalled.map((item) => ({
+                    id: item.id,
+                    displayName: item.displayName,
+                    icon: item.icon,
+                    command: item.command,
+                    category: 'cli',
+                    enabled: true,
+                }));
+            },
+        };
+
+        const detectCalls: Array<{ includeVersion?: boolean }> = [];
+        const fakeDetect = async (_loader?: any, opts?: { includeVersion?: boolean }) => {
+            detectCalls.push({ includeVersion: opts?.includeVersion });
+            return currentInstalled.map((entry) => ({ ...entry }));
+        };
+
+        invalidateCachedCliInventory!(stubLoader);
+
+        // First call: cold cache -> triggers 1 fresh detection with includeVersion: false
+        const first: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+            { deps: { providerLoader: stubLoader } } as any,
+            {
+                workspace: repo,
+                meshId: 'mesh_inv',
+                operation: 'clone_worktree',
+                branch: 'feat/inv-1',
+                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
+                _detectCLIs: fakeDetect,
+            },
+        );
+        expect(first.success).toBe(true);
+        expect(detectCalls).toEqual([{ includeVersion: false }]);
+        expect(first.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli']);
+
+        // Second call without invalidation: served from cache
+        const second: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+            { deps: { providerLoader: stubLoader } } as any,
+            {
+                workspace: repo,
+                meshId: 'mesh_inv',
+                operation: 'clone_worktree',
+                branch: 'feat/inv-2',
+                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
+                _detectCLIs: fakeDetect,
+            },
+        );
+        expect(second.success).toBe(true);
+        expect(detectCalls).toHaveLength(1);
+
+        // Provider change / explicit invalidation -> next call re-detects with includeVersion: false
+        currentInstalled = [
+            ...currentInstalled,
+            {
+                id: 'codex-cli',
+                displayName: 'Codex CLI',
+                icon: '⚡',
+                command: 'codex',
+                category: 'cli',
+                installed: true,
+                path: '/usr/local/bin/codex',
+            },
+        ];
+        invalidateCachedCliInventory!(stubLoader);
+
+        const third: any = await meshOnboardingHandlers.plan_mesh_onboarding(
+            { deps: { providerLoader: stubLoader } } as any,
+            {
+                workspace: repo,
+                meshId: 'mesh_inv',
+                operation: 'clone_worktree',
+                branch: 'feat/inv-3',
+                inlineMesh: mesh('github.com/acme/project', repo, 'mesh_inv'),
+                _detectCLIs: fakeDetect,
+            },
+        );
+        expect(third.success).toBe(true);
+        expect(detectCalls).toEqual([{ includeVersion: false }, { includeVersion: false }]);
+        expect(third.suggestedConfig?.providers?.providerPriority).toEqual(['claude-cli', 'codex-cli']);
+    });
+
+    it('bounds cold-cache CLI detection wait so a hung detectCLIs falls back within budget', async () => {
+        const cliDetector = await import('../../src/detection/cli-detector.js');
+        const getCachedCliInventory = (cliDetector as any).getCachedCliInventory as
+            | ((loader?: any, opts?: any) => Promise<any[]>)
+            | undefined;
+        expect(typeof getCachedCliInventory).toBe('function');
+
+        const stubLoader: any = {
+            getCliDetectionList() {
+                return [{
+                    id: 'hung-cli',
+                    displayName: 'Hung CLI',
+                    icon: '🔧',
+                    command: 'hung-cli',
+                    category: 'cli',
+                    enabled: true,
+                }];
+            },
+        };
+        const hungDetect = async () => {
+            await new Promise((resolve) => setTimeout(resolve, 2_000));
+            return [{ id: 'hung-cli', displayName: 'Hung CLI', icon: '🔧', command: 'hung-cli', installed: true }];
+        };
+
+        const startedAt = Date.now();
+        const detected = await getCachedCliInventory!(stubLoader, {
+            forceRefresh: true,
+            budgetMs: 80,
+            detectFn: hungDetect,
+        });
+        const elapsedMs = Date.now() - startedAt;
+
+        expect(elapsedMs).toBeLessThan(500);
+        expect(Array.isArray(detected)).toBe(true);
+        expect(detected[0]?.id).toBe('hung-cli');
+    });
+});
+

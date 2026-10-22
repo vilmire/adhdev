@@ -468,7 +468,7 @@ export async function meshCloneNode(
         }, null, 2);
     }
 
-    const result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', {
+    const cloneArgs = {
         meshId: ctx.mesh.id,
         sourceNodeId: args.source_node_id,
         branch: args.branch,
@@ -479,7 +479,59 @@ export async function meshCloneNode(
         ...(args.task_id ? { taskId: args.task_id } : {}),
         ...(args.reason ? { reason: args.reason } : {}),
         inlineMesh: ctx.mesh,
-    });
+    };
+
+    const isCloneTimeout = (message: unknown): boolean =>
+        typeof message === 'string' && /timed?\s*out/i.test(message);
+
+    const recoverBackgroundCloneFromTimeout = async (timeoutReason: string): Promise<Record<string, unknown>> => {
+        let recoveredNode: LocalMeshNodeEntry | undefined;
+        try {
+            const refreshed = unwrapCommandPayload(await ctx.transport.command('get_mesh', { meshId: ctx.mesh.id })) as any;
+            const candidateNodes: LocalMeshNodeEntry[] = Array.isArray(refreshed?.mesh?.nodes)
+                ? refreshed.mesh.nodes
+                : [];
+            recoveredNode = candidateNodes.find((n) => {
+                const wtBranch = readNodeString(n, 'worktreeBranch', 'worktree_branch', 'branch');
+                if (wtBranch !== args.branch) return false;
+                const clonedFrom = readNodeString(n, 'clonedFromNodeId', 'cloned_from_node_id');
+                return !clonedFrom || meshNodeIdMatches(sourceNode as any, clonedFrom) || clonedFrom === args.source_node_id;
+            });
+        } catch {
+            // Best-effort recovery probe only.
+        }
+        return {
+            success: true,
+            async: true,
+            status: 'accepted',
+            recoveredFromTimeout: true,
+            meshId: ctx.mesh.id,
+            sourceNodeId: args.source_node_id,
+            branch: args.branch,
+            ...(recoveredNode ? { node: recoveredNode, worktreePath: recoveredNode.workspace } : {}),
+            worktreeSetup: {
+                status: 'running',
+                message: recoveredNode
+                    ? 'Worktree node was registered in the background after the synchronous clone RPC timed out.'
+                    : `Worktree clone exceeded the synchronous RPC window (${timeoutReason}) and is continuing in the background.`,
+            },
+        };
+    };
+
+    let result: any;
+    try {
+        result = await commandForNode(ctx, sourceNode, 'clone_mesh_node', cloneArgs);
+        const unwrapped = unwrapCommandPayload(result) as any;
+        if (unwrapped?.success === false && isCloneTimeout(unwrapped?.error)) {
+            result = await recoverBackgroundCloneFromTimeout(String(unwrapped.error));
+        }
+    } catch (error: any) {
+        if (isCloneTimeout(error?.message || String(error))) {
+            result = await recoverBackgroundCloneFromTimeout(error?.message || String(error));
+        } else {
+            throw error;
+        }
+    }
     const clonePayload = extractCloneNodePayload(result);
     let sharedBaseWorktreeAdvisory: ReturnType<typeof buildSharedBaseWorktreeAdvisory> | null = null;
     if (clonePayload?.success && clonePayload.node?.id) {

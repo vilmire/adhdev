@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { getTimeoutMs } from '../src/transports/ipc.js';
+import { CLI_INVENTORY_DETECT_BUDGET_MS, resultTimeoutForCommand } from '@adhdev/daemon-core';
 
 // Q-E: IPC (layer-1) timeout chain. The invariant for each heavy verb is
 //   IPC (layer-1, here) >= relay (layer-2, daemon-cloud resultTimeoutForCommand) >= responder.
@@ -138,3 +139,12 @@ test('invariant sweep: IPC deadline >= documented relay/responder floor for ever
     assert.ok(ipc >= floor, `${verb}: IPC ${ipc} must be >= floor ${floor}`);
   }
 });
+
+test('clone / onboarding-plan IPC deadlines dominate relay resultTimeoutForCommand and cold CLI-inventory detect budget', () => {
+  const planRelay = resultTimeoutForCommand('plan_mesh_onboarding');
+  const cloneRelay = resultTimeoutForCommand('clone_mesh_node');
+  assert.ok(getTimeoutMs('plan_mesh_onboarding', '') >= planRelay);
+  assert.ok(planRelay > CLI_INVENTORY_DETECT_BUDGET_MS);
+  assert.ok(getTimeoutMs('clone_mesh_node', '') >= cloneRelay);
+});
+

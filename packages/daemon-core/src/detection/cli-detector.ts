@@ -188,6 +188,10 @@ export async function detectCLIs(
         { concurrency: DETECT_CLIS_CONCURRENCY },
     );
 
+    if (!options?.includeDisabled) {
+        primeCachedCliInventory(results, providerLoader);
+    }
+
     return results;
 }
 
@@ -337,6 +341,189 @@ export function getCachedProviderVersions(providerLoader?: ProviderLoader): Reco
         void refreshProviderVersionsSnapshot(providerLoader);
     }
     return { ...cachedProviderVersions };
+}
+
+// ─── Cached CLI inventory for clone / onboarding planning ───────────────────
+//
+// `plan_mesh_onboarding` and `mesh_init` previously ran `detectCLIs(..., { includeVersion: true })`
+// on every invocation — spawning every CLI with `--version` on the clone hot path.
+// Reuse the cached CLI inventory (TTL 5m, invalidated whenever providers reload or
+// machine provider config changes), enrich versions from `readDetectedProviderVersion`
+// without spawning, and fall back to fresh `includeVersion: false` detection only
+// when no valid cache exists (bounded by CLI_INVENTORY_DETECT_BUDGET_MS).
+export const CLI_INVENTORY_TTL_MS = PROVIDER_VERSIONS_TTL_MS;
+export const CLI_INVENTORY_DETECT_BUDGET_MS = 5_000;
+
+interface CachedCliInventorySlot {
+    observedAt: number;
+    revision: number;
+    signature: string;
+    items: CLIInfo[];
+    inFlight?: Promise<CLIInfo[]>;
+}
+
+const cliInventoryByLoader = new WeakMap<object, CachedCliInventorySlot>();
+let defaultCliInventorySlot: CachedCliInventorySlot | undefined;
+
+function getCliInventorySignature(providerLoader?: ProviderLoader): { revision: number; signature: string } {
+    const loader = providerLoader as (ProviderLoader & { getCliDetectionRevision?: () => number }) | undefined;
+    const revision = typeof loader?.getCliDetectionRevision === 'function' ? loader.getCliDetectionRevision() : 0;
+    const list = loader?.getCliDetectionList?.() ?? [];
+    const signature = list
+        .map((c) => `${c.id}:${c.command}:${c.detectCommand ?? ''}:${c.enabled !== false ? '1' : '0'}`)
+        .join('|');
+    return { revision, signature };
+}
+
+function readCliInventorySlot(providerLoader?: ProviderLoader): CachedCliInventorySlot | undefined {
+    if (providerLoader && typeof providerLoader === 'object') {
+        return cliInventoryByLoader.get(providerLoader);
+    }
+    return defaultCliInventorySlot;
+}
+
+function writeCliInventorySlot(providerLoader: ProviderLoader | undefined, slot: CachedCliInventorySlot | undefined): void {
+    if (providerLoader && typeof providerLoader === 'object') {
+        if (slot) cliInventoryByLoader.set(providerLoader, slot);
+        else cliInventoryByLoader.delete(providerLoader);
+        return;
+    }
+    defaultCliInventorySlot = slot;
+}
+
+function enrichCliInventoryVersions(items: CLIInfo[], providerLoader?: ProviderLoader): CLIInfo[] {
+    return items.map((cli) => {
+        if (!cli.installed) return { ...cli };
+        const version = cli.version || readDetectedProviderVersion(cli.id, providerLoader) || undefined;
+        return {
+            ...cli,
+            ...(version ? { version } : {}),
+        };
+    });
+}
+
+export function primeCachedCliInventory(
+    detected: CLIInfo[],
+    providerLoader?: ProviderLoader,
+    observedAt: number = Date.now(),
+): void {
+    const loader = providerLoader ?? defaultProviderLoader;
+    const { revision, signature } = getCliInventorySignature(loader);
+    writeCliInventorySlot(loader, {
+        observedAt,
+        revision,
+        signature,
+        items: detected.map((cli) => ({ ...cli })),
+    });
+}
+
+export function invalidateCachedCliInventory(providerLoader?: ProviderLoader): void {
+    const loader = providerLoader ?? defaultProviderLoader;
+    (loader as { invalidateCliDetectionCache?: () => void } | undefined)?.invalidateCliDetectionCache?.();
+    writeCliInventorySlot(loader, undefined);
+    if (!providerLoader) {
+        defaultCliInventorySlot = undefined;
+    }
+}
+
+export async function getCachedCliInventory(
+    providerLoader?: ProviderLoader,
+    options?: {
+        ttlMs?: number;
+        budgetMs?: number;
+        now?: number;
+        forceRefresh?: boolean;
+        detectFn?: typeof detectCLIs;
+    },
+): Promise<CLIInfo[]> {
+    const loader = providerLoader ?? defaultProviderLoader;
+    if (!loader) return [];
+
+    const now = options?.now ?? Date.now();
+    const ttlMs = options?.ttlMs ?? CLI_INVENTORY_TTL_MS;
+    const budgetMs = Math.max(1, options?.budgetMs ?? CLI_INVENTORY_DETECT_BUDGET_MS);
+    const { revision, signature } = getCliInventorySignature(loader);
+    const existing = readCliInventorySlot(loader);
+
+    if (
+        !options?.forceRefresh
+        && existing
+        && existing.revision === revision
+        && existing.signature === signature
+        && now - existing.observedAt <= ttlMs
+    ) {
+        return enrichCliInventoryVersions(existing.items, loader);
+    }
+
+    const loaderWithCache = loader as ProviderLoader & {
+        getCachedCliDetectionInventory?: (ttlMs?: number, now?: number) => CLIInfo[] | null;
+        setCliDetectionResults?: (results: Array<{ id: string; installed: boolean; path?: string }>, replace?: boolean) => void;
+    };
+    if (!options?.forceRefresh && typeof loaderWithCache.getCachedCliDetectionInventory === 'function') {
+        const fromLoader = loaderWithCache.getCachedCliDetectionInventory(ttlMs, now);
+        if (fromLoader) {
+            primeCachedCliInventory(fromLoader, loader, now);
+            return enrichCliInventoryVersions(fromLoader, loader);
+        }
+    }
+
+    const detectFn = options?.detectFn ?? detectCLIs;
+    let inFlight = !options?.forceRefresh && !options?.detectFn ? existing?.inFlight : undefined;
+    if (!inFlight) {
+        const refreshPromise = (async () => {
+            const detected = await detectFn(loader, { includeVersion: false });
+            if (!options?.detectFn && typeof loaderWithCache.setCliDetectionResults === 'function') {
+                try {
+                    loaderWithCache.setCliDetectionResults(detected, true);
+                } catch {
+                    // Best-effort sync back into ProviderRegistry availability map.
+                }
+            }
+            primeCachedCliInventory(detected, loader, Date.now());
+            return detected;
+        })();
+
+        if (!options?.detectFn) {
+            writeCliInventorySlot(loader, {
+                observedAt: existing?.observedAt ?? 0,
+                revision,
+                signature,
+                items: existing?.items ?? [],
+                inFlight: refreshPromise,
+            });
+            void refreshPromise.finally(() => {
+                const current = readCliInventorySlot(loader);
+                if (current?.inFlight === refreshPromise) {
+                    delete current.inFlight;
+                }
+            });
+        }
+        inFlight = refreshPromise;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const timedResult = await Promise.race([
+            inFlight.then((items) => ({ timedOut: false as const, items })),
+            new Promise<{ timedOut: true }>((resolve) => {
+                timer = setTimeout(() => resolve({ timedOut: true }), budgetMs);
+            }),
+        ]);
+        if (!timedResult.timedOut) {
+            return enrichCliInventoryVersions(timedResult.items, loader);
+        }
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+
+    if (existing?.items?.length) {
+        return enrichCliInventoryVersions(existing.items, loader);
+    }
+    const fallbackList = loader.getCliDetectionList?.() ?? [];
+    return fallbackList.map((cli) => ({
+        ...cli,
+        installed: false,
+    }));
 }
 
 /**

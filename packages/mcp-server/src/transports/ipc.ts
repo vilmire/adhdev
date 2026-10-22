@@ -100,13 +100,12 @@ const IPC_COMMAND_TIMEOUTS_MS: Record<string, number> = {
   // LOCAL node (no relay layer wraps a local dispatch — see the module comment above).
   //
   // plan_mesh_onboarding: relay classifies it as a git-status probe (30s, daemon-cloud
-  // GIT_STATUS_PROBE_COMMANDS) but the responder's own worst case can exceed that —
-  // detectCLIs(includeVersion:true) fans out across providers in parallel, but EACH
-  // provider runs its --version/-V/-v/custom fallback chain SEQUENTIALLY, up to 4 x 3s
-  // = 12s for a single slow/hanging provider (cli-detector.ts), stacked on top of
-  // mesh-onboarding-plan.ts's sequential git probes (each capped at GIT_TIMEOUT_MS 15s).
-  // 45s covers the relay's 30s plus headroom for that responder spike; see the
-  // detectCLIs parallelization fix below for the actual root-cause mitigation.
+  // GIT_STATUS_PROBE_COMMANDS). Server-side CLI inventory detection reuses the cached
+  // CLI inventory (5m TTL, invalidated on provider reload/config change) and bounds
+  // cold-cache detection (`includeVersion: false`, CLI_INVENTORY_DETECT_BUDGET_MS = 5s)
+  // without spawning `--version` probes on the clone hot path, stacked with
+  // mesh-onboarding-plan.ts's git discovery probes (GIT_TIMEOUT_MS 15s).
+  // 45s covers the relay's 30s plus headroom for local git discovery.
   plan_mesh_onboarding: 45_000,
   // get_runtime_snapshot / session_host_get_diagnostics: both are answered by the
   // session-host process via SessionHostClient.request(), which has its own hard 30s

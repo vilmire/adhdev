@@ -1,7 +1,7 @@
 /**
  * Read-only Git-aware Repo Mesh onboarding discovery/plan command.
  */
-import { detectCLIs } from '../../detection/cli-detector.js';
+import { getCachedCliInventory } from '../../detection/cli-detector.js';
 import { planMeshOnboarding } from '../../mesh/mesh-onboarding-plan.js';
 import type { MedFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
@@ -12,7 +12,11 @@ export const meshOnboardingHandlers: Record<string, MedFamilyHandler> = {
             ? args.workspace.trim()
             : process.cwd();
         try {
-            const detectedProviders = await detectCLIs(ctx.deps.providerLoader, { includeVersion: true });
+            const detectedProviders = await getCachedCliInventory(ctx.deps.providerLoader, {
+                ...(typeof args?._detectCLIs === 'function' ? { detectFn: args._detectCLIs } : {}),
+                ...(typeof args?._cliDetectBudgetMs === 'number' ? { budgetMs: args._cliDetectBudgetMs } : {}),
+                ...(typeof args?._cliCacheTtlMs === 'number' ? { ttlMs: args._cliCacheTtlMs } : {}),
+            });
             return await planMeshOnboarding({
                 workspace,
                 meshId: typeof args?.meshId === 'string' ? args.meshId.trim() || undefined : undefined,

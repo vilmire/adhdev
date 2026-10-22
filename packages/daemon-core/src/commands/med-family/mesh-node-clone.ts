@@ -485,7 +485,13 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
         const ownerFailure = await ctx.requireMeshHostMutationOwner(meshId, args?.inlineMesh, 'worktree clone');
         if (ownerFailure) return ownerFailure;
 
-        try {
+        const cloneStartedAtMs = Date.now();
+        const requestedSyncBudgetMs = Number(args?.syncBudgetMs);
+        const syncBudgetMs = Number.isFinite(requestedSyncBudgetMs) && requestedSyncBudgetMs > 0
+            ? Math.min(Math.max(requestedSyncBudgetMs, 10), 90_000)
+            : 75_000;
+
+        const runClonePipeline = async (): Promise<CommandRouterResult> => {
             // Resolve with preferInline so the clone writes the new node into the
             // same representation that get_mesh reads back (the MCP coordinator passes
             // inlineMesh on every mesh command, and get_mesh reads preferInline).
@@ -665,14 +671,18 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
             };
 
             const requestedSetupWaitMs = Number(args?.setupWaitMs ?? args?.bootstrapWaitMs ?? 8000);
-            const setupWaitMs = Number.isFinite(requestedSetupWaitMs)
+            const rawSetupWaitMs = Number.isFinite(requestedSetupWaitMs)
                 ? Math.min(Math.max(requestedSetupWaitMs, 0), 14000)
                 : 8000;
+            const remainingSyncBudgetMs = Math.max(0, syncBudgetMs - (Date.now() - cloneStartedAtMs));
+            const setupWaitMs = Math.min(rawSetupWaitMs, remainingSyncBudgetMs);
             const setupPromise = finishWorktreeSetup();
-            const setupResult = await Promise.race([
-                setupPromise.then((value) => ({ completed: true as const, value })),
-                new Promise<{ completed: false }>((resolve) => setTimeout(() => resolve({ completed: false }), setupWaitMs)),
-            ]);
+            const setupResult = setupWaitMs > 0
+                ? await Promise.race([
+                    setupPromise.then((value) => ({ completed: true as const, value })),
+                    new Promise<{ completed: false }>((resolve) => setTimeout(() => resolve({ completed: false }), setupWaitMs)),
+                ])
+                : { completed: false as const };
 
             const bootstrapStartedMs = Date.now();
 
@@ -740,6 +750,40 @@ export const meshNodeCloneHandlers: Record<string, MedFamilyHandler> = {
                 submodulesInitialized,
                 worktreeBootstrap: bootstrapState,
             };
+        };
+
+        try {
+            const pipelinePromise = runClonePipeline();
+            let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+                const raced = await Promise.race([
+                    pipelinePromise.then((res) => ({ completed: true as const, res })),
+                    new Promise<{ completed: false }>((resolve) => {
+                        budgetTimer = setTimeout(() => resolve({ completed: false }), syncBudgetMs);
+                    }),
+                ]);
+                if (raced.completed) {
+                    return raced.res;
+                }
+            } finally {
+                if (budgetTimer) clearTimeout(budgetTimer);
+            }
+            void pipelinePromise.catch((err) => {
+                LOG.warn('Mesh', `[clone] background clone pipeline failed for ${meshId}/${branch}: ${err?.message || err}`);
+            });
+            return {
+                success: true,
+                async: true,
+                status: 'accepted',
+                meshId,
+                sourceNodeId,
+                branch,
+                worktreeSetup: {
+                    status: 'running',
+                    setupWaitMs: syncBudgetMs,
+                    message: 'Worktree clone accepted; worktree creation and bootstrap are continuing in the background.',
+                },
+            } as CommandRouterResult;
         } catch (e: any) {
             // A mesh at its policy.maxNodes limit refuses AFTER `git worktree add` (the rollback
             // above has already removed the worktree and branch): answer with the actionable

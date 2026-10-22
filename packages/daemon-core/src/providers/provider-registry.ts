@@ -30,6 +30,8 @@ import type {
 export abstract class ProviderRegistry {
   protected providers = new Map<string, ProviderModule>();
   protected providerAvailability = new Map<string, ProviderAvailabilityState>();
+  protected cliDetectionUpdatedAt = 0;
+  protected cliDetectionRevision = 0;
 
   protected abstract log(msg: string): void;
 
@@ -366,6 +368,12 @@ export abstract class ProviderRegistry {
       config.machineProviders[providerType] = next;
       if (next.enabled !== true) {
         this.providerAvailability.set(providerType, { installed: false, detectedPath: null });
+      } else if (enabledChanged || executableChanged || argsChanged) {
+        this.providerAvailability.delete(providerType);
+      }
+      if (enabledChanged || executableChanged || argsChanged) {
+        this.cliDetectionUpdatedAt = 0;
+        this.cliDetectionRevision += 1;
       }
       this.writeConfig(config);
       this.log(`Machine provider config updated: ${providerType}`);
@@ -419,6 +427,46 @@ export abstract class ProviderRegistry {
       installed: !!state.installed,
       detectedPath: state.detectedPath ?? null,
     });
+    this.cliDetectionRevision += 1;
+  }
+
+  getCliDetectionRevision(): number {
+    return this.cliDetectionRevision;
+  }
+
+  getCliDetectionUpdatedAt(): number {
+    return this.cliDetectionUpdatedAt;
+  }
+
+  invalidateCliDetectionCache(): void {
+    this.cliDetectionUpdatedAt = 0;
+    this.cliDetectionRevision += 1;
+  }
+
+  /**
+   * Read the cached CLI detection inventory populated at boot / provider sync
+   * (`setCliDetectionResults(..., true)`). Returns `null` when cold, expired,
+   * or invalidated by a provider reload / machine-config change.
+   */
+  getCachedCliDetectionInventory(
+    ttlMs: number = 5 * 60 * 1000,
+    now: number = Date.now(),
+  ): Array<CliDetectionEntry & { installed: boolean; path?: string }> | null {
+    if (this.cliDetectionUpdatedAt <= 0 || now - this.cliDetectionUpdatedAt > ttlMs) {
+      return null;
+    }
+    const cliList = this.getCliDetectionList();
+    const out: Array<CliDetectionEntry & { installed: boolean; path?: string }> = [];
+    for (const cli of cliList) {
+      const availability = this.providerAvailability.get(cli.id);
+      if (!availability) return null;
+      out.push({
+        ...cli,
+        installed: availability.installed === true,
+        ...(availability.detectedPath ? { path: availability.detectedPath } : {}),
+      });
+    }
+    return out;
   }
 
   setCliDetectionResults(results: Array<{ id: string; installed: boolean; path?: string }>, replace: boolean = true): void {
@@ -437,6 +485,8 @@ export abstract class ProviderRegistry {
           if (this.isMachineProviderEnabled(provider.type)) this.stampLastDetection(provider, installed, detectedPath);
         }
       }
+      this.cliDetectionUpdatedAt = Date.now();
+      this.cliDetectionRevision += 1;
       return;
     }
 

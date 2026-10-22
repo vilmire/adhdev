@@ -47,3 +47,55 @@ test('mesh_clone_node forwards reason / task_id to clone_mesh_node', async () =>
   assert.equal(seen[0]!.reason, 'user asked for two parallel features');
   assert.equal(seen[0]!.taskId, 't-1');
 });
+
+test('mesh_clone_node returns an accepted/async response instead of hiding a background clone behind a caller timeout', async () => {
+  const transport = new IpcTransport() as IpcTransport & {
+    command: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+    meshCommand: (daemonId: string, command: string, args?: Record<string, unknown>) => Promise<unknown>;
+  };
+  const source = { id: 'node-src', workspace: '/repo/main', repoRoot: '/repo', daemonId: 'd1', userOverrides: {}, policy: {} };
+  const backgroundClonedNode = {
+    id: 'node-bg-clone',
+    workspace: '/repo/.adhdev-worktrees/mesh-x/feat-bg',
+    repoRoot: '/repo/.adhdev-worktrees/mesh-x/feat-bg',
+    daemonId: 'd1',
+    isLocalWorktree: true,
+    worktreeBranch: 'feat/bg',
+    clonedFromNodeId: 'node-src',
+    userOverrides: {},
+    policy: {},
+  };
+  const mesh = { id: 'mesh-x', name: 'x', repoIdentity: 'r', policy: {}, coordinator: {}, createdAt: '', updatedAt: '', nodes: [source] };
+
+  transport.command = async (command) => {
+    if (command === 'get_mesh') {
+      return { success: true, mesh: { ...mesh, nodes: [source, backgroundClonedNode] } };
+    }
+    throw new Error(`unexpected direct command: ${command}`);
+  };
+  transport.meshCommand = async (_d, command) => {
+    if (command === 'plan_mesh_onboarding') {
+      return { success: true, plan: { operation: 'clone_worktree' }, warnings: ['Source workspace has 1 uncommitted change(s).'] };
+    }
+    if (command === 'clone_mesh_node') {
+      throw new Error("Command 'clone_mesh_node' timed out after 120000ms");
+    }
+    if (command === 'git_status') {
+      return { success: true, status: { isGitRepo: true, branch: 'main' } };
+    }
+    throw new Error(`unexpected mesh command: ${command}`);
+  };
+
+  const parsed = JSON.parse(await meshCloneNode({ mesh, transport } as any, {
+    source_node_id: 'node-src',
+    branch: 'feat/bg',
+  }));
+
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.async, true);
+  assert.equal(parsed.status, 'accepted');
+  assert.equal(parsed.node?.id, 'node-bg-clone');
+  assert.ok(mesh.nodes.some((n: any) => n.id === 'node-bg-clone'), 'recovered background clone node must be synced into ctx.mesh.nodes');
+  assert.deepEqual(parsed.warnings, ['Source workspace has 1 uncommitted change(s).']);
+});
+

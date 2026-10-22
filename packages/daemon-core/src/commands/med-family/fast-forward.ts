@@ -10,7 +10,7 @@
 import { daemonIdsEquivalent, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { fastForwardMeshNode } from '../../mesh/mesh-fast-forward.js';
 import { runMeshInit } from '../../mesh/mesh-init.js';
-import { detectCLIs } from '../../detection/cli-detector.js';
+import { getCachedCliInventory } from '../../detection/cli-detector.js';
 import { buildMeshRefineValidationPlan } from '../router.js';
 import { planMeshRefineNodeSubmodulePreflight } from '../../mesh/mesh-refine-submodule-preflight.js';
 import { resolveMeshRefineConfigBaseRefs } from '../../mesh/refine-config.js';
@@ -26,7 +26,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
         const workspace = typeof args?.workspace === 'string' && args.workspace.trim() ? args.workspace.trim() : process.cwd();
         const mesh = args?.inlineMesh || {};
         try {
-            const detected = await detectCLIs(ctx.deps.providerLoader, { includeVersion: true });
+            const detected = await getCachedCliInventory(ctx.deps.providerLoader);
             return { ...runMeshInit(mesh, workspace, detected, {
                 write: args?.write === true,
                 overwrite: args?.overwrite === true,

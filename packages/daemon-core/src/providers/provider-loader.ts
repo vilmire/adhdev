@@ -433,6 +433,7 @@ export class ProviderLoader extends ProviderRegistry {
   loadAll(): void {
     this.providers.clear();
     this.providerAvailability.clear();
+    this.invalidateCliDetectionCache();
 
  // 1. Load upstream (GitHub auto-download — primary official source)
     let upstreamCount = 0;
