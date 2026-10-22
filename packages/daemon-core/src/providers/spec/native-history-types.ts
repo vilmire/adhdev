@@ -97,7 +97,7 @@ export interface NativeHistoryInput {
      *  process.env so the native-history reader follows the spawned
      *  child's view of a `${VAR}` path template instead of the daemon's. */
     envOverrides?: Record<string, string>;
-    /** Bypass parsed JSONL reuse for completion-contract evidence reads. */
+    /** Request fresh source metadata/tail for completion evidence; immutable prefixes remain reusable. */
     forceRefresh?: boolean;
     args?: Record<string, unknown>;
 }

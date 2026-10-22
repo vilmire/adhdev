@@ -526,7 +526,10 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
     if (restoredHistory.source !== 'provider-native') {
         host.lastExternalCompletionProbe = null;
         host.publishTranscriptSignalObservation(null);
-        return null;
+        // A cooperative rebuild is pending, rather than an absent transcript.
+        // Keep the existing external-native hold; do not fall back to weaker
+        // parsed evidence while the current signature is still being read.
+        return restoredHistory.unavailableReason === 'native_history_loading' ? [] : null;
     }
     host.lastExternalCompletionProbe = buildExternalTranscriptProbe(
         restoredHistory.messages,

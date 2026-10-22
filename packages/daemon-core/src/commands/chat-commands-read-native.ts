@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import type { ChatMessage } from '../types.js';
 import { flattenContent, type ProviderModule, type ProviderScripts } from '../providers/contracts.js';
-import { readProviderChatHistory } from '../config/provider-native-history.js';
+import { readProviderChatHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
 import type { CommandHelpers } from './handler.js';
 import { getTargetedCliAdapter } from './chat-commands-shared.js';
 
@@ -206,7 +206,7 @@ export function sessionSpawnEnvFromAdapter(h: CommandHelpers, targetSessionId: s
     return env && typeof env === 'object' ? env as Record<string, string> : undefined;
 }
 
-export function readCliProviderNativeHistory(agentStr: string, args: {
+function* readCliProviderNativeHistoryWork(agentStr: string, args: {
     canonicalHistory?: ProviderModule['canonicalHistory'];
     historySessionId?: string;
     workspace?: string;
@@ -240,7 +240,7 @@ export function readCliProviderNativeHistory(agentStr: string, args: {
     // conversation .db.
     instanceId?: string;
     excludeActivity?: boolean; // chat_history's prose-only default — see readProviderChatHistory
-}): ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' } {
+}): Generator<Parameters<typeof readProviderChatHistory>, ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' }, ReturnType<typeof readProviderChatHistory>> {
     const canBindFromLiveSession = !args.historySessionId
         && typeof args.sessionStartedAtMs === 'number'
         && args.sessionStartedAtMs > 0
@@ -293,7 +293,7 @@ export function readCliProviderNativeHistory(agentStr: string, args: {
             lookup: 'session',
         } as ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' };
     }
-    const sessionHistory = readProviderChatHistory(agentStr, {
+    const sessionHistory = yield [agentStr, {
         canonicalHistory: args.canonicalHistory,
         historySessionId: effectiveHistorySessionId || undefined,
         workspace: args.workspace,
@@ -308,7 +308,7 @@ export function readCliProviderNativeHistory(agentStr: string, args: {
         envOverrides: args.envOverrides,
         instanceId: args.instanceId,
         excludeActivity: args.excludeActivity,
-    });
+    }];
     const boundProviderSessionId = typeof (sessionHistory as any)?.providerSessionId === 'string'
         ? (sessionHistory as any).providerSessionId.trim()
         : '';
@@ -322,4 +322,16 @@ export function readCliProviderNativeHistory(agentStr: string, args: {
             ? 'session'
             : 'workspace',
     };
+}
+
+export function readCliProviderNativeHistory(agent: string, args: Parameters<typeof readCliProviderNativeHistoryWork>[1]) {
+    const work = readCliProviderNativeHistoryWork(agent, args);
+    const step = work.next();
+    return step.done ? step.value : work.next(readProviderChatHistory(...step.value)).value as ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' };
+}
+
+export async function readCliProviderNativeHistoryAsync(agent: string, args: Parameters<typeof readCliProviderNativeHistoryWork>[1]) {
+    const work = readCliProviderNativeHistoryWork(agent, args);
+    const step = work.next();
+    return step.done ? step.value : work.next(await readProviderChatHistoryAsync(...step.value)).value as ReturnType<typeof readProviderChatHistory> & { lookup: 'session' | 'workspace' };
 }

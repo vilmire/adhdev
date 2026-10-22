@@ -419,3 +419,59 @@ describe('CliProviderInstance canonical Hermes saved-history sync', () => {
     expect(instance.adapter.seedCommittedMessages).not.toHaveBeenCalled()
   })
 })
+
+
+afterEach(() => vi.restoreAllMocks());
+
+it('coalesces async status hydration and starts its TTL when the bounded tail completes', async () => {
+  const { syncCanonicalSavedHistoryIfNeeded } = await import('../../src/providers/cli-provider-history-sync.js');
+  let finish!: (result: any) => void;
+  let now = 10_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const read: any = vi.fn(() => { throw new Error('status must not perform a synchronous history read'); });
+  read.readAsync = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+  const host: any = { type: 'claude-cli', workingDir: '/workspace', instanceId: 'runtime', providerSessionId: 'session',
+    provider: { nativeHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } }, scripts: { readNativeHistory: read } },
+    lastPersistedHistoryMessages: [], lastNativeSourceCanonicalCheckAt: 0 };
+  for (let i = 0; i < 20; i++) expect(syncCanonicalSavedHistoryIfNeeded(host)).toBe(true);
+  expect(read).not.toHaveBeenCalled();
+  expect(read.readAsync).toHaveBeenCalledTimes(1);
+  now = 20_000; // The read itself took longer than the TTL.
+  finish({ messages: Array.from({ length: 280 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `message ${i}`, receivedAt: 1_800_000_000_000 + i * 1000 })), sourcePath: '/native', sourceMtimeMs: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(host.lastPersistedHistoryMessages).toHaveLength(200);
+  expect(host.lastNativeSourceCanonicalCheckAt).toBe(20_000);
+  now = 21_999;
+  syncCanonicalSavedHistoryIfNeeded(host);
+  expect(read.readAsync).toHaveBeenCalledTimes(1);
+  now = 22_001;
+  syncCanonicalSavedHistoryIfNeeded(host);
+  expect(read.readAsync).toHaveBeenCalledTimes(2);
+  finish({ messages: [], sourcePath: '/native', sourceMtimeMs: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+});
+
+
+it('seeds the complete async restore while retaining only the status tail, including a rebind during hydration', async () => {
+  const { syncCanonicalSavedHistoryIfNeeded, restorePersistedHistoryFromCurrentSession } = await import('../../src/providers/cli-provider-history-sync.js');
+  const finishes: Array<(result: any) => void> = [];
+  const read: any = vi.fn();
+  read.readAsync = vi.fn(() => new Promise(resolve => finishes.push(resolve)));
+  const host: any = { type: 'claude-cli', workingDir: '/workspace', instanceId: 'runtime', providerSessionId: 'old',
+    provider: { nativeHistory: { mode: 'native-source', scripts: { readSession: 'readNativeHistory' } }, scripts: { readNativeHistory: read } },
+    lastPersistedHistoryMessages: [], lastNativeSourceCanonicalCheckAt: 0, historyWriter: { seedSessionHistory: vi.fn() } };
+  syncCanonicalSavedHistoryIfNeeded(host);
+  host.providerSessionId = 'new';
+  restorePersistedHistoryFromCurrentSession(host);
+  restorePersistedHistoryFromCurrentSession(host);
+  expect(read.readAsync).toHaveBeenCalledTimes(2);
+  finishes[0]({ messages: [{ role: 'assistant', content: 'old', receivedAt: 1_800_000_000_000 }], sourcePath: '/old', sourceMtimeMs: 1 });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(host.lastPersistedHistoryMessages).toEqual([]);
+  const messages = Array.from({ length: 280 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `new ${i}`, receivedAt: 1_800_000_000_000 + i * 1000 }));
+  finishes[1]({ messages, sourcePath: '/new', sourceMtimeMs: 2 });
+  await new Promise(resolve => setImmediate(resolve));
+  expect(host.historyWriter.seedSessionHistory.mock.calls[0][1]).toHaveLength(280);
+  expect(host.historyWriter.seedSessionHistory.mock.calls[0][2]).toBe('new');
+  expect(host.lastPersistedHistoryMessages).toHaveLength(200);
+});

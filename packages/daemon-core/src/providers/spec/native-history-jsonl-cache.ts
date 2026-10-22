@@ -24,6 +24,10 @@ interface ParsedJsonlCacheEntry {
 }
 
 interface ParsedJsonlCacheStats {
+    fullReads: number;
+    bytesRead: number;
+    recordsParsed: number;
+    recordsProjected: number;
     hits: number;
     misses: number;
     fileReads: number;
@@ -43,6 +47,10 @@ const PARSED_JSONL_CACHE_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 const parsedJsonlCache = new Map<string, ParsedJsonlCacheEntry>();
 let parsedJsonlCacheSourceBytes = 0;
 const parsedJsonlCacheStats: ParsedJsonlCacheStats = {
+    fullReads: 0,
+    bytesRead: 0,
+    recordsParsed: 0,
+    recordsProjected: 0,
     hits: 0,
     misses: 0,
     fileReads: 0,
@@ -236,7 +244,12 @@ export function __getParsedJsonlCacheStatsForTests(): ParsedJsonlCacheStats {
 
 /** TESTS ONLY. */
 export function __resetParsedJsonlCacheForTests(): void {
+    projectedJsonlCache.clear();
     parsedJsonlCache.clear();
+    parsedJsonlCacheStats.fullReads = 0;
+    parsedJsonlCacheStats.bytesRead = 0;
+    parsedJsonlCacheStats.recordsParsed = 0;
+    parsedJsonlCacheStats.recordsProjected = 0;
     parsedJsonlCacheSourceBytes = 0;
     parsedJsonlCacheStats.hits = 0;
     parsedJsonlCacheStats.misses = 0;
@@ -244,4 +257,101 @@ export function __resetParsedJsonlCacheForTests(): void {
     parsedJsonlCacheStats.parsePasses = 0;
     parsedJsonlCacheStats.incrementalReads = 0;
     parsedJsonlCacheStats.incrementalBytesSkipped = 0;
+}
+
+// Compact projections have their own cursors: the raw-object/source-byte LRU
+// must never discard the identity or append offset of an active transcript.
+// Large tool results are summarized by project() before retention. Inactive
+// sources expire; there is no source-size cliff for an active status reader.
+interface ProjectedJsonlEntry extends ParsedJsonlCacheEntry { touchedAt: number }
+const projectedJsonlCache = new Map<string, ProjectedJsonlEntry>();
+const READ_CHUNK_BYTES = 256 * 1024;
+const PROJECTED_IDLE_MS = 10 * 60_000;
+
+/** Cooperative reader. The caller drains synchronously for the compatibility
+ * API, or yields to the event loop between steps for daemon history reads.
+ * Only complete newline prefixes are committed. A final fragment is emitted
+ * exactly as in readJsonlLines and replaced on the next append. */
+export function* readProjectedJsonlRecords<T>(
+    p: string, projectionKey: string, project: (record: any, index: number) => T,
+): Generator<void, T[], void> {
+    let stat: fs.Stats;
+    try { stat = fs.statSync(p); } catch { return []; }
+    const key = `${p}\0${projectionKey}`;
+    const signature = parsedJsonlSignature(stat);
+    const now = Date.now();
+    for (const [k, entry] of projectedJsonlCache) {
+        if (now - entry.touchedAt > PROJECTED_IDLE_MS) projectedJsonlCache.delete(k);
+    }
+    const cached = projectedJsonlCache.get(key);
+    if (cached?.signature === signature) {
+        cached.touchedAt = now;
+        parsedJsonlCacheStats.hits++;
+        return cached.lines;
+    }
+    yield; // Let a synchronous lifecycle sampler defer a cold/changed source.
+    parsedJsonlCacheStats.misses++;
+    // A same-size timestamp change is a rewrite, not an empty append. Compare
+    // against sourceBytes, not committedBytes (which excludes a partial line).
+    const resume = cached && stat.size > cached.sourceBytes && canResumeFrom(cached, stat);
+    const from = resume ? cached.committedBytes : 0;
+    const lines: T[] = resume ? cached.lines.slice(0, cached.committedLineCount) : [];
+    let committedBytes = from;
+    let committedLineCount = lines.length;
+    let fd: number;
+    try { fd = fs.openSync(p, 'r'); } catch { return []; }
+    parsedJsonlCacheStats.fileReads++;
+    parsedJsonlCacheStats.parsePasses++;
+    if (resume) {
+        parsedJsonlCacheStats.incrementalReads++;
+        parsedJsonlCacheStats.incrementalBytesSkipped += from;
+    } else {
+        parsedJsonlCacheStats.fullReads++;
+    }
+    const parse = (bytes: Buffer) => {
+        const text = bytes.toString('utf8').trim();
+        if (!text) return;
+        let record: any;
+        try { record = JSON.parse(text); } catch { return; }
+        parsedJsonlCacheStats.recordsParsed++;
+        lines.push(project(record, lines.length));
+        parsedJsonlCacheStats.recordsProjected++;
+    };
+    // Retain undecoded byte fragments so UTF-8 split across a read stays intact.
+    let fragments: Buffer[] = [];
+    let fragmentBytes = 0;
+    let position = from;
+    try {
+        while (position < stat.size) {
+            const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, stat.size - position));
+            const count = fs.readSync(fd, chunk, 0, chunk.length, position);
+            if (!count) break;
+            parsedJsonlCacheStats.bytesRead += count;
+            position += count;
+            let start = 0;
+            for (let end = 0; end < count; end++) {
+                if (chunk[end] !== 10) continue;
+                const segment = chunk.subarray(start, end);
+                parse(fragments.length ? Buffer.concat([...fragments, segment], fragmentBytes + segment.length) : segment);
+                fragments = [];
+                fragmentBytes = 0;
+                committedBytes = position - count + end + 1;
+                committedLineCount = lines.length;
+                start = end + 1;
+                if (lines.length % 256 === 0) yield;
+            }
+            if (start < count) {
+                const fragment = chunk.subarray(start, count);
+                fragments.push(fragment);
+                fragmentBytes += fragment.length;
+            }
+            yield;
+        }
+        if (fragmentBytes) parse(Buffer.concat(fragments, fragmentBytes));
+    } finally { fs.closeSync(fd); }
+    projectedJsonlCache.set(key, {
+        signature, sourceBytes: stat.size, lines, committedBytes,
+        committedLineCount, dev: stat.dev, ino: stat.ino, touchedAt: Date.now(),
+    });
+    return lines;
 }

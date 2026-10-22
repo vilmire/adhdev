@@ -7,7 +7,7 @@
 
 import type { CommandResult, CommandHelpers } from './handler.js';
 import { type ProviderModule } from '../providers/contracts.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/provider-native-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
 import { LOG } from '../logging/logger.js';
 import type { ChatMessage } from '../types.js';
 import { isActivityChatMessage, normalizeChatMessages } from '../providers/chat-message-normalization.js';
@@ -44,7 +44,7 @@ import {
     readHistorySessionIdFromMessages,
 } from './chat-commands-read-native-normalize.js';
 import {
-    effectiveReadSessionId, hasSafeNativeHistoryMapping, normalizeComparableWorkspace, readCliProviderNativeHistory,
+    effectiveReadSessionId, hasSafeNativeHistoryMapping, normalizeComparableWorkspace, readCliProviderNativeHistoryAsync,
     sessionSpawnEnvFromAdapter, sessionStartedAtMsFromRegistry,
 } from './chat-commands-read-native.js';
 
@@ -195,7 +195,7 @@ async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace
             || (typeof args?.providerSessionId === 'string' && args.providerSessionId.trim())
         );
         const result = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory)
-            ? readCliProviderNativeHistory(agentStr, {
+            ? await readCliProviderNativeHistoryAsync(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
                 historySessionId: effectiveHistorySessionId,
                 workspace,
@@ -212,7 +212,7 @@ async function readChatHistoryPage(h: CommandHelpers, args: any, targetWorkspace
                 allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
                 excludeActivity: !includeActivity,
             })
-            : readProviderChatHistory(agentStr, {
+            : await readProviderChatHistoryAsync(agentStr, {
                 canonicalHistory: provider?.nativeHistory,
                 historySessionId,
                 workspace,

@@ -9,7 +9,7 @@
 
 import type { CommandHelpers, CommandResult } from './handler.js';
 import type { ChatMessage } from '../types.js';
-import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../config/provider-native-history.js';
+import { isNativeSourceCanonicalHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
 import { LOG } from '../logging/logger.js';
 import { getCurrentProviderType } from './chat-commands-shared.js';
 import { normalizeReadChatTailLimit } from './read-chat-message-filters.js';
@@ -21,7 +21,7 @@ import { normalizeAndFilterNativeHistory, readHistorySessionIdFromMessages } fro
 import {
     effectiveReadSessionId,
     hasSafeNativeHistoryMapping,
-    readCliProviderNativeHistory,
+    readCliProviderNativeHistoryAsync,
     sessionSpawnEnvFromAdapter,
     sessionStartedAtMsFromRegistry,
 } from './chat-commands-read-native.js';
@@ -44,15 +44,15 @@ interface HistoryOnlyRead {
 // simply decides whether native is usable; if not we return the
 // history we have plus a `native_history_not_safely_available`
 // error response when the provider requires native source.
-export function readChatFromHistoryOnly(h: CommandHelpers, args: any, req: CliReadChatRequest): CommandResult {
+export async function readChatFromHistoryOnly(h: CommandHelpers, args: any, req: CliReadChatRequest): Promise<CommandResult> {
     try {
-        return buildHistoryOnlyResult(h, args, req, readHistoryOnlyNative(h, args, req));
+        return buildHistoryOnlyResult(h, args, req, await readHistoryOnlyNative(h, args, req));
     } catch (error: any) {
         return { success: false, error: error?.message || `${req.transport} adapter not found` };
     }
 }
 
-function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatRequest): HistoryOnlyRead {
+async function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatRequest): Promise<HistoryOnlyRead> {
     const { provider, historySessionId } = req;
     const historyLimit = normalizeReadChatTailLimit(args);
     const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
@@ -87,7 +87,7 @@ function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatReq
         effectiveHistorySessionId: effectiveHistorySessionIdForRead,
     } = resolveNativeHistoryReadSession(args, historySessionId);
     const history = supportsNative
-        ? readCliProviderNativeHistory(agentStr, {
+        ? await readCliProviderNativeHistoryAsync(agentStr, {
             canonicalHistory: provider?.nativeHistory,
             historySessionId: effectiveHistorySessionIdForRead,
             workspace,
@@ -104,7 +104,7 @@ function readHistoryOnlyNative(h: CommandHelpers, args: any, req: CliReadChatReq
             // runtime fallback did not resolve a real provider session.
             allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
         })
-        : readProviderChatHistory(agentStr, {
+        : await readProviderChatHistoryAsync(agentStr, {
             canonicalHistory: provider?.nativeHistory,
             historySessionId,
             workspace,

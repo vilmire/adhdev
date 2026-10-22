@@ -19,7 +19,7 @@ import { nativeHistoryObservedModel } from '../providers/native-history/observed
 import type { CommandHelpers, CommandResult } from './handler.js';
 import {
     HOT_TAIL_MIN_LIMIT, normalizeComparableWorkspace, effectiveReadSessionId,
-    hasSafeNativeHistoryMapping, readCliProviderNativeHistory, sessionSpawnEnvFromAdapter,
+    hasSafeNativeHistoryMapping, readCliProviderNativeHistoryAsync, sessionSpawnEnvFromAdapter,
     sessionStartedAtMsFromRegistry,
 } from './chat-commands-read-native.js';
 import {
@@ -366,17 +366,17 @@ interface CliReadChatSelection {
     liveSelectedNativeTurnTerminalMarkers?: unknown[];
 }
 
-export function readChatFromCliAdapter(
+export async function readChatFromCliAdapter(
     h: CommandHelpers,
     args: any,
     adapter: CliAdapter,
     req: CliReadChatRequest,
-): CommandResult {
+): Promise<CommandResult> {
     LOG.debug('Command', `[read_chat] ${req.transport} adapter: ${adapter.cliType}`);
     const snapshot = readCliAdapterSnapshot(h, args, adapter, req);
     if ('error' in snapshot) return snapshot.error;
-    const native = readCliNativeHistoryForReadChat(h, args, adapter, req, snapshot);
-    const selection = selectCliReadChatMessages(h, args, adapter, req, snapshot, native);
+    const native = await readCliNativeHistoryForReadChat(h, args, adapter, req, snapshot);
+    const selection = await selectCliReadChatMessages(h, args, adapter, req, snapshot, native);
     reconcileNativeFinalAssistantStatus(selection, snapshot);
     LOG.debug('Command', `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || '')} adapterStatus=${String(snapshot.adapterStatus.status || '')} parsedStatus=${String(snapshot.parsedRecord.status || '')} parsedMsgCount=${snapshot.parsedRecord.messages.length} returnedMsgCount=${snapshot.returnedMessages.length}`);
     return buildCliReadChatResult(h, args, adapter, req, snapshot, native, selection);
@@ -468,13 +468,13 @@ function readCliAdapterSnapshot(
  *     fallbacks are preserved as additional input rounds to the machine; they
  *     were never the source decision itself, they were retries.
  */
-function readCliNativeHistoryForReadChat(
+async function readCliNativeHistoryForReadChat(
     h: CommandHelpers,
     args: any,
     adapter: CliAdapter,
     req: CliReadChatRequest,
     snap: CliAdapterSnapshot,
-): CliNativeRead {
+): Promise<CliNativeRead> {
     const { provider, historySessionId } = req;
     const supportsNative = supportsCliNativeTranscript(snap.providerType, provider)
         && isNativeSourceCanonicalHistory(provider?.nativeHistory);
@@ -533,14 +533,14 @@ function readCliNativeHistoryForReadChat(
         // (or restored, spawnedAtMs=0) session's own store. Prefer a pin (a real
         // conversation id a prior read resolved for THIS session, now also persisted
         // across restart) over the runtime id, else drop the runtime id so
-        // readCliProviderNativeHistory's pin / workspace-latest paths can engage.
+        // readCliProviderNativeHistoryAsync's pin / workspace-latest paths can engage.
         // Mirrors the handleChatHistory path's established handling.
         const {
             pinnedProviderSessionId: pinnedProviderSessionIdForRead,
             effectiveHistorySessionId: effectiveNativeReadSessionId,
         } = resolveNativeHistoryReadSession(args, nativeHistoryReadSessionId);
         try {
-            nativeHistory = readCliProviderNativeHistory(agentStr, {
+            nativeHistory = await readCliProviderNativeHistoryAsync(agentStr, {
                 ...readOpts,
                 historySessionId: effectiveNativeReadSessionId,
                 sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
@@ -621,7 +621,7 @@ function readCliNativeHistoryForReadChat(
         && !safeMapping;
     if (mayRetryUnsafeAutoDetectedCodexSession) {
         try {
-            nativeHistory = readCliProviderNativeHistory(agentStr, {
+            nativeHistory = await readCliProviderNativeHistoryAsync(agentStr, {
                 ...readOpts,
                 historySessionId: undefined,
                 sessionStartedAtMs,
@@ -705,14 +705,14 @@ function maybePinResolvedProviderSessionId(h: CommandHelpers, targetSessionId: s
  * targetSessionId is the most specific session anchor we have; fall back to
  * historySessionId so we never leak state across distinct sessions.
  */
-function selectCliReadChatMessages(
+async function selectCliReadChatMessages(
     h: CommandHelpers,
     args: any,
     adapter: CliAdapter,
     req: CliReadChatRequest,
     snap: CliAdapterSnapshot,
     native: CliNativeRead,
-): CliReadChatSelection {
+): Promise<CliReadChatSelection> {
     const { provider } = req;
     const machineSessionKey = String(
         args?.targetSessionId
@@ -767,7 +767,7 @@ function selectCliReadChatMessages(
             h.ctx.sessionRegistry?.observeLaunchAxis?.(observedSessionId, 'model', observedModel.value, observedModel.at);
         }
     } else if (native.supportsNative) {
-        applyNativeNotSelectedFallbacks(h, args, adapter, req, snap, native, machineSessionKey, selection);
+        await applyNativeNotSelectedFallbacks(h, args, adapter, req, snap, native, machineSessionKey, selection);
     }
     return selection;
 }
@@ -777,7 +777,7 @@ function selectCliReadChatMessages(
  * on PTY: (a) Codex-only live workspace native probe; (b) unsafe-native daemon
  * mirror selection. The machine sees each retry as an additional observation.
  */
-function applyNativeNotSelectedFallbacks(
+async function applyNativeNotSelectedFallbacks(
     h: CommandHelpers,
     args: any,
     adapter: CliAdapter,
@@ -786,7 +786,7 @@ function applyNativeNotSelectedFallbacks(
     native: CliNativeRead,
     machineSessionKey: string,
     selection: CliReadChatSelection,
-): void {
+): Promise<void> {
     const { provider } = req;
     const unsafeFallback = () => applyUnsafeNativeDaemonFallback({
         providerType: snap.providerType,
@@ -825,7 +825,7 @@ function applyNativeNotSelectedFallbacks(
         && (!native.historyProviderSessionId || native.historyProviderSessionId === native.nativeHistoryReadSessionId || native.historyProviderSessionId === req.historySessionId)
         && !native.skipLiveNativeHistoryWithoutProviderSession;
     const liveWorkspaceNativeHistory: any = mayProbeLiveCodexWorkspaceNative
-        ? readLiveCodexWorkspaceNativeHistory(native.agentStr, {
+        ? await readLiveCodexWorkspaceNativeHistory(native.agentStr, {
             canonicalHistory: provider?.nativeHistory,
             workspace: snap.sessionWorkspace,
             offset: 0,

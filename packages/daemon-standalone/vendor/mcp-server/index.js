@@ -56215,7 +56215,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         registers
       });
       sync.setDirectiveHub(directives);
-      const snapshots = new SnapshotHub({
+      const snapshots2 = new SnapshotHub({
         core: core2,
         store: store2,
         topics,
@@ -56225,7 +56225,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         emitAnomaly,
         authority: opts.authority
       });
-      sync.setSnapshotHub(snapshots);
+      sync.setSnapshotHub(snapshots2);
       const archive = new ArchiveHub({ core: core2, store: store2, topics, views, registers, constants: constants3, clock, emitAnomaly });
       consumers.setOnAdvance((topic) => archive.onConsumerAdvance(topic));
       const beaconHub = new BeaconHub({
@@ -70071,6 +70071,20 @@ ${upstream}`;
         init_dist();
       }
     });
+    function markNativeHistorySnapshot(records) {
+      snapshots.add(records);
+      return records;
+    }
+    function isNativeHistorySnapshot(records) {
+      return snapshots.has(records);
+    }
+    var snapshots;
+    var init_native_history_snapshot = __esm2({
+      "src/providers/spec/native-history-snapshot.ts"() {
+        "use strict";
+        snapshots = /* @__PURE__ */ new WeakSet();
+      }
+    });
     function normalizeInputEnvelope(input) {
       const normalized = normalizeInputEnvelopePayload(input);
       const textFallback = normalized.textFallback ?? flattenInputParts(normalized.parts);
@@ -72457,7 +72471,12 @@ ${upstream}`;
     function normalizeProviderNativeHistoryRecords(agentType, historySessionId, records) {
       if (!Array.isArray(records)) return [];
       const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
-      return records.map((record6) => {
+      const key4 = `${agentType}\0${normalizedSessionId}`;
+      const immutable = isNativeHistorySnapshot(records);
+      let byContext = immutable ? normalizedNativeRecords.get(records) : void 0;
+      const cached5 = byContext?.get(key4);
+      if (cached5) return cached5;
+      const result = records.map((record6) => {
         const base = {
           ts: typeof record6?.ts === "string" ? record6.ts : new Date(Number(record6?.receivedAt) || Date.now()).toISOString(),
           receivedAt: Number(record6?.receivedAt) || Date.parse(record6?.ts || "") || Date.now(),
@@ -72502,6 +72521,12 @@ ${upstream}`;
         if (src) base._src = src;
         return sanitizeHistoryMessage(agentType, base);
       }).filter(Boolean);
+      if (immutable) {
+        markNativeHistorySnapshot(result);
+        if (!byContext) normalizedNativeRecords.set(records, byContext = /* @__PURE__ */ new Map());
+        byContext.set(key4, result);
+      }
+      return result;
     }
     function callProviderNativeHistoryRead(agentType, canonicalHistory, scripts, historySessionId, workspace, excludeInProgressTurn, sessionStartedAtMs, envOverrides, forceRefresh, instanceId) {
       const fn = getProviderNativeHistoryScript(scripts, canonicalHistory, "readSession");
@@ -72599,6 +72624,37 @@ ${upstream}`;
       if (canonicalHistory.mode === "materialized-mirror") return false;
       return true;
     }
+    function pageNativeHistory(agentType, records, options) {
+      const o = options || {};
+      const key4 = JSON.stringify([agentType, o.offset || 0, o.limit || 30, o.excludeRecentCount || 0, o.historyBehavior, o.excludeFromIdentity, o.excludeActivity === true]);
+      const immutable = isNativeHistorySnapshot(records);
+      let pages = immutable ? nativePages.get(records) : void 0;
+      const cached5 = pages?.get(key4);
+      if (cached5) return cached5;
+      const result = pageHistoryRecords(agentType, records, o.offset || 0, o.limit || 30, o.excludeRecentCount || 0, o.historyBehavior, o.excludeFromIdentity, o.excludeActivity === true);
+      if (immutable) {
+        if (!pages) nativePages.set(records, pages = /* @__PURE__ */ new Map());
+        if (pages.size >= 8) pages.delete(pages.keys().next().value);
+        pages.set(key4, result);
+      }
+      return result;
+    }
+    async function readProviderChatHistoryAsync(agentType, options = {}) {
+      const fn = getProviderNativeHistoryScript(options.scripts, options.canonicalHistory, "readSession");
+      if (typeof fn?.readAsync !== "function") return readProviderChatHistory(agentType, options);
+      const name = getNativeHistoryScriptName(options.canonicalHistory, "readSession");
+      let input;
+      readProviderChatHistory(agentType, { ...options, scripts: { ...options.scripts, [name]: (value) => {
+        input = value;
+        return null;
+      } } });
+      if (!input) return readProviderChatHistory(agentType, options);
+      const result = await fn.readAsync(input);
+      return readProviderChatHistory(agentType, { ...options, scripts: { ...options.scripts, [name]: () => result } });
+    }
+    function hasAsyncProviderHistoryReader(canonicalHistory, scripts) {
+      return typeof getProviderNativeHistoryScript(scripts, canonicalHistory, "readSession")?.readAsync === "function";
+    }
     function readProviderChatHistory(agentType, options = {}) {
       if (isNativeSourceCanonicalHistory(options.canonicalHistory) && (options.historySessionId || options.workspace)) {
         const nativeResult = buildNativeHistoryReadResult(agentType, options.canonicalHistory, options.scripts, options.historySessionId, options.workspace, options.excludeInProgressTurn, options.sessionStartedAtMs, options.envOverrides, options.forceRefresh, options.instanceId);
@@ -72614,7 +72670,7 @@ ${upstream}`;
           };
         }
         return {
-          ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity, options.excludeActivity === true),
+          ...pageNativeHistory(agentType, nativeResult.records, options),
           source: "provider-native",
           sourcePath: nativeResult.sourcePath,
           sourceMtimeMs: nativeResult.sourceMtimeMs,
@@ -72730,9 +72786,12 @@ ${upstream}`;
       };
     }
     var fs26;
+    var normalizedNativeRecords;
+    var nativePages;
     var init_provider_native_history = __esm2({
       "src/config/provider-native-history.ts"() {
         "use strict";
+        init_native_history_snapshot();
         fs26 = __toESM2(require("fs"));
         init_chat_history();
         init_chat_history_messages();
@@ -72740,6 +72799,8 @@ ${upstream}`;
         init_saved_history_index();
         init_chat_history_files();
         init_message_source_address();
+        normalizedNativeRecords = /* @__PURE__ */ new WeakMap();
+        nativePages = /* @__PURE__ */ new WeakMap();
       }
     });
     function resolveTranscriptAuthorityProfile(provider) {
@@ -118259,20 +118320,20 @@ exec "${portableNode}" "${cliEntry}" "$@"
       };
     }
     function snapshotStableFiles(stablePrefix) {
-      const snapshots = /* @__PURE__ */ new Map();
+      const snapshots2 = /* @__PURE__ */ new Map();
       for (const name of STABLE_FILES) {
         const target = path40.join(stablePrefix, name);
         try {
-          snapshots.set(target, { exists: true, data: fs33.readFileSync(target) });
+          snapshots2.set(target, { exists: true, data: fs33.readFileSync(target) });
         } catch {
-          snapshots.set(target, { exists: false });
+          snapshots2.set(target, { exists: false });
         }
       }
-      return snapshots;
+      return snapshots2;
     }
-    function restoreStableFiles(snapshots, layout) {
+    function restoreStableFiles(snapshots2, layout) {
       const shims = stableShimContents();
-      for (const [target, snapshot] of snapshots) {
+      for (const [target, snapshot] of snapshots2) {
         if (snapshot.exists && snapshot.data && snapshot.data.length > 0) {
           atomicWrite(target, snapshot.data.toString("binary"), "binary");
           continue;
@@ -118347,7 +118408,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
       const { layout, packageName, targetVersion, portableNode, hooks } = options;
       const versionName = `version-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
       const stagedPrefix = path40.join(layout.installRoot, versionName);
-      const snapshots = snapshotStableFiles(layout.stablePrefix);
+      const snapshots2 = snapshotStableFiles(layout.stablePrefix);
       let activated = false;
       let restarted = null;
       fs33.mkdirSync(stagedPrefix, { recursive: false });
@@ -118399,7 +118460,7 @@ exec "${portableNode}" "${cliEntry}" "$@"
         if (restarted?.pid) hooks.stopProcess(restarted.pid);
         if (activated) {
           try {
-            restoreStableFiles(snapshots, layout);
+            restoreStableFiles(snapshots2, layout);
             hooks.log(`Rolled back activation to ${layout.activeVersionName}`);
           } catch (rollbackError) {
             hooks.log(`Stable-file rollback failed: ${rollbackError?.message || String(rollbackError)}`);
@@ -125647,6 +125708,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       scan(dir);
       return count;
     }
+    init_message_source_address();
     function createCodexTurnProvenance() {
       let current4;
       return (payload, at, marker2) => {
@@ -125751,6 +125813,10 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     var parsedJsonlCache = /* @__PURE__ */ new Map();
     var parsedJsonlCacheSourceBytes = 0;
     var parsedJsonlCacheStats = {
+      fullReads: 0,
+      bytesRead: 0,
+      recordsParsed: 0,
+      recordsProjected: 0,
       hits: 0,
       misses: 0,
       fileReads: 0,
@@ -125880,6 +125946,107 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         ino: stat2.ino
       });
       return out;
+    }
+    var projectedJsonlCache = /* @__PURE__ */ new Map();
+    var READ_CHUNK_BYTES = 256 * 1024;
+    var PROJECTED_IDLE_MS = 10 * 6e4;
+    function* readProjectedJsonlRecords(p, projectionKey, project) {
+      let stat2;
+      try {
+        stat2 = fs49.statSync(p);
+      } catch {
+        return [];
+      }
+      const key4 = `${p}\0${projectionKey}`;
+      const signature = parsedJsonlSignature(stat2);
+      const now = Date.now();
+      for (const [k, entry] of projectedJsonlCache) {
+        if (now - entry.touchedAt > PROJECTED_IDLE_MS) projectedJsonlCache.delete(k);
+      }
+      const cached5 = projectedJsonlCache.get(key4);
+      if (cached5?.signature === signature) {
+        cached5.touchedAt = now;
+        parsedJsonlCacheStats.hits++;
+        return cached5.lines;
+      }
+      yield;
+      parsedJsonlCacheStats.misses++;
+      const resume = cached5 && stat2.size > cached5.sourceBytes && canResumeFrom(cached5, stat2);
+      const from = resume ? cached5.committedBytes : 0;
+      const lines = resume ? cached5.lines.slice(0, cached5.committedLineCount) : [];
+      let committedBytes = from;
+      let committedLineCount = lines.length;
+      let fd;
+      try {
+        fd = fs49.openSync(p, "r");
+      } catch {
+        return [];
+      }
+      parsedJsonlCacheStats.fileReads++;
+      parsedJsonlCacheStats.parsePasses++;
+      if (resume) {
+        parsedJsonlCacheStats.incrementalReads++;
+        parsedJsonlCacheStats.incrementalBytesSkipped += from;
+      } else {
+        parsedJsonlCacheStats.fullReads++;
+      }
+      const parse2 = (bytes) => {
+        const text4 = bytes.toString("utf8").trim();
+        if (!text4) return;
+        let record6;
+        try {
+          record6 = JSON.parse(text4);
+        } catch {
+          return;
+        }
+        parsedJsonlCacheStats.recordsParsed++;
+        lines.push(project(record6, lines.length));
+        parsedJsonlCacheStats.recordsProjected++;
+      };
+      let fragments = [];
+      let fragmentBytes = 0;
+      let position = from;
+      try {
+        while (position < stat2.size) {
+          const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, stat2.size - position));
+          const count = fs49.readSync(fd, chunk, 0, chunk.length, position);
+          if (!count) break;
+          parsedJsonlCacheStats.bytesRead += count;
+          position += count;
+          let start = 0;
+          for (let end = 0; end < count; end++) {
+            if (chunk[end] !== 10) continue;
+            const segment = chunk.subarray(start, end);
+            parse2(fragments.length ? Buffer.concat([...fragments, segment], fragmentBytes + segment.length) : segment);
+            fragments = [];
+            fragmentBytes = 0;
+            committedBytes = position - count + end + 1;
+            committedLineCount = lines.length;
+            start = end + 1;
+            if (lines.length % 256 === 0) yield;
+          }
+          if (start < count) {
+            const fragment = chunk.subarray(start, count);
+            fragments.push(fragment);
+            fragmentBytes += fragment.length;
+          }
+          yield;
+        }
+        if (fragmentBytes) parse2(Buffer.concat(fragments, fragmentBytes));
+      } finally {
+        fs49.closeSync(fd);
+      }
+      projectedJsonlCache.set(key4, {
+        signature,
+        sourceBytes: stat2.size,
+        lines,
+        committedBytes,
+        committedLineCount,
+        dev: stat2.dev,
+        ino: stat2.ino,
+        touchedAt: Date.now()
+      });
+      return lines;
     }
     var os24 = __toESM2(require("os"));
     var path58 = __toESM2(require("path"));
@@ -126976,11 +127143,63 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!own) return "";
       return claimTranscript(key4(own), owner) === "denied" ? "" : own;
     }
+    init_native_history_snapshot();
     function executeNativeHistory(cfg, input) {
       if (!cfg?.source) return null;
-      if (cfg.source.kind === "jsonl") return executeJsonl(cfg.source, input);
+      if (cfg.source.kind === "jsonl") {
+        const work = executeJsonl(cfg.source, input);
+        let step = work.next();
+        while (!step.done) step = work.next();
+        return step.value;
+      }
       if (cfg.source.kind === "sqlite") return executeSqlite(cfg.source, input);
       return null;
+    }
+    var jsonlWorkQueue = Promise.resolve();
+    function executeNativeHistoryAsync(cfg, input) {
+      if (cfg?.source?.kind !== "jsonl") return Promise.resolve(executeNativeHistory(cfg, input));
+      const run3 = async () => {
+        const work = executeJsonl(cfg.source, input);
+        let step = work.next();
+        while (!step.done) {
+          await new Promise((resolve54) => setImmediate(resolve54));
+          step = work.next();
+        }
+        return step.value;
+      };
+      const result = jsonlWorkQueue.then(run3, run3);
+      jsonlWorkQueue = result.catch(() => {
+      });
+      return result;
+    }
+    function createCooperativeNativeHistoryReader(cfg) {
+      const pending = /* @__PURE__ */ new Map();
+      const keyFor = (input) => JSON.stringify({
+        ...input,
+        forceRefresh: void 0,
+        args: { ...input.args, forceRefresh: void 0, excludeInProgressTurn: void 0 },
+        excludeInProgressTurn: void 0
+      });
+      const loading = { messages: [], sourcePath: "", sourceMtimeMs: 0, unavailableReason: "native_history_loading" };
+      const reader = (input) => {
+        const key4 = keyFor(input);
+        if (pending.has(key4)) return loading;
+        if (cfg?.source?.kind !== "jsonl") return executeNativeHistory(cfg, input);
+        const work = executeJsonl(cfg.source, input);
+        const first = work.next();
+        if (first.done) return first.value;
+        work.return(null);
+        const result = executeNativeHistoryAsync(cfg, input);
+        pending.set(key4, result);
+        void result.finally(() => pending.delete(key4)).catch(() => {
+        });
+        return loading;
+      };
+      reader.readAsync = async (input) => {
+        const result = reader(input);
+        return pending.get(keyFor(input)) ?? result;
+      };
+      return reader;
     }
     function executeNativeHistoryList(cfg, input) {
       if (!cfg?.source) return null;
@@ -127079,7 +127298,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         sourceMtimeMs: mtime
       };
     }
-    function executeJsonl(src, input) {
+    var jsonlProjections = /* @__PURE__ */ new WeakMap();
+    function* executeJsonl(src, input) {
       const resolution = resolveJsonlSourcePathDetailed(src, input);
       const outcome = resolution.outcome;
       if (outcome && (outcome.attribution === "ambiguous" || outcome.attribution === "already_claimed")) {
@@ -127107,13 +127327,41 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         return null;
       }
       const mtime = safeMtimeMs(sourcePath);
-      const forceRefresh = input.forceRefresh === true || input.args?.forceRefresh === true;
-      const lines = readJsonlLines(sourcePath, forceRefresh);
+      const shapes = compileRecordShapes(src);
+      const pickUsage = compileUsageShapes(src);
+      const requested = readRequestedSessionId(input) || "";
+      const projectionKey = JSON.stringify([src, input.agentType]);
+      const lines = yield* readProjectedJsonlRecords(sourcePath, projectionKey, (rec5, i) => {
+        const shape = shapes.pick(rec5);
+        const usageMap = pickUsage?.(rec5);
+        const messages2 = shape ? projectMessages(rec5, shape.map, i, i + 1, 1, "__projection__") : [];
+        let terminal;
+        if (input.agentType === "codex-cli" && rec5?.type === "event_msg") {
+          const payload = rec5?.payload;
+          terminal = { type: rec5.type, timestamp: rec5.timestamp, payload: payload && {
+            type: payload.type,
+            turn_id: payload.turn_id,
+            error: payload.error && typeof payload.error === "object" ? { type: payload.error.type } : payload.error,
+            last_agent_message: flattenJsonlText(payload.last_agent_message)
+          } };
+        } else if (input.agentType === "kimi" && rec5?.type === "turn.ended") {
+          terminal = { type: rec5.type, time: rec5.time, reason: rec5.reason, turnId: rec5.turnId };
+        }
+        return {
+          messages: messages2,
+          fallbackTime: !!shape && (!shape.map.timestamp_ms || parseTimestamp(jsonPathGet(rec5, shape.map.timestamp_ms)) == null),
+          usage: usageMap ? projectUsageRecord(rec5, usageMap, 0) : void 0,
+          fallbackUsageTime: !!usageMap && (!usageMap.timestamp_ms || parseTimestamp(jsonPathGet(rec5, usageMap.timestamp_ms)) == null),
+          sessionId: i === 0 && src.session_id_path ? jsonPathGet(rec5, src.session_id_path) : void 0,
+          workspace: i < 5 ? readSessionMetaWorkspace([rec5]) : void 0,
+          terminal
+        };
+      });
       if (lines.length === 0) return null;
-      const transcriptWorkspace = readSessionMetaWorkspace(lines) ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : void 0) ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : void 0);
+      const transcriptWorkspace = lines.slice(0, 5).find((record6) => record6.workspace)?.workspace ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : void 0) ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : void 0);
       let providerSessionId;
       if (src.session_id_from === "first_record" && src.session_id_path) {
-        const v = jsonPathGet(lines[0], src.session_id_path);
+        const v = lines[0].sessionId;
         if (typeof v === "string" && v) providerSessionId = v;
       } else if (src.session_id_from === "dir_uuid") {
         providerSessionId = dirUuid(sourcePath) || void 0;
@@ -127121,29 +127369,42 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         const m = path59.basename(sourcePath).match(UUID_RE);
         if (m) providerSessionId = m[1];
       }
-      const requested = readRequestedSessionId(input) || "";
       if (requested && providerSessionId && !sameSessionUuid(providerSessionId, requested)) return null;
-      const shapes = compileRecordShapes(src);
-      const pickUsage = compileUsageShapes(src);
-      const messages = [];
-      const usageRecords = [];
-      for (let i = 0; i < lines.length; i += 1) {
-        const rec5 = lines[i];
-        if (pickUsage) {
-          const usageMap = pickUsage(rec5);
-          if (usageMap) {
-            const usageRecord = projectUsageRecord(rec5, usageMap, mtime);
-            if (usageRecord) usageRecords.push(usageRecord);
+      const projectionContext = JSON.stringify([mtime, transcriptWorkspace, providerSessionId || requested || sourcePath]);
+      let byContext = jsonlProjections.get(lines);
+      let projection = byContext?.get(projectionContext);
+      if (!projection) {
+        const messages2 = [];
+        const usageRecords = [];
+        for (let i = 0; i < lines.length; i++) {
+          const rec5 = lines[i];
+          if (rec5.usage) usageRecords.push(rec5.fallbackUsageTime ? { ...rec5.usage, receivedAt: mtime } : rec5.usage);
+          for (const original of rec5.messages) {
+            const msg = { ...original };
+            if (rec5.fallbackTime) msg.receivedAt += mtime - (lines.length - 1 - i) * 1e3 - 1;
+            if (msg.toolBlockRef) {
+              if (mtime > 0) msg.toolBlockRef = { ...msg.toolBlockRef, sourceMtimeMs: mtime };
+              else delete msg.toolBlockRef;
+            }
+            if (original._src?.cls === "n") msg._src = nativeSourceAddress(providerSessionId || requested || sourcePath, original._src.addr);
+            if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
+            messages2.push(msg);
           }
+          if (i % 256 === 0) yield;
         }
-        const shape = shapes.pick(rec5);
-        if (!shape) continue;
-        for (const msg of projectMessages(rec5, shape.map, i, lines.length, mtime, providerSessionId || requested || sourcePath)) {
-          if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
-          messages.push(msg);
-        }
+        const turnTerminalMarkers2 = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map((rec5) => rec5.terminal));
+        projection = {
+          messages: markNativeHistorySnapshot(messages2),
+          turnTerminalMarkers: turnTerminalMarkers2,
+          ...usageRecords.length ? { usage: foldUsageRecords(usageRecords, {
+            providerSessionId: providerSessionId || "",
+            agent: typeof input.agentType === "string" ? input.agentType : "unknown"
+          }) } : {}
+        };
+        if (!byContext) jsonlProjections.set(lines, byContext = /* @__PURE__ */ new Map());
+        byContext.set(projectionContext, projection);
       }
-      const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
+      const { messages, usage, turnTerminalMarkers } = projection;
       if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
       const workspaceHint = typeof input.workspace === "string" && input.workspace.trim() ? input.workspace.trim() : "";
       const workspaceMatches = !workspaceHint || !transcriptWorkspace || claimKeyForPath(transcriptWorkspace) === claimKeyForPath(workspaceHint);
@@ -127169,12 +127430,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
         attribution: outcome?.attribution,
         // A timestamp/mtime pick is a candidate, not runtime ownership proof.
         ownerConfirmed: input.agentType === "codex-cli" ? codexExactConfirmed || codexPromptConfirmed : outcome?.ownerConfirmed,
-        ...usageRecords.length > 0 ? {
-          usage: foldUsageRecords(usageRecords, {
-            providerSessionId: providerSessionId || "",
-            agent: typeof input.agentType === "string" ? input.agentType : "unknown"
-          })
-        } : {},
+        ...usage ? { usage } : {},
         ...turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {}
       };
     }
@@ -130215,7 +130471,7 @@ ${output}` : "";
             let format = "spec";
             if (nh.source) {
               format = `spec-${nh.source.kind}`;
-              reader = (input) => executeNativeHistory(nh, input);
+              reader = nh.source.kind === "jsonl" ? createCooperativeNativeHistoryReader(nh) : (input) => executeNativeHistory(nh, input);
               if (nh.source.kind === "jsonl") {
                 lister = (input) => executeNativeHistoryList(nh, input);
               }
@@ -130243,13 +130499,17 @@ ${output}` : "";
             }
             if (reader) {
               resolved.scripts = { ...resolved.scripts || {} };
-              resolved.scripts.readNativeHistory = (input) => {
-                const result = reader(input);
+              const trimResult = (input, result) => {
                 const wantsTrim = input?.excludeInProgressTurn === true || input?.args?.excludeInProgressTurn === true;
                 if (!wantsTrim || !result || !Array.isArray(result.messages)) return result;
                 const trimmed2 = trimInProgressTurnToolTail(result.messages);
                 return trimmed2 === result.messages ? result : { ...result, messages: trimmed2 };
               };
+              const read2 = (input) => trimResult(input, reader(input));
+              if (typeof reader.readAsync === "function") {
+                read2.readAsync = async (input) => trimResult(input, await reader.readAsync(input));
+              }
+              resolved.scripts.readNativeHistory = read2;
               const scriptsMarker = { readSession: "readNativeHistory" };
               if (lister) {
                 resolved.scripts.listNativeHistory = lister;
@@ -133836,7 +134096,7 @@ ${output}` : "";
       const env2 = meta && typeof meta === "object" ? meta.spawnedEnv : void 0;
       return env2 && typeof env2 === "object" ? env2 : void 0;
     }
-    function readCliProviderNativeHistory(agentStr, args) {
+    function* readCliProviderNativeHistoryWork(agentStr, args) {
       const canBindFromLiveSession = !args.historySessionId && typeof args.sessionStartedAtMs === "number" && args.sessionStartedAtMs > 0 && typeof args.workspace === "string" && args.workspace.trim().length > 0;
       const pinnedProviderSessionId = typeof args.pinnedProviderSessionId === "string" ? args.pinnedProviderSessionId.trim() : "";
       const effectiveHistorySessionId = args.historySessionId || pinnedProviderSessionId || "";
@@ -133850,7 +134110,7 @@ ${output}` : "";
           lookup: "session"
         };
       }
-      const sessionHistory = readProviderChatHistory(agentStr, {
+      const sessionHistory = yield [agentStr, {
         canonicalHistory: args.canonicalHistory,
         historySessionId: effectiveHistorySessionId || void 0,
         workspace: args.workspace,
@@ -133865,12 +134125,17 @@ ${output}` : "";
         envOverrides: args.envOverrides,
         instanceId: args.instanceId,
         excludeActivity: args.excludeActivity
-      });
+      }];
       const boundProviderSessionId = typeof sessionHistory?.providerSessionId === "string" ? sessionHistory.providerSessionId.trim() : "";
       return {
         ...sessionHistory,
         lookup: effectiveHistorySessionId || canBindFromLiveSession && boundProviderSessionId && (agentStr !== "codex-cli" || sessionHistory.ownerConfirmed === true) ? "session" : "workspace"
       };
+    }
+    async function readCliProviderNativeHistoryAsync(agent, args) {
+      const work = readCliProviderNativeHistoryWork(agent, args);
+      const step = work.next();
+      return step.done ? step.value : work.next(await readProviderChatHistoryAsync(...step.value)).value;
     }
     init_contracts2();
     init_coordinator_registry();
@@ -134614,11 +134879,11 @@ ${output}` : "";
       );
     }
     init_provider_native_history();
-    function readLiveCodexWorkspaceNativeHistory(agentStr, args) {
+    async function readLiveCodexWorkspaceNativeHistory(agentStr, args) {
       if (agentStr !== "codex-cli") return null;
       const workspace = typeof args.workspace === "string" ? args.workspace.trim() : "";
       if (!workspace) return null;
-      const history = readProviderChatHistory(agentStr, {
+      const history = await readProviderChatHistoryAsync(agentStr, {
         canonicalHistory: args.canonicalHistory,
         workspace,
         offset: args.offset,
@@ -137827,12 +138092,12 @@ ${output}` : "";
       if (shouldTrustCliAdapterTerminalStatus(parsedStatus, activeModal, adapter, adapterStatus)) return "idle";
       return typeof parsedStatus === "string" && parsedStatus.trim() ? parsedStatus : "idle";
     }
-    function readChatFromCliAdapter(h, args, adapter, req) {
+    async function readChatFromCliAdapter(h, args, adapter, req) {
       LOG.debug("Command", `[read_chat] ${req.transport} adapter: ${adapter.cliType}`);
       const snapshot = readCliAdapterSnapshot(h, args, adapter, req);
       if ("error" in snapshot) return snapshot.error;
-      const native = readCliNativeHistoryForReadChat(h, args, adapter, req, snapshot);
-      const selection = selectCliReadChatMessages(h, args, adapter, req, snapshot, native);
+      const native = await readCliNativeHistoryForReadChat(h, args, adapter, req, snapshot);
+      const selection = await selectCliReadChatMessages(h, args, adapter, req, snapshot, native);
       reconcileNativeFinalAssistantStatus(selection, snapshot);
       LOG.debug("Command", `[read_chat] cli-like parsed provider=${adapter.cliType} target=${String(args?.targetSessionId || "")} adapterStatus=${String(snapshot.adapterStatus.status || "")} parsedStatus=${String(snapshot.parsedRecord.status || "")} parsedMsgCount=${snapshot.parsedRecord.messages.length} returnedMsgCount=${snapshot.returnedMessages.length}`);
       return buildCliReadChatResult(h, args, adapter, req, snapshot, native, selection);
@@ -137876,7 +138141,7 @@ ${output}` : "";
         intendedWorkspace: typeof args?.workspace === "string" ? args.workspace : void 0
       };
     }
-    function readCliNativeHistoryForReadChat(h, args, adapter, req, snap) {
+    async function readCliNativeHistoryForReadChat(h, args, adapter, req, snap) {
       const { provider, historySessionId } = req;
       const supportsNative = supportsCliNativeTranscript(snap.providerType, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory);
       const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h, adapter.cliType);
@@ -137919,7 +138184,7 @@ ${output}` : "";
           effectiveHistorySessionId: effectiveNativeReadSessionId
         } = resolveNativeHistoryReadSession(args, nativeHistoryReadSessionId);
         try {
-          nativeHistory = readCliProviderNativeHistory(agentStr, {
+          nativeHistory = await readCliProviderNativeHistoryAsync(agentStr, {
             ...readOpts,
             historySessionId: effectiveNativeReadSessionId,
             sessionStartedAtMs: sessionStartedAtMsFromRegistry(h, args?.targetSessionId),
@@ -137958,7 +138223,7 @@ ${output}` : "";
       const mayRetryUnsafeAutoDetectedCodexSession = adapter.cliType === "codex-cli" && !getExplicitHistorySessionId(args) && Boolean(sessionStartedAtMs && sessionStartedAtMs > 0) && !skipLiveNativeHistoryWithoutProviderSession && !safeMapping;
       if (mayRetryUnsafeAutoDetectedCodexSession) {
         try {
-          nativeHistory = readCliProviderNativeHistory(agentStr, {
+          nativeHistory = await readCliProviderNativeHistoryAsync(agentStr, {
             ...readOpts,
             historySessionId: void 0,
             sessionStartedAtMs
@@ -138004,7 +138269,7 @@ ${output}` : "";
         recordBoundProviderSessionId(h, effectiveReadSessionId(h, targetSessionId), resolvedProviderSessionId);
       }
     }
-    function selectCliReadChatMessages(h, args, adapter, req, snap, native) {
+    async function selectCliReadChatMessages(h, args, adapter, req, snap, native) {
       const { provider } = req;
       const machineSessionKey = String(
         args?.targetSessionId || snap.providerSessionId || req.historySessionId || h.currentSession?.sessionId || ""
@@ -138050,11 +138315,11 @@ ${output}` : "";
           h.ctx.sessionRegistry?.observeLaunchAxis?.(observedSessionId, "model", observedModel.value, observedModel.at);
         }
       } else if (native.supportsNative) {
-        applyNativeNotSelectedFallbacks(h, args, adapter, req, snap, native, machineSessionKey, selection);
+        await applyNativeNotSelectedFallbacks(h, args, adapter, req, snap, native, machineSessionKey, selection);
       }
       return selection;
     }
-    function applyNativeNotSelectedFallbacks(h, args, adapter, req, snap, native, machineSessionKey, selection) {
+    async function applyNativeNotSelectedFallbacks(h, args, adapter, req, snap, native, machineSessionKey, selection) {
       const { provider } = req;
       const unsafeFallback = () => applyUnsafeNativeDaemonFallback({
         providerType: snap.providerType,
@@ -138090,7 +138355,7 @@ ${output}` : "";
         ptyMessages: snap.returnedMessages
       });
       const mayProbeLiveCodexWorkspaceNative = adapter.cliType === "codex-cli" && liveCurrentRuntimePtySafe && !(typeof args?.providerSessionId === "string" && args.providerSessionId.trim()) && !(snap.providerSessionId && snap.providerSessionId.trim()) && !native.nativeHistoryReadSessionId && (!native.historyProviderSessionId || native.historyProviderSessionId === native.nativeHistoryReadSessionId || native.historyProviderSessionId === req.historySessionId) && !native.skipLiveNativeHistoryWithoutProviderSession;
-      const liveWorkspaceNativeHistory = mayProbeLiveCodexWorkspaceNative ? readLiveCodexWorkspaceNativeHistory(native.agentStr, {
+      const liveWorkspaceNativeHistory = mayProbeLiveCodexWorkspaceNative ? await readLiveCodexWorkspaceNativeHistory(native.agentStr, {
         canonicalHistory: provider?.nativeHistory,
         workspace: snap.sessionWorkspace,
         offset: 0,
@@ -138192,14 +138457,14 @@ ${output}` : "";
     }
     init_provider_native_history();
     init_logger();
-    function readChatFromHistoryOnly(h, args, req) {
+    async function readChatFromHistoryOnly(h, args, req) {
       try {
-        return buildHistoryOnlyResult(h, args, req, readHistoryOnlyNative(h, args, req));
+        return buildHistoryOnlyResult(h, args, req, await readHistoryOnlyNative(h, args, req));
       } catch (error) {
         return { success: false, error: error?.message || `${req.transport} adapter not found` };
       }
     }
-    function readHistoryOnlyNative(h, args, req) {
+    async function readHistoryOnlyNative(h, args, req) {
       const { provider, historySessionId } = req;
       const historyLimit = normalizeReadChatTailLimit(args);
       const agentStr = provider?.type || args?.agentType || getCurrentProviderType(h);
@@ -138214,7 +138479,7 @@ ${output}` : "";
         pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
         effectiveHistorySessionId: effectiveHistorySessionIdForRead
       } = resolveNativeHistoryReadSession(args, historySessionId);
-      const history = supportsNative ? readCliProviderNativeHistory(agentStr, {
+      const history = supportsNative ? await readCliProviderNativeHistoryAsync(agentStr, {
         canonicalHistory: provider?.nativeHistory,
         historySessionId: effectiveHistorySessionIdForRead,
         workspace,
@@ -138230,7 +138495,7 @@ ${output}` : "";
         // Last-resort only when no pin was ever recorded AND the
         // runtime fallback did not resolve a real provider session.
         allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback
-      }) : readProviderChatHistory(agentStr, {
+      }) : await readProviderChatHistoryAsync(agentStr, {
         canonicalHistory: provider?.nativeHistory,
         historySessionId,
         workspace,
@@ -138607,7 +138872,7 @@ ${output}` : "";
         const exactNativeHistoryScope = Boolean(
           typeof args?.targetSessionId === "string" && args.targetSessionId.trim() || typeof args?.historySessionId === "string" && args.historySessionId.trim() && !historySessionIdIsRuntimeFallback || typeof args?.providerSessionId === "string" && args.providerSessionId.trim()
         );
-        const result = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory) ? readCliProviderNativeHistory(agentStr, {
+        const result = supportsCliNativeTranscript(agentStr, provider) && isNativeSourceCanonicalHistory(provider?.nativeHistory) ? await readCliProviderNativeHistoryAsync(agentStr, {
           canonicalHistory: provider?.nativeHistory,
           historySessionId: effectiveHistorySessionId,
           workspace,
@@ -138623,7 +138888,7 @@ ${output}` : "";
           pinnedProviderSessionId: pinnedProviderSessionIdForHistory,
           allowWorkspaceLatestFallback: !pinnedProviderSessionIdForHistory && historySessionIdIsRuntimeFallback,
           excludeActivity: !includeActivity
-        }) : readProviderChatHistory(agentStr, {
+        }) : await readProviderChatHistoryAsync(agentStr, {
           canonicalHistory: provider?.nativeHistory,
           historySessionId,
           workspace,
@@ -139361,12 +139626,15 @@ ${output}` : "";
     init_provider_approval();
     init_assistant_registry();
     init_assistant_services();
+    function actionState(instance) {
+      return instance?.getActionState ? instance.getActionState() : instance?.getState?.();
+    }
     function assistantExecutionState(components) {
       const entry = getAssistantRegistry().reload();
       const sid = entry?.sessionId ?? null;
       const runtime = sid ? components.instanceManager?.getInstance(sid) ?? null : null;
       const adapter = sid ? components.cliManager?.adapters.get(sid) ?? null : null;
-      const state2 = runtime?.getState?.();
+      const state2 = actionState(runtime);
       return {
         sessionId: sid,
         enabled: entry?.executionEnabled !== false,
@@ -139378,7 +139646,7 @@ ${output}` : "";
       };
     }
     function actionTarget(components, action2) {
-      const state2 = components.instanceManager?.getInstance(action2.targetSessionId)?.getState?.();
+      const state2 = actionState(components.instanceManager?.getInstance(action2.targetSessionId));
       const settings2 = state2?.settings;
       const meshId = settings2?.meshNodeFor || settings2?.meshCoordinatorFor;
       if (meshId !== action2.meshId || !getAssistantServices().listMeshes().some((m) => m.id === meshId)) return null;
@@ -139402,7 +139670,7 @@ ${output}` : "";
     function ownerActionChoices(components) {
       const choices = [];
       for (const sid of components.cliManager?.adapters.keys() ?? []) {
-        const st = components.instanceManager?.getInstance(sid)?.getState?.();
+        const st = actionState(components.instanceManager?.getInstance(sid));
         const meshId = st?.settings?.meshNodeFor || st?.settings?.meshCoordinatorFor;
         const modal = components.cliManager?.adapters.get(sid)?.getStatus?.()?.activeModal ?? st?.activeChat?.activeModal;
         const providerType = typeof st?.type === "string" ? st.type : "";
@@ -139461,7 +139729,7 @@ ${output}` : "";
       if (!target) return { success: false, code: "assistant_action_target_unavailable" };
       if (selection !== void 0 && typeof expectedModal !== "string") return { success: false, code: "owner_modal_selection_required" };
       if (expectedModal !== void 0 && expectedModal !== modalIdentity(target.modal)) return { success: false, code: "owner_modal_selection_changed" };
-      const targetState = components.instanceManager?.getInstance(action2.targetSessionId)?.getState?.();
+      const targetState = actionState(components.instanceManager?.getInstance(action2.targetSessionId));
       const episode = liveApprovalEpisode(components, action2.targetSessionId, typeof targetState?.type === "string" ? targetState.type : "");
       if (episode.kind === "unavailable") return { success: false, code: "assistant_action_target_unavailable" };
       if (expectedApprovalTarget !== void 0 && (episode.kind !== "live" || !sameApprovalTarget(expectedApprovalTarget, episode.target))) {
@@ -144662,7 +144930,7 @@ ${output}` : "";
     }
     var DEFAULT_TAIL_BYTES = 64 * 1024;
     var MAX_TAIL_BYTES2 = 128 * 1024;
-    var READ_CHUNK_BYTES = 64 * 1024;
+    var READ_CHUNK_BYTES2 = 64 * 1024;
     function resolveLogPath(date) {
       if (date instanceof Date) return getCurrentDaemonLogPath(date);
       if (typeof date === "string" && date.trim()) {
@@ -144693,7 +144961,7 @@ ${output}` : "";
         const buffers = [];
         let position = start;
         while (position < size) {
-          const chunkSize = Math.min(READ_CHUNK_BYTES, size - position);
+          const chunkSize = Math.min(READ_CHUNK_BYTES2, size - position);
           const chunk = Buffer.alloc(chunkSize);
           fs79.readSync(fd, chunk, 0, chunkSize, position);
           buffers.push(chunk);
@@ -151159,7 +151427,7 @@ ${ptyResult.output.slice(-2e3)}`);
     var crypto10 = __toESM2(require("crypto"));
     var fs90 = __toESM2(require("fs"));
     var path86 = __toESM2(require("path"));
-    var READ_CHUNK_BYTES2 = 64 * 1024;
+    var READ_CHUNK_BYTES3 = 64 * 1024;
     var MAX_TITLE_CHARS = 200;
     var WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
     function isUncPath(raw) {
@@ -151548,7 +151816,7 @@ ${ptyResult.output.slice(-2e3)}`);
         const chunks = [];
         let totalBytes = 0;
         let position = 0;
-        const scratch = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES2, Math.max(1, fdStat.size + 1)));
+        const scratch = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES3, Math.max(1, fdStat.size + 1)));
         while (true) {
           const bytesRead = fs90.readSync(fd, scratch, 0, scratch.byteLength, position);
           if (bytesRead <= 0) {
@@ -170307,7 +170575,7 @@ ${buttons.join("\n")}`;
       if (restoredHistory.source !== "provider-native") {
         host.lastExternalCompletionProbe = null;
         host.publishTranscriptSignalObservation(null);
-        return null;
+        return restoredHistory.unavailableReason === "native_history_loading" ? [] : null;
       }
       host.lastExternalCompletionProbe = buildExternalTranscriptProbe(
         restoredHistory.messages,
@@ -171060,6 +171328,10 @@ ${buttons.join("\n")}`;
       const previousHistorySessionId = host.providerSessionId || host.instanceId;
       const previousProviderSessionId = host.providerSessionId;
       host.providerSessionId = nextSessionId;
+      if (hasAsyncProviderHistoryReader(host.provider.nativeHistory, host.provider.scripts)) {
+        host.lastPersistedHistoryMessages = [];
+        host.lastNativeSourceCanonicalCacheKey = void 0;
+      }
       if (host.type === "antigravity-cli") {
         const owner = host.antigravityClaimOwner();
         if (owner) claimAntigravityConversation(nextSessionId, owner);
@@ -171089,6 +171361,19 @@ ${buttons.join("\n")}`;
       const newestMessageAt = parsedMessages.reduce((newest, message) => Math.max(newest, getMessageTime(message)), 0);
       return newestMessageAt === 0;
     }
+    var nativeHydrations = /* @__PURE__ */ new WeakMap();
+    var nativeRestores = /* @__PURE__ */ new WeakMap();
+    function nativeReadOptions(host, limit) {
+      return {
+        canonicalHistory: host.provider.nativeHistory,
+        historySessionId: host.providerSessionId,
+        workspace: host.workingDir,
+        offset: 0,
+        limit,
+        historyBehavior: host.provider.historyBehavior,
+        scripts: host.provider.scripts
+      };
+    }
     function syncCanonicalSavedHistoryIfNeeded(host, options = {}) {
       if (!host.providerSessionId) return false;
       const canonicalHistory = host.provider.nativeHistory;
@@ -171099,6 +171384,21 @@ ${buttons.join("\n")}`;
         const cacheKey = [host.type, host.providerSessionId, host.workingDir, windowTag].join("\0");
         const now = Date.now();
         if (cacheKey === host.lastNativeSourceCanonicalCacheKey && now - host.lastNativeSourceCanonicalCheckAt < 2e3) {
+          return true;
+        }
+        if (hasAsyncProviderHistoryReader(canonicalHistory, host.provider.scripts)) {
+          if (nativeHydrations.has(host)) return true;
+          const sessionId = host.providerSessionId;
+          const pending = readProviderChatHistoryAsync(host.type, nativeReadOptions(host, limit)).then((history) => {
+            if (host.providerSessionId !== sessionId) return;
+            if (history.source === "provider-native") host.lastPersistedHistoryMessages = toPersistableMessages(history.messages);
+            host.lastNativeSourceCanonicalCacheKey = cacheKey;
+            host.lastNativeSourceCanonicalCheckAt = Date.now();
+          }).catch((error) => LOG.debug("CLI", `[${host.type}] history hydration failed: ${String(error)}`));
+          nativeHydrations.set(host, pending);
+          void pending.finally(() => {
+            if (nativeHydrations.get(host) === pending) nativeHydrations.delete(host);
+          });
           return true;
         }
         host.lastNativeSourceCanonicalCacheKey = cacheKey;
@@ -171115,6 +171415,7 @@ ${buttons.join("\n")}`;
         if (restoredHistory.source === "provider-native") {
           host.lastPersistedHistoryMessages = toPersistableMessages(restoredHistory.messages);
         }
+        host.lastNativeSourceCanonicalCheckAt = Date.now();
         return true;
       }
       try {
@@ -171137,6 +171438,25 @@ ${buttons.join("\n")}`;
     }
     function restorePersistedHistoryFromCurrentSession(host) {
       if (!host.providerSessionId) return;
+      if (hasAsyncProviderHistoryReader(host.provider.nativeHistory, host.provider.scripts)) {
+        const sessionId = host.providerSessionId;
+        if (nativeRestores.get(host)?.sessionId === sessionId) return;
+        const pending = readProviderChatHistoryAsync(host.type, nativeReadOptions(host, Number.MAX_SAFE_INTEGER)).then((history) => {
+          if (host.providerSessionId !== sessionId || history.source !== "provider-native") return;
+          host.historyWriter.seedSessionHistory(host.type, history.messages, sessionId, host.instanceId);
+          host.lastPersistedHistoryMessages = toPersistableMessages(history.messages.slice(-STATUS_HYDRATION_TAIL_LIMIT));
+          host.suppressIdleHistoryReplay = history.messages.length > 0;
+          host.lastNativeSourceCanonicalCacheKey = [host.type, sessionId, host.workingDir, `tail:${STATUS_HYDRATION_TAIL_LIMIT}`].join("\0");
+          host.lastNativeSourceCanonicalCheckAt = Date.now();
+        }).catch((error) => LOG.debug("CLI", `[${host.type}] history restore failed: ${String(error)}`));
+        nativeHydrations.set(host, pending);
+        nativeRestores.set(host, { sessionId, pending });
+        void pending.finally(() => {
+          if (nativeHydrations.get(host) === pending) nativeHydrations.delete(host);
+          if (nativeRestores.get(host)?.pending === pending) nativeRestores.delete(host);
+        });
+        return;
+      }
       syncCanonicalSavedHistoryIfNeeded(host, { full: true });
       const restoredHistory = isNativeSourceCanonicalHistory(host.provider.nativeHistory) ? readProviderChatHistory(host.type, {
         canonicalHistory: host.provider.nativeHistory,
@@ -172998,6 +173318,15 @@ ${buttons.join("\n")}`;
        */
       probeSessionIdFromConfig(probe) {
         return probeSessionIdFromConfig(this, probe);
+      }
+      getActionState() {
+        const status = this.adapter.getStatus({ allowParse: false });
+        return {
+          type: this.type,
+          category: "cli",
+          settings: this.settings,
+          activeChat: { activeModal: status.activeModal, activeInteractivePrompt: status.activeInteractivePrompt }
+        };
       }
       getState() {
         return buildProviderState(this);
