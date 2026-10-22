@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync } from 'fs';
+import { createHash } from 'node:crypto';
+import { OutgoingReceiptStore } from '../../src/sessions/outgoing-receipt-store.js';
+import { createSessionInputService } from '../../src/sessions/session-input-service.js';
+import { handleSendChat } from '../../src/commands/chat-commands-write.js';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -699,6 +703,82 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         expect(sendNoCoord).toMatchObject({ success: false, code: 'coordinator_missing' });
         expect(hostExecute).not.toHaveBeenCalledWith('launch_mesh_coordinator', expect.anything());
     });
+
+    it.each(['long_identity', 'corrupt_after_delivery', 'journal_io_failure', 'journal_lookup_failure'] as const)(
+        'project_send → followed host → real send_chat preserves delivery and dedupes after %s', async fault => {
+            await withHostEnv(() => createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p', { ownerVerified: true },
+            ));
+            installAssistantEnv();
+            await createRouter(ASSISTANT_B).execute(ASSISTANT_REMOTE_FOLLOW_COMMAND, {
+                action: 'follow', hostDaemonId: HOST_A, hostLabel: 'Host-A', meshId: MESH_PREFEX_SIM,
+                name: 'AlphaSim', sanitizedRepoIdentity: 'github.com/acme/alpha-sim', grantRevision: 1, bindingRevision: 1,
+            }, 'p2p', { ownerVerified: true });
+
+            const directory = join(hostDir, 'outgoing-receipts');
+            const store = new OutgoingReceiptStore(directory);
+            const delivered: string[] = [];
+            const adapter = { getStatus: () => ({ status: 'idle' }) };
+            const target = { ...adapter, sendMessage: async (_text: string, options: any) => {
+                delivered.push(options.messageId);
+                if (fault === 'corrupt_after_delivery') {
+                    const file = join(directory, createHash('sha256').update(options.messageId).digest('hex') + '.json');
+                    writeFileSync(file, '{"version":');
+                }
+                return { status: 'delivered' as const };
+            } };
+            const makeService = () => {
+                const restored = new OutgoingReceiptStore(directory);
+                if (fault === 'journal_lookup_failure') vi.spyOn(restored, 'get').mockImplementation(() => { throw new Error('synthetic journal read failure'); });
+                return createSessionInputService({ receiptStore: restored, resolveSession: () => target });
+            };
+            let service = createSessionInputService({ receiptStore: store, resolveSession: () => target });
+            const advance = fault === 'journal_io_failure' ? vi.spyOn(store, 'advance').mockImplementation(() => { throw new Error('synthetic journal I/O failure'); }) : null;
+            if (fault === 'journal_lookup_failure') {
+                const get = store.get.bind(store);
+                vi.spyOn(store, 'get').mockImplementation(id => {
+                    if (delivered.length) throw new Error('synthetic journal read failure');
+                    return get(id);
+                });
+            }
+            hostExecute.mockImplementation(async (command: string, args: any) => {
+                if (command !== 'send_chat') return { success: true };
+                const helper: any = { getProvider: () => ({ type: 'claude-cli', category: 'cli' }),
+                    getCliAdapter: () => adapter, currentSession: { sessionId: 'coord-alpha-1', transport: 'pty' },
+                    ctx: { sessionInput: service, adapters: new Map([['coord-alpha-1', adapter]]),
+                        sessionRegistry: { get: () => ({ transport: 'pty' }) }, instanceManager: { getInstance: () => null } } };
+                try { return await handleSendChat(helper, { ...args, _commandSource: 'mesh' }); }
+                catch (error) { return { success: false, error: `Internal error: ${(error as Error).message}` }; }
+            });
+            const args = { project: 'alpha-sim', message: 'Run the synthetic verification',
+                messageId: fault === 'long_identity' ? 'client-' + 'x'.repeat(190) : `receipt-${fault}` };
+            const router = createRouter(ASSISTANT_B);
+            const sent: any = await router.execute(ASSISTANT_VERB.projectSend, args, 'standalone');
+            expect(delivered).toHaveLength(1);
+            if (fault === 'long_identity') expect(delivered[0].length).toBeGreaterThan(256);
+            expect(sent).toMatchObject({ success: true, result: { status: 'accepted' } });
+            if (fault !== 'long_identity') expect(sent.result).toMatchObject({ receiptUnverified: true });
+            clearFollowerSendReceiptsForTest();
+            expect(await router.execute(ASSISTANT_VERB.projectSend, args, 'standalone')).toMatchObject({ success: true, result: { status: 'duplicate' } });
+            expect(delivered).toHaveLength(1);
+            const files = readdirSync(directory);
+            if (fault === 'corrupt_after_delivery') {
+                const quarantined = files.filter(file => file.includes('.invalid-'));
+                expect(quarantined).toHaveLength(1);
+                expect(readFileSync(join(directory, quarantined[0]), 'utf8')).toBe('{"version":');
+            }
+            // Lose service memory and the follower cache: the durable original
+            // identity must still prevent a second native delivery.
+            advance?.mockRestore();
+            service = makeService();
+            clearFollowerSendReceiptsForTest();
+            const retry: any = await router.execute(ASSISTANT_VERB.projectSend, args, 'standalone');
+            expect(retry).toMatchObject({ success: true, result: { status: 'duplicate' } });
+            expect(delivered).toHaveLength(1);
+        },
+    );
 
     it('6. stop following (unfollow) is local-only and prevents project_send from reopening; remove access revokes host ACL and suppresses pending relay', async () => {
         await withHostEnv(() =>

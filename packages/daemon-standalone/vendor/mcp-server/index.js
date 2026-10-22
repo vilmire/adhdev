@@ -24140,8 +24140,10 @@ var require_dist3 = __commonJS({
     function assessQuotaFreshness2(quota, now = Date.now()) {
       const meta = quota.metadata;
       const kind = meta?.failureKind;
-      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli" || kind === "expired-token" && ["grok-cli", "kimi", "antigravity-cli"].includes(quota.provider);
+      const userMustAct = kind === "no-data" && quota.provider !== "codex-cli";
+      const awaitsCliUse = kind === "expired-token" && ["grok-cli", "kimi", "antigravity-cli"].includes(quota.provider);
       if (userMustAct) return hasReading(quota) ? { cue: "stale", userMustAct: true } : { userMustAct: true };
+      if (awaitsCliUse) return hasReading(quota) ? { cue: "stale", userMustAct: false } : { userMustAct: false };
       if (meta?.lastGoodWindows !== true) {
         const measuredAt = finiteMs(quota.updatedAt);
         if (hasReading(quota) && (measuredAt === void 0 || now - measuredAt >= QUOTA_BACKFILL_HORIZON_MS2)) {
@@ -32709,7 +32711,7 @@ ${res.stderr}`);
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         return { kind: "invalid", platform: platform10, reason: "Antigravity credential has no access token" };
       }
-      const expiryRaw = token.expiry ?? token.expires_at;
+      const expiryRaw = token.expiry ?? token.expires_at ?? token.expiry_date;
       let expiresAtMs = null;
       if (typeof expiryRaw === "string" && expiryRaw.trim() !== "") {
         const ms3 = new Date(expiryRaw).getTime();
@@ -32725,26 +32727,81 @@ ${res.stderr}`);
         platform: platform10
       };
     }
+    function isSameCredentialAccount(a, b) {
+      if (!a.identity || !b.identity) return false;
+      return a.identity.iss === b.identity.iss && a.identity.sub === b.identity.sub;
+    }
+    async function readOptionalAntigravityTokenFile(deps, platform10) {
+      let home = deps.env.HOME?.trim() || deps.env.USERPROFILE?.trim() || "";
+      if (!home && !isTestRuntimeEnv()) {
+        try {
+          home = os42.homedir().trim();
+        } catch {
+          home = "";
+        }
+      }
+      if (!home) return null;
+      try {
+        const raw = await deps.readFile(path8.join(home, LINUX_TOKEN_RELATIVE));
+        if (!raw?.trim()) return null;
+        const parsed = parseCredentials(decodeKeyringSecret(raw), platform10);
+        return parsed.kind === "ok" ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+    function pickFreshestCredential(candidates, nowMs2) {
+      return candidates.reduce((best, candidate) => {
+        const bestUnexpired = !isExpired(best.credentials, nowMs2);
+        const candidateUnexpired = !isExpired(candidate.credentials, nowMs2);
+        if (candidateUnexpired !== bestUnexpired) return candidateUnexpired ? candidate : best;
+        const bestExpiry = best.credentials.expiresAtMs;
+        const candidateExpiry = candidate.credentials.expiresAtMs;
+        if (bestExpiry !== null && candidateExpiry !== null && candidateExpiry !== bestExpiry) {
+          return candidateExpiry > bestExpiry ? candidate : best;
+        }
+        return best;
+      });
+    }
     async function readCredentials(deps) {
       const platform10 = deps.env.ADHDEV_ANTIGRAVITY_PLATFORM?.trim() || process.platform;
       if (platform10 !== "darwin" && platform10 !== "win32" && platform10 !== "linux") {
         return { kind: "unsupported-platform", platform: platform10 };
       }
-      let raw;
-      try {
-        if (platform10 === "linux") {
-          raw = await readLinuxTokenFile(deps);
-        } else {
-          raw = platform10 === "darwin" ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
+      if (platform10 === "linux") {
+        let raw2;
+        try {
+          raw2 = await readLinuxTokenFile(deps);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return { kind: "invalid", platform: platform10, reason: `Unable to read the Antigravity credential: ${message}` };
         }
+        if (raw2 === null || raw2 === "") {
+          return { kind: "missing", platform: platform10 };
+        }
+        return parseCredentials(decodeKeyringSecret(raw2), platform10);
+      }
+      let raw = null;
+      try {
+        raw = platform10 === "darwin" ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { kind: "invalid", platform: platform10, reason: `Unable to read the Antigravity credential: ${message}` };
       }
-      if (raw === null || raw === "") {
+      const storeResult = raw !== null && raw !== "" ? parseCredentials(decodeKeyringSecret(raw), platform10) : null;
+      if (storeResult && storeResult.kind === "invalid") {
+        return storeResult;
+      }
+      const fileCandidate = await readOptionalAntigravityTokenFile(deps, platform10);
+      const compatibleFileCandidate = fileCandidate && (storeResult?.kind !== "ok" || isSameCredentialAccount(storeResult.credentials, fileCandidate.credentials)) ? fileCandidate : null;
+      const candidates = [
+        ...storeResult?.kind === "ok" ? [storeResult] : [],
+        ...compatibleFileCandidate ? [compatibleFileCandidate] : []
+      ];
+      if (candidates.length === 0) {
         return { kind: "missing", platform: platform10 };
       }
-      return parseCredentials(decodeKeyringSecret(raw), platform10);
+      return pickFreshestCredential(candidates, deps.now());
     }
     function isExpired(credentials, nowMs2) {
       return isCredentialExpired(credentials.expiresAtMs, nowMs2, EXPIRY_SKEW_MS);
@@ -32917,8 +32974,8 @@ ${res.stderr}`);
       if (isExpired(credentials, deps.now())) {
         return quotaFailure(
           "antigravity-cli",
-          "error",
-          `Antigravity access token expired \u2014 run \`agy\` once to refresh it, then quota will report again (within ~60 min on its own, ${quotaReadNowClause()}).`,
+          "unavailable",
+          `Antigravity quota reading unavailable until next CLI use \u2014 run \`agy\` once to refresh its short-lived access token (probed again within ~60 min on its own, ${quotaReadNowClause()}).`,
           { source: source2, failureKind: "expired-token" }
         );
       }
@@ -35013,8 +35070,8 @@ child.on('exit', () => process.exit(0));
       if (isExpired2(credentials, deps.now())) {
         return quotaFailure(
           "grok-cli",
-          "error",
-          "Grok access token expired \u2014 the grok CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.",
+          "unavailable",
+          "Grok quota reading unavailable until next CLI use \u2014 the grok CLI renews it on next use; an idle CLI does not renew it in the background.",
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -35179,7 +35236,13 @@ child.on('exit', () => process.exit(0));
       }
       const expiresAtRaw = record6.expires_at;
       const expiresAt = typeof expiresAtRaw === "number" && Number.isFinite(expiresAtRaw) ? expiresAtRaw : null;
-      return { kind: "ok", credentials: { accessToken, expiresAt } };
+      return {
+        kind: "ok",
+        credentials: {
+          accessToken,
+          expiresAt
+        }
+      };
     }
     function readCredentials4(deps, oauthKey) {
       const file = credentialsPath(deps.env, oauthKey);
@@ -35298,8 +35361,8 @@ child.on('exit', () => process.exit(0));
       if (isExpired3(credentials, deps.now())) {
         return quotaFailure(
           "kimi",
-          "error",
-          "Kimi access token expired normally (~15 min lifespan) \u2014 the kimi CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.",
+          "unavailable",
+          "Kimi quota reading unavailable until next CLI use \u2014 the kimi CLI renews it on next use; an idle CLI does not renew it in the background.",
           { source: "oauth", failureKind: "expired-token" }
         );
       }
@@ -35704,6 +35767,7 @@ child.on('exit', () => process.exit(0));
         const at = now();
         if (at - (lastRefreshAt.get(refresher.provider) ?? -Infinity) < debounceMs) return;
         lastRefreshAt.set(refresher.provider, at);
+        rearmExhaustedFailureRetry(refresher.provider, { active: true, now: at });
         void refreshQuotaCacheOnce([refresher], isEnabled).catch((err) => LOG.warn("Quota", `Event-driven quota refresh failed: ${err?.message || err}`));
       }, { name: "quota.event-refresh" });
       LOG.info("Quota", `Event-driven quota refresh armed (turn commits, ${debounceMs}ms debounce)`);
@@ -36065,6 +36129,17 @@ child.on('exit', () => process.exit(0));
       if (mtimeMs <= previous) return false;
       if (state2.timer) clearTimeout(state2.timer);
       failureRetries.set(provider, { failures: 0, timer: null, credentialMtimeMs: mtimeMs });
+      const entry = cache.get(provider);
+      if (entry && entry.status !== "ok" && entry.metadata?.retryExhausted) {
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, {
+          ...entry,
+          metadata: {
+            ...restMetadata,
+            retryAtMs: typeof restMetadata.retryAtMs === "number" ? Math.min(restMetadata.retryAtMs, Date.now()) : Date.now()
+          }
+        });
+      }
       LOG.info("Quota", `${provider}: credential renewed since the last failure \u2014 retry budget reset`);
       return true;
     }
@@ -36105,8 +36180,9 @@ child.on('exit', () => process.exit(0));
       if (previous?.timer) clearTimeout(previous.timer);
       const failures = (previous?.failures ?? 0) + 1;
       const credentialMtimeMs = previous?.credentialMtimeMs;
+      const lastRearmedAtMs = previous?.lastRearmedAtMs;
       if (failures > QUOTA_FAILURE_MAX_RETRIES) {
-        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs });
+        failureRetries.set(provider, { failures, timer: null, credentialMtimeMs, lastRearmedAtMs });
         if (entry && entry.metadata) {
           cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryExhausted: true } });
         }
@@ -36121,7 +36197,8 @@ child.on('exit', () => process.exit(0));
       );
       const delayMs = Math.max(retryAtMs - Date.now(), backoffMs, 0);
       if (entry && entry.metadata) {
-        cache.set(provider, { ...entry, metadata: { ...entry.metadata, retryAtMs: Date.now() + delayMs } });
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, { ...entry, metadata: { ...restMetadata, retryAtMs: Date.now() + delayMs } });
       }
       const timer = setTimeout(() => {
         const state2 = failureRetries.get(provider);
@@ -36133,8 +36210,42 @@ child.on('exit', () => process.exit(0));
         });
       }, delayMs);
       if (typeof timer.unref === "function") timer.unref();
-      failureRetries.set(provider, { failures, timer, credentialMtimeMs });
+      failureRetries.set(provider, { failures, timer, credentialMtimeMs, lastRearmedAtMs });
       LOG.info("Quota", `${provider}: transient failure \u2014 retry scheduled in ${Math.round(delayMs / 1e3)}s (attempt ${failures}/${QUOTA_FAILURE_MAX_RETRIES})`);
+    }
+    function rearmExhaustedFailureRetry(provider, options = {}) {
+      const now = options.now ?? Date.now();
+      const entry = cache.get(provider);
+      if (!entry || entry.status === "ok") return false;
+      const state2 = failureRetries.get(provider);
+      const isExhausted = entry.metadata?.retryExhausted === true || (state2?.failures ?? 0) > QUOTA_FAILURE_MAX_RETRIES;
+      if (!isExhausted) return false;
+      if (entry.metadata?.failureKind === "rate-limited" && typeof entry.metadata.retryAtMs === "number" && entry.metadata.retryAtMs > now) {
+        return false;
+      }
+      const attemptedAt = lastAttemptAt(entry);
+      const lastRearmedAt = state2?.lastRearmedAtMs;
+      const baselineAt = attemptedAt !== void 0 && lastRearmedAt !== void 0 ? Math.max(attemptedAt, lastRearmedAt) : attemptedAt ?? lastRearmedAt;
+      const minIntervalMs = options.active ? QUOTA_REARM_MIN_INTERVAL_MS : QUOTA_ROUTABLE_MAX_AGE_MS;
+      if (baselineAt !== void 0 && now - baselineAt < minIntervalMs) return false;
+      if (state2?.timer) clearTimeout(state2.timer);
+      failureRetries.set(provider, {
+        failures: QUOTA_FAILURE_MAX_RETRIES,
+        timer: null,
+        credentialMtimeMs: state2?.credentialMtimeMs,
+        lastRearmedAtMs: now
+      });
+      if (entry.metadata) {
+        const { retryExhausted: _removed, ...restMetadata } = entry.metadata;
+        cache.set(provider, {
+          ...entry,
+          metadata: {
+            ...restMetadata,
+            retryAtMs: typeof restMetadata.retryAtMs === "number" ? Math.min(restMetadata.retryAtMs, now) : now
+          }
+        });
+      }
+      return true;
     }
     var QUOTA_REFRESH_INTERVAL_MS;
     var QUOTA_ACTIVITY_WINDOW_MS;
@@ -36150,6 +36261,7 @@ child.on('exit', () => process.exit(0));
     var pendingHydrationConfirmations;
     var latestQuotaAttempts;
     var QUOTA_FAILURE_MAX_RETRIES;
+    var QUOTA_REARM_MIN_INTERVAL_MS;
     var failureRetries;
     var CREDENTIAL_RENEWAL_FAILURE_KINDS;
     var CREDENTIAL_MTIME_SOURCES;
@@ -36217,6 +36329,7 @@ child.on('exit', () => process.exit(0));
         pendingHydrationConfirmations = [];
         latestQuotaAttempts = /* @__PURE__ */ new Map();
         QUOTA_FAILURE_MAX_RETRIES = 4;
+        QUOTA_REARM_MIN_INTERVAL_MS = QUOTA_REFRESH_INTERVAL_MS;
         failureRetries = /* @__PURE__ */ new Map();
         CREDENTIAL_RENEWAL_FAILURE_KINDS = /* @__PURE__ */ new Set([
           "expired-token",
@@ -90017,6 +90130,127 @@ ${result.stderr}`, result.code);
         globalStore = createDebugTraceStore({ enabled: false, capacity: getDebugRuntimeConfig().traceBufferSize });
       }
     });
+    function isPidAlive2(pid) {
+      if (pid === process.pid) return true;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error.code !== "ESRCH";
+      }
+    }
+    function readOwner(lock) {
+      try {
+        const value = JSON.parse((0, import_node_fs6.readFileSync)((0, import_node_path7.join)(lock, OWNER_FILE), "utf8"));
+        const v = value;
+        if (v && Number.isSafeInteger(v.pid) && v.pid > 0 && typeof v.nonce === "string" && v.nonce) {
+          return { kind: "owner", owner: { pid: v.pid, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0 } };
+        }
+      } catch {
+      }
+      try {
+        return { kind: "ownerless", mtimeMs: (0, import_node_fs6.statSync)(lock).mtimeMs };
+      } catch {
+        return { kind: "gone" };
+      }
+    }
+    function abandoned(observed2, alive, now, maxAgeMs) {
+      if (observed2.kind === "owner") return !alive(observed2.owner.pid) || maxAgeMs !== void 0 && now - observed2.owner.acquiredAt >= maxAgeMs;
+      if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
+      return false;
+    }
+    function sameInstance(a, b) {
+      if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
+      return a.kind === "ownerless" && b.kind === "ownerless";
+    }
+    function reclaim2(lock, alive, now, maxAgeMs) {
+      const observed2 = readOwner(lock);
+      if (observed2.kind === "gone") return true;
+      if (!abandoned(observed2, alive, now(), maxAgeMs)) return false;
+      const guard2 = `${lock}.reclaim`;
+      try {
+        (0, import_node_fs6.mkdirSync)(guard2, { mode: 448 });
+      } catch {
+        return false;
+      }
+      try {
+        const recheck = readOwner(lock);
+        if (recheck.kind === "gone") return true;
+        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now(), maxAgeMs)) return false;
+        try {
+          (0, import_node_fs6.unlinkSync)((0, import_node_path7.join)(lock, OWNER_FILE));
+        } catch {
+        }
+        try {
+          (0, import_node_fs6.rmdirSync)(lock);
+          return true;
+        } catch {
+          return false;
+        }
+      } finally {
+        try {
+          (0, import_node_fs6.rmdirSync)(guard2);
+        } catch {
+        }
+      }
+    }
+    function acquireOwnedLock(lock, options = {}) {
+      const alive = options.isPidAlive ?? isPidAlive2;
+      const now = options.now ?? Date.now;
+      const held = () => {
+        let reclaimGuard = false;
+        try {
+          reclaimGuard = (0, import_node_fs6.statSync)(`${lock}.reclaim`).isDirectory();
+        } catch {
+        }
+        return { ok: false, busy: true, reason: reclaimGuard ? `write_lock_reclaim_in_progress: ${lock}.reclaim` : `write_lock_held: ${lock}` };
+      };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          (0, import_node_fs6.mkdirSync)(lock, { mode: 448 });
+        } catch (error) {
+          const errno = error.code;
+          if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
+          if (!reclaim2(lock, alive, now, options.maxAgeMs)) return held();
+          continue;
+        }
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto18.randomBytes)(16).toString("hex"), acquiredAt: now() };
+        try {
+          (0, import_node_fs6.writeFileSync)((0, import_node_path7.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
+        } catch {
+          try {
+            (0, import_node_fs6.rmdirSync)(lock);
+          } catch {
+          }
+          return { ok: false, busy: false, reason: `write_lock_unavailable: ${lock}` };
+        }
+        return { ok: true, owner, release: () => {
+          const current4 = readOwner(lock);
+          if (current4.kind !== "owner" || current4.owner.nonce !== owner.nonce) return;
+          try {
+            (0, import_node_fs6.unlinkSync)((0, import_node_path7.join)(lock, OWNER_FILE));
+            (0, import_node_fs6.rmdirSync)(lock);
+          } catch {
+          }
+        } };
+      }
+      return held();
+    }
+    var import_node_fs6;
+    var import_node_path7;
+    var import_node_crypto18;
+    var OWNERLESS_STALE_MS;
+    var OWNER_FILE;
+    var init_owned_lock = __esm2({
+      "src/launch-defaults/owned-lock.ts"() {
+        "use strict";
+        import_node_fs6 = require("fs");
+        import_node_path7 = require("path");
+        import_node_crypto18 = require("crypto");
+        OWNERLESS_STALE_MS = 6e4;
+        OWNER_FILE = "owner.json";
+      }
+    });
     function looksLikeBase64Secret(run3) {
       if (!/[0-9]/.test(run3) || !/[A-Za-z]/.test(run3)) return false;
       return /[A-Za-z0-9]{20,}/.test(run3);
@@ -92363,15 +92597,15 @@ ${body}`;
     function validDriverDigest(value) {
       return typeof value === "string" && DIGEST.test(value);
     }
-    var import_node_fs7;
-    var import_node_path8;
+    var import_node_fs8;
+    var import_node_path9;
     var DIGEST;
     var DriverActivationStore;
     var init_activation_store = __esm2({
       "src/drivers/activation-store.ts"() {
         "use strict";
-        import_node_fs7 = require("fs");
-        import_node_path8 = require("path");
+        import_node_fs8 = require("fs");
+        import_node_path9 = require("path");
         init_config();
         init_store_guards();
         init_risk_class();
@@ -92380,13 +92614,13 @@ ${body}`;
           path;
           now;
           constructor(opts = {}) {
-            this.path = (0, import_node_path8.join)(opts.configDir ?? getConfigDir2(), "drivers", "activations.json");
+            this.path = (0, import_node_path9.join)(opts.configDir ?? getConfigDir2(), "drivers", "activations.json");
             this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
           }
           list() {
             let raw;
             try {
-              raw = (0, import_node_fs7.readFileSync)(this.path, "utf8");
+              raw = (0, import_node_fs8.readFileSync)(this.path, "utf8");
             } catch (error) {
               if (error.code === "ENOENT") return [];
               throw error;
@@ -92452,18 +92686,18 @@ ${body}`;
         };
       }
     });
-    var import_node_fs8;
-    var import_node_path9;
-    var import_node_crypto19;
+    var import_node_fs9;
+    var import_node_path10;
+    var import_node_crypto20;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
     var init_driver_staging = __esm2({
       "src/assistant/driver-staging.ts"() {
         "use strict";
-        import_node_fs8 = require("fs");
-        import_node_path9 = require("path");
-        import_node_crypto19 = require("crypto");
+        import_node_fs9 = require("fs");
+        import_node_path10 = require("path");
+        import_node_crypto20 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -92475,11 +92709,11 @@ ${body}`;
           now;
           discarded = /* @__PURE__ */ new Set();
           constructor(opts = {}) {
-            this.dir = (0, import_node_path9.join)(opts.configDir ?? getConfigDir2(), "assistant", "staged");
+            this.dir = (0, import_node_path10.join)(opts.configDir ?? getConfigDir2(), "assistant", "staged");
             this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
           }
           path(id4) {
-            return (0, import_node_path9.join)(this.dir, `${id4}.json`);
+            return (0, import_node_path10.join)(this.dir, `${id4}.json`);
           }
           write(module22, digest4) {
             if (!validDriverDigest(digest4) || module22.category !== "driver") throw new Error("Invalid driver proposal");
@@ -92487,7 +92721,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto19.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto20.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -92509,20 +92743,20 @@ ${body}`;
           read(id4) {
             if (!ID.test(id4)) return null;
             try {
-              const r = JSON.parse((0, import_node_fs8.readFileSync)(this.path(id4), "utf8"));
+              const r = JSON.parse((0, import_node_fs9.readFileSync)(this.path(id4), "utf8"));
               if (r?.kind === "driver_activation" && r.id === id4 && r.origin === "driver" && typeof r.type === "string" && !!r.type && typeof r.name === "string" && !!r.name && typeof r.providerVersion === "string" && !!r.providerVersion && (r.publisher === void 0 || typeof r.publisher === "string") && validDriverDigest(r.treeDigest) && typeof r.trust === "string" && r.runtime?.kind === "mcp-stdio" && typeof r.runtime.command === "string" && r.declaredAccess && typeof r.declaredAccess === "object" && !Array.isArray(r.declaredAccess) && ["low", "elevated"].includes(r.riskClass) && Array.isArray(r.reasons) && r.reasons.every((s2) => typeof s2 === "string") && Number.isFinite(Date.parse(r.createdAt))) return r;
             } catch {
             }
             return null;
           }
           list() {
-            if (!(0, import_node_fs8.existsSync)(this.dir)) return [];
-            return (0, import_node_fs8.readdirSync)(this.dir).filter((n) => n.startsWith("driver-activation-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+            if (!(0, import_node_fs9.existsSync)(this.dir)) return [];
+            return (0, import_node_fs9.readdirSync)(this.dir).filter((n) => n.startsWith("driver-activation-") && n.endsWith(".json")).map((n) => this.read(n.slice(0, -5))).filter((r) => r !== null).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
           }
           remove(id4) {
             if (!ID.test(id4)) return;
             try {
-              (0, import_node_fs8.unlinkSync)(this.path(id4));
+              (0, import_node_fs9.unlinkSync)(this.path(id4));
             } catch (error) {
               if (error.code !== "ENOENT") throw error;
             }
@@ -92644,127 +92878,6 @@ ${body}`;
             return dropped;
           }
         };
-      }
-    });
-    function isPidAlive2(pid) {
-      if (pid === process.pid) return true;
-      try {
-        process.kill(pid, 0);
-        return true;
-      } catch (error) {
-        return error.code !== "ESRCH";
-      }
-    }
-    function readOwner(lock) {
-      try {
-        const value = JSON.parse((0, import_node_fs9.readFileSync)((0, import_node_path10.join)(lock, OWNER_FILE), "utf8"));
-        const v = value;
-        if (v && Number.isSafeInteger(v.pid) && v.pid > 0 && typeof v.nonce === "string" && v.nonce) {
-          return { kind: "owner", owner: { pid: v.pid, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0 } };
-        }
-      } catch {
-      }
-      try {
-        return { kind: "ownerless", mtimeMs: (0, import_node_fs9.statSync)(lock).mtimeMs };
-      } catch {
-        return { kind: "gone" };
-      }
-    }
-    function abandoned(observed2, alive, now) {
-      if (observed2.kind === "owner") return !alive(observed2.owner.pid);
-      if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= OWNERLESS_STALE_MS;
-      return false;
-    }
-    function sameInstance(a, b) {
-      if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
-      return a.kind === "ownerless" && b.kind === "ownerless";
-    }
-    function reclaim2(lock, alive, now) {
-      const observed2 = readOwner(lock);
-      if (observed2.kind === "gone") return true;
-      if (!abandoned(observed2, alive, now())) return false;
-      const guard2 = `${lock}.reclaim`;
-      try {
-        (0, import_node_fs9.mkdirSync)(guard2, { mode: 448 });
-      } catch {
-        return false;
-      }
-      try {
-        const recheck = readOwner(lock);
-        if (recheck.kind === "gone") return true;
-        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now())) return false;
-        try {
-          (0, import_node_fs9.unlinkSync)((0, import_node_path10.join)(lock, OWNER_FILE));
-        } catch {
-        }
-        try {
-          (0, import_node_fs9.rmdirSync)(lock);
-          return true;
-        } catch {
-          return false;
-        }
-      } finally {
-        try {
-          (0, import_node_fs9.rmdirSync)(guard2);
-        } catch {
-        }
-      }
-    }
-    function acquireOwnedLock(lock, options = {}) {
-      const alive = options.isPidAlive ?? isPidAlive2;
-      const now = options.now ?? Date.now;
-      const held = () => {
-        let reclaimGuard = false;
-        try {
-          reclaimGuard = (0, import_node_fs9.statSync)(`${lock}.reclaim`).isDirectory();
-        } catch {
-        }
-        return { ok: false, busy: true, reason: reclaimGuard ? `write_lock_reclaim_in_progress: ${lock}.reclaim` : `write_lock_held: ${lock}` };
-      };
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          (0, import_node_fs9.mkdirSync)(lock, { mode: 448 });
-        } catch (error) {
-          const errno = error.code;
-          if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
-          if (!reclaim2(lock, alive, now)) return held();
-          continue;
-        }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto20.randomBytes)(16).toString("hex"), acquiredAt: now() };
-        try {
-          (0, import_node_fs9.writeFileSync)((0, import_node_path10.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
-        } catch {
-          try {
-            (0, import_node_fs9.rmdirSync)(lock);
-          } catch {
-          }
-          return { ok: false, busy: false, reason: `write_lock_unavailable: ${lock}` };
-        }
-        return { ok: true, owner, release: () => {
-          const current4 = readOwner(lock);
-          if (current4.kind !== "owner" || current4.owner.nonce !== owner.nonce) return;
-          try {
-            (0, import_node_fs9.unlinkSync)((0, import_node_path10.join)(lock, OWNER_FILE));
-            (0, import_node_fs9.rmdirSync)(lock);
-          } catch {
-          }
-        } };
-      }
-      return held();
-    }
-    var import_node_fs9;
-    var import_node_path10;
-    var import_node_crypto20;
-    var OWNERLESS_STALE_MS;
-    var OWNER_FILE;
-    var init_owned_lock = __esm2({
-      "src/launch-defaults/owned-lock.ts"() {
-        "use strict";
-        import_node_fs9 = require("fs");
-        import_node_path10 = require("path");
-        import_node_crypto20 = require("crypto");
-        OWNERLESS_STALE_MS = 6e4;
-        OWNER_FILE = "owner.json";
       }
     });
     function isLaunchRole(value) {
@@ -105236,7 +105349,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
       const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
-      return { ok: true, status, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
+      return { ok: true, status, ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str10(sent.deliveryNote) } : {}, launched: coord.launched, coordinatorSessionId: coord.sessionId, messageId, cursor };
     }
     function readTailArg(raw) {
       const n = Number(raw);
@@ -105491,6 +105604,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
             return wrap(p.slug, meshId, {
               status: str10(body.status) || "accepted",
+              ...body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {},
               launched: body.launched === true,
               coordinatorSessionId: remoteCoordSessionId,
               messageId: str10(body.messageId) || null,
@@ -122598,12 +122712,13 @@ ${marker2}`,
     init_control_effects();
     init_dist();
     init_dist2();
+    var MAX_OUTGOING_MESSAGE_ID_LENGTH = 4096;
     function readOutgoingReceipt(value) {
       if (!value || typeof value !== "object") return null;
       const r = value;
       if (r.version !== 1 || !["accepted", "submitted", "uncertain", "failed"].includes(String(r.state)) || !["acceptance", "native_write_ack", "none", "not_written"].includes(String(r.proof)) || !Number.isSafeInteger(r.revision) || Number(r.revision) < 1) return null;
       for (const k of ["messageId", "sessionId", "attemptId", "generation", "inputDigest"]) {
-        if (typeof r[k] !== "string" || !r[k] || r[k].length > 256) return null;
+        if (typeof r[k] !== "string" || !r[k] || r[k].length > (k === "messageId" ? MAX_OUTGOING_MESSAGE_ID_LENGTH : 256)) return null;
       }
       if (r.state === "submitted" && r.proof !== "native_write_ack") return null;
       if (r.state === "failed" && r.proof !== "not_written") return null;
@@ -139590,97 +139705,174 @@ ${output}` : "";
         truncated: result.truncated
       };
     }
-    var import_node_fs6 = __toESM2(require("fs"));
-    var import_node_path7 = __toESM2(require("path"));
-    var import_node_crypto18 = require("crypto");
+    var import_node_fs7 = __toESM2(require("fs"));
+    var import_node_path8 = __toESM2(require("path"));
+    var import_node_crypto19 = require("crypto");
+    init_logger();
+    init_owned_lock();
     var OutgoingReceiptStore = class {
       constructor(directory2) {
         this.directory = directory2;
+        if (!directory2) return;
+        let names;
+        try {
+          names = import_node_fs7.default.readdirSync(directory2);
+        } catch (error) {
+          if (error.code === "ENOENT") return;
+          throw error;
+        }
+        for (const name of names) {
+          if (!/^[a-f0-9]{64}\.json\.invalid-\d+$/.test(name)) continue;
+          this.markInvalid(import_node_path8.default.join(directory2, name.slice(0, name.indexOf(".invalid-"))), import_node_path8.default.join(directory2, name));
+        }
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path7.default.join(this.directory, (0, import_node_crypto18.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path8.default.join(this.directory, (0, import_node_crypto19.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
-        const fd = import_node_fs6.default.openSync(this.directory, "r");
+        const fd = import_node_fs7.default.openSync(this.directory, "r");
         try {
-          import_node_fs6.default.fsyncSync(fd);
+          import_node_fs7.default.fsyncSync(fd);
         } finally {
-          import_node_fs6.default.closeSync(fd);
+          import_node_fs7.default.closeSync(fd);
         }
+      }
+      locked(id4, operation) {
+        if (!this.directory) return operation();
+        import_node_fs7.default.mkdirSync(this.directory, { recursive: true });
+        const lock = this.filename(id4) + ".lock";
+        const deadline = performance.now() + 10;
+        let waitBudget = 10;
+        for (; ; ) {
+          const acquired = acquireOwnedLock(lock, { maxAgeMs: 3e4 });
+          if (acquired.ok) {
+            try {
+              return operation();
+            } finally {
+              acquired.release();
+            }
+          }
+          const remaining = Math.min(waitBudget, deadline - performance.now());
+          if (!acquired.busy || remaining <= 0) throw Object.assign(new Error(acquired.reason), { code: acquired.errno ?? "EEXIST" });
+          const delay3 = Math.min(1, remaining);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay3);
+          waitBudget -= delay3;
+        }
+      }
+      isUnverified(messageId) {
+        return !!this.directory && import_node_fs7.default.existsSync(this.filename(messageId) + ".invalid");
+      }
+      markInvalid(file, source2 = file) {
+        try {
+          import_node_fs7.default.linkSync(source2, file + ".invalid");
+        } catch (error) {
+          if (error.code === "EEXIST") return;
+          throw error;
+        }
+        this.syncDirectory();
+      }
+      hasAcceptance(messageId) {
+        return this.records.has(messageId) || !!this.directory && (import_node_fs7.default.existsSync(this.filename(messageId)) || this.isUnverified(messageId));
+      }
+      read(messageId) {
+        if (!this.directory) return this.records.get(messageId);
+        const file = this.filename(messageId);
+        let bytes;
+        try {
+          bytes = import_node_fs7.default.readFileSync(file, "utf8");
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+          const known2 = this.isUnverified(messageId) ? this.records.get(messageId) : void 0;
+          return known2 ? { ...known2, state: "uncertain", proof: "none", revision: known2.revision + 1 } : void 0;
+        }
+        let receipt = null;
+        try {
+          receipt = readOutgoingReceipt(JSON.parse(bytes));
+        } catch {
+        }
+        if (receipt?.messageId === messageId) {
+          this.records.set(messageId, receipt);
+          return receipt;
+        }
+        let timestamp2 = Date.now();
+        let quarantine2 = `${file}.invalid-${timestamp2}`;
+        while (import_node_fs7.default.existsSync(quarantine2)) quarantine2 = `${file}.invalid-${++timestamp2}`;
+        this.markInvalid(file);
+        import_node_fs7.default.renameSync(file, quarantine2);
+        LOG.warn("OutgoingReceipt", `Invalid outgoing receipt journal quarantined at ${quarantine2}; delivery unverified, automatic resend suppressed`);
+        this.syncDirectory();
+        const known = this.records.get(messageId);
+        return known ? { ...known, state: "uncertain", proof: "none", revision: known.revision + 1 } : void 0;
       }
       get(messageId) {
         if (!this.directory) return this.records.get(messageId);
-        const file = this.filename(messageId);
-        if (!import_node_fs6.default.existsSync(file)) return void 0;
-        const receipt = readOutgoingReceipt(JSON.parse(import_node_fs6.default.readFileSync(file, "utf8")));
-        if (!receipt || receipt.messageId !== messageId) throw new Error("Invalid outgoing receipt journal");
-        return receipt;
+        if (!import_node_fs7.default.existsSync(this.directory)) return void 0;
+        return this.locked(messageId, () => this.read(messageId));
+      }
+      write(receipt) {
+        if (!readOutgoingReceipt(receipt)) throw new Error("Invalid outgoing receipt identity");
+        if (!this.directory) {
+          this.records.set(receipt.messageId, receipt);
+          return;
+        }
+        const file = this.filename(receipt.messageId);
+        const staging = `${file}.${(0, import_node_crypto19.randomUUID)()}.tmp`;
+        const fd = import_node_fs7.default.openSync(staging, "wx", 384);
+        try {
+          try {
+            import_node_fs7.default.writeFileSync(fd, JSON.stringify(receipt));
+            import_node_fs7.default.fsyncSync(fd);
+          } finally {
+            import_node_fs7.default.closeSync(fd);
+          }
+          import_node_fs7.default.renameSync(staging, file);
+          this.records.set(receipt.messageId, receipt);
+          this.syncDirectory();
+        } finally {
+          if (import_node_fs7.default.existsSync(staging)) import_node_fs7.default.unlinkSync(staging);
+        }
       }
       accept(messageId, sessionId, input) {
-        const inputDigest = outgoingInputDigest(input);
-        const existing = () => {
-          const prior2 = this.get(messageId);
-          if (!prior2 || prior2.sessionId !== sessionId || prior2.inputDigest !== inputDigest) throw new Error("Outgoing message identity conflict");
-          return { receipt: prior2, fresh: false };
-        };
-        const prior = this.get(messageId);
-        if (prior && (this.directory || prior.state !== "failed")) return existing();
-        const receipt = {
-          version: 1,
-          messageId,
-          sessionId,
-          inputDigest,
-          attemptId: (0, import_node_crypto18.randomUUID)(),
-          generation: (0, import_node_crypto18.randomUUID)(),
-          state: "accepted",
-          revision: 1,
-          proof: "acceptance"
-        };
-        if (this.directory) {
-          import_node_fs6.default.mkdirSync(this.directory, { recursive: true });
-          let fd;
-          try {
-            fd = import_node_fs6.default.openSync(this.filename(messageId), "wx", 384);
-          } catch (error) {
-            if (error.code === "EEXIST") return existing();
-            throw error;
+        return this.locked(messageId, () => {
+          const inputDigest = outgoingInputDigest(input);
+          const prior = this.read(messageId);
+          if (prior && (this.directory || prior.state !== "failed")) {
+            if (prior.sessionId !== sessionId || prior.inputDigest !== inputDigest) throw new Error("Outgoing message identity conflict");
+            return { receipt: prior, fresh: false };
           }
-          try {
-            import_node_fs6.default.writeFileSync(fd, JSON.stringify(receipt));
-            import_node_fs6.default.fsyncSync(fd);
-          } finally {
-            import_node_fs6.default.closeSync(fd);
-          }
-          this.syncDirectory();
-        } else this.records.set(messageId, receipt);
-        return { receipt, fresh: true };
+          const unverified = this.isUnverified(messageId);
+          const receipt = {
+            version: 1,
+            messageId,
+            sessionId,
+            inputDigest,
+            attemptId: (0, import_node_crypto19.randomUUID)(),
+            generation: (0, import_node_crypto19.randomUUID)(),
+            state: unverified ? "uncertain" : "accepted",
+            revision: 1,
+            proof: unverified ? "none" : "acceptance"
+          };
+          this.write(receipt);
+          return { receipt, fresh: !unverified };
+        });
       }
       advance(expected, state2) {
-        const current4 = this.get(expected.messageId);
-        if (!current4 || !sameOutgoingAttempt(current4, expected)) return void 0;
-        if (current4.state === "submitted" || current4.state === "failed" || state2 === "accepted" || state2 === current4.state) return current4;
-        const next = {
-          ...current4,
-          state: state2,
-          revision: current4.revision + 1,
-          proof: state2 === "submitted" ? "native_write_ack" : state2 === "failed" ? "not_written" : "none"
-        };
-        if (this.directory) {
-          const file = this.filename(current4.messageId);
-          const staging = `${file}.${(0, import_node_crypto18.randomUUID)()}.tmp`;
-          const fd = import_node_fs6.default.openSync(staging, "wx", 384);
-          try {
-            import_node_fs6.default.writeFileSync(fd, JSON.stringify(next));
-            import_node_fs6.default.fsyncSync(fd);
-          } finally {
-            import_node_fs6.default.closeSync(fd);
-          }
-          import_node_fs6.default.renameSync(staging, file);
-          this.syncDirectory();
-        } else this.records.set(current4.messageId, next);
-        return next;
+        return this.locked(expected.messageId, () => {
+          const current4 = this.read(expected.messageId);
+          if (!current4 || !sameOutgoingAttempt(current4, expected)) return void 0;
+          if (this.isUnverified(expected.messageId)) return { ...current4, state: "uncertain", proof: "none" };
+          if (current4.state === "submitted" || current4.state === "failed" || state2 === "accepted" || state2 === current4.state) return current4;
+          const next = {
+            ...current4,
+            state: state2,
+            revision: current4.revision + 1,
+            proof: state2 === "submitted" ? "native_write_ack" : state2 === "failed" ? "not_written" : "none"
+          };
+          this.write(next);
+          return next;
+        });
       }
       list(sessionId, ids) {
         return ids.slice(0, 32).flatMap((id4) => {
@@ -140001,22 +140193,28 @@ ${output}` : "";
     function createSessionInputService(deps) {
       const receiptStore = deps.receiptStore ?? new OutgoingReceiptStore();
       const freshOutgoing = /* @__PURE__ */ new Set();
+      const unverifiedReceipts = /* @__PURE__ */ new Set();
       const outgoingAttempts = /* @__PURE__ */ new Map();
       const now = deps.clock ?? Date.now;
       const log = deps.log ?? (() => {
       });
       const tuning = deps.interrupt ?? {};
+      function receiptFailure(messageId, error) {
+        unverifiedReceipts.add(messageId);
+        log("warn", `submit(${messageId}) receipt unverified; preserving delivery/dedupe: ${error?.message ?? error}`);
+      }
       const settled = /* @__PURE__ */ new Map();
       const inFlight4 = /* @__PURE__ */ new Map();
       const parkedText = /* @__PURE__ */ new Map();
-      function remember(messageId, kind) {
+      function remember(msg, kind) {
+        const messageId = msg.messageId;
         const at = now();
         for (const [id4, entry] of settled) {
           if (at - entry.at <= DEDUPE_WINDOW_MS && settled.size < DEDUPE_MAX_ENTRIES) break;
           settled.delete(id4);
         }
         settled.delete(messageId);
-        settled.set(messageId, { kind, at });
+        settled.set(messageId, { kind, at, sessionId: msg.sessionId, inputDigest: outgoingInputDigest(msg.input) });
       }
       function settledKind(messageId) {
         const entry = settled.get(messageId);
@@ -140081,7 +140279,8 @@ ${output}` : "";
             const updated = receiptStore.advance(receipt, state2 === "submitted" ? "submitted" : "uncertain");
             if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
             if (state2 !== "started") outgoingAttempts.delete(msg.messageId);
-          } catch {
+          } catch (error) {
+            receiptFailure(msg.messageId, error);
           }
         });
         assertMaintenanceAdmission();
@@ -140128,7 +140327,8 @@ ${output}` : "";
             const updated = receiptStore.advance(receipt, state2 === "submitted" ? "submitted" : "uncertain");
             if (updated) target.recordAcknowledgedUserInput?.(msg.input, msg.messageId, updated);
             if (state2 !== "started") outgoingAttempts.delete(msg.messageId);
-          } catch {
+          } catch (error) {
+            receiptFailure(msg.messageId, error);
           }
         });
         let outcome;
@@ -140219,18 +140419,28 @@ ${output}` : "";
         }
       }
       async function run3(msg, prepareInput, noticeObserver) {
-        if (prepareInput || msg.origin === "dashboard" || receiptStore.get(msg.messageId)) {
-          const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
-          if (fresh) freshOutgoing.add(msg.messageId);
-          if (!fresh) {
-            const liveTarget = await deps.resolveSession(msg.sessionId);
-            if (msg.policy.mode === "queue" || receipt.state !== "accepted" || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
-              return { kind: "duplicate", of: msg.messageId };
-            }
-          }
-          outgoingAttempts.set(msg.messageId, receipt);
+        if (settledKind(msg.messageId) === "delivered") {
+          const prior2 = settled.get(msg.messageId);
+          if (prior2.sessionId !== msg.sessionId || prior2.inputDigest !== outgoingInputDigest(msg.input)) throw new Error("Outgoing message identity conflict");
+          return { kind: "duplicate", of: msg.messageId };
         }
-        if (settledKind(msg.messageId) === "delivered") return { kind: "duplicate", of: msg.messageId };
+        try {
+          if (prepareInput || msg.origin === "dashboard" || receiptStore.hasAcceptance(msg.messageId)) {
+            const { receipt, fresh } = receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
+            if (fresh) freshOutgoing.add(msg.messageId);
+            if (!fresh) {
+              const liveTarget = await deps.resolveSession(msg.sessionId);
+              if (msg.policy.mode === "queue" || receipt.state !== "accepted" || !liveTarget?.hasQueuedSend?.(msg.messageId)) {
+                return { kind: "duplicate", of: msg.messageId };
+              }
+            }
+            outgoingAttempts.set(msg.messageId, receipt);
+          }
+        } catch (error) {
+          if (error.message === "Outgoing message identity conflict" || !receiptStore.hasAcceptance(msg.messageId)) throw error;
+          receiptFailure(msg.messageId, error);
+          return { kind: "duplicate", of: msg.messageId };
+        }
         let target;
         try {
           target = await deps.resolveSession(msg.sessionId);
@@ -140279,8 +140489,9 @@ ${output}` : "";
           await pending.catch(() => void 0);
           try {
             if (receiptStore.get(msg.messageId)) receiptStore.accept(msg.messageId, msg.sessionId, msg.input);
-          } catch {
-            return refuse3("internal_error", { message: "Outgoing message identity conflict" });
+          } catch (error) {
+            if (error.message === "Outgoing message identity conflict") return refuse3("internal_error", { message: "Outgoing message identity conflict" });
+            receiptFailure(msg.messageId, error);
           }
           return { kind: "duplicate", of: msg.messageId };
         }
@@ -140291,16 +140502,20 @@ ${output}` : "";
         inFlight4.set(msg.messageId, promise);
         try {
           const outcome = await promise;
-          const receipt = outgoingAttempts.get(msg.messageId);
-          if (receipt && outcome.kind === "refused") {
-            const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === "accepted" && ["no_target", "unsupported_input", "session_exited", "paused", "waiting_external"].includes(outcome.reason);
-            receiptStore.advance(receipt, notWritten ? "failed" : "uncertain");
-          }
-          if (receipt && outcome.kind === "delivered" && receiptStore.get(msg.messageId)?.state === "accepted") {
-            receiptStore.advance(receipt, "uncertain");
-          }
-          if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg.messageId, outcome.kind);
+          if (outcome.kind === "delivered" || outcome.kind === "queued") remember(msg, outcome.kind);
           if (outcome.kind === "delivered") parkedText.delete(msg.messageId);
+          try {
+            const receipt = outgoingAttempts.get(msg.messageId);
+            if (receipt && outcome.kind === "refused") {
+              const notWritten = freshOutgoing.has(msg.messageId) && receiptStore.get(msg.messageId)?.state === "accepted" && ["no_target", "unsupported_input", "session_exited", "paused", "waiting_external"].includes(outcome.reason);
+              receiptStore.advance(receipt, notWritten ? "failed" : "uncertain");
+            }
+            if (receipt && outcome.kind === "delivered" && receiptStore.get(msg.messageId)?.state === "accepted") {
+              receiptStore.advance(receipt, "uncertain");
+            }
+          } catch (error) {
+            receiptFailure(msg.messageId, error);
+          }
           return outcome;
         } finally {
           inFlight4.delete(msg.messageId);
@@ -140311,6 +140526,7 @@ ${output}` : "";
         async submitNotice(msg, observe) {
           return submitOwned({ ...msg }, void 0, observe);
         },
+        isReceiptUnverified: (messageId) => unverifiedReceipts.has(messageId) || receiptStore.isUnverified(messageId),
         getReceipts: (sessionId, ids) => receiptStore.list(sessionId, ids).map((receipt) => {
           return receipt.state === "accepted" && !outgoingAttempts.has(receipt.messageId) ? { ...receipt, state: "uncertain", proof: "none", revision: receipt.revision + 1 } : receipt;
         }),
@@ -140665,6 +140881,15 @@ ${output}` : "";
           };
       }
     }
+    function chatReceipt(service, sessionId, messageId) {
+      try {
+        const outgoingReceipt = service.getReceipts(sessionId, [messageId])[0];
+        if (outgoingReceipt && !service.isReceiptUnverified?.(messageId)) return { outgoingReceipt };
+      } catch (error) {
+        LOG.warn("OutgoingReceipt", `Receipt unverified for ${messageId}: ${error.message}`);
+      }
+      return { receiptUnverified: true, deliveryNote: "Receipt unverified. Retain the same messageId for any retry." };
+    }
     async function submitCliChat(h, args, input, provider, transport) {
       const sessionKey2 = resolveInputSessionKey(h, args, provider?.type);
       if (!sessionKey2) {
@@ -140714,13 +140939,13 @@ ${output}` : "";
         error: prepared.code,
         sent: false,
         messageId,
-        outgoingReceipt: service.getReceipts(sessionKey2, [messageId])[0]
+        ...chatReceipt(service, sessionKey2, messageId)
       };
       const requested = typeof args?.targetSessionId === "string" ? args.targetSessionId.trim() : "";
       reportSessionChatInput({ sessionIds: requested && requested !== sessionKey2 ? [sessionKey2, requested] : [sessionKey2], messageId, source: readCommandSource(args), outcome });
       return {
         ...sendChatResultFromOutcome(outcome, messageId, transport, provider?.type),
-        outgoingReceipt: service.getReceipts(sessionKey2, [messageId])[0],
+        ...chatReceipt(service, sessionKey2, messageId),
         ...prepared && "expiresAt" in prepared ? { ownerActionExpiresAt: prepared.expiresAt, ownerActionRetry: "If execution expires while queued or busy, select the current permission again. Consent is never renewed automatically." } : {}
       };
     }
@@ -141467,7 +141692,7 @@ ${output}` : "";
     async function handleOutgoingReceipts(h, args) {
       const sessionKey2 = resolveInputSessionKey(h, args, h.getProvider(args?.agentType)?.type);
       if (!sessionKey2) return { success: false, error: "Session not found" };
-      const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id4) => typeof id4 === "string" && id4.length <= 256).slice(0, 32) : [];
+      const ids = Array.isArray(args?.messageIds) ? args.messageIds.filter((id4) => typeof id4 === "string" && id4.length <= MAX_OUTGOING_MESSAGE_ID_LENGTH).slice(0, 32) : [];
       return { success: true, receipts: sessionInputFor(h).getReceipts(sessionKey2, ids) };
     }
     var fs75 = __toESM2(require("fs"));
@@ -143550,15 +143775,19 @@ ${output}` : "";
         if (!isEnabled(provider)) continue;
         const entry = cache.get(provider);
         if (!entry) return 0;
+        const attemptedAt = lastAttemptAt(entry);
         if (entry.status !== "ok") {
           const retryAtMs = entry.metadata?.retryAtMs;
-          if (typeof retryAtMs === "number" && !hasArmedFailureRetryTimer(provider) && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
+          const exhausted = entry.metadata?.retryExhausted === true || (failureRetries.get(provider)?.failures ?? 0) > QUOTA_FAILURE_MAX_RETRIES;
+          if (typeof retryAtMs === "number" && !hasArmedFailureRetryTimer(provider) && !exhausted) {
             nextAt = Math.min(nextAt, retryAtMs);
+          } else if (exhausted && entry.metadata?.failureKind !== "rate-limited") {
+            const firstRearmAt = attemptedAt === void 0 ? now : attemptedAt + QUOTA_REFRESH_INTERVAL_MS;
+            nextAt = Math.min(nextAt, active ? firstRearmAt : Math.max(firstRearmAt, now + QUOTA_REFRESH_INTERVAL_MS));
           }
         }
         const updatedAtMs = Number(entry.updatedAt);
         const dataDueAt = Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? updatedAtMs + QUOTA_ROUTABLE_MAX_AGE_MS : Number.NEGATIVE_INFINITY;
-        const attemptedAt = lastAttemptAt(entry);
         const attemptDueAt = attemptedAt === void 0 ? Number.NEGATIVE_INFINITY : attemptedAt + QUOTA_ROUTABLE_MAX_AGE_MS;
         nextAt = Math.min(nextAt, Math.max(dataDueAt, attemptDueAt));
         if (active) {
@@ -143627,6 +143856,7 @@ ${output}` : "";
         const backfillDue = (provider) => !!options.isEnabled && (!cache.has(provider) || isFailureRetryDue(provider) || isSnapshotStaleForRouting(provider) && isBackfillDueByAttemptClock(provider));
         const due = fetchers.filter(({ provider }) => {
           if (options.isEnabled && !options.isEnabled(provider)) return false;
+          rearmExhaustedFailureRetry(provider, { active });
           if (backfillDue(provider)) return true;
           return active && isDueByAxisTtl(provider);
         });
@@ -154121,6 +154351,7 @@ ${ptyResult.output.slice(-2e3)}`);
               status: "duplicate",
               launched: false,
               coordinatorSessionId: live.sessionId,
+              ...prior.receiptUnverified ? { receiptUnverified: true, deliveryNote: prior.deliveryNote } : {},
               messageId: prior.messageId,
               cursor: prior.cursor
             }
@@ -154146,12 +154377,14 @@ ${ptyResult.output.slice(-2e3)}`);
           bodyHash,
           messageId,
           cursor,
-          recordedAt: now
+          recordedAt: now,
+          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str14(sent.deliveryNote) } : {}
         }, now);
         return {
           success: true,
           result: {
             status,
+            ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {},
             launched: false,
             coordinatorSessionId: live.sessionId,
             messageId,

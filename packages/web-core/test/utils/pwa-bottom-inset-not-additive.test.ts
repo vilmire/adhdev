@@ -71,7 +71,9 @@ function bottomNavClassName(): string {
  */
 const BOTTOM_SURFACES: Array<{ name: string; base: string; read: () => string }> = [
   { name: 'mobile bottom nav (Chats list / Machines)', base: '20px', read: bottomNavClassName },
-  { name: 'mobile chat composer', base: '16px', read: composerRule },
+  // Browser-tab rule only: the installed-PWA composer is inset-only by owner
+  // decision (2026-10-22), asserted in pwa-flow-header-inset-once.test.ts.
+  { name: 'mobile chat composer (browser tab)', base: '16px', read: composerRule },
 ]
 
 describe('PWA bottom inset is additive, sized against the top reference', () => {

@@ -1878,3 +1878,59 @@ describe('describeRecoveryRelaunchDecision — recovery-relaunch observability',
         expect(msg).toContain('stays queued');
     });
 });
+
+describe('evaluateProviderQuotaGate — per-window resetsAt gating vs unavailable expired-token (mission bcf1e31c)', () => {
+    const DAY = 24 * 60 * MIN;
+
+    it('gates Codex at 100% weekly with reset 3 days out on a stale lastGoodWindows reading', () => {
+        const node = nodeWithQuota({
+            'codex-cli': okQuota({
+                provider: 'codex-cli',
+                status: 'ok',
+                session: null,
+                weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: NOW + 3 * DAY },
+                updatedAt: NOW - 9 * 60 * MIN,
+                metadata: { source: 'rollout', lastGoodWindows: true },
+            }),
+        });
+
+        expect(evaluateProviderQuotaGate(node, 'codex-cli', { weeklyMinRemainingPercent: 80 }, NOW)).toMatchObject({
+            reason: PROVIDER_QUOTA_WEEKLY_LOW_SKIP_REASON,
+            window: 'weekly',
+            remainingPercent: 0,
+        });
+        const ranked = rankProvidersByQuotaGate(node, ['codex-cli'], { weeklyMinRemainingPercent: 80 }, NOW);
+        expect(ranked.clear).toEqual([]);
+        expect(ranked.gated).toHaveLength(1);
+    });
+
+    it('keeps kimi routable when status is unavailable/expired-token with no fresh measured exhaustion', () => {
+        const withoutRetained = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                status: 'unavailable',
+                session: null,
+                weekly: null,
+                updatedAt: NOW - 239 * MIN,
+                error: 'Kimi quota reading unavailable until next CLI use',
+                metadata: { source: 'oauth', failureKind: 'expired-token', retryExhausted: true },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(withoutRetained, 'kimi', null, NOW)).toBeNull();
+        expect(rankProvidersByQuotaGate(withoutRetained, ['kimi'], null, NOW).clear).toEqual(['kimi']);
+
+        const withRoomyRetained = nodeWithQuota({
+            kimi: okQuota({
+                provider: 'kimi',
+                status: 'unavailable',
+                session: null,
+                weekly: { usedPercent: 40, windowMinutes: 10080, resetsAt: NOW + 3 * DAY },
+                updatedAt: NOW - 239 * MIN,
+                error: 'Kimi quota reading unavailable until next CLI use',
+                metadata: { source: 'oauth', failureKind: 'expired-token', retryExhausted: true, lastGoodWindows: true },
+            }),
+        });
+        expect(evaluateProviderQuotaGate(withRoomyRetained, 'kimi', null, NOW)).toBeNull();
+        expect(rankProvidersByQuotaGate(withRoomyRetained, ['kimi'], null, NOW).clear).toEqual(['kimi']);
+    });
+});

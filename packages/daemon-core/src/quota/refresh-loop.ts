@@ -21,6 +21,7 @@ import {
     isSnapshotStaleForRouting,
     isBackfillDueByAttemptClock,
     isDueByAxisTtl,
+    rearmExhaustedFailureRetry,
     resetFailureBudgetOnCredentialRenewal,
     notifyQuotaCacheChanged,
     refreshQuotaCacheOnce,
@@ -150,19 +151,24 @@ function computeNextWakeDelayMs(
         if (!isEnabled(provider)) continue;
         const entry = cache.get(provider);
         if (!entry) return 0; // missing entry → the backfill is due now
+        const attemptedAt = lastAttemptAt(entry);
         if (entry.status !== 'ok') {
             const retryAtMs = entry.metadata?.retryAtMs;
+            const exhausted = entry.metadata?.retryExhausted === true
+                || (failureRetries.get(provider)?.failures ?? 0) > QUOTA_FAILURE_MAX_RETRIES;
             if (typeof retryAtMs === 'number'
                 && !hasArmedFailureRetryTimer(provider) // the armed timer owns this retry
-                && (failureRetries.get(provider)?.failures ?? 0) <= QUOTA_FAILURE_MAX_RETRIES) {
+                && !exhausted) {
                 nextAt = Math.min(nextAt, retryAtMs);
+            } else if (exhausted && entry.metadata?.failureKind !== 'rate-limited') {
+                const firstRearmAt = attemptedAt === undefined ? now : attemptedAt + QUOTA_REFRESH_INTERVAL_MS;
+                nextAt = Math.min(nextAt, active ? firstRearmAt : Math.max(firstRearmAt, now + QUOTA_REFRESH_INTERVAL_MS));
             }
         }
         const updatedAtMs = Number(entry.updatedAt);
         const dataDueAt = Number.isFinite(updatedAtMs) && updatedAtMs > 0
             ? updatedAtMs + QUOTA_ROUTABLE_MAX_AGE_MS
             : Number.NEGATIVE_INFINITY;
-        const attemptedAt = lastAttemptAt(entry);
         const attemptDueAt = attemptedAt === undefined
             ? Number.NEGATIVE_INFINITY
             : attemptedAt + QUOTA_ROUTABLE_MAX_AGE_MS;
@@ -351,6 +357,7 @@ export function startQuotaRefreshLoop(options: QuotaRefreshLoopOptions): QuotaRe
         // safety net does not already cover.
         const due = fetchers.filter(({ provider }) => {
             if (options.isEnabled && !options.isEnabled(provider)) return false;
+            rearmExhaustedFailureRetry(provider, { active });
             if (backfillDue(provider)) return true;
             return active && isDueByAxisTtl(provider);
         });
