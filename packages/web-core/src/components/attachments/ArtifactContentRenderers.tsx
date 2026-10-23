@@ -301,7 +301,7 @@ export function ArtifactContentRenderer({ payload, objectUrl }: ArtifactContentR
                 <div className="flex items-center justify-end">
                     <CopyButton value={text} label={copyLabel} />
                 </div>
-                <div className="max-h-96 overflow-auto rounded-lg border border-border-subtle bg-bg-primary/50 p-3 text-xs text-text-primary">
+                <div className="chat-markdown max-h-96 overflow-auto rounded-lg border border-border-subtle bg-bg-primary/50 p-3 text-xs text-text-primary">
                     {text ? (
                         <ChatMarkdownBody
                             content={text}
