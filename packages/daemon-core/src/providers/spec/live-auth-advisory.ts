@@ -88,7 +88,6 @@ import type { SignalDetection } from './signal-rules.js';
  *  unchanged; only where the tail bytes live moved (one shared `RawTail`, not
  *  a private accumulator this module used to own via `appendAuthTail`). */
 export const TAIL_BYTES = 16 * 1024;
-const STUCK_BUSY_ESCAPE_MS = 60_000;
 /** A just-submitted prompt sits in the composer for ~1-2s while the FSM still
  *  reads idle (standalone live check 2026-09-21: a prompt that merely MENTIONED
  *  the words paged within 300ms of sendMessage). Let the idle→generating edge
@@ -98,6 +97,14 @@ const MIN_SUSPECT_AGE_MS = 5_000;
  *  page the coordinator on every idle edge. */
 const ADVISORY_COOLDOWN_MS = 10 * 60_000;
 export const LIVE_AUTH_ADVISORY_RULE_ID = 'builtin.live_auth_marker';
+
+/**
+ * Anchored Kimi provider-UI error envelope. Kimi's live hard-error latch is
+ * restricted to Kimi's own machine-tagged `[provider.auth_error]` / `[auth.*]`
+ * lines or its explicit `kimi login` / `Kimi Code` banner on the settled screen,
+ * never generic text.
+ */
+const KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
 
 export interface LiveAuthState {
     suspect: { failure: ProviderFailure; suspectedAtMs: number } | null;
@@ -195,7 +202,7 @@ export function resolveLiveAuthSuspect(
     // multi-KB body over tens of seconds (antigravity) kept re-raising and
     // re-resolving the suspicion against the task text. Wait for the submit.
     if (input.submitInFlight) return {};
-    if (input.midTurn && ageMs < STUCK_BUSY_ESCAPE_MS) return {};
+    if (input.midTurn) return {};
     state.suspect = null;
     // Re-check at confirm time too — the relay stamp path can mark a session as a
     // coordinator after the suspicion was recorded.
@@ -203,12 +210,15 @@ export function resolveLiveAuthSuspect(
 
     let screen = '';
     try { screen = input.readScreen() || ''; } catch { screen = ''; }
-    const confirmed = classifyAuthBillingOutput(ctx.cliType, screen || input.tail);
+    const surface = screen || input.tail;
+    const confirmed = classifyAuthBillingOutput(ctx.cliType, surface);
     if (!confirmed) {
         LOG.info('SpecAdapter', `[${ctx.cliType}] live ${suspect.failure.failureKind} marker no longer on screen at turn boundary (session=${ctx.sessionLabel}) — dismissed as quoted content`);
         return { clearTail: true };
     }
-    if (ctx.cliType === 'kimi') return { latch: confirmed };
+    if (ctx.cliType === 'kimi' && KIMI_ANCHORED_PROVIDER_UI_ERROR_RE.test(surface)) {
+        return { latch: confirmed };
+    }
 
     if (now - state.advisoryNotifiedAtMs < ADVISORY_COOLDOWN_MS) return { clearTail: true };
     state.advisoryNotifiedAtMs = now;

@@ -255,15 +255,19 @@ describe('SpecCliAdapter — Kimi live auth/billing failure detection', () => {
       expect(adapter.getStatus().errorReason).toBeUndefined()
     })
 
-    it('kimi keeps its latch, now behind on-screen confirmation (stuck-busy escape included)', () => {
+    it('kimi never confirms mid-turn (even past 60s) and latches only at the turn boundary on anchored Kimi UI error', () => {
       const adapter = make({
         cliType: 'kimi',
-        driver: { snapshot: () => 'Authentication failed: access token has expired.\n' },
+        driver: { snapshot: () => '[provider.auth_error] 401 Authentication failed: access token has expired. Please run kimi login.\n' },
         latestState: { id: 'busy', label: 'Generating', title: null, status: 'generating' },
       })
-      adapter.handleEvent({ kind: 'pty_data', chunk: 'Authentication failed: access token has expired.\r\n' })
+      adapter.handleEvent({ kind: 'pty_data', chunk: '[provider.auth_error] 401 Authentication failed: access token has expired. Please run kimi login.\r\n' })
       expect(adapter.getStatus().status).not.toBe('error')
       adapter.liveAuth.suspect.suspectedAtMs = Date.now() - 61_000
+      expect(adapter.getStatus()).toMatchObject({ status: 'generating' })
+      expect(adapter.statusCallback).not.toHaveBeenCalled()
+
+      adapter.latestState = { id: 'idle', label: 'Ready', title: null, status: 'idle' }
       expect(adapter.getStatus()).toMatchObject({ status: 'error', errorReason: 'auth_failed' })
       expect(adapter.statusCallback).toHaveBeenCalledTimes(1)
     })
