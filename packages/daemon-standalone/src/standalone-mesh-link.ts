@@ -38,6 +38,7 @@ import {
   WsMeshTransport,
   canonicalDaemonId,
   getHostOriginGrantPublicKey,
+  getLatestHostKeyRotationProof,
   getPeerSecret,
   listPeerSecrets,
   maskDaemonId,
@@ -256,6 +257,7 @@ export class StandaloneMeshLink {
     performMeshHandshake(ws, 'responder', {
       localDaemonId: this.localDaemonId,
       originGrantPublicKey: getHostOriginGrantPublicKey(this.localDaemonId, this.secretStore.env),
+      keyRotation: getLatestHostKeyRotationProof(this.localDaemonId, this.secretStore.env),
       resolveSecret: (meshId, peerDaemonId) => this.resolveInboundSecret(meshId, peerDaemonId),
     }, this.handshakeTimeoutMs).then((proven) => {
       if (lane === 'rpc') {
@@ -358,6 +360,7 @@ export class StandaloneMeshLink {
       serverDaemonIdExpected: record.peerDaemonId,
       secret: record.secret,
       originGrantPublicKey: getHostOriginGrantPublicKey(this.localDaemonId, this.secretStore.env),
+      keyRotation: getLatestHostKeyRotationProof(this.localDaemonId, this.secretStore.env),
     }, this.handshakeTimeoutMs);
     return ws;
   }

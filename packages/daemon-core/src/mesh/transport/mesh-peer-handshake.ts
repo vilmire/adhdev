@@ -41,8 +41,19 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { canonicalDaemonId } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
-import { recordAuthenticatedPeerOriginGrantPublicKey } from '../mesh-host-memory.js';
-import { getHostOriginGrantPublicKey, isValidOriginGrantPublicKey } from '../origin-grant-keypair.js';
+import {
+    canAcceptPeerOriginGrantPublicKey,
+    recordAuthenticatedPeerOriginGrantPublicKey,
+} from '../mesh-host-memory.js';
+import {
+    canonicalOriginGrantPublicKeyBytes,
+    canonicalizeOriginGrantPublicKey,
+    getHostOriginGrantPublicKey,
+    getLatestHostKeyRotationProof,
+    isValidOriginGrantPublicKey,
+    isValidRotationProofShape,
+    type OriginGrantKeyRotationProof,
+} from '../origin-grant-keypair.js';
 import { maskDaemonId } from './mask-daemon-id.js';
 
 export const MESH_HANDSHAKE_PROTOCOL_VERSION = 1 as const;
@@ -64,6 +75,7 @@ export interface MeshHelloFrame {
     /** 16 random bytes, base64. */
     nonce: string;
     originGrantPublicKey?: string;
+    keyRotation?: OriginGrantKeyRotationProof;
 }
 export interface MeshChallengeFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
@@ -73,6 +85,7 @@ export interface MeshChallengeFrame {
     /** The responder's own daemon id — the initiator needs it before computing its proof. */
     daemonId: string;
     originGrantPublicKey?: string;
+    keyRotation?: OriginGrantKeyRotationProof;
 }
 export interface MeshProofFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
@@ -84,6 +97,8 @@ export interface MeshOkFrame {
     kind: 'mesh_ok';
     daemonId: string;
     originGrantPublicKey?: string;
+    keyRotation?: OriginGrantKeyRotationProof;
+    proof?: string;
 }
 export interface MeshErrorFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
@@ -126,29 +141,90 @@ export interface ProofInputs {
     /** Either form; canonicalised inside. */
     clientDaemonId: string;
     serverDaemonId: string;
+    clientOriginGrantPublicKey?: string;
+    serverOriginGrantPublicKey?: string;
+    clientKeyRotation?: OriginGrantKeyRotationProof;
+    serverKeyRotation?: OriginGrantKeyRotationProof;
 }
 
 function canon(id: string): string {
     return canonicalDaemonId(id) ?? id.trim();
 }
 
-function hmacBase64(secret: string, message: string): string {
-    return createHmac('sha256', secret).update(message, 'utf8').digest('base64');
+function hasKeyMaterial(input: ProofInputs): boolean {
+    return Boolean(
+        (input.clientOriginGrantPublicKey && input.clientOriginGrantPublicKey.trim()) ||
+        (input.serverOriginGrantPublicKey && input.serverOriginGrantPublicKey.trim()) ||
+        input.clientKeyRotation ||
+        input.serverKeyRotation,
+    );
+}
+
+function encodeSpkiBytesForTranscript(rawPublicKey: string | undefined): Buffer {
+    if (!rawPublicKey || !rawPublicKey.trim()) return Buffer.alloc(0);
+    const canonicalBytes = canonicalOriginGrantPublicKeyBytes(rawPublicKey);
+    if (canonicalBytes) return canonicalBytes;
+    return Buffer.from(`invalid:${rawPublicKey.trim()}`, 'utf8');
+}
+
+function encodeRotationForTranscript(proof: OriginGrantKeyRotationProof | undefined): Buffer {
+    if (!proof) return Buffer.alloc(0);
+    return Buffer.from(
+        [
+            canon(proof.hostDaemonId),
+            canonicalizeOriginGrantPublicKey(proof.oldPublicKey) ?? proof.oldPublicKey.trim(),
+            canonicalizeOriginGrantPublicKey(proof.newPublicKey) ?? proof.newPublicKey.trim(),
+            String(proof.rotatedAt),
+            proof.nonce.trim(),
+            proof.signature.trim(),
+        ].join('|'),
+        'utf8',
+    );
+}
+
+function computeTranscriptHmac(prefix: string, input: ProofInputs): string {
+    const hmac = createHmac('sha256', input.secret);
+    hmac.update(prefix, 'utf8');
+    if (hasKeyMaterial(input)) {
+        const clientSpki = encodeSpkiBytesForTranscript(input.clientOriginGrantPublicKey);
+        const serverSpki = encodeSpkiBytesForTranscript(input.serverOriginGrantPublicKey);
+        const clientRot = encodeRotationForTranscript(input.clientKeyRotation);
+        const serverRot = encodeRotationForTranscript(input.serverKeyRotation);
+        hmac.update(`|spkiC:${clientSpki.byteLength}:`, 'utf8');
+        hmac.update(clientSpki);
+        hmac.update(`|spkiS:${serverSpki.byteLength}:`, 'utf8');
+        hmac.update(serverSpki);
+        if (clientRot.byteLength > 0 || serverRot.byteLength > 0) {
+            hmac.update(`|rotC:${clientRot.byteLength}:`, 'utf8');
+            hmac.update(clientRot);
+            hmac.update(`|rotS:${serverRot.byteLength}:`, 'utf8');
+            hmac.update(serverRot);
+        }
+    }
+    return hmac.digest('base64');
 }
 
 /** proofS — what the responder sends in `mesh_challenge`. */
 export function computeServerProof(input: ProofInputs): string {
-    return hmacBase64(
-        input.secret,
+    return computeTranscriptHmac(
         `S|${input.clientNonce}|${input.serverNonce}|${input.meshId}|${canon(input.clientDaemonId)}|${canon(input.serverDaemonId)}`,
+        input,
     );
 }
 
 /** proofC — what the initiator sends in `mesh_proof`. */
 export function computeClientProof(input: ProofInputs): string {
-    return hmacBase64(
-        input.secret,
+    return computeTranscriptHmac(
         `C|${input.serverNonce}|${input.clientNonce}|${input.meshId}|${canon(input.clientDaemonId)}|${canon(input.serverDaemonId)}`,
+        input,
+    );
+}
+
+/** proofOk — what the responder sends in `mesh_ok` when key material is bound. */
+export function computeOkProof(input: ProofInputs): string {
+    return computeTranscriptHmac(
+        `O|${input.clientNonce}|${input.serverNonce}|${input.meshId}|${canon(input.clientDaemonId)}|${canon(input.serverDaemonId)}`,
+        input,
     );
 }
 
@@ -159,6 +235,27 @@ export function proofsEqual(expected: string, actual: unknown): boolean {
     const b = Buffer.from(actual, 'base64');
     if (a.length === 0 || a.length !== b.length) return false;
     return timingSafeEqual(a, b);
+}
+
+function parseOptionalOriginGrantPublicKey(
+    value: unknown,
+): { ok: true; value?: string } | { ok: false } {
+    if (value === undefined) return { ok: true };
+    if (typeof value !== 'string') return { ok: false };
+    const trimmed = value.trim();
+    if (!trimmed || !isValidOriginGrantPublicKey(trimmed)) return { ok: false };
+    return { ok: true, value: trimmed };
+}
+
+function parseOptionalKeyRotation(
+    value: unknown,
+): { ok: true; value?: OriginGrantKeyRotationProof } | { ok: false } {
+    if (value === undefined) return { ok: true };
+    if (!isValidRotationProofShape(value)) return { ok: false };
+    if (!isValidOriginGrantPublicKey(value.oldPublicKey) || !isValidOriginGrantPublicKey(value.newPublicKey)) {
+        return { ok: false };
+    }
+    return { ok: true, value };
 }
 
 /**
@@ -179,41 +276,61 @@ export function parseHandshakeFrame(raw: unknown): MeshHandshakeFrame | { error:
     const obj = value as Record<string, unknown>;
     if (obj.v !== MESH_HANDSHAKE_PROTOCOL_VERSION) return { error: 'bad_version' };
     switch (obj.kind) {
-        case 'mesh_hello':
+        case 'mesh_hello': {
             if (!isNonEmptyString(obj.meshId) || !isNonEmptyString(obj.daemonId) || !isNonce(obj.nonce)) {
                 return { error: 'bad_frame' };
             }
+            const pubKey = parseOptionalOriginGrantPublicKey(obj.originGrantPublicKey);
+            const rotation = parseOptionalKeyRotation(obj.keyRotation);
+            if (!pubKey.ok || !rotation.ok) return { error: 'bad_frame' };
             return {
                 v: 1,
                 kind: 'mesh_hello',
                 meshId: obj.meshId,
                 daemonId: obj.daemonId,
                 nonce: obj.nonce,
-                ...(isNonEmptyString(obj.originGrantPublicKey) ? { originGrantPublicKey: obj.originGrantPublicKey.trim() } : {}),
+                ...(pubKey.value ? { originGrantPublicKey: pubKey.value } : {}),
+                ...(rotation.value ? { keyRotation: rotation.value } : {}),
             };
-        case 'mesh_challenge':
+        }
+        case 'mesh_challenge': {
             if (!isNonce(obj.nonce) || !isNonEmptyString(obj.proof) || !isNonEmptyString(obj.daemonId)) {
                 return { error: 'bad_frame' };
             }
+            const pubKey = parseOptionalOriginGrantPublicKey(obj.originGrantPublicKey);
+            const rotation = parseOptionalKeyRotation(obj.keyRotation);
+            if (!pubKey.ok || !rotation.ok) return { error: 'bad_frame' };
             return {
                 v: 1,
                 kind: 'mesh_challenge',
                 nonce: obj.nonce,
                 proof: obj.proof,
                 daemonId: obj.daemonId,
-                ...(isNonEmptyString(obj.originGrantPublicKey) ? { originGrantPublicKey: obj.originGrantPublicKey.trim() } : {}),
+                ...(pubKey.value ? { originGrantPublicKey: pubKey.value } : {}),
+                ...(rotation.value ? { keyRotation: rotation.value } : {}),
             };
+        }
         case 'mesh_proof':
             if (!isNonEmptyString(obj.proof)) return { error: 'bad_frame' };
+            if (obj.originGrantPublicKey !== undefined || obj.keyRotation !== undefined) {
+                return { error: 'bad_frame' };
+            }
             return { v: 1, kind: 'mesh_proof', proof: obj.proof };
-        case 'mesh_ok':
+        case 'mesh_ok': {
             if (!isNonEmptyString(obj.daemonId)) return { error: 'bad_frame' };
+            if (obj.proof !== undefined && !isNonEmptyString(obj.proof)) return { error: 'bad_frame' };
+            const pubKey = parseOptionalOriginGrantPublicKey(obj.originGrantPublicKey);
+            const rotation = parseOptionalKeyRotation(obj.keyRotation);
+            if (!pubKey.ok || !rotation.ok) return { error: 'bad_frame' };
             return {
                 v: 1,
                 kind: 'mesh_ok',
                 daemonId: obj.daemonId,
-                ...(isNonEmptyString(obj.originGrantPublicKey) ? { originGrantPublicKey: obj.originGrantPublicKey.trim() } : {}),
+                ...(pubKey.value ? { originGrantPublicKey: pubKey.value } : {}),
+                ...(rotation.value ? { keyRotation: rotation.value } : {}),
+                ...(isNonEmptyString(obj.proof) ? { proof: obj.proof } : {}),
             };
+        }
         case 'mesh_error':
             if (typeof obj.code !== 'string' || !ERROR_CODES.has(obj.code)) return { error: 'bad_frame' };
             return { v: 1, kind: 'mesh_error', code: obj.code as MeshHandshakeErrorCode };
@@ -230,6 +347,17 @@ function errorFrame(code: MeshHandshakeErrorCode): MeshErrorFrame {
     return { v: MESH_HANDSHAKE_PROTOCOL_VERSION, kind: 'mesh_error', code };
 }
 
+function rotationProofsEquivalent(
+    a: OriginGrantKeyRotationProof | undefined,
+    b: OriginGrantKeyRotationProof | undefined,
+): boolean {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return (
+        encodeRotationForTranscript(a).equals(encodeRotationForTranscript(b))
+    );
+}
+
 // ─── Initiator (client / member side) ────────────────────────────────────────
 
 export interface HandshakeInitiatorOptions {
@@ -240,6 +368,7 @@ export interface HandshakeInitiatorOptions {
     serverDaemonIdExpected?: string;
     secret: string;
     originGrantPublicKey?: string;
+    keyRotation?: OriginGrantKeyRotationProof;
     send(frame: MeshHandshakeFrame): void;
 }
 
@@ -259,6 +388,7 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
     let serverNonce = '';
     let serverDaemonId = '';
     let serverOriginGrantPublicKey: string | undefined;
+    let serverKeyRotation: OriginGrantKeyRotationProof | undefined;
 
     const fail = (code: MeshHandshakeFailureCode, notifyPeer: boolean): HandshakeStep => {
         state = 'done';
@@ -284,6 +414,7 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
                 daemonId: opts.daemonId,
                 nonce: clientNonce,
                 ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
+                ...(opts.keyRotation ? { keyRotation: opts.keyRotation } : {}),
             });
         },
         current: () => step,
@@ -306,11 +437,27 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
                     meshId: opts.meshId,
                     clientDaemonId: opts.daemonId,
                     serverDaemonId: parsed.daemonId,
+                    clientOriginGrantPublicKey: opts.originGrantPublicKey,
+                    serverOriginGrantPublicKey: parsed.originGrantPublicKey,
+                    clientKeyRotation: opts.keyRotation,
+                    serverKeyRotation: parsed.keyRotation,
                 };
                 if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail('bad_proof', true);
+                if (
+                    parsed.originGrantPublicKey &&
+                    !canAcceptPeerOriginGrantPublicKey(
+                        opts.meshId,
+                        canon(parsed.daemonId),
+                        parsed.originGrantPublicKey,
+                        { rotationProof: parsed.keyRotation },
+                    )
+                ) {
+                    return fail('bad_proof', true);
+                }
                 serverNonce = parsed.nonce;
                 serverDaemonId = parsed.daemonId;
                 serverOriginGrantPublicKey = parsed.originGrantPublicKey;
+                serverKeyRotation = parsed.keyRotation;
                 state = 'awaiting_ok';
                 opts.send({ v: MESH_HANDSHAKE_PROTOCOL_VERSION, kind: 'mesh_proof', proof: computeClientProof(inputs) });
                 return PENDING;
@@ -319,10 +466,45 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
             // awaiting_ok
             if (parsed.kind !== 'mesh_ok') return fail('bad_frame', true);
             if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail('bad_frame', true);
+            const canonChallengeKey = serverOriginGrantPublicKey
+                ? canonicalizeOriginGrantPublicKey(serverOriginGrantPublicKey)
+                : null;
+            const canonOkKey = parsed.originGrantPublicKey
+                ? canonicalizeOriginGrantPublicKey(parsed.originGrantPublicKey)
+                : null;
+            if (canonChallengeKey !== canonOkKey) {
+                return fail('bad_proof', true);
+            }
+            if (parsed.keyRotation && !rotationProofsEquivalent(parsed.keyRotation, serverKeyRotation)) {
+                return fail('bad_proof', true);
+            }
+            const okInputs: ProofInputs = {
+                secret: opts.secret,
+                clientNonce,
+                serverNonce,
+                meshId: opts.meshId,
+                clientDaemonId: opts.daemonId,
+                serverDaemonId,
+                clientOriginGrantPublicKey: opts.originGrantPublicKey,
+                serverOriginGrantPublicKey: parsed.originGrantPublicKey ?? serverOriginGrantPublicKey,
+                clientKeyRotation: opts.keyRotation,
+                serverKeyRotation: parsed.keyRotation ?? serverKeyRotation,
+            };
+            if (hasKeyMaterial(okInputs) || parsed.proof !== undefined) {
+                if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
+                    return fail('bad_proof', true);
+                }
+            }
             const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
             const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : undefined;
             if (validPeerPubKey) {
-                recordAuthenticatedPeerOriginGrantPublicKey(opts.meshId, canon(serverDaemonId), validPeerPubKey);
+                const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
+                    opts.meshId,
+                    canon(serverDaemonId),
+                    validPeerPubKey,
+                    { rotationProof: parsed.keyRotation ?? serverKeyRotation },
+                );
+                if (!recorded) return fail('bad_proof', true);
             }
             state = 'done';
             step = {
@@ -344,6 +526,7 @@ export interface HandshakeResponderOptions {
     /** Secret for (meshId, canonical peer id), or null when unknown. */
     resolveSecret(meshId: string, daemonId: string): string | null;
     originGrantPublicKey?: string;
+    keyRotation?: OriginGrantKeyRotationProof;
     send(frame: MeshHandshakeFrame): void;
 }
 
@@ -360,9 +543,11 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
     // known one, so timing does not distinguish "no such mesh/peer".
     const decoySecret = randomBytes(32).toString('base64');
     let expectedClientProof = '';
+    let expectedOkProof: string | undefined;
     let meshId = '';
     let peerDaemonId = '';
     let clientOriginGrantPublicKey: string | undefined;
+    let clientKeyRotation: OriginGrantKeyRotationProof | undefined;
 
     const fail = (code: MeshHandshakeFailureCode, notifyPeer: boolean): HandshakeStep => {
         state = 'done';
@@ -397,18 +582,25 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
                     meshId: parsed.meshId,
                     clientDaemonId: parsed.daemonId,
                     serverDaemonId: opts.localDaemonId,
+                    clientOriginGrantPublicKey: parsed.originGrantPublicKey,
+                    serverOriginGrantPublicKey: opts.originGrantPublicKey,
+                    clientKeyRotation: parsed.keyRotation,
+                    serverKeyRotation: opts.keyRotation,
                 };
                 const serverProof = computeServerProof(inputs);
                 const clientProof = computeClientProof(inputs);
+                const okProof = hasKeyMaterial(inputs) ? computeOkProof(inputs) : undefined;
                 if (secret === null || secret === '') {
                     // Same work as the known-peer path (two HMACs + one compare), one code.
                     proofsEqual(serverProof, clientProof);
                     return fail('unknown_peer', true);
                 }
                 expectedClientProof = clientProof;
+                expectedOkProof = okProof;
                 meshId = parsed.meshId;
                 peerDaemonId = canonicalPeer;
                 clientOriginGrantPublicKey = parsed.originGrantPublicKey;
+                clientKeyRotation = parsed.keyRotation;
                 state = 'awaiting_proof';
                 opts.send({
                     v: MESH_HANDSHAKE_PROTOCOL_VERSION,
@@ -417,6 +609,7 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
                     proof: serverProof,
                     daemonId: opts.localDaemonId,
                     ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
+                    ...(opts.keyRotation ? { keyRotation: opts.keyRotation } : {}),
                 });
                 return PENDING;
             }
@@ -428,7 +621,13 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
                 ? clientOriginGrantPublicKey
                 : undefined;
             if (validClientPubKey) {
-                recordAuthenticatedPeerOriginGrantPublicKey(meshId, peerDaemonId, validClientPubKey);
+                const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
+                    meshId,
+                    peerDaemonId,
+                    validClientPubKey,
+                    { rotationProof: clientKeyRotation },
+                );
+                if (!recorded) return fail('bad_proof', true);
             }
             state = 'done';
             step = {
@@ -442,10 +641,26 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
                 kind: 'mesh_ok',
                 daemonId: opts.localDaemonId,
                 ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
+                ...(opts.keyRotation ? { keyRotation: opts.keyRotation } : {}),
+                ...(expectedOkProof ? { proof: expectedOkProof } : {}),
             });
             return step;
         },
     };
+}
+
+function resolveDefaultKeyRotation(
+    daemonId: string,
+    effectivePublicKey: string | undefined,
+    explicitRotation: OriginGrantKeyRotationProof | undefined,
+): OriginGrantKeyRotationProof | undefined {
+    if (explicitRotation) return explicitRotation;
+    if (!effectivePublicKey) return undefined;
+    const latest = getLatestHostKeyRotationProof(daemonId);
+    if (!latest) return undefined;
+    const canonLatestNew = canonicalizeOriginGrantPublicKey(latest.newPublicKey);
+    const canonEffective = canonicalizeOriginGrantPublicKey(effectivePublicKey);
+    return canonLatestNew && canonEffective && canonLatestNew === canonEffective ? latest : undefined;
 }
 
 // ─── ws helper ───────────────────────────────────────────────────────────────
@@ -523,20 +738,28 @@ export function performMeshHandshake(
             socket.send(JSON.stringify(frame));
         };
         const machine: { onFrame(frame: unknown): HandshakeStep; start?(): void } = side === 'initiator'
-            ? createHandshakeInitiator({
-                ...(opts as Omit<HandshakeInitiatorOptions, 'send'>),
-                originGrantPublicKey:
-                    (opts as Omit<HandshakeInitiatorOptions, 'send'>).originGrantPublicKey
-                    || getHostOriginGrantPublicKey((opts as Omit<HandshakeInitiatorOptions, 'send'>).daemonId),
-                send,
-            })
-            : createHandshakeResponder({
-                ...(opts as Omit<HandshakeResponderOptions, 'send'>),
-                originGrantPublicKey:
-                    (opts as Omit<HandshakeResponderOptions, 'send'>).originGrantPublicKey
-                    || getHostOriginGrantPublicKey((opts as Omit<HandshakeResponderOptions, 'send'>).localDaemonId),
-                send,
-            });
+            ? (() => {
+                const initOpts = opts as Omit<HandshakeInitiatorOptions, 'send'>;
+                const effectiveKey = initOpts.originGrantPublicKey || getHostOriginGrantPublicKey(initOpts.daemonId);
+                const effectiveRotation = resolveDefaultKeyRotation(initOpts.daemonId, effectiveKey, initOpts.keyRotation);
+                return createHandshakeInitiator({
+                    ...initOpts,
+                    originGrantPublicKey: effectiveKey,
+                    ...(effectiveRotation ? { keyRotation: effectiveRotation } : {}),
+                    send,
+                });
+            })()
+            : (() => {
+                const respOpts = opts as Omit<HandshakeResponderOptions, 'send'>;
+                const effectiveKey = respOpts.originGrantPublicKey || getHostOriginGrantPublicKey(respOpts.localDaemonId);
+                const effectiveRotation = resolveDefaultKeyRotation(respOpts.localDaemonId, effectiveKey, respOpts.keyRotation);
+                return createHandshakeResponder({
+                    ...respOpts,
+                    originGrantPublicKey: effectiveKey,
+                    ...(effectiveRotation ? { keyRotation: effectiveRotation } : {}),
+                    send,
+                });
+            })();
 
         const detach = (): void => {
             socket.off('open', onOpen);

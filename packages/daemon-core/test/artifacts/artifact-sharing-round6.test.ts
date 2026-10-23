@@ -657,19 +657,15 @@ rl.on('line', async (line) => {
         }
     });
 
-    it('Finding 1 + Lifecycle: WS performMeshHandshake supplies SPKI by default to rotate a stale cached key, and SQLite consumed-nonce table enforces an expiry index and row cap', async () => {
+    it('Finding 1 + Lifecycle: WS performMeshHandshake supplies SPKI and rotation proof by default to rotate a stale cached key, and SQLite consumed-nonce table enforces an expiry index and fail-closed row cap', async () => {
         const meshId = 'mesh-r6-ws-handshake';
         const hostId = 'daemon_mach_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
         const memberId = 'daemon_mach_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
         const secret = mintPeerSecret();
 
-        const staleKey = rotateHostOriginGrantKeyPair(hostId).previousPublicKey;
-        const freshHostKey = getHostOriginGrantKeyAfterSecondRotation(hostId);
-
-        function getHostOriginGrantKeyAfterSecondRotation(id: string): string {
-            rotateHostOriginGrantKeyPair(id);
-            return getHostOriginGrantPublicKey(id);
-        }
+        const rotated = rotateHostOriginGrantKeyPair(hostId);
+        const staleKey = rotated.previousPublicKey;
+        const freshHostKey = rotated.publicKey;
 
         // Seed stale key in both peer-secrets and mesh-host-records
         putPeerSecret({
@@ -684,7 +680,7 @@ rl.on('line', async (line) => {
         expect(resolveTrustedHostOriginGrantPublicKey({ meshId, hostDaemonId: hostId })).toBe(staleKey);
 
         // Run performMeshHandshake WITHOUT passing originGrantPublicKey in options:
-        // deployed callers and default performMeshHandshake must supply freshHostKey automatically.
+        // deployed callers and default performMeshHandshake must supply freshHostKey + rotationProof automatically.
         const [clientSock, serverSock] = createConnectedSocketPair();
         const serverP = performMeshHandshake(serverSock, 'responder', {
             localDaemonId: hostId,
@@ -698,10 +694,10 @@ rl.on('line', async (line) => {
         });
         await Promise.all([serverP, clientP]);
 
-        // Fresh handshake key must win over stale cached key in memory and disk
+        // Fresh handshake key (with valid rotation proof) must win over stale cached key in memory and disk
         expect(resolveTrustedHostOriginGrantPublicKey({ meshId, hostDaemonId: hostId })).toBe(freshHostKey);
 
-        // Verify SQLite consumed_artifact_origin_grant_nonces expiry index and bounded row cap
+        // Verify SQLite consumed_artifact_origin_grant_nonces expiry index and fail-closed bounded row cap
         const nowMs = Date.now();
         const grant1 = mintArtifactOriginFetchGrant({
             meshId,
@@ -735,7 +731,8 @@ rl.on('line', async (line) => {
             .all() as Array<{ name?: string }>;
         expect(indexes.some((idx) => idx.name === 'idx_consumed_origin_grant_nonces_expires')).toBe(true);
 
-        // Seed MAX_TRACKED_NONCES + 20 unexpired rows and 10 expired rows, then consume one more grant
+        // Seed MAX_TRACKED_NONCES - 1 additional unexpired rows (reaching MAX_TRACKED_NONCES total live rows)
+        // plus 10 expired rows, then verify expired rows are pruned while live capacity refuses new grants.
         const insertStmt = hostMeshStore.db.prepare(
             `INSERT OR REPLACE INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, canonical_payload, expires_at)
              VALUES (?, ?, ?, ?)`,
@@ -745,8 +742,8 @@ rl.on('line', async (line) => {
             for (let i = 0; i < 10; i++) {
                 insertStmt.run(`expired-${i}`, meshId, 'payload', nowMs - 1000 - i);
             }
-            for (let i = 0; i < MAX_TRACKED_NONCES + 20; i++) {
-                insertStmt.run(`unexpired-${i}`, meshId, 'payload', nowMs + 10_000 + i);
+            for (let i = 0; i < MAX_TRACKED_NONCES - 1; i++) {
+                insertStmt.run(`unexpired-${i}`, meshId, 'payload', nowMs + 10_000);
             }
             hostMeshStore.db.exec('COMMIT');
         } catch (e) {
@@ -764,7 +761,7 @@ rl.on('line', async (line) => {
             requesterAttemptId: 'att-nonce-1',
             nowMs,
         });
-        const verified2 = verifyArtifactOriginFetchGrant(
+        const verifiedAtCap = verifyArtifactOriginFetchGrant(
             grant2,
             {
                 meshId,
@@ -779,17 +776,35 @@ rl.on('line', async (line) => {
             },
             nowMs,
         );
-        expect(verified2.ok).toBe(true);
+        expect(verifiedAtCap).toEqual({ ok: false, reason: 'grant_capacity_exhausted' });
 
         const countRow = hostMeshStore.db
             .prepare('SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces')
             .get() as { cnt: number };
-        expect(countRow.cnt).toBeLessThanOrEqual(MAX_TRACKED_NONCES);
+        expect(countRow.cnt).toBe(MAX_TRACKED_NONCES);
 
         const expiredRemaining = hostMeshStore.db
             .prepare('SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces WHERE expires_at <= ?')
             .get(nowMs) as { cnt: number };
         expect(expiredRemaining.cnt).toBe(0);
+
+        // Once the seeded rows expire, grant2 is accepted.
+        const verifiedAfterExpiry = verifyArtifactOriginFetchGrant(
+            grant2,
+            {
+                meshId,
+                hostDaemonId: hostId,
+                originDaemonId: memberId,
+                artifactId: 'art-nonce-cap-2',
+                requesterSessionId: 'sess-nonce-1',
+                requesterTaskId: 'task-nonce-1',
+                requesterAttemptId: 'att-nonce-1',
+                consumeNonce: true,
+                nonceStoreDb: hostMeshStore.db,
+            },
+            nowMs + 15_000,
+        );
+        expect(verifiedAfterExpiry.ok).toBe(true);
     });
 
     it('Finding 2 (MEDIUM): concurrent registration B updating the same path/id is NOT deleted when registration A receives a delayed host refusal', async () => {

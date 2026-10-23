@@ -55,22 +55,26 @@ const RAW_CREDENTIAL_PATTERNS: readonly RegExp[] = [
     /[?&](?:api[_-]?key|access[_-]?key|token|secret|password|client_secret|credential|mcpSessionCredential)=(?!\[REDACTED)[^&#\s]+/i,
 ];
 
-const PERCENT_ENCODED_RUN_RE = /(?:[A-Za-z0-9+/_~=-]|%[0-9A-Fa-f]{2}){10,}/g;
-const BASE64_RUN_RE = /[A-Za-z0-9+/_-]{12,}={0,2}/g;
+const PERCENT_ENCODED_RUN_RE = /(?<![A-Za-z0-9+/_~=%-])(?:[A-Za-z0-9+/_~=-]|%[0-9A-Fa-f]{2}){10,}/g;
+const BASE64_RUN_RE = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{12,}={0,2}/g;
 const SPLIT_BASE64_RUN_RE =
-    /[A-Za-z0-9+/_-]{4,}(?:(?:\\[rnt]|[\r\n\t]+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`]))[A-Za-z0-9+/_-]{4,})+={0,2}/g;
+    /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-])(?:(?:\\[rnt]|[\r\n\t]+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`]))[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-]))+={0,2}/g;
 const INTRA_TOKEN_SPLIT_RE =
     /(?:\\[rnt]|[\r\n\t])+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`])|\\(?:\r?\n)/g;
 
 export const MAX_CREDENTIAL_DECODE_DEPTH = 4;
 const MAX_SCAN_INPUT_CHARS = 65_536;
 const MAX_COLLAPSE_CHARS = 16_384;
+const MAX_BASE64_RUN_CHARS = 16_384;
 const MAX_DECODE_OPERATIONS = 256;
 const MAX_CANDIDATE_RUNS_PER_LAYER = 64;
+const MAX_UNIQUE_NON_DECODABLE_RUNS = 512;
 
 interface DecodeBudget {
     operations: number;
     visited: Set<string>;
+    nonDecodableRuns: Set<string>;
+    exhausted: boolean;
 }
 
 export function isCredentialKey(key: string): boolean {
@@ -128,8 +132,25 @@ function isPlausibleDecodedText(str: string): boolean {
     return asciiPrintable >= 4;
 }
 
+function isUniformRepeatedChar(s: string): boolean {
+    if (s.length <= 1) return true;
+    const first = s.charCodeAt(0);
+    for (let i = 1; i < s.length; i++) {
+        if (s.charCodeAt(i) !== first) return false;
+    }
+    return true;
+}
+
+function findTailStart(rawText: string, limit: number): number {
+    let idx = Math.min(rawText.length, limit);
+    while (idx > 0 && /[A-Za-z0-9+/_~=%-]/.test(rawText[idx - 1]!)) {
+        idx--;
+    }
+    return idx;
+}
+
 function tryDecodeBase64Run(candidate: string): string | null {
-    if (candidate.length < 12 || candidate.length > 16_384) return null;
+    if (candidate.length < 12 || candidate.length > MAX_BASE64_RUN_CHARS) return null;
     const normalized = candidate.replace(/-/g, '+').replace(/_/g, '/');
     const padMod = normalized.length % 4;
     if (padMod === 1) return null;
@@ -143,6 +164,22 @@ function tryDecodeBase64Run(candidate: string): string | null {
     }
 }
 
+function hasUnexaminedEncodedTail(rawText: string, budget: DecodeBudget): boolean {
+    if (rawText.length <= MAX_SCAN_INPUT_CHARS) return false;
+    if (isUniformRepeatedChar(rawText)) return false;
+    const tailStart = findTailStart(rawText, MAX_SCAN_INPUT_CHARS);
+    const tail = rawText.slice(tailStart);
+    if (!tail) return false;
+    if (tail.includes('%') && /%[0-9A-Fa-f]{2}/.test(tail)) return true;
+    for (const match of tail.matchAll(BASE64_RUN_RE)) {
+        const run = match[0];
+        if (isUniformRepeatedChar(run)) continue;
+        if (run.length > MAX_BASE64_RUN_CHARS) return true;
+        if (!budget.nonDecodableRuns.has(run)) return true;
+    }
+    return false;
+}
+
 function checkLayerRecursive(
     rawText: string,
     patterns: readonly RegExp[],
@@ -150,16 +187,29 @@ function checkLayerRecursive(
     depth: number,
     budget: DecodeBudget,
 ): boolean {
-    if (!rawText || budget.operations >= MAX_DECODE_OPERATIONS) return false;
+    if (!rawText) return false;
+    // Full-input linear literal scan with no character cap.
+    if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
+
+    if (budget.operations >= MAX_DECODE_OPERATIONS) {
+        budget.exhausted = true;
+        return true;
+    }
+    if (depth > 0 && rawText.length > MAX_SCAN_INPUT_CHARS) {
+        budget.exhausted = true;
+        return true;
+    }
+
     const text = rawText.length > MAX_SCAN_INPUT_CHARS ? rawText.slice(0, MAX_SCAN_INPUT_CHARS) : rawText;
     const visitKey = `${depth}:${text.length}:${text.slice(0, 128)}:${text.slice(-64)}`;
     if (budget.visited.has(visitKey)) return false;
     budget.visited.add(visitKey);
     budget.operations++;
 
-    if (matchesAnyPattern(text, patterns, liveCred)) return true;
+    if (text !== rawText && matchesAnyPattern(text, patterns, liveCred)) return true;
 
     let collapsed = '';
+    INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
     if (text.length <= MAX_COLLAPSE_CHARS && INTRA_TOKEN_SPLIT_RE.test(text)) {
         INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
         collapsed = text.replace(INTRA_TOKEN_SPLIT_RE, '');
@@ -168,12 +218,12 @@ function checkLayerRecursive(
         }
     }
 
-    if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= MAX_DECODE_OPERATIONS) {
-        return false;
-    }
-
     // 1. Percent-encoding transitions (whole string + candidate percent runs)
-    if (text.includes('%')) {
+    if (text.includes('%') && /%[0-9A-Fa-f]{2}/.test(text)) {
+        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= MAX_DECODE_OPERATIONS) {
+            budget.exhausted = true;
+            return true;
+        }
         const wholeDecoded = decodeOnePercentLayer(text);
         if (
             wholeDecoded !== text &&
@@ -183,9 +233,16 @@ function checkLayerRecursive(
         }
         let pctCount = 0;
         for (const match of text.matchAll(PERCENT_ENCODED_RUN_RE)) {
-            if (++pctCount > MAX_CANDIDATE_RUNS_PER_LAYER || budget.operations >= MAX_DECODE_OPERATIONS) break;
             const run = match[0];
-            if (!run.includes('%') || run === text) continue;
+            if (!run.includes('%') || !/%[0-9A-Fa-f]{2}/.test(run) || run === text) continue;
+            if (
+                run.length > MAX_BASE64_RUN_CHARS ||
+                ++pctCount > MAX_CANDIDATE_RUNS_PER_LAYER ||
+                budget.operations >= MAX_DECODE_OPERATIONS
+            ) {
+                budget.exhausted = true;
+                return true;
+            }
             const decodedRun = decodeOnePercentLayer(run);
             if (
                 decodedRun !== run &&
@@ -199,27 +256,74 @@ function checkLayerRecursive(
     // 2. Base64 / Base64url transitions (contiguous runs + collapsed split runs)
     let b64Count = 0;
     for (const match of text.matchAll(BASE64_RUN_RE)) {
-        if (++b64Count > MAX_CANDIDATE_RUNS_PER_LAYER || budget.operations >= MAX_DECODE_OPERATIONS) break;
         const run = match[0];
+        if (isUniformRepeatedChar(run)) continue;
+        if (run.length > MAX_BASE64_RUN_CHARS) {
+            budget.exhausted = true;
+            return true;
+        }
+        if (budget.nonDecodableRuns.has(run)) continue;
         const decoded = tryDecodeBase64Run(run);
-        if (decoded && checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
+        if (!decoded) {
+            budget.nonDecodableRuns.add(run);
+            if (budget.nonDecodableRuns.size > MAX_UNIQUE_NON_DECODABLE_RUNS) {
+                budget.exhausted = true;
+                return true;
+            }
+            continue;
+        }
+        if (
+            depth >= MAX_CREDENTIAL_DECODE_DEPTH ||
+            ++b64Count > MAX_CANDIDATE_RUNS_PER_LAYER ||
+            budget.operations >= MAX_DECODE_OPERATIONS
+        ) {
+            budget.exhausted = true;
+            return true;
+        }
+        if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
             return true;
         }
     }
 
-    if (collapsed && collapsed !== text && budget.operations < MAX_DECODE_OPERATIONS) {
+    if (collapsed && collapsed !== text) {
         let collapsedCount = 0;
         for (const match of collapsed.matchAll(BASE64_RUN_RE)) {
-            if (++collapsedCount > 16 || budget.operations >= MAX_DECODE_OPERATIONS) break;
             const run = match[0];
+            if (isUniformRepeatedChar(run)) continue;
+            if (run.length > MAX_BASE64_RUN_CHARS) {
+                budget.exhausted = true;
+                return true;
+            }
+            if (budget.nonDecodableRuns.has(run)) continue;
             const decoded = tryDecodeBase64Run(run);
-            if (decoded && checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
+            if (!decoded) {
+                budget.nonDecodableRuns.add(run);
+                if (budget.nonDecodableRuns.size > MAX_UNIQUE_NON_DECODABLE_RUNS) {
+                    budget.exhausted = true;
+                    return true;
+                }
+                continue;
+            }
+            if (
+                depth >= MAX_CREDENTIAL_DECODE_DEPTH ||
+                ++collapsedCount > MAX_CANDIDATE_RUNS_PER_LAYER ||
+                budget.operations >= MAX_DECODE_OPERATIONS
+            ) {
+                budget.exhausted = true;
+                return true;
+            }
+            if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
                 return true;
             }
         }
     }
 
-    return false;
+    if (depth === 0 && hasUnexaminedEncodedTail(rawText, budget)) {
+        budget.exhausted = true;
+        return true;
+    }
+
+    return budget.exhausted;
 }
 
 export function containsEncodedOrRawSecret(
@@ -230,7 +334,12 @@ export function containsEncodedOrRawSecret(
     const patterns =
         extraPatterns.length > 0 ? [...RAW_CREDENTIAL_PATTERNS, ...extraPatterns] : RAW_CREDENTIAL_PATTERNS;
     const liveCred = getLiveSessionCredential();
-    const budget: DecodeBudget = { operations: 0, visited: new Set() };
+    const budget: DecodeBudget = {
+        operations: 0,
+        visited: new Set(),
+        nonDecodableRuns: new Set(),
+        exhausted: false,
+    };
     return checkLayerRecursive(value, patterns, liveCred, 0, budget);
 }
 
@@ -292,6 +401,15 @@ export function redactCredentialString(value: string): string {
         }
         return run;
     });
+
+    if (redacted.length > MAX_SCAN_INPUT_CHARS && containsEncodedOrRawSecret(redacted)) {
+        const tailStart = findTailStart(redacted, MAX_SCAN_INPUT_CHARS);
+        const prefix = redacted.slice(0, tailStart);
+        if (!containsEncodedOrRawSecret(prefix)) {
+            return `${prefix}[REDACTED:unexamined]`;
+        }
+        return '[REDACTED:encoded-credential]';
+    }
 
     if (containsEncodedOrRawSecret(redacted)) {
         return '[REDACTED:encoded-credential]';

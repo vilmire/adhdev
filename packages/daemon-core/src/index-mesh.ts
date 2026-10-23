@@ -382,15 +382,19 @@ export {
 } from './mesh/transport/mesh-peer-handshake.js';
 export {
   getHostOriginGrantPublicKey,
+  getLatestHostKeyRotationProof,
   rotateHostOriginGrantKeyPair,
   verifyOriginGrantKeyRotationProof,
   isValidOriginGrantPublicKey,
+  canonicalizeOriginGrantPublicKey,
+  canonicalOriginGrantPublicKeyBytes,
   type OriginGrantKeyRotationProof,
 } from './mesh/origin-grant-keypair.js';
 export {
   readMeshHostRecord,
   writeMeshHostRecord,
   readAuthenticatedPeerOriginGrantPublicKey,
+  canAcceptPeerOriginGrantPublicKey,
   recordAuthenticatedPeerOriginGrantPublicKey,
   clearAuthenticatedPeerOriginGrantPublicKey,
   applyAuthenticatedHostKeyRotation,

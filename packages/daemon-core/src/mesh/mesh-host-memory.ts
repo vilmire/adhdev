@@ -29,11 +29,14 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
+import { LOG } from '../logging/logger.js';
 import {
+    canonicalizeOriginGrantPublicKey,
     isValidOriginGrantPublicKey,
     verifyOriginGrantKeyRotationProof,
     type OriginGrantKeyRotationProof,
 } from './origin-grant-keypair.js';
+import { maskDaemonId } from './transport/mask-daemon-id.js';
 
 type MeshHostRecordSource = 'pairing' | 'session_stamp' | 'first_dispatch';
 
@@ -150,16 +153,47 @@ export function writeMeshHostRecord(
     }
 }
 
+export function canAcceptPeerOriginGrantPublicKey(
+    meshId: string,
+    peerDaemonId: string,
+    originGrantPublicKey: string,
+    opts?: { env?: NodeJS.ProcessEnv; rotationProof?: unknown },
+): boolean {
+    const mesh = typeof meshId === 'string' ? meshId.trim() : '';
+    const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
+    const pubKey = isValidOriginGrantPublicKey(originGrantPublicKey) ? originGrantPublicKey.trim() : '';
+    const canonicalPubKey = canonicalizeOriginGrantPublicKey(pubKey);
+    if (!mesh || !peer || !pubKey || !canonicalPubKey) return false;
+    const currentPinned = readAuthenticatedPeerOriginGrantPublicKey(mesh, peer, { env: opts?.env });
+    const canonicalCurrent = currentPinned ? canonicalizeOriginGrantPublicKey(currentPinned) : null;
+    if (currentPinned && canonicalCurrent && canonicalCurrent !== canonicalPubKey) {
+        const verified = verifyOriginGrantKeyRotationProof(opts?.rotationProof, {
+            hostDaemonId: peer,
+            currentPinnedPublicKey: currentPinned,
+        });
+        const canonicalVerifiedNew = verified.ok ? canonicalizeOriginGrantPublicKey(verified.newPublicKey) : null;
+        if (!verified.ok || canonicalVerifiedNew !== canonicalPubKey) {
+            const reason = verified.ok ? 'rotation_new_key_mismatch' : verified.reason;
+            LOG.warn(
+                'MeshHostMemory',
+                `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${reason})`,
+            );
+            return false;
+        }
+    }
+    return true;
+}
+
 export function recordAuthenticatedPeerOriginGrantPublicKey(
     meshId: string,
     peerDaemonId: string,
     originGrantPublicKey: string,
-    opts?: { env?: NodeJS.ProcessEnv; syncPeerSecrets?: boolean },
-): void {
+    opts?: { env?: NodeJS.ProcessEnv; syncPeerSecrets?: boolean; rotationProof?: unknown },
+): boolean {
     const mesh = typeof meshId === 'string' ? meshId.trim() : '';
     const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
     const pubKey = isValidOriginGrantPublicKey(originGrantPublicKey) ? originGrantPublicKey.trim() : '';
-    if (!mesh || !peer || !pubKey) return;
+    if (!canAcceptPeerOriginGrantPublicKey(mesh, peer, pubKey, opts)) return false;
     const configDir = getConfigDir(opts?.env);
     authenticatedPeerPublicKeys.set(peerKey(mesh, peer, configDir), pubKey);
     try {
@@ -209,6 +243,7 @@ export function recordAuthenticatedPeerOriginGrantPublicKey(
             // Best-effort sync to peer secrets.
         }
     }
+    return true;
 }
 
 export function clearAuthenticatedPeerOriginGrantPublicKey(
@@ -255,6 +290,29 @@ export function readAuthenticatedPeerOriginGrantPublicKey(
     ) {
         return rec.originGrantPublicKey;
     }
+    try {
+        const secretsPath = join(configDir, 'mesh-peer-secrets.json');
+        if (existsSync(secretsPath)) {
+            const parsed = JSON.parse(readFileSync(secretsPath, 'utf8'));
+            if (parsed && typeof parsed === 'object' && Array.isArray(parsed.records)) {
+                for (const secretRec of parsed.records) {
+                    if (
+                        secretRec &&
+                        typeof secretRec === 'object' &&
+                        secretRec.meshId === mesh &&
+                        typeof secretRec.peerDaemonId === 'string' &&
+                        daemonIdsEquivalent(secretRec.peerDaemonId, peer) &&
+                        typeof secretRec.originGrantPublicKey === 'string' &&
+                        isValidOriginGrantPublicKey(secretRec.originGrantPublicKey)
+                    ) {
+                        return secretRec.originGrantPublicKey.trim();
+                    }
+                }
+            }
+        }
+    } catch {
+        // Ignore unreadable peer-secrets file.
+    }
     return null;
 }
 
@@ -270,9 +328,18 @@ export function applyAuthenticatedHostKeyRotation(params: {
         currentPinnedPublicKey: params.currentPinnedPublicKey,
     });
     if (!verified.ok) return verified;
-    recordAuthenticatedPeerOriginGrantPublicKey(params.meshId, params.hostDaemonId, verified.newPublicKey, {
-        env: params.env,
-    });
+    const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
+        params.meshId,
+        params.hostDaemonId,
+        verified.newPublicKey,
+        {
+            env: params.env,
+            rotationProof: params.rotationProof,
+        },
+    );
+    if (!recorded) {
+        return { ok: false, reason: 'rotation_old_key_mismatch' };
+    }
     return verified;
 }
 

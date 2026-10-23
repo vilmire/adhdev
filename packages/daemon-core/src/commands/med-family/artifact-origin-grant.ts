@@ -123,11 +123,6 @@ function pruneExpiredConsumedNonces(nowMs: number): void {
             consumedOriginGrantNonces.delete(nonce);
         }
     }
-    while (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
-        const oldestKey = consumedOriginGrantNonces.keys().next().value;
-        if (oldestKey === undefined) break;
-        consumedOriginGrantNonces.delete(oldestKey);
-    }
 }
 
 export interface GrantNonceStoreDb {
@@ -138,6 +133,10 @@ export interface GrantNonceStoreDb {
     exec?(sql: string): unknown;
 }
 
+type NonceConsumeResult =
+    | { ok: true }
+    | { ok: false; reason: 'replayed_grant_nonce' | 'grant_capacity_exhausted' | 'nonce_store_error' };
+
 function consumeOriginGrantNonce(
     nonce: string,
     meshId: string,
@@ -145,11 +144,11 @@ function consumeOriginGrantNonce(
     expiresAt: number,
     nowMs: number,
     db?: GrantNonceStoreDb | null,
-): boolean {
+): NonceConsumeResult {
     pruneExpiredConsumedNonces(nowMs);
     const inMem = consumedOriginGrantNonces.get(nonce);
     if (inMem && inMem.expiresAt > nowMs) {
-        return false;
+        return { ok: false, reason: 'replayed_grant_nonce' };
     }
 
     if (db) {
@@ -174,35 +173,45 @@ function consumeOriginGrantNonce(
                 .prepare('SELECT nonce, expires_at FROM consumed_artifact_origin_grant_nonces WHERE nonce = ?')
                 .get(nonce) as { nonce?: string; expires_at?: number } | undefined;
             if (existing && typeof existing.expires_at === 'number' && existing.expires_at > nowMs) {
-                consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt: existing.expires_at });
-                return false;
+                if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) {
+                    consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt: existing.expires_at });
+                }
+                return { ok: false, reason: 'replayed_grant_nonce' };
             }
             const countRow = db
                 .prepare('SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces')
                 .get() as { cnt?: number } | undefined;
             const currentCount = typeof countRow?.cnt === 'number' ? countRow.cnt : 0;
             if (currentCount >= MAX_TRACKED_NONCES) {
-                const overflow = currentCount - MAX_TRACKED_NONCES + 1;
-                db.prepare(
-                    `DELETE FROM consumed_artifact_origin_grant_nonces
-                     WHERE nonce IN (
-                         SELECT nonce FROM consumed_artifact_origin_grant_nonces
-                         ORDER BY expires_at ASC, rowid ASC
-                         LIMIT ?
-                     )`,
-                ).run(overflow);
+                return { ok: false, reason: 'grant_capacity_exhausted' };
             }
             db.prepare(
-                `INSERT OR REPLACE INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, canonical_payload, expires_at)
+                `INSERT INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, canonical_payload, expires_at)
                  VALUES (?, ?, ?, ?)`,
             ).run(nonce, meshId, canonicalPayload, expiresAt);
+            if (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
+                const checkStmt = db.prepare(
+                    'SELECT 1 AS present FROM consumed_artifact_origin_grant_nonces WHERE nonce = ?',
+                );
+                for (const cachedNonce of consumedOriginGrantNonces.keys()) {
+                    const row = checkStmt.get(cachedNonce) as { present?: number } | undefined;
+                    if (!row?.present) {
+                        consumedOriginGrantNonces.delete(cachedNonce);
+                    }
+                    if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) break;
+                }
+            }
         } catch {
-            return false;
+            return { ok: false, reason: 'nonce_store_error' };
         }
+    } else if (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
+        return { ok: false, reason: 'grant_capacity_exhausted' };
     }
 
-    consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt });
-    return true;
+    if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) {
+        consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt });
+    }
+    return { ok: true };
 }
 
 export function __resetOriginGrantStateForTest(): void {
@@ -425,8 +434,8 @@ export function verifyArtifactOriginFetchGrant(
             nowMs,
             expected.nonceStoreDb,
         );
-        if (!consumed) {
-            return { ok: false, reason: 'replayed_grant_nonce' };
+        if (!consumed.ok) {
+            return { ok: false, reason: consumed.reason };
         }
     }
 
@@ -935,10 +944,14 @@ export function authorizeWorkerOriginFetch(params: {
             nonceStoreDb,
         });
         if (!grantCheck.ok) {
+            const denialCode =
+                grantCheck.reason === 'grant_capacity_exhausted'
+                    ? 'grant_capacity_exhausted'
+                    : 'artifact_access_denied';
             return {
                 success: false,
-                code: 'artifact_access_denied',
-                error: `Host originFetchGrant verification failed (${grantCheck.reason}) (artifact_access_denied)`,
+                code: denialCode,
+                error: `Host originFetchGrant verification failed (${grantCheck.reason}) (${denialCode})`,
             };
         }
     }

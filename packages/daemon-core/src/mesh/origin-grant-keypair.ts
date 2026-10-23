@@ -70,7 +70,24 @@ export function isValidOriginGrantPublicKey(rawPublicKey: unknown): rawPublicKey
     return typeof rawPublicKey === 'string' && parseOriginGrantPublicKeyObject(rawPublicKey) !== null;
 }
 
-function isValidRotationProofShape(value: unknown): value is OriginGrantKeyRotationProof {
+export function canonicalOriginGrantPublicKeyBytes(rawPublicKey: unknown): Buffer | null {
+    if (typeof rawPublicKey !== 'string') return null;
+    const keyObj = parseOriginGrantPublicKeyObject(rawPublicKey);
+    if (!keyObj) return null;
+    try {
+        const exported = keyObj.export({ format: 'der', type: 'spki' });
+        return Buffer.isBuffer(exported) ? exported : Buffer.from(exported);
+    } catch {
+        return null;
+    }
+}
+
+export function canonicalizeOriginGrantPublicKey(rawPublicKey: unknown): string | null {
+    const bytes = canonicalOriginGrantPublicKeyBytes(rawPublicKey);
+    return bytes ? bytes.toString('base64url') : null;
+}
+
+export function isValidRotationProofShape(value: unknown): value is OriginGrantKeyRotationProof {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as Record<string, unknown>;
     return (
