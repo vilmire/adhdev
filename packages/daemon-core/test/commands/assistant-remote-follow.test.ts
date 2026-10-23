@@ -4990,6 +4990,766 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             });
             expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
         });
+    }, 15_000);
+
+    it('23l. [Round 5 MEDIUM] cold wake with >1s hide gap is counted once across daemon restart (second wake after 61s allowed, third within 15m refused), stale reserved rows expire after 15m, and 1500ms liveness probe does not hold withMeshRemoteAccessMutex', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        let currentNow = Date.parse('2026-10-20T08:00:00Z');
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        try {
+            let wakeCount = 0;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+            hostExecute.mockClear();
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    wakeCount += 1;
+                    const sessionId = `coord-r5-wake-${wakeCount}`;
+                    hostCoordinators[MESH_PREFEX_SIM] = [
+                        { sessionId, idle: true, modalParked: false, managedByAssistant: true },
+                    ];
+                    return { success: true, sessionId };
+                }
+                if (cmd === 'set_conversation_prefs') {
+                    // Simulate both real async event-loop delay and a > 1s hide gap between quota settlement (post-launch) and turn_events audit (post-hide)
+                    await new Promise((r) => setTimeout(r, 30));
+                    currentNow += 1_500;
+                    return { success: true };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            // 1. Wake #1 with a 1.5s (> 1s) hide gap
+            const wake1: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake 1 with 1.5s hide gap',
+                        clientId: 'r5-hide-gap-wake-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(wake1).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-1' },
+            });
+
+            // Verify the persisted receipt and audit row have timestamps 1.5s apart and share a stable wakeId
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                const receipts = db
+                    .prepare("SELECT value, at_ms FROM assistant_relay_receipts WHERE kind = 'follower_wake_quota'")
+                    .all() as Array<{ value: string; at_ms: number }>;
+                const audits = db
+                    .prepare("SELECT at_ms, payload_json FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake' AND rule = 'cold_wake_launched'")
+                    .all(MESH_PREFEX_SIM) as Array<{ at_ms: number; payload_json: string }>;
+                expect(receipts).toHaveLength(1);
+                expect(audits).toHaveLength(1);
+                expect(audits[0]!.at_ms - receipts[0]!.at_ms).toBeGreaterThan(1_000);
+                const receiptVal = JSON.parse(receipts[0]!.value);
+                const auditPayload = JSON.parse(audits[0]!.payload_json);
+                expect(typeof receiptVal.wakeId).toBe('string');
+                expect(receiptVal.wakeId.length).toBeGreaterThan(0);
+                expect(auditPayload.wakeId).toBe(receiptVal.wakeId);
+            });
+
+            // 2. Restart daemon after +61s: Wake #1 must be reconstructed ONCE, so Wake #2 is ALLOWED
+            currentNow += 61_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const wake2: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake 2 after +61s and restart',
+                        clientId: 'r5-hide-gap-wake-2',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(wake2).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-2' },
+            });
+
+            // 3. Restart again and advance another +61s (still within 15m window): Wake #3 is REFUSED with window_limit
+            currentNow += 61_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const wake3Refused: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake 3 within 15m window',
+                        clientId: 'r5-hide-gap-wake-3',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(wake3Refused).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'window_limit',
+            });
+
+            // 4. Stale 'reserved' row without completion: counts conservatively inside 15m and expires after 15m
+            currentNow += 16 * 60_000;
+            clearFollowerWakeRateLimitForTest({ clearStore: true });
+            MeshRuntimeStore.resetForTests();
+
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                db.prepare("DELETE FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake'").run(MESH_PREFEX_SIM);
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:crash-reserved-1',
+                    JSON.stringify({ wakeId: 'wake:crash-1', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow, status: 'reserved' }),
+                    currentNow,
+                    'follower_wake_quota',
+                );
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:crash-reserved-2',
+                    JSON.stringify({ wakeId: 'wake:crash-2', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow + 61_000, status: 'reserved' }),
+                    currentNow + 61_000,
+                    'follower_wake_quota',
+                );
+            });
+
+            // Inside the 15m window (at +122s), the 2 uncompleted 'reserved' rows count conservatively and block a 3rd wake
+            currentNow += 122_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const blockedByReserved: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Blocked by two uncompleted reserved rows inside 15m',
+                        clientId: 'r5-reserved-active-block',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(blockedByReserved).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'window_limit',
+            });
+
+            // Advance past 15 minutes from both stale reserved rows -> they expire and cold wakes succeed again
+            currentNow += 15 * 60_000 + 1_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const afterStaleExpiry: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Allowed after stale reserved rows expire past 15m',
+                        clientId: 'r5-stale-reserved-expired',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(afterStaleExpiry).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-3' },
+            });
+
+            // 5. 1500ms liveness probe detects 'dead' on a 200ms (>100ms) response without holding withMeshRemoteAccessMutex
+            currentNow += 65_000;
+            const { createSessionHostControlPlane } = await import('@adhdev/session-host-core');
+            const { SessionHostController } = await import('../../src/session-host/session-host-controller.js');
+            const probeEvents: string[] = [];
+            let notifyProbeStarted!: () => void;
+            const probeStarted = new Promise<void>((resolve) => {
+                notifyProbeStarted = resolve;
+            });
+
+            const slowDeadController = Object.assign(Object.create(SessionHostController.prototype), {
+                plane: createSessionHostControlPlane({
+                    request: async <T>() => {
+                        probeEvents.push('probe_started');
+                        notifyProbeStarted();
+                        await new Promise((r) => setTimeout(r, 200));
+                        probeEvents.push('probe_finished');
+                        return [
+                            {
+                                sessionId: 'coord-r5-stale-sh',
+                                runtimeKey: 'claude-cli-alpha',
+                                displayName: 'Claude Code',
+                                workspaceLabel: 'alpha',
+                                transport: 'pty',
+                                providerType: 'claude-cli',
+                                category: 'cli',
+                                workspace: '/tmp/alpha',
+                                launchCommand: { command: 'claude', args: [] },
+                                createdAt: 1,
+                                startedAt: 1,
+                                lastActivityAt: 2,
+                                lifecycle: 'stopped',
+                                surfaceKind: 'recovery_snapshot',
+                                writeOwner: null,
+                                attachedClients: [],
+                                buffer: { scrollbackBytes: 0, snapshotSeq: 0 },
+                                meta: {},
+                            },
+                        ] as unknown as T;
+                    },
+                }),
+            });
+
+            await withHostEnv(async () => {
+                setAssistantProjectPortsForTests(() => {
+                    const defaultPorts = createDefaultProjectPorts({
+                        components: () => ({
+                            instanceManager: {
+                                getByCategory: () => [
+                                    {
+                                        getDrainStatus: () => 'idle',
+                                        isModalParked: () => false,
+                                        getState: () => ({
+                                            instanceId: 'coord-r5-stale-sh',
+                                            connected: true,
+                                            status: 'idle',
+                                            settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: false },
+                                            runtime: { runtimeId: 'coord-r5-stale-sh', lifecycle: 'running', surfaceKind: 'live_runtime' },
+                                        }),
+                                    },
+                                ],
+                            },
+                            router: { deps: { sessionHostControl: slowDeadController } },
+                        }) as any,
+                        selfDaemonId: HOST_A,
+                        execute: hostExecute as any,
+                    });
+                    return {
+                        ...defaultPorts,
+                        listMeshes: () => loadMeshConfig().meshes,
+                        isHostedHere: (m: LocalMeshEntry) => m.id === MESH_PREFEX_SIM,
+                        coordinatorTurns: () => ({ open: false, committed: [] }),
+                    };
+                });
+
+                const router = createRouter(HOST_A);
+                const sendDuringProbe = router.execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Send during 200ms dead liveness probe',
+                        clientId: 'r5-probe-no-mutex-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                );
+
+                await probeStarted;
+
+                // Owner set_policy acquires withMeshRemoteAccessMutex and must commit BEFORE the 200ms probe finishes
+                const policyRes: any = await router.execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowCoordinatorLaunch: true },
+                    'p2p',
+                    { ownerVerified: true },
+                );
+                expect(policyRes).toMatchObject({ success: true, access: { allowCoordinatorLaunch: true } });
+                probeEvents.push('owner_policy_committed');
+
+                const probeSendRes: any = await sendDuringProbe;
+                expect(probeEvents).toEqual(['probe_started', 'owner_policy_committed', 'probe_finished']);
+                expect(probeSendRes).toMatchObject({
+                    success: true,
+                    result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-4' },
+                });
+            });
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
+    it('23m. [Round 6 Finding 1 MEDIUM] future +30d quota rows are durably normalized on first hydration so they expire after one 15m window across restarts (+16m restart, +17m, +1d restart)', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        let currentNow = Date.parse('2026-10-20T10:00:00Z');
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        const warnSpy = vi.spyOn(LOG, 'warn');
+        try {
+            let wakeCount = 0;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+            hostExecute.mockClear();
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    wakeCount += 1;
+                    const sessionId = `coord-r6-f1-wake-${wakeCount}`;
+                    hostCoordinators[MESH_PREFEX_SIM] = [
+                        { sessionId, idle: true, modalParked: false, managedByAssistant: true },
+                    ];
+                    return { success: true, sessionId };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            // Two charged rows dated +30 days in the future
+            const t0 = currentNow;
+            const plus30Days = t0 + 30 * 24 * 60 * 60_000;
+            clearFollowerWakeRateLimitForTest({ clearStore: true });
+            MeshRuntimeStore.resetForTests();
+
+            await withHostEnv(async () => {
+                const store = MeshRuntimeStore.getInstance();
+                store.db.prepare("DELETE FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake'").run(MESH_PREFEX_SIM);
+                store.db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:future-30d-1',
+                    JSON.stringify({ wakeId: 'wake:future-30d-1', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: plus30Days, status: 'charged' }),
+                    plus30Days,
+                    'follower_wake_quota',
+                );
+                store.db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:future-30d-2',
+                    JSON.stringify({ wakeId: 'wake:future-30d-2', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: plus30Days, status: 'charged' }),
+                    plus30Days,
+                    'follower_wake_quota',
+                );
+                store.turnStore().insertEvent({
+                    eventId: 'assistant_follower_coordinator_wake:future-30d-1',
+                    meshId: MESH_PREFEX_SIM,
+                    attemptId: null,
+                    generation: null,
+                    sessionId: 'coord-future-1',
+                    kind: 'assistant_follower_coordinator_wake',
+                    source: 'assistant_remote',
+                    verdict: 'recorded',
+                    rule: 'cold_wake_launched',
+                    dedupeKey: 'future-30d-1',
+                    payload: {
+                        meshId: MESH_PREFEX_SIM,
+                        hostDaemonId: HOST_A,
+                        senderDaemonId: ASSISTANT_B,
+                        activeDaemonId: ASSISTANT_B,
+                        wakeId: 'wake:future-30d-1',
+                        wakeAtMs: plus30Days,
+                        atMs: plus30Days,
+                    },
+                    observedBy: HOST_A,
+                    publishState: 'none',
+                    atMs: plus30Days,
+                    recordedAt: plus30Days,
+                });
+            });
+
+            // 1. First hydration at t0: future rows are clamped to t0 and persisted back to SQLite so restarts cannot renew them
+            const atHydrationRefused: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Refused at first hydration t0',
+                        clientId: 'r6-future-t0',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(atHydrationRefused).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'cooldown',
+            });
+
+            // Verify durable normalization in SQLite (both assistant_relay_receipts and turn_events rewritten to t0 with futureNormalizedAtMs marker)
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                const receipts = db
+                    .prepare("SELECT receipt_key, value, at_ms FROM assistant_relay_receipts WHERE kind = 'follower_wake_quota' ORDER BY receipt_key ASC")
+                    .all() as Array<{ receipt_key: string; value: string; at_ms: number }>;
+                expect(receipts).toHaveLength(2);
+                for (const r of receipts) {
+                    expect(r.at_ms).toBe(t0);
+                    const parsed = JSON.parse(r.value);
+                    expect(parsed.atMs).toBe(t0);
+                    expect(parsed.futureNormalizedAtMs).toBe(t0);
+                    expect(parsed.originalAtMs).toBe(plus30Days);
+                }
+                const audits = db
+                    .prepare("SELECT at_ms, payload_json FROM turn_events WHERE event_id = 'assistant_follower_coordinator_wake:future-30d-1'")
+                    .all() as Array<{ at_ms: number; payload_json: string }>;
+                expect(audits).toHaveLength(1);
+                expect(audits[0]!.at_ms).toBe(t0);
+                const auditPayload = JSON.parse(audits[0]!.payload_json);
+                expect(auditPayload.wakeAtMs).toBe(t0);
+                expect(auditPayload.futureNormalizedAtMs).toBe(t0);
+                expect(auditPayload.originalAtMs).toBe(plus30Days);
+            });
+
+            // 2. At t0 + 16m WITH a restart: both +30d rows have expired past their single 15m window from first hydration -> launch succeeds!
+            currentNow = t0 + 16 * 60_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const after16mRestart: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Allowed after +16m and restart',
+                        clientId: 'r6-future-16m-restart',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(after16mRestart).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r6-f1-wake-1' },
+            });
+
+            // 3. At t0 + 17m (60s after the +16m launch): second launch in the new window also succeeds (not blocked by window_limit)
+            currentNow = t0 + 17 * 60_000;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const after17m: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Allowed at +17m',
+                        clientId: 'r6-future-17m',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(after17m).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r6-f1-wake-2' },
+            });
+
+            // 4. At t0 + 1 day WITH a restart: allowed (not blocked by cooldown)
+            currentNow = t0 + 24 * 60 * 60_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const after1dRestart: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Allowed after +1d and restart',
+                        clientId: 'r6-future-1d-restart',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(after1dRestart).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r6-f1-wake-3' },
+            });
+            expect(warnSpy).toHaveBeenCalled();
+
+            // Verify generated wakeId includes a 128-bit UUID v4 suffix
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                const receipts = db
+                    .prepare("SELECT value FROM assistant_relay_receipts WHERE kind = 'follower_wake_quota'")
+                    .all() as Array<{ value: string }>;
+                expect(receipts.length).toBeGreaterThanOrEqual(1);
+                const latestWakeId = String(JSON.parse(receipts[receipts.length - 1]!.value).wakeId);
+                expect(latestWakeId).toMatch(/:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+            });
+        } finally {
+            warnSpy.mockRestore();
+            nowSpy.mockRestore();
+        }
+    });
+
+    it('23n. [Round 6 Finding 2 MEDIUM] duplicate wakeId receipts at -122s and -61s refuse a 3rd launch within 15m, and conflicting -899s and -1s timestamps sharing a wakeId enforce the newest cooldown', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        let currentNow = Date.parse('2026-10-21T10:00:00Z');
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        const warnSpy = vi.spyOn(LOG, 'warn');
+        try {
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+            hostExecute.mockClear();
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    const sessionId = 'coord-r6-f2-should-not-launch';
+                    hostCoordinators[MESH_PREFEX_SIM] = [
+                        { sessionId, idle: true, modalParked: false, managedByAssistant: true },
+                    ];
+                    return { success: true, sessionId };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            // ─── Repro 1: Two distinct charged receipts sharing a wakeId at -122s and -61s ───
+            clearFollowerWakeRateLimitForTest({ clearStore: true });
+            MeshRuntimeStore.resetForTests();
+            warnSpy.mockClear();
+
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                db.prepare("DELETE FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake'").run(MESH_PREFEX_SIM);
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:dup-receipt-1',
+                    JSON.stringify({ wakeId: 'wake:shared-dup-id', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow - 122_000, status: 'charged' }),
+                    currentNow - 122_000,
+                    'follower_wake_quota',
+                );
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:dup-receipt-2',
+                    JSON.stringify({ wakeId: 'wake:shared-dup-id', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow - 61_000, status: 'charged' }),
+                    currentNow - 61_000,
+                    'follower_wake_quota',
+                );
+            });
+
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+
+            const dupReceiptsRefused: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Third launch within 15m with duplicate wakeId receipts must be refused',
+                        clientId: 'r6-dup-wakeid-window',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(dupReceiptsRefused).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'window_limit',
+            });
+            expect(warnSpy).toHaveBeenCalled();
+
+            // ─── Repro 2a: Two receipts sharing a wakeId with conflicting timestamps -899s and -1s ───
+            currentNow += 30 * 60_000;
+            clearFollowerWakeRateLimitForTest({ clearStore: true });
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            warnSpy.mockClear();
+
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                db.prepare("DELETE FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake'").run(MESH_PREFEX_SIM);
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:conflict-r1',
+                    JSON.stringify({ wakeId: 'wake:conflict-899-1', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow - 899_000, status: 'charged' }),
+                    currentNow - 899_000,
+                    'follower_wake_quota',
+                );
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:conflict-r2',
+                    JSON.stringify({ wakeId: 'wake:conflict-899-1', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow - 1_000, status: 'charged' }),
+                    currentNow - 1_000,
+                    'follower_wake_quota',
+                );
+            });
+
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+
+            const conflictReceiptsCooldown: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Conflicting -899s and -1s duplicate receipts must enforce -1s cooldown',
+                        clientId: 'r6-conflict-receipts-cooldown',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(conflictReceiptsCooldown).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'cooldown',
+            });
+            expect(warnSpy).toHaveBeenCalled();
+
+            // ─── Repro 2b: Receipt at -899s and audit row at -1s sharing a wakeId (disagreeing by > 5m) ───
+            currentNow += 30 * 60_000;
+            clearFollowerWakeRateLimitForTest({ clearStore: true });
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            warnSpy.mockClear();
+
+            await withHostEnv(async () => {
+                const store = MeshRuntimeStore.getInstance();
+                store.db.prepare("DELETE FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake'").run(MESH_PREFEX_SIM);
+                store.db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:drift-r1',
+                    JSON.stringify({ wakeId: 'wake:drift-899-1', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow - 899_000, status: 'charged' }),
+                    currentNow - 899_000,
+                    'follower_wake_quota',
+                );
+                store.turnStore().insertEvent({
+                    eventId: 'assistant_follower_coordinator_wake:drift-a1',
+                    meshId: MESH_PREFEX_SIM,
+                    attemptId: null,
+                    generation: null,
+                    sessionId: 'coord-drift-1',
+                    kind: 'assistant_follower_coordinator_wake',
+                    source: 'assistant_remote',
+                    verdict: 'recorded',
+                    rule: 'cold_wake_launched',
+                    dedupeKey: 'drift-a1',
+                    payload: {
+                        meshId: MESH_PREFEX_SIM,
+                        hostDaemonId: HOST_A,
+                        senderDaemonId: ASSISTANT_B,
+                        activeDaemonId: ASSISTANT_B,
+                        wakeId: 'wake:drift-899-1',
+                        wakeAtMs: currentNow - 1_000,
+                        atMs: currentNow - 1_000,
+                    },
+                    observedBy: HOST_A,
+                    publishState: 'none',
+                    atMs: currentNow - 1_000,
+                    recordedAt: currentNow - 1_000,
+                });
+            });
+
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+
+            const driftReceiptAuditCooldown: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Disagreeing receipt (-899s) and audit (-1s) must enforce -1s cooldown',
+                        clientId: 'r6-drift-receipt-audit-cooldown',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(driftReceiptAuditCooldown).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'cooldown',
+            });
+            expect(warnSpy).toHaveBeenCalled();
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+        } finally {
+            warnSpy.mockRestore();
+            nowSpy.mockRestore();
+        }
     });
 
     it('Round 3 Findings 1 & 6: assistant_artifact_list/read refuse unauthenticated IPC or unverified standalone callers before touching project ports, allow bound assistant session with credential or verified owner, and read a 262144-byte remote image', async () => {

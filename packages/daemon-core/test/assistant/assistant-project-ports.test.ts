@@ -8,6 +8,7 @@ import { createSessionHostControlPlane, type SessionHostRecord } from '@adhdev/s
 import {
     createDefaultProjectPorts,
     preloadAssistantProjectReaders,
+    SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS,
     setAssistantRelayHooks,
 } from '../../src/assistant/assistant-project-ports.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
@@ -203,9 +204,17 @@ describe('createDefaultProjectPorts', () => {
             selfDaemonId: 'daemon_mach_self',
         });
 
+        expect(SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS).toBe(1_500);
         expect(await ports.isCoordinatorLive!('coord-sh-live')).toBe('live');
         expect(await ports.isCoordinatorLive!('coord-sh-dead')).toBe('dead');
         expect(await ports.isCoordinatorLive!('coord-sh-missing')).toBe('dead');
+
+        // A loaded host taking 250ms (> 100ms, < 1500ms) still detects 'dead' rather than timing out as 'unknown'
+        requestImpl = async () => {
+            await new Promise((r) => setTimeout(r, 250));
+            return [deadRecord];
+        };
+        expect(await ports.isCoordinatorLive!('coord-sh-dead')).toBe('dead');
 
         // Timeout / rejection from listSessions yields 'unknown', never 'dead'
         requestImpl = async () => {
