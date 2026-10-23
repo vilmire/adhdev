@@ -589,7 +589,7 @@ describe('Review Finding 1 — healthy codex 0.133 and claude 2.1.309 sessions s
         for (const screen of [claudeManualModeScreen, claudeCustomStatuslineScreen]) {
             const row = screen.split('\n').length - 3;
             expect(evaluateFsm(spec, 'idle', screen, { row, col: 2 }, undefined, clk(5_000, 0)).fired).toBeNull();
-            expect(evaluateFsm(spec, 'starting', screen, { row, col: 2 }, undefined, clk(2_000, 0)).fired?.to).toBe('idle');
+            expect(evaluateFsm(spec, 'starting', screen, { row, col: 2 }, undefined, clk(9_000, 0)).fired?.to).toBe('idle');
             expect(evaluateFsm(spec, 'signing_in', screen, { row, col: 2 }, undefined, clk(2_000, 0)).fired?.to).toBe('idle');
         }
     });
@@ -941,7 +941,7 @@ describe('Round 3 Finding 1 — pre-send screen guard blocks idle auth-expiry de
 
             // 1. Healthy Claude reaches idle
             pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
-            await vi.advanceTimersByTimeAsync(600);
+            await vi.advanceTimersByTimeAsync(9_000);
             expect(driver.currentStateId).toBe('idle');
             expect(driver.hasSeenReady()).toBe(true);
             pty.writes.length = 0;
@@ -1013,7 +1013,7 @@ describe('Round 3 Finding 1 — pre-send screen guard blocks idle auth-expiry de
             ].join('\r\n');
 
             pty.feed(`${scrollbackPadding}\r\n${activeIdleWithToolSignIn}\r\n`);
-            await vi.advanceTimersByTimeAsync(600);
+            await vi.advanceTimersByTimeAsync(9_000);
             expect(driver.currentStateId).toBe('idle');
             expect(driver.hasSeenReady()).toBe(true);
             pty.writes.length = 0;
@@ -1396,7 +1396,7 @@ describe('Round 4 Finding 1 — pre-send guard evaluates provider spec signing_i
                     const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
 
                     pty.feed(provider.readyFrame);
-                    await vi.advanceTimersByTimeAsync(2_000);
+                    await vi.advanceTimersByTimeAsync(9_000);
                     expect(driver.currentStateId, `${label} initial idle`).toBe('idle');
                     expect(driver.hasSeenReady(), `${label} readySeenOnce`).toBe(true);
                     pty.writes.length = 0;
@@ -1447,7 +1447,7 @@ describe('Round 4 Finding 2 — ordinary text does not block send, and forced si
             const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
 
             pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
-            await vi.advanceTimersByTimeAsync(600);
+            await vi.advanceTimersByTimeAsync(9_000);
             expect(driver.currentStateId).toBe('idle');
             pty.writes.length = 0;
 
@@ -1484,7 +1484,7 @@ describe('Round 4 Finding 2 — ordinary text does not block send, and forced si
 
             // 1. Reach idle
             pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
-            await vi.advanceTimersByTimeAsync(600);
+            await vi.advanceTimersByTimeAsync(9_000);
             expect(driver.currentStateId).toBe('idle');
             pty.writes.length = 0;
 
@@ -1633,5 +1633,334 @@ describe('Round 4 Finding 4 — TerminalAdapter.snapshot caches serialized scree
         adapter.kill();
     });
 });
+
+describe('Round 5 — HIGH-1: approval modals quoting login text stay in approval with card visible and never hijack into signing_in', () => {
+    const claudeBashHeredocApproval = [
+        '⏺ Bash(cat <<\'EOF\' > /tmp/login-fixture.txt)',
+        '',
+        '────────────────────────────────────────────────────────────────────────────────',
+        ' Bash command',
+        '',
+        '   cat <<\'EOF\' > /tmp/login-fixture.txt',
+        '   Select login method:',
+        '    ❯ 1. Claude account with subscription',
+        '      2. Anthropic Console account',
+        '   EOF',
+        '',
+        ' Do you want to proceed?',
+        ' ❯ 1. Yes',
+        '   2. Yes, and don\'t ask again for cat commands in /tmp',
+        '   3. No, and tell Claude what to do differently (esc)',
+        '',
+        ' Esc to cancel · Tab to amend',
+    ].join('\n');
+
+    const claudeCreateFileApproval = [
+        '⏺ Write(/tmp/login-fixture.txt)',
+        '',
+        '────────────────────────────────────────────────────────────────────────────────',
+        ' Create file',
+        ' ../../../../tmp/login-fixture.txt',
+        '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+        '  1 Select login method:',
+        '  2 Anthropic Console account',
+        '╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌',
+        ' Do you want to create login-fixture.txt?',
+        ' ❯ 1. Yes',
+        '   2. Yes, allow all edits in tmp/ during this session (shift+tab)',
+        '   3. No',
+        '',
+        ' Esc to cancel · Tab to amend',
+    ].join('\n');
+
+    const codexCommandApproval = [
+        'Would you like to run the following command?',
+        '',
+        '  $ printf "%s\\n" "Use your own OpenAI API key" "Sign in with ChatGPT to use Codex"',
+        '',
+        '› 1. Yes, proceed (y)',
+        '  2. Yes, and don\'t ask again for this command (a)',
+        '  3. No, and tell Codex what to do differently (esc)',
+        '',
+        '  Press enter to confirm or esc to cancel',
+    ].join('\n');
+
+    it.each([
+        ['Claude Bash heredoc approval quoting login text', claudeBashHeredocApproval],
+        ['Claude Create-file approval quoting login text', claudeCreateFileApproval],
+    ])('%s keeps state approval with modal card visible across a send and 120s+, and never queues as auth_required', async (_label, approvalModalScreen) => {
+        vi.useFakeTimers();
+        try {
+            const spec = loadProviderSpec('claude-cli', '4.0.json');
+            expect(isAnchoredSignInViewport(approvalModalScreen, spec)).toBe(false);
+
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('claude-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+
+            let latestModal: { title?: string; buttons: Array<{ index: number; label: string }>; kind?: string } | null = null;
+            let latestStateId = '';
+            driver.subscribe(ev => {
+                if (ev.kind === 'state_changed') {
+                    latestStateId = ev.state.id;
+                    latestModal = ev.modal;
+                }
+            });
+
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            // 1. Reach idle past the 8s startup grace
+            pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
+            await vi.advanceTimersByTimeAsync(9_000);
+            expect(driver.currentStateId).toBe('idle');
+            expect(driver.hasSeenReady()).toBe(true);
+            pty.writes.length = 0;
+
+            // 2. Render approval modal quoting login text (clearing composer chrome off viewport)
+            pty.feed('\u001b[2J\u001b[H' + approvalModalScreen.replace(/\n/g, '\r\n') + '\r\n');
+            await vi.advanceTimersByTimeAsync(200);
+
+            expect(driver.currentStateId).toBe('approval');
+            expect(latestStateId).toBe('approval');
+            expect(latestModal).not.toBeNull();
+            expect(latestModal?.buttons.length).toBeGreaterThanOrEqual(2);
+            expect(latestModal?.buttons[0]?.label).toMatch(/^Yes\b/);
+
+            // 3. Send a message while the approval modal is up
+            const disp = driver.sendMessageWithDisposition('follow-up message during approval', false, 'msg-during-claude-approval');
+            expect(disp.status).toBe('queued');
+            expect(disp.reason).not.toBe('auth_required');
+            expect(disp.reason).toBe('machine is approval');
+            expect(nonFocusWrites()).toEqual([]);
+
+            // 4. State must remain approval with the modal card visible immediately and past 120s+
+            expect(driver.currentStateId).toBe('approval');
+            expect(latestStateId).toBe('approval');
+            expect(latestModal).not.toBeNull();
+
+            await vi.advanceTimersByTimeAsync(130_000);
+            expect(driver.currentStateId).toBe('approval');
+            expect(latestStateId).toBe('approval');
+            expect(latestModal).not.toBeNull();
+            expect(latestModal?.buttons[0]?.label).toMatch(/^Yes\b/);
+            expect(nonFocusWrites()).toEqual([]);
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('Codex command approval quoting "Use your own OpenAI API key" keeps state approval with modal card visible across a send and 120s+, and never queues as auth_required', async () => {
+        vi.useFakeTimers();
+        try {
+            const spec = loadProviderSpec('codex-cli', '4.0.json');
+            expect(isAnchoredSignInViewport(codexCommandApproval, spec)).toBe(false);
+
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('codex-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+
+            let latestModal: { title?: string; buttons: Array<{ index: number; label: string }>; kind?: string } | null = null;
+            let latestStateId = '';
+            driver.subscribe(ev => {
+                if (ev.kind === 'state_changed') {
+                    latestStateId = ev.state.id;
+                    latestModal = ev.modal;
+                }
+            });
+
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            // 1. Reach idle
+            pty.feed('› Explain this codebase\r\n\r\n  gpt-5.4 high · 100% left · ~/repo\r\n');
+            await vi.advanceTimersByTimeAsync(2_000);
+            expect(driver.currentStateId).toBe('idle');
+            expect(driver.hasSeenReady()).toBe(true);
+            pty.writes.length = 0;
+
+            // 2. Render Codex approval modal whose command quotes "Use your own OpenAI API key"
+            pty.feed('\u001b[2J\u001b[H' + codexCommandApproval.replace(/\n/g, '\r\n') + '\r\n');
+            await vi.advanceTimersByTimeAsync(200);
+
+            expect(driver.currentStateId).toBe('approval');
+            expect(latestStateId).toBe('approval');
+            expect(latestModal).not.toBeNull();
+            expect(latestModal?.buttons.length).toBeGreaterThanOrEqual(2);
+            expect(latestModal?.buttons[0]?.label).toMatch(/^Yes, proceed/);
+
+            // 3. Send a message while the approval modal is active
+            const disp = driver.sendMessageWithDisposition('follow-up message during codex approval', false, 'msg-during-codex-approval');
+            expect(disp.status).toBe('queued');
+            expect(disp.reason).not.toBe('auth_required');
+            expect(disp.reason).toBe('machine is approval');
+            expect(nonFocusWrites()).toEqual([]);
+
+            // 4. State must remain approval with the modal card visible immediately and past 120s+
+            expect(driver.currentStateId).toBe('approval');
+            expect(latestStateId).toBe('approval');
+            expect(latestModal).not.toBeNull();
+
+            await vi.advanceTimersByTimeAsync(130_000);
+            expect(driver.currentStateId).toBe('approval');
+            expect(latestStateId).toBe('approval');
+            expect(latestModal).not.toBeNull();
+            expect(latestModal?.buttons[0]?.label).toMatch(/^Yes, proceed/);
+            expect(nonFocusWrites()).toEqual([]);
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('signing_in → approval escape transitions out of signing_in when an approval modal renders in Claude or Codex', async () => {
+        vi.useFakeTimers();
+        try {
+            for (const tc of [
+                {
+                    cli: 'claude-cli',
+                    file: '4.0.json',
+                    loginScreen: CLAUDE_SIGNIN_SCREEN,
+                    approvalScreen: claudeBashHeredocApproval,
+                },
+                {
+                    cli: 'codex-cli',
+                    file: '4.0.json',
+                    loginScreen: CODEX_SIGNIN_SCREEN,
+                    approvalScreen: codexCommandApproval,
+                },
+            ]) {
+                const factory = new DrivableFactory();
+                const driver = new FsmDriver({
+                    specPath: resolveProviderSpecPath(tc.cli, tc.file),
+                    workingDir: os.tmpdir(),
+                    hotReload: false,
+                    transportFactory: factory,
+                });
+
+                let latestModal: { title?: string; buttons: Array<{ index: number; label: string }> } | null = null;
+                driver.subscribe(ev => {
+                    if (ev.kind === 'state_changed') {
+                        latestModal = ev.modal;
+                    }
+                });
+
+                driver.start();
+                const pty = factory.last!;
+
+                pty.feed(tc.loginScreen.replace(/\n/g, '\r\n') + '\r\n');
+                await vi.advanceTimersByTimeAsync(200);
+                expect(driver.currentStateId, `${tc.cli} entered signing_in`).toBe('signing_in');
+
+                // Approval modal appears while in signing_in -> must immediately escape to approval with modal card visible
+                pty.feed('\u001b[2J\u001b[H' + tc.approvalScreen.replace(/\n/g, '\r\n') + '\r\n');
+                await vi.advanceTimersByTimeAsync(200);
+                expect(driver.currentStateId, `${tc.cli} escaped signing_in → approval`).toBe('approval');
+                expect(latestModal, `${tc.cli} modal card visible`).not.toBeNull();
+                expect(latestModal?.buttons.length).toBeGreaterThanOrEqual(2);
+
+                driver.shutdown();
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe('Round 5 — MEDIUM-3: unclosed fences terminate at strong turn boundaries so real subsequent 401 auth errors are detected', () => {
+    const t0 = 1_850_000_000_000;
+    const ctx = { cliType: 'claude-cli', sessionLabel: 'sess-r5-m3', isCoordinator: false };
+
+    const unclosedTruncatedCatProbe = [
+        '⏺ Bash(cat README.md)',
+        '  ⎿  # Project Setup',
+        '     ```bash',
+        '     export API_KEY="demo"',
+        '     npm test',
+        '     … +42 lines (ctrl+o to expand)',
+        '',
+        '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+    ].join('\n');
+
+    const unclosedAgentProseFenceProbe = [
+        '⏺ Here is the snippet I was writing before the request failed:',
+        '```ts',
+        'export function sum(a: number, b: number) {',
+        '  return a + b;',
+        '}',
+        '',
+        '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}} · Please run /login',
+    ].join('\n');
+
+    const unclosedFenceBeforeSummaryProbe = [
+        '⏺ Starting example block:',
+        '```json',
+        '{"hello": "world"}',
+        '✻ Worked for 4s',
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+    ].join('\n');
+
+    const unclosedDiffHunkProbe = [
+        '⏺ Update(src/index.ts)',
+        '@@ -1,3 +1,4 @@',
+        ' const x = 1;',
+        '+const y = 2;',
+        '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+    ].join('\n');
+
+    const balancedFenceControl = [
+        '⏺ Example snippet:',
+        '```ts',
+        'export const x = 1;',
+        '```',
+        '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+    ].join('\n');
+
+    it.each([
+        ['unclosed fence in truncated cat README.md output ending "… +42 lines"', unclosedTruncatedCatProbe],
+        ['unclosed fence in agent prose followed by a col-0 ⏺ API Error: 401 line', unclosedAgentProseFenceProbe],
+        ['unclosed fence terminated by a ✻ turn summary line before API Error: 401', unclosedFenceBeforeSummaryProbe],
+        ['unclosed diff hunk terminated by a col-0 ⏺ API Error: 401 line', unclosedDiffHunkProbe],
+        ['balanced fence control followed by a real ⏺ API Error: 401 line', balancedFenceControl],
+    ])('detects auth_failed and emits mid-turn auth_error advisory for %s', (_label, screen) => {
+        const failure = detectProviderFailure(screen);
+        expect(failure).not.toBeNull();
+        expect(failure?.errorReason).toBe('auth_failed');
+
+        const classified = classifyAuthBillingOutput('claude-cli', screen);
+        expect(classified).not.toBeNull();
+        expect(classified?.errorReason).toBe('auth_failed');
+
+        const state = createLiveAuthState();
+        state.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: '401 Unauthorized' },
+            suspectedAtMs: t0,
+        };
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: true,
+            now: t0 + 20_000,
+            quietMs: 10_000,
+            tail: screen,
+            readScreen: () => screen,
+        });
+        expect(res.advisory).toBeDefined();
+        expect(res.advisory?.kind).toBe('auth_error');
+        expect(res.latch).toBeUndefined();
+    });
+});
+
 
 

@@ -79,6 +79,31 @@ function hasProviderFailureEnvelope(text: string): boolean {
 
 const CLEAR_PROVIDER_CHROME_RE = /^[ \t]*(?:[⏺✻✢✳✶✽✷✸✹❯›](?:\s|$)|─{10,}[ \t]*$)/;
 const TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|Glob|LS|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|Ran|Explored|Edited|Wrote)\b/;
+const TRUNCATED_OUTPUT_LINE_RE = /^[ \t]*(?:…|\.\.\.)\s+\+\d+\s+lines\b/i;
+const STRONG_TURN_BOUNDARY_LINE_RE = /^[ \t]{0,2}(?:⏺(?:\s|$)|[✻✢✳✶✽✷✸✹](?:\s|$))/;
+const COMPOSER_DIVIDER_LINE_RE = /^[ \t]*─{10,}[ \t]*$/;
+const COL0_COMPOSER_DIVIDER_LINE_RE = /^─{10,}[ \t]*$/;
+const COMPOSER_PROMPT_LINE_RE = /^[ \t]*[❯›>](?:\s|$)/;
+const MAX_OPEN_BLOCK_SPAN_LINES = 40;
+
+function hasMatchingClosingFence(lines: string[], openIdx: number, ch: '`' | '~'): boolean {
+    const closeRe = new RegExp(`^${ch}{3,}\\s*$`);
+    const limit = Math.min(lines.length, openIdx + 1 + MAX_OPEN_BLOCK_SPAN_LINES);
+    for (let j = openIdx + 1; j < limit; j += 1) {
+        const candidate = lines[j];
+        if (
+            TRUNCATED_OUTPUT_LINE_RE.test(candidate)
+            || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate)
+            || TOOL_HEADER_LINE_RE.test(candidate)
+        ) {
+            return false;
+        }
+        if (closeRe.test(candidate.trim())) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * Strip lines that are clearly tool-result blocks, diffs, line-numbered file
@@ -89,42 +114,88 @@ const TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|G
 export function stripToolAndCodeLines(raw: string): string {
     let inToolBlock = false;
     let inFence: '`' | '~' | null = null;
+    let fenceHasClose = false;
+    let fenceLines = 0;
     let inDiffHunk = false;
+    let diffHunkLines = 0;
     const out: string[] = [];
-    for (const line of raw.split('\n')) {
+    const lines = raw.split('\n');
+    for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
         const trimmed = line.trim();
+        if (TRUNCATED_OUTPUT_LINE_RE.test(line)) {
+            inFence = null;
+            fenceHasClose = false;
+            fenceLines = 0;
+            inDiffHunk = false;
+            diffHunkLines = 0;
+            inToolBlock = false;
+            continue;
+        }
         const fenceMatch = trimmed.match(/^(```+|~~~+)/);
         if (fenceMatch) {
             const ch = fenceMatch[1][0] as '`' | '~';
             if (inFence === null) {
                 inFence = ch;
+                fenceHasClose = hasMatchingClosingFence(lines, i, ch);
+                fenceLines = 0;
                 inDiffHunk = false;
+                diffHunkLines = 0;
                 inToolBlock = false;
                 continue;
             }
             if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed)) {
                 inFence = null;
+                fenceHasClose = false;
+                fenceLines = 0;
                 continue;
             }
         }
         if (inFence !== null) {
-            continue;
+            const isStrongTurnBoundary = STRONG_TURN_BOUNDARY_LINE_RE.test(line) || TOOL_HEADER_LINE_RE.test(line);
+            const isComposerBoundary = COMPOSER_DIVIDER_LINE_RE.test(line)
+                && i + 1 < lines.length
+                && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1])
+                && (
+                    !fenceHasClose
+                    || /^[ \t]*[❯›>][ \t]*$/.test(lines[i + 1])
+                    || (i + 2 < lines.length && COMPOSER_DIVIDER_LINE_RE.test(lines[i + 2]))
+                );
+            fenceLines += 1;
+            if (isStrongTurnBoundary || isComposerBoundary || fenceLines > MAX_OPEN_BLOCK_SPAN_LINES) {
+                inFence = null;
+                fenceHasClose = false;
+                fenceLines = 0;
+            } else {
+                continue;
+            }
         }
         if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed)) {
             inDiffHunk = false;
+            diffHunkLines = 0;
             continue;
         }
         if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed)) {
             inDiffHunk = true;
+            diffHunkLines = 0;
             inToolBlock = false;
             continue;
         }
         if (inDiffHunk) {
-            if (!trimmed) continue;
-            if (/^(?:[ +-]|\\ No newline)/.test(line)) {
+            const isStrongTurnBoundary = STRONG_TURN_BOUNDARY_LINE_RE.test(line) || TOOL_HEADER_LINE_RE.test(line);
+            const isComposerBoundary = COL0_COMPOSER_DIVIDER_LINE_RE.test(line)
+                && i + 1 < lines.length
+                && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]);
+            diffHunkLines += 1;
+            if (isStrongTurnBoundary || isComposerBoundary || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
+                inDiffHunk = false;
+                diffHunkLines = 0;
+            } else if (!trimmed || /^(?:[ +-]|\\ No newline)/.test(line)) {
                 continue;
+            } else {
+                inDiffHunk = false;
+                diffHunkLines = 0;
             }
-            inDiffHunk = false;
         }
         if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
             inToolBlock = false;
@@ -211,19 +282,19 @@ export function detectProviderFailure(output: string, _exitCode?: number): Provi
         /"type"\s*:\s*"authentication_error"/,
         /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
         // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
-        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
+        /(?:^|\n)\s*(?:[●⏺✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
         /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
         // Anchored CLI auth / token / not-signed-in statements
-        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
+        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●⏺✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
         /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
         // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
-        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/,
+        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●⏺✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/,
     ].some(pattern => pattern.test(linesText));
     if (auth) {
         return {
