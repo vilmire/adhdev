@@ -395,6 +395,7 @@ export {
 export {
   readMeshHostRecord,
   writeMeshHostRecord,
+  migrateBogusPairingHostRecords,
   readAuthenticatedPeerOriginGrantPublicKey,
   canAcceptPeerOriginGrantPublicKey,
   recordAuthenticatedPeerOriginGrantPublicKey,

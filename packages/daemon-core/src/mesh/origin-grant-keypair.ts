@@ -465,11 +465,16 @@ export function verifyOriginGrantKeyRotationChain(
     },
 ):
     | { ok: true; newPublicKey: string; proof: OriginGrantKeyRotationProof; chain: OriginGrantKeyRotationProof[] }
-    | { ok: false; reason: string } {
+    | { ok: false; reason: string; code?: string; error?: string } {
     const rawList: unknown[] = [];
     if (Array.isArray(input.rotationChain) && input.rotationChain.length > 0) {
         if (input.rotationChain.length > MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
-            return { ok: false, reason: 'rotation_chain_too_long' };
+            return {
+                ok: false,
+                reason: 'rotation_chain_too_long',
+                code: 're_pair_required',
+                error: `Origin-grant rotation chain length (${input.rotationChain.length}) exceeds maximum (${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH}); re-pair required (re_pair_required)`,
+            };
         }
         rawList.push(...input.rotationChain);
     } else if (input.rotationProof !== undefined) {
@@ -490,6 +495,30 @@ export function verifyOriginGrantKeyRotationChain(
         originGrantPublicKeysEqual(p.oldPublicKey, expected.currentPinnedPublicKey),
     );
     if (startIdx === -1) {
+        if (proofs.length >= MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
+            let chainInternallyValid = true;
+            for (let i = 0; i < proofs.length; i++) {
+                const p = proofs[i]!;
+                const stepKey = i === 0 ? p.oldPublicKey : proofs[i - 1]!.newPublicKey;
+                const step = verifyOriginGrantKeyRotationProof(p, {
+                    hostDaemonId: expected.hostDaemonId,
+                    currentPinnedPublicKey: stepKey,
+                });
+                if (!step.ok) {
+                    chainInternallyValid = false;
+                    break;
+                }
+            }
+            if (chainInternallyValid) {
+                const peerLabel = canonGrantDaemonId(expected.hostDaemonId) || trimStr(expected.hostDaemonId);
+                return {
+                    ok: false,
+                    reason: 're_pair_required',
+                    code: 're_pair_required',
+                    error: `Peer ${peerLabel} missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} origin-grant key rotations; re-pair required (re_pair_required)`,
+                };
+            }
+        }
         return { ok: false, reason: 'rotation_old_key_mismatch' };
     }
 

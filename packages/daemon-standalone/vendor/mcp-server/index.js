@@ -89066,7 +89066,12 @@ ${cleanBody}`;
       const rawList = [];
       if (Array.isArray(input.rotationChain) && input.rotationChain.length > 0) {
         if (input.rotationChain.length > MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
-          return { ok: false, reason: "rotation_chain_too_long" };
+          return {
+            ok: false,
+            reason: "rotation_chain_too_long",
+            code: "re_pair_required",
+            error: `Origin-grant rotation chain length (${input.rotationChain.length}) exceeds maximum (${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH}); re-pair required (re_pair_required)`
+          };
         }
         rawList.push(...input.rotationChain);
       } else if (input.rotationProof !== void 0) {
@@ -89085,6 +89090,30 @@ ${cleanBody}`;
         (p) => originGrantPublicKeysEqual(p.oldPublicKey, expected.currentPinnedPublicKey)
       );
       if (startIdx === -1) {
+        if (proofs.length >= MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
+          let chainInternallyValid = true;
+          for (let i = 0; i < proofs.length; i++) {
+            const p = proofs[i];
+            const stepKey = i === 0 ? p.oldPublicKey : proofs[i - 1].newPublicKey;
+            const step = verifyOriginGrantKeyRotationProof(p, {
+              hostDaemonId: expected.hostDaemonId,
+              currentPinnedPublicKey: stepKey
+            });
+            if (!step.ok) {
+              chainInternallyValid = false;
+              break;
+            }
+          }
+          if (chainInternallyValid) {
+            const peerLabel = canonGrantDaemonId(expected.hostDaemonId) || trimStr(expected.hostDaemonId);
+            return {
+              ok: false,
+              reason: "re_pair_required",
+              code: "re_pair_required",
+              error: `Peer ${peerLabel} missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} origin-grant key rotations; re-pair required (re_pair_required)`
+            };
+          }
+        }
         return { ok: false, reason: "rotation_old_key_mismatch" };
       }
       let workingKey = expected.currentPinnedPublicKey;
@@ -89129,11 +89158,13 @@ ${cleanBody}`;
     });
     var mesh_host_memory_exports = {};
     __export2(mesh_host_memory_exports, {
+      MESH_HOST_RECORDS_SCHEMA_VERSION: () => MESH_HOST_RECORDS_SCHEMA_VERSION,
       __resetAuthenticatedPeerKeysForTest: () => __resetAuthenticatedPeerKeysForTest,
       applyAuthenticatedHostKeyRotation: () => applyAuthenticatedHostKeyRotation,
       canAcceptPeerOriginGrantPublicKey: () => canAcceptPeerOriginGrantPublicKey,
       clearAuthenticatedPeerOriginGrantPublicKey: () => clearAuthenticatedPeerOriginGrantPublicKey,
       listMeshHostRecords: () => listMeshHostRecords,
+      migrateBogusPairingHostRecords: () => migrateBogusPairingHostRecords,
       readAuthenticatedPeerOriginGrantPublicKey: () => readAuthenticatedPeerOriginGrantPublicKey,
       readMeshHostRecord: () => readMeshHostRecord,
       recordAuthenticatedPeerOriginGrantPublicKey: () => recordAuthenticatedPeerOriginGrantPublicKey,
@@ -89177,6 +89208,102 @@ ${cleanBody}`;
       (0, import_fs25.writeFileSync)(tmp, JSON.stringify({ version: 1, keys }, null, 2), { encoding: "utf8", mode: 384 });
       (0, import_fs25.renameSync)(tmp, path108);
     }
+    function isBackedByRealPairingOnDisk(meshId, hostDaemonId, configDir = getConfigDir2()) {
+      try {
+        const meshesPath = (0, import_path20.join)(configDir, "meshes.json");
+        if ((0, import_fs25.existsSync)(meshesPath)) {
+          const parsed = JSON.parse((0, import_fs25.readFileSync)(meshesPath, "utf8"));
+          const meshes = Array.isArray(parsed?.meshes) ? parsed.meshes : [];
+          for (const m of meshes) {
+            if (!m || typeof m !== "object") continue;
+            const mh = m.meshHost;
+            if (!mh || typeof mh !== "object" || mh.role !== "member") continue;
+            const matchesMesh = m.id === meshId || mh.hostMeshId === meshId;
+            if (!matchesMesh) continue;
+            const isPaired = mh.pairing?.status === "paired" || Boolean(mh.pairing?.joinedAt) || Boolean(mh.pairing?.tokenId);
+            const matchesHost = !mh.hostDaemonId || daemonIdsEquivalent4(String(mh.hostDaemonId), hostDaemonId);
+            if (isPaired && matchesHost) {
+              return true;
+            }
+          }
+        }
+      } catch {
+      }
+      try {
+        const secretsPath = (0, import_path20.join)(configDir, "mesh-peer-secrets.json");
+        if ((0, import_fs25.existsSync)(secretsPath)) {
+          const parsed = JSON.parse((0, import_fs25.readFileSync)(secretsPath, "utf8"));
+          const records = Array.isArray(parsed?.records) ? parsed.records : [];
+          for (const rec5 of records) {
+            if (rec5 && typeof rec5 === "object" && rec5.meshId === meshId && rec5.role === "member" && typeof rec5.peerDaemonId === "string" && daemonIdsEquivalent4(rec5.peerDaemonId, hostDaemonId)) {
+              return true;
+            }
+          }
+        }
+      } catch {
+      }
+      return false;
+    }
+    function migrateBogusPairingHostRecords(configDir = getConfigDir2()) {
+      const path108 = filePath(configDir);
+      if (!(0, import_fs25.existsSync)(path108)) return { removed: [], kept: [] };
+      try {
+        const parsed = JSON.parse((0, import_fs25.readFileSync)(path108, "utf8"));
+        const meshes = parsed && typeof parsed === "object" ? parsed.meshes : void 0;
+        if (!meshes || typeof meshes !== "object" || Array.isArray(meshes)) {
+          return { removed: [], kept: [] };
+        }
+        const fileVersion = typeof parsed.version === "number" ? parsed.version : 1;
+        const out = {};
+        const removed = [];
+        const kept = [];
+        let dirty = fileVersion !== MESH_HOST_RECORDS_SCHEMA_VERSION;
+        for (const [meshId, value] of Object.entries(meshes)) {
+          const hostDaemonId = typeof value?.hostDaemonId === "string" ? value.hostDaemonId.trim() : "";
+          if (!meshId || !hostDaemonId) {
+            dirty = true;
+            continue;
+          }
+          const source2 = value.source === "pairing" || value.source === "session_stamp" ? value.source : "first_dispatch";
+          if (source2 === "pairing") {
+            const explicitlyVerified = value.pairingVerified === true;
+            const backedOnDisk = isBackedByRealPairingOnDisk(meshId, hostDaemonId, configDir);
+            if (!explicitlyVerified && !backedOnDisk) {
+              removed.push(meshId);
+              dirty = true;
+              continue;
+            }
+            const originGrantPublicKey = isValidOriginGrantPublicKey(value?.originGrantPublicKey) ? value.originGrantPublicKey.trim() : void 0;
+            if (value.pairingVerified !== true) {
+              dirty = true;
+            }
+            out[meshId] = {
+              meshId,
+              hostDaemonId,
+              source: "pairing",
+              recordedAt: typeof value.recordedAt === "string" ? value.recordedAt : "",
+              ...originGrantPublicKey ? { originGrantPublicKey } : {},
+              pairingVerified: true
+            };
+            kept.push(meshId);
+          } else {
+            out[meshId] = {
+              meshId,
+              hostDaemonId,
+              source: source2,
+              recordedAt: typeof value.recordedAt === "string" ? value.recordedAt : ""
+            };
+            kept.push(meshId);
+          }
+        }
+        if (dirty) {
+          writeAll(out, configDir);
+        }
+        return { removed, kept };
+      } catch {
+        return { removed: [], kept: [] };
+      }
+    }
     function readAll(configDir = getConfigDir2()) {
       const path108 = filePath(configDir);
       if (!(0, import_fs25.existsSync)(path108)) return {};
@@ -89184,29 +89311,49 @@ ${cleanBody}`;
         const parsed = JSON.parse((0, import_fs25.readFileSync)(path108, "utf8"));
         const meshes = parsed && typeof parsed === "object" ? parsed.meshes : void 0;
         if (!meshes || typeof meshes !== "object" || Array.isArray(meshes)) return {};
-        const out = {};
-        for (const [meshId, value] of Object.entries(meshes)) {
-          const hostDaemonId = typeof value?.hostDaemonId === "string" ? value.hostDaemonId.trim() : "";
-          if (!meshId || !hostDaemonId) continue;
-          const source2 = value.source === "pairing" || value.source === "session_stamp" ? value.source : "first_dispatch";
-          const originGrantPublicKey = source2 === "pairing" && isValidOriginGrantPublicKey(value?.originGrantPublicKey) ? value.originGrantPublicKey.trim() : void 0;
-          out[meshId] = {
-            meshId,
-            hostDaemonId,
-            source: source2,
-            recordedAt: typeof value.recordedAt === "string" ? value.recordedAt : "",
-            ...originGrantPublicKey ? { originGrantPublicKey } : {}
-          };
+        const fileVersion = typeof parsed.version === "number" ? parsed.version : 1;
+        const needsMigration = fileVersion !== MESH_HOST_RECORDS_SCHEMA_VERSION || Object.values(meshes).some(
+          (v) => v?.source === "pairing" && v?.pairingVerified !== true
+        );
+        if (needsMigration) {
+          migrateBogusPairingHostRecords(configDir);
+          if (!(0, import_fs25.existsSync)(path108)) return {};
+          const reParsed = JSON.parse((0, import_fs25.readFileSync)(path108, "utf8"));
+          const reMeshes = reParsed && typeof reParsed === "object" ? reParsed.meshes : void 0;
+          if (!reMeshes || typeof reMeshes !== "object" || Array.isArray(reMeshes)) return {};
+          return parseValidatedRecords(reMeshes);
         }
-        return out;
+        return parseValidatedRecords(meshes);
       } catch {
         return {};
       }
     }
+    function parseValidatedRecords(meshes) {
+      const out = {};
+      for (const [meshId, value] of Object.entries(meshes)) {
+        const hostDaemonId = typeof value?.hostDaemonId === "string" ? value.hostDaemonId.trim() : "";
+        if (!meshId || !hostDaemonId) continue;
+        const source2 = value.source === "pairing" || value.source === "session_stamp" ? value.source : "first_dispatch";
+        const originGrantPublicKey = source2 === "pairing" && isValidOriginGrantPublicKey(value?.originGrantPublicKey) ? value.originGrantPublicKey.trim() : void 0;
+        out[meshId] = {
+          meshId,
+          hostDaemonId,
+          source: source2,
+          recordedAt: typeof value.recordedAt === "string" ? value.recordedAt : "",
+          ...originGrantPublicKey ? { originGrantPublicKey } : {},
+          ...source2 === "pairing" && value.pairingVerified === true ? { pairingVerified: true } : {}
+        };
+      }
+      return out;
+    }
     function writeAll(records, configDir = getConfigDir2()) {
       const path108 = filePath(configDir);
       const tmp = `${path108}.${process.pid}.tmp`;
-      (0, import_fs25.writeFileSync)(tmp, JSON.stringify({ version: 1, meshes: records }, null, 2), "utf8");
+      (0, import_fs25.writeFileSync)(
+        tmp,
+        JSON.stringify({ version: MESH_HOST_RECORDS_SCHEMA_VERSION, meshes: records }, null, 2),
+        { encoding: "utf8", mode: 384 }
+      );
       (0, import_fs25.renameSync)(tmp, path108);
     }
     function readMeshHostRecord(meshId) {
@@ -89224,13 +89371,13 @@ ${cleanBody}`;
         return [];
       }
     }
-    function writeMeshHostRecord(meshId, hostDaemonId, source2, originGrantPublicKey) {
+    function writeMeshHostRecord(meshId, hostDaemonId, source2, originGrantPublicKey, opts) {
       const mesh = meshId.trim();
       const host = hostDaemonId.trim();
       if (!mesh || !host) return false;
-      const configDir = getConfigDir2();
+      const configDir = getConfigDir2(opts?.env);
       const pubKey = source2 === "pairing" && isValidOriginGrantPublicKey(originGrantPublicKey) ? originGrantPublicKey.trim() : void 0;
-      if (pubKey) {
+      if (pubKey && opts?.pairingVerified !== false) {
         authenticatedPeerPublicKeys.set(peerKey(mesh, host, configDir), pubKey);
         try {
           const peerKeys = readPeerGrantKeysFile(configDir);
@@ -89246,12 +89393,14 @@ ${cleanBody}`;
           return false;
         }
         const effectivePubKey = pubKey || (existing && existing.source === "pairing" && daemonIdsEquivalent4(existing.hostDaemonId, host) ? existing.originGrantPublicKey : void 0);
+        const pairingVerified = source2 === "pairing" ? opts?.pairingVerified ?? true : void 0;
         all[mesh] = {
           meshId: mesh,
           hostDaemonId: host,
           source: source2,
           recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
-          ...effectivePubKey ? { originGrantPublicKey: effectivePubKey } : {}
+          ...effectivePubKey ? { originGrantPublicKey: effectivePubKey } : {},
+          ...pairingVerified ? { pairingVerified: true } : {}
         };
         writeAll(all, configDir);
         return true;
@@ -89279,9 +89428,10 @@ ${cleanBody}`;
           }
         );
         if (!verified.ok) {
+          const detail = verified.error ? `${verified.reason}: ${verified.error}` : verified.reason;
           LOG.warn(
             "MeshHostMemory",
-            `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${verified.reason})`
+            `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${detail})`
           );
           return false;
         }
@@ -89331,26 +89481,14 @@ ${cleanBody}`;
       const peer = typeof peerDaemonId === "string" ? peerDaemonId.trim() : "";
       if (!mesh || !peer) return;
       const configDir = getConfigDir2(opts?.env);
-      authenticatedPeerPublicKeys.delete(peerKey(mesh, peer, configDir));
-      try {
-        const peerKeys = readPeerGrantKeysFile(configDir);
-        const sKey = peerStoreKey(mesh, peer);
-        if (sKey in peerKeys) {
-          delete peerKeys[sKey];
-          writePeerGrantKeysFile(peerKeys, configDir);
-        }
-      } catch {
-      }
-      try {
-        const all = readAll(configDir);
-        const existing = all[mesh];
-        if (existing && daemonIdsEquivalent4(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
-          const { originGrantPublicKey: _removed, ...rest } = existing;
-          all[mesh] = rest;
-          writeAll(all, configDir);
-        }
-      } catch {
-      }
+      const memKey = peerKey(mesh, peer, configDir);
+      authenticatedPeerPublicKeys.delete(memKey);
+      const stagedRenames = [];
+      const stageFile = (target, serialized) => {
+        const tmp = `${target}.clear-${process.pid}.tmp`;
+        (0, import_fs25.writeFileSync)(tmp, serialized, { encoding: "utf8", mode: 384 });
+        stagedRenames.push({ tmp, target });
+      };
       try {
         const secretsPath = (0, import_path20.join)(configDir, "mesh-peer-secrets.json");
         if ((0, import_fs25.existsSync)(secretsPath)) {
@@ -89364,14 +89502,47 @@ ${cleanBody}`;
               }
             }
             if (updated) {
-              const tmp = `${secretsPath}.tmp-${process.pid}`;
-              (0, import_fs25.writeFileSync)(tmp, JSON.stringify(parsed, null, 2), { encoding: "utf8", mode: 384 });
-              (0, import_fs25.renameSync)(tmp, secretsPath);
+              stageFile(secretsPath, JSON.stringify(parsed, null, 2));
             }
           }
         }
       } catch {
       }
+      try {
+        const hostRecordsPath = filePath(configDir);
+        const all = readAll(configDir);
+        const existing = all[mesh];
+        if (existing && daemonIdsEquivalent4(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
+          const { originGrantPublicKey: _removed, ...rest } = existing;
+          all[mesh] = rest;
+          stageFile(
+            hostRecordsPath,
+            JSON.stringify({ version: MESH_HOST_RECORDS_SCHEMA_VERSION, meshes: all }, null, 2)
+          );
+        }
+      } catch {
+      }
+      try {
+        const peerGrantPath = peerGrantKeysFilePath(configDir);
+        const peerKeys = readPeerGrantKeysFile(configDir);
+        const sKey = peerStoreKey(mesh, peer);
+        if (sKey in peerKeys) {
+          delete peerKeys[sKey];
+          stageFile(peerGrantPath, JSON.stringify({ version: 1, keys: peerKeys }, null, 2));
+        }
+      } catch {
+      }
+      for (const { tmp, target } of stagedRenames) {
+        try {
+          (0, import_fs25.renameSync)(tmp, target);
+        } catch {
+          try {
+            (0, import_fs25.unlinkSync)(tmp);
+          } catch {
+          }
+        }
+      }
+      authenticatedPeerPublicKeys.delete(memKey);
     }
     function readAuthenticatedPeerOriginGrantPublicKey(meshId, peerDaemonId, opts) {
       const mesh = typeof meshId === "string" ? meshId.trim() : "";
@@ -89438,6 +89609,7 @@ ${cleanBody}`;
     var import_path20;
     var FILE_NAME;
     var PEER_GRANT_KEYS_FILE_NAME;
+    var MESH_HOST_RECORDS_SCHEMA_VERSION;
     var authenticatedPeerPublicKeys;
     var init_mesh_host_memory = __esm2({
       "src/mesh/mesh-host-memory.ts"() {
@@ -89451,6 +89623,7 @@ ${cleanBody}`;
         init_mask_daemon_id();
         FILE_NAME = "mesh-host-records.json";
         PEER_GRANT_KEYS_FILE_NAME = "mesh-peer-grant-keys.json";
+        MESH_HOST_RECORDS_SCHEMA_VERSION = 2;
         authenticatedPeerPublicKeys = /* @__PURE__ */ new Map();
       }
     });
@@ -93419,28 +93592,53 @@ ${result.stderr}`, result.code);
       }
       return true;
     }
-    function tryDecodeBase64Slice(candidate) {
-      if (candidate.length < 12 || candidate.length > MAX_BASE64_SLICE_CHARS) return null;
+    function decodeBase64Slice(candidate, patterns, liveCred) {
+      if (candidate.length < 12 || candidate.length > MAX_BASE64_SLICE_CHARS) return { kind: "none" };
       const normalized = candidate.replace(/-/g, "+").replace(/_/g, "/");
       const padMod = normalized.length % 4;
-      if (padMod === 1) return null;
+      if (padMod === 1) return { kind: "none" };
       const padded = padMod === 0 ? normalized : normalized + "=".repeat(4 - padMod);
       try {
         const buf = Buffer.from(padded, "base64");
-        if (buf.byteLength < 6) return null;
+        if (buf.byteLength < 6) return { kind: "none" };
+        const decoded = buf.toString("utf8");
+        if (matchesAnyPattern(decoded, patterns, liveCred)) {
+          return { kind: "match" };
+        }
+        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+        if (INTRA_TOKEN_SPLIT_RE.test(decoded)) {
+          INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+          const collapsed = decoded.replace(INTRA_TOKEN_SPLIT_RE, "");
+          if (collapsed && collapsed !== decoded && matchesAnyPattern(collapsed, patterns, liveCred)) {
+            return { kind: "match" };
+          }
+        }
         const sampleBytes = Math.min(buf.byteLength, 512);
+        let controlInPrefix = false;
         for (let i = 0; i < sampleBytes; i++) {
           const b = buf[i];
           if (b >= 0 && b <= 8 || b === 11 || b === 12 || b >= 14 && b <= 31 || b === 127) {
-            return null;
+            controlInPrefix = true;
+            break;
           }
         }
-        const decoded = buf.toString("utf8");
-        if (!isPlausibleDecodedText(decoded)) return null;
-        return decoded;
+        if (!controlInPrefix && isPlausibleDecodedText(decoded)) {
+          return { kind: "text", text: decoded };
+        }
+        const asciiSegments = decoded.match(/[\x09\x0a\x0d\x20-\x7e]{16,}/g);
+        if (asciiSegments && asciiSegments.length > 0) {
+          return { kind: "text", text: asciiSegments.join("\n") };
+        }
+        return { kind: "none" };
       } catch {
-        return null;
+        return { kind: "none" };
       }
+    }
+    function tryDecodeBase64Slice(candidate) {
+      const res = decodeBase64Slice(candidate, RAW_CREDENTIAL_PATTERNS, getLiveSessionCredential());
+      if (res.kind === "match") return candidate;
+      if (res.kind === "text") return res.text;
+      return null;
     }
     function rememberNonDecodable(budget, run3) {
       if (budget.nonDecodableCache.size < MAX_NON_DECODABLE_CACHE_ENTRIES) {
@@ -93462,7 +93660,43 @@ ${result.stderr}`, result.code);
         if (rawEnd >= run3.length) break;
       }
     }
-    function examineBase64Run(run3, patterns, liveCred, depth, budget, onDecodedCandidate) {
+    function classifyDecodedCandidate(decodedText, patterns, liveCred, budget) {
+      if (!decodedText) return "benign";
+      if (matchesAnyPattern(decodedText, patterns, liveCred)) return "match";
+      let collapsed = "";
+      INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+      if (INTRA_TOKEN_SPLIT_RE.test(decodedText)) {
+        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+        collapsed = decodedText.replace(INTRA_TOKEN_SPLIT_RE, "");
+        if (collapsed && collapsed !== decodedText && matchesAnyPattern(collapsed, patterns, liveCred)) {
+          return "match";
+        }
+      }
+      if (decodedText.includes("%") && /%[0-9A-Fa-f]{2}/.test(decodedText)) {
+        const nextPercent = decodeOnePercentLayer(decodedText);
+        if (nextPercent !== decodedText) {
+          if (matchesAnyPattern(nextPercent, patterns, liveCred)) return "match";
+          return "plausible";
+        }
+      }
+      const targets = collapsed && collapsed !== decodedText ? [decodedText, collapsed] : [decodedText];
+      for (const target of targets) {
+        for (const match of target.matchAll(BASE64_RUN_RE)) {
+          const subRun = match[0];
+          if (isUniformRepeatedChar(subRun)) continue;
+          if (subRun.length <= MAX_BASE64_SLICE_CHARS && budget.nonDecodableCache.has(subRun)) continue;
+          for (const slice of iterateBase64Slices(subRun)) {
+            if (budget.nonDecodableCache.has(slice)) continue;
+            const subDecoded = decodeBase64Slice(slice, patterns, liveCred);
+            if (subDecoded.kind === "match") return "match";
+            if (subDecoded.kind === "text") return "plausible";
+            rememberNonDecodable(budget, slice);
+          }
+        }
+      }
+      return "benign";
+    }
+    function examineBase64Run(run3, patterns, liveCred, depth, budget, onPlausibleCandidate) {
       if (isUniformRepeatedChar(run3)) return false;
       if (run3.length <= MAX_BASE64_SLICE_CHARS && budget.nonDecodableCache.has(run3)) {
         return false;
@@ -93470,17 +93704,27 @@ ${result.stderr}`, result.code);
       let anyDecoded = false;
       for (const slice of iterateBase64Slices(run3)) {
         if (budget.nonDecodableCache.has(slice)) continue;
-        const decoded = tryDecodeBase64Slice(slice);
-        if (!decoded) {
+        const decodedRes = decodeBase64Slice(slice, patterns, liveCred);
+        if (decodedRes.kind === "none") {
           rememberNonDecodable(budget, slice);
           continue;
         }
+        if (decodedRes.kind === "match") {
+          return true;
+        }
         anyDecoded = true;
-        if (!onDecodedCandidate()) {
+        const classification = classifyDecodedCandidate(decodedRes.text, patterns, liveCred, budget);
+        if (classification === "match") {
+          return true;
+        }
+        if (classification === "benign") {
+          continue;
+        }
+        if (!onPlausibleCandidate()) {
           budget.exhausted = true;
           return true;
         }
-        if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
+        if (checkLayerRecursive(decodedRes.text, patterns, liveCred, depth + 1, budget)) {
           return true;
         }
       }
@@ -93490,117 +93734,74 @@ ${result.stderr}`, result.code);
       return budget.exhausted;
     }
     function examineWindowTransforms(windowText, patterns, liveCred, depth, budget) {
-      let collapsed = "";
-      INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
-      if (INTRA_TOKEN_SPLIT_RE.test(windowText)) {
-        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
-        collapsed = windowText.replace(INTRA_TOKEN_SPLIT_RE, "");
-        if (collapsed && collapsed !== windowText && matchesAnyPattern(collapsed, patterns, liveCred)) {
-          return true;
-        }
-      }
       if (windowText.includes("%") && /%[0-9A-Fa-f]{2}/.test(windowText)) {
-        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= budget.maxOperations) {
-          budget.exhausted = true;
-          return true;
-        }
-        budget.operations++;
-        const wholeDecoded = decodeOnePercentLayer(windowText);
-        if (wholeDecoded !== windowText) {
-          if (matchesAnyPattern(wholeDecoded, patterns, liveCred)) {
+        let cur = windowText;
+        for (let d = depth; d < MAX_CREDENTIAL_DECODE_DEPTH; d++) {
+          if (!cur.includes("%") || !/%[0-9A-Fa-f]{2}/.test(cur)) break;
+          const next = decodeOnePercentLayer(cur);
+          if (next === cur) break;
+          if (matchesAnyPattern(next, patterns, liveCred)) {
             return true;
           }
-          if (wholeDecoded.includes("%") && /%[0-9A-Fa-f]{2}/.test(wholeDecoded)) {
-            if (checkLayerRecursive(wholeDecoded, patterns, liveCred, depth + 1, budget)) {
+          INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+          if (INTRA_TOKEN_SPLIT_RE.test(next)) {
+            INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+            const nextCollapsed = next.replace(INTRA_TOKEN_SPLIT_RE, "");
+            if (nextCollapsed && nextCollapsed !== next && matchesAnyPattern(nextCollapsed, patterns, liveCred)) {
               return true;
             }
-          } else {
-            let b64Count = 0;
-            const maxSubCandidates = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
-            for (const match of wholeDecoded.matchAll(BASE64_RUN_RE)) {
-              const run3 = match[0];
-              if (examineBase64Run(run3, patterns, liveCred, depth + 1, budget, () => {
-                if (depth + 1 >= MAX_CREDENTIAL_DECODE_DEPTH || ++b64Count > maxSubCandidates || budget.operations >= budget.maxOperations) {
-                  return false;
-                }
-                return true;
-              })) {
-                return true;
-              }
-            }
           }
-        }
-      }
-      if (collapsed && collapsed !== windowText) {
-        let collapsedCount = 0;
-        const maxSubCandidates = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
-        for (const match of collapsed.matchAll(BASE64_RUN_RE)) {
-          const run3 = match[0];
-          if (examineBase64Run(run3, patterns, liveCred, depth, budget, () => {
-            if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++collapsedCount > maxSubCandidates || budget.operations >= budget.maxOperations) {
-              return false;
-            }
-            return true;
-          })) {
-            return true;
-          }
+          cur = next;
         }
       }
       return budget.exhausted;
     }
-    function checkLayerRecursive(rawText, patterns, liveCred, depth, budget) {
-      if (!rawText) return false;
-      if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
-      if (budget.operations >= budget.maxOperations) {
-        budget.exhausted = true;
-        return true;
+    function computeVisitKey(depth, rawText) {
+      if (rawText.length <= 256) {
+        return `${depth}:raw:${rawText}`;
       }
-      const visitKey = `${depth}:${rawText.length}:${rawText.slice(0, 128)}:${rawText.slice(-64)}`;
-      if (budget.visited.has(visitKey)) return false;
-      budget.visited.add(visitKey);
-      budget.operations++;
-      if (rawText.length <= SCAN_WINDOW_CHARS) {
-        if (examineWindowTransforms(rawText, patterns, liveCred, depth, budget)) {
+      const digest4 = (0, import_crypto25.createHash)("sha256").update(rawText).digest("base64url");
+      return `${depth}:${rawText.length}:${digest4}`;
+    }
+    function scanPercentRuns(text4, patterns, liveCred, depth, budget) {
+      if (!text4.includes("%") || !/%[0-9A-Fa-f]{2}/.test(text4)) return false;
+      let pctCount = 0;
+      let currentWindowIdx = 0;
+      const maxPerScope = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+      for (const match of text4.matchAll(PERCENT_ENCODED_RUN_RE)) {
+        const run3 = match[0];
+        if (!run3.includes("%") || !/%[0-9A-Fa-f]{2}/.test(run3)) continue;
+        if (depth === 0) {
+          const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
+          if (winIdx !== currentWindowIdx) {
+            currentWindowIdx = winIdx;
+            pctCount = 0;
+          }
+        }
+        const decodedRun = decodeOnePercentLayer(run3);
+        if (decodedRun === run3) continue;
+        const classification = classifyDecodedCandidate(decodedRun, patterns, liveCred, budget);
+        if (classification === "match") {
           return true;
         }
-      } else {
-        for (let offset = 0; offset < rawText.length; offset += SCAN_WINDOW_STEP_CHARS) {
-          const windowText = rawText.slice(offset, Math.min(rawText.length, offset + SCAN_WINDOW_CHARS));
-          if (examineWindowTransforms(windowText, patterns, liveCred, depth, budget)) {
-            return true;
-          }
-          if (offset + SCAN_WINDOW_CHARS >= rawText.length) break;
+        if (classification === "benign") {
+          continue;
+        }
+        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++pctCount > maxPerScope || budget.operations >= budget.maxOperations) {
+          budget.exhausted = true;
+          return true;
+        }
+        if (checkLayerRecursive(decodedRun, patterns, liveCred, depth + 1, budget)) {
+          return true;
         }
       }
-      if (rawText.includes("%") && /%[0-9A-Fa-f]{2}/.test(rawText)) {
-        let pctCount = 0;
-        let currentWindowIdx2 = 0;
-        const maxPerScope2 = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
-        for (const match of rawText.matchAll(PERCENT_ENCODED_RUN_RE)) {
-          const run3 = match[0];
-          if (!run3.includes("%") || !/%[0-9A-Fa-f]{2}/.test(run3) || run3 === rawText) continue;
-          if (depth === 0) {
-            const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
-            if (winIdx !== currentWindowIdx2) {
-              currentWindowIdx2 = winIdx;
-              pctCount = 0;
-            }
-          }
-          const decodedRun = decodeOnePercentLayer(run3);
-          if (decodedRun === run3) continue;
-          if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++pctCount > maxPerScope2 || budget.operations >= budget.maxOperations) {
-            budget.exhausted = true;
-            return true;
-          }
-          if (checkLayerRecursive(decodedRun, patterns, liveCred, depth + 1, budget)) {
-            return true;
-          }
-        }
-      }
+      return budget.exhausted;
+    }
+    function scanBase64Runs(text4, patterns, liveCred, depth, budget) {
       let b64Count = 0;
       let currentWindowIdx = 0;
       const maxPerScope = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
-      for (const match of rawText.matchAll(BASE64_RUN_RE)) {
+      for (const match of text4.matchAll(BASE64_RUN_RE)) {
         const run3 = match[0];
         if (depth === 0) {
           const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
@@ -93615,6 +93816,64 @@ ${result.stderr}`, result.code);
           }
           return true;
         })) {
+          return true;
+        }
+      }
+      return budget.exhausted;
+    }
+    function checkLayerRecursive(rawText, patterns, liveCred, depth, budget) {
+      if (!rawText) return false;
+      if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
+      if (budget.operations >= budget.maxOperations) {
+        budget.exhausted = true;
+        return true;
+      }
+      const visitKey = computeVisitKey(depth, rawText);
+      if (budget.visited.has(visitKey)) return false;
+      budget.visited.add(visitKey);
+      budget.operations++;
+      let fullCollapsed = "";
+      INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+      if (INTRA_TOKEN_SPLIT_RE.test(rawText)) {
+        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+        fullCollapsed = rawText.replace(INTRA_TOKEN_SPLIT_RE, "");
+        if (fullCollapsed && fullCollapsed !== rawText && matchesAnyPattern(fullCollapsed, patterns, liveCred)) {
+          return true;
+        }
+      }
+      if (rawText.length <= SCAN_WINDOW_CHARS) {
+        if (examineWindowTransforms(rawText, patterns, liveCred, depth, budget)) {
+          return true;
+        }
+      } else {
+        for (let offset = 0; offset < rawText.length; offset += SCAN_WINDOW_STEP_CHARS) {
+          const windowText = rawText.slice(offset, Math.min(rawText.length, offset + SCAN_WINDOW_CHARS));
+          if (examineWindowTransforms(windowText, patterns, liveCred, depth, budget)) {
+            return true;
+          }
+          if (offset + SCAN_WINDOW_CHARS >= rawText.length) break;
+        }
+      }
+      if (scanPercentRuns(rawText, patterns, liveCred, depth, budget)) {
+        return true;
+      }
+      if (scanBase64Runs(rawText, patterns, liveCred, depth, budget)) {
+        return true;
+      }
+      if (fullCollapsed && fullCollapsed !== rawText) {
+        for (const match of rawText.matchAll(SPLIT_BASE64_RUN_RE)) {
+          INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+          const collapsedRun = match[0].replace(INTRA_TOKEN_SPLIT_RE, "");
+          if (examineBase64Run(collapsedRun, patterns, liveCred, depth, budget, () => {
+            if (depth + 1 >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= budget.maxOperations) {
+              return false;
+            }
+            return true;
+          })) {
+            return true;
+          }
+        }
+        if (scanPercentRuns(fullCollapsed, patterns, liveCred, depth, budget)) {
           return true;
         }
       }
@@ -93645,13 +93904,10 @@ ${result.stderr}`, result.code);
         redacted = redacted.split(liveCred).join("[REDACTED:mcp-session-credential]");
       }
       redacted = redacted.replace(/(Authorization\s*:\s*Bearer\s+)[^\s'"`,;]+/gi, "$1[REDACTED:bearer]").replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]{12,}=*/gi, "$1[REDACTED:bearer]").replace(/\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}\b/g, "[REDACTED:github-token]").replace(/\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}\b/g, "[REDACTED:api-key]").replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED:slack-token]").replace(/\bmcp_sess_[A-Za-z0-9._~+/-]{8,}/g, "[REDACTED:mcp-session-credential]").replace(
-        /\bmcp(?:\\?[\s"'`+._-]){0,12}sess_?(?:\\?[\s"'`+._-]){0,12}[A-Za-z0-9._~+/-]{8,}/gi,
+        /\bmcp(?:\\?[\s"'`+]){0,12}_(?:\\?[\s"'`+]){0,12}sess(?:\\?[\s"'`+]){0,12}_(?:\\?[\s"'`+]){0,12}[A-Za-z0-9._~+/-]{8,}/gi,
         "[REDACTED:mcp-session-credential]"
-      ).replace(/\b(?:adk|adm|adp|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{8,}\b/g, "[REDACTED:adhdev-token]").replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED:jwt]").replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED:aws-key]").replace(/\bAIza[0-9A-Za-z_-]{35}\b/g, "[REDACTED:api-key]").replace(
-        /((?:api[_-]?key|access[_-]?key|token|secret|password|passwd|client[_-]?secret|mcpSessionCredential|sessionCredential|connectionToken|ADHDEV_MCP_SESSION_CREDENTIAL)\s*["']?\s*[:=]\s*["']?)(?!\[REDACTED)[^\s,'"`}&;]+/gi,
-        "$1[REDACTED:secret]"
-      ).replace(
-        /([?&](?:api[_-]?key|access[_-]?key|token|secret|password|client_secret|credential|mcpSessionCredential)=)(?!\[REDACTED)[^&#\s]+/gi,
+      ).replace(/\b(?:adk|adm|adp|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{8,}\b/g, "[REDACTED:adhdev-token]").replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED:jwt]").replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[REDACTED:aws-key]").replace(/\bAIza[0-9A-Za-z_-]{35}\b/g, "[REDACTED:api-key]").replace(KEY_VALUE_CREDENTIAL_REDACT_RE, "$1[REDACTED:secret]").replace(
+        /([?&](?:api[_-]?key|access[_-]?key|token|secret|password|client_secret|credential|mcpSessionCredential)=)(?!\[REDACTED|\$\{)[A-Za-z0-9._~+%/-]{4,}(?=$|[&#\s'")\]};,])/gi,
         "$1[REDACTED:secret]"
       );
       if (redacted.includes("%")) {
@@ -93688,8 +93944,11 @@ ${result.stderr}`, result.code);
       }
       return redacted;
     }
+    var import_crypto25;
     var CREDENTIAL_KEY_SET;
     var CREDENTIAL_KEY_PATTERN;
+    var KEY_VALUE_CREDENTIAL_RE;
+    var KEY_VALUE_CREDENTIAL_REDACT_RE;
     var RAW_CREDENTIAL_PATTERNS;
     var PERCENT_ENCODED_RUN_RE;
     var BASE64_RUN_RE;
@@ -93709,6 +93968,7 @@ ${result.stderr}`, result.code);
     var init_credential_redactor = __esm2({
       "src/logging/credential-redactor.ts"() {
         "use strict";
+        import_crypto25 = require("crypto");
         CREDENTIAL_KEY_SET = /* @__PURE__ */ new Set([
           "token",
           "bind",
@@ -93737,10 +93997,12 @@ ${result.stderr}`, result.code);
           "peerSecret"
         ]);
         CREDENTIAL_KEY_PATTERN = /(?:credential|token|secret|password|passwd|api[_-]?key|access[_-]?key|refresh[_-]?token|client[_-]?secret|authorization|cookie|bearer|private[_-]?key|session[_-]?bind|fetch[_-]?grant)/i;
+        KEY_VALUE_CREDENTIAL_RE = /(?<!\?\s*)(?:api[_-]?key|access[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|session[_-]?credential|mcpSessionCredential|connectionToken|originFetchGrant|peerSecret|credential|token|secret|password|passwd)(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?![a-z][A-Za-z]*\1\s*(?:\||,\s*description\s*:))(?:[^\s"'`\\]{6,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|eyJ|(?:adk|adm|adp|shr|wtk|wtt|wsb)_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{5,}={0,2}(?=$|[\s,;}\]&'"]))/i;
+        KEY_VALUE_CREDENTIAL_REDACT_RE = /((?<!\?\s*)(?:api[_-]?key|access[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key|session[_-]?credential|mcpSessionCredential|connectionToken|originFetchGrant|peerSecret|credential|token|secret|password|passwd|ADHDEV_MCP_SESSION_CREDENTIAL)(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*)(?:(["'])(?!\[REDACTED|\$\{)(?![a-z][A-Za-z]*\2\s*(?:\||,\s*description\s*:))(?:[^\s"'`\\]{6,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\2|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|eyJ|(?:adk|adm|adp|shr|wtk|wtt|wsb)_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{5,}={0,2}(?=$|[\s,;}\]&'"]))/gi;
         RAW_CREDENTIAL_PATTERNS = [
           /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/,
           /\bmcp_sess_[A-Za-z0-9._~+/-]{8,}/,
-          /\bmcp(?:\\?[\s"'`+._-]){0,12}sess_?(?:\\?[\s"'`+._-]){0,12}[A-Za-z0-9._~+/-]{8,}/i,
+          /\bmcp(?:\\?[\s"'`+]){0,12}_(?:\\?[\s"'`+]){0,12}sess(?:\\?[\s"'`+]){0,12}_(?:\\?[\s"'`+]){0,12}[A-Za-z0-9._~+/-]{8,}/i,
           /\b(?:adk|adm|adp|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{8,}\b/,
           /\b(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{16,}\b/,
           /\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{16,}\b/,
@@ -93751,12 +94013,12 @@ ${result.stderr}`, result.code);
           /\bADHDEV_MCP_SESSION_CREDENTIAL\b/,
           /Authorization\s*:\s*Bearer\s+(?!\[REDACTED)[^\s'"`,;]+/i,
           /\bBearer\s+(?!\[REDACTED)[A-Za-z0-9._~+/-]{12,}=*/i,
-          /(?:api[_-]?key|access[_-]?key|token|secret|password|passwd|client[_-]?secret|mcpSessionCredential|sessionCredential|connectionToken)\s*["']?\s*[:=]\s*["']?(?!\[REDACTED)[^\s,'"`}&;]{6,}/i,
-          /[?&](?:api[_-]?key|access[_-]?key|token|secret|password|client_secret|credential|mcpSessionCredential)=(?!\[REDACTED)[^&#\s]+/i
+          KEY_VALUE_CREDENTIAL_RE,
+          /[?&](?:api[_-]?key|access[_-]?key|token|secret|password|client_secret|credential|mcpSessionCredential)=(?!\[REDACTED|\$\{)[A-Za-z0-9._~+%/-]{4,}(?=$|[&#\s'")\]};,])/i
         ];
         PERCENT_ENCODED_RUN_RE = /(?<![A-Za-z0-9+/_~=%-])(?:[A-Za-z0-9+/_~=-]|%[0-9A-Fa-f]{2}){10,}/g;
         BASE64_RUN_RE = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{12,}={0,2}/g;
-        SPLIT_BASE64_RUN_RE = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-])(?:(?:\\[rnt]|[\r\n\t]+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`]))[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-]))+={0,2}/g;
+        SPLIT_BASE64_RUN_RE = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-])(?:(?:\\[rnt]|[\r\n\t]+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`])|\\(?:\r?\n))[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-]))+={0,2}/g;
         INTRA_TOKEN_SPLIT_RE = /(?:\\[rnt]|[\r\n\t])+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`])|\\(?:\r?\n)/g;
         MAX_CREDENTIAL_DECODE_DEPTH = 4;
         SCAN_WINDOW_CHARS = 65536;
@@ -94024,7 +94286,7 @@ ${result.stderr}`, result.code);
       return m ? { cls: "n", L: m[1], addr: m[2] } : void 0;
     }
     function newEpochToken() {
-      return (0, import_crypto25.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
+      return (0, import_crypto26.randomBytes)(4).readUInt32BE(0).toString(36).padStart(6, "0").slice(-6);
     }
     function contentKey(role, kind, text4) {
       return `${role}\0${kind}\0${text4}`;
@@ -94206,7 +94468,7 @@ ${result.stderr}`, result.code);
     function dropMessageIdentityLedger(sessionKey2) {
       ledgers.delete(sessionKey2);
     }
-    var import_crypto25;
+    var import_crypto26;
     var TOMBSTONE_POOL_MAX;
     var LIVE_ENTRIES_MAX;
     var LCS_MAX_CELLS;
@@ -94221,7 +94483,7 @@ ${result.stderr}`, result.code);
     var init_message_identity_ledger = __esm2({
       "src/chat/message-identity-ledger.ts"() {
         "use strict";
-        import_crypto25 = require("crypto");
+        import_crypto26 = require("crypto");
         init_fractional_index();
         init_message_source_address();
         TOMBSTONE_POOL_MAX = 256;
@@ -96911,7 +97173,7 @@ ${result.stderr}`, result.code);
     }
     var import_fs29;
     var import_path23;
-    var import_crypto27;
+    var import_crypto28;
     var MEMORY_FILE_NAMES;
     var MEMORY_JOURNAL_FILE;
     var DEFAULT_MEMORY_BUDGETS;
@@ -96933,7 +97195,7 @@ ${result.stderr}`, result.code);
         "use strict";
         import_fs29 = require("fs");
         import_path23 = require("path");
-        import_crypto27 = require("crypto");
+        import_crypto28 = require("crypto");
         init_config();
         init_store_guards();
         MEMORY_FILE_NAMES = {
@@ -97223,7 +97485,7 @@ ${result.stderr}`, result.code);
             return (0, import_path23.join)(this.stagedDir, `${id4}.json`);
           }
           stage(op, origin, reviewTurnId) {
-            const id4 = `mem-${this.now().getTime()}-${(0, import_crypto27.randomBytes)(4).toString("hex")}`;
+            const id4 = `mem-${this.now().getTime()}-${(0, import_crypto28.randomBytes)(4).toString("hex")}`;
             const rec5 = { kind: "memory", id: id4, createdAt: this.now().toISOString(), origin, op, ...reviewTurnId ? { reviewTurnId } : {} };
             writeFileAtomic600(this.stagedPath(id4), JSON.stringify(rec5, null, 2));
             return id4;
@@ -98391,7 +98653,7 @@ ${body}`;
     });
     var import_fs34;
     var import_path27;
-    var import_crypto28;
+    var import_crypto29;
     var REDACT_RESULTS;
     var SkillJournal;
     var SkillStaging;
@@ -98400,7 +98662,7 @@ ${body}`;
         "use strict";
         import_fs34 = require("fs");
         import_path27 = require("path");
-        import_crypto28 = require("crypto");
+        import_crypto29 = require("crypto");
         init_store_guards();
         REDACT_RESULTS = /* @__PURE__ */ new Set(["skill_secret_rejected", "skill_hidden_chars_rejected", "skill_injection_rejected"]);
         SkillJournal = class {
@@ -98446,7 +98708,7 @@ ${body}`;
             return (0, import_path27.join)(this.dir, `${id4}.json`);
           }
           write(rec5) {
-            const id4 = `skl-${this.now().getTime()}-${(0, import_crypto28.randomBytes)(4).toString("hex")}`;
+            const id4 = `skl-${this.now().getTime()}-${(0, import_crypto29.randomBytes)(4).toString("hex")}`;
             const full = { kind: "skill", id: id4, createdAt: this.now().toISOString(), ...rec5 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
@@ -99312,7 +99574,7 @@ ${body}`;
     });
     var import_fs37;
     var import_path30;
-    var import_crypto29;
+    var import_crypto30;
     var PROJECT_NOTE_CATEGORIES;
     var ID_RE2;
     var AssistantNoteStaging;
@@ -99321,7 +99583,7 @@ ${body}`;
         "use strict";
         import_fs37 = require("fs");
         import_path30 = require("path");
-        import_crypto29 = require("crypto");
+        import_crypto30 = require("crypto");
         init_config();
         init_store_guards();
         PROJECT_NOTE_CATEGORIES = ["provider_quirk", "pattern_to_avoid", "recovery_lesson"];
@@ -99337,7 +99599,7 @@ ${body}`;
             return (0, import_path30.join)(this.dir, `${id4}.json`);
           }
           write(rec5) {
-            const id4 = `note-${this.now().getTime()}-${(0, import_crypto29.randomBytes)(4).toString("hex")}`;
+            const id4 = `note-${this.now().getTime()}-${(0, import_crypto30.randomBytes)(4).toString("hex")}`;
             const full = { kind: "note", id: id4, createdAt: this.now().toISOString(), ...rec5 };
             writeFileAtomic600(this.path(id4), JSON.stringify(full, null, 2));
             return id4;
@@ -102805,9 +103067,9 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
           /\bmcp_sess_[A-Za-z0-9_-]{8,}\b/,
           /\bADHDEV_MCP_SESSION_CREDENTIAL\b/,
-          /\bmcpSessionCredential\s*["']?\s*[:=]\s*["']?(?!\[)[A-Za-z0-9/+._-]{8,}/i,
+          /\bmcpSessionCredential(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{6,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{5,}={0,2}(?=$|[\s,;}\]&'"]))/i,
           /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
-          /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET|SESSION_CREDENTIAL))\s*[:=]\s*['"]?[A-Za-z0-9/+._-]{16,}['"]?/i
+          /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET|SESSION_CREDENTIAL))(?:\s*(?<![=!<>])[:=](?![=>])|["']\s*:(?![=>]))\s*(?:(["'])(?!\[REDACTED|\$\{)(?:[^\s"'`\\]{8,}|[^\s"'`\\]*\u2026[^\s"'`\\]*)\1|(?![\"'])(?!\[REDACTED)(?:mcp_sess_|sk-|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza|eyJ|(?:adk|adm|adp|shr|wtk|wtt|wsb)_|[A-Za-z0-9_~+/-]*[0-9][A-Za-z0-9_~+/-]*)[A-Za-z0-9_~+/-]{8,}={0,2}(?=$|[\s,;}\]&'"]))/i
         ];
       }
     });
@@ -103941,6 +104203,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       }
       const hasRotationChain = Array.isArray(candidate.keyRotationChain) && candidate.keyRotationChain.length > 0;
       const hasSingleRotation = isValidRotationProofShape(candidate.keyRotation);
+      let missedRotationError;
       if (hasRotationChain || hasSingleRotation) {
         const candidateProofs = hasRotationChain ? candidate.keyRotationChain : [candidate.keyRotation];
         const chainMatchesPinned = candidateProofs.some(
@@ -103957,6 +104220,23 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           if (rotated.ok) {
             trustedPublicKey = rotated.newPublicKey;
           }
+        } else {
+          const chainCheck = verifyOriginGrantKeyRotationChain(
+            {
+              rotationProof: candidate.keyRotation,
+              rotationChain: candidate.keyRotationChain
+            },
+            {
+              hostDaemonId,
+              currentPinnedPublicKey: trustedPublicKey
+            }
+          );
+          if (!chainCheck.ok && chainCheck.reason === "re_pair_required") {
+            missedRotationError = {
+              code: "re_pair_required",
+              error: chainCheck.error || `Peer ${hostDaemonId} missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} origin-grant key rotations; re-pair required (re_pair_required)`
+            };
+          }
         }
       }
       const canonicalPayload = buildCanonicalGrantPayload({
@@ -103972,6 +104252,14 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         nonce
       });
       if (!verifyCanonicalGrantSignature(canonicalPayload, signature, trustedPublicKey)) {
+        if (missedRotationError) {
+          return {
+            ok: false,
+            reason: "re_pair_required",
+            code: missedRotationError.code,
+            error: missedRotationError.error
+          };
+        }
         return { ok: false, reason: "invalid_grant_signature" };
       }
       if (expected.consumeNonce !== false) {
@@ -104412,6 +104700,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           nonceStoreDb
         });
         if (!grantCheck.ok) {
+          if (grantCheck.reason === "re_pair_required") {
+            return {
+              success: false,
+              code: "re_pair_required",
+              error: grantCheck.error || `Host originFetchGrant verification failed: peer missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} key rotations; re-pair required (re_pair_required)`
+            };
+          }
           const denialCode = grantCheck.reason === "grant_capacity_exhausted" ? "grant_capacity_exhausted" : "artifact_access_denied";
           return {
             success: false,
@@ -106566,7 +106861,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const mesh = config.meshes.find((m) => m.id === meshId);
       if (!mesh) return void 0;
       const now = opts.now || (/* @__PURE__ */ new Date()).toISOString();
-      const token = (opts.token || `mhj_${(0, import_crypto31.randomBytes)(24).toString("base64url")}`).trim();
+      const token = (opts.token || `mhj_${(0, import_crypto32.randomBytes)(24).toString("base64url")}`).trim();
       if (!token) throw new Error("token required");
       const tokenId = tokenIdForManualPairing(token);
       const expiresAt = normalizeTokenExpiry(opts.expiresAt) ?? new Date(new Date(now).getTime() + MESH_HOST_PAIRING_TOKEN_TTL_MS).toISOString();
@@ -106642,7 +106937,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       } else {
         assertMeshNodeCapacity(mesh);
         node = {
-          id: memberId || `node_${(0, import_crypto31.randomUUID)().replace(/-/g, "")}`,
+          id: memberId || `node_${(0, import_crypto32.randomUUID)().replace(/-/g, "")}`,
           workspace,
           repoRoot: opts.memberNode.repoRoot,
           daemonId: opts.memberNode.daemonId,
@@ -106779,7 +107074,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       saveMeshConfig(config);
       return { mesh, meshHost: mesh.meshHost };
     }
-    var import_crypto31;
+    var import_crypto32;
     var MESH_HOST_PAIRING_TOKEN_TTL_MS;
     var MESH_HOST_PAIRING_TOKEN_USED_REASON;
     var init_mesh_config_host_pairing = __esm2({
@@ -106791,7 +107086,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_mesh_config_store();
         init_mesh_node_limit();
         init_mesh_host_ownership();
-        import_crypto31 = require("crypto");
+        import_crypto32 = require("crypto");
         init_dist();
         MESH_HOST_PAIRING_TOKEN_TTL_MS = 10 * 60 * 1e3;
         MESH_HOST_PAIRING_TOKEN_USED_REASON = "host pairing token already used";
@@ -108694,7 +108989,7 @@ ${asText(streams.stderr)}
       }
     }
     async function runScheduledRefineValidation(schedule, commandsToRun, summary, runOne) {
-      const runId = (0, import_crypto32.randomUUID)();
+      const runId = (0, import_crypto33.randomUUID)();
       const started = Date.now();
       const runEnv = { ADHDEV_REFINE_RUN_ID: runId };
       summary.schedule = { mode: "lanes", runId, wallMs: 0, prepareRun: [] };
@@ -108831,7 +109126,7 @@ ${asText(streams.stderr)}
     }
     var import_path36;
     var fs88;
-    var import_crypto32;
+    var import_crypto33;
     var REFINE_VALIDATION_TIMEOUT_MS;
     var REFINE_VALIDATION_OUTPUT_LIMIT_BYTES;
     var REFINE_VALIDATION_LOG_DIR;
@@ -108847,7 +109142,7 @@ ${asText(streams.stderr)}
         init_mesh_refine_env_sanitize();
         init_mesh_refine_lanes();
         init_refine_schedule();
-        import_crypto32 = require("crypto");
+        import_crypto33 = require("crypto");
         init_mesh_refine_gitlink_utils();
         init_mesh_refine_submodule_converge();
         init_mesh_refine_generated_bundles();
@@ -112841,7 +113136,7 @@ ${asText(streams.stderr)}
       }
     });
     function terminalRetryIdentity(intent) {
-      return (0, import_crypto33.createHash)("sha256").update(JSON.stringify([intent.watch_id, intent.event_id, intent.recipient_session_id, intent.token])).digest("hex");
+      return (0, import_crypto34.createHash)("sha256").update(JSON.stringify([intent.watch_id, intent.event_id, intent.recipient_session_id, intent.token])).digest("hex");
     }
     function readTerminalEvents(db, meshId, kind, entityId, since, receipts) {
       const ids = receipts.slice(0, 256);
@@ -112911,7 +113206,7 @@ ${asText(streams.stderr)}
         recorded.add(event.eventId);
       }
     }
-    var import_crypto33;
+    var import_crypto34;
     var TERMINAL_WATCH_TTL_MS;
     var TERMINAL_WATCH_MAX;
     var TERMINAL_WATCH_SCHEMA;
@@ -112919,7 +113214,7 @@ ${asText(streams.stderr)}
     var init_terminal_watch = __esm2({
       "src/assistant/terminal-watch.ts"() {
         "use strict";
-        import_crypto33 = require("crypto");
+        import_crypto34 = require("crypto");
         init_mesh_local_records();
         TERMINAL_WATCH_TTL_MS = 24 * 60 * 6e4;
         TERMINAL_WATCH_MAX = 32;
@@ -112938,7 +113233,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           }
           subscribe(meshId, kind, entityId, recipient, now = Date.now()) {
             this.prune(now);
-            const watchId = (0, import_crypto33.createHash)("sha256").update(JSON.stringify([meshId, kind, entityId, recipient])).digest("hex");
+            const watchId = (0, import_crypto34.createHash)("sha256").update(JSON.stringify([meshId, kind, entityId, recipient])).digest("hex");
             const existing = this.get(watchId);
             if (existing) return { success: true, watchId, expiresAt: existing.expires_at, duplicate: true };
             const count = this.db.prepare("SELECT COUNT(*) n FROM assistant_terminal_watches WHERE expires_at > ?").get(now);
@@ -112959,7 +113254,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             return this.db.prepare("SELECT * FROM assistant_terminal_inflight WHERE watch_id=? AND event_id=?").get(id4, eventId);
           }
           beginDelivery(id4, eventId, sid) {
-            this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_inflight VALUES (?,?,?,?,?)").run(id4, eventId, sid, (0, import_crypto33.randomBytes)(24).toString("hex"), Date.now());
+            this.db.prepare("INSERT OR IGNORE INTO assistant_terminal_inflight VALUES (?,?,?,?,?)").run(id4, eventId, sid, (0, import_crypto34.randomBytes)(24).toString("hex"), Date.now());
             return this.intent(id4, eventId);
           }
           retryDelivery(id4, eventId) {
@@ -113480,7 +113775,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function reportMessageId(message) {
       const m = message;
-      return (0, import_crypto34.createHash)("sha256").update(JSON.stringify([
+      return (0, import_crypto35.createHash)("sha256").update(JSON.stringify([
         // read_chat stamps presentation ids; chat_history returns native rows.
         // A timestamped native reply must keep one cursor across both lanes.
         m?.timestamp == null && m?.receivedAt == null && m?.createdAt == null ? m?.messageId ?? m?.bubbleId ?? m?.id ?? null : null,
@@ -113490,7 +113785,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         messageText(m)
       ])).digest("hex");
     }
-    var import_crypto34;
+    var import_crypto35;
     var STALE_MISSION_AFTER_MS;
     var PROJECT_STATUS_ROUTING_DIFFICULTY;
     var PROJECT_READ_DEFAULT_TAIL;
@@ -113499,7 +113794,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     var init_project_views = __esm2({
       "src/assistant/project-views.ts"() {
         "use strict";
-        import_crypto34 = require("crypto");
+        import_crypto35 = require("crypto");
         init_dist();
         init_mesh_host_ownership();
         STALE_MISSION_AFTER_MS = 3 * 24 * 60 * 6e4;
@@ -114172,14 +114467,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
       return { success: false, code: "original_report_unavailable", reason: "exact_message_not_found_in_bounded_history" };
     }
-    var import_crypto35;
+    var import_crypto36;
     var reportBodyId;
     var init_report_continuation = __esm2({
       "src/assistant/report-continuation.ts"() {
         "use strict";
-        import_crypto35 = require("crypto");
+        import_crypto36 = require("crypto");
         init_project_views();
-        reportBodyId = (body) => (0, import_crypto35.createHash)("sha256").update(body).digest("hex");
+        reportBodyId = (body) => (0, import_crypto36.createHash)("sha256").update(body).digest("hex");
       }
     });
     async function coordinatorReplyReadable(execute, reply) {
@@ -114771,7 +115066,7 @@ ${grant.exp}`).digest("hex");
               if (workspace !== args.workspace) throw new AttachFailure("PATH_CONFLICT", "registration", "Attachment must use its verified managed checkout.");
               const old = authorizeHost(ctx, args, remote.identity);
               await verifyCheckout(workspace, remote.identity);
-              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing")) return fail3("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
+              if (!old && !writeMeshHostRecord(args.meshId, args.hostDaemonId, "pairing", void 0, { pairingVerified: true })) return fail3("REGISTRATION_FAILED", "registration", "Checkout is preserved; restore writable daemon configuration before retrying.", "HOST_RECORD_WRITE_FAILED");
               const resources = await pythonResourcePreflight();
               return { success: true, attached: true, ready: resources.ready, resources, workspace, targetDaemonId: ctx.deps.statusInstanceId, stage: resources.ready ? "ready" : "resource_preflight" };
             } catch (e) {
@@ -116311,7 +116606,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const runtime = MeshRuntimeStore.getInstance();
       return recoverAttemptReport(runtime.db, runtime.turnStore().getAttempt(attemptId), meshId, sessionId, ports.execute);
     }
-    var import_crypto36;
+    var import_crypto37;
     var import_fs43;
     var import_os8;
     var import_path43;
@@ -116337,7 +116632,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_mesh_runtime_store();
         init_environment_inventory();
         init_report_continuation();
-        import_crypto36 = require("crypto");
+        import_crypto37 = require("crypto");
         import_fs43 = require("fs");
         import_os8 = require("os");
         import_path43 = require("path");
@@ -116510,7 +116805,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!p.ok) return p.result;
           const meshId = p.mesh.id;
           const where = { project: p.slug, meshId };
-          const clientId = str10(args.messageId) || (0, import_crypto36.randomUUID)();
+          const clientId = str10(args.messageId) || (0, import_crypto37.randomUUID)();
           const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
           if (p.remote) {
             const expectedCoordinatorSessionId = str10(args.expectedCoordinatorSessionId) || str10(p.followedRemote?.coordinatorSessionId);
@@ -119087,7 +119382,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const key4 = followerWakeKey(trimmedMeshId, canonSender);
       const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
       followerWakePersistSeq += 1;
-      const wakeId = `wake:${key4}:${now}:${followerWakePersistSeq}:${(0, import_crypto37.randomUUID)()}`;
+      const wakeId = `wake:${key4}:${now}:${followerWakePersistSeq}:${(0, import_crypto38.randomUUID)()}`;
       const receiptKey2 = `${FOLLOWER_WAKE_QUOTA_RECEIPT_KIND}:${wakeId}`;
       const recentMap = /* @__PURE__ */ new Map();
       for (const [id4, rawT] of followerWakeRecords.get(key4) ?? []) {
@@ -119285,7 +119580,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
 
 ${defangRelayBody(text4)}`;
     }
-    var import_crypto37;
+    var import_crypto38;
     var FOLLOWER_SEND_RECEIPT_MAX_ENTRIES;
     var FOLLOWER_SEND_RECEIPT_TTL_MS;
     var FOLLOWER_WAKE_WINDOW_MS;
@@ -119305,7 +119600,7 @@ ${defangRelayBody(text4)}`;
     var init_assistant_follower_wake_quota = __esm2({
       "src/commands/high-family/assistant-follower-wake-quota.ts"() {
         "use strict";
-        import_crypto37 = require("crypto");
+        import_crypto38 = require("crypto");
         init_dist();
         init_assistant_relay_format();
         init_logger();
@@ -119592,7 +119887,7 @@ ${defangRelayBody(text4)}`;
       const clientId = str13(args.clientId);
       if (!clientId || clientId.length > 200) return fail5("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str13(args.expectedCoordinatorSessionId);
-      const bodyHash = (0, import_crypto38.createHash)("sha256").update(text4, "utf8").digest("hex");
+      const bodyHash = (0, import_crypto39.createHash)("sha256").update(text4, "utf8").digest("hex");
       const canonSender = canonicalDaemonId2(sender) ?? sender;
       const deadSessionIds = /* @__PURE__ */ new Set();
       const admitted2 = await withMeshRemoteAccessMutex(meshId, async () => {
@@ -120007,7 +120302,7 @@ ${defangRelayBody(text4)}`;
           return note(meshId, args);
       }
     }
-    var import_crypto38;
+    var import_crypto39;
     var REMOTE_SEND_MAX_CHARS;
     var REMOTE_POLL_MAX_COMMITS;
     var ASSISTANT_REMOTE_OWNER_SOURCES;
@@ -120025,7 +120320,7 @@ ${defangRelayBody(text4)}`;
         init_terminal_watch();
         init_mesh_runtime_store();
         init_report_continuation();
-        import_crypto38 = require("crypto");
+        import_crypto39 = require("crypto");
         init_dist();
         init_command_registry();
         init_command_args();
@@ -124656,6 +124951,7 @@ ${tail}` : ""
       meshTaskPriorityRank: () => meshTaskPriorityRank,
       meshTopicIndexFor: () => meshTopicIndexFor,
       meshWsUrlForHostAddress: () => meshWsUrlForHostAddress,
+      migrateBogusPairingHostRecords: () => migrateBogusPairingHostRecords,
       migrateTurnLedgerV1: () => migrateTurnLedgerV1,
       migrateTurnLedgerV2: () => migrateTurnLedgerV2,
       migrateTurnLedgerV3: () => migrateTurnLedgerV3,
@@ -150314,9 +150610,9 @@ ${output}` : "";
     };
     init_config_dir();
     init_provider_approval();
-    var import_crypto26 = require("crypto");
+    var import_crypto27 = require("crypto");
     function modalIdentity(modal) {
-      return (0, import_crypto26.createHash)("sha256").update(JSON.stringify(modal)).digest("hex");
+      return (0, import_crypto27.createHash)("sha256").update(JSON.stringify(modal)).digest("hex");
     }
     function parseAssistantAction(raw) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -150359,7 +150655,7 @@ ${output}` : "";
         if (!this.available(state2)) return { success: false, code: state2.enabled ? "assistant_execution_not_enforced" : "assistant_execution_off" };
         for (const [token, c] of this.consents) if (c.expiresAt <= now) this.consents.delete(token);
         if (this.consents.size >= 32) return { success: false, code: "assistant_consent_capacity" };
-        const authorization = (0, import_crypto26.randomBytes)(32).toString("hex");
+        const authorization = (0, import_crypto27.randomBytes)(32).toString("hex");
         const expiresAt = now + 2 * 6e4;
         this.consents.set(authorization, {
           origin: "OWNER",
@@ -154844,7 +155140,7 @@ ${output}` : "";
       }
     };
     var meshLedgerSpecs = defineCommandSpecs("low", meshLedgerHandlers, {}, { meshSender: "authenticated_peer" });
-    var import_crypto30 = require("crypto");
+    var import_crypto31 = require("crypto");
     init_dist();
     init_dist();
     var ROUTER_INTERNAL_ARG_PREFIX = "_";
@@ -155426,7 +155722,7 @@ ${output}` : "";
           return { success: false, error: "turn_cancel: no attempt found for the given attemptId/taskId", code: "ledger_not_owner" };
         }
         const evidence = {
-          eventId: (0, import_crypto30.randomUUID)(),
+          eventId: (0, import_crypto31.randomUUID)(),
           at: Date.now(),
           source: "mcp_probe",
           sessionId: attempt.sessionId,
@@ -155460,7 +155756,7 @@ ${output}` : "";
           return { success: true, ...response2 };
         }
         const evidence = {
-          eventId: (0, import_crypto30.randomUUID)(),
+          eventId: (0, import_crypto31.randomUUID)(),
           at: Date.now(),
           source: "mcp_probe",
           sessionId: attempt.sessionId,
@@ -162642,7 +162938,7 @@ ${ptyResult.output.slice(-2e3)}`);
         return refused2(message.startsWith("assistant_identity_conflict") ? "assistant_identity_conflict" : "assistant_inventory_unavailable", message);
       }
     }
-    var import_crypto39 = require("crypto");
+    var import_crypto40 = require("crypto");
     var import_fs45 = require("fs");
     var import_path44 = require("path");
     init_dist();
@@ -163020,7 +163316,7 @@ You are the one chat the user talks to. Behind you, each project (one git reposi
 
 ## Tools
 Each tool's description says what it does; these are the routing rules on top.
-- \`projects\` answers "how is everything going?"; \`project_status\` covers one project; \`project_read\` is for when a relay was cut short or you need more context; \`artifact_list\` / \`artifact_read\` read artifacts.
+- \`projects\` answers "how is everything going?"; \`project_status\` covers one project; \`project_read\` is for cut-short relays or extra context; \`artifact_list\` / \`artifact_read\` read artifacts.
 - \`project_send\` returns at once (\`accepted\`, \`queued\` or \`duplicate\`); the answer arrives later as a relay. Never wait or poll for it.
 - \`discover_repos\` then \`project_add\` makes a local repository a project; \`project_attach_remote\` adds one to the exact machine the user named.
 - \`memory\`, \`project_note\`, \`skill_view\` and \`skill_manage\`: see "Memory, notes and skills".
@@ -163240,7 +163536,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const configDir = getConfigDir2();
       const workspace = assistantWorkspaceDir(configDir);
       const setup = resolveMeshCoordinatorSetup({ provider, cliType, meshId: "", workspace, toolset: { kind: "assistant" } });
-      const assistantSessionKey = (0, import_crypto39.randomUUID)();
+      const assistantSessionKey = (0, import_crypto40.randomUUID)();
       const mcp = planAssistantMcp({
         cliType,
         setup,
@@ -163755,7 +164051,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     init_mesh_remote_worktree_membership();
     init_mesh_runtime_store();
-    var import_crypto40 = require("crypto");
+    var import_crypto41 = require("crypto");
     init_config();
     init_cli_detector();
     init_build_info();
@@ -166259,7 +166555,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        * as `daemonBootId` in this daemon's own runtime summary (a coordinator that
        * sees it change knows this member restarted).
        */
-      meshCoordinatorBootId = (0, import_crypto40.randomUUID)();
+      meshCoordinatorBootId = (0, import_crypto41.randomUUID)();
       meshNodeStatePushRestore = null;
       async closeDrivers() {
         await closeDriverService(this.deps);
@@ -167282,9 +167578,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const pairedHostDaemonId = typeof hostResult.meshHost?.hostDaemonId === "string" && hostResult.meshHost.hostDaemonId.trim() ? hostResult.meshHost.hostDaemonId.trim() : hostDaemonId;
           if (pairedHostDaemonId) {
             const { writeMeshHostRecord: writeMeshHostRecord2 } = await Promise.resolve().then(() => (init_mesh_host_memory(), mesh_host_memory_exports));
-            writeMeshHostRecord2(meshId, pairedHostDaemonId, "pairing", hostOriginGrantPublicKey || void 0);
+            writeMeshHostRecord2(meshId, pairedHostDaemonId, "pairing", hostOriginGrantPublicKey || void 0, {
+              pairingVerified: true
+            });
             if (secretMeshId && secretMeshId !== meshId) {
-              writeMeshHostRecord2(secretMeshId, pairedHostDaemonId, "pairing", hostOriginGrantPublicKey || void 0);
+              writeMeshHostRecord2(
+                secretMeshId,
+                pairedHostDaemonId,
+                "pairing",
+                hostOriginGrantPublicKey || void 0,
+                { pairingVerified: true }
+              );
             }
           }
           return {
@@ -190286,7 +190590,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     function isLostRuntimeError(error) {
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
-    var import_crypto41 = require("crypto");
+    var import_crypto42 = require("crypto");
     var import_session_host_core16 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
@@ -190384,7 +190688,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const sessionId = String(options.sessionId || "").trim();
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
-        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto41.randomUUID)().slice(0, 8)}`;
+        const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto42.randomUUID)().slice(0, 8)}`;
         const client = options.client || new import_session_host_core16.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
@@ -192085,7 +192389,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
       }
     }
-    var import_crypto42 = require("crypto");
+    var import_crypto43 = require("crypto");
     var import_fs50 = require("fs");
     var import_path48 = require("path");
     init_config();
@@ -192147,7 +192451,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       LOG.info("Seqscribe", "local authority secret minted (standalone, no fleet secret configured)");
     }
     function mintLocalAuthoritySecret() {
-      return (0, import_crypto42.randomBytes)(32).toString("hex");
+      return (0, import_crypto43.randomBytes)(32).toString("hex");
     }
     function loadOrCreateLocalAuthoritySecret(env2) {
       const existing = loadStoredLocalAuthoritySecret(env2);
@@ -192896,7 +193200,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     init_mesh_publisher();
     init_mesh_record();
     init_worker_bridge_transaction();
-    var import_crypto43 = require("crypto");
+    var import_crypto44 = require("crypto");
     init_dist();
     init_dist();
     init_background_work_guard();
@@ -193422,7 +193726,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         };
       }
       function notifyMeshEvent(notice) {
-        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto43.randomUUID)()}`;
+        const eventId = notice.eventId ?? `mesh_event:${(0, import_crypto44.randomUUID)()}`;
         const at = notice.at ?? now();
         const notifyKind = notice.notify ?? "mesh_event";
         const entry = {

@@ -452,13 +452,21 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 : hostDaemonId;
             if (pairedHostDaemonId) {
                 const { writeMeshHostRecord } = await import('../../mesh/mesh-host-memory.js');
-                writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing', hostOriginGrantPublicKey || undefined);
+                writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing', hostOriginGrantPublicKey || undefined, {
+                    pairingVerified: true,
+                });
                 // The host dispatches under ITS mesh id (the one the peer secret
                 // is keyed by), which differs from this member's local mesh id
                 // in the address + code flow. Record it too, so the sender gate
                 // is anchored by the pairing instead of trust-on-first-use.
                 if (secretMeshId && secretMeshId !== meshId) {
-                    writeMeshHostRecord(secretMeshId, pairedHostDaemonId, 'pairing', hostOriginGrantPublicKey || undefined);
+                    writeMeshHostRecord(
+                        secretMeshId,
+                        pairedHostDaemonId,
+                        'pairing',
+                        hostOriginGrantPublicKey || undefined,
+                        { pairingVerified: true },
+                    );
                 }
             }
             return {

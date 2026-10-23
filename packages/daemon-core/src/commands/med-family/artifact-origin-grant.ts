@@ -402,7 +402,9 @@ export function verifyArtifactOriginFetchGrant(
         nonceStoreDb?: GrantNonceStoreDb | null;
     },
     nowMs = Date.now(),
-): { ok: true; grant: ArtifactOriginFetchGrant } | { ok: false; reason: string } {
+):
+    | { ok: true; grant: ArtifactOriginFetchGrant }
+    | { ok: false; reason: string; code?: string; error?: string } {
     if (!rawGrant || typeof rawGrant !== 'object') {
         return { ok: false, reason: 'missing_or_malformed_grant' };
     }
@@ -488,6 +490,7 @@ export function verifyArtifactOriginFetchGrant(
 
     const hasRotationChain = Array.isArray(candidate.keyRotationChain) && candidate.keyRotationChain.length > 0;
     const hasSingleRotation = isValidRotationProofShape(candidate.keyRotation);
+    let missedRotationError: { code: string; error: string } | undefined;
     if (hasRotationChain || hasSingleRotation) {
         const candidateProofs = hasRotationChain
             ? (candidate.keyRotationChain as unknown[])
@@ -506,6 +509,25 @@ export function verifyArtifactOriginFetchGrant(
             if (rotated.ok) {
                 trustedPublicKey = rotated.newPublicKey;
             }
+        } else {
+            const chainCheck = verifyOriginGrantKeyRotationChain(
+                {
+                    rotationProof: candidate.keyRotation,
+                    rotationChain: candidate.keyRotationChain,
+                },
+                {
+                    hostDaemonId,
+                    currentPinnedPublicKey: trustedPublicKey,
+                },
+            );
+            if (!chainCheck.ok && chainCheck.reason === 're_pair_required') {
+                missedRotationError = {
+                    code: 're_pair_required',
+                    error:
+                        chainCheck.error ||
+                        `Peer ${hostDaemonId} missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} origin-grant key rotations; re-pair required (re_pair_required)`,
+                };
+            }
         }
     }
 
@@ -522,6 +544,14 @@ export function verifyArtifactOriginFetchGrant(
         nonce,
     });
     if (!verifyCanonicalGrantSignature(canonicalPayload, signature, trustedPublicKey)) {
+        if (missedRotationError) {
+            return {
+                ok: false,
+                reason: 're_pair_required',
+                code: missedRotationError.code,
+                error: missedRotationError.error,
+            };
+        }
         return { ok: false, reason: 'invalid_grant_signature' };
     }
 
@@ -1045,6 +1075,15 @@ export function authorizeWorkerOriginFetch(params: {
             nonceStoreDb,
         });
         if (!grantCheck.ok) {
+            if (grantCheck.reason === 're_pair_required') {
+                return {
+                    success: false,
+                    code: 're_pair_required',
+                    error:
+                        grantCheck.error ||
+                        `Host originFetchGrant verification failed: peer missed more than ${MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH} key rotations; re-pair required (re_pair_required)`,
+                };
+            }
             const denialCode =
                 grantCheck.reason === 'grant_capacity_exhausted'
                     ? 'grant_capacity_exhausted'

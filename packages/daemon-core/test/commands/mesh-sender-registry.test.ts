@@ -25,6 +25,8 @@ const EXPECTED_CLASSES: Record<string, string> = {
     worker_report_forwarded: 'roster',
     worker_report_refusal_forwarded: 'roster',
     worker_progress_forwarded: 'roster',
+    artifact_fetch_origin: 'roster',
+    artifact_index_forwarded: 'roster',
     // owner → worker, session-scoped
     agent_command: 'session_coordinator',
     send_keys: 'session_coordinator',
