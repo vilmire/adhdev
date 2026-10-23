@@ -507,7 +507,13 @@ export function buildQuotaDisplayModel(
         ? { key: 'usage', label: usageLabel, usedPercent: null, hint: 'usage', tone: 'info' }
         : null
 
-    const compactChip = session ?? weekly ?? usageChip
+    // Per-pool providers (antigravity): the collapsed session/weekly axes are
+    // the worst pool and would mislabel a healthy pool as exhausted, so the
+    // one-number chip is the worst per-pool bucket chip, which names its pool.
+    const worstBucketChip = bucketChips.length > 0
+        ? bucketChips.reduce((worst, chip) => ((chip.usedPercent ?? -1) > (worst.usedPercent ?? -1) ? chip : worst))
+        : null
+    const compactChip = worstBucketChip ?? session ?? weekly ?? usageChip
 
     if (chips.length > 0) {
         return { kind: 'chips', cue, chips, usageLabel: null, message: null, compactChip }

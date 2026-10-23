@@ -73063,7 +73063,8 @@ ${upstream}`;
       return matches.reduce((worst, bucket2) => Number(bucket2.usedPercent) > Number(worst.usedPercent) ? bucket2 : worst);
     }
     function quotaWindowsForGateTarget(providerType, quota, target) {
-      if (providerType !== "antigravity-cli" || quota.status !== "ok") return void 0;
+      if (providerType !== "antigravity-cli") return void 0;
+      if (quota.status !== "ok" && quota.metadata?.lastGoodWindows !== true) return void 0;
       const selectedPool = antigravityPoolFromLeadingLabel(target?.model);
       if (!selectedPool || !Array.isArray(quota.buckets) || !quota.buckets.length) return void 0;
       const classified = [];
@@ -73071,7 +73072,7 @@ ${upstream}`;
         const pool = bucket2?.group === "gemini" ? "gemini" : bucket2?.group === "claude-gpt" ? "claude-gpt" : antigravityPoolFromLeadingLabel(bucket2?.name);
         const usedPercent = Number(bucket2?.usedPercent);
         const windowMinutes3 = Number(bucket2?.windowMinutes);
-        if (!pool || !Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes3)) return void 0;
+        if (!pool || !Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes3)) continue;
         classified.push({
           pool,
           bucket: { usedPercent, windowMinutes: windowMinutes3, resetsAt: bucket2.resetsAt }
@@ -73082,6 +73083,10 @@ ${upstream}`;
       const session = worstBucketWindow(selectedBuckets, DEFAULT_SESSION_WINDOW_MINUTES);
       const weekly = worstBucketWindow(selectedBuckets, DEFAULT_WEEKLY_WINDOW_MINUTES);
       return { session, weekly, group: selectedPool };
+    }
+    function quotaAxesForTarget2(providerType, quota, target) {
+      const projected = quotaWindowsForGateTarget(providerType, quota, target);
+      return projected ?? { session: quota.session, weekly: quota.weekly };
     }
     function isSessionResetImminent(session, facts, quota, imminentMs, now) {
       const resetsAt = Number(session?.resetsAt);
@@ -73189,11 +73194,12 @@ ${upstream}`;
       if (!(remainingPercent2 > 0)) return 0;
       return remainingPercent2 * remainingPercent2 / (remainingPercent2 + 100 * timeLeftFraction);
     }
-    function expiryRiskForRanking(node, providerType, axis2, policy, now = Date.now(), context2) {
+    function expiryRiskForRanking(node, providerType, axis2, policy, now = Date.now(), context2, target) {
       const entry = quotaEntryFor(node, providerType, context2, now);
       if (!entry) return void 0;
       const { facts, quota } = entry;
-      const window = axis2 === "session" ? quota.session : quota.weekly;
+      const axes = quotaAxesForTarget2(providerType, quota, target);
+      const window = axis2 === "session" ? axes.session : axes.weekly;
       if (!isWindowTrustworthy(window, facts, quota, policy, now)) return void 0;
       const remaining = remainingPercent(window);
       if (remaining === void 0) return void 0;
@@ -73223,11 +73229,11 @@ ${upstream}`;
         if (block2) gated.push({ providerType, block: block2 });
         else clear.push(providerType);
       }
-      const weeklyByProvider = new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, "weekly", policy, now, context2)]));
+      const weeklyByProvider = new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, "weekly", policy, now, context2, targetsByProvider?.get(p))]));
       const headroomPercent = resolveQuotaRoutingPolicy(policy).sessionAxisWeeklyHeadroomPercent;
       const weeklyMeasured = [...weeklyByProvider.values()].filter((w) => w !== void 0);
       const sessionAxisActive = weeklyMeasured.length > 0 && weeklyMeasured.every((w) => w.remainingPercent > headroomPercent);
-      const sessionByProvider = sessionAxisActive ? new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, "session", policy, now, context2)])) : void 0;
+      const sessionByProvider = sessionAxisActive ? new Map(clear.map((p) => [p, expiryRiskForRanking(node, p, "session", policy, now, context2, targetsByProvider?.get(p))])) : void 0;
       clear.sort((a, b) => {
         const wa = weeklyByProvider.get(a);
         const wb = weeklyByProvider.get(b);
@@ -73327,7 +73333,23 @@ ${upstream}`;
         ...outcome === "refused" && refusalReason ? { claimRefusalReason: refusalReason } : {}
       });
     }
-    function quotaSpreadBonusByProvider(node, policy, now = Date.now(), context2) {
+    function quotaTargetsFromSlots2(slots2) {
+      const byProvider = /* @__PURE__ */ new Map();
+      for (const slot of slots2) {
+        const provider = slot.provider ?? slot.providerType;
+        if (!provider) continue;
+        const models = byProvider.get(provider) ?? [];
+        models.push(slot.model);
+        byProvider.set(provider, models);
+      }
+      const out = /* @__PURE__ */ new Map();
+      for (const [provider, models] of byProvider) {
+        const pools = new Set(models.map((m) => antigravityPoolFromLeadingLabel(m) ?? `raw:${m ?? ""}`));
+        if (pools.size === 1) out.set(provider, { model: models[0] });
+      }
+      return out;
+    }
+    function quotaSpreadBonusByProvider(node, policy, now = Date.now(), context2, targetsByProvider) {
       const resolved = resolveQuotaRoutingPolicy(policy);
       const out = {};
       const directQuota = node?.nodeFacts?.quota;
@@ -73343,9 +73365,10 @@ ${upstream}`;
         let bonus = 0;
         const windowsEligible = snapshot && typeof snapshot === "object" && (snapshot.status === "ok" || snapshot.metadata?.lastGoodWindows === true);
         if (windowsEligible) {
+          const axes = quotaAxesForTarget2(provider, snapshot, targetsByProvider?.get(provider));
           const ratios = [
-            isWindowTrustworthy(snapshot.session, facts, snapshot, policy, now) ? remainingPercent(snapshot.session) : void 0,
-            isWindowTrustworthy(snapshot.weekly, facts, snapshot, policy, now) ? remainingPercent(snapshot.weekly) : void 0
+            isWindowTrustworthy(axes.session, facts, snapshot, policy, now) ? remainingPercent(axes.session) : void 0,
+            isWindowTrustworthy(axes.weekly, facts, snapshot, policy, now) ? remainingPercent(axes.weekly) : void 0
           ].filter((r) => r !== void 0).map((r) => r / 100);
           if (ratios.length) {
             bonus = Math.round(resolved.spreadBonusMax * Math.min(...ratios));
@@ -73355,8 +73378,8 @@ ${upstream}`;
       }
       return out;
     }
-    function quotaSpreadBonusDiagnosticsByProvider(node, providerTypes, policy, now = Date.now(), context2) {
-      const bonuses = quotaSpreadBonusByProvider(node, policy, now, context2);
+    function quotaSpreadBonusDiagnosticsByProvider(node, providerTypes, policy, now = Date.now(), context2, targetsByProvider) {
+      const bonuses = quotaSpreadBonusByProvider(node, policy, now, context2, targetsByProvider);
       return [...new Set(providerTypes)].map((providerType) => {
         const value = bonuses[providerType] ?? 0;
         const entry = quotaEntryFor(node, providerType, context2, now);
@@ -73368,6 +73391,7 @@ ${upstream}`;
         const { facts, quota } = entry;
         const snapshotStatus = typeof quota.status === "string" ? quota.status : void 0;
         const failureKind = typeof quota.metadata?.failureKind === "string" ? quota.metadata.failureKind : void 0;
+        const axes = quotaAxesForTarget2(providerType, quota, targetsByProvider?.get(providerType));
         let zeroReason;
         if (value === 0) {
           const windowsEligible = quota.status === "ok" || quota.metadata?.lastGoodWindows === true;
@@ -73375,7 +73399,7 @@ ${upstream}`;
             zeroReason = failureKind === "no-data" ? "no-data" : "snapshot-error";
           } else if (!quota.session && !quota.weekly) {
             zeroReason = "no-data";
-          } else if (!isWindowTrustworthy(quota.session, facts, quota, policy, now) && !isWindowTrustworthy(quota.weekly, facts, quota, policy, now)) {
+          } else if (!isWindowTrustworthy(axes.session, facts, quota, policy, now) && !isWindowTrustworthy(axes.weekly, facts, quota, policy, now)) {
             zeroReason = "stale";
           } else {
             zeroReason = "zero-headroom";
@@ -75103,7 +75127,7 @@ ${upstream}`;
       LOG.info("MeshQueue", `LAUNCH-SIDE DIFFICULTY FLOOR: not launching '${providerType}'${model ? ` (model '${model}')` : ""} on node ${nodeId} for task ${task.id} \u2014 the resolved launch model only covers [${(allowed || []).join(", ")}], below the task's '${task.difficulty}' floor; the claim side would refuse it identically (difficulty_floor_unmet), so spawning would only orphan a session`);
       return `task_difficulty_floor_launch_model_mismatch:${task.difficulty || "classified"}`;
     }
-    function readSessionModel(state2) {
+    function readSessionModel2(state2) {
       const controlModel = typeof state2?.controlValues?.model === "string" ? state2.controlValues.model.trim() : "";
       if (controlModel) return controlModel;
       const modelItem = Array.isArray(state2?.summaryMetadata?.items) ? state2.summaryMetadata.items.find((item) => item?.id === "model") : void 0;
@@ -75386,7 +75410,7 @@ ${upstream}`;
             return false;
           }
         }
-        const allowance = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), sessionProviderType, readSessionModel(state2));
+        const allowance = allowedClassifiedDifficultiesForSession(node, resolveNodeCapabilitySlots(node, meshId), sessionProviderType, readSessionModel2(state2));
         if (!taskMeetsSessionDifficultyFloor(task, allowance)) return false;
         if (sessionId && sessionClaimRefusalReleasesSpawnGate(meshId, sessionId)) return false;
         return true;
@@ -77239,14 +77263,31 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
         const tier = Math.min(...available.map((candidate) => slotDifficultyTierForTask(candidate.slot, args.task.difficulty) ?? Number.POSITIVE_INFINITY));
         candidateSlots = available.filter((candidate) => slotDifficultyTierForTask(candidate.slot, args.task.difficulty) === tier);
       }
-      const candidates = [];
-      const seenProviders = /* @__PURE__ */ new Set();
-      for (const candidate of candidateSlots) {
-        if (seenProviders.has(candidate.providerType)) continue;
-        seenProviders.add(candidate.providerType);
-        candidates.push(candidate);
-      }
       const now = args.now ?? Date.now();
+      const slotBlocked = /* @__PURE__ */ new Map();
+      const isSlotBlocked = (candidate) => {
+        let blocked = slotBlocked.get(candidate);
+        if (blocked === void 0) {
+          blocked = !!evaluateProviderQuotaGate3(
+            args.node,
+            candidate.providerType,
+            args.quotaRouting,
+            now,
+            args.quotaFactsContext,
+            { model: candidate.slot.model }
+          );
+          slotBlocked.set(candidate, blocked);
+        }
+        return blocked;
+      };
+      const byProvider = /* @__PURE__ */ new Map();
+      for (const candidate of candidateSlots) {
+        const current4 = byProvider.get(candidate.providerType);
+        if (!current4 || isSlotBlocked(current4) && !isSlotBlocked(candidate)) {
+          byProvider.set(candidate.providerType, candidate);
+        }
+      }
+      const candidates = [...byProvider.values()];
       const ranked = rankProvidersByQuotaGate2(
         args.node,
         candidates.map((candidate) => candidate.providerType),
@@ -77326,7 +77367,13 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       return decision;
     }
     function buildAutoLaunchRoutingDecision(args) {
-      const bonus = quotaSpreadBonusByProvider(args.node, args.quotaRouting, Date.now(), args.quotaFactsContext);
+      const bonus = quotaSpreadBonusByProvider(
+        args.node,
+        args.quotaRouting,
+        Date.now(),
+        args.quotaFactsContext,
+        /* @__PURE__ */ new Map([[args.resolved.providerType, { model: args.resolved.slot.model }]])
+      );
       const winningSlot = args.resolved.slot;
       const executedSlot = args.executedSlot ?? winningSlot;
       const winningProvider = args.resolved.providerType;
@@ -77484,7 +77531,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       if (!providerLoader) return { reason: "provider_loader_unavailable" };
       const slots2 = resolveNodeCapabilitySlots(node, meshId);
       if (!slots2.length) return { reason: "missing_provider_priority" };
-      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext) : void 0;
+      const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsFromSlots2(slots2)) : void 0;
       const orderedSlots = task ? orderSlotsForProviderSelection(slots2, meshId ?? "", nodeId, node, task, quotaBonusByProvider) : slots2;
       const difficultyFloorRequired = !!task && taskRequiresDifficultyFloor(node, task);
       if (difficultyFloorRequired && !orderedSlots.length) {
@@ -78613,7 +78660,7 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
       const { components, meshId, nodeId, sessionId, providerType, node, mesh } = p;
       const nodeSlotsForCap = resolveNodeCapabilitySlots(node, meshId);
       const providerMaxParallel = resolveProviderMaxParallel(nodeSlotsForCap, providerType);
-      const assignedModel = typeof p.routingDecision?.resolvedModel === "string" && p.routingDecision.resolvedModel.trim() ? p.routingDecision.resolvedModel.trim() : readSessionModel(p.claimState);
+      const assignedModel = typeof p.routingDecision?.resolvedModel === "string" && p.routingDecision.resolvedModel.trim() ? p.routingDecision.resolvedModel.trim() : readSessionModel2(p.claimState);
       const allowedTaskDifficulties = allowedClassifiedDifficultiesForSession(node, nodeSlotsForCap, providerType, assignedModel);
       const claimingSlot = nodeSlotsForCap.find((s2) => s2.provider?.trim() === providerType && isModelAllowedBySlot(assignedModel, s2));
       const slotMaxParallel = claimingSlot ? resolveSlotMaxParallel(nodeSlotsForCap, providerType, claimingSlot.model, isModelAllowedBySlot) : void 0;
@@ -78777,7 +78824,14 @@ If the pin is stale (session is actually gone), re-target now instead of waiting
             noteClaimDeferredForNode(meshId, nodeId);
             return false;
           }
-          if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: routingDecision?.selectedSlot?.model, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
+          let gateModel = routingDecision?.selectedSlot?.model;
+          if (!gateModel) {
+            try {
+              gateModel = readSessionModel2(components.instanceManager?.getInstance?.(sessionId)?.getState?.());
+            } catch {
+            }
+          }
+          if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
             return false;
           }
           if (isClaimGatedByWorktreeBootstrap(components, meshId, nodeId, sessionId, node)) return false;
@@ -111843,7 +111897,9 @@ ${tail}` : ""
       publishMeshRecord: () => publishMeshRecord,
       publishMeshTopicEntry: () => publishMeshTopicEntry,
       putPeerSecret: () => putPeerSecret,
+      quotaAxesForTarget: () => quotaAxesForTarget2,
       quotaRiskSnapshotForCandidates: () => quotaRiskSnapshotForCandidates,
+      quotaTargetsFromSlots: () => quotaTargetsFromSlots2,
       rankProvidersByQuotaGate: () => rankProvidersByQuotaGate2,
       readAntigravityCliSession: () => readSession3,
       readCachedInlineMeshActiveSessionDetails: () => readCachedInlineMeshActiveSessionDetails,
@@ -111867,6 +111923,7 @@ ${tail}` : ""
       readOperatingNotes: () => readOperatingNotes,
       readOwnTaskLifecycle: () => readOwnTaskLifecycle,
       readRouterCommandIngress: () => readRouterCommandIngress,
+      readSessionModel: () => readSessionModel2,
       readSessionUsage: () => readSessionUsage,
       readStatuslineStatus: () => readStatuslineStatus,
       readTimeoutEnv: () => readTimeoutEnv,
@@ -114418,6 +114475,8 @@ ${tail}` : ""
     init_mesh_quota_ranking_records();
     init_mesh_quota_routing();
     init_mesh_quota_ranking_records();
+    init_mesh_difficulty_floor();
+    init_mesh_quota_ranking_records();
     init_dist();
     init_mesh_node_slots();
     init_mesh_quota_ranking_records();
@@ -114445,7 +114504,8 @@ ${tail}` : ""
         args.node,
         args.quotaRouting,
         now,
-        quotaFactsContext
+        quotaFactsContext,
+        quotaTargetsFromSlots2(slots2)
       );
       const orderedSlots = orderSlotsForProviderSelection(
         slots2,
@@ -182771,14 +182831,36 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
       return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
     }
+    function groupedBucketWindows(quota) {
+      const byGroup = /* @__PURE__ */ new Map();
+      for (const bucket2 of Array.isArray(quota.buckets) ? quota.buckets : []) {
+        const group = typeof bucket2?.group === "string" && bucket2.group ? bucket2.group : void 0;
+        if (!group || !Number.isFinite(bucket2.usedPercent) || !Number.isFinite(bucket2.windowMinutes)) continue;
+        byGroup.set(group, [...byGroup.get(group) ?? [], bucket2]);
+      }
+      if (byGroup.size < 2) return [];
+      const pick = (list2, minutes) => {
+        const hits = list2.filter((b) => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
+        return hits.length ? hits.reduce((w, b) => b.usedPercent > w.usedPercent ? b : w) : null;
+      };
+      return [...byGroup].map(([group, list2]) => ({ group, session: pick(list2, 300), weekly: pick(list2, 10080) }));
+    }
     function printQuota(name, quota) {
       console.log();
       const account = formatQuotaAccount(quota);
       console.log(account ? `${import_chalk2.default.bold(name)}  ${import_chalk2.default.gray(account)}` : import_chalk2.default.bold(name));
       if (quota.status === "ok" || quota.session || quota.weekly || quota.monthly) {
         const cue = windowCue(quota);
-        console.log(formatWindow("5 hour", quota.session, cue));
-        console.log(formatWindow("7 day", quota.weekly, cue));
+        const groups = groupedBucketWindows(quota);
+        if (groups.length) {
+          for (const g3 of groups) {
+            console.log(formatWindow(`${g3.group} 5 hour`, g3.session, cue));
+            console.log(formatWindow(`${g3.group} 7 day`, g3.weekly, cue));
+          }
+        } else {
+          console.log(formatWindow("5 hour", quota.session, cue));
+          console.log(formatWindow("7 day", quota.weekly, cue));
+        }
         if (quota.monthly) console.log(formatWindow("30 day", quota.monthly, cue));
       }
       const lastGood = quota.metadata?.lastGoodWindows === true ? quota.metadata.lastGood : void 0;
@@ -192078,6 +192160,9 @@ function extractStatusMetadataSessions(value) {
   const status = payload?.status && typeof payload.status === "object" ? payload.status : payload;
   return Array.isArray(status?.sessions) ? status.sessions : [];
 }
+function readSessionRecordModel(session) {
+  return (0, import_daemon_core2.readSessionModel)(session);
+}
 function resolveSessionProviderType(session) {
   return readString(session?.providerType) || readString(session?.cliType) || readString(session?.agentType) || "";
 }
@@ -195572,6 +195657,20 @@ function annotateQuotaSnapshotFreshness(quota, now = Date.now()) {
   }
   return out;
 }
+function summarizeBucketGroups(buckets) {
+  const byGroup = /* @__PURE__ */ new Map();
+  for (const b of buckets) {
+    const group = typeof b?.group === "string" && b.group ? b.group : void 0;
+    if (!group || !Number.isFinite(b.windowMinutes)) continue;
+    byGroup.set(group, [...byGroup.get(group) ?? [], b]);
+  }
+  if (byGroup.size < 2) return void 0;
+  const worst = (list, minutes) => {
+    const hits = list.filter((b) => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
+    return hits.length ? `${Math.round(Math.max(...hits.map((b) => b.usedPercent)))}%` : "\u2014";
+  };
+  return [...byGroup].map(([group, list]) => `${group} 7d ${worst(list, 10080)} 5h ${worst(list, 300)}`).join(" | ");
+}
 function summarizeNodeQuota(quota, now = Date.now()) {
   if (!quota || typeof quota !== "object" || Array.isArray(quota)) return void 0;
   const out = {};
@@ -195592,7 +195691,9 @@ function summarizeNodeQuota(quota, now = Date.now()) {
     const age = formatQuotaSnapshotAge(snapshot, now);
     const stale = isQuotaSnapshotStale(snapshot, now);
     let line = `7d ${weekly ?? "\u2014"} \xB7 5h ${session ?? "\u2014"} \xB7 ${age}${stale ? " stale" : ""}`;
-    if (weekly === void 0 && session === void 0 && worstBucket !== void 0) {
+    const groupSegments = summarizeBucketGroups(buckets);
+    if (groupSegments) line = `${groupSegments} \xB7 ${age}${stale ? " stale" : ""}`;
+    if (!groupSegments && weekly === void 0 && session === void 0 && worstBucket !== void 0) {
       line = `pool ${worstBucket} (${buckets.length}) \xB7 ${age}${stale ? " stale" : ""}`;
     } else if (weekly === void 0 && session === void 0 && monthly !== void 0) {
       line = `30d ${monthly} \xB7 ${age}${stale ? " stale" : ""}`;
@@ -199181,12 +199282,14 @@ function buildProviderPinUnsatisfiableFailure(node, providerPins, nodeProviders,
     nextAction: `Leave the task queued (the claim path enforces the pin per session), or launch a '${providerPins[0]}' session on this node with mesh_launch_session, or re-enqueue without the provider pin if any provider is acceptable.`
   };
 }
-function checkDirectDispatchQuotaGate(node, providerType, quotaRoutingPolicy) {
+function checkDirectDispatchQuotaGate(node, providerType, quotaRoutingPolicy, model) {
   if (!providerType) return null;
-  const block = (0, import_daemon_core22.evaluateProviderQuotaGate)(node, providerType, quotaRoutingPolicy ?? null);
+  const target = model ? { model } : void 0;
+  const block = (0, import_daemon_core22.evaluateProviderQuotaGate)(node, providerType, quotaRoutingPolicy ?? null, void 0, void 0, target);
   if (!block) return null;
   const quota = node?.nodeFacts?.quota?.[providerType];
-  const window = block.window === "session" ? quota?.session : block.window === "weekly" ? quota?.weekly : null;
+  const axes = quota ? (0, import_daemon_core22.quotaAxesForTarget)(providerType, quota, target) : void 0;
+  const window = block.window === "session" ? axes?.session : block.window === "weekly" ? axes?.weekly : null;
   const resetsAt = typeof window?.resetsAt === "number" && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
   return { block, resetsAt };
 }
@@ -199244,7 +199347,7 @@ function checkExplicitRemoteSession(ctx, node, sessionId, session, provider, coo
 async function resolveRemoteDispatchSession(ctx, node, args, provider, coordinatorDaemonId) {
   const sessionId = args.session_id?.trim() || "";
   if (sessionId && args.verifiedSession) {
-    return checkExplicitRemoteSession(ctx, node, sessionId, args.verifiedSession, provider, coordinatorDaemonId) ?? { sessionId };
+    return checkExplicitRemoteSession(ctx, node, sessionId, args.verifiedSession, provider, coordinatorDaemonId) ?? { sessionId, model: readSessionRecordModel(args.verifiedSession) };
   }
   try {
     const { providerPins } = provider;
@@ -199272,17 +199375,17 @@ async function resolveRemoteDispatchSession(ctx, node, args, provider, coordinat
           nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ""}) or retry without session_id so Repo Mesh can target a live delegate session.`
         };
       }
-      return checkExplicitRemoteSession(ctx, node, sessionId, explicitSession, provider, coordinatorDaemonId) ?? { sessionId };
+      return checkExplicitRemoteSession(ctx, node, sessionId, explicitSession, provider, coordinatorDaemonId) ?? { sessionId, model: readSessionRecordModel(explicitSession) };
     }
     const candidates = args.allowQuotaExhausted ? sessions : sessions.filter((session) => {
       const sessionProviderType = resolveSessionProviderType(session);
       if (!sessionProviderType) return true;
-      return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+      return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null, readSessionRecordModel(session));
     });
     const targetSession = chooseDispatchableSession(candidates, sessionProviderFilter, ctx.mesh.id, node.id, coordinatorDaemonId);
     if (targetSession?.id || targetSession?.sessionId) {
       if (!provider.resolvedProviderType) provider.resolvedProviderType = provider.adoptSessionProviderType(targetSession);
-      return { sessionId: targetSession.id || targetSession.sessionId };
+      return { sessionId: targetSession.id || targetSession.sessionId, model: readSessionRecordModel(targetSession) };
     }
     return { sessionId: "" };
   } catch (e) {
@@ -199333,7 +199436,7 @@ async function resolveRemoteDispatchTarget(ctx, node, args) {
   if ("success" in provider) return provider;
   const session = await resolveRemoteDispatchSession(ctx, node, args, provider, dispatchCoordinatorDaemonId);
   if ("success" in session) return session;
-  const { sessionId } = session;
+  const { sessionId, model: sessionModel } = session;
   const { providerPins, resolvedProviderType } = provider;
   if (!resolvedProviderType) {
     return { success: false, error: `Cannot dispatch to remote node '${node.id}': providerType unknown. Set providerPriority on the node policy or call mesh_launch_session first.` };
@@ -199342,7 +199445,7 @@ async function resolveRemoteDispatchTarget(ctx, node, args) {
     return buildProviderPinUnsatisfiableFailure(node, providerPins, readNodeProviderPriority(node), resolvedProviderType);
   }
   if (!args.allowQuotaExhausted) {
-    const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+    const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null, sessionModel);
     if (quotaGate) {
       return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || void 0, quotaGate);
     }
@@ -199853,7 +199956,7 @@ async function resolveDirectDispatchTarget(ctx, node, route, args, req, explicit
   const resolved = await resolveLocalTargetProviderType(ctx, node, { ...args, session_id: sessionId }, req, explicitTargetSession);
   if (typeof resolved === "string") return resolved;
   if (!req.allowQuotaExhausted) {
-    const quotaGate = checkDirectDispatchQuotaGate(node, resolved.providerType, ctx.mesh.policy?.quotaRouting ?? null);
+    const quotaGate = checkDirectDispatchQuotaGate(node, resolved.providerType, ctx.mesh.policy?.quotaRouting ?? null, readSessionRecordModel(explicitTargetSession));
     if (quotaGate) {
       return JSON.stringify(buildQuotaExhaustedDispatchFailure(node, resolved.providerType, sessionId, quotaGate));
     }
@@ -200652,7 +200755,8 @@ function checkRequestedLaunchType(ctx, node, nodeId, requestedType) {
       supportedProviders: slotProviders
     }, null, 2);
   }
-  const explicitBlock = (0, import_daemon_core28.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+  const launchTarget = (0, import_daemon_core28.quotaTargetsFromSlots)(normalizeNodeCapabilitySlots(node.policy?.slots)).get(requestedType);
+  const explicitBlock = (0, import_daemon_core28.evaluateProviderQuotaGate)(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null, void 0, void 0, launchTarget);
   if (!explicitBlock) return { quotaWarning: null };
   return {
     quotaWarning: {
@@ -200691,7 +200795,14 @@ async function detectLaunchProviderType(ctx, node, nodeId) {
     failed.push(`${providerType}: ${detectedPayload?.error || "not detected"}`);
   }
   if (detectedCandidates.length) {
-    const ranked = (0, import_daemon_core28.rankProvidersByQuotaGate)(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+    const ranked = (0, import_daemon_core28.rankProvidersByQuotaGate)(
+      node,
+      detectedCandidates,
+      ctx.mesh.policy?.quotaRouting ?? null,
+      void 0,
+      void 0,
+      (0, import_daemon_core28.quotaTargetsFromSlots)(normalizeNodeCapabilitySlots(node.policy?.slots))
+    );
     if (ranked.clear.length) return { providerType: ranked.clear[0] };
     const detail = ranked.gated.map((g) => `${g.providerType}: ${g.block.reason}`).join("; ");
     return JSON.stringify({

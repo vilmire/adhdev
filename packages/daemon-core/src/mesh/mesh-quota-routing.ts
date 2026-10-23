@@ -159,7 +159,7 @@ export interface ProviderQuotaGateBlock {
 /** The concrete slot the gate is deciding for. Model is optional because
  * idle-session and legacy callers know only the provider; absence deliberately
  * preserves the provider headline gate rather than guessing a bucket. */
-interface ProviderQuotaGateTarget {
+export interface ProviderQuotaGateTarget {
     model?: string | null;
 }
 
@@ -171,7 +171,7 @@ type QuotaGateWindow = {
 
 type AntigravityQuotaPool = 'gemini' | 'claude-gpt';
 
-function antigravityPoolFromLeadingLabel(value: string | null | undefined): AntigravityQuotaPool | undefined {
+export function antigravityPoolFromLeadingLabel(value: string | null | undefined): AntigravityQuotaPool | undefined {
     const label = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (/^gemini(?:[\s/_-]|$)/.test(label)) return 'gemini';
     if (/^(?:claude|gpt)(?:[\s/_-]|$)/.test(label)) return 'claude-gpt';
@@ -205,15 +205,20 @@ function worstBucketWindow(
  * provider contract: Antigravity models lead with Gemini / Claude / GPT, and
  * grouped bucket names lead with Gemini Models / Claude/GPT. Every bucket must
  * be classifiable and every headline axis must have a matching selected-pool
- * bucket. Anything else returns undefined, which makes the caller retain the
+ * bucket. Buckets of an unrecognised group are ignored; a selected pool with
+ * no bucket at all returns undefined, which makes the caller retain the
  * existing worst-headline decision (fail closed; never guess a pool).
  */
-function quotaWindowsForGateTarget(
+export function quotaWindowsForGateTarget(
     providerType: string,
     quota: MeshNodeFactsProviderQuota,
     target?: ProviderQuotaGateTarget | null,
 ): { session: QuotaGateWindow | null; weekly: QuotaGateWindow | null; group: AntigravityQuotaPool } | undefined {
-    if (providerType !== 'antigravity-cli' || quota.status !== 'ok') return undefined;
+    if (providerType !== 'antigravity-cli') return undefined;
+    // 'ok' snapshots AND carried-forward lastGoodWindows readings (expired-token
+    // fail-open path) both hold real per-pool buckets; the caller still gates
+    // each projected window on its own resetsAt.
+    if (quota.status !== 'ok' && (quota as any).metadata?.lastGoodWindows !== true) return undefined;
     const selectedPool = antigravityPoolFromLeadingLabel(target?.model);
     if (!selectedPool || !Array.isArray(quota.buckets) || !quota.buckets.length) return undefined;
 
@@ -224,7 +229,10 @@ function quotaWindowsForGateTarget(
                 : antigravityPoolFromLeadingLabel(bucket?.name);
         const usedPercent = Number(bucket?.usedPercent);
         const windowMinutes = Number(bucket?.windowMinutes);
-        if (!pool || !Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes)) return undefined;
+        // An unrecognised/unreadable bucket (e.g. a newly added model group)
+        // is ignored: it must not disable per-group gating for the known
+        // groups, and it can never be attributed to the selected pool.
+        if (!pool || !Number.isFinite(usedPercent) || !Number.isFinite(windowMinutes)) continue;
         classified.push({
             pool,
             bucket: { usedPercent, windowMinutes, resetsAt: bucket.resetsAt },
@@ -242,6 +250,21 @@ function quotaWindowsForGateTarget(
     // is disabled once the weekly limit is hit) is simply not gated on; falling
     // back to another pool's headline would judge the slot by the wrong group.
     return { session, weekly, group: selectedPool };
+}
+
+/**
+ * The session/weekly axes a consumer should read for (provider, target): the
+ * slot's own Antigravity pool when it can be resolved, otherwise the provider
+ * headline. Shared by the gate, ranking and spread bonus so none of them reads
+ * the blended worst-pool headline for a slot whose pool is known.
+ */
+export function quotaAxesForTarget(
+    providerType: string,
+    quota: MeshNodeFactsProviderQuota,
+    target?: ProviderQuotaGateTarget | null,
+): { session: QuotaGateWindow | null | undefined; weekly: QuotaGateWindow | null | undefined; group?: string } {
+    const projected = quotaWindowsForGateTarget(providerType, quota, target);
+    return projected ?? { session: quota.session, weekly: quota.weekly };
 }
 
 /**
@@ -614,11 +637,13 @@ export function expiryRiskForRanking(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    target?: ProviderQuotaGateTarget | null,
 ): ExpiryRisk | undefined {
     const entry = quotaEntryFor(node, providerType, context, now);
     if (!entry) return undefined;
     const { facts, quota } = entry;
-    const window = axis === 'session' ? quota.session : quota.weekly;
+    const axes = quotaAxesForTarget(providerType, quota, target);
+    const window = axis === 'session' ? axes.session : axes.weekly;
     // Keep ranking on the same per-window authority boundary as the launch
     // gate and spread bonus. In particular, an already-reset window is not
     // "fully elapsed" risk; it no longer says anything about the new window.
@@ -818,7 +843,7 @@ export function rankProvidersByQuotaGate(
         if (block) gated.push({ providerType, block });
         else clear.push(providerType);
     }
-    const weeklyByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'weekly', policy, now, context)]));
+    const weeklyByProvider = new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'weekly', policy, now, context, targetsByProvider?.get(p))]));
     // 2′ conditional gate: the session (5h) axis ranks ONLY while every
     // weekly-readable candidate has weekly headroom to spare (strictly above
     // the threshold — a candidate AT it stays weekly-protected). With no
@@ -833,7 +858,7 @@ export function rankProvidersByQuotaGate(
     const sessionAxisActive = weeklyMeasured.length > 0
         && weeklyMeasured.every(w => w.remainingPercent > headroomPercent);
     const sessionByProvider = sessionAxisActive
-        ? new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'session', policy, now, context)]))
+        ? new Map(clear.map(p => [p, expiryRiskForRanking(node, p, 'session', policy, now, context, targetsByProvider?.get(p))]))
         : undefined;
     clear.sort((a, b) => {
         const wa = weeklyByProvider.get(a);

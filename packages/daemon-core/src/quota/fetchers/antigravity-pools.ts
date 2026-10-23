@@ -23,6 +23,14 @@ export function quotaPoolOf(groupLabel: string | null, bucket: Record<string, un
  * A live bucket always carries its fraction (every captured sample does, even
  * at 1.0), so a bucket with a reset stamp and neither remaining member — or a
  * `remainingAmount` of 0 — is read as 0 left. Callers already skip `disabled`.
+ *
+ * Why this default is kept (proto3 reasoning): in proto3 an unset scalar and a
+ * zero scalar are indistinguishable on the wire, and JSON serialization omits
+ * both, so "absent" is the only encoding the server has for 0. Treating absence
+ * as "unknown" would reintroduce the original defect (an exhausted pool
+ * silently judged by the healthy pool's headline). The residual risk is a
+ * malformed bucket that carries a resetTime but no remaining members; that
+ * reads as exhausted for this one pool only, and clears on the next refresh.
  */
 export function exhaustedByOmission(bucket: Record<string, unknown>): boolean {
     if (bucket.remainingFraction === undefined && bucket.remainingAmount === undefined

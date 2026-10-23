@@ -472,3 +472,35 @@ describe('printQuota — account label parity with the dashboards', () => {
         expect(heading).not.toContain('·');
     });
 });
+
+describe('printQuota — antigravity per-model-group windows', () => {
+    const NOW = Date.now();
+    const bucket = (group: string, name: string, usedPercent: number, windowMinutes: number) => ({
+        name, group, usedPercent, windowMinutes, resetsAt: NOW + 60 * 60_000,
+    });
+
+    it('prints the own window of each group, not 5h/7d instead of the blended worst-pool headline', () => {
+        const quota = {
+            provider: 'antigravity-cli',
+            status: 'ok',
+            // Blended headline: weekly reads 100% used because Gemini is out.
+            session: { usedPercent: 0, windowMinutes: 300, resetsAt: NOW + 60 * 60_000 },
+            weekly: { usedPercent: 100, windowMinutes: 10080, resetsAt: NOW + 60 * 60_000 },
+            buckets: [
+                bucket('gemini', 'Gemini Models · Weekly Limit Remaining', 100, 10080),
+                bucket('claude-gpt', 'Claude and GPT models · Weekly Limit Remaining', 44.35, 10080),
+                bucket('claude-gpt', 'Claude and GPT models · Five Hour Limit Remaining', 0, 300),
+            ],
+            updatedAt: NOW,
+            error: null,
+        } as unknown as ProviderQuota;
+        const lines = captureLogs(() => printQuota('Antigravity', quota));
+        const text = lines.join(' | ');
+        expect(text).toMatch(/gemini 7 day.*100\.0% used/);
+        expect(text).toMatch(/gemini 5 hour.*not reported/);
+        expect(text).toMatch(/claude-gpt 7 day.*44.[34]% used/);
+        expect(text).toMatch(/claude-gpt 5 hour.*0\.0% used/);
+        expect(lines.some(l => /^\s+7 day/.test(l))).toBe(false);
+    });
+});
+

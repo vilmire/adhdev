@@ -1,7 +1,7 @@
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { LOG } from '../logging/logger.js';
-import { rankProvidersByQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
+import { rankProvidersByQuotaGate, evaluateProviderQuotaGate, PROVIDER_QUOTA_EXHAUSTED_SKIP_REASON, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
 import { buildQuotaRankingRationale, quotaRiskSnapshotForCandidates, quotaSpreadBonusByProvider, quotaSpreadBonusDiagnosticsByProvider, type ProviderQuotaBonusDiagnostic, type ProviderQuotaRiskSnapshot, type QuotaRankingRationale } from './mesh-quota-ranking-records.js';
 import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import { scoreSlotForTask, scoreSlotForTaskBreakdown, slotCapacityRemaining, slotDifficultyTierForTask, slotHasCapacity, type FitnessTask } from './mesh-scheduling-fitness.js';
@@ -426,14 +426,31 @@ export function selectProviderWithDiagnostics(args: {
             slotDifficultyTierForTask(candidate.slot, args.task.difficulty) === tier);
     }
 
-    const candidates: ProviderSlotCandidate[] = [];
-    const seenProviders = new Set<string>();
-    for (const candidate of candidateSlots) {
-        if (seenProviders.has(candidate.providerType)) continue;
-        seenProviders.add(candidate.providerType);
-        candidates.push(candidate);
-    }
     const now = args.now ?? Date.now();
+    // Gate PER SLOT first, then dedupe by provider: two slots of one provider
+    // (e.g. Antigravity Gemini vs Claude/GPT) can have different quota
+    // verdicts, so the first slot must not shadow a healthy sibling. A provider
+    // whose slots are all blocked keeps its first slot (stays visible as gated).
+    const slotBlocked = new Map<ProviderSlotCandidate, boolean>();
+    const isSlotBlocked = (candidate: ProviderSlotCandidate): boolean => {
+        let blocked = slotBlocked.get(candidate);
+        if (blocked === undefined) {
+            blocked = !!evaluateProviderQuotaGate(
+                args.node, candidate.providerType, args.quotaRouting, now,
+                args.quotaFactsContext, { model: candidate.slot.model },
+            );
+            slotBlocked.set(candidate, blocked);
+        }
+        return blocked;
+    };
+    const byProvider = new Map<string, ProviderSlotCandidate>();
+    for (const candidate of candidateSlots) {
+        const current = byProvider.get(candidate.providerType);
+        if (!current || (isSlotBlocked(current) && !isSlotBlocked(candidate))) {
+            byProvider.set(candidate.providerType, candidate);
+        }
+    }
+    const candidates: ProviderSlotCandidate[] = [...byProvider.values()];
     const ranked = rankProvidersByQuotaGate(
         args.node,
         candidates.map(candidate => candidate.providerType),
@@ -550,7 +567,10 @@ export function buildAutoLaunchRoutingDecision(args: {
     demotionReason?: string;
     otherProviderAvailableAtDemotion?: boolean;
 }): MeshTaskRoutingDecision {
-    const bonus = quotaSpreadBonusByProvider(args.node, args.quotaRouting, Date.now(), args.quotaFactsContext);
+    const bonus = quotaSpreadBonusByProvider(
+        args.node, args.quotaRouting, Date.now(), args.quotaFactsContext,
+        new Map([[args.resolved.providerType, { model: args.resolved.slot.model }]]),
+    );
     const winningSlot = args.resolved.slot;
     const executedSlot = args.executedSlot ?? winningSlot;
     const winningProvider = args.resolved.providerType;

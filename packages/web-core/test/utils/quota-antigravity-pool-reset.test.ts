@@ -61,7 +61,7 @@ describe('describeQuotaResetDetail — absolute local + relative / unknown', () 
 })
 
 describe('buildQuotaDisplayModel + selectMachineQuotaChips — pool visibility', () => {
-    it('two LIVE pools → four bucket chips; compactChip stays worst-headline; fleet/row/all show pools', () => {
+    it('two LIVE pools → four bucket chips; compactChip is the worst pool chip; fleet/row/all show pools', () => {
         const model = buildQuotaDisplayModel(antigravityTwoPools(), NOW)
         expect(model.kind).toBe('chips')
         expect(model.chips.every((c) => c.hint === 'bucket')).toBe(true)
@@ -74,7 +74,8 @@ describe('buildQuotaDisplayModel + selectMachineQuotaChips — pool visibility',
         // Pool labels stay distinct — LIVE group "Claude and GPT models" trims to "Claude and GPT".
         expect(model.chips.some((c) => c.key.startsWith('Gemini'))).toBe(true)
         expect(model.chips.some((c) => c.key.startsWith('Claude and GPT'))).toBe(true)
-        expect(model.compactChip).toMatchObject({ hint: 'session', usedPercent: 1.34 })
+        expect(model.compactChip).toMatchObject({ hint: 'bucket' })
+        expect(model.chips).toContain(model.compactChip)
         expect(selectMachineQuotaChips(model, 'fleet')).toHaveLength(4)
         expect(selectMachineQuotaChips(model, 'row')).toHaveLength(4)
         expect(selectMachineQuotaChips(model, 'all')).toHaveLength(4)
