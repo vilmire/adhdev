@@ -65,14 +65,16 @@ export function safeSlug(slug: string): string {
 }
 
 /**
- * Neutralise frame tokens inside untrusted text: a `[/relay]` in the body would
- * end the frame early, and `[ADHDev …]` / `[project …]` would read as a daemon
- * marker. Bracket-quoting keeps the text readable.
+ * Neutralise frame tokens inside untrusted text: a `[/relay]` or
+ * `[/UNTRUSTED_RELAY_NOTICE]` in the body would end the frame early, and
+ * `[ADHDev …]` / `[UNTRUSTED_RELAY_NOTICE]` / `[Assistant relay …]` / `[project …]`
+ * would read as a daemon marker. Bracket-quoting keeps the text readable.
  */
 export function defangRelayBody(text: string): string {
     return text
         .replace(/\[\s*\/\s*relay\s*\]/gi, '[/relay (quoted)]')
-        .replace(/\[(\s*)(ADHDev)\b/gi, '[$1quoted $2')
+        .replace(/\[\s*\/\s*UNTRUSTED_RELAY_NOTICE\s*\]/gi, '[/UNTRUSTED_RELAY_NOTICE (quoted)]')
+        .replace(/\[(\s*)(ADHDev|UNTRUSTED_RELAY_NOTICE|Assistant\s+relay)\b/gi, '[$1quoted $2')
         .replace(/^\[(\s*)project\b/gim, '[$1quoted project');
 }
 

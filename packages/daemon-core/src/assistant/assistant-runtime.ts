@@ -53,6 +53,7 @@ import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
 import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
 import { AssistantRemoteRelayPoller, REMOTE_POLL_MS } from './assistant-remote-relay.js';
+import { rebuildFollowerWakeRateLimitFromStore } from '../commands/high-family/assistant-remote.js';
 
 export const ASSISTANT_RELAY_TICK_MS = 60_000;
 const METRICS_PRUNE_EVERY_MS = 60 * 60_000;
@@ -295,6 +296,7 @@ export function wireAssistantRuntime(
     const registry = opts.registry ?? getAssistantRegistry();
     const opened = opts.store ? { store: opts.store, metrics: opts.metrics ?? null } : openStores();
     const { store, metrics } = opened;
+    rebuildFollowerWakeRateLimitFromStore();
     let sawCaller = false;
     let mcpRecipient: string | null = null;
     let review: AssistantReviewScheduler | null = null;

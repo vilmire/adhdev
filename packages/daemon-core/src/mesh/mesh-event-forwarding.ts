@@ -207,6 +207,10 @@ export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 
         if (readText(settings.meshCoordinatorFor) !== meshId) continue;
         const sessionId = readText(state?.instanceId);
         if (!sessionId) continue;
+        if (state?.connected === false) continue;
+        const rawStatus = readText(state?.status).toLowerCase();
+        const drainStatus = typeof inst.getDrainStatus === 'function' ? readText(inst.getDrainStatus()).toLowerCase() : '';
+        if (rawStatus === 'stopped' || rawStatus === 'error' || drainStatus === 'stopped' || drainStatus === 'error') continue;
         out.push({ sessionId, idle: coordinatorIsIdle(inst), modalParked: coordinatorIsModalParked(inst) });
     }
     return out;
