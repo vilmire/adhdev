@@ -10,3 +10,4 @@ export function parseDiffTree(text: string, scan: (t: string) => Array<{ line: n
 export function checkPush(entries: PushEntry[], opts?: { cwd?: string; remoteName?: string; remoteUrl?: string; ownerNames?: Iterable<string>; findLeaksFn?: (t: string) => Array<{ line: number; match: string; name?: string }> }): Promise<{ violations: PushViolation[]; checked: number }>;
 export function formatViolation(v: PushViolation): string;
 export function assertPublishableToPublicOss(cwd: string, commit: string, opts?: { remoteName?: string; remoteUrl?: string; remoteRef?: string }): Promise<{ checked: number }>;
+export function createDiffTreeParser(scan: (t: string) => Array<{ line: number; match: string; name?: string }>): { feed(chunk: string): void; end(): PushViolation[] };

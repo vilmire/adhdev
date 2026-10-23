@@ -66016,7 +66016,7 @@ ${buildSafetyTailSection(coordinatorCliType)}`,
       const rules = [];
       if (policy.requireApprovalForPush) rules.push("- **Ask for user approval** before pushing to remote (the refine path enforces it)");
       if (policy.allowAutoPublishSubmoduleMainCommits) {
-        rules.push("- Refinery may auto-publish unreachable submodule gitlink commits to a PRIVATE submodule origin/main (non-force, after validation and patch-equivalence pass). A PUBLIC remote (e.g. the oss repo) is NEVER published automatically: the refine stops with `publish_approval_required` listing every commit (sha, subject, author/committer, guard scan). Show that list to the owner and, only after explicit approval, rerun with `approved_publish_shas` covering those commits");
+        rules.push("- Refinery may auto-publish unreachable submodule gitlink commits to a PRIVATE submodule origin/main (non-force, after validation and patch-equivalence pass). A PUBLIC remote (e.g. the oss repo) is NEVER published automatically: the refine stops with `publish_approval_required` listing every commit (sha, subject, author/committer, guard scan). Show that list to the owner and, only after explicit approval, rerun with `approved_publish_shas` set to exactly those commit SHAs (missing or extra SHAs are refused)");
       }
       rules.push("- **Ask for user approval** before destructive git operations (force push, reset, etc.)");
       rules.push(`- Maximum **${policy.maxParallelTasks}** concurrent WRITE tasks; **${resolveMaxReadonlyParallelTasks(policy.maxParallelTasks)}** concurrent READ-ONLY tasks (\`live_debug_readonly\`, own cap)`);
@@ -69194,23 +69194,43 @@ ${upstream}`;
     function isPublicRemoteUrl(url) {
       return PUBLIC_REMOTE_RE.test(String(url || "").trim());
     }
-    function runGit2(cwd, args, { input } = {}) {
+    function runGit2(cwd, args, { input, env: env2, onStdout } = {}) {
       return new Promise((resolve54, reject) => {
         const child = (0, import_node_child_process7.spawn)("git", ["--no-replace-objects", ...args], {
           cwd,
-          env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os22.devNull, GIT_TERMINAL_PROMPT: "0" },
+          env: { ...process.env, ...GIT_ENV, ...env2 },
           timeout: args[0] === "ls-remote" ? 3e4 : void 0,
           windowsHide: true,
           stdio: [input === void 0 ? "ignore" : "pipe", "pipe", "pipe"]
         });
         const out = [];
         const err = [];
-        child.stdout.on("data", (d) => out.push(d));
+        const decoder = new import_node_string_decoder.StringDecoder("utf8");
+        let callbackError;
+        child.stdout.on("data", (d) => {
+          if (!onStdout) return out.push(d);
+          try {
+            onStdout(decoder.write(d));
+          } catch (e) {
+            callbackError = callbackError || e;
+            child.kill();
+          }
+        });
         child.stderr.on("data", (d) => err.push(d));
         child.on("error", reject);
         child.on("close", (code) => {
-          const stdout = Buffer.concat(out).toString("utf-8");
-          if (code === 0) return resolve54(stdout);
+          if (callbackError) return reject(callbackError);
+          const stdout = onStdout ? "" : Buffer.concat(out).toString("utf-8");
+          if (code === 0) {
+            if (onStdout) {
+              try {
+                onStdout(decoder.end());
+              } catch (e) {
+                return reject(e);
+              }
+            }
+            return resolve54(stdout);
+          }
           reject(new Error(`git ${args.slice(0, 3).join(" ")} exited ${code}: ${Buffer.concat(err).toString("utf-8").trim().slice(0, 500)}`));
         });
         if (input !== void 0) {
@@ -69227,9 +69247,17 @@ ${upstream}`;
       if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
       return { urls, isPublic: [...urls, ...configured.trim().split("\n")].some(isPublicRemoteUrl) };
     }
+    async function networkEnv(cwd) {
+      const env2 = { GIT_ASKPASS: "false", SSH_ASKPASS: "false", SSH_ASKPASS_REQUIRE: "never", GCM_INTERACTIVE: "never" };
+      const ssh = process.env.GIT_SSH_COMMAND || await tryGit2(cwd, ["config", "--get", "core.sshCommand"]) || (process.env.GIT_SSH ? "" : "ssh");
+      if (ssh) env2.GIT_SSH_COMMAND = `${ssh} -o BatchMode=yes`;
+      return env2;
+    }
     async function advertisedCommits(cwd, destination) {
       try {
-        const refs = await runGit2(cwd, ["ls-remote", "--refs", "--", destination]);
+        const rewritten = (await runGit2(cwd, ["ls-remote", "--get-url", "--", destination])).trim();
+        if (rewritten !== destination) return [];
+        const refs = await runGit2(cwd, ["ls-remote", "--refs", "--", destination], { env: await networkEnv(cwd) });
         const shas = new Set(refs.split("\n").map((line) => line.split(/\s+/)[0]).filter((sha6) => /^[0-9a-f]{40,64}$/.test(sha6)));
         return await locallyReadableCommits(cwd, shas);
       } catch {
@@ -69300,6 +69328,7 @@ ${upstream}`;
       if (!shas.length) return [];
       const raw = await runGit2(cwd, ["rev-list", "--header", "--no-walk=unsorted", "--stdin"], { input: shas.join("\n") + "\n" });
       const out = [];
+      const identityOk = (name, email) => name === REQUIRED_NAME && email === REQUIRED_EMAIL;
       for (const record6 of raw.split("\0")) {
         const nl = record6.indexOf("\n");
         if (nl === -1) continue;
@@ -69308,16 +69337,36 @@ ${upstream}`;
         const sep21 = body.indexOf("\n\n");
         const header = sep21 === -1 ? body : body.slice(0, sep21);
         for (const l of scanText(scan, header)) out.push({ kind: "path", sha: sha6, file: "(commit header)", line: l.line, detail: l.name || l.match });
+        const lines = header.split("\n");
+        const counts = { author: 0, committer: 0 };
+        for (const line of lines) {
+          const m = /^(author|committer) (.*) <(.*)> \d+ [+-]\d{4}$/.exec(line);
+          if (!m) continue;
+          if (++counts[m[1]] > 1 && !identityOk(m[2], m[3])) out.push({ kind: "identity", sha: sha6, detail: `raw ${m[1]} header is "${m[2]} <${m[3]}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+        }
+        for (const role of ["author", "committer"]) {
+          if (counts[role] !== 1) out.push({ kind: "identity", sha: sha6, detail: `expected exactly one ${role} header, found ${counts[role]}` });
+        }
+        for (let i = 0; i < lines.length; i++) {
+          if (!lines[i].startsWith("mergetag ")) continue;
+          const tagLines = [];
+          while (i + 1 < lines.length && lines[i + 1].startsWith(" ")) tagLines.push(lines[++i].slice(1));
+          const tagger = /^tagger (.*) <(.*)> \d+ [+-]\d{4}$/m.exec(tagLines.join("\n"));
+          if (!tagger || !identityOk(tagger[1], tagger[2])) {
+            out.push({ kind: "identity", sha: sha6, detail: `mergetag tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : "missing"}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+          }
+        }
       }
       return out;
     }
-    function parseDiffTree(text4, scan) {
+    function createDiffTreeParser(scan) {
       const out = [];
       let sha6 = "";
       let file = "";
       let lineNo = 0;
       let inHunk = false;
       let pending = [];
+      let tail = "";
       const flush = () => {
         if (!pending.length) return;
         const block2 = pending.map((p) => p.text).join("\n");
@@ -69327,20 +69376,20 @@ ${upstream}`;
         }
         pending = [];
       };
-      for (const line of text4.split("\n")) {
+      const handle = (line) => {
         if (inHunk) {
           const c = line[0];
           if (c === "+") {
             pending.push({ text: line.slice(1), file, line: lineNo++ });
-            continue;
+            return;
           }
-          if (c === "-" || c === " " || c === "\\") continue;
+          if (c === "-" || c === " " || c === "\\") return;
         }
         if (line.startsWith("@@")) {
           const h = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
           lineNo = h ? Number(h[1]) : 0;
           inHunk = true;
-          continue;
+          return;
         }
         inHunk = false;
         const m = SHA_LINE.exec(line);
@@ -69348,19 +69397,31 @@ ${upstream}`;
           flush();
           sha6 = m[1];
           file = "";
-          continue;
+          return;
         }
         if (line.startsWith("diff --git ") || line.startsWith("diff --cc ") || line.startsWith("diff --combined ")) {
           file = line.replace(/^diff --\S+ /, "").replace(/^"?a\//, "").split(/ "?b\//)[0];
           pending.push({ text: line.replace(/^diff --\S+ /, ""), file: file || "(file name)", line: 0 });
         }
-      }
-      flush();
-      return out;
+      };
+      return {
+        feed(chunk) {
+          const lines = (tail + chunk).split("\n");
+          tail = lines.pop();
+          for (const line of lines) handle(line);
+        },
+        end() {
+          if (tail) handle(tail);
+          tail = "";
+          flush();
+          return out;
+        }
+      };
     }
     async function patchViolations(cwd, shas, scan) {
       if (!shas.length) return [];
-      const raw = await runGit2(cwd, [
+      const parser = createDiffTreeParser(scan);
+      await runGit2(cwd, [
         "-c",
         "core.quotepath=off",
         "diff-tree",
@@ -69375,10 +69436,76 @@ ${upstream}`;
         "--no-ext-diff",
         "--no-renames",
         "--no-color"
-      ], { input: shas.join("\n") + "\n" });
-      return parseDiffTree(raw, scan);
+      ], { input: shas.join("\n") + "\n", onStdout: (chunk) => parser.feed(chunk) });
+      return parser.end();
     }
-    async function tagViolations(cwd, objectSha, scan, scanRef) {
+    function openBatchReader(cwd) {
+      const child = (0, import_node_child_process7.spawn)("git", ["--no-replace-objects", "cat-file", "--batch"], { cwd, env: { ...process.env, ...GIT_ENV }, windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+      let buf = Buffer.alloc(0);
+      let waiter = null;
+      let dead = null;
+      const settle2 = () => {
+        if (!waiter) return;
+        if (dead) {
+          const w2 = waiter;
+          waiter = null;
+          return w2.reject(dead);
+        }
+        const nl = buf.indexOf(10);
+        if (nl === -1) return;
+        const head = buf.subarray(0, nl).toString("utf-8");
+        if (head.endsWith(" missing")) {
+          const w2 = waiter;
+          waiter = null;
+          buf = buf.subarray(nl + 1);
+          return w2.resolve(null);
+        }
+        const m = /^([0-9a-f]{40,64}) (\S+) (\d+)$/.exec(head);
+        if (!m) {
+          const w2 = waiter;
+          waiter = null;
+          return w2.reject(new Error(`unexpected cat-file --batch header: ${head.slice(0, 80)}`));
+        }
+        const size = Number(m[3]);
+        if (buf.length < nl + 1 + size + 1) return;
+        const content = buf.subarray(nl + 1, nl + 1 + size);
+        buf = buf.subarray(nl + 1 + size + 1);
+        const w = waiter;
+        waiter = null;
+        w.resolve({ type: m[2], content });
+      };
+      child.stdout.on("data", (d) => {
+        buf = Buffer.concat([buf, d]);
+        settle2();
+      });
+      child.on("error", (e) => {
+        dead = e;
+        settle2();
+      });
+      child.on("close", (code) => {
+        dead = dead || new Error(`git cat-file --batch exited ${code}`);
+        settle2();
+      });
+      child.stdin.on("error", () => {
+      });
+      return {
+        read(name) {
+          return new Promise((resolve54, reject) => {
+            waiter = { resolve: resolve54, reject };
+            if (dead) return settle2();
+            child.stdin.write(`${name}
+`);
+          });
+        },
+        close() {
+          try {
+            child.stdin.end();
+          } catch {
+          }
+        }
+      };
+    }
+    async function tagViolations(reader, objectSha, scan, scanRef) {
       const out = [];
       let cur = objectSha;
       const seen2 = /* @__PURE__ */ new Set();
@@ -69386,8 +69513,10 @@ ${upstream}`;
         if (seen2.has(cur)) throw new Error(`cycle in tag chain at ${cur}`);
         if (seen2.size >= 1e5) throw new Error("unresolved tag chain exceeds safety bound");
         seen2.add(cur);
-        if ((await runGit2(cwd, ["cat-file", "-t", cur])).trim() !== "tag") break;
-        const raw = await runGit2(cwd, ["cat-file", "tag", cur]);
+        const obj = await reader.read(cur);
+        if (!obj) throw new Error(`missing object ${cur} in tag chain`);
+        if (obj.type !== "tag") break;
+        const raw = obj.content.toString("utf-8");
         const sep21 = raw.indexOf("\n\n");
         const header = sep21 === -1 ? raw : raw.slice(0, sep21);
         const message = sep21 === -1 ? "" : raw.slice(sep21 + 2);
@@ -69420,25 +69549,31 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       };
       const violations = [];
       const seen2 = /* @__PURE__ */ new Set();
-      const active = entries.filter((e) => e.localSha && !ZERO2.test(e.localSha));
-      const proven = active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
-      proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
-      for (const e of entries) {
-        if (!e.localSha || ZERO2.test(e.localSha)) continue;
-        const ref2 = e.localRef || e.localSha;
-        const add = (list2) => list2.forEach((v) => violations.push({ ...v, ref: ref2 }));
-        for (const l of scanRef(e.remoteRef || "")) add([{ kind: "path", sha: e.localSha, file: "(destination ref)", line: l.line, detail: l.name || l.match }]);
-        if (e.localRef?.startsWith("refs/tags/")) {
-          for (const l of scanRef(e.localRef)) add([{ kind: "path", sha: e.localSha, file: "(tag name)", line: l.line, detail: l.name || l.match }]);
+      let batch;
+      const reader = () => batch ||= openBatchReader(cwd);
+      try {
+        const active = entries.filter((e) => e.localSha && !ZERO2.test(e.localSha));
+        const proven = active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
+        proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
+        for (const e of entries) {
+          if (!e.localSha || ZERO2.test(e.localSha)) continue;
+          const ref2 = e.localRef || e.localSha;
+          const add = (list2) => list2.forEach((v) => violations.push({ ...v, ref: ref2 }));
+          for (const l of scanRef(e.remoteRef || "")) add([{ kind: "path", sha: e.localSha, file: "(destination ref)", line: l.line, detail: l.name || l.match }]);
+          if (e.localRef?.startsWith("refs/tags/")) {
+            for (const l of scanRef(e.localRef)) add([{ kind: "path", sha: e.localSha, file: "(tag name)", line: l.line, detail: l.name || l.match }]);
+          }
+          if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan, scanRef));
+          const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha, proven)).filter((s2) => !seen2.has(s2));
+          shas.forEach((s2) => seen2.add(s2));
+          add(await identityViolations(cwd, shas));
+          add(await messageViolations(cwd, shas, scan));
+          add(await patchViolations(cwd, shas, scan));
         }
-        if (e.localSha !== e.remoteSha) add(await tagViolations(cwd, e.localSha, scan, scanRef));
-        const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha, proven)).filter((s2) => !seen2.has(s2));
-        shas.forEach((s2) => seen2.add(s2));
-        add(await identityViolations(cwd, shas));
-        add(await messageViolations(cwd, shas, scan));
-        add(await patchViolations(cwd, shas, scan));
+        return { violations, checked: seen2.size };
+      } finally {
+        batch?.close();
       }
-      return { violations, checked: seen2.size };
     }
     function formatViolation(v) {
       if (v.kind === "identity") return `  ${v.sha.slice(0, 12)} [${v.ref}] identity: ${v.detail}`;
@@ -69454,11 +69589,13 @@ ${BLOCKED_HINT}`);
       return { checked };
     }
     var import_node_child_process7;
+    var import_node_string_decoder;
     var import_node_os22;
     var REQUIRED_NAME;
     var REQUIRED_EMAIL;
     var ZERO2;
     var PUBLIC_REMOTE_RE;
+    var GIT_ENV;
     var tryGit2;
     var SHA_LINE;
     var BLOCKED_HINT;
@@ -69466,12 +69603,14 @@ ${BLOCKED_HINT}`);
       "src/git/public-push-guard.mjs"() {
         "use strict";
         import_node_child_process7 = require("child_process");
+        import_node_string_decoder = require("string_decoder");
         import_node_os22 = require("os");
         init_personal_paths();
         REQUIRED_NAME = "vilmire";
         REQUIRED_EMAIL = "vilmire@users.noreply.github.com";
         ZERO2 = /^0+$/;
         PUBLIC_REMOTE_RE = /[:/]vilmire\/adhdev(?:\.git)?\/?$/i;
+        GIT_ENV = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: import_node_os22.devNull, GIT_TERMINAL_PROMPT: "0" };
         tryGit2 = async (cwd, args) => {
           try {
             return (await runGit2(cwd, args)).trim();
@@ -96291,8 +96430,9 @@ ${tail}`;
         };
       });
       const unapproved = commits.filter((c) => !c.approved).map((c) => c.sha);
-      if (unapproved.length === 0 && commits.length > 0) return void 0;
-      return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved };
+      const extraApproved = approved.filter((a) => !commits.some((c) => c.sha.startsWith(a)));
+      if (unapproved.length === 0 && extraApproved.length === 0 && commits.length > 0) return void 0;
+      return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved };
     }
     async function runMeshRefineSubmoduleReachabilityGate(repoRoot, mergedTree, options = {}) {
       const startedAt = Date.now();
@@ -96471,7 +96611,7 @@ ${tail}`;
                     entry.autoPublishAllowed = true;
                     entry.autoPublishAttempted = false;
                     entry.publishApproval = publishApproval;
-                    entry.autoPublishSkippedReason = `publish_approval_required: ${publishApproval.commits.length} commit(s) would become public on ${entry.remoteUrl || "origin"} ${publishApproval.remoteRef}; ${publishApproval.unapproved.length} not covered by approved_publish_shas`;
+                    entry.autoPublishSkippedReason = `publish_approval_required: ${publishApproval.commits.length} commit(s) would become public on ${entry.remoteUrl || "origin"} ${publishApproval.remoteRef}; ${publishApproval.unapproved.length} not covered and ${publishApproval.extraApproved.length} extra in approved_publish_shas (the set must equal the pending commits)`;
                   } else if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
                     entry.autoPublishAllowed = true;
                     entry.autoPublishAttempted = true;
@@ -109709,7 +109849,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               remoteUrls: entry.publishApproval.remoteUrls,
               remoteRef: entry.publishApproval.remoteRef,
               commits: entry.publishApproval.commits,
-              unapproved: entry.publishApproval.unapproved
+              unapproved: entry.publishApproval.unapproved,
+              extraApproved: entry.publishApproval.extraApproved
             }))
           } : {},
           convergenceStatus: "blocked_review",
@@ -109721,7 +109862,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           nextSteps: approvalRequired ? [
             "Nothing was pushed: the submodule remote is PUBLIC, and the Refinery never publishes to a public remote without per-commit owner approval.",
             'Show the owner every commit in publishApprovalRequired[].commits (sha, subject, author/committer, guardScan). Do not approve any commit whose guardScan is not "clean".',
-            "After the owner approves, rerun with approved_publish_shas set to those commit SHAs (it must cover every listed commit)."
+            "After the owner approves, rerun with approved_publish_shas set to exactly those commit SHAs (the set must equal the listed commits; extra or missing SHAs are refused)."
           ] : convergeToPublished ? [
             "Do NOT publish the local submodule commit(s): an equivalent commit (identical tree) is already published on the submodule remote main branch for every unreachable gitlink.",
             "Retarget each submodule gitlink to the already-published equivalent commit shown in the evidence (equivalentPublishedCommit), commit the root pointer update, and push the submodule checkout to that commit.",
@@ -195322,7 +195463,7 @@ var MESH_REFINE_NODE_TOOL = {
       approved_publish_shas: {
         type: "array",
         items: { type: "string" },
-        description: "Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must cover every listed commit. Private remotes are unaffected."
+        description: "Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must EQUAL the listed commits exactly (a missing or extra SHA is refused). With mesh_refine_batch the one array is applied to every node, so publish public submodule commits one node at a time. Private remotes are unaffected."
       }
     },
     required: ["node_id"]
@@ -195344,7 +195485,7 @@ var MESH_REFINE_BATCH_TOOL = {
       approved_publish_shas: {
         type: "array",
         items: { type: "string" },
-        description: "Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must cover every listed commit. Private remotes are unaffected."
+        description: "Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must EQUAL the listed commits exactly (a missing or extra SHA is refused). With mesh_refine_batch the one array is applied to every node, so publish public submodule commits one node at a time. Private remotes are unaffected."
       }
     },
     required: []

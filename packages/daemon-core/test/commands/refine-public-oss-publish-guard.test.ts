@@ -196,6 +196,16 @@ describe('★owner rule: the Refinery never publishes to a PUBLIC remote without
     expect(f.originMain()).toEqual(before)
   })
 
+  it('an approved set with an EXTRA sha (stale/wrong approval) → blocked, nothing pushed', async () => {
+    const f = publicFixtureWithTwoCommits()
+    const before = f.originMain()
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, { ...AUTO_PUBLISH_ON, approvedPublishShas: [f.first, f.second, 'deadbeefdeadbeef'] })
+    const [entry] = gate.unreachable
+    expect(gate.status).toBe('failed')
+    expect(entry.publishApproval?.extraApproved).toEqual(['deadbeefdeadbeef'])
+    expect(f.originMain()).toEqual(before)
+  })
+
   it('a guard-blocked commit is reported as blocked in the approval request', async () => {
     const f = fixture({ originSubpath: 'vilmire/adhdev', id: BAD, content: 'clean\n' })
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)

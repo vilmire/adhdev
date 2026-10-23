@@ -25,6 +25,7 @@
 //   - `diff --git a/<path> b/<path>` lines are scanned: file NAMES leak too.
 
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { devNull } from 'node:os';
 import { findLeaks, currentUserNames } from './personal-paths.mjs';
 
@@ -43,22 +44,32 @@ export function isPublicRemoteUrl(url) {
   return PUBLIC_REMOTE_RE.test(String(url || '').trim());
 }
 
-function runGit(cwd, args, { input } = {}) {
+const GIT_ENV = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull, GIT_TERMINAL_PROMPT: '0' };
+
+// `env` adds to the replacement/graft isolation; `onStdout` streams decoded text
+// instead of buffering the whole output (the resolved value is then '').
+function runGit(cwd, args, { input, env, onStdout } = {}) {
   return new Promise((resolve, reject) => {
     // Read the real object graph, irrespective of local replacement refs/grafts.
     const child = spawn('git', ['--no-replace-objects', ...args], {
-      cwd, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull, GIT_TERMINAL_PROMPT: '0' },
+      cwd, env: { ...process.env, ...GIT_ENV, ...env },
       timeout: args[0] === 'ls-remote' ? 30_000 : undefined,
       windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
     const out = [];
     const err = [];
-    child.stdout.on('data', (d) => out.push(d));
+    const decoder = new StringDecoder('utf8');
+    let callbackError;
+    child.stdout.on('data', (d) => {
+      if (!onStdout) return out.push(d);
+      try { onStdout(decoder.write(d)); } catch (e) { callbackError = callbackError || e; child.kill(); }
+    });
     child.stderr.on('data', (d) => err.push(d));
     child.on('error', reject);
     child.on('close', (code) => {
-      const stdout = Buffer.concat(out).toString('utf-8');
-      if (code === 0) return resolve(stdout);
+      if (callbackError) return reject(callbackError);
+      const stdout = onStdout ? '' : Buffer.concat(out).toString('utf-8');
+      if (code === 0) { if (onStdout) { try { onStdout(decoder.end()); } catch (e) { return reject(e); } } return resolve(stdout); }
       reject(new Error(`git ${args.slice(0, 3).join(' ')} exited ${code}: ${Buffer.concat(err).toString('utf-8').trim().slice(0, 500)}`));
     });
     if (input !== undefined) { child.stdin.on('error', () => {}); child.stdin.end(input); }
@@ -76,10 +87,24 @@ export async function pushDestinations(cwd, remoteName = 'origin') {
   return { urls, isPublic: [...urls, ...configured.trim().split('\n')].some(isPublicRemoteUrl) };
 }
 
+// The guard's own network call must never wait for a human: no terminal, ssh
+// BatchMode (appended to whatever ssh command is already configured), no askpass.
+async function networkEnv(cwd) {
+  const env = { GIT_ASKPASS: 'false', SSH_ASKPASS: 'false', SSH_ASKPASS_REQUIRE: 'never', GCM_INTERACTIVE: 'never' };
+  const ssh = process.env.GIT_SSH_COMMAND || await tryGit(cwd, ['config', '--get', 'core.sshCommand']) || (process.env.GIT_SSH ? '' : 'ssh');
+  if (ssh) env.GIT_SSH_COMMAND = `${ssh} -o BatchMode=yes`;
+  return env;
+}
+
 /** Only fresh destination advertisements prove possession, never refs/remotes/*. */
 async function advertisedCommits(cwd, destination) {
   try {
-    const refs = await runGit(cwd, ['ls-remote', '--refs', '--', destination]);
+    // `destination` is already the URL git pushes to. If url.*.insteadOf would rewrite
+    // it AGAIN for ls-remote, the advertisement could come from a different repository:
+    // no proof, so scan the full ancestry.
+    const rewritten = (await runGit(cwd, ['ls-remote', '--get-url', '--', destination])).trim();
+    if (rewritten !== destination) return [];
+    const refs = await runGit(cwd, ['ls-remote', '--refs', '--', destination], { env: await networkEnv(cwd) });
     const shas = new Set(refs.split('\n').map((line) => line.split(/\s+/)[0]).filter((sha) => /^[0-9a-f]{40,64}$/.test(sha)));
     return await locallyReadableCommits(cwd, shas);
   } catch {
@@ -168,6 +193,7 @@ async function headerViolations(cwd, shas, scan) {
   if (!shas.length) return [];
   const raw = await runGit(cwd, ['rev-list', '--header', '--no-walk=unsorted', '--stdin'], { input: shas.join('\n') + '\n' });
   const out = [];
+  const identityOk = (name, email) => name === REQUIRED_NAME && email === REQUIRED_EMAIL;
   for (const record of raw.split('\0')) {
     const nl = record.indexOf('\n');
     if (nl === -1) continue;
@@ -176,20 +202,47 @@ async function headerViolations(cwd, shas, scan) {
     const sep = body.indexOf('\n\n');
     const header = sep === -1 ? body : body.slice(0, sep);
     for (const l of scanText(scan, header)) out.push({ kind: 'path', sha, file: '(commit header)', line: l.line, detail: l.name || l.match });
+    // Every author/committer header (a forged duplicate is published too) and every
+    // tagger inside an embedded mergetag must be the required identity.
+    const lines = header.split('\n');
+    const counts = { author: 0, committer: 0 };
+    for (const line of lines) {
+      const m = /^(author|committer) (.*) <(.*)> \d+ [+-]\d{4}$/.exec(line);
+      if (!m) continue;
+      // The first of each is what git parsed (%an/%ce, already checked); report only duplicates.
+      if (++counts[m[1]] > 1 && !identityOk(m[2], m[3])) out.push({ kind: 'identity', sha, detail: `raw ${m[1]} header is "${m[2]} <${m[3]}>", required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+    }
+    for (const role of ['author', 'committer']) {
+      if (counts[role] !== 1) out.push({ kind: 'identity', sha, detail: `expected exactly one ${role} header, found ${counts[role]}` });
+    }
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith('mergetag ')) continue;
+      const tagLines = [];
+      while (i + 1 < lines.length && lines[i + 1].startsWith(' ')) tagLines.push(lines[++i].slice(1));
+      const tagger = /^tagger (.*) <(.*)> \d+ [+-]\d{4}$/m.exec(tagLines.join('\n'));
+      if (!tagger || !identityOk(tagger[1], tagger[2])) {
+        out.push({ kind: 'identity', sha, detail: `mergetag tagger is ${tagger ? `"${tagger[1]} <${tagger[2]}>"` : 'missing'}, required "${REQUIRED_NAME} <${REQUIRED_EMAIL}>"` });
+      }
+    }
   }
   return out;
 }
 
 const SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?$/;
 
-/** Added lines + file names of the given commits, via the unified-diff grammar. */
-export function parseDiffTree(text, scan) {
+/**
+ * Incremental parser for `diff-tree -p` output: feed text chunks as they arrive,
+ * `end()` returns the violations. Only the CURRENT commit's added lines are held,
+ * so a 100,000-commit history is never buffered as one string.
+ */
+export function createDiffTreeParser(scan) {
   const out = [];
   let sha = '';
   let file = '';
   let lineNo = 0;
   let inHunk = false;
   let pending = []; // {text, file, line} for the current commit
+  let tail = '';
   const flush = () => {
     if (!pending.length) return;
     const block = pending.map((p) => p.text).join('\n');
@@ -199,41 +252,95 @@ export function parseDiffTree(text, scan) {
     }
     pending = [];
   };
-  for (const line of text.split('\n')) {
+  const handle = (line) => {
     if (inHunk) {
       const c = line[0];
-      if (c === '+') { pending.push({ text: line.slice(1), file, line: lineNo++ }); continue; }
-      if (c === '-' || c === ' ' || c === '\\') continue;
+      if (c === '+') { pending.push({ text: line.slice(1), file, line: lineNo++ }); return; }
+      if (c === '-' || c === ' ' || c === '\\') return;
     }
     if (line.startsWith('@@')) {
       const h = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
       lineNo = h ? Number(h[1]) : 0;
       inHunk = true;
-      continue;
+      return;
     }
     inHunk = false;
     const m = SHA_LINE.exec(line);
-    if (m) { flush(); sha = m[1]; file = ''; continue; }
+    if (m) { flush(); sha = m[1]; file = ''; return; }
     if (line.startsWith('diff --git ') || line.startsWith('diff --cc ') || line.startsWith('diff --combined ')) {
       file = line.replace(/^diff --\S+ /, '').replace(/^"?a\//, '').split(/ "?b\//)[0];
       pending.push({ text: line.replace(/^diff --\S+ /, ''), file: file || '(file name)', line: 0 });
     }
-  }
-  flush();
-  return out;
+  };
+  return {
+    feed(chunk) {
+      const lines = (tail + chunk).split('\n');
+      tail = lines.pop();
+      for (const line of lines) handle(line);
+    },
+    end() {
+      if (tail) handle(tail);
+      tail = '';
+      flush();
+      return out;
+    },
+  };
+}
+
+/** Added lines + file names of the given commits, via the unified-diff grammar. */
+export function parseDiffTree(text, scan) {
+  const parser = createDiffTreeParser(scan);
+  parser.feed(text);
+  return parser.end();
 }
 
 async function patchViolations(cwd, shas, scan) {
   if (!shas.length) return [];
-  const raw = await runGit(cwd, [
+  const parser = createDiffTreeParser(scan);
+  await runGit(cwd, [
     '-c', 'core.quotepath=off',
     'diff-tree', '--stdin', '-r', '-p', '-m', '--root', '-U0', '--text', '--no-textconv', '--no-ext-diff', '--no-renames', '--no-color',
-  ], { input: shas.join('\n') + '\n' });
-  return parseDiffTree(raw, scan);
+  ], { input: shas.join('\n') + '\n', onStdout: (chunk) => parser.feed(chunk) });
+  return parser.end();
+}
+
+// One long-lived `cat-file --batch` for the whole tag walk: one process for any
+// chain depth instead of two spawns per level. Requests are strictly sequential.
+function openBatchReader(cwd) {
+  const child = spawn('git', ['--no-replace-objects', 'cat-file', '--batch'], { cwd, env: { ...process.env, ...GIT_ENV }, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  let buf = Buffer.alloc(0);
+  let waiter = null;
+  let dead = null;
+  const settle = () => {
+    if (!waiter) return;
+    if (dead) { const w = waiter; waiter = null; return w.reject(dead); }
+    const nl = buf.indexOf(10);
+    if (nl === -1) return;
+    const head = buf.subarray(0, nl).toString('utf-8');
+    if (head.endsWith(' missing')) { const w = waiter; waiter = null; buf = buf.subarray(nl + 1); return w.resolve(null); }
+    const m = /^([0-9a-f]{40,64}) (\S+) (\d+)$/.exec(head);
+    if (!m) { const w = waiter; waiter = null; return w.reject(new Error(`unexpected cat-file --batch header: ${head.slice(0, 80)}`)); }
+    const size = Number(m[3]);
+    if (buf.length < nl + 1 + size + 1) return;
+    const content = buf.subarray(nl + 1, nl + 1 + size);
+    buf = buf.subarray(nl + 1 + size + 1);
+    const w = waiter; waiter = null;
+    w.resolve({ type: m[2], content });
+  };
+  child.stdout.on('data', (d) => { buf = Buffer.concat([buf, d]); settle(); });
+  child.on('error', (e) => { dead = e; settle(); });
+  child.on('close', (code) => { dead = dead || new Error(`git cat-file --batch exited ${code}`); settle(); });
+  child.stdin.on('error', () => {});
+  return {
+    read(name) {
+      return new Promise((resolve, reject) => { waiter = { resolve, reject }; if (dead) return settle(); child.stdin.write(`${name}\n`); });
+    },
+    close() { try { child.stdin.end(); } catch { /* already closed */ } },
+  };
 }
 
 /** Annotated tag objects: tagger identity + name/message scan (nested tags too). */
-async function tagViolations(cwd, objectSha, scan, scanRef) {
+async function tagViolations(reader, objectSha, scan, scanRef) {
   const out = [];
   let cur = objectSha;
   const seen = new Set();
@@ -241,8 +348,10 @@ async function tagViolations(cwd, objectSha, scan, scanRef) {
     if (seen.has(cur)) throw new Error(`cycle in tag chain at ${cur}`);
     if (seen.size >= 100_000) throw new Error('unresolved tag chain exceeds safety bound');
     seen.add(cur);
-    if ((await runGit(cwd, ['cat-file', '-t', cur])).trim() !== 'tag') break;
-    const raw = await runGit(cwd, ['cat-file', 'tag', cur]);
+    const obj = await reader.read(cur);
+    if (!obj) throw new Error(`missing object ${cur} in tag chain`);
+    if (obj.type !== 'tag') break;
+    const raw = obj.content.toString('utf-8');
     const sep = raw.indexOf('\n\n');
     const header = sep === -1 ? raw : raw.slice(0, sep);
     const message = sep === -1 ? '' : raw.slice(sep + 2);
@@ -281,6 +390,9 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
   };
   const violations = [];
   const seen = new Set();
+  let batch;
+  const reader = () => (batch ||= openBatchReader(cwd));
+  try {
   const active = entries.filter((e) => e.localSha && !ZERO.test(e.localSha));
   const proven = active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
   proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
@@ -292,7 +404,7 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
     if (e.localRef?.startsWith('refs/tags/')) {
       for (const l of scanRef(e.localRef)) add([{ kind: 'path', sha: e.localSha, file: '(tag name)', line: l.line, detail: l.name || l.match }]);
     }
-    if (e.localSha !== e.remoteSha) add(await tagViolations(cwd, e.localSha, scan, scanRef));
+    if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan, scanRef));
     const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha, proven)).filter((s) => !seen.has(s));
     shas.forEach((s) => seen.add(s));
     add(await identityViolations(cwd, shas));
@@ -300,6 +412,7 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
     add(await patchViolations(cwd, shas, scan));
   }
   return { violations, checked: seen.size };
+  } finally { batch?.close(); }
 }
 
 export function formatViolation(v) {

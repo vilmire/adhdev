@@ -726,6 +726,8 @@ export type MeshRefinePublishApprovalRequest = {
     remoteRef: string;
     commits: MeshRefinePublishCandidate[];
     unapproved: string[];
+    /** Approved SHAs that match no commit about to become public (stale or wrong approval). */
+    extraApproved: string[];
 };
 
 /**
@@ -733,9 +735,9 @@ export type MeshRefinePublishApprovalRequest = {
  * authority. Returns `undefined` when the destination is private (current behaviour
  * unchanged) or when every commit that would become public is in `approvedShas`.
  * Otherwise returns the request to show the owner. Fail-closed: if the push URLs
- * cannot be read the destination is treated as public. An approval only has to
- * COVER the pending commits — an extra approved SHA publishes nothing — so a stale
- * approval can never smuggle in a commit that was added after the owner looked.
+ * cannot be read the destination is treated as public. The approved set must EQUAL
+ * the pending set: a missing commit was never approved, and an extra SHA means the
+ * owner approved a different history than the one about to be published.
  */
 export async function evaluatePublicPublishApproval(
     submodulePath: string,
@@ -790,8 +792,9 @@ export async function evaluatePublicPublishApproval(
         };
     });
     const unapproved = commits.filter(c => !c.approved).map(c => c.sha);
-    if (unapproved.length === 0 && commits.length > 0) return undefined;
-    return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved };
+    const extraApproved = approved.filter(a => !commits.some(c => c.sha.startsWith(a)));
+    if (unapproved.length === 0 && extraApproved.length === 0 && commits.length > 0) return undefined;
+    return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved };
 }
 
 export async function runMeshRefineSubmoduleReachabilityGate(
@@ -1039,7 +1042,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                                 entry.autoPublishAllowed = true;
                                 entry.autoPublishAttempted = false;
                                 entry.publishApproval = publishApproval;
-                                entry.autoPublishSkippedReason = `publish_approval_required: ${publishApproval.commits.length} commit(s) would become public on ${entry.remoteUrl || 'origin'} ${publishApproval.remoteRef}; ${publishApproval.unapproved.length} not covered by approved_publish_shas`;
+                                entry.autoPublishSkippedReason = `publish_approval_required: ${publishApproval.commits.length} commit(s) would become public on ${entry.remoteUrl || 'origin'} ${publishApproval.remoteRef}; ${publishApproval.unapproved.length} not covered and ${publishApproval.extraApproved.length} extra in approved_publish_shas (the set must equal the pending commits)`;
                             } else if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
                                 entry.autoPublishAllowed = true;
                                 entry.autoPublishAttempted = true;

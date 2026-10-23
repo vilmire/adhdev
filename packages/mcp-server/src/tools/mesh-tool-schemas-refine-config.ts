@@ -22,7 +22,7 @@ export const MESH_REFINE_NODE_TOOL = {
             approved_publish_shas: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must cover every listed commit. Private remotes are unaffected.',
+                description: 'Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must EQUAL the listed commits exactly (a missing or extra SHA is refused). With mesh_refine_batch the one array is applied to every node, so publish public submodule commits one node at a time. Private remotes are unaffected.',
             },
         },
         required: ['node_id'],
@@ -49,7 +49,7 @@ export const MESH_REFINE_BATCH_TOOL = {
             approved_publish_shas: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must cover every listed commit. Private remotes are unaffected.',
+                description: 'Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must EQUAL the listed commits exactly (a missing or extra SHA is refused). With mesh_refine_batch the one array is applied to every node, so publish public submodule commits one node at a time. Private remotes are unaffected.',
             },
         },
         required: [],
