@@ -9,8 +9,9 @@
  *   - there is no owner record and the directory is older than
  *     OWNERLESS_STALE_MS (a lock left by a build that predates owner records;
  *     a live holder writes its record microseconds after mkdir).
- * A live pid — including one that may have been reused — is never stolen
- * unless the caller explicitly opts into a maximum lock age.
+ * A live pid is never stolen unless the caller opts into a maximum lock age,
+ * or the record carries a process start identity that no longer matches the
+ * live pid (pid reuse after a crash).
  *
  * Reclaim runs under a second mkdir guard (`<lock>.reclaim`) and re-reads the
  * owner record there: only the exact abandoned instance (same nonce, or still
@@ -20,12 +21,15 @@
  */
 import { mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
 export const OWNERLESS_STALE_MS = 60_000;
 const OWNER_FILE = 'owner.json';
 
-export interface LockOwner { pid: number; nonce: string; acquiredAt: number }
+/** `startId` is the holder's process start identity; a live pid whose start
+ * identity differs is a reused pid, not the holder. Absent on old records / win32. */
+export interface LockOwner { pid: number; nonce: string; acquiredAt: number; startId?: string }
 export type OwnedLockResult =
     | { ok: true; owner: LockOwner; release(): void }
     /** `busy`: held by a live owner (or a reclaim is in progress). `errno`: the
@@ -37,6 +41,47 @@ export interface OwnedLockOptions {
     /** Opt-in expiry for bounded synchronous transactions. Other callers retain
      * the default of never reclaiming a known live owner. */
     maxAgeMs?: number;
+    /** Opt into peer probes for stale-looking locks. Never enable in receipt transactions. */
+    probePeerIdentity?: boolean;
+    /** Process start identity probe (injectable for tests). */
+    processStartId?: (pid: number) => string | undefined;
+}
+
+/** Numeric OS identity. The version tag prevents comparison with legacy ps text.
+ * Darwin's portable ps fallback has second precision; UTC parsing avoids local
+ * timezone/DST and locale conversions. A same-second reuse is unknown, not proof. */
+export function processStartId(pid: number): string | undefined {
+    try {
+        if (process.platform === 'linux') {
+            const boot = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+            const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+            // comm (field 2) can contain spaces and parentheses. Field 22 is
+            // index 19 after the closing comm parenthesis (field 3 starts there).
+            const ticks = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+            if (/^[a-f0-9-]{36}$/.test(boot) && /^\d+$/.test(ticks ?? '')) return `linux-start-ticks-v1:${boot}:${ticks}`;
+        } else if (process.platform === 'darwin') {
+            const out = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+                encoding: 'utf8', timeout: 2000, windowsHide: true,
+                env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, stdio: ['ignore', 'pipe', 'ignore'],
+            }).trim();
+            const match = /^\w{3} (\w{3})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(out);
+            if (!match) return undefined;
+            const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(match[1]);
+            const epochMs = Date.UTC(Number(match[6]), month, Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5]));
+            if (month >= 0 && Number.isFinite(epochMs) && epochMs > 0) return `darwin-epoch-seconds-v1:${epochMs / 1000}`;
+        }
+    } catch { /* An unavailable probe is uncertainty, never reuse evidence. */ }
+    return undefined;
+}
+
+// Module initialization precedes lock transactions. No process spawn is needed
+// for fresh locks, including the receipt store's synchronous hot path.
+const ownProcessStartId = processStartId(process.pid);
+
+function identityFormat(value: string | undefined): string | undefined {
+    if (/^linux-start-ticks-v1:[a-f0-9-]{36}:\d+$/.test(value ?? '')) return 'linux-start-ticks-v1';
+    if (/^darwin-epoch-seconds-v1:\d+$/.test(value ?? '')) return 'darwin-epoch-seconds-v1';
+    return undefined;
 }
 
 export function isPidAlive(pid: number): boolean {
@@ -52,18 +97,29 @@ function readOwner(lock: string): Observed {
         const value: unknown = JSON.parse(readFileSync(join(lock, OWNER_FILE), 'utf8'));
         const v = value as Partial<LockOwner> | null;
         if (v && Number.isSafeInteger(v.pid) && (v.pid as number) > 0 && typeof v.nonce === 'string' && v.nonce) {
-            return { kind: 'owner', owner: { pid: v.pid as number, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0 } };
+            return { kind: 'owner', owner: { pid: v.pid as number, nonce: v.nonce, acquiredAt: Number(v.acquiredAt) || 0,
+                ...(typeof v.startId === 'string' && v.startId ? { startId: v.startId } : {}) } };
         }
     } catch { /* absent or torn record: fall through to the directory age */ }
     try { return { kind: 'ownerless', mtimeMs: statSync(lock).mtimeMs }; }
     catch { return { kind: 'gone' }; }
 }
 
-function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number, maxAgeMs?: number): boolean {
+function abandoned(observed: Observed, alive: (pid: number) => boolean, now: number, maxAgeMs: number | undefined,
+    startOf: (pid: number) => string | undefined): boolean {
     if (observed.kind === 'owner') return !alive(observed.owner.pid)
+        || ((observed.owner.pid === process.pid || now - observed.owner.acquiredAt >= OWNERLESS_STALE_MS)
+            && pidReused(observed.owner, startOf))
         || (maxAgeMs !== undefined && now - observed.owner.acquiredAt >= maxAgeMs);
     if (observed.kind === 'ownerless') return now - observed.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
     return false;
+}
+
+function pidReused(owner: LockOwner, startOf: (pid: number) => string | undefined): boolean {
+    const format = identityFormat(owner.startId);
+    if (!format) return false;
+    const current = startOf(owner.pid);
+    return identityFormat(current) === format && current !== owner.startId;
 }
 
 function sameInstance(a: Observed, b: Observed): boolean {
@@ -72,16 +128,17 @@ function sameInstance(a: Observed, b: Observed): boolean {
 }
 
 /** Remove an abandoned lock under the reclaim guard. True when the caller should retry mkdir. */
-function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number, maxAgeMs?: number): boolean {
+function reclaim(lock: string, alive: (pid: number) => boolean, now: () => number, maxAgeMs: number | undefined,
+    startOf: (pid: number) => string | undefined): boolean {
     const observed = readOwner(lock);
     if (observed.kind === 'gone') return true;
-    if (!abandoned(observed, alive, now(), maxAgeMs)) return false;
+    if (!abandoned(observed, alive, now(), maxAgeMs, startOf)) return false;
     const guard = `${lock}.reclaim`;
     try { mkdirSync(guard, { mode: 0o700 }); } catch { return false; }
     try {
         const recheck = readOwner(lock);
         if (recheck.kind === 'gone') return true;
-        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now(), maxAgeMs)) return false;
+        if (!sameInstance(observed, recheck) || !abandoned(recheck, alive, now(), maxAgeMs, startOf)) return false;
         try { unlinkSync(join(lock, OWNER_FILE)); } catch { /* ownerless or torn record */ }
         try { rmdirSync(lock); return true; } catch { return false; }
     } finally {
@@ -92,6 +149,8 @@ function reclaim(lock: string, alive: (pid: number) => boolean, now: () => numbe
 export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): OwnedLockResult {
     const alive = options.isPidAlive ?? isPidAlive;
     const now = options.now ?? Date.now;
+    const startOf = options.processStartId ?? ((pid: number) => pid === process.pid
+        ? ownProcessStartId : options.probePeerIdentity ? processStartId(pid) : undefined);
     const held = (): OwnedLockResult => {
         let reclaimGuard = false;
         try { reclaimGuard = statSync(`${lock}.reclaim`).isDirectory(); } catch { /* none */ }
@@ -103,10 +162,11 @@ export function acquireOwnedLock(lock: string, options: OwnedLockOptions = {}): 
         catch (error) {
             const errno = (error as NodeJS.ErrnoException).code;
             if (errno !== 'EEXIST') return { ok: false, busy: false, ...(errno ? { errno } : {}), reason: `write_lock_unavailable: ${lock}` };
-            if (!reclaim(lock, alive, now, options.maxAgeMs)) return held();
+            if (!reclaim(lock, alive, now, options.maxAgeMs, startOf)) return held();
             continue;
         }
-        const owner: LockOwner = { pid: process.pid, nonce: randomBytes(16).toString('hex'), acquiredAt: now() };
+        const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;
+        const owner: LockOwner = { pid: process.pid, nonce: randomBytes(16).toString('hex'), acquiredAt: now(), ...(startId ? { startId } : {}) };
         try { writeFileSync(join(lock, OWNER_FILE), JSON.stringify(owner), { flag: 'wx', mode: 0o600 }); }
         catch {
             try { rmdirSync(lock); } catch { /* ownerless lock ages out after OWNERLESS_STALE_MS */ }

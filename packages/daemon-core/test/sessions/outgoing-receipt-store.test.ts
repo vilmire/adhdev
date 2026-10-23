@@ -2,12 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { buildSync } from 'esbuild';
 import { afterEach, expect, it, vi } from 'vitest';
 import { OutgoingReceiptStore } from '../../src/sessions/outgoing-receipt-store.js';
 import { createSessionInputService } from '../../src/sessions/session-input-service.js';
 import { LOG } from '../../src/logging/logger.js';
+
+vi.mock('node:child_process', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:child_process')>();
+    return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 const directories: string[] = [];
 const input = { parts: [{ type: 'text', text: 'Synthetic input' }], textFallback: 'Synthetic input' };
@@ -189,4 +194,13 @@ it('uses a quarantine tombstone to dedupe non-dashboard input without preparatio
     expect(await service.submit({ messageId: 'message', sessionId: 'session', input, origin: 'assistant',
         policy: { mode: 'queue' }, createdAt: 1 } as any)).toMatchObject({ kind: 'duplicate' });
     expect(sendMessage).not.toHaveBeenCalled();
+});
+
+
+it('never spawns ps or sysctl while acquiring a receipt lock', () => {
+    const f = fixture();
+    const probe = vi.mocked(execFileSync);
+    probe.mockClear();
+    expect(f.store.accept('message', 'session', input).fresh).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
 });

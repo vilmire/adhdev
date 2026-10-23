@@ -17,6 +17,7 @@ import { buildSessionLaunchRecord } from '../../src/sessions/launch-record.js';
 import * as quota from '../../src/quota/refresh.js';
 import * as coordinator from '../../src/commands/mesh-coordinator.js';
 let dir: string, prior: string | undefined, registry: AssistantRegistry;
+const OWNER = { namespace: 'role-test', endpoint: 'unix:/tmp/role-test.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_role_test' };
 const provider = (type: string, command = false): any => ({ type, category: 'cli',
     modelLaunchArgs: ['--model', '{{model}}'], thinkingLaunchArgs: ['--effort', '{{level}}'], thinkingLevelOptions: ['low', 'high'],
     meshCoordinator: { supported: true, mcpConfig: command
@@ -30,7 +31,8 @@ function context(command = false) {
         providerLoader: { resolveAlias: (v: string) => v === 'claude' ? 'claude-cli' : v,
             getMeta: (t: string) => providers.find(p => p.type === t), resolve: (t: string) => providers.find(p => p.type === t),
             getAvailableProviderInfos: () => providers.map(p => ({ type: p.type, enabled: true, installed: installed.has(p.type) })) },
-        instanceManager: { getInstance: () => undefined }, cliManager: { adapters: new Map() } },
+        instanceManager: { getInstance: () => undefined }, cliManager: { adapters: new Map(), hostedRestoreState: 'ready',
+            deps: { getHostedBindingOwner: () => OWNER, listHostedCliRuntimes: async () => [] } } },
         components: () => ({ instanceManager: { getInstance: () => undefined }, cliManager: { adapters: new Map() } }), execute, inlineMeshCache: new Map() };
     return { c, execute, installed };
 }
@@ -63,7 +65,7 @@ afterEach(() => {
 });
 describe('real role launch consumers', () => {
     it.each(['assistant', 'coordinator'])('%s uses the saved triple rather than sticky/worker priority', async role => {
-        registry.bindSession({ sessionId: 'old', cliType: 'codex-cli', workspace: dir, at: 1 });
+        registry.bindSession({ sessionId: 'old', cliType: 'codex-cli', workspace: dir, hostOwner: OWNER, at: 1 });
         const { c, execute } = context(); expect(await launch(role, c)).toMatchObject({ success: true });
         expect(launched(execute)).toMatchObject({ cliType: 'claude-cli', initialModel: role === 'assistant' ? 'opus' : 'sonnet',
             roleLaunch: { documentRevision: 1, applied: { provider: { source: 'stored_default' }, model: { source: 'stored_default' },

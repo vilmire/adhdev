@@ -1,3 +1,4 @@
+import { beginAssistantSpawn } from '../assistant/assistant-launch-fence.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
 import { assertMaintenanceAdmission, assertMaintenanceCommandIdentity, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
@@ -301,6 +302,7 @@ async function startCliPtySession(
         const resolvedProvider = launchProvider;
         assertMaintenanceCommandIdentity({ settings: launchSettings });
         assertMaintenanceAdmission();
+        beginAssistantSpawn(key);
         await host.registerCliInstance(
             key,
             normalizedType,
@@ -352,6 +354,7 @@ async function startCliPtySession(
         try {
             assertMaintenanceCommandIdentity({ settings: launchSettings });
             assertMaintenanceAdmission();
+            beginAssistantSpawn(key);
             await adapter.spawn();
         } catch (spawnErr: any) {
             LOG.error('CLI', `[${cliType}] Spawn failed: ${spawnErr?.message}`);
