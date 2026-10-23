@@ -549,7 +549,15 @@ export {
   resolveSessionHostAppNameResolution,
 } from './session-host/app-name.js';
 export type { SessionHostAppNameResolution } from './session-host/app-name.js';
-export { ensureSessionHostReady, listHostedCliRuntimes } from './session-host/runtime-support.js';
+export {
+  SESSION_HOST_UNAVAILABLE_TRANSIENT_CODE,
+  SessionHostUnavailableTransientError,
+  ensureSessionHostReady,
+  isExistingSocketPathPresent,
+  isResourceExhaustionError,
+  isSessionHostUnavailableTransientError,
+  listHostedCliRuntimes,
+} from './session-host/runtime-support.js';
 export { createManagedSessionHost } from './session-host/managed-host.js';
 export type { ManagedSessionHost, ManagedSessionHostOptions } from './session-host/managed-host.js';
 export {

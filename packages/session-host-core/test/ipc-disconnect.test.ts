@@ -443,3 +443,57 @@ test('L3: create_session without clientId does not invent a daemon clientId on r
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* noop */ }
   }
 })
+
+test('findConnectedClient returns an established client for the endpoint and clears after disconnectClients', async () => {
+  const h = await makeHarness()
+  const endpoint = { kind: 'unix' as const, path: h.sockPath }
+  try {
+    assert.equal(h.client.isConnected(), false)
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), null)
+
+    await h.client.connect()
+    assert.equal(h.client.isConnected(), true)
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), h.client)
+
+    SessionHostClient.disconnectClients(endpoint)
+    assert.equal(h.client.isConnected(), false)
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), null)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+
+test('a per-request probe timeout overrides the 30s default on an existing connection', async () => {
+  const h = await makeHarness()
+  try {
+    await h.client.connect()
+    const started = Date.now()
+    const request = h.client.request({ type: 'get_host_diagnostics', payload: { includeSessions: false } }, { timeoutMs: 25 })
+    const outcome = await Promise.race([
+      request.then(() => 'unexpected success', e => e),
+      settle(250).then(() => 'probe exceeded its budget'),
+    ])
+    assert.ok(outcome instanceof Error, String(outcome))
+    assert.match(outcome.message, /timed out after 25ms/)
+    assert.ok(Date.now() - started < 250)
+  } finally { h.peer()?.destroy(); await h.cleanup() }
+})
+
+test('an isolated probe stays out of the shared client registry', async () => {
+  const h = await makeHarness()
+  const endpoint = { kind: 'unix' as const, path: h.sockPath }
+  const probe = new SessionHostClient({ endpoint, registerAsShared: false })
+  try {
+    await probe.connect()
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), null)
+    await h.client.connect()
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), h.client)
+    SessionHostClient.disconnectClients(endpoint)
+    assert.equal(h.client.isConnected(), false)
+    assert.equal(probe.isConnected(), true)
+  } finally {
+    await probe.close()
+    await h.cleanup()
+  }
+})

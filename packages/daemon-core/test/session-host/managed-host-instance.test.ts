@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -66,6 +67,42 @@ function makeHost(appName: string) {
 }
 
 describe('managed session-host instance namespacing', () => {
+  it.each(['stable', 'preview', 'legacy'])('preview refuses a %s PID unless argv proves the same instance', (owner) => {
+    const homeDir = makeTempHome()
+    setFakeHome(homeDir)
+    const previewDir = path.join(homeDir, '.adhdev-preview')
+    const ownerDir = owner === 'stable' ? path.join(homeDir, '.adhdev') : previewDir
+    process.env.ADHDEV_CONFIG_DIR = previewDir
+    resetProcessInstanceContextForTests()
+    const host = createManagedSessionHost({ appName: 'adhdev', requiredRequestTypes: [], isManagedPid: () => true })
+    fs.mkdirSync(previewDir, { recursive: true })
+    fs.writeFileSync(host.getPidFile(), '12345')
+    const identity = '--instance-config-key=' + createHash('sha256').update(path.resolve(ownerDir)).digest('hex')
+    cp.execFileSync.mockReturnValue(`node /opt/adhdev/vendor/session-host-daemon/index.js serve ${owner === 'legacy' ? '' : identity}`)
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    try {
+      expect(host.stopManagedSessionHostProcess()).toBe(owner === 'preview')
+      expect(kill.mock.calls.filter(([, signal]) => signal === 'SIGTERM')).toEqual(owner === 'preview' ? [[12345, 'SIGTERM']] : [])
+      kill.mockClear()
+      expect(host.killPid(12345)).toBe(owner === 'preview')
+      expect(kill.mock.calls).toEqual(owner === 'preview' ? [[12345, 'SIGTERM']] : [])
+    } finally { kill.mockRestore() }
+  })
+
+  it('fails closed when isManagedPid is omitted, even with matching argv', () => {
+    const configDir = makeTempHome()
+    process.env.ADHDEV_CONFIG_DIR = configDir
+    resetProcessInstanceContextForTests()
+    const host = makeHost('adhdev')
+    const identity = '--instance-config-key=' + createHash('sha256').update(path.resolve(configDir)).digest('hex')
+    cp.execFileSync.mockReturnValue(`node /opt/adhdev/vendor/session-host-daemon/index.js serve ${identity}`)
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    try {
+      expect(host.killPid(12345)).toBe(false)
+      expect(kill).not.toHaveBeenCalled()
+    } finally { kill.mockRestore() }
+  })
+
   it('default instance keeps the legacy un-suffixed endpoint and ~/.adhdev pid file', () => {
     const homeDir = makeTempHome()
     setFakeHome(homeDir)
@@ -181,6 +218,7 @@ describe('managed session-host instance namespacing', () => {
 
     // The spawned child carries the pinned instance identity.
     const spawnEnv = cp.spawn.mock.calls[0][2]?.env as NodeJS.ProcessEnv
+    expect(cp.spawn.mock.calls[0][1]).toEqual([host.resolveEntry(), 'serve', '--instance-config-key=' + createHash('sha256').update(path.resolve(previewDir)).digest('hex')])
     expect(spawnEnv.ADHDEV_CONFIG_DIR).toBe(previewDir)
     expect(spawnEnv.ADHDEV_SESSION_HOST_NAME).toBe('adhdev-preview')
   })

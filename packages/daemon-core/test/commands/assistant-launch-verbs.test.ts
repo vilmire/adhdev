@@ -22,10 +22,16 @@ import {
     unlinkSync,
     writeFileSync,
 } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ASSISTANT_VERB } from '@adhdev/mesh-shared';
+import { issueTrustedOwnerIngressProof, markTrustedOwnerIngress } from '../../src/commands/command-args.js';
+import { DaemonCliManager } from '../../src/commands/cli-manager.js';
+import { acquireOwnedLock } from '../../src/launch-defaults/owned-lock.js';
+import * as ownedLocks from '../../src/launch-defaults/owned-lock.js';
+import { beginAssistantSpawn } from '../../src/assistant/assistant-launch-fence.js';
 import { assistantLaunchHandlers } from '../../src/commands/high-family/assistant-launch.js';
 import { writeProtectedAssistantConfigFile } from '../../src/assistant/assistant-config-io.js';
 import { ASSISTANT_MCP_SERVER_NAME, mergeAssistantCodexMcpConfigToml } from '../../src/assistant/assistant-launch-plan.js';
@@ -37,6 +43,7 @@ import { wireAssistantRuntime, type AssistantRuntime } from '../../src/assistant
 import { ASSISTANT_SAFETY_TAIL } from '../../src/assistant/assistant-prompt.js';
 import type { LocalMeshEntry } from '../../src/repo-mesh-types.js';
 
+const HOST_OWNER = { namespace: 'review-preview', endpoint: 'unix:/tmp/preview-test.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_mach_self' };
 const SELF = 'daemon_mach_self';
 let dir: string;
 let prevConfigDir: string | undefined;
@@ -67,6 +74,8 @@ function ctx(): any {
     return {
         deps: {
             statusInstanceId: SELF,
+            cliManager: { hostedRestoreState: 'ready', deps: { getHostedBindingOwner: () => HOST_OWNER,
+                hostedRuntimeManagerTag: HOST_OWNER.managedBy, listHostedCliRuntimes: async () => [] } },
             instanceManager: { getInstance: (id: string) => (live.has(id) ? { getState: () => ({ status: 'idle', settings: { assistant: true } }) } : undefined) },
             providerLoader: loader(provider),
         },
@@ -124,6 +133,388 @@ afterEach(() => {
 });
 
 describe('launch_assistant', () => {
+    it('holds admission through a timed-out dispatch and stops its late success before a retry', async () => {
+        vi.useFakeTimers();
+        let finish!: () => void;
+        const c = ctx();
+        const stop = vi.fn(async (id: string) => { live.delete(id); });
+        c.deps.cliManager.stopSessionWithMode = stop;
+        execute.mockImplementation(async (cmd: string) => {
+            if (cmd !== 'launch_cli') return { success: true };
+            const id = `late-${++launchCount}`;
+            if (launchCount === 1) await new Promise<void>(resolve => { finish = resolve; });
+            live.add(id);
+            return { success: true, sessionId: id };
+        });
+        try {
+            const pending = assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+            await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+            expect(launchCalls()).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(30_001);
+            expect(await pending).toMatchObject({ code: 'assistant_launch_timeout' });
+            // A different daemon/registry cannot steal the still-live launch lock.
+            const contender = acquireOwnedLock(join(dir, '.assistant-launch.lock'), { now: () => Date.now() + 60_000 });
+            if (contender.ok) contender.release();
+            expect(contender.ok).toBe(false);
+            expect((await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).success).toBe(false);
+            expect(launchCalls()).toHaveLength(1);
+            finish();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(stop).toHaveBeenCalledWith('late-1', 'hard');
+            expect(live.size).toBe(0);
+            expect(registry.reload()?.sessionId ?? null).toBeNull();
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, sessionId: 'late-2' });
+            expect([...live]).toEqual(['late-2']);
+            expect(registry.reload()?.sessionId).toBe('late-2');
+        } finally {
+            finish?.();
+            await vi.advanceTimersByTimeAsync(1);
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([false, true])('never lets late A overwrite retry B after the hard ceiling (cleanup fails: %s)', async cleanupFails => {
+        vi.useFakeTimers();
+        const c = ctx();
+        let finish!: () => void;
+        const stop = vi.fn(async (id: string) => {
+            if (cleanupFails) throw new Error('stop failed');
+            live.delete(id);
+        });
+        c.deps.cliManager.stopSessionWithMode = stop;
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => [...live].map(runtimeId => ({ runtimeId, cliType: 'claude-cli', workspace: dir, assistant: true }));
+        execute.mockImplementation(async (cmd: string) => {
+            if (cmd !== 'launch_cli') return { success: true };
+            const id = `generation-${++launchCount}`;
+            if (launchCount === 1) await new Promise<void>(resolve => { finish = resolve; });
+            live.add(id);
+            return { success: true, sessionId: id };
+        });
+        try {
+            const a = assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+            await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+            await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+            expect(await a).toMatchObject({ code: 'assistant_launch_timeout' });
+            const args = markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, args)).toMatchObject({ success: true, sessionId: 'generation-2' });
+            finish();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(stop).toHaveBeenCalledWith('generation-1', 'hard');
+            expect(registry.reload()?.sessionId).toBe('generation-2');
+            expect(live.has('generation-2')).toBe(true);
+            if (!cleanupFails) expect([...live]).toEqual(['generation-2']);
+            else {
+                expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ code: 'assistant_launch_cleanup_pending' });
+                stop.mockImplementation(async id => { live.delete(id); });
+                expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, args)).toMatchObject({ success: true, launched: false, sessionId: 'generation-2' });
+                expect([...live]).toEqual(['generation-2']);
+                expect(registry.reload()?.sessionId).toBe('generation-2');
+            }
+        } finally { finish?.(); await vi.advanceTimersByTimeAsync(1); vi.useRealTimers(); }
+    });
+
+    it('keeps admission past five minutes when spawning has begun and cleanup cannot be acknowledged', async () => {
+        vi.useFakeTimers();
+        const c = ctx();
+        let finish!: () => void;
+        c.deps.cliManager.stopSessionWithMode = vi.fn(async (id: string) => { live.delete(id); });
+        execute.mockImplementation(async (cmd: string, args: any) => {
+            if (cmd !== 'launch_cli') return { success: true };
+            beginAssistantSpawn(args.assistantSessionKey);
+            await new Promise<void>(resolve => { finish = resolve; });
+            live.add('spawning-A');
+            return { success: true, sessionId: 'spawning-A' };
+        });
+        try {
+            const a = assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+            await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+            await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+            expect(await a).toMatchObject({ code: 'assistant_launch_timeout' });
+            const args = markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, args)).toMatchObject({ code: 'assistant_launch_cancellation_pending' });
+            expect(existsSync(join(dir, '.assistant-launch.lock'))).toBe(true);
+            expect(launchCalls()).toHaveLength(1);
+            finish();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(c.deps.cliManager.stopSessionWithMode).toHaveBeenCalledWith('spawning-A', 'hard');
+            expect(existsSync(join(dir, '.assistant-launch.lock'))).toBe(false);
+        } finally { finish?.(); await vi.advanceTimersByTimeAsync(1); vi.useRealTimers(); }
+    });
+
+    it('reuses an attached bound assistant without scanning unrelated persisted snapshots', async () => {
+        registry.bindSession({ sessionId: 'attached', cliType: 'claude-cli', workspace: join(dir, 'assistant'), hostOwner: HOST_OWNER, at: 1 });
+        live.add('attached');
+        const runtimes = join(dir, 'session-host', 'unrelated', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        writeFileSync(join(runtimes, 'broken.json'), '{broken snapshot');
+        const c = ctx();
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => [{ runtimeId: 'attached', cliType: 'claude-cli', workspace: join(dir, 'assistant'), assistant: true }];
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: false, sessionId: 'attached' });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('retains binding and admission while late assistant cleanup fails', async () => {
+        vi.useFakeTimers();
+        let finish!: () => void;
+        const c = ctx();
+        c.deps.cliManager.stopSessionWithMode = vi.fn(async () => { throw new Error('stop failed'); });
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => [...live].map(runtimeId => ({ runtimeId, cliType: 'claude-cli', workspace: dir, assistant: true }));
+        execute.mockImplementation(async (cmd: string) => {
+            if (cmd !== 'launch_cli') return { success: true };
+            await new Promise<void>(resolve => { finish = resolve; });
+            live.add('late-retained');
+            return { success: true, sessionId: 'late-retained' };
+        });
+        try {
+            const pending = assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+            await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+            await vi.advanceTimersByTimeAsync(30_001);
+            expect(await pending).toMatchObject({ code: 'assistant_launch_timeout' });
+            finish();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(registry.reload()?.sessionId).toBe('late-retained');
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_launch_cleanup_pending' });
+            expect(existsSync(join(dir, '.assistant-launch.lock'))).toBe(true);
+            expect(launchCalls()).toHaveLength(1);
+        } finally { finish?.(); await vi.advanceTimersByTimeAsync(1); vi.useRealTimers(); }
+    });
+
+    it('lets a trusted owner replace unverifiable evidence whose PID belongs to another process', async () => {
+        const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        writeFileSync(join(runtimes, 'stale.json'), JSON.stringify({ record: {
+            sessionId: 'stale', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', osPid: process.pid, meta: { assistant: true } }, snapshot: {} }));
+        writeFileSync(join(dir, 'foreign-session-host.pid'), String(process.pid));
+        const args = markTrustedOwnerIngress({ replace: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](ctx(), args)).toMatchObject({ success: true, launched: true });
+    });
+
+    it.each([true, false])('never lets trusted owner force replace a verified live foreign assistant (role metadata: %s)', async marked => {
+        const { SessionHostClient, getDefaultSessionHostEndpoint, resolveSessionHostIpcKey } = await import('@adhdev/session-host-core');
+        const endpoint = getDefaultSessionHostEndpoint('foreign', { ipcKey: resolveSessionHostIpcKey(dir) });
+        const record = { sessionId: 'foreign', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', meta: { assistant: marked } };
+        if (!marked) registry.bindSession({ sessionId: 'foreign', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1,
+            hostOwner: { ...HOST_OWNER, namespace: 'foreign', endpoint: `${endpoint.kind}:${endpoint.path}` } });
+        const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        writeFileSync(join(runtimes, 'foreign.json'), JSON.stringify({ record, snapshot: {} }));
+        const request = vi.spyOn(SessionHostClient.prototype, 'request').mockResolvedValue({ success: true, result: {
+            endpoint: endpoint.path, hostStartedAt: 1, hostEntryPath: '/opt/adhdev/session-host-daemon/dist/index.js', sessions: [record],
+        } });
+        try {
+            const args = markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](ctx(), args)).toMatchObject({ success: false, code: 'assistant_identity_conflict' });
+            expect(launchCalls()).toHaveLength(0);
+            expect(request).toHaveBeenCalledTimes(1);
+        } finally { request.mockRestore(); }
+    });
+
+    it('prunes a dead legacy assistant resolved by a local tombstone and launches', async () => {
+        registry.bindSession({ sessionId: 'legacy-dead', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1 });
+        const tombstones = join(dir, 'session-host', HOST_OWNER.namespace, 'tombstones');
+        mkdirSync(tombstones, { recursive: true });
+        writeFileSync(join(tombstones, 'legacy-dead.json'), JSON.stringify({ sessionId: 'legacy-dead', termination: { lifecycle: 'stopped' } }));
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: true, launched: true });
+    });
+
+    it('recovers from a failed full restore on the next launch', async () => {
+        const c = ctx();
+        const list = vi.fn().mockRejectedValueOnce(new Error('transient inventory failure')).mockResolvedValue([]);
+        const m = new DaemonCliManager({ ...c.deps.cliManager.deps, getInstanceManager: () => c.deps.instanceManager,
+            getP2p: () => null, listHostedCliRuntimes: list }, { ...loader(provider), getSettings: () => ({}) } as any);
+        await expect(m.restoreHostedSessions()).rejects.toThrow('transient inventory failure');
+        c.deps.cliManager = m;
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: true });
+        expect(m.hostedRestoreState).toBe('ready');
+    });
+
+    it('a released binding permits a different host to launch', async () => {
+        registry.bindSession({ sessionId: 'released', cliType: 'claude-cli', workspace: join(dir, 'assistant'), hostOwner: HOST_OWNER, at: 1 });
+        registry.releaseSession('released', 'pty_exit');
+        const c = ctx();
+        c.deps.cliManager.deps.getHostedBindingOwner = () => ({ ...HOST_OWNER, namespace: 'foreign', endpoint: 'unix:/tmp/foreign.sock' });
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: true });
+    });
+
+    it.each(['terminated', 'crashed'])('does not block launch on a %s foreign persisted runtime', async kind => {
+        const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        const record = { sessionId: 'foreign', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', meta: { assistant: true },
+            ...(kind === 'terminated' ? { termination: { lifecycle: 'stopped' } } : {}) };
+        writeFileSync(join(runtimes, 'foreign.json'), JSON.stringify(record));
+        if (kind === 'crashed') writeFileSync(join(dir, 'foreign-session-host.pid'), '2147483647');
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: true, launched: true });
+    });
+
+    it('blocks a live foreign runtime in the actual wrapped storage format', async () => {
+        const runtimes = join(dir, 'session-host', 'foreign', 'runtimes');
+        mkdirSync(runtimes, { recursive: true });
+        writeFileSync(join(runtimes, 'foreign.json'), JSON.stringify({ record: {
+            sessionId: 'foreign', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', meta: { assistant: true } }, snapshot: {}, updatedAt: 1 }));
+        writeFileSync(join(dir, 'foreign-session-host.pid'), String(process.pid));
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_identity_conflict' });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('allows only verified owner force to clear a stale unknown binding, and audits it', async () => {
+        registry.bindSession({ sessionId: 'unknown-stale', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1 });
+        expect(await run(ASSISTANT_VERB.launch, { force: true })).toMatchObject({ success: false, code: 'assistant_owner_required' });
+        expect(registry.reload()?.sessionId).toBe('unknown-stale');
+        const args = markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+        const { LOG } = await import('../../src/logging/logger.js');
+        const audit = vi.spyOn(LOG, 'warn');
+        try {
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](ctx(), args)).toMatchObject({ success: true, launched: true });
+            expect(audit).toHaveBeenCalledWith('Assistant', expect.stringContaining('owner_force'));
+        } finally { audit.mockRestore(); }
+    });
+
+    it('creates a missing config directory before acquiring the launch lock', async () => {
+        const missing = join(dir, 'missing-config');
+        setAssistantRegistryForTests(new AssistantRegistry({ configDir: missing }));
+        expect(await run(ASSISTANT_VERB.launch, { cliType: 'claude-cli' })).toMatchObject({ success: true, launched: true });
+    });
+
+    it('times out a hung inventory and releases the lock while fencing its late completion', async () => {
+        vi.useFakeTimers();
+        let finish!: (records: any[]) => void;
+        const c = ctx();
+        c.deps.cliManager.deps.listHostedCliRuntimes = () => new Promise<any[]>(resolve => { finish = resolve; });
+        try {
+            const pending = assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {});
+            await vi.advanceTimersByTimeAsync(30_001);
+            expect(await pending).toMatchObject({ success: false, code: 'assistant_launch_timeout' });
+            expect(existsSync(join(dir, '.assistant-launch.lock'))).toBe(false);
+            finish([]);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(launchCalls()).toHaveLength(0);
+            c.deps.cliManager.deps.listHostedCliRuntimes = async () => [];
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: true });
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('blocks a real delayed restore, then returns the restored runtime with its original provider conversation', async () => {
+        const c = ctx();
+        const record = { runtimeId: 'delayed-assistant', cliType: 'claude-cli', workspace: join(dir, 'assistant'), assistant: true, providerSessionId: '364da694-b0e6-421e-802a-8ea938be2b85' };
+        let release!: (records: any[]) => void;
+        const inventory = new Promise<any[]>(resolve => { release = resolve; });
+        const m = new DaemonCliManager({ ...c.deps.cliManager.deps,
+            getInstanceManager: () => c.deps.instanceManager, getP2p: () => null,
+            listHostedCliRuntimes: () => inventory,
+        }, { ...loader({ ...provider, resume: { supported: true, sessionIdFormat: 'uuid', resumeSessionArgs: ['--resume', '{{id}}'] } }), getSettings: () => ({ autoApprove: true }) } as any);
+        const attach = vi.spyOn(m, 'registerCliInstance').mockImplementation(async () => { live.add(record.runtimeId); });
+        c.deps.cliManager = m;
+        const restore = m.restoreHostedSessions();
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_restore_pending' });
+        expect(launchCalls()).toHaveLength(0);
+        release([record]);
+        expect(await restore).toBe(1);
+        expect(attach.mock.calls[0][8]).toMatchObject({ providerSessionId: '364da694-b0e6-421e-802a-8ea938be2b85' });
+        expect(attach.mock.calls[0][6]).toMatchObject({ assistant: true, autoApprove: false });
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: true, launched: false, sessionId: record.runtimeId });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('refuses a launch while boot restore is delayed or failed', async () => {
+        const c = ctx();
+        for (const state of ['pending', 'failed']) {
+            c.deps.cliManager.hostedRestoreState = state;
+            expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_restore_pending' });
+        }
+        expect(launchCalls()).toHaveLength(0);
+        expect(existsSync(join(dir, 'mcp-configs', 'assistant.json'))).toBe(false);
+    });
+
+    it.each([false, true])('reuses a hosted/restorable assistant after binding damage (already bound: %s)', async bound => {
+        if (bound) registry.bindSession({ sessionId: 'persisted-assistant', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1, hostOwner: HOST_OWNER });
+        const c = ctx();
+        const record = { runtimeId: 'persisted-assistant', cliType: 'claude-cli', workspace: join(dir, 'assistant'), assistant: true };
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => [record];
+        c.deps.cliManager.restoreHostedSessions = vi.fn(async () => { live.add(record.runtimeId); return 1; });
+        const results = await Promise.all([assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {}), assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})]);
+        for (const result of results) expect(result).toMatchObject({ success: true, launched: false, sessionId: record.runtimeId });
+        expect(c.deps.cliManager.restoreHostedSessions).toHaveBeenCalledTimes(1);
+        expect(new AssistantRegistry({ configDir: dir }).read()).toMatchObject({ sessionId: record.runtimeId, hostOwner: HOST_OWNER });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('fails closed for multiple candidates, a foreign persisted runtime, or a failed inventory', async () => {
+        const c = ctx();
+        const record = { runtimeId: 'one', cliType: 'claude-cli', workspace: join(dir, 'assistant'), assistant: true };
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => [record, { ...record, runtimeId: 'two' }];
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_identity_conflict' });
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => [];
+        const hostDir = join(dir, 'session-host', 'foreign-host', 'runtimes');
+        mkdirSync(hostDir, { recursive: true });
+        writeFileSync(join(hostDir, 'foreign.json'), JSON.stringify({ sessionId: 'foreign', providerType: 'claude-cli', category: 'cli', lifecycle: 'running', workspace: record.workspace, meta: { assistant: true } }));
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_identity_conflict' });
+        c.deps.cliManager.deps.listHostedCliRuntimes = async () => { throw new Error('host unavailable'); };
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_inventory_unavailable' });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('preserves an attached assistant role while its hosted inventory is catching up', async () => {
+        const c = ctx();
+        live.add('attached-assistant');
+        c.deps.instanceManager.listInstanceIds = () => ['attached-assistant'];
+        expect(await assistantLaunchHandlers[ASSISTANT_VERB.launch](c, {})).toMatchObject({ success: false, code: 'assistant_restore_pending' });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('rechecks the disk binding written by another registry before launching', async () => {
+        expect(registry.read()).toBeNull();
+        new AssistantRegistry({ configDir: dir }).bindSession({ sessionId: 'foreign-bound', cliType: 'claude-cli', workspace: join(dir, 'assistant'), at: 1, hostOwner: { ...HOST_OWNER, endpoint: 'unix:/tmp/foreign.sock' } });
+        expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_owned_by_other_host' });
+        expect(launchCalls()).toHaveLength(0);
+    });
+
+    it('refuses admission while a separate process owns the shared account launch lock', async () => {
+        const lock = join(dir, '.assistant-launch.lock');
+        const child = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.mkdirSync(process.argv[1]); fs.writeFileSync(process.argv[1] + '/owner.json', JSON.stringify({ pid: process.pid, nonce: 'child', acquiredAt: Date.now() })); process.stdout.write('ready'); process.stdin.resume();`, lock], { stdio: ['pipe', 'pipe', 'pipe'] });
+        try {
+            await new Promise<void>((resolve, reject) => { child.stdout.once('data', () => resolve()); child.once('error', reject); child.once('exit', () => reject(new Error('lock holder exited'))); });
+            expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_launch_pending' });
+            expect(launchCalls()).toHaveLength(0);
+        } finally { child.kill(); await new Promise(resolve => child.once('exit', resolve)); }
+    });
+
+    describe('launch lock hard ceiling', () => {
+        const ownerArgs = () => markTrustedOwnerIngress({ force: true }, issueTrustedOwnerIngressProof({ source: 'standalone', ownerVerified: true }));
+        const plantLock = (record: Record<string, unknown>) => {
+            const lock = join(dir, '.assistant-launch.lock');
+            mkdirSync(lock);
+            writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, nonce: 'wedged', ...record }));
+        };
+
+        it('refuses to steal a live peer lock past the ceiling without cancellation acknowledgement', async () => {
+            plantLock({ acquiredAt: Date.now() - 6 * 60_000 });
+            expect(await run(ASSISTANT_VERB.launch, ownerArgs())).toMatchObject({ success: false, code: 'assistant_launch_cancellation_pending' });
+            expect(launchCalls()).toHaveLength(0);
+        });
+
+        it('keeps refusing an owner-force launch while the lock is younger than the ceiling', async () => {
+            plantLock({ acquiredAt: Date.now() - 30_000 });
+            expect(await run(ASSISTANT_VERB.launch, ownerArgs())).toMatchObject({ success: false, code: 'assistant_launch_cancellation_pending' });
+            expect(launchCalls()).toHaveLength(0);
+        });
+
+        it('never reclaims an over-ceiling lock without owner force', async () => {
+            plantLock({ acquiredAt: Date.now() - 6 * 60_000 });
+            expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: false, code: 'assistant_launch_pending' });
+            expect(launchCalls()).toHaveLength(0);
+        });
+
+        it('reclaims a reused pid using an injected numeric identity on every platform', async () => {
+            const acquire = ownedLocks.acquireOwnedLock;
+            const probe = vi.spyOn(ownedLocks, 'acquireOwnedLock').mockImplementation((path, options) =>
+                acquire(path, { ...options, processStartId: () => 'darwin-epoch-seconds-v1:2' }));
+            try {
+                plantLock({ acquiredAt: Date.now(), startId: 'darwin-epoch-seconds-v1:1' });
+                expect(await run(ASSISTANT_VERB.launch)).toMatchObject({ success: true, launched: true });
+            } finally { probe.mockRestore(); }
+        });
+    });
+
     it('launches claude-cli in <configDir>/assistant with the assistant stamp, prompt and MCP wiring', async () => {
         const r: any = await run(ASSISTANT_VERB.launch, { model: 'opus', thinkingLevel: 'high' });
         expect(r).toMatchObject({ success: true, launched: true, sessionId: 'asst-1', cliType: 'claude-cli', workspace: join(dir, 'assistant') });

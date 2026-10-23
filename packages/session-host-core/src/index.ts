@@ -77,6 +77,7 @@ export {
   createLineParser,
   createResponseEnvelope,
   disconnectSessionHostClients,
+  findConnectedSessionHostClient,
   getDefaultSessionHostEndpoint,
   writeEnvelope,
 } from './ipc.js';

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { SessionRegistry } from '../../src/sessions/registry.js'
 import { listLocalCoordinatorSessions } from '../../src/mesh/mesh-event-forwarding.js'
 
 // The turn.deliver consumer's routing snapshot (C-W3): this daemon's CLI
@@ -47,6 +48,35 @@ describe('listLocalCoordinatorSessions — raw turn-state', () => {
     it('falls back to the visible status without getDrainStatus()', () => {
         const c = components([instance({ meshCoordinatorFor: 'm1', status: 'idle' })])
         expect(listLocalCoordinatorSessions(c, 'm1')[0]).toMatchObject({ idle: true, modalParked: false })
+    })
+
+    it('keeps a live coordinator with a transient parse-error overlay selectable', () => {
+        const c = components([instance({ meshCoordinatorFor: 'm1', status: 'error', drain: 'idle' })])
+        expect(listLocalCoordinatorSessions(c, 'm1')).toEqual([{ sessionId: 'coord-1', idle: true, modalParked: false }])
+    })
+
+    it.each(['exited', 'stopped', 'terminated'])('excludes a confirmed %s coordinator', (status) => {
+        const c = components([instance({ meshCoordinatorFor: 'm1', status, drain: status })])
+        expect(listLocalCoordinatorSessions(c, 'm1')).toEqual([])
+    })
+
+    it('excludes registry-terminated runtimes even while the provider projection is stale, and admits a new registration', () => {
+        const registry = new SessionRegistry()
+        const target = { sessionId: 'coord-1', parentSessionId: null, providerType: 'claude-cli',
+            transport: 'pty', adapterKey: 'coord-1', instanceKey: 'coord-1', workspace: '/tmp', spawnedAtMs: 1 } as const
+        registry.register(target)
+        const c = { ...components([instance({ meshCoordinatorFor: 'm1', status: 'idle' })]), sessionRegistry: registry }
+        expect(listLocalCoordinatorSessions(c, 'm1')).toHaveLength(1)
+        registry.terminateByInstanceKey('coord-1', 'pty_exit')
+        expect(listLocalCoordinatorSessions(c, 'm1')).toEqual([])
+        registry.register(target)
+        expect(listLocalCoordinatorSessions(c, 'm1')).toHaveLength(1)
+    })
+
+    it('keeps a coordinator during a transient controller disconnect', () => {
+        const coord = instance({ meshCoordinatorFor: 'm1', status: 'error', drain: 'idle' })
+        const c = components([{ ...coord, getState: () => ({ ...coord.getState(), connected: false }) }])
+        expect(listLocalCoordinatorSessions(c, 'm1')).toHaveLength(1)
     })
 
     it('only coordinators OF THIS MESH', () => {
