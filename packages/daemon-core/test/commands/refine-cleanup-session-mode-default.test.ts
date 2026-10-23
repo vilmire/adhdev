@@ -13,6 +13,9 @@ import {
 } from '../../src/commands/router-worktree-cleanup';
 import { runRefineMergeAndFinalizeLocked } from '../../src/commands/router-refine-merge.js';
 import { createWorktree } from '../../src/git/git-worktree';
+import { bindPushDestination, useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns';
+
+useSyntheticPublicPushPatterns();
 
 const execFileAsync = promisify(execFile);
 
@@ -117,6 +120,10 @@ async function runRealRefineCleanup(policy: Record<string, unknown>) {
     const { stdout: baseBranchOut } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot });
     const baseBranch = baseBranchOut.trim();
     await execFileAsync('git', ['push', '-u', 'origin', baseBranch], { cwd: repoRoot });
+    // Cleanup follows an authorized push. A raw local origin is now an unknown,
+    // public destination, so model the canonical private root destination while
+    // the shared test transport keeps every network operation on the bare repo.
+    bindPushDestination(repoRoot, remote, 'root');
 
     const branch = 'feat/refine-real';
     const worktreeBaseDir = join(dir, 'worktrees');
@@ -169,8 +176,10 @@ async function runRealRefineCleanup(policy: Record<string, unknown>) {
 describe('A. Refinery cleanup sessionCleanupMode arg shape', () => {
     it('OMITS sessionCleanupMode entirely when the policy does not set it (worktree default survives)', async () => {
         // No sessionCleanupOnNodeRemove — the exact case that regressed.
-        const { dir, removeCalls } = await runRealRefineCleanup({});
+        const { dir, removeCalls, outcome } = await runRealRefineCleanup({});
         try {
+            expect(outcome.result, outcome.result.pushResult?.error || outcome.result.error)
+                .toMatchObject({ success: true, merged: true, pushed: true });
             expect(removeCalls).toHaveLength(1);
             // The key must be ABSENT. remove_mesh_node resolves it with a `??`
             // chain, so an omitted key falls through to the worktree default
@@ -185,8 +194,10 @@ describe('A. Refinery cleanup sessionCleanupMode arg shape', () => {
 
     it('honors an explicitly configured policy value verbatim (existing behavior preserved)', async () => {
         for (const mode of ['stop_and_delete', 'stop', 'preserve'] as const) {
-            const { dir, removeCalls } = await runRealRefineCleanup({ sessionCleanupOnNodeRemove: mode });
+            const { dir, removeCalls, outcome } = await runRealRefineCleanup({ sessionCleanupOnNodeRemove: mode });
             try {
+                expect(outcome.result, outcome.result.pushResult?.error || outcome.result.error)
+                    .toMatchObject({ success: true, merged: true, pushed: true });
                 expect(removeCalls).toHaveLength(1);
                 // An explicit 'preserve' is still passed through — the fix must not
                 // silently upgrade a deliberate preserve into a delete.

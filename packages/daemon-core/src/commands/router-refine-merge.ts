@@ -13,6 +13,7 @@ import { notifyMeshCoordinator } from '../mesh/mesh-events.js';
 import { buildRefineJobKey } from './router-refine-jobs.js';
 import { probeRefineBaseCas, describeRefineBaseCasStage, buildRefineBaseCasBlockedResult } from '../mesh/mesh-refine-base-cas.js';
 import { gitChildEnv } from '../git/git-locale.js';
+import { assertRefineryPublishApproved, PublicPublishApprovalRequired } from '../mesh/mesh-refine-gitlink-utils.js';
 import { resolveMeshPolicy } from '../repo-mesh-types.js';
 
 /**
@@ -324,10 +325,26 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     // `timeout` mirrors the async sibling call sites in `mesh-fast-forward.ts`:
                     // an unreachable remote must surface as a push FAILURE (which the catch
                     // below already reports) rather than an await that never settles.
-                    await execFileAsync('git', ['push', 'origin', baseBranch], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: 30_000 });
+                    const { stdout: tip } = await execFileAsync('git', ['--no-replace-objects', 'rev-parse', `${baseBranch}^{commit}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
+                    const publishCommit = tip.trim();
+                    await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas, 'origin', undefined, Math.max(1, submoduleReachability?.publicRepoCount || 0));
+                    // Push exactly what was approved/scanned, even if the branch moves.
+                    await execFileAsync('git', ['push', 'origin', `${publishCommit}:refs/heads/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: 30_000 });
                     pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
                     recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
                 } catch (e: any) {
+                    if (e instanceof PublicPublishApprovalRequired) {
+                        recordMeshRefineStage(refineStages, 'push', 'skipped', pushStarted, { reason: 'publish_approval_required' });
+                        return { kind: 'terminal', result: {
+                            success: false, code: 'publish_approval_required', convergenceStatus: 'blocked_review',
+                            merged: true, mergedLocal: true, pushed: false, branch, into: baseBranch,
+                            publishApprovalRequired: [{ path: '.', ...e.approval }],
+                            error: 'The local merge is retained; owner approval is required before publishing to a remote not proven private.',
+                            nextSteps: ['Show the owner every pending commit and its guard scan.', 'Rerun with approved_publish_shas resolving uniquely to exactly the listed full SHAs.'],
+                            validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment, mergeResult, refineStages,
+                            finalBranchConvergenceState: { branch: baseBranch, mergedBranch: branch, baseBranch, merged: true, pushed: false, removed: false, status: 'merged_local_pending_push' },
+                        } };
+                    }
                     pushResult = {
                         pushed: false,
                         remote: 'origin',
