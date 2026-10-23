@@ -36,6 +36,7 @@
 import { LOG } from '../../logging/logger.js';
 import type { CliSpecV4, FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
+import { stripAnsi, stripToolAndCodeLines } from './provider-failure-classifier.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
     WIN32_PTY_WRITE_CHUNK_GAP_MS,
@@ -143,6 +144,75 @@ export interface DriverHost {
      * ("machine is waiting_external").
      */
     currentStatus(): FsmStatus;
+    /** Optional hook invoked when the pre-send screen guard detects an anchored
+     *  sign-in screen on a session the FSM still considers idle. */
+    onPreSendAuthRequired?(): void;
+}
+
+const PRE_SEND_COMPOSER_OR_BUSY_CHROME_RE = /(?:esc to interrupt|ctrl\+c to interrupt|esc:interrupt|ctrl\+c to stop|esc to cancel|• Working|thinking\)|──────────\n[ \t]*[❯›>]|Context left until auto-compact|\b\d+%\s+context\b|\b\d+%\s+left\b|\bclaude-(?:opus|sonnet|haiku)|(?:Opus|Sonnet|Haiku)\s+\d|\? for shortcuts|Type your message|·\s*\d+(?:\.\d+)?%|→\s*Plan,\s*search,\s*build anything|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│\s*❯|(?:^|\n)[ \t]*›(?:[ \t]*|[ \t]+(?![1-9]\.)[^\n]*)(?:\n|$))/i;
+
+const PRE_SEND_ANCHORED_SIGN_IN_LINE_RE = /^[ \t]{0,4}(?:(?:[❯›>•*▸⠋│]\s*)?(?:[1-9]\.\s+)?(?:Claude account with subscription|Anthropic Console account|Sign in with your Console account|Sign in with ChatGPT|Continue with ChatGPT|Use API key|Provide your own API key|Sign in with Device Code|Sign in with Google|Use Gemini API Key|Vertex AI|Enter Authorization Code|Press Enter to (?:log|sign) in|Sign in to Kimi Code|Waiting for authorization)|Let's get started\b|Select (?:a |Google Cloud )?(?:login|sign-in) method\b|How do you want to sign in\?|Opening browser to sign in|Cloud gateway\s*[·•]\s*sign in\b|Browser didn't open\?|Paste code here if prompted\b|Waiting for (?:authentication|authorization|login)\b|Sign in to (?:Claude|Codex|Cursor|Grok|Kimi)\b|Log in to Claude\b|Please (?:run \/login|sign in|log in|set your API key|visit the (?:following )?URL to (?:authenticate|log in))\b|Not (?:logged|signed) in\b|Welcome back!\s*You are currently not signed in\b|Authentication required\b|Finish signing in via your browser\b|Preparing device code login\b|Use your own OpenAI API key\b|>?\s*API key login is disabled\b|Open this link in your browser to sign in\b|Enter (?:this one-time code|the authorization code|your API key)\b|How would you like to authenticate\b|Or visit:\s*https:\/\/cursor\.com\b|Authenticate with Cursor\b|XAI_API_KEY\b|Paste your xAI API key to continue\b|Invalid API key\b|kimi login\b|Scan the QR code\b|Visit https:\/\/[^\s]*(?:moonshot|kimi))/i;
+
+/**
+ * PRE-SEND SCREEN GUARD: checks the CURRENT viewport immediately before writing
+ * a task to a session the FSM thinks is idle. Returns true only when:
+ *  1. Normal composer chrome and active busy chrome are absent from the viewport,
+ *  2. An anchored sign-in header/menu line is present in the active bottom region
+ *     (outside tool output, fenced code blocks, and diffs), and
+ *  3. No composer prompt or divider line appears below the sign-in block.
+ */
+export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): boolean {
+    if (!viewport) return false;
+    const stripped = stripAnsi(viewport).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    if (!stripped.trim()) return false;
+    if (PRE_SEND_COMPOSER_OR_BUSY_CHROME_RE.test(stripped)) return false;
+    if ((!spec || spec.id === 'kimi') && /│\s*>\s*│/.test(stripped)) return false;
+
+    if (spec?.transitions) {
+        for (const t of spec.transitions) {
+            if (t.to !== 'signing_in' || !t.when) continue;
+            const whenObj = t.when as unknown as Record<string, unknown>;
+            const conds = Array.isArray(whenObj.all)
+                ? (whenObj.all as Array<Record<string, unknown>>)
+                : [whenObj];
+            for (const c of conds) {
+                const negPattern = typeof c.not_matches === 'string'
+                    ? c.not_matches
+                    : (typeof (c.not as { matches?: unknown } | undefined)?.matches === 'string'
+                        ? (c.not as { matches: string }).matches
+                        : '');
+                if (negPattern) {
+                    try {
+                        if (new RegExp(negPattern, 'i').test(stripped)) return false;
+                    } catch { /* ignore malformed regex */ }
+                }
+            }
+        }
+    }
+
+    const cleaned = stripToolAndCodeLines(stripped);
+    if (!cleaned.trim()) return false;
+    const nonEmptyLines = cleaned
+        .split('\n')
+        .map(l => l.trimEnd())
+        .filter(l => l.trim().length > 0);
+    if (nonEmptyLines.length === 0) return false;
+
+    const bottomRegion = nonEmptyLines.slice(-12);
+    let lastMatchIdx = -1;
+    for (let i = 0; i < bottomRegion.length; i += 1) {
+        if (PRE_SEND_ANCHORED_SIGN_IN_LINE_RE.test(bottomRegion[i])) {
+            lastMatchIdx = i;
+        }
+    }
+    if (lastMatchIdx === -1) return false;
+    if (bottomRegion.length - 1 - lastMatchIdx > 5) return false;
+    for (let j = lastMatchIdx + 1; j < bottomRegion.length; j += 1) {
+        if (/^[ \t]*(?:[❯›][ \t]*|─{10,}[ \t]*)$/.test(bottomRegion[j])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -421,17 +491,41 @@ export class SendSubmitEngine {
         return { status: 'delivered' };
     }
 
+    /** True when the most recent canSendNow() check blocked on an anchored
+     *  sign-in viewport while the FSM still reported idle. */
+    private lastPreSendAuthBlocked = false;
+
+    private isPreSendAuthRequired(): boolean {
+        let viewport = '';
+        try {
+            viewport = this.host.adapter?.snapshot?.() ?? '';
+        } catch {
+            viewport = '';
+        }
+        if (isAnchoredSignInViewport(viewport, this.host.spec)) {
+            this.lastPreSendAuthBlocked = true;
+            this.host.onPreSendAuthRequired?.();
+            return true;
+        }
+        this.lastPreSendAuthBlocked = false;
+        return false;
+    }
+
     /** True when a send can be written to the PTY right now. */
     private canSendNow(): boolean {
+        this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
-        return this.host.currentStatus() === 'idle';
+        if (this.host.currentStatus() !== 'idle') return false;
+        if (this.isPreSendAuthRequired()) return false;
+        return true;
     }
 
     /** Human-readable reason a send was queued — logged, never used for control flow. */
     private sendBlockedReason(): string {
         if (!this.host.readySeenOnce) return 'machine not ready yet';
         if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
+        if (this.lastPreSendAuthBlocked) return 'auth_required';
         return `machine is ${this.host.currentStatus()}`;
     }
 
@@ -509,6 +603,7 @@ export class SendSubmitEngine {
         }
         if (this.isSendInFlight()) return;
         if (this.pendingSends.length === 0) return;
+        if (this.isPreSendAuthRequired()) return;
         const next = this.pendingSends.shift()!;
         LOG.info('FsmDriver', `[${this.host.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
         // Small delay for parity with the ready-gate drain: it lets the prompt
@@ -516,6 +611,15 @@ export class SendSubmitEngine {
         if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
         this.pendingSendDrainTimer = setTimeout(() => {
             this.pendingSendDrainTimer = null;
+            if (this.host.currentStatus() !== 'idle' || this.isPreSendAuthRequired()) {
+                this.pendingSends.unshift(next);
+                this.sendInFlight = false;
+                if (this.latchWatchdogTimer) {
+                    clearTimeout(this.latchWatchdogTimer);
+                    this.latchWatchdogTimer = null;
+                }
+                return;
+            }
             this.beginSend(next.text, next.bracketedPaste, next.messageId);
         }, 50);
         // Hold the latch immediately so a second drain on the very next frame

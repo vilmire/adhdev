@@ -237,6 +237,7 @@ export class FsmDriver implements ISpecDriver {
             // ★ The engine gates on this but never computes it — see the note on
             // the `sends` field.
             currentStatus: () => this.currentStatus(),
+            onPreSendAuthRequired: () => this.enterPreSendSigningIn(),
         });
         this.redrawNudge = new RedrawNudger({
             isGenerating: () => this.currentStatus() === 'generating',
@@ -796,6 +797,32 @@ export class FsmDriver implements ISpecDriver {
         LOG.info('FsmDriver', `[${this.specTag()}] ${from} → ${fired.to} (${fired.label})`);
         const statusOf = (id: string) => { const st = stateById(this.spec, id); return st ? statusForState(st) : 'idle'; };
         this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
+    }
+
+    /** Transition to `signing_in` when the pre-send screen guard detects an
+     *  active anchored login screen on a session the FSM still considered idle. */
+    private enterPreSendSigningIn(): void {
+        const target = stateById(this.spec, 'signing_in');
+        if (!target || this.currentStateId === 'signing_in') return;
+        const now = Date.now();
+        const from = this.currentStateId;
+        this.currentStateId = 'signing_in';
+        this.stateEnteredAt = now;
+        this.lastModalParseMissKey = null;
+        this.regionLastChangedAt.clear();
+        this.stableVerdictCache.clear();
+        this.pushHistory('signing_in', target.label ?? 'signing_in', {
+            reason: 'transition',
+            via: `${from}→signing_in`,
+            matchedRules: ['pre_send_auth_guard'],
+        });
+        LOG.info('FsmDriver', `[${this.specTag()}] ${from} → signing_in (pre_send_auth_guard)`);
+        const statusOf = (id: string) => { const st = stateById(this.spec, id); return st ? statusForState(st) : 'idle'; };
+        this.redrawNudge.onTransition(statusOf(from), statusOf('signing_in'), 'pre_send_auth_guard');
+        this.emitStateChanged(true);
+        this.scheduleWakeForState();
+        this.focusPrimer.scheduleStallWatchdog();
+        this.redrawNudge.schedule();
     }
 
     /** Snapshot the full FSM evaluation that produced a transition into the

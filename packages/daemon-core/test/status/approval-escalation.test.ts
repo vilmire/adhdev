@@ -153,6 +153,47 @@ describe('coordinator-first owner escalation', () => {
         expect(w.server).toHaveLength(1);
         w.stop();
     });
+
+    it('escalates a later modal-less wait again after the session resolves to idle (wait → push at 60 s → idle → new modal-less wait pushes again at 60 s)', () => {
+        const w = world();
+        state = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: { status: 'waiting_approval', activeModal: null, providerApproval: undefined },
+        };
+        const askExternal = (ts = 1) => w.bus.emit({
+            kind: 'provider_event',
+            sessionId: 'w1',
+            event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'claude-cli', timestamp: ts },
+        } as any);
+
+        // 1. First modal-less wait -> pushes at 60s
+        askExternal(1);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS);
+        expect(w.server).toHaveLength(1);
+
+        // 2. Session resolves to idle
+        state = {
+            status: 'idle',
+            settings: workerSettings,
+            activeChat: { status: 'idle', activeModal: null, providerApproval: undefined },
+        };
+        vi.advanceTimersByTime(1_000);
+
+        // 3. New modal-less wait -> must hold for 60s and then push again at 60s
+        state = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: { status: 'waiting_approval', activeModal: null, providerApproval: undefined },
+        };
+        askExternal(2);
+        expect(w.server).toHaveLength(1);
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS - 1);
+        expect(w.server).toHaveLength(1);
+        vi.advanceTimersByTime(1);
+        expect(w.server).toHaveLength(2);
+        w.stop();
+    });
 });
 
 describe('episode identity helpers', () => {
