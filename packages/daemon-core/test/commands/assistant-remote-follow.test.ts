@@ -5166,7 +5166,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 reason: 'cooldown',
             });
 
-            // Verify durable normalization in SQLite (both assistant_relay_receipts and turn_events rewritten to t0 with futureNormalizedAtMs marker)
+            // Verify durable receipt normalization and quota-owned audit bounds; ledger rows stay immutable.
             await withHostEnv(async () => {
                 const db = MeshRuntimeStore.getInstance().db;
                 const receipts = db
@@ -5184,11 +5184,13 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                     .prepare("SELECT at_ms, payload_json FROM turn_events WHERE event_id = 'assistant_follower_coordinator_wake:future-30d-1'")
                     .all() as Array<{ at_ms: number; payload_json: string }>;
                 expect(audits).toHaveLength(1);
-                expect(audits[0]!.at_ms).toBe(t0);
+                expect(audits[0]!.at_ms).toBe(plus30Days);
                 const auditPayload = JSON.parse(audits[0]!.payload_json);
-                expect(auditPayload.wakeAtMs).toBe(t0);
-                expect(auditPayload.futureNormalizedAtMs).toBe(t0);
-                expect(auditPayload.originalAtMs).toBe(plus30Days);
+                expect(auditPayload.wakeAtMs).toBe(plus30Days);
+                const bound = db.prepare('SELECT at_ms, value FROM assistant_follower_wake_audit_bounds WHERE event_id = ?')
+                    .get('assistant_follower_coordinator_wake:future-30d-1') as { at_ms: number; value: string };
+                expect(bound.at_ms).toBe(t0);
+                expect(JSON.parse(bound.value)).toMatchObject({ firstNormalizedAtMs: t0, originalAtMs: plus30Days });
             });
 
             // 2. At t0 + 16m WITH a restart: both +30d rows have expired past their single 15m window from first hydration -> launch succeeds!
@@ -5861,7 +5863,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         }
     });
 
-    it('23p. [Round 7 Finding 2 MEDIUM & Finding 4 LOW] partial-failure injection on audit UPDATE rolls back receipt UPDATE so one wake is never double-counted after restart, and originalAtMs is preserved across backward clock steps', async () => {
+    it('23p. [Round 7 Finding 2 MEDIUM & Finding 4 LOW] partial-failure injection on audit bound INSERT rolls back receipt UPDATE so one wake is never double-counted after restart, and originalAtMs is preserved across backward clock steps', async () => {
         await withHostEnv(() =>
             createRouter(HOST_A).execute(
                 ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
@@ -5936,13 +5938,16 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                     recordedAt: futureAt,
                 });
 
-                // Install a SQLite trigger that aborts UPDATE on turn_events (after assistant_relay_receipts UPDATE runs)
+                // Install a fault on the quota-owned audit bound write after receipt UPDATE runs.
+                store.db.exec(`CREATE TABLE IF NOT EXISTS assistant_follower_wake_audit_bounds (
+                    event_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, value TEXT NOT NULL
+                )`);
                 store.db.exec(
-                    "CREATE TEMP TRIGGER fail_turn_events_update BEFORE UPDATE ON turn_events BEGIN SELECT RAISE(ABORT, 'injected turn_events update failure'); END;",
+                    "CREATE TEMP TRIGGER fail_audit_bound_insert BEFORE INSERT ON assistant_follower_wake_audit_bounds BEGIN SELECT RAISE(ABORT, 'injected audit bound failure'); END;",
                 );
             });
 
-            // Run hydration at t0 while the turn_events UPDATE trigger fails
+            // Run hydration at t0 while the quota-owned audit bound INSERT trigger fails
             await withHostEnv(async () => {
                 const { rebuildFollowerWakeRateLimitFromStore } = await import('../../src/commands/high-family/assistant-remote.js');
                 rebuildFollowerWakeRateLimitFromStore(t0);
@@ -5961,7 +5966,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 expect(JSON.parse(auditRow.payload_json).wakeAtMs).toBe(futureAt);
 
                 // Drop the fault trigger
-                db.exec('DROP TRIGGER fail_turn_events_update;');
+                db.exec('DROP TRIGGER fail_audit_bound_insert;');
             });
 
             // Now simulate restart at t0 + 61s, then wake at t0 + 122s (61s after the +61s normalization):
@@ -6074,14 +6079,12 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 // originalAtMs MUST remain origFuture (t1 + 30d), NEVER overwritten with t1!
                 expect(parsedReceipt.originalAtMs).toBe(origFuture);
 
-                expect(auditRow.at_ms).toBe(t2);
-                const parsedAudit = JSON.parse(auditRow.payload_json);
-                expect(parsedAudit.atMs).toBe(t2);
-                expect(parsedAudit.wakeAtMs).toBe(t2);
-                expect(parsedAudit.futureNormalizedAtMs).toBe(t2);
-                expect(parsedAudit.firstNormalizedAtMs).toBe(t1);
-                // originalAtMs MUST remain origFuture (t1 + 30d), NEVER overwritten with t1!
-                expect(parsedAudit.originalAtMs).toBe(origFuture);
+                expect(auditRow.at_ms).toBe(origFuture);
+                expect(JSON.parse(auditRow.payload_json).wakeAtMs).toBe(origFuture);
+                const bound = db.prepare('SELECT at_ms, value FROM assistant_follower_wake_audit_bounds WHERE event_id = ?')
+                    .get('assistant_follower_coordinator_wake:r7-orig-preserve') as { at_ms: number; value: string };
+                expect(bound.at_ms).toBe(t2);
+                expect(JSON.parse(bound.value)).toMatchObject({ firstNormalizedAtMs: t1, originalAtMs: origFuture });
             });
 
             // Restart and hydrate again at t2: idempotent, originalAtMs still origFuture, and still 1 charge
@@ -6098,7 +6101,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                     .prepare("SELECT payload_json FROM turn_events WHERE event_id = 'assistant_follower_coordinator_wake:r7-orig-preserve'")
                     .get() as { payload_json: string };
                 expect(JSON.parse(receiptRow.value).originalAtMs).toBe(origFuture);
-                expect(JSON.parse(auditRow.payload_json).originalAtMs).toBe(origFuture);
+                expect(JSON.parse(auditRow.payload_json).wakeAtMs).toBe(origFuture);
+                const bound = db.prepare('SELECT value FROM assistant_follower_wake_audit_bounds WHERE event_id = ?')
+                    .get('assistant_follower_coordinator_wake:r7-orig-preserve') as { value: string };
+                expect(JSON.parse(bound.value).originalAtMs).toBe(origFuture);
             });
         } finally {
             nowSpy.mockRestore();

@@ -109528,7 +109528,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const auditsByKey = /* @__PURE__ */ new Map();
         const normByKey = /* @__PURE__ */ new Map();
         const pendingReceiptRepairs = [];
-        const pendingAuditRepairs = [];
+        const pendingAuditBounds = [];
         const pendingNormInserts = [];
         let receiptSeq = 0;
         let auditSeq = 0;
@@ -109681,6 +109681,12 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         } catch {
         }
         try {
+          store2.db.exec(`CREATE TABLE IF NOT EXISTS assistant_follower_wake_audit_bounds (
+                event_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, value TEXT NOT NULL
+            )`);
+          const auditBounds = new Map(store2.db.prepare(
+            "SELECT event_id, at_ms, value FROM assistant_follower_wake_audit_bounds"
+          ).all().map((row2) => [row2.event_id, row2]));
           const auditRows = store2.db.prepare(
             "SELECT event_id, mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC"
           ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND);
@@ -109689,7 +109695,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const persistedEventId = str12(row2.event_id);
             const eventId = persistedEventId || `audit-row-${auditSeq}`;
             const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:audit:${eventId}`;
-            const priorNorm = normByKey.get(normKey);
+            const priorBound = auditBounds.get(eventId);
+            const priorNorm = priorBound ? JSON.parse(priorBound.value) : normByKey.get(normKey);
             const meshId = str12(row2.mesh_id);
             const rowAtMs = Number(row2.at_ms);
             let sender = "";
@@ -109725,7 +109732,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const rawConflict = hasRowAt && hasExplicitWakeAt && (payloadWakeAt > rowAtMs || rowAtMs - payloadWakeAt > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS) || hasRowAt && hasPayloadAt && Math.abs(rowAtMs - payloadAt) > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS;
             const origConflict = hasExplicitWakeAt && (originalWakeAtMs > originalRowAtMs || originalRowAtMs - originalWakeAtMs > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS);
             const conflict = priorNorm?.conflict === true || parsed.conflict === true || rawConflict || origConflict;
-            const isFuture = hasRowAt && rowAtMs > now || hasExplicitWakeAt && payloadWakeAt > now || hasPayloadAt && payloadAt > now;
+            const isFuture = priorBound ? priorBound.at_ms > now : hasRowAt && rowAtMs > now || hasExplicitWakeAt && payloadWakeAt > now || hasPayloadAt && payloadAt > now;
             const isFutureBeyondSkew = hasRowAt && rowAtMs > now + FOLLOWER_WAKE_FUTURE_SKEW_MS || hasExplicitWakeAt && payloadWakeAt > now + FOLLOWER_WAKE_FUTURE_SKEW_MS || hasPayloadAt && payloadAt > now + FOLLOWER_WAKE_FUTURE_SKEW_MS;
             let effectiveAtMs;
             let effectiveWakeAtMs;
@@ -109742,41 +109749,26 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 );
               }
               if (persistedEventId) {
-                if (!priorNorm) {
-                  pendingNormInserts.push({
-                    normKey,
-                    atMs: firstNormalizedAtMs,
-                    valueJson: JSON.stringify({
-                      targetKind: "audit",
-                      targetId: persistedEventId,
-                      wakeId,
-                      originalAtMs,
-                      originalRowAtMs,
-                      originalWakeAtMs,
-                      originalPayloadAtMs,
-                      firstNormalizedAtMs,
-                      conflict
-                    })
-                  });
-                }
-                const repairedPayload = JSON.stringify({
-                  ...parsed,
-                  atMs: now,
-                  wakeAtMs: now,
-                  futureNormalizedAtMs: now,
-                  firstNormalizedAtMs,
-                  originalAtMs,
-                  originalWakeAtMs,
-                  originalRowAtMs,
-                  originalPayloadAtMs,
-                  ...conflict ? { conflict: true } : {}
-                });
-                pendingAuditRepairs.push({
+                pendingAuditBounds.push({
                   eventId: persistedEventId,
                   atMs: now,
-                  repairedPayload
+                  valueJson: JSON.stringify({
+                    targetKind: "audit",
+                    targetId: persistedEventId,
+                    wakeId,
+                    originalAtMs,
+                    originalRowAtMs,
+                    originalWakeAtMs,
+                    originalPayloadAtMs,
+                    firstNormalizedAtMs,
+                    conflict
+                  })
                 });
               }
+            } else if (priorBound) {
+              effectiveAtMs = priorBound.at_ms;
+              effectiveWakeAtMs = priorBound.at_ms;
+              effectiveRowAtMs = priorBound.at_ms;
             } else {
               effectiveRowAtMs = hasRowAt ? rowAtMs : hasExplicitWakeAt ? payloadWakeAt : payloadAt;
               effectiveWakeAtMs = hasExplicitWakeAt ? payloadWakeAt : effectiveRowAtMs;
@@ -109820,7 +109812,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         } catch {
         }
         let repairTransactionFailed = false;
-        if (pendingReceiptRepairs.length > 0 || pendingAuditRepairs.length > 0 || pendingNormInserts.length > 0) {
+        if (pendingReceiptRepairs.length > 0 || pendingAuditBounds.length > 0 || pendingNormInserts.length > 0) {
           try {
             const applyRepairs = store2.db.transaction(() => {
               for (const r of pendingReceiptRepairs) {
@@ -109834,10 +109826,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                   ).run(r.atMs, r.receiptKey);
                 }
               }
-              for (const a of pendingAuditRepairs) {
-                store2.db.prepare(
-                  "UPDATE turn_events SET at_ms = ?, recorded_at = MIN(recorded_at, ?), payload_json = ? WHERE event_id = ?"
-                ).run(a.atMs, a.atMs, a.repairedPayload, a.eventId);
+              for (const a of pendingAuditBounds) {
+                store2.db.prepare(`
+                            INSERT INTO assistant_follower_wake_audit_bounds (event_id, at_ms, value) VALUES (?, ?, ?)
+                            ON CONFLICT(event_id) DO UPDATE SET at_ms = MIN(at_ms, excluded.at_ms)
+                        `).run(a.eventId, a.atMs, a.valueJson);
               }
               for (const n of pendingNormInserts) {
                 store2.db.prepare(
