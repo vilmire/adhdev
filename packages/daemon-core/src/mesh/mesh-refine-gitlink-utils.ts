@@ -13,12 +13,13 @@
  */
 import * as fs from 'fs';
 import { execFileSync } from 'node:child_process';
+import { devNull } from 'node:os';
 import { resolve as pathResolve } from 'path';
 
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations } from '../git/public-push-guard.mjs';
+import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations, publicPushPendingCommits } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
@@ -47,6 +48,10 @@ export const GIT = process.platform === 'win32' ? resolveWin32Executable('git') 
  * `-C` and `cwd`, so these commands would silently read — and fetch into — a
  * DIFFERENT repository.
  */
+// All ancestry decisions use real objects, including approval and containment.
+const realGitEnv = () => ({ ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull });
+const realGitArgs = (args: string[]) => ['--no-replace-objects', '-c', 'core.useReplaceRefs=false', ...args];
+
 export const REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024;
 
 // Head+tail budget (was head-only 2000 chars — see REFINE-LOG-TRUNCATION). A
@@ -78,13 +83,13 @@ export function truncateValidationOutput(value: unknown): string {
 /** The gitlink (mode 160000) paths whose recorded commit differs between two refs. */
 export function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef: string): string[] {
     try {
-        const output = execFileSync(GIT, ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+        const output = execFileSync(GIT, ['--no-replace-objects', 'diff', '--raw', '--no-abbrev', fromRef, toRef], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
             timeout: GIT_LOCAL_TIMEOUT_MS,
             windowsHide: true,
-            env: gitChildEnv(),
+            env: realGitEnv(),
         });
         const paths = new Set<string>();
         for (const line of output.split('\n')) {
@@ -107,13 +112,13 @@ export function readChangedGitlinkPaths(repoRoot: string, fromRef: string, toRef
 /** The submodule commit a ref's tree records at `path`, or undefined. */
 export function readTreeObject(repoRoot: string, ref: string, path: string): string | undefined {
     try {
-        const output = execFileSync(GIT, ['ls-tree', ref, '--', path], {
+        const output = execFileSync(GIT, ['--no-replace-objects', 'ls-tree', ref, '--', path], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: 1024 * 1024,
             timeout: GIT_LOCAL_TIMEOUT_MS,
             windowsHide: true,
-            env: gitChildEnv(),
+            env: realGitEnv(),
         }).trim();
         const match = output.match(/\bcommit\s+([0-9a-f]{40})\b/i);
         return match?.[1];
@@ -136,7 +141,7 @@ function gitRefsResolvable(cwd: string, refs: string[]): boolean {
     for (const ref of refs) {
         if (!ref) return false;
         try {
-            execFileSync(GIT, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            execFileSync(GIT, ['--no-replace-objects', 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: realGitEnv() });
         } catch {
             return false;
         }
@@ -169,7 +174,7 @@ export function probeGitAncestry(cwd: string, ancestor: string, descendant: stri
     }
     if (!gitRefsResolvable(cwd, [ancestor, descendant])) return 'undeterminable';
     try {
-        execFileSync(GIT, ['merge-base', '--is-ancestor', ancestor, descendant], { cwd, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        execFileSync(GIT, ['--no-replace-objects', 'merge-base', '--is-ancestor', ancestor, descendant], { cwd, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: realGitEnv() });
         return true;
     } catch (e: any) {
         // Both operands resolved above, so exit 1 is git's real "no". Anything
@@ -281,7 +286,7 @@ export function warnRefineSubmoduleUndeterminable(nodeId: string, evidence: any)
 export function submoduleCommitPresent(submoduleRepoPath: string, commit: string): boolean {
     if (!commit) return false;
     try {
-        execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+        execFileSync(GIT, ['--no-replace-objects', 'cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: realGitEnv() });
         return true;
     } catch {
         return false;
@@ -322,7 +327,7 @@ export function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmod
     if (!commit) return false;
     const present = (): boolean => {
         try {
-            execFileSync(GIT, ['cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv() });
+            execFileSync(GIT, ['--no-replace-objects', 'cat-file', '-e', `${commit}^{commit}`], { cwd: submoduleRepoPath, stdio: 'ignore', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: realGitEnv() });
             return true;
         } catch {
             return false;
@@ -350,12 +355,12 @@ export function ensureSubmoduleCommitLocal(submoduleRepoPath: string, baseSubmod
             // transport and this call runs with `protocol.file.allow=always`, so a
             // remote-backed or network-mounted source reaches the wire. Unbounded,
             // one such source freezes the whole daemon (see the module note above).
-            execFileSync(GIT, ['-c', 'protocol.file.allow=always', ...args], {
+            execFileSync(GIT, ['--no-replace-objects', '-c', 'protocol.file.allow=always', ...args], {
                 cwd: submoduleRepoPath,
                 stdio: ['ignore', 'ignore', 'pipe'],
                 timeout: GIT_NETWORK_TIMEOUT_MS,
                 windowsHide: true,
-                env: gitChildEnv(),
+                env: realGitEnv(),
             });
         } catch { /* try the next strategy */ }
         if (present()) return true;
@@ -487,13 +492,13 @@ export type GitlinkTrivialFastForwardEvaluation = {
  */
 export function readChangedPathKinds(repoRoot: string, fromRef: string, toRef: string): Array<{ path: string; isGitlink: boolean }> {
     try {
-        const output = execFileSync(GIT, ['diff', '--raw', '--no-abbrev', fromRef, toRef], {
+        const output = execFileSync(GIT, ['--no-replace-objects', 'diff', '--raw', '--no-abbrev', fromRef, toRef], {
             cwd: repoRoot,
             encoding: 'utf8',
             maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
             timeout: GIT_LOCAL_TIMEOUT_MS,
             windowsHide: true,
-            env: gitChildEnv(),
+            env: realGitEnv(),
         });
         const result: Array<{ path: string; isGitlink: boolean }> = [];
         const seen = new Set<string>();
@@ -557,8 +562,9 @@ export async function verifyRemoteBranchContainsCommit(
     commit: string,
     branch = 'main',
 ): Promise<RemoteContainmentVerdict> {
+    const readGit = (cwd: string, args: string[]) => runGit(cwd, ['--no-replace-objects', '-c', 'core.useReplaceRefs=false', ...args]);
     try {
-        await runGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+        await readGit(submodulePath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`]);
     } catch (fetchError: any) {
         // The remote was never consulted — no ancestry verdict exists.
         return { state: 'undeterminable', error: fetchError };
@@ -569,7 +575,7 @@ export async function verifyRemoteBranchContainsCommit(
     // wrote nothing), there is no set to test membership in — `--is-ancestor`
     // would fail for a reason that is not "not an ancestor". Undeterminable.
     try {
-        await runGit(submodulePath, ['rev-parse', '--verify', '--quiet', `${remoteRef}^{commit}`]);
+        await readGit(submodulePath, ['rev-parse', '--verify', '--quiet', `${remoteRef}^{commit}`]);
     } catch (resolveError: any) {
         return { state: 'undeterminable', error: resolveError };
     }
@@ -588,12 +594,12 @@ export async function verifyRemoteBranchContainsCommit(
     // (fatal: not a valid object) for a missing candidate, which is
     // indistinguishable by exit code from a genuine spawn/environment failure.
     try {
-        await runGit(submodulePath, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`]);
+        await readGit(submodulePath, ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`]);
     } catch (missingCandidate: any) {
         return { state: 'absent', error: missingCandidate };
     }
     try {
-        await runGit(submodulePath, ['merge-base', '--is-ancestor', commit, remoteRef]);
+        await readGit(submodulePath, ['merge-base', '--is-ancestor', commit, remoteRef]);
         return { state: 'contained' };
     } catch (ancestryError: any) {
         // Both operands resolved above, so exit 1 is git's real "no". Anything
@@ -638,7 +644,7 @@ export type MeshRefineSubmoduleReachabilityEntry = {
     autoPublishSkippedReason?: string;
     /**
      * ★Set when the destination is a PUBLIC remote and the commits that would become
-     * public (origin/<branch>..commit) are not all covered by the caller's
+     * public (the union of actual push destinations’ pending commits) are not all covered by the caller's
      * `approvedPublishShas`. Nothing was pushed. Carries everything the coordinator
      * must show the owner before approving.
      */
@@ -728,6 +734,9 @@ export type MeshRefinePublishApprovalRequest = {
     unapproved: string[];
     /** Approved SHAs that match no commit about to become public (stale or wrong approval). */
     extraApproved: string[];
+    /** Invalid or ambiguous approvals are never authority to publish. */
+    invalidApproved?: string[];
+    error?: string;
 };
 
 /**
@@ -750,15 +759,28 @@ export async function evaluatePublicPublishApproval(
     if (destinations && !destinations.isPublic) return undefined;
 
     const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const run = async (args: string[]) => String((await promisify(execFile)(GIT, args, {
-        cwd: submodulePath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
-        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-    })).stdout || '');
-    const remoteRef = `refs/remotes/origin/${branch}`;
-    let range = `${remoteRef}..${commit}`;
-    try { await run(['rev-parse', '--verify', '--quiet', `${remoteRef}^{commit}`]); } catch { range = commit; }
-    const log = await run(['log', '--reverse', '--format=%H%x00%an <%ae>%x00%cn <%ce>%x00%s%x00', range]);
+    const run = async (args: string[], input?: string): Promise<string> => {
+        let child: ReturnType<typeof execFile>;
+        const result = new Promise<string>((resolve, reject) => {
+            child = execFile(GIT, args, {
+                cwd: submodulePath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: realGitEnv(),
+                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+            }, (error, stdout) => error ? reject(error) : resolve(String(stdout || '')));
+            child.stdin?.on('error', () => {});
+            child.stdin?.end(input);
+        });
+        return result;
+    };
+    let evidenceError = '';
+    let pending: string[];
+    try {
+        if (!destinations) throw new Error('push destination could not be read');
+        pending = await publicPushPendingCommits(submodulePath, commit, `refs/heads/${branch}`, destinations.urls);
+    } catch (e: any) {
+        evidenceError = e?.message || String(e);
+        pending = (await run(realGitArgs(['rev-list', commit]))).trim().split('\n').filter(Boolean);
+    }
+    const log = pending.length ? await run(realGitArgs(['log', '--reverse', '--no-walk=unsorted', '--format=%H%x00%an <%ae>%x00%cn <%ce>%x00%s%x00', '--stdin']), pending.join('\n') + '\n') : '';
     const fields = log.split('\0');
     const rows: Array<{ sha: string; author: string; committer: string; subject: string }> = [];
     for (let i = 0; i + 3 < fields.length; i += 4) {
@@ -781,20 +803,53 @@ export async function evaluatePublicPublishApproval(
         }
     } catch (e: any) { scanError = e?.message || String(e); }
 
-    const approved = (approvedShas || []).map(s => String(s).trim().toLowerCase()).filter(s => /^[0-9a-f]{7,64}$/.test(s));
+    const entries = (approvedShas || []).map(s => String(s).trim().toLowerCase());
+    const approved = new Set<string>();
+    const invalidApproved: string[] = [];
+    const extraApproved: string[] = [];
+    for (const entry of entries) {
+        const matches = rows.filter(row => row.sha.startsWith(entry));
+        if (!/^[0-9a-f]{7,64}$/.test(entry)) { invalidApproved.push(entry); continue; }
+        try {
+            // --disambiguate covers the repository, including non-pending commits
+            // and other objects; a prefix must be unique there as well.
+            const objects = (await run(realGitArgs(['rev-parse', `--disambiguate=${entry}`]))).trim().split('\n').filter(Boolean);
+            if (objects.length !== 1 || matches.length > 1) { invalidApproved.push(entry); continue; }
+            const full = (await run(realGitArgs(['rev-parse', '--verify', `${objects[0]}^{commit}`]))).trim();
+            if (matches.length !== 1 || matches[0].sha !== full) { extraApproved.push(entry); continue; }
+            approved.add(full);
+        } catch { invalidApproved.push(entry); }
+    }
     const commits: MeshRefinePublishCandidate[] = rows.map(row => {
         const details = violationsBySha.get(row.sha) || [];
         return {
             ...row,
             guardScan: scanError ? 'error' : details.length ? 'blocked' : 'clean',
             guardDetails: scanError ? [scanError] : details,
-            approved: approved.some(a => row.sha.startsWith(a)),
+            approved: approved.has(row.sha),
         };
     });
     const unapproved = commits.filter(c => !c.approved).map(c => c.sha);
-    const extraApproved = approved.filter(a => !commits.some(c => c.sha.startsWith(a)));
-    if (unapproved.length === 0 && extraApproved.length === 0 && commits.length > 0) return undefined;
-    return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved };
+    if (!evidenceError && invalidApproved.length === 0 && unapproved.length === 0 && extraApproved.length === 0) return undefined;
+    return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved, invalidApproved, ...(evidenceError ? { error: evidenceError } : {}) };
+}
+
+/** Approval errors carry the same evidence as the submodule terminal result. */
+export class PublicPublishApprovalRequired extends Error {
+    constructor(public readonly approval: MeshRefinePublishApprovalRequest) {
+        super('publish_approval_required');
+    }
+}
+
+export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: readonly string[]): Promise<void> {
+    const request = await evaluatePublicPublishApproval(repo, commit, branch, approvedShas);
+    if (request) throw new PublicPublishApprovalRequired(request);
+    const destinations = await pushDestinations(repo, 'origin');
+    if (destinations.isPublic) {
+        for (const remoteUrl of destinations.urls) {
+            await assertPublishableToPublicOss(repo, commit, { remoteUrl, remoteRef: `refs/heads/${branch}` });
+        }
+    }
 }
 
 export async function runMeshRefineSubmoduleReachabilityGate(
@@ -809,13 +864,13 @@ export async function runMeshRefineSubmoduleReachabilityGate(
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
         const runGit = async (cwd: string, args: string[]): Promise<string> => {
-            const { stdout } = await execFileAsync(GIT, args, {
+            const { stdout } = await execFileAsync(GIT, realGitArgs(args), {
                 cwd,
                 encoding: 'utf8',
                 timeout: GIT_NETWORK_TIMEOUT_MS,
                 maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
                 windowsHide: true,
-                env: gitChildEnv(),
+                env: realGitEnv(),
             });
             return String(stdout || '');
         };
@@ -831,7 +886,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             // scripts, and a fresh worktree may never have run setup-hooks): identity +
             // full-history personal-path scan run HERE, fail-closed, before anything is sent.
             // A throw lands in the caller's publishError path, so the publish is refused.
-            // Scoped to the public oss remote — other submodules (providers) are not gated.
+            // Public and unknown destinations, including providers, require the same guard.
             let destinations: Awaited<ReturnType<typeof pushDestinations>> | undefined;
             try { destinations = await pushDestinations(submodulePath, 'origin'); } catch { /* unknown URLs: guard full ancestry */ }
             if (!destinations || destinations.isPublic) {
@@ -847,7 +902,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                 timeout: GIT_NETWORK_TIMEOUT_MS,
                 maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
                 windowsHide: true,
-                env: gitChildEnv(),
+                env: realGitEnv(),
             });
             return { stdout: String(stdout || ''), stderr: String(stderr || ''), refspec };
         };

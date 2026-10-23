@@ -33,15 +33,17 @@ export const REQUIRED_NAME = 'vilmire';
 export const REQUIRED_EMAIL = 'vilmire@users.noreply.github.com';
 
 const ZERO = /^0+$/;
-const PUBLIC_REMOTE_RE = /[:/]vilmire\/adhdev(?:\.git)?\/?$/i;
+const KNOWN_PUBLIC_RE = /[:/]vilmire\/adhdev(?:-providers)?(?:\.git)?\/?$/i;
 
-/**
- * True for any URL form of the public oss repo, including SSH host aliases
- * (`git@github.com-work:vilmire/adhdev.git`) and ssh-over-443. Not for
- * `vilmire/adhdev-providers`.
- */
+// Only the known private GitHub repository is trusted by URL. Host aliases and
+// local/file URLs need explicit remote.<name>.adhdev-private=true configuration.
+function isKnownPrivateUrl(url) {
+  return /^(?:https:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/(?:git@)?github\.com(?::[0-9]+)?\/|git@github\.com:)vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(String(url || '').trim());
+}
+
+/** Public means not proven private; URL-only classification has no local override. */
 export function isPublicRemoteUrl(url) {
-  return PUBLIC_REMOTE_RE.test(String(url || '').trim());
+  return !isKnownPrivateUrl(url);
 }
 
 const GIT_ENV = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull, GIT_TERMINAL_PROMPT: '0' };
@@ -84,16 +86,43 @@ export async function pushDestinations(cwd, remoteName = 'origin') {
   const pushurls = await tryGit(cwd, ['config', '--get-all', `remote.${remoteName}.pushurl`]);
   const configured = pushurls || await runGit(cwd, ['config', '--get-all', `remote.${remoteName}.url`]);
   if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
-  return { urls, isPublic: [...urls, ...configured.trim().split('\n')].some(isPublicRemoteUrl) };
+  const all = [...urls, ...configured.trim().split('\n')];
+  const explicitlyPrivate = await tryGit(cwd, ['config', '--local', '--bool', '--get', `remote.${remoteName}.adhdev-private`]) === 'true';
+  return { urls, isPublic: all.some(url => KNOWN_PUBLIC_RE.test(url)) || (!explicitlyPrivate && all.some(isPublicRemoteUrl)) };
 }
 
-// The guard's own network call must never wait for a human: no terminal, ssh
-// BatchMode (appended to whatever ssh command is already configured), no askpass.
+// Noninteractive ssh: insert our option before existing options, since ssh uses
+// the first value. Keep the executable (including a quoted path) and its arguments.
 async function networkEnv(cwd) {
   const env = { GIT_ASKPASS: 'false', SSH_ASKPASS: 'false', SSH_ASKPASS_REQUIRE: 'never', GCM_INTERACTIVE: 'never' };
-  const ssh = process.env.GIT_SSH_COMMAND || await tryGit(cwd, ['config', '--get', 'core.sshCommand']) || (process.env.GIT_SSH ? '' : 'ssh');
-  if (ssh) env.GIT_SSH_COMMAND = `${ssh} -o BatchMode=yes`;
+  const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
+  const ssh = process.env.GIT_SSH_COMMAND || await tryGit(cwd, ['config', '--get', 'core.sshCommand']) || (process.env.GIT_SSH ? quote(process.env.GIT_SSH) : 'ssh');
+  const executable = /^(?:"[^"\n]+"|'[^'\n]+'|[^\s'";|&<>]+)(?=\s|$)/.exec(ssh);
+  if (!executable) throw new Error('cannot make configured ssh command noninteractive');
+  env.GIT_SSH_COMMAND = `${executable[0]} -o BatchMode=yes${ssh.slice(executable[0].length)}`;
   return env;
+}
+
+/** Fresh union of commits absent from each actual push destination branch.
+ * Unlike the history scan's optional proof, unreadable approval evidence is fatal.
+ */
+export async function publicPushPendingCommits(cwd, commit, remoteRef, urls) {
+  if (!urls.length) throw new Error('no readable push destination');
+  const pending = new Set();
+  for (const destination of urls) {
+    const rewritten = (await runGit(cwd, ['ls-remote', '--get-url', '--', destination])).trim();
+    if (rewritten !== destination) throw new Error('push destination would be rewritten during approval lookup');
+    const raw = await runGit(cwd, ['ls-remote', '--refs', '--', destination, remoteRef], { env: await networkEnv(cwd) });
+    const lines = raw.trim().split('\n').filter(Boolean);
+    let remoteSha;
+    if (lines.length) {
+      const fields = lines[0].split(/\s+/);
+      if (lines.length !== 1 || !/^[0-9a-f]{40,64}$/.test(fields[0]) || fields[1] !== remoteRef) throw new Error('invalid destination branch advertisement');
+      remoteSha = fields[0];
+    }
+    for (const sha of await newCommits(cwd, 'origin', commit, remoteSha, [])) pending.add(sha);
+  }
+  return [...pending];
 }
 
 /** Only fresh destination advertisements prove possession, never refs/remotes/*. */

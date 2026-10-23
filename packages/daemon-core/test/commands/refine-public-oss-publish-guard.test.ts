@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
+import { evaluatePublicPublishApproval } from '../../src/mesh/mesh-refine-gitlink-utils'
 import { runMeshRefineSubmoduleReachabilityGate } from '../../src/commands/router'
 
 /**
@@ -100,8 +102,9 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
     expect(f.originMain()).toContain(f.localOnly)
   })
 
-  it('other submodule remotes (not the public oss repo) are not gated', async () => {
+  it('explicitly private submodule remotes keep their behavior', async () => {
     const f = fixture({ originSubpath: 'someone/other-repo', id: BAD, content: 'clean\n' })
+    git(f.sub, ['config', 'remote.origin.adhdev-private', 'true'])
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
     expect(gate.status).toBe('passed')
     expect(f.originMain()).toContain(f.localOnly)
@@ -202,7 +205,7 @@ describe('★owner rule: the Refinery never publishes to a PUBLIC remote without
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, { ...AUTO_PUBLISH_ON, approvedPublishShas: [f.first, f.second, 'deadbeefdeadbeef'] })
     const [entry] = gate.unreachable
     expect(gate.status).toBe('failed')
-    expect(entry.publishApproval?.extraApproved).toEqual(['deadbeefdeadbeef'])
+    expect(entry.publishApproval?.invalidApproved).toEqual(['deadbeefdeadbeef'])
     expect(f.originMain()).toEqual(before)
   })
 
@@ -215,9 +218,92 @@ describe('★owner rule: the Refinery never publishes to a PUBLIC remote without
 
   it('a private remote is unchanged: auto-published with no approval argument', async () => {
     const f = fixture({ originSubpath: 'someone/private-repo', id: GOOD, content: 'clean\n' })
+    git(f.sub, ['config', 'remote.origin.adhdev-private', 'true'])
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
     expect(gate.status).toBe('passed')
     expect(gate.entries[0].publishApproval).toBeUndefined()
     expect(f.originMain()).toContain(f.localOnly)
   })
+})
+
+
+describe('review approval regressions', () => {
+  function rawCommit(sub: string, parents: string[], message: string) {
+    return [`tree ${git(sub, ['rev-parse', 'HEAD^{tree}'])}`, ...parents.map(p => `parent ${p}`),
+      `author ${GOOD.name} <${GOOD.email}> 1700000000 +0000`, `committer ${GOOD.name} <${GOOD.email}> 1700000000 +0000`, '', message, ''].join('\n')
+  }
+  function store(sub: string, raw: string) {
+    return execFileSync('git', ['hash-object', '-w', '-t', 'commit', '--stdin'], { cwd: sub, input: raw, encoding: 'utf8' }).trim()
+  }
+  it('P1-1: a colliding seven-hex approval cannot approve two pending commits', async () => {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'clean\n' })
+    const seen = new Map<string, string>()
+    let a = '', b = '', prefix = ''
+    const template = rawCommit(f.sub, [f.localOnly], 'nonce ')
+    for (let i = 0; i < 200000; i++) {
+      const raw = template + i
+      const sha = createHash('sha1').update(`commit ${Buffer.byteLength(raw)}\0`).update(raw).digest('hex')
+      prefix = sha.slice(0, 7)
+      if (seen.has(prefix)) { a = store(f.sub, seen.get(prefix)!); b = store(f.sub, raw); break }
+      seen.set(prefix, raw)
+    }
+    expect(a).not.toBe('')
+    const merge = store(f.sub, rawCommit(f.sub, [a, b], 'merge collision'))
+    const request = await evaluatePublicPublishApproval(f.sub, merge, 'main', [f.localOnly, prefix, merge])
+    expect(request).toBeDefined()
+    expect(request!.unapproved).toEqual(expect.arrayContaining([a, b]))
+    expect((await evaluatePublicPublishApproval(f.sub, a, 'main', [f.localOnly, prefix]))?.unapproved).toContain(a)
+  })
+  it.each(['replace', 'graft'])('P1-2: %s cannot hide an unapproved ancestor', async (mode) => {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'first\n' })
+    const origin = git(f.sub, ['rev-parse', 'origin/main'])
+    const tip = store(f.sub, rawCommit(f.sub, [f.localOnly], 'second'))
+    if (mode === 'replace') git(f.sub, ['replace', tip, store(f.sub, rawCommit(f.sub, [origin], 'replacement'))])
+    else writeFileSync(git(f.sub, ['rev-parse', '--git-path', 'info/grafts']).startsWith('/') ? git(f.sub, ['rev-parse', '--git-path', 'info/grafts']) : join(f.sub, git(f.sub, ['rev-parse', '--git-path', 'info/grafts'])), `${tip} ${origin}\n`)
+    const request = await evaluatePublicPublishApproval(f.sub, tip, 'main', [tip])
+    expect(request?.unapproved).toContain(f.localOnly)
+  })
+  it('P1-3: fresh fetch mirror cannot prove possession at another push destination', async () => {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'first\n' })
+    const mirror = join(f.base, '..', 'mirror.git')
+    git(f.sub, ['clone', '-q', '--bare', f.sub, mirror])
+    git(f.sub, ['remote', 'set-url', 'origin', mirror])
+    git(f.sub, ['config', 'remote.origin.pushurl', f.origin])
+    git(f.sub, ['fetch', 'origin', 'main:refs/remotes/origin/main'])
+    const tip = store(f.sub, rawCommit(f.sub, [f.localOnly], 'second'))
+    const request = await evaluatePublicPublishApproval(f.sub, tip, 'main', [tip])
+    expect(request?.unapproved).toContain(f.localOnly)
+  })
+  it('P1-3: multiple push destinations require the union of pending commits', async () => {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'first\n' })
+    const mirror = join(f.base, '..', 'mirror.git')
+    git(f.sub, ['clone', '-q', '--bare', f.sub, mirror])
+    git(f.sub, ['remote', 'set-url', 'origin', mirror])
+    git(f.sub, ['config', '--add', 'remote.origin.pushurl', mirror])
+    git(f.sub, ['config', '--add', 'remote.origin.pushurl', f.origin])
+    git(f.sub, ['fetch', 'origin', 'main:refs/remotes/origin/main'])
+    const tip = store(f.sub, rawCommit(f.sub, [f.localOnly], 'second'))
+    expect((await evaluatePublicPublishApproval(f.sub, tip, 'main', [tip]))?.unapproved).toContain(f.localOnly)
+    expect(await evaluatePublicPublishApproval(f.sub, tip, 'main', [f.localOnly, tip])).toBeUndefined()
+  })
+  it('P1-3: an unreadable push destination refuses even a complete approval', async () => {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'clean\n' })
+    git(f.sub, ['config', 'remote.origin.pushurl', join(f.base, 'missing')])
+    expect(await evaluatePublicPublishApproval(f.sub, f.localOnly, 'main', [f.localOnly])).toBeDefined()
+  })
+  it('P1-4: unknown local destinations need approval; providers also runs the identity guard', async () => {
+    const unknown = fixture({ originSubpath: 'unknown/repo', id: GOOD, content: 'clean\n' })
+    expect((await runMeshRefineSubmoduleReachabilityGate(unknown.base, unknown.mergedTree, AUTO_PUBLISH_ON)).entries[0].autoPublishAttempted).toBe(false)
+    const providers = fixture({ originSubpath: 'vilmire/adhdev-providers', id: BAD, content: 'clean\n' })
+    const gate = await runMeshRefineSubmoduleReachabilityGate(providers.base, providers.mergedTree, approved(providers))
+    expect(gate.status).toBe('failed')
+    expect(gate.entries[0].error).toContain('identity')
+  })
+})
+
+
+it('P1-5: the shared root publication assertion still runs the identity guard after approval', async () => {
+  const { assertRefineryPublishApproved } = await import('../../src/mesh/mesh-refine-gitlink-utils')
+  const f = fixture({ originSubpath: 'vilmire/adhdev', id: BAD, content: 'clean\n' })
+  await expect(assertRefineryPublishApproved(f.sub, f.localOnly, 'main', [f.localOnly])).rejects.toThrow('identity')
 })

@@ -11,3 +11,5 @@ export function checkPush(entries: PushEntry[], opts?: { cwd?: string; remoteNam
 export function formatViolation(v: PushViolation): string;
 export function assertPublishableToPublicOss(cwd: string, commit: string, opts?: { remoteName?: string; remoteUrl?: string; remoteRef?: string }): Promise<{ checked: number }>;
 export function createDiffTreeParser(scan: (t: string) => Array<{ line: number; match: string; name?: string }>): { feed(chunk: string): void; end(): PushViolation[] };
+
+export function publicPushPendingCommits(cwd: string, commit: string, remoteRef: string, urls: string[]): Promise<string[]>;

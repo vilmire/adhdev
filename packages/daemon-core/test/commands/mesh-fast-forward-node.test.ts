@@ -11,6 +11,7 @@ vi.mock('../../src/mesh/mesh-record.js', () => ({
   },
 }))
 
+import * as publicGuard from '../../src/git/public-push-guard.mjs'
 import { fastForwardMeshNode } from '../../src/mesh/mesh-fast-forward'
 
 beforeEach(() => { recorded.calls.length = 0 })
@@ -485,6 +486,42 @@ describe('fast_forward_mesh_node ledger — noop checks are not events', () => {
       expect(blocked.code).toBe('dirty_worktree')
       expect(recorded.calls).toEqual([{ meshId: 'mesh_real', kind: 'direct_fast_forward', outcome: 'blocked' }])
     } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+})
+
+
+describe('P2 submodule push visibility enforcement', () => {
+  it.each(['known-public', 'unknown', 'throwing', 'private'])('%s destination: only proven-private submodules can be pushed', async (visibility) => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-ff-public-'))
+    let classification: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      const { work } = createRemoteBackedRepo(root)
+      const child = createRemoteBackedRepo(join(root, 'child'))
+      const sub = join(work, 'oss')
+      git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'add', child.origin, 'oss'])
+      configureUser(sub)
+      if (visibility === 'private') git(sub, ['config', 'remote.origin.adhdev-private', 'true'])
+      if (visibility === 'known-public') classification = vi.spyOn(publicGuard, 'pushDestinations').mockResolvedValue({ urls: [child.origin], isPublic: true })
+      else if (visibility === 'throwing') classification = vi.spyOn(publicGuard, 'pushDestinations').mockRejectedValue(new Error('unreadable destination'))
+      const before = git(child.origin, ['rev-parse', 'main'])
+      commitFile(sub, 'LOCAL.md', 'submodule change\n', 'submodule change')
+      const tip = git(sub, ['rev-parse', 'HEAD'])
+      git(work, ['add', '.'])
+      git(work, ['commit', '-qm', 'root gitlink'])
+      const result = await fastForwardMeshNode({ workspace: work, execute: true, mode: 'push', pushSubmodules: true, allowAutoPublishSubmoduleMainCommits: true })
+      const entry = result.submodulePushes?.[0]
+      expect(entry).toBeDefined()
+      if (visibility === 'private') {
+        expect(entry).toMatchObject({ pushed: true, skipped: false, code: 'submodule_pushed' })
+        expect(git(child.origin, ['rev-parse', 'main'])).toBe(tip)
+      } else {
+        expect(entry).toMatchObject({ pushed: false, skipped: true, code: 'submodule_public_publish_requires_approval' })
+        expect(git(child.origin, ['rev-parse', 'main'])).toBe(before)
+      }
+    } finally {
+      classification?.mockRestore()
       rmSync(root, { recursive: true, force: true })
     }
   }, 60000)

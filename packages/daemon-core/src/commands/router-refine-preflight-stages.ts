@@ -238,6 +238,8 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                             commits: entry.publishApproval!.commits,
                             unapproved: entry.publishApproval!.unapproved,
                             extraApproved: entry.publishApproval!.extraApproved,
+                            invalidApproved: entry.publishApproval!.invalidApproved,
+                            error: entry.publishApproval!.error,
                         })),
                     } : {}),
                     convergenceStatus: 'blocked_review',
@@ -251,7 +253,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                     nextSteps: approvalRequired ? [
                         'Nothing was pushed: the submodule remote is PUBLIC, and the Refinery never publishes to a public remote without per-commit owner approval.',
                         'Show the owner every commit in publishApprovalRequired[].commits (sha, subject, author/committer, guardScan). Do not approve any commit whose guardScan is not "clean".',
-                        'After the owner approves, rerun with approved_publish_shas set to exactly those commit SHAs (the set must equal the listed commits; extra or missing SHAs are refused).',
+                        'After the owner approves, rerun with approved_publish_shas resolving uniquely in the repository and pending set to exactly the listed full SHAs; ambiguous, extra or missing entries are refused.',
                     ] : convergeToPublished ? [
                         'Do NOT publish the local submodule commit(s): an equivalent commit (identical tree) is already published on the submodule remote main branch for every unreachable gitlink.',
                         'Retarget each submodule gitlink to the already-published equivalent commit shown in the evidence (equivalentPublishedCommit), commit the root pointer update, and push the submodule checkout to that commit.',

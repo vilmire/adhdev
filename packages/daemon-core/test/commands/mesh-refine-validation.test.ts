@@ -115,6 +115,7 @@ function initGitRepo(repo: string) {
   const originBare = `${repo}-origin.git`
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', originBare])
   execFileSync('git', ['remote', 'add', 'origin', originBare], { cwd: repo })
+  execFileSync('git', ['config', 'remote.origin.adhdev-private', 'true'], { cwd: repo })
   execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo })
 }
 
@@ -130,6 +131,7 @@ function initSubmoduleOrigin(repo: string) {
 
 function addSubmodule(repo: string, submoduleOrigin: string, path = 'oss') {
   execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', submoduleOrigin, path], { cwd: repo })
+  execFileSync('git', ['config', 'remote.origin.adhdev-private', 'true'], { cwd: join(repo, path) })
   execFileSync('git', ['commit', '-q', '-m', `add ${path} submodule`], { cwd: repo })
 }
 
@@ -1787,4 +1789,44 @@ describe('refine_mesh_node validation gate', () => {
     }
   }, 90000)
 
+})
+
+
+describe('P1-5 root public publishing', () => {
+  it('refuses the root push without per-commit approval even when auto-push is enabled', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-refine-public-root-'))
+    const repo = join(root, 'repo')
+    const previousConfigDir = process.env.ADHDEV_CONFIG_DIR
+    try {
+      withConfigDir(root)
+      initGitRepo(repo)
+      execFileSync('git', ['config', '--unset', 'remote.origin.adhdev-private'], { cwd: repo })
+      const remoteBefore = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repo, encoding: 'utf8' }).trim()
+      execFileSync('git', ['config', 'user.name', 'vilmire'], { cwd: repo })
+      execFileSync('git', ['config', 'user.email', 'vilmire@users.noreply.github.com'], { cwd: repo })
+      const worktree = createWorktreeWithCommit(root, repo)
+      const mesh = createMesh(repo, worktree, 'node-public-root')
+      const router = createRouter()
+      const accepted: any = await router.execute('refine_mesh_node', { execute: true, meshId: mesh.id, nodeId: 'node-public-root', inlineMesh: mesh })
+      expectAccepted(accepted, 'node-public-root')
+      const terminal = await waitForRefineLedger(mesh.id, accepted.jobId)
+      const result = (terminal.payload as any).result
+      expect(result).toMatchObject({ success: false, code: 'publish_approval_required', pushed: false })
+      expect(result.publishApprovalRequired[0].commits.length).toBeGreaterThan(0)
+      expect(execFileSync('git', ['--git-dir=' + repo + '-origin.git', 'rev-parse', 'main'], { encoding: 'utf8' }).trim()).toBe(remoteBefore)
+      expect(mesh.nodes.some((node: any) => node.id === 'node-public-root')).toBe(true)
+      expect(result.refineStages.some((stage: any) => stage.stage === 'cleanup')).toBe(false)
+      const approvedPublishShas = result.publishApprovalRequired[0].commits.map((commit: any) => commit.sha)
+      expect(result.publishApprovalRequired[0].commits.every((commit: any) => commit.guardScan === 'clean')).toBe(true)
+      const retry: any = await router.execute('refine_mesh_node', { execute: true, meshId: mesh.id, nodeId: 'node-public-root', inlineMesh: mesh, approvedPublishShas })
+      expectAccepted(retry, 'node-public-root')
+      const published = (await waitForRefineLedger(mesh.id, retry.jobId)).payload.result as any
+      expect(published).toMatchObject({ success: true, pushed: true })
+      expect(execFileSync('git', ['--git-dir=' + repo + '-origin.git', 'rev-parse', 'main'], { encoding: 'utf8' }).trim()).not.toBe(remoteBefore)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR
+      else process.env.ADHDEV_CONFIG_DIR = previousConfigDir
+      rmTempRepo(root)
+    }
+  }, 90000)
 })
