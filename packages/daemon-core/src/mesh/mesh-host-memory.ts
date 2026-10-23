@@ -33,7 +33,8 @@ import { LOG } from '../logging/logger.js';
 import {
     canonicalizeOriginGrantPublicKey,
     isValidOriginGrantPublicKey,
-    verifyOriginGrantKeyRotationProof,
+    originGrantPublicKeysEqual,
+    verifyOriginGrantKeyRotationChain,
     type OriginGrantKeyRotationProof,
 } from './origin-grant-keypair.js';
 import { maskDaemonId } from './transport/mask-daemon-id.js';
@@ -49,6 +50,7 @@ interface MeshHostRecord {
 }
 
 const FILE_NAME = 'mesh-host-records.json';
+const PEER_GRANT_KEYS_FILE_NAME = 'mesh-peer-grant-keys.json';
 const authenticatedPeerPublicKeys = new Map<string, string>();
 
 function peerKey(meshId: string, peerDaemonId: string, configDir = getConfigDir()): string {
@@ -56,8 +58,43 @@ function peerKey(meshId: string, peerDaemonId: string, configDir = getConfigDir(
     return `${configDir}\0${meshId.trim()}\0${canon}`;
 }
 
+function peerStoreKey(meshId: string, peerDaemonId: string): string {
+    const canon = canonicalDaemonId(peerDaemonId.trim()) || peerDaemonId.trim();
+    return `${meshId.trim()}\0${canon}`;
+}
+
 function filePath(configDir = getConfigDir()): string {
     return join(configDir, FILE_NAME);
+}
+
+function peerGrantKeysFilePath(configDir = getConfigDir()): string {
+    return join(configDir, PEER_GRANT_KEYS_FILE_NAME);
+}
+
+function readPeerGrantKeysFile(configDir = getConfigDir()): Record<string, string> {
+    const path = peerGrantKeysFilePath(configDir);
+    if (!existsSync(path)) return {};
+    try {
+        const parsed = JSON.parse(readFileSync(path, 'utf8'));
+        const keys = parsed && typeof parsed === 'object' ? parsed.keys : undefined;
+        if (!keys || typeof keys !== 'object' || Array.isArray(keys)) return {};
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(keys as Record<string, unknown>)) {
+            if (typeof v === 'string' && isValidOriginGrantPublicKey(v)) {
+                out[k] = v.trim();
+            }
+        }
+        return out;
+    } catch {
+        return {};
+    }
+}
+
+function writePeerGrantKeysFile(keys: Record<string, string>, configDir = getConfigDir()): void {
+    const path = peerGrantKeysFilePath(configDir);
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ version: 1, keys }, null, 2), { encoding: 'utf8', mode: 0o600 });
+    renameSync(tmp, path);
 }
 
 function readAll(configDir = getConfigDir()): Record<string, MeshHostRecord> {
@@ -128,6 +165,13 @@ export function writeMeshHostRecord(
         : undefined;
     if (pubKey) {
         authenticatedPeerPublicKeys.set(peerKey(mesh, host, configDir), pubKey);
+        try {
+            const peerKeys = readPeerGrantKeysFile(configDir);
+            peerKeys[peerStoreKey(mesh, host)] = pubKey;
+            writePeerGrantKeysFile(peerKeys, configDir);
+        } catch {
+            // Best-effort sync to peer grant keys store.
+        }
     }
     try {
         const all = readAll(configDir);
@@ -157,7 +201,7 @@ export function canAcceptPeerOriginGrantPublicKey(
     meshId: string,
     peerDaemonId: string,
     originGrantPublicKey: string,
-    opts?: { env?: NodeJS.ProcessEnv; rotationProof?: unknown },
+    opts?: { env?: NodeJS.ProcessEnv; rotationProof?: unknown; rotationChain?: unknown },
 ): boolean {
     const mesh = typeof meshId === 'string' ? meshId.trim() : '';
     const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
@@ -165,18 +209,22 @@ export function canAcceptPeerOriginGrantPublicKey(
     const canonicalPubKey = canonicalizeOriginGrantPublicKey(pubKey);
     if (!mesh || !peer || !pubKey || !canonicalPubKey) return false;
     const currentPinned = readAuthenticatedPeerOriginGrantPublicKey(mesh, peer, { env: opts?.env });
-    const canonicalCurrent = currentPinned ? canonicalizeOriginGrantPublicKey(currentPinned) : null;
-    if (currentPinned && canonicalCurrent && canonicalCurrent !== canonicalPubKey) {
-        const verified = verifyOriginGrantKeyRotationProof(opts?.rotationProof, {
-            hostDaemonId: peer,
-            currentPinnedPublicKey: currentPinned,
-        });
-        const canonicalVerifiedNew = verified.ok ? canonicalizeOriginGrantPublicKey(verified.newPublicKey) : null;
-        if (!verified.ok || canonicalVerifiedNew !== canonicalPubKey) {
-            const reason = verified.ok ? 'rotation_new_key_mismatch' : verified.reason;
+    if (currentPinned && !originGrantPublicKeysEqual(currentPinned, pubKey)) {
+        const verified = verifyOriginGrantKeyRotationChain(
+            {
+                rotationProof: opts?.rotationProof,
+                rotationChain: opts?.rotationChain,
+            },
+            {
+                hostDaemonId: peer,
+                currentPinnedPublicKey: currentPinned,
+                targetPublicKey: pubKey,
+            },
+        );
+        if (!verified.ok) {
             LOG.warn(
                 'MeshHostMemory',
-                `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${reason})`,
+                `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${verified.reason})`,
             );
             return false;
         }
@@ -188,7 +236,12 @@ export function recordAuthenticatedPeerOriginGrantPublicKey(
     meshId: string,
     peerDaemonId: string,
     originGrantPublicKey: string,
-    opts?: { env?: NodeJS.ProcessEnv; syncPeerSecrets?: boolean; rotationProof?: unknown },
+    opts?: {
+        env?: NodeJS.ProcessEnv;
+        syncPeerSecrets?: boolean;
+        rotationProof?: unknown;
+        rotationChain?: unknown;
+    },
 ): boolean {
     const mesh = typeof meshId === 'string' ? meshId.trim() : '';
     const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
@@ -197,20 +250,11 @@ export function recordAuthenticatedPeerOriginGrantPublicKey(
     const configDir = getConfigDir(opts?.env);
     authenticatedPeerPublicKeys.set(peerKey(mesh, peer, configDir), pubKey);
     try {
-        const all = readAll(configDir);
-        const existing = all[mesh];
-        if (!existing || daemonIdsEquivalent(existing.hostDaemonId, peer)) {
-            all[mesh] = {
-                meshId: mesh,
-                hostDaemonId: existing?.hostDaemonId || peer,
-                source: 'pairing',
-                recordedAt: existing?.recordedAt || new Date().toISOString(),
-                originGrantPublicKey: pubKey,
-            };
-            writeAll(all, configDir);
-        }
+        const peerKeys = readPeerGrantKeysFile(configDir);
+        peerKeys[peerStoreKey(mesh, peer)] = pubKey;
+        writePeerGrantKeysFile(peerKeys, configDir);
     } catch {
-        // Best-effort durable update.
+        // Best-effort durable update to dedicated peer grant keys store.
     }
     if (opts?.syncPeerSecrets !== false) {
         try {
@@ -257,6 +301,16 @@ export function clearAuthenticatedPeerOriginGrantPublicKey(
     const configDir = getConfigDir(opts?.env);
     authenticatedPeerPublicKeys.delete(peerKey(mesh, peer, configDir));
     try {
+        const peerKeys = readPeerGrantKeysFile(configDir);
+        const sKey = peerStoreKey(mesh, peer);
+        if (sKey in peerKeys) {
+            delete peerKeys[sKey];
+            writePeerGrantKeysFile(peerKeys, configDir);
+        }
+    } catch {
+        // Best-effort cleanup of peer grant keys store.
+    }
+    try {
         const all = readAll(configDir);
         const existing = all[mesh];
         if (existing && daemonIdsEquivalent(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
@@ -265,7 +319,36 @@ export function clearAuthenticatedPeerOriginGrantPublicKey(
             writeAll(all, configDir);
         }
     } catch {
-        // Best-effort cleanup.
+        // Best-effort cleanup of host record key.
+    }
+    try {
+        const secretsPath = join(configDir, 'mesh-peer-secrets.json');
+        if (existsSync(secretsPath)) {
+            const parsed = JSON.parse(readFileSync(secretsPath, 'utf8'));
+            if (parsed && typeof parsed === 'object' && Array.isArray(parsed.records)) {
+                let updated = false;
+                for (const rec of parsed.records) {
+                    if (
+                        rec &&
+                        typeof rec === 'object' &&
+                        rec.meshId === mesh &&
+                        typeof rec.peerDaemonId === 'string' &&
+                        daemonIdsEquivalent(rec.peerDaemonId, peer) &&
+                        rec.originGrantPublicKey !== undefined
+                    ) {
+                        delete rec.originGrantPublicKey;
+                        updated = true;
+                    }
+                }
+                if (updated) {
+                    const tmp = `${secretsPath}.tmp-${process.pid}`;
+                    writeFileSync(tmp, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+                    renameSync(tmp, secretsPath);
+                }
+            }
+        }
+    } catch {
+        // Best-effort cleanup of peer-secrets fallback.
     }
 }
 
@@ -280,6 +363,10 @@ export function readAuthenticatedPeerOriginGrantPublicKey(
     const configDir = getConfigDir(opts?.env);
     const inMem = authenticatedPeerPublicKeys.get(peerKey(mesh, peer, configDir));
     if (inMem && isValidOriginGrantPublicKey(inMem)) return inMem;
+    const fromPeerGrantStore = readPeerGrantKeysFile(configDir)[peerStoreKey(mesh, peer)];
+    if (fromPeerGrantStore && isValidOriginGrantPublicKey(fromPeerGrantStore)) {
+        return fromPeerGrantStore;
+    }
     const rec = readAll(configDir)[mesh] ?? null;
     if (
         rec &&
@@ -320,13 +407,20 @@ export function applyAuthenticatedHostKeyRotation(params: {
     meshId: string;
     hostDaemonId: string;
     currentPinnedPublicKey: string;
-    rotationProof: unknown;
+    rotationProof?: unknown;
+    rotationChain?: unknown;
     env?: NodeJS.ProcessEnv;
 }): { ok: true; newPublicKey: string; proof: OriginGrantKeyRotationProof } | { ok: false; reason: string } {
-    const verified = verifyOriginGrantKeyRotationProof(params.rotationProof, {
-        hostDaemonId: params.hostDaemonId,
-        currentPinnedPublicKey: params.currentPinnedPublicKey,
-    });
+    const verified = verifyOriginGrantKeyRotationChain(
+        {
+            rotationProof: params.rotationProof,
+            rotationChain: params.rotationChain,
+        },
+        {
+            hostDaemonId: params.hostDaemonId,
+            currentPinnedPublicKey: params.currentPinnedPublicKey,
+        },
+    );
     if (!verified.ok) return verified;
     const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
         params.meshId,
@@ -335,6 +429,7 @@ export function applyAuthenticatedHostKeyRotation(params: {
         {
             env: params.env,
             rotationProof: params.rotationProof,
+            rotationChain: params.rotationChain,
         },
     );
     if (!recorded) {

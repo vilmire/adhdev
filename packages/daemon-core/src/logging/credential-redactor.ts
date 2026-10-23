@@ -63,17 +63,22 @@ const INTRA_TOKEN_SPLIT_RE =
     /(?:\\[rnt]|[\r\n\t])+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`])|\\(?:\r?\n)/g;
 
 export const MAX_CREDENTIAL_DECODE_DEPTH = 4;
-const MAX_SCAN_INPUT_CHARS = 65_536;
-const MAX_COLLAPSE_CHARS = 16_384;
-const MAX_BASE64_RUN_CHARS = 16_384;
-const MAX_DECODE_OPERATIONS = 256;
-const MAX_CANDIDATE_RUNS_PER_LAYER = 64;
-const MAX_UNIQUE_NON_DECODABLE_RUNS = 512;
+const SCAN_WINDOW_CHARS = 65_536;
+const SCAN_WINDOW_OVERLAP_CHARS = 4_096;
+const SCAN_WINDOW_STEP_CHARS = SCAN_WINDOW_CHARS - SCAN_WINDOW_OVERLAP_CHARS;
+const MAX_BASE64_SLICE_CHARS = 65_536;
+const BASE64_SLICE_OVERLAP_CHARS = 4_096;
+const BASE64_SLICE_STEP_CHARS = MAX_BASE64_SLICE_CHARS - BASE64_SLICE_OVERLAP_CHARS;
+const MAX_DECODABLE_CANDIDATES_PER_WINDOW = 1_024;
+const MAX_DECODE_OPS_PER_WINDOW = 2_048;
+const MAX_CANDIDATE_RUNS_PER_SUBLAYER = 128;
+const MAX_NON_DECODABLE_CACHE_ENTRIES = 4_096;
 
 interface DecodeBudget {
     operations: number;
+    maxOperations: number;
     visited: Set<string>;
-    nonDecodableRuns: Set<string>;
+    nonDecodableCache: Set<string>;
     exhausted: boolean;
 }
 
@@ -125,11 +130,12 @@ function isPlausibleDecodedText(str: string): boolean {
         ) {
             return false;
         }
-        if (code >= 0x20 && code <= 0x7e) {
+        if (code === 0x09 || code === 0x0a || code === 0x0d || (code >= 0x20 && code <= 0x7e)) {
             asciiPrintable++;
         }
     }
-    return asciiPrintable >= 4;
+    const minRequiredAscii = Math.max(6, Math.ceil(len * 0.8));
+    return asciiPrintable >= minRequiredAscii;
 }
 
 function isUniformRepeatedChar(s: string): boolean {
@@ -141,22 +147,29 @@ function isUniformRepeatedChar(s: string): boolean {
     return true;
 }
 
-function findTailStart(rawText: string, limit: number): number {
-    let idx = Math.min(rawText.length, limit);
-    while (idx > 0 && /[A-Za-z0-9+/_~=%-]/.test(rawText[idx - 1]!)) {
-        idx--;
-    }
-    return idx;
-}
-
-function tryDecodeBase64Run(candidate: string): string | null {
-    if (candidate.length < 12 || candidate.length > MAX_BASE64_RUN_CHARS) return null;
+function tryDecodeBase64Slice(candidate: string): string | null {
+    if (candidate.length < 12 || candidate.length > MAX_BASE64_SLICE_CHARS) return null;
     const normalized = candidate.replace(/-/g, '+').replace(/_/g, '/');
     const padMod = normalized.length % 4;
     if (padMod === 1) return null;
     const padded = padMod === 0 ? normalized : normalized + '='.repeat(4 - padMod);
     try {
-        const decoded = Buffer.from(padded, 'base64').toString('utf8');
+        const buf = Buffer.from(padded, 'base64');
+        if (buf.byteLength < 6) return null;
+        const sampleBytes = Math.min(buf.byteLength, 512);
+        for (let i = 0; i < sampleBytes; i++) {
+            const b = buf[i]!;
+            if (
+                (b >= 0x00 && b <= 0x08) ||
+                b === 0x0b ||
+                b === 0x0c ||
+                (b >= 0x0e && b <= 0x1f) ||
+                b === 0x7f
+            ) {
+                return null;
+            }
+        }
+        const decoded = buf.toString('utf8');
         if (!isPlausibleDecodedText(decoded)) return null;
         return decoded;
     } catch {
@@ -164,20 +177,144 @@ function tryDecodeBase64Run(candidate: string): string | null {
     }
 }
 
-function hasUnexaminedEncodedTail(rawText: string, budget: DecodeBudget): boolean {
-    if (rawText.length <= MAX_SCAN_INPUT_CHARS) return false;
-    if (isUniformRepeatedChar(rawText)) return false;
-    const tailStart = findTailStart(rawText, MAX_SCAN_INPUT_CHARS);
-    const tail = rawText.slice(tailStart);
-    if (!tail) return false;
-    if (tail.includes('%') && /%[0-9A-Fa-f]{2}/.test(tail)) return true;
-    for (const match of tail.matchAll(BASE64_RUN_RE)) {
-        const run = match[0];
-        if (isUniformRepeatedChar(run)) continue;
-        if (run.length > MAX_BASE64_RUN_CHARS) return true;
-        if (!budget.nonDecodableRuns.has(run)) return true;
+function rememberNonDecodable(budget: DecodeBudget, run: string): void {
+    if (budget.nonDecodableCache.size < MAX_NON_DECODABLE_CACHE_ENTRIES) {
+        budget.nonDecodableCache.add(run);
     }
-    return false;
+}
+
+function* iterateBase64Slices(run: string): Generator<string> {
+    if (run.length <= MAX_BASE64_SLICE_CHARS) {
+        yield run;
+        return;
+    }
+    for (let offset = 0; offset < run.length; offset += BASE64_SLICE_STEP_CHARS) {
+        const alignedStart = offset - (offset % 4);
+        const rawEnd = Math.min(run.length, alignedStart + MAX_BASE64_SLICE_CHARS);
+        const alignedEnd = rawEnd < run.length ? rawEnd - (rawEnd % 4) : rawEnd;
+        if (alignedEnd - alignedStart >= 12) {
+            yield run.slice(alignedStart, alignedEnd);
+        }
+        if (rawEnd >= run.length) break;
+    }
+}
+
+function examineBase64Run(
+    run: string,
+    patterns: readonly RegExp[],
+    liveCred: string,
+    depth: number,
+    budget: DecodeBudget,
+    onDecodedCandidate: () => boolean,
+): boolean {
+    if (isUniformRepeatedChar(run)) return false;
+    if (run.length <= MAX_BASE64_SLICE_CHARS && budget.nonDecodableCache.has(run)) {
+        return false;
+    }
+    let anyDecoded = false;
+    for (const slice of iterateBase64Slices(run)) {
+        if (budget.nonDecodableCache.has(slice)) continue;
+        const decoded = tryDecodeBase64Slice(slice);
+        if (!decoded) {
+            rememberNonDecodable(budget, slice);
+            continue;
+        }
+        anyDecoded = true;
+        if (!onDecodedCandidate()) {
+            budget.exhausted = true;
+            return true;
+        }
+        if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
+            return true;
+        }
+    }
+    if (!anyDecoded && run.length <= MAX_BASE64_SLICE_CHARS) {
+        rememberNonDecodable(budget, run);
+    }
+    return budget.exhausted;
+}
+
+function examineWindowTransforms(
+    windowText: string,
+    patterns: readonly RegExp[],
+    liveCred: string,
+    depth: number,
+    budget: DecodeBudget,
+): boolean {
+    let collapsed = '';
+    INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+    if (INTRA_TOKEN_SPLIT_RE.test(windowText)) {
+        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+        collapsed = windowText.replace(INTRA_TOKEN_SPLIT_RE, '');
+        if (collapsed && collapsed !== windowText && matchesAnyPattern(collapsed, patterns, liveCred)) {
+            return true;
+        }
+    }
+
+    if (windowText.includes('%') && /%[0-9A-Fa-f]{2}/.test(windowText)) {
+        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= budget.maxOperations) {
+            budget.exhausted = true;
+            return true;
+        }
+        budget.operations++;
+        const wholeDecoded = decodeOnePercentLayer(windowText);
+        if (wholeDecoded !== windowText) {
+            if (matchesAnyPattern(wholeDecoded, patterns, liveCred)) {
+                return true;
+            }
+            if (wholeDecoded.includes('%') && /%[0-9A-Fa-f]{2}/.test(wholeDecoded)) {
+                if (checkLayerRecursive(wholeDecoded, patterns, liveCred, depth + 1, budget)) {
+                    return true;
+                }
+            } else {
+                let b64Count = 0;
+                const maxSubCandidates =
+                    depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+                for (const match of wholeDecoded.matchAll(BASE64_RUN_RE)) {
+                    const run = match[0];
+                    if (
+                        examineBase64Run(run, patterns, liveCred, depth + 1, budget, () => {
+                            if (
+                                depth + 1 >= MAX_CREDENTIAL_DECODE_DEPTH ||
+                                ++b64Count > maxSubCandidates ||
+                                budget.operations >= budget.maxOperations
+                            ) {
+                                return false;
+                            }
+                            return true;
+                        })
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    if (collapsed && collapsed !== windowText) {
+        let collapsedCount = 0;
+        const maxSubCandidates =
+            depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+        for (const match of collapsed.matchAll(BASE64_RUN_RE)) {
+            const run = match[0];
+            if (
+                examineBase64Run(run, patterns, liveCred, depth, budget, () => {
+                    if (
+                        depth >= MAX_CREDENTIAL_DECODE_DEPTH ||
+                        ++collapsedCount > maxSubCandidates ||
+                        budget.operations >= budget.maxOperations
+                    ) {
+                        return false;
+                    }
+                    return true;
+                })
+            ) {
+                return true;
+            }
+        }
+    }
+
+    return budget.exhausted;
 }
 
 function checkLayerRecursive(
@@ -191,136 +328,91 @@ function checkLayerRecursive(
     // Full-input linear literal scan with no character cap.
     if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
 
-    if (budget.operations >= MAX_DECODE_OPERATIONS) {
-        budget.exhausted = true;
-        return true;
-    }
-    if (depth > 0 && rawText.length > MAX_SCAN_INPUT_CHARS) {
+    if (budget.operations >= budget.maxOperations) {
         budget.exhausted = true;
         return true;
     }
 
-    const text = rawText.length > MAX_SCAN_INPUT_CHARS ? rawText.slice(0, MAX_SCAN_INPUT_CHARS) : rawText;
-    const visitKey = `${depth}:${text.length}:${text.slice(0, 128)}:${text.slice(-64)}`;
+    const visitKey = `${depth}:${rawText.length}:${rawText.slice(0, 128)}:${rawText.slice(-64)}`;
     if (budget.visited.has(visitKey)) return false;
     budget.visited.add(visitKey);
     budget.operations++;
 
-    if (text !== rawText && matchesAnyPattern(text, patterns, liveCred)) return true;
-
-    let collapsed = '';
-    INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
-    if (text.length <= MAX_COLLAPSE_CHARS && INTRA_TOKEN_SPLIT_RE.test(text)) {
-        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
-        collapsed = text.replace(INTRA_TOKEN_SPLIT_RE, '');
-        if (collapsed && collapsed !== text && matchesAnyPattern(collapsed, patterns, liveCred)) {
+    // 1. Windowed transforms (intra-token split collapse + whole-window percent decoding)
+    if (rawText.length <= SCAN_WINDOW_CHARS) {
+        if (examineWindowTransforms(rawText, patterns, liveCred, depth, budget)) {
             return true;
+        }
+    } else {
+        for (let offset = 0; offset < rawText.length; offset += SCAN_WINDOW_STEP_CHARS) {
+            const windowText = rawText.slice(offset, Math.min(rawText.length, offset + SCAN_WINDOW_CHARS));
+            if (examineWindowTransforms(windowText, patterns, liveCred, depth, budget)) {
+                return true;
+            }
+            if (offset + SCAN_WINDOW_CHARS >= rawText.length) break;
         }
     }
 
-    // 1. Percent-encoding transitions (whole string + candidate percent runs)
-    if (text.includes('%') && /%[0-9A-Fa-f]{2}/.test(text)) {
-        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= MAX_DECODE_OPERATIONS) {
-            budget.exhausted = true;
-            return true;
-        }
-        const wholeDecoded = decodeOnePercentLayer(text);
-        if (
-            wholeDecoded !== text &&
-            checkLayerRecursive(wholeDecoded, patterns, liveCred, depth + 1, budget)
-        ) {
-            return true;
-        }
+    // 2. Percent-encoded candidate runs across the full input
+    if (rawText.includes('%') && /%[0-9A-Fa-f]{2}/.test(rawText)) {
         let pctCount = 0;
-        for (const match of text.matchAll(PERCENT_ENCODED_RUN_RE)) {
+        let currentWindowIdx = 0;
+        const maxPerScope =
+            depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+        for (const match of rawText.matchAll(PERCENT_ENCODED_RUN_RE)) {
             const run = match[0];
-            if (!run.includes('%') || !/%[0-9A-Fa-f]{2}/.test(run) || run === text) continue;
-            if (
-                run.length > MAX_BASE64_RUN_CHARS ||
-                ++pctCount > MAX_CANDIDATE_RUNS_PER_LAYER ||
-                budget.operations >= MAX_DECODE_OPERATIONS
-            ) {
-                budget.exhausted = true;
-                return true;
+            if (!run.includes('%') || !/%[0-9A-Fa-f]{2}/.test(run) || run === rawText) continue;
+            if (depth === 0) {
+                const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
+                if (winIdx !== currentWindowIdx) {
+                    currentWindowIdx = winIdx;
+                    pctCount = 0;
+                }
             }
             const decodedRun = decodeOnePercentLayer(run);
-            if (
-                decodedRun !== run &&
-                checkLayerRecursive(decodedRun, patterns, liveCred, depth + 1, budget)
-            ) {
-                return true;
-            }
-        }
-    }
-
-    // 2. Base64 / Base64url transitions (contiguous runs + collapsed split runs)
-    let b64Count = 0;
-    for (const match of text.matchAll(BASE64_RUN_RE)) {
-        const run = match[0];
-        if (isUniformRepeatedChar(run)) continue;
-        if (run.length > MAX_BASE64_RUN_CHARS) {
-            budget.exhausted = true;
-            return true;
-        }
-        if (budget.nonDecodableRuns.has(run)) continue;
-        const decoded = tryDecodeBase64Run(run);
-        if (!decoded) {
-            budget.nonDecodableRuns.add(run);
-            if (budget.nonDecodableRuns.size > MAX_UNIQUE_NON_DECODABLE_RUNS) {
-                budget.exhausted = true;
-                return true;
-            }
-            continue;
-        }
-        if (
-            depth >= MAX_CREDENTIAL_DECODE_DEPTH ||
-            ++b64Count > MAX_CANDIDATE_RUNS_PER_LAYER ||
-            budget.operations >= MAX_DECODE_OPERATIONS
-        ) {
-            budget.exhausted = true;
-            return true;
-        }
-        if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
-            return true;
-        }
-    }
-
-    if (collapsed && collapsed !== text) {
-        let collapsedCount = 0;
-        for (const match of collapsed.matchAll(BASE64_RUN_RE)) {
-            const run = match[0];
-            if (isUniformRepeatedChar(run)) continue;
-            if (run.length > MAX_BASE64_RUN_CHARS) {
-                budget.exhausted = true;
-                return true;
-            }
-            if (budget.nonDecodableRuns.has(run)) continue;
-            const decoded = tryDecodeBase64Run(run);
-            if (!decoded) {
-                budget.nonDecodableRuns.add(run);
-                if (budget.nonDecodableRuns.size > MAX_UNIQUE_NON_DECODABLE_RUNS) {
-                    budget.exhausted = true;
-                    return true;
-                }
-                continue;
-            }
+            if (decodedRun === run) continue;
             if (
                 depth >= MAX_CREDENTIAL_DECODE_DEPTH ||
-                ++collapsedCount > MAX_CANDIDATE_RUNS_PER_LAYER ||
-                budget.operations >= MAX_DECODE_OPERATIONS
+                ++pctCount > maxPerScope ||
+                budget.operations >= budget.maxOperations
             ) {
                 budget.exhausted = true;
                 return true;
             }
-            if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
+            if (checkLayerRecursive(decodedRun, patterns, liveCred, depth + 1, budget)) {
                 return true;
             }
         }
     }
 
-    if (depth === 0 && hasUnexaminedEncodedTail(rawText, budget)) {
-        budget.exhausted = true;
-        return true;
+    // 3. Base64 / Base64url candidate runs across the full input
+    let b64Count = 0;
+    let currentWindowIdx = 0;
+    const maxPerScope =
+        depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+    for (const match of rawText.matchAll(BASE64_RUN_RE)) {
+        const run = match[0];
+        if (depth === 0) {
+            const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
+            if (winIdx !== currentWindowIdx) {
+                currentWindowIdx = winIdx;
+                b64Count = 0;
+            }
+        }
+        if (
+            examineBase64Run(run, patterns, liveCred, depth, budget, () => {
+                if (
+                    depth >= MAX_CREDENTIAL_DECODE_DEPTH ||
+                    ++b64Count > maxPerScope ||
+                    budget.operations >= budget.maxOperations
+                ) {
+                    return false;
+                }
+                return true;
+            })
+        ) {
+            return true;
+        }
     }
 
     return budget.exhausted;
@@ -334,10 +426,12 @@ export function containsEncodedOrRawSecret(
     const patterns =
         extraPatterns.length > 0 ? [...RAW_CREDENTIAL_PATTERNS, ...extraPatterns] : RAW_CREDENTIAL_PATTERNS;
     const liveCred = getLiveSessionCredential();
+    const numWindows = Math.max(1, Math.ceil(value.length / SCAN_WINDOW_STEP_CHARS));
     const budget: DecodeBudget = {
         operations: 0,
+        maxOperations: numWindows * MAX_DECODE_OPS_PER_WINDOW,
         visited: new Set(),
-        nonDecodableRuns: new Set(),
+        nonDecodableCache: new Set(),
         exhausted: false,
     };
     return checkLayerRecursive(value, patterns, liveCred, 0, budget);
@@ -395,21 +489,20 @@ export function redactCredentialString(value: string): string {
         return run;
     });
 
+    const nonDecodableSeen = new Set<string>();
     redacted = redacted.replace(BASE64_RUN_RE, (run) => {
+        if (isUniformRepeatedChar(run) || nonDecodableSeen.has(run)) return run;
+        if (run.length <= MAX_BASE64_SLICE_CHARS && !tryDecodeBase64Slice(run)) {
+            if (nonDecodableSeen.size < MAX_NON_DECODABLE_CACHE_ENTRIES) {
+                nonDecodableSeen.add(run);
+            }
+            return run;
+        }
         if (containsEncodedOrRawSecret(run)) {
             return '[REDACTED:encoded-credential]';
         }
         return run;
     });
-
-    if (redacted.length > MAX_SCAN_INPUT_CHARS && containsEncodedOrRawSecret(redacted)) {
-        const tailStart = findTailStart(redacted, MAX_SCAN_INPUT_CHARS);
-        const prefix = redacted.slice(0, tailStart);
-        if (!containsEncodedOrRawSecret(prefix)) {
-            return `${prefix}[REDACTED:unexamined]`;
-        }
-        return '[REDACTED:encoded-credential]';
-    }
 
     if (containsEncodedOrRawSecret(redacted)) {
         return '[REDACTED:encoded-credential]';

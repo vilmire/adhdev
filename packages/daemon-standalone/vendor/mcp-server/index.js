@@ -88800,6 +88800,12 @@ ${cleanBody}`;
       const bytes = canonicalOriginGrantPublicKeyBytes(rawPublicKey);
       return bytes ? bytes.toString("base64url") : null;
     }
+    function originGrantPublicKeysEqual(a, b) {
+      const bytesA = canonicalOriginGrantPublicKeyBytes(a);
+      const bytesB = canonicalOriginGrantPublicKeyBytes(b);
+      if (!bytesA || !bytesB) return false;
+      return bytesA.equals(bytesB);
+    }
     function isValidRotationProofShape(value) {
       if (!value || typeof value !== "object") return false;
       const candidate = value;
@@ -88822,11 +88828,14 @@ ${cleanBody}`;
         const out = {};
         for (const [k, v] of Object.entries(parsed.keys)) {
           if (v && typeof v === "object" && typeof v.publicKey === "string" && v.publicKey.trim() && typeof v.privateKey === "string" && v.privateKey.trim()) {
+            const validChain = Array.isArray(v.rotationChain) ? v.rotationChain.filter(isValidRotationProofShape).slice(-MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) : isValidRotationProofShape(v.rotationProof) ? [v.rotationProof] : void 0;
+            const latestProof = isValidRotationProofShape(v.rotationProof) ? v.rotationProof : validChain && validChain.length > 0 ? validChain[validChain.length - 1] : void 0;
             out[k] = {
               publicKey: v.publicKey.trim(),
               privateKey: v.privateKey.trim(),
               createdAt: typeof v.createdAt === "string" ? v.createdAt : "",
-              ...isValidRotationProofShape(v.rotationProof) ? { rotationProof: v.rotationProof } : {}
+              ...latestProof ? { rotationProof: latestProof } : {},
+              ...validChain && validChain.length > 0 ? { rotationChain: validChain } : {}
             };
           }
         }
@@ -88885,7 +88894,8 @@ ${cleanBody}`;
             publicKey: existing.publicKey,
             privateKeyObj: privateKeyObj2,
             fileMtimeMs: currentMtime,
-            ...existing.rotationProof ? { rotationProof: existing.rotationProof } : {}
+            ...existing.rotationProof ? { rotationProof: existing.rotationProof } : {},
+            ...existing.rotationChain ? { rotationChain: existing.rotationChain } : {}
           };
           keyPairCache.set(cacheKey, entry2);
           return entry2;
@@ -88923,6 +88933,13 @@ ${cleanBody}`;
     function getLatestHostKeyRotationProof(hostDaemonId, env2) {
       return getOrCreateHostKeyPair(hostDaemonId, env2).rotationProof;
     }
+    function getHostKeyRotationChain(hostDaemonId, env2) {
+      const entry = getOrCreateHostKeyPair(hostDaemonId, env2);
+      if (entry.rotationChain && entry.rotationChain.length > 0) {
+        return [...entry.rotationChain];
+      }
+      return entry.rotationProof ? [entry.rotationProof] : [];
+    }
     function rotateHostOriginGrantKeyPair(hostDaemonId, opts) {
       const env2 = opts?.env;
       const configDir = getConfigDir2(env2);
@@ -88944,9 +88961,10 @@ ${cleanBody}`;
       });
       const rotatedAt = typeof opts?.nowMs === "number" && Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
       const nonce = crypto6.randomBytes(16).toString("hex");
+      const canonicalOldKey = canonicalizeOriginGrantPublicKey(previous.publicKey) ?? previous.publicKey;
       const canonicalRotation = buildCanonicalKeyRotationPayload({
         hostDaemonId: keyId,
-        oldPublicKey: previous.publicKey,
+        oldPublicKey: canonicalOldKey,
         newPublicKey,
         rotatedAt,
         nonce
@@ -88954,31 +88972,36 @@ ${cleanBody}`;
       const signature = crypto6.sign(null, Buffer.from(canonicalRotation, "utf8"), previous.privateKeyObj).toString("base64url");
       const rotationProof = {
         hostDaemonId: keyId,
-        oldPublicKey: previous.publicKey,
+        oldPublicKey: canonicalOldKey,
         newPublicKey,
         rotatedAt,
         nonce,
         signature
       };
+      const priorChain = previous.rotationChain && previous.rotationChain.length > 0 ? previous.rotationChain : previous.rotationProof ? [previous.rotationProof] : [];
+      const rotationChain = [...priorChain, rotationProof].slice(-MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH);
       const storedAll = readStoredKeyPairs(filePath2);
       storedAll[keyId] = {
         publicKey: newPublicKey,
         privateKey: newPrivateKey,
         createdAt: new Date(rotatedAt).toISOString(),
-        rotationProof
+        rotationProof,
+        rotationChain
       };
       writeStoredKeyPairs(filePath2, storedAll);
       const nextEntry = {
         publicKey: newPublicKey,
         privateKeyObj: newPrivateKeyObj,
         fileMtimeMs: readFileMtimeMs(filePath2),
-        rotationProof
+        rotationProof,
+        rotationChain
       };
       keyPairCache.set(cacheKey, nextEntry);
       return {
         publicKey: newPublicKey,
         previousPublicKey: previous.publicKey,
-        rotationProof
+        rotationProof,
+        rotationChain
       };
     }
     function verifyOriginGrantKeyRotationProof(rawProof, expected) {
@@ -88993,16 +89016,16 @@ ${cleanBody}`;
       if (!daemonIdsEquivalent4(rawProof.hostDaemonId, expectedHost)) {
         return { ok: false, reason: "rotation_host_mismatch" };
       }
-      if (trimStr(rawProof.oldPublicKey) !== currentKey) {
-        return { ok: false, reason: "rotation_old_key_mismatch" };
-      }
-      const newPublicKey = trimStr(rawProof.newPublicKey);
-      if (!newPublicKey || newPublicKey === currentKey || !isValidOriginGrantPublicKey(newPublicKey)) {
-        return { ok: false, reason: "rotation_new_key_invalid" };
-      }
       const oldPubKeyObj = parseOriginGrantPublicKeyObject(currentKey);
       if (!oldPubKeyObj) {
         return { ok: false, reason: "rotation_pinned_key_invalid" };
+      }
+      if (!originGrantPublicKeysEqual(rawProof.oldPublicKey, currentKey)) {
+        return { ok: false, reason: "rotation_old_key_mismatch" };
+      }
+      const newPublicKey = trimStr(rawProof.newPublicKey);
+      if (!newPublicKey || !isValidOriginGrantPublicKey(newPublicKey) || originGrantPublicKeysEqual(newPublicKey, currentKey)) {
+        return { ok: false, reason: "rotation_new_key_invalid" };
       }
       try {
         const normalizedSig = rawProof.signature.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -89010,26 +89033,86 @@ ${cleanBody}`;
         if (sigBuf.byteLength !== 64) {
           return { ok: false, reason: "rotation_signature_invalid" };
         }
-        const canonicalPayload = buildCanonicalKeyRotationPayload({
-          hostDaemonId: rawProof.hostDaemonId,
-          oldPublicKey: currentKey,
-          newPublicKey,
-          rotatedAt: rawProof.rotatedAt,
-          nonce: rawProof.nonce
-        });
-        const verified = crypto6.verify(null, Buffer.from(canonicalPayload, "utf8"), oldPubKeyObj, sigBuf);
+        const canonicalOld = canonicalizeOriginGrantPublicKey(rawProof.oldPublicKey) ?? trimStr(rawProof.oldPublicKey);
+        const canonicalNew = canonicalizeOriginGrantPublicKey(newPublicKey) ?? newPublicKey;
+        const candidatePayloads = [
+          buildCanonicalKeyRotationPayload({
+            hostDaemonId: rawProof.hostDaemonId,
+            oldPublicKey: canonicalOld,
+            newPublicKey: canonicalNew,
+            rotatedAt: rawProof.rotatedAt,
+            nonce: rawProof.nonce
+          }),
+          buildCanonicalKeyRotationPayload({
+            hostDaemonId: rawProof.hostDaemonId,
+            oldPublicKey: trimStr(rawProof.oldPublicKey),
+            newPublicKey,
+            rotatedAt: rawProof.rotatedAt,
+            nonce: rawProof.nonce
+          })
+        ];
+        const verified = candidatePayloads.some(
+          (payload) => crypto6.verify(null, Buffer.from(payload, "utf8"), oldPubKeyObj, sigBuf)
+        );
         if (!verified) {
           return { ok: false, reason: "rotation_signature_invalid" };
         }
-        return { ok: true, newPublicKey, proof: rawProof };
+        return { ok: true, newPublicKey: canonicalNew, proof: rawProof };
       } catch {
         return { ok: false, reason: "rotation_signature_invalid" };
       }
+    }
+    function verifyOriginGrantKeyRotationChain(input, expected) {
+      const rawList = [];
+      if (Array.isArray(input.rotationChain) && input.rotationChain.length > 0) {
+        if (input.rotationChain.length > MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
+          return { ok: false, reason: "rotation_chain_too_long" };
+        }
+        rawList.push(...input.rotationChain);
+      } else if (input.rotationProof !== void 0) {
+        rawList.push(input.rotationProof);
+      } else {
+        return { ok: false, reason: "invalid_rotation_proof_shape" };
+      }
+      const proofs = [];
+      for (const item of rawList) {
+        if (!isValidRotationProofShape(item)) {
+          return { ok: false, reason: "invalid_rotation_proof_shape" };
+        }
+        proofs.push(item);
+      }
+      const startIdx = proofs.findIndex(
+        (p) => originGrantPublicKeysEqual(p.oldPublicKey, expected.currentPinnedPublicKey)
+      );
+      if (startIdx === -1) {
+        return { ok: false, reason: "rotation_old_key_mismatch" };
+      }
+      let workingKey = expected.currentPinnedPublicKey;
+      const verifiedSteps = [];
+      for (let i = startIdx; i < proofs.length; i++) {
+        const step = verifyOriginGrantKeyRotationProof(proofs[i], {
+          hostDaemonId: expected.hostDaemonId,
+          currentPinnedPublicKey: workingKey
+        });
+        if (!step.ok) return step;
+        workingKey = step.newPublicKey;
+        verifiedSteps.push(step.proof);
+      }
+      if (expected.targetPublicKey !== void 0 && !originGrantPublicKeysEqual(workingKey, expected.targetPublicKey)) {
+        return { ok: false, reason: "rotation_new_key_mismatch" };
+      }
+      return {
+        ok: true,
+        newPublicKey: workingKey,
+        proof: verifiedSteps[verifiedSteps.length - 1],
+        chain: verifiedSteps
+      };
     }
     var crypto6;
     var fs30;
     var path38;
     var ORIGIN_GRANT_KEYS_FILENAME;
+    var MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH;
     var keyPairCache;
     var init_origin_grant_keypair = __esm2({
       "src/mesh/origin-grant-keypair.ts"() {
@@ -89040,6 +89123,7 @@ ${cleanBody}`;
         init_dist();
         init_config();
         ORIGIN_GRANT_KEYS_FILENAME = "artifact-origin-grant-keys.json";
+        MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH = 4;
         keyPairCache = /* @__PURE__ */ new Map();
       }
     });
@@ -89059,8 +89143,39 @@ ${cleanBody}`;
       const canon3 = canonicalDaemonId2(peerDaemonId.trim()) || peerDaemonId.trim();
       return `${configDir}\0${meshId.trim()}\0${canon3}`;
     }
+    function peerStoreKey(meshId, peerDaemonId) {
+      const canon3 = canonicalDaemonId2(peerDaemonId.trim()) || peerDaemonId.trim();
+      return `${meshId.trim()}\0${canon3}`;
+    }
     function filePath(configDir = getConfigDir2()) {
       return (0, import_path20.join)(configDir, FILE_NAME);
+    }
+    function peerGrantKeysFilePath(configDir = getConfigDir2()) {
+      return (0, import_path20.join)(configDir, PEER_GRANT_KEYS_FILE_NAME);
+    }
+    function readPeerGrantKeysFile(configDir = getConfigDir2()) {
+      const path108 = peerGrantKeysFilePath(configDir);
+      if (!(0, import_fs25.existsSync)(path108)) return {};
+      try {
+        const parsed = JSON.parse((0, import_fs25.readFileSync)(path108, "utf8"));
+        const keys = parsed && typeof parsed === "object" ? parsed.keys : void 0;
+        if (!keys || typeof keys !== "object" || Array.isArray(keys)) return {};
+        const out = {};
+        for (const [k, v] of Object.entries(keys)) {
+          if (typeof v === "string" && isValidOriginGrantPublicKey(v)) {
+            out[k] = v.trim();
+          }
+        }
+        return out;
+      } catch {
+        return {};
+      }
+    }
+    function writePeerGrantKeysFile(keys, configDir = getConfigDir2()) {
+      const path108 = peerGrantKeysFilePath(configDir);
+      const tmp = `${path108}.${process.pid}.tmp`;
+      (0, import_fs25.writeFileSync)(tmp, JSON.stringify({ version: 1, keys }, null, 2), { encoding: "utf8", mode: 384 });
+      (0, import_fs25.renameSync)(tmp, path108);
     }
     function readAll(configDir = getConfigDir2()) {
       const path108 = filePath(configDir);
@@ -89117,6 +89232,12 @@ ${cleanBody}`;
       const pubKey = source2 === "pairing" && isValidOriginGrantPublicKey(originGrantPublicKey) ? originGrantPublicKey.trim() : void 0;
       if (pubKey) {
         authenticatedPeerPublicKeys.set(peerKey(mesh, host, configDir), pubKey);
+        try {
+          const peerKeys = readPeerGrantKeysFile(configDir);
+          peerKeys[peerStoreKey(mesh, host)] = pubKey;
+          writePeerGrantKeysFile(peerKeys, configDir);
+        } catch {
+        }
       }
       try {
         const all = readAll(configDir);
@@ -89145,18 +89266,22 @@ ${cleanBody}`;
       const canonicalPubKey = canonicalizeOriginGrantPublicKey(pubKey);
       if (!mesh || !peer || !pubKey || !canonicalPubKey) return false;
       const currentPinned = readAuthenticatedPeerOriginGrantPublicKey(mesh, peer, { env: opts?.env });
-      const canonicalCurrent = currentPinned ? canonicalizeOriginGrantPublicKey(currentPinned) : null;
-      if (currentPinned && canonicalCurrent && canonicalCurrent !== canonicalPubKey) {
-        const verified = verifyOriginGrantKeyRotationProof(opts?.rotationProof, {
-          hostDaemonId: peer,
-          currentPinnedPublicKey: currentPinned
-        });
-        const canonicalVerifiedNew = verified.ok ? canonicalizeOriginGrantPublicKey(verified.newPublicKey) : null;
-        if (!verified.ok || canonicalVerifiedNew !== canonicalPubKey) {
-          const reason = verified.ok ? "rotation_new_key_mismatch" : verified.reason;
+      if (currentPinned && !originGrantPublicKeysEqual(currentPinned, pubKey)) {
+        const verified = verifyOriginGrantKeyRotationChain(
+          {
+            rotationProof: opts?.rotationProof,
+            rotationChain: opts?.rotationChain
+          },
+          {
+            hostDaemonId: peer,
+            currentPinnedPublicKey: currentPinned,
+            targetPublicKey: pubKey
+          }
+        );
+        if (!verified.ok) {
           LOG.warn(
             "MeshHostMemory",
-            `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${reason})`
+            `Refused unverified origin-grant public key replacement for peer ${maskDaemonId(peer)} in mesh ${mesh} (${verified.reason})`
           );
           return false;
         }
@@ -89171,18 +89296,9 @@ ${cleanBody}`;
       const configDir = getConfigDir2(opts?.env);
       authenticatedPeerPublicKeys.set(peerKey(mesh, peer, configDir), pubKey);
       try {
-        const all = readAll(configDir);
-        const existing = all[mesh];
-        if (!existing || daemonIdsEquivalent4(existing.hostDaemonId, peer)) {
-          all[mesh] = {
-            meshId: mesh,
-            hostDaemonId: existing?.hostDaemonId || peer,
-            source: "pairing",
-            recordedAt: existing?.recordedAt || (/* @__PURE__ */ new Date()).toISOString(),
-            originGrantPublicKey: pubKey
-          };
-          writeAll(all, configDir);
-        }
+        const peerKeys = readPeerGrantKeysFile(configDir);
+        peerKeys[peerStoreKey(mesh, peer)] = pubKey;
+        writePeerGrantKeysFile(peerKeys, configDir);
       } catch {
       }
       if (opts?.syncPeerSecrets !== false) {
@@ -89217,12 +89333,42 @@ ${cleanBody}`;
       const configDir = getConfigDir2(opts?.env);
       authenticatedPeerPublicKeys.delete(peerKey(mesh, peer, configDir));
       try {
+        const peerKeys = readPeerGrantKeysFile(configDir);
+        const sKey = peerStoreKey(mesh, peer);
+        if (sKey in peerKeys) {
+          delete peerKeys[sKey];
+          writePeerGrantKeysFile(peerKeys, configDir);
+        }
+      } catch {
+      }
+      try {
         const all = readAll(configDir);
         const existing = all[mesh];
         if (existing && daemonIdsEquivalent4(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
           const { originGrantPublicKey: _removed, ...rest } = existing;
           all[mesh] = rest;
           writeAll(all, configDir);
+        }
+      } catch {
+      }
+      try {
+        const secretsPath = (0, import_path20.join)(configDir, "mesh-peer-secrets.json");
+        if ((0, import_fs25.existsSync)(secretsPath)) {
+          const parsed = JSON.parse((0, import_fs25.readFileSync)(secretsPath, "utf8"));
+          if (parsed && typeof parsed === "object" && Array.isArray(parsed.records)) {
+            let updated = false;
+            for (const rec5 of parsed.records) {
+              if (rec5 && typeof rec5 === "object" && rec5.meshId === mesh && typeof rec5.peerDaemonId === "string" && daemonIdsEquivalent4(rec5.peerDaemonId, peer) && rec5.originGrantPublicKey !== void 0) {
+                delete rec5.originGrantPublicKey;
+                updated = true;
+              }
+            }
+            if (updated) {
+              const tmp = `${secretsPath}.tmp-${process.pid}`;
+              (0, import_fs25.writeFileSync)(tmp, JSON.stringify(parsed, null, 2), { encoding: "utf8", mode: 384 });
+              (0, import_fs25.renameSync)(tmp, secretsPath);
+            }
+          }
         }
       } catch {
       }
@@ -89234,6 +89380,10 @@ ${cleanBody}`;
       const configDir = getConfigDir2(opts?.env);
       const inMem = authenticatedPeerPublicKeys.get(peerKey(mesh, peer, configDir));
       if (inMem && isValidOriginGrantPublicKey(inMem)) return inMem;
+      const fromPeerGrantStore = readPeerGrantKeysFile(configDir)[peerStoreKey(mesh, peer)];
+      if (fromPeerGrantStore && isValidOriginGrantPublicKey(fromPeerGrantStore)) {
+        return fromPeerGrantStore;
+      }
       const rec5 = readAll(configDir)[mesh] ?? null;
       if (rec5 && rec5.source === "pairing" && daemonIdsEquivalent4(rec5.hostDaemonId, peer) && rec5.originGrantPublicKey && isValidOriginGrantPublicKey(rec5.originGrantPublicKey)) {
         return rec5.originGrantPublicKey;
@@ -89255,10 +89405,16 @@ ${cleanBody}`;
       return null;
     }
     function applyAuthenticatedHostKeyRotation(params) {
-      const verified = verifyOriginGrantKeyRotationProof(params.rotationProof, {
-        hostDaemonId: params.hostDaemonId,
-        currentPinnedPublicKey: params.currentPinnedPublicKey
-      });
+      const verified = verifyOriginGrantKeyRotationChain(
+        {
+          rotationProof: params.rotationProof,
+          rotationChain: params.rotationChain
+        },
+        {
+          hostDaemonId: params.hostDaemonId,
+          currentPinnedPublicKey: params.currentPinnedPublicKey
+        }
+      );
       if (!verified.ok) return verified;
       const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
         params.meshId,
@@ -89266,7 +89422,8 @@ ${cleanBody}`;
         verified.newPublicKey,
         {
           env: params.env,
-          rotationProof: params.rotationProof
+          rotationProof: params.rotationProof,
+          rotationChain: params.rotationChain
         }
       );
       if (!recorded) {
@@ -89280,6 +89437,7 @@ ${cleanBody}`;
     var import_fs25;
     var import_path20;
     var FILE_NAME;
+    var PEER_GRANT_KEYS_FILE_NAME;
     var authenticatedPeerPublicKeys;
     var init_mesh_host_memory = __esm2({
       "src/mesh/mesh-host-memory.ts"() {
@@ -89292,6 +89450,7 @@ ${cleanBody}`;
         init_origin_grant_keypair();
         init_mask_daemon_id();
         FILE_NAME = "mesh-host-records.json";
+        PEER_GRANT_KEYS_FILE_NAME = "mesh-peer-grant-keys.json";
         authenticatedPeerPublicKeys = /* @__PURE__ */ new Map();
       }
     });
@@ -93245,11 +93404,12 @@ ${result.stderr}`, result.code);
         if (code >= 0 && code <= 8 || code === 11 || code === 12 || code >= 14 && code <= 31 || code >= 127 && code <= 159) {
           return false;
         }
-        if (code >= 32 && code <= 126) {
+        if (code === 9 || code === 10 || code === 13 || code >= 32 && code <= 126) {
           asciiPrintable++;
         }
       }
-      return asciiPrintable >= 4;
+      const minRequiredAscii = Math.max(6, Math.ceil(len * 0.8));
+      return asciiPrintable >= minRequiredAscii;
     }
     function isUniformRepeatedChar(s2) {
       if (s2.length <= 1) return true;
@@ -93259,110 +93419,64 @@ ${result.stderr}`, result.code);
       }
       return true;
     }
-    function findTailStart(rawText, limit) {
-      let idx = Math.min(rawText.length, limit);
-      while (idx > 0 && /[A-Za-z0-9+/_~=%-]/.test(rawText[idx - 1])) {
-        idx--;
-      }
-      return idx;
-    }
-    function tryDecodeBase64Run(candidate) {
-      if (candidate.length < 12 || candidate.length > MAX_BASE64_RUN_CHARS) return null;
+    function tryDecodeBase64Slice(candidate) {
+      if (candidate.length < 12 || candidate.length > MAX_BASE64_SLICE_CHARS) return null;
       const normalized = candidate.replace(/-/g, "+").replace(/_/g, "/");
       const padMod = normalized.length % 4;
       if (padMod === 1) return null;
       const padded = padMod === 0 ? normalized : normalized + "=".repeat(4 - padMod);
       try {
-        const decoded = Buffer.from(padded, "base64").toString("utf8");
+        const buf = Buffer.from(padded, "base64");
+        if (buf.byteLength < 6) return null;
+        const sampleBytes = Math.min(buf.byteLength, 512);
+        for (let i = 0; i < sampleBytes; i++) {
+          const b = buf[i];
+          if (b >= 0 && b <= 8 || b === 11 || b === 12 || b >= 14 && b <= 31 || b === 127) {
+            return null;
+          }
+        }
+        const decoded = buf.toString("utf8");
         if (!isPlausibleDecodedText(decoded)) return null;
         return decoded;
       } catch {
         return null;
       }
     }
-    function hasUnexaminedEncodedTail(rawText, budget) {
-      if (rawText.length <= MAX_SCAN_INPUT_CHARS) return false;
-      if (isUniformRepeatedChar(rawText)) return false;
-      const tailStart = findTailStart(rawText, MAX_SCAN_INPUT_CHARS);
-      const tail = rawText.slice(tailStart);
-      if (!tail) return false;
-      if (tail.includes("%") && /%[0-9A-Fa-f]{2}/.test(tail)) return true;
-      for (const match of tail.matchAll(BASE64_RUN_RE)) {
-        const run3 = match[0];
-        if (isUniformRepeatedChar(run3)) continue;
-        if (run3.length > MAX_BASE64_RUN_CHARS) return true;
-        if (!budget.nonDecodableRuns.has(run3)) return true;
+    function rememberNonDecodable(budget, run3) {
+      if (budget.nonDecodableCache.size < MAX_NON_DECODABLE_CACHE_ENTRIES) {
+        budget.nonDecodableCache.add(run3);
       }
-      return false;
     }
-    function checkLayerRecursive(rawText, patterns, liveCred, depth, budget) {
-      if (!rawText) return false;
-      if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
-      if (budget.operations >= MAX_DECODE_OPERATIONS) {
-        budget.exhausted = true;
-        return true;
+    function* iterateBase64Slices(run3) {
+      if (run3.length <= MAX_BASE64_SLICE_CHARS) {
+        yield run3;
+        return;
       }
-      if (depth > 0 && rawText.length > MAX_SCAN_INPUT_CHARS) {
-        budget.exhausted = true;
-        return true;
+      for (let offset = 0; offset < run3.length; offset += BASE64_SLICE_STEP_CHARS) {
+        const alignedStart = offset - offset % 4;
+        const rawEnd = Math.min(run3.length, alignedStart + MAX_BASE64_SLICE_CHARS);
+        const alignedEnd = rawEnd < run3.length ? rawEnd - rawEnd % 4 : rawEnd;
+        if (alignedEnd - alignedStart >= 12) {
+          yield run3.slice(alignedStart, alignedEnd);
+        }
+        if (rawEnd >= run3.length) break;
       }
-      const text4 = rawText.length > MAX_SCAN_INPUT_CHARS ? rawText.slice(0, MAX_SCAN_INPUT_CHARS) : rawText;
-      const visitKey = `${depth}:${text4.length}:${text4.slice(0, 128)}:${text4.slice(-64)}`;
-      if (budget.visited.has(visitKey)) return false;
-      budget.visited.add(visitKey);
-      budget.operations++;
-      if (text4 !== rawText && matchesAnyPattern(text4, patterns, liveCred)) return true;
-      let collapsed = "";
-      INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
-      if (text4.length <= MAX_COLLAPSE_CHARS && INTRA_TOKEN_SPLIT_RE.test(text4)) {
-        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
-        collapsed = text4.replace(INTRA_TOKEN_SPLIT_RE, "");
-        if (collapsed && collapsed !== text4 && matchesAnyPattern(collapsed, patterns, liveCred)) {
-          return true;
-        }
+    }
+    function examineBase64Run(run3, patterns, liveCred, depth, budget, onDecodedCandidate) {
+      if (isUniformRepeatedChar(run3)) return false;
+      if (run3.length <= MAX_BASE64_SLICE_CHARS && budget.nonDecodableCache.has(run3)) {
+        return false;
       }
-      if (text4.includes("%") && /%[0-9A-Fa-f]{2}/.test(text4)) {
-        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= MAX_DECODE_OPERATIONS) {
-          budget.exhausted = true;
-          return true;
-        }
-        const wholeDecoded = decodeOnePercentLayer(text4);
-        if (wholeDecoded !== text4 && checkLayerRecursive(wholeDecoded, patterns, liveCred, depth + 1, budget)) {
-          return true;
-        }
-        let pctCount = 0;
-        for (const match of text4.matchAll(PERCENT_ENCODED_RUN_RE)) {
-          const run3 = match[0];
-          if (!run3.includes("%") || !/%[0-9A-Fa-f]{2}/.test(run3) || run3 === text4) continue;
-          if (run3.length > MAX_BASE64_RUN_CHARS || ++pctCount > MAX_CANDIDATE_RUNS_PER_LAYER || budget.operations >= MAX_DECODE_OPERATIONS) {
-            budget.exhausted = true;
-            return true;
-          }
-          const decodedRun = decodeOnePercentLayer(run3);
-          if (decodedRun !== run3 && checkLayerRecursive(decodedRun, patterns, liveCred, depth + 1, budget)) {
-            return true;
-          }
-        }
-      }
-      let b64Count = 0;
-      for (const match of text4.matchAll(BASE64_RUN_RE)) {
-        const run3 = match[0];
-        if (isUniformRepeatedChar(run3)) continue;
-        if (run3.length > MAX_BASE64_RUN_CHARS) {
-          budget.exhausted = true;
-          return true;
-        }
-        if (budget.nonDecodableRuns.has(run3)) continue;
-        const decoded = tryDecodeBase64Run(run3);
+      let anyDecoded = false;
+      for (const slice of iterateBase64Slices(run3)) {
+        if (budget.nonDecodableCache.has(slice)) continue;
+        const decoded = tryDecodeBase64Slice(slice);
         if (!decoded) {
-          budget.nonDecodableRuns.add(run3);
-          if (budget.nonDecodableRuns.size > MAX_UNIQUE_NON_DECODABLE_RUNS) {
-            budget.exhausted = true;
-            return true;
-          }
+          rememberNonDecodable(budget, slice);
           continue;
         }
-        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++b64Count > MAX_CANDIDATE_RUNS_PER_LAYER || budget.operations >= MAX_DECODE_OPERATIONS) {
+        anyDecoded = true;
+        if (!onDecodedCandidate()) {
           budget.exhausted = true;
           return true;
         }
@@ -93370,37 +93484,139 @@ ${result.stderr}`, result.code);
           return true;
         }
       }
-      if (collapsed && collapsed !== text4) {
-        let collapsedCount = 0;
-        for (const match of collapsed.matchAll(BASE64_RUN_RE)) {
-          const run3 = match[0];
-          if (isUniformRepeatedChar(run3)) continue;
-          if (run3.length > MAX_BASE64_RUN_CHARS) {
-            budget.exhausted = true;
+      if (!anyDecoded && run3.length <= MAX_BASE64_SLICE_CHARS) {
+        rememberNonDecodable(budget, run3);
+      }
+      return budget.exhausted;
+    }
+    function examineWindowTransforms(windowText, patterns, liveCred, depth, budget) {
+      let collapsed = "";
+      INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+      if (INTRA_TOKEN_SPLIT_RE.test(windowText)) {
+        INTRA_TOKEN_SPLIT_RE.lastIndex = 0;
+        collapsed = windowText.replace(INTRA_TOKEN_SPLIT_RE, "");
+        if (collapsed && collapsed !== windowText && matchesAnyPattern(collapsed, patterns, liveCred)) {
+          return true;
+        }
+      }
+      if (windowText.includes("%") && /%[0-9A-Fa-f]{2}/.test(windowText)) {
+        if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || budget.operations >= budget.maxOperations) {
+          budget.exhausted = true;
+          return true;
+        }
+        budget.operations++;
+        const wholeDecoded = decodeOnePercentLayer(windowText);
+        if (wholeDecoded !== windowText) {
+          if (matchesAnyPattern(wholeDecoded, patterns, liveCred)) {
             return true;
           }
-          if (budget.nonDecodableRuns.has(run3)) continue;
-          const decoded = tryDecodeBase64Run(run3);
-          if (!decoded) {
-            budget.nonDecodableRuns.add(run3);
-            if (budget.nonDecodableRuns.size > MAX_UNIQUE_NON_DECODABLE_RUNS) {
-              budget.exhausted = true;
+          if (wholeDecoded.includes("%") && /%[0-9A-Fa-f]{2}/.test(wholeDecoded)) {
+            if (checkLayerRecursive(wholeDecoded, patterns, liveCred, depth + 1, budget)) {
               return true;
             }
-            continue;
+          } else {
+            let b64Count = 0;
+            const maxSubCandidates = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+            for (const match of wholeDecoded.matchAll(BASE64_RUN_RE)) {
+              const run3 = match[0];
+              if (examineBase64Run(run3, patterns, liveCred, depth + 1, budget, () => {
+                if (depth + 1 >= MAX_CREDENTIAL_DECODE_DEPTH || ++b64Count > maxSubCandidates || budget.operations >= budget.maxOperations) {
+                  return false;
+                }
+                return true;
+              })) {
+                return true;
+              }
+            }
           }
-          if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++collapsedCount > MAX_CANDIDATE_RUNS_PER_LAYER || budget.operations >= MAX_DECODE_OPERATIONS) {
-            budget.exhausted = true;
+        }
+      }
+      if (collapsed && collapsed !== windowText) {
+        let collapsedCount = 0;
+        const maxSubCandidates = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+        for (const match of collapsed.matchAll(BASE64_RUN_RE)) {
+          const run3 = match[0];
+          if (examineBase64Run(run3, patterns, liveCred, depth, budget, () => {
+            if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++collapsedCount > maxSubCandidates || budget.operations >= budget.maxOperations) {
+              return false;
+            }
             return true;
-          }
-          if (checkLayerRecursive(decoded, patterns, liveCred, depth + 1, budget)) {
+          })) {
             return true;
           }
         }
       }
-      if (depth === 0 && hasUnexaminedEncodedTail(rawText, budget)) {
+      return budget.exhausted;
+    }
+    function checkLayerRecursive(rawText, patterns, liveCred, depth, budget) {
+      if (!rawText) return false;
+      if (matchesAnyPattern(rawText, patterns, liveCred)) return true;
+      if (budget.operations >= budget.maxOperations) {
         budget.exhausted = true;
         return true;
+      }
+      const visitKey = `${depth}:${rawText.length}:${rawText.slice(0, 128)}:${rawText.slice(-64)}`;
+      if (budget.visited.has(visitKey)) return false;
+      budget.visited.add(visitKey);
+      budget.operations++;
+      if (rawText.length <= SCAN_WINDOW_CHARS) {
+        if (examineWindowTransforms(rawText, patterns, liveCred, depth, budget)) {
+          return true;
+        }
+      } else {
+        for (let offset = 0; offset < rawText.length; offset += SCAN_WINDOW_STEP_CHARS) {
+          const windowText = rawText.slice(offset, Math.min(rawText.length, offset + SCAN_WINDOW_CHARS));
+          if (examineWindowTransforms(windowText, patterns, liveCred, depth, budget)) {
+            return true;
+          }
+          if (offset + SCAN_WINDOW_CHARS >= rawText.length) break;
+        }
+      }
+      if (rawText.includes("%") && /%[0-9A-Fa-f]{2}/.test(rawText)) {
+        let pctCount = 0;
+        let currentWindowIdx2 = 0;
+        const maxPerScope2 = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+        for (const match of rawText.matchAll(PERCENT_ENCODED_RUN_RE)) {
+          const run3 = match[0];
+          if (!run3.includes("%") || !/%[0-9A-Fa-f]{2}/.test(run3) || run3 === rawText) continue;
+          if (depth === 0) {
+            const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
+            if (winIdx !== currentWindowIdx2) {
+              currentWindowIdx2 = winIdx;
+              pctCount = 0;
+            }
+          }
+          const decodedRun = decodeOnePercentLayer(run3);
+          if (decodedRun === run3) continue;
+          if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++pctCount > maxPerScope2 || budget.operations >= budget.maxOperations) {
+            budget.exhausted = true;
+            return true;
+          }
+          if (checkLayerRecursive(decodedRun, patterns, liveCred, depth + 1, budget)) {
+            return true;
+          }
+        }
+      }
+      let b64Count = 0;
+      let currentWindowIdx = 0;
+      const maxPerScope = depth === 0 ? MAX_DECODABLE_CANDIDATES_PER_WINDOW : MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+      for (const match of rawText.matchAll(BASE64_RUN_RE)) {
+        const run3 = match[0];
+        if (depth === 0) {
+          const winIdx = Math.floor((match.index ?? 0) / SCAN_WINDOW_STEP_CHARS);
+          if (winIdx !== currentWindowIdx) {
+            currentWindowIdx = winIdx;
+            b64Count = 0;
+          }
+        }
+        if (examineBase64Run(run3, patterns, liveCred, depth, budget, () => {
+          if (depth >= MAX_CREDENTIAL_DECODE_DEPTH || ++b64Count > maxPerScope || budget.operations >= budget.maxOperations) {
+            return false;
+          }
+          return true;
+        })) {
+          return true;
+        }
       }
       return budget.exhausted;
     }
@@ -93408,10 +93624,12 @@ ${result.stderr}`, result.code);
       if (!value) return false;
       const patterns = extraPatterns.length > 0 ? [...RAW_CREDENTIAL_PATTERNS, ...extraPatterns] : RAW_CREDENTIAL_PATTERNS;
       const liveCred = getLiveSessionCredential();
+      const numWindows = Math.max(1, Math.ceil(value.length / SCAN_WINDOW_STEP_CHARS));
       const budget = {
         operations: 0,
+        maxOperations: numWindows * MAX_DECODE_OPS_PER_WINDOW,
         visited: /* @__PURE__ */ new Set(),
-        nonDecodableRuns: /* @__PURE__ */ new Set(),
+        nonDecodableCache: /* @__PURE__ */ new Set(),
         exhausted: false
       };
       return checkLayerRecursive(value, patterns, liveCred, 0, budget);
@@ -93451,20 +93669,20 @@ ${result.stderr}`, result.code);
         }
         return run3;
       });
+      const nonDecodableSeen = /* @__PURE__ */ new Set();
       redacted = redacted.replace(BASE64_RUN_RE, (run3) => {
+        if (isUniformRepeatedChar(run3) || nonDecodableSeen.has(run3)) return run3;
+        if (run3.length <= MAX_BASE64_SLICE_CHARS && !tryDecodeBase64Slice(run3)) {
+          if (nonDecodableSeen.size < MAX_NON_DECODABLE_CACHE_ENTRIES) {
+            nonDecodableSeen.add(run3);
+          }
+          return run3;
+        }
         if (containsEncodedOrRawSecret(run3)) {
           return "[REDACTED:encoded-credential]";
         }
         return run3;
       });
-      if (redacted.length > MAX_SCAN_INPUT_CHARS && containsEncodedOrRawSecret(redacted)) {
-        const tailStart = findTailStart(redacted, MAX_SCAN_INPUT_CHARS);
-        const prefix = redacted.slice(0, tailStart);
-        if (!containsEncodedOrRawSecret(prefix)) {
-          return `${prefix}[REDACTED:unexamined]`;
-        }
-        return "[REDACTED:encoded-credential]";
-      }
       if (containsEncodedOrRawSecret(redacted)) {
         return "[REDACTED:encoded-credential]";
       }
@@ -93478,12 +93696,16 @@ ${result.stderr}`, result.code);
     var SPLIT_BASE64_RUN_RE;
     var INTRA_TOKEN_SPLIT_RE;
     var MAX_CREDENTIAL_DECODE_DEPTH;
-    var MAX_SCAN_INPUT_CHARS;
-    var MAX_COLLAPSE_CHARS;
-    var MAX_BASE64_RUN_CHARS;
-    var MAX_DECODE_OPERATIONS;
-    var MAX_CANDIDATE_RUNS_PER_LAYER;
-    var MAX_UNIQUE_NON_DECODABLE_RUNS;
+    var SCAN_WINDOW_CHARS;
+    var SCAN_WINDOW_OVERLAP_CHARS;
+    var SCAN_WINDOW_STEP_CHARS;
+    var MAX_BASE64_SLICE_CHARS;
+    var BASE64_SLICE_OVERLAP_CHARS;
+    var BASE64_SLICE_STEP_CHARS;
+    var MAX_DECODABLE_CANDIDATES_PER_WINDOW;
+    var MAX_DECODE_OPS_PER_WINDOW;
+    var MAX_CANDIDATE_RUNS_PER_SUBLAYER;
+    var MAX_NON_DECODABLE_CACHE_ENTRIES;
     var init_credential_redactor = __esm2({
       "src/logging/credential-redactor.ts"() {
         "use strict";
@@ -93537,12 +93759,16 @@ ${result.stderr}`, result.code);
         SPLIT_BASE64_RUN_RE = /(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-])(?:(?:\\[rnt]|[\r\n\t]+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`]))[A-Za-z0-9+/_-]{4,}(?![A-Za-z0-9+/_-]))+={0,2}/g;
         INTRA_TOKEN_SPLIT_RE = /(?:\\[rnt]|[\r\n\t])+|(?:\\?["'`])\s*(?:\+\s*)?(?:\\?["'`])|\\(?:\r?\n)/g;
         MAX_CREDENTIAL_DECODE_DEPTH = 4;
-        MAX_SCAN_INPUT_CHARS = 65536;
-        MAX_COLLAPSE_CHARS = 16384;
-        MAX_BASE64_RUN_CHARS = 16384;
-        MAX_DECODE_OPERATIONS = 256;
-        MAX_CANDIDATE_RUNS_PER_LAYER = 64;
-        MAX_UNIQUE_NON_DECODABLE_RUNS = 512;
+        SCAN_WINDOW_CHARS = 65536;
+        SCAN_WINDOW_OVERLAP_CHARS = 4096;
+        SCAN_WINDOW_STEP_CHARS = SCAN_WINDOW_CHARS - SCAN_WINDOW_OVERLAP_CHARS;
+        MAX_BASE64_SLICE_CHARS = 65536;
+        BASE64_SLICE_OVERLAP_CHARS = 4096;
+        BASE64_SLICE_STEP_CHARS = MAX_BASE64_SLICE_CHARS - BASE64_SLICE_OVERLAP_CHARS;
+        MAX_DECODABLE_CANDIDATES_PER_WINDOW = 1024;
+        MAX_DECODE_OPS_PER_WINDOW = 2048;
+        MAX_CANDIDATE_RUNS_PER_SUBLAYER = 128;
+        MAX_NON_DECODABLE_CACHE_ENTRIES = 4096;
       }
     });
     function summarizeString(value) {
@@ -103453,6 +103679,27 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_artifact_store();
       }
     });
+    function setInMemoryNonce(nonce, entry) {
+      const prev = consumedOriginGrantNonces.get(nonce);
+      if (prev) {
+        const prevCount = consumedOriginGrantScopeCounts.get(prev.scopeKey) ?? 0;
+        if (prevCount <= 1) consumedOriginGrantScopeCounts.delete(prev.scopeKey);
+        else consumedOriginGrantScopeCounts.set(prev.scopeKey, prevCount - 1);
+      }
+      consumedOriginGrantNonces.set(nonce, entry);
+      consumedOriginGrantScopeCounts.set(
+        entry.scopeKey,
+        (consumedOriginGrantScopeCounts.get(entry.scopeKey) ?? 0) + 1
+      );
+    }
+    function deleteInMemoryNonce(nonce) {
+      const prev = consumedOriginGrantNonces.get(nonce);
+      if (!prev) return;
+      consumedOriginGrantNonces.delete(nonce);
+      const prevCount = consumedOriginGrantScopeCounts.get(prev.scopeKey) ?? 0;
+      if (prevCount <= 1) consumedOriginGrantScopeCounts.delete(prev.scopeKey);
+      else consumedOriginGrantScopeCounts.set(prev.scopeKey, prevCount - 1);
+    }
     function trimStr2(value) {
       return typeof value === "string" ? value.trim() : "";
     }
@@ -103489,70 +103736,113 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     function pruneExpiredConsumedNonces(nowMs2) {
       for (const [nonce, entry] of consumedOriginGrantNonces) {
         if (entry.expiresAt <= nowMs2) {
-          consumedOriginGrantNonces.delete(nonce);
+          deleteInMemoryNonce(nonce);
         }
       }
     }
-    function consumeOriginGrantNonce(nonce, meshId, canonicalPayload, expiresAt, nowMs2, db) {
-      pruneExpiredConsumedNonces(nowMs2);
-      const inMem = consumedOriginGrantNonces.get(nonce);
-      if (inMem && inMem.expiresAt > nowMs2) {
-        return { ok: false, reason: "replayed_grant_nonce" };
+    function countInMemoryNoncesForScope(scopeKey) {
+      return consumedOriginGrantScopeCounts.get(scopeKey) ?? 0;
+    }
+    function ensureConsumedNoncesSchema(db) {
+      if (initializedNonceDbs.has(db)) return;
+      const createTableSql = `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
+        nonce TEXT PRIMARY KEY,
+        mesh_id TEXT NOT NULL,
+        host_daemon_id TEXT NOT NULL DEFAULT '',
+        canonical_payload TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+    )`;
+      const createIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_expires
+        ON consumed_artifact_origin_grant_nonces(expires_at)`;
+      const createScopeIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_scope
+        ON consumed_artifact_origin_grant_nonces(mesh_id, host_daemon_id, expires_at)`;
+      if (typeof db.exec === "function") {
+        db.exec(createTableSql);
+        db.exec(createIndexSql);
+      } else {
+        db.prepare(createTableSql).run();
+        db.prepare(createIndexSql).run();
       }
+      try {
+        if (typeof db.exec === "function") {
+          db.exec(createScopeIndexSql);
+        } else {
+          db.prepare(createScopeIndexSql).run();
+        }
+      } catch {
+        const alterSql = `ALTER TABLE consumed_artifact_origin_grant_nonces ADD COLUMN host_daemon_id TEXT NOT NULL DEFAULT ''`;
+        if (typeof db.exec === "function") {
+          db.exec(alterSql);
+          db.exec(createScopeIndexSql);
+        } else {
+          db.prepare(alterSql).run();
+          db.prepare(createScopeIndexSql).run();
+        }
+      }
+      initializedNonceDbs.add(db);
+    }
+    function consumeOriginGrantNonce(nonce, meshId, hostDaemonId, canonicalPayload, expiresAt, nowMs2, db) {
+      const canonHost = canonGrantDaemonId(hostDaemonId);
+      const scopeKey = `${meshId.trim()}\0${canonHost}`;
+      const inMem = consumedOriginGrantNonces.get(nonce);
+      if (inMem) {
+        if (inMem.expiresAt > nowMs2) {
+          return { ok: false, reason: "replayed_grant_nonce" };
+        }
+        deleteInMemoryNonce(nonce);
+      }
+      if (countInMemoryNoncesForScope(scopeKey) >= MAX_TRACKED_NONCES) {
+        pruneExpiredConsumedNonces(nowMs2);
+      }
+      const inMemScopeCount = countInMemoryNoncesForScope(scopeKey);
       if (db) {
         try {
-          const createTableSql = `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
-                nonce TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                canonical_payload TEXT NOT NULL,
-                expires_at INTEGER NOT NULL
-            )`;
-          const createIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_expires
-                ON consumed_artifact_origin_grant_nonces(expires_at)`;
-          if (typeof db.exec === "function") {
-            db.exec(createTableSql);
-            db.exec(createIndexSql);
-          } else {
-            db.prepare(createTableSql).run();
-            db.prepare(createIndexSql).run();
-          }
+          ensureConsumedNoncesSchema(db);
           db.prepare("DELETE FROM consumed_artifact_origin_grant_nonces WHERE expires_at <= ?").run(nowMs2);
           const existing = db.prepare("SELECT nonce, expires_at FROM consumed_artifact_origin_grant_nonces WHERE nonce = ?").get(nonce);
           if (existing && typeof existing.expires_at === "number" && existing.expires_at > nowMs2) {
-            if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) {
-              consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt: existing.expires_at });
+            if (inMemScopeCount < MAX_TRACKED_NONCES) {
+              setInMemoryNonce(nonce, {
+                scopeKey,
+                canonicalPayload,
+                expiresAt: existing.expires_at
+              });
             }
             return { ok: false, reason: "replayed_grant_nonce" };
           }
-          const countRow = db.prepare("SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces").get();
+          const countRow = db.prepare(
+            `SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces
+                     WHERE mesh_id = ? AND (host_daemon_id = ? OR host_daemon_id = '')`
+          ).get(meshId, canonHost);
           const currentCount = typeof countRow?.cnt === "number" ? countRow.cnt : 0;
           if (currentCount >= MAX_TRACKED_NONCES) {
             return { ok: false, reason: "grant_capacity_exhausted" };
           }
           db.prepare(
-            `INSERT INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, canonical_payload, expires_at)
-                 VALUES (?, ?, ?, ?)`
-          ).run(nonce, meshId, canonicalPayload, expiresAt);
-          if (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
+            `INSERT INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, host_daemon_id, canonical_payload, expires_at)
+                 VALUES (?, ?, ?, ?, ?)`
+          ).run(nonce, meshId, canonHost, canonicalPayload, expiresAt);
+          if (countInMemoryNoncesForScope(scopeKey) >= MAX_TRACKED_NONCES) {
             const checkStmt = db.prepare(
               "SELECT 1 AS present FROM consumed_artifact_origin_grant_nonces WHERE nonce = ?"
             );
-            for (const cachedNonce of consumedOriginGrantNonces.keys()) {
+            for (const [cachedNonce, cachedEntry] of consumedOriginGrantNonces.entries()) {
+              if (cachedEntry.scopeKey !== scopeKey) continue;
               const row2 = checkStmt.get(cachedNonce);
               if (!row2?.present) {
-                consumedOriginGrantNonces.delete(cachedNonce);
+                deleteInMemoryNonce(cachedNonce);
               }
-              if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) break;
+              if (countInMemoryNoncesForScope(scopeKey) < MAX_TRACKED_NONCES) break;
             }
           }
         } catch {
           return { ok: false, reason: "nonce_store_error" };
         }
-      } else if (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
+      } else if (inMemScopeCount >= MAX_TRACKED_NONCES) {
         return { ok: false, reason: "grant_capacity_exhausted" };
       }
-      if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) {
-        consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt });
+      if (countInMemoryNoncesForScope(scopeKey) < MAX_TRACKED_NONCES) {
+        setInMemoryNonce(nonce, { scopeKey, canonicalPayload, expiresAt });
       }
       return { ok: true };
     }
@@ -103578,10 +103868,12 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       const canonicalPayload = buildCanonicalGrantPayload(base);
       const signature = signCanonicalGrantPayload(canonicalPayload, hostDaemonId);
       const keyRotation = getLatestHostKeyRotationProof(hostDaemonId);
+      const keyRotationChain = getHostKeyRotationChain(hostDaemonId);
       return {
         ...base,
         signature,
-        ...keyRotation ? { keyRotation } : {}
+        ...keyRotation ? { keyRotation } : {},
+        ...keyRotationChain.length > 0 ? { keyRotationChain } : {}
       };
     }
     function resolveTrustedHostOriginGrantPublicKey(params) {
@@ -103618,7 +103910,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (!meshId || !rawHostDaemonId || !rawOriginDaemonId || !artifactId || !requesterSessionId || !requesterTaskId || !requesterAttemptId || !nonce || !signature || !Number.isFinite(issuedAt) || !Number.isFinite(expiresAt)) {
         return { ok: false, reason: "incomplete_grant_fields" };
       }
-      if (expiresAt <= issuedAt || nowMs2 > expiresAt || issuedAt > nowMs2 + MAX_ORIGIN_GRANT_CLOCK_SKEW_MS) {
+      if (expiresAt <= issuedAt || expiresAt - issuedAt > ARTIFACT_ORIGIN_FETCH_GRANT_TTL_MS || nowMs2 > expiresAt || issuedAt > nowMs2 + MAX_ORIGIN_GRANT_CLOCK_SKEW_MS) {
         return { ok: false, reason: "expired_or_invalid_grant_window" };
       }
       const hostDaemonId = canonGrantDaemonId(rawHostDaemonId);
@@ -103647,14 +103939,20 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
       if (!trustedPublicKey) {
         return { ok: false, reason: "untrusted_or_missing_host_public_key" };
       }
-      if (candidate.keyRotation && typeof candidate.keyRotation === "object") {
-        const rotationObj = candidate.keyRotation;
-        if (trimStr2(rotationObj.oldPublicKey) === trustedPublicKey) {
+      const hasRotationChain = Array.isArray(candidate.keyRotationChain) && candidate.keyRotationChain.length > 0;
+      const hasSingleRotation = isValidRotationProofShape(candidate.keyRotation);
+      if (hasRotationChain || hasSingleRotation) {
+        const candidateProofs = hasRotationChain ? candidate.keyRotationChain : [candidate.keyRotation];
+        const chainMatchesPinned = candidateProofs.some(
+          (p) => isValidRotationProofShape(p) && originGrantPublicKeysEqual(p.oldPublicKey, trustedPublicKey)
+        );
+        if (chainMatchesPinned) {
           const rotated = applyAuthenticatedHostKeyRotation({
             meshId,
             hostDaemonId,
             currentPinnedPublicKey: trustedPublicKey,
-            rotationProof: candidate.keyRotation
+            rotationProof: candidate.keyRotation,
+            rotationChain: candidate.keyRotationChain
           });
           if (rotated.ok) {
             trustedPublicKey = rotated.newPublicKey;
@@ -103680,6 +103978,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         const consumed = consumeOriginGrantNonce(
           nonce,
           meshId,
+          hostDaemonId,
           canonicalPayload,
           expiresAt,
           nowMs2,
@@ -104223,6 +104522,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
     var MAX_ORIGIN_GRANT_CLOCK_SKEW_MS;
     var MAX_TRACKED_NONCES;
     var consumedOriginGrantNonces;
+    var consumedOriginGrantScopeCounts;
+    var initializedNonceDbs;
     var init_artifact_origin_grant = __esm2({
       "src/commands/med-family/artifact-origin-grant.ts"() {
         "use strict";
@@ -104238,6 +104539,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         MAX_ORIGIN_GRANT_CLOCK_SKEW_MS = 3e4;
         MAX_TRACKED_NONCES = 4096;
         consumedOriginGrantNonces = /* @__PURE__ */ new Map();
+        consumedOriginGrantScopeCounts = /* @__PURE__ */ new Map();
+        initializedNonceDbs = /* @__PURE__ */ new WeakSet();
       }
     });
     function trimString3(value) {
@@ -118251,7 +118554,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const auditsByKey = /* @__PURE__ */ new Map();
         const normByKey = /* @__PURE__ */ new Map();
         const pendingReceiptRepairs = [];
-        const pendingAuditBounds = [];
+        const pendingAuditRepairs = [];
         const pendingNormInserts = [];
         let receiptSeq = 0;
         let auditSeq = 0;
@@ -118404,12 +118707,6 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         } catch {
         }
         try {
-          store2.db.exec(`CREATE TABLE IF NOT EXISTS assistant_follower_wake_audit_bounds (
-                event_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, value TEXT NOT NULL
-            )`);
-          const auditBounds = new Map(store2.db.prepare(
-            "SELECT event_id, at_ms, value FROM assistant_follower_wake_audit_bounds"
-          ).all().map((row2) => [row2.event_id, row2]));
           const auditRows = store2.db.prepare(
             "SELECT event_id, mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC"
           ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND);
@@ -118418,8 +118715,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const persistedEventId = str12(row2.event_id);
             const eventId = persistedEventId || `audit-row-${auditSeq}`;
             const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:audit:${eventId}`;
-            const priorBound = auditBounds.get(eventId);
-            const priorNorm = priorBound ? JSON.parse(priorBound.value) : normByKey.get(normKey);
+            const priorNorm = normByKey.get(normKey);
             const meshId = str12(row2.mesh_id);
             const rowAtMs = Number(row2.at_ms);
             let sender = "";
@@ -118455,7 +118751,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const rawConflict = hasRowAt && hasExplicitWakeAt && (payloadWakeAt > rowAtMs || rowAtMs - payloadWakeAt > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS) || hasRowAt && hasPayloadAt && Math.abs(rowAtMs - payloadAt) > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS;
             const origConflict = hasExplicitWakeAt && (originalWakeAtMs > originalRowAtMs || originalRowAtMs - originalWakeAtMs > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS);
             const conflict = priorNorm?.conflict === true || parsed.conflict === true || rawConflict || origConflict;
-            const isFuture = priorBound ? priorBound.at_ms > now : hasRowAt && rowAtMs > now || hasExplicitWakeAt && payloadWakeAt > now || hasPayloadAt && payloadAt > now;
+            const isFuture = hasRowAt && rowAtMs > now || hasExplicitWakeAt && payloadWakeAt > now || hasPayloadAt && payloadAt > now;
             const isFutureBeyondSkew = hasRowAt && rowAtMs > now + FOLLOWER_WAKE_FUTURE_SKEW_MS || hasExplicitWakeAt && payloadWakeAt > now + FOLLOWER_WAKE_FUTURE_SKEW_MS || hasPayloadAt && payloadAt > now + FOLLOWER_WAKE_FUTURE_SKEW_MS;
             let effectiveAtMs;
             let effectiveWakeAtMs;
@@ -118472,26 +118768,41 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 );
               }
               if (persistedEventId) {
-                pendingAuditBounds.push({
+                if (!priorNorm) {
+                  pendingNormInserts.push({
+                    normKey,
+                    atMs: firstNormalizedAtMs,
+                    valueJson: JSON.stringify({
+                      targetKind: "audit",
+                      targetId: persistedEventId,
+                      wakeId,
+                      originalAtMs,
+                      originalRowAtMs,
+                      originalWakeAtMs,
+                      originalPayloadAtMs,
+                      firstNormalizedAtMs,
+                      conflict
+                    })
+                  });
+                }
+                const repairedPayload = JSON.stringify({
+                  ...parsed,
+                  atMs: now,
+                  wakeAtMs: now,
+                  futureNormalizedAtMs: now,
+                  firstNormalizedAtMs,
+                  originalAtMs,
+                  originalWakeAtMs,
+                  originalRowAtMs,
+                  originalPayloadAtMs,
+                  ...conflict ? { conflict: true } : {}
+                });
+                pendingAuditRepairs.push({
                   eventId: persistedEventId,
                   atMs: now,
-                  valueJson: JSON.stringify({
-                    targetKind: "audit",
-                    targetId: persistedEventId,
-                    wakeId,
-                    originalAtMs,
-                    originalRowAtMs,
-                    originalWakeAtMs,
-                    originalPayloadAtMs,
-                    firstNormalizedAtMs,
-                    conflict
-                  })
+                  repairedPayload
                 });
               }
-            } else if (priorBound) {
-              effectiveAtMs = priorBound.at_ms;
-              effectiveWakeAtMs = priorBound.at_ms;
-              effectiveRowAtMs = priorBound.at_ms;
             } else {
               effectiveRowAtMs = hasRowAt ? rowAtMs : hasExplicitWakeAt ? payloadWakeAt : payloadAt;
               effectiveWakeAtMs = hasExplicitWakeAt ? payloadWakeAt : effectiveRowAtMs;
@@ -118535,7 +118846,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         } catch {
         }
         let repairTransactionFailed = false;
-        if (pendingReceiptRepairs.length > 0 || pendingAuditBounds.length > 0 || pendingNormInserts.length > 0) {
+        if (pendingReceiptRepairs.length > 0 || pendingAuditRepairs.length > 0 || pendingNormInserts.length > 0) {
           try {
             const applyRepairs = store2.db.transaction(() => {
               for (const r of pendingReceiptRepairs) {
@@ -118549,11 +118860,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                   ).run(r.atMs, r.receiptKey);
                 }
               }
-              for (const a of pendingAuditBounds) {
-                store2.db.prepare(`
-                            INSERT INTO assistant_follower_wake_audit_bounds (event_id, at_ms, value) VALUES (?, ?, ?)
-                            ON CONFLICT(event_id) DO UPDATE SET at_ms = MIN(at_ms, excluded.at_ms)
-                        `).run(a.eventId, a.atMs, a.valueJson);
+              for (const a of pendingAuditRepairs) {
+                store2.db.prepare(
+                  "UPDATE turn_events SET at_ms = ?, recorded_at = MIN(recorded_at, ?), payload_json = ? WHERE event_id = ?"
+                ).run(a.atMs, a.atMs, a.repairedPayload, a.eventId);
               }
               for (const n of pendingNormInserts) {
                 store2.db.prepare(
@@ -128187,6 +128497,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_origin_grant_keypair();
     init_mask_daemon_id();
     var MESH_HANDSHAKE_PROTOCOL_VERSION = 1;
+    var MESH_HANDSHAKE_ORIGIN_GRANT_CAP = "origin_grant_v1";
     var MESH_HANDSHAKE_DEFAULT_TIMEOUT_MS = 5e3;
     var MESH_HANDSHAKE_CLOSE_CODE = 4401;
     var NONCE_BYTES = 16;
@@ -128198,8 +128509,29 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       "bad_frame",
       "timeout"
     ]);
+    var CAP_SENTINEL_BYTES = 6;
+    var CAP_SENTINEL_PREFIX_BYTES = NONCE_BYTES - CAP_SENTINEL_BYTES;
     function mintHandshakeNonce() {
       return (0, import_crypto20.randomBytes)(NONCE_BYTES).toString("base64");
+    }
+    function computeCapableNonceSentinel(secret, role, meshId, daemonId, prefixBytes) {
+      const hmac2 = (0, import_crypto20.createHmac)("sha256", secret);
+      hmac2.update(`adhdev.mesh.cap_sentinel.v1|${role}|${meshId}|${canon(daemonId)}|`, "utf8");
+      hmac2.update(prefixBytes);
+      return hmac2.digest().subarray(0, CAP_SENTINEL_BYTES);
+    }
+    function mintCapableHandshakeNonce(secret, role, meshId, daemonId) {
+      const prefix = (0, import_crypto20.randomBytes)(CAP_SENTINEL_PREFIX_BYTES);
+      const sentinel = computeCapableNonceSentinel(secret, role, meshId, daemonId, prefix);
+      return Buffer.concat([prefix, sentinel]).toString("base64");
+    }
+    function hasCapableNonceSentinel(nonceBase64, secret, role, meshId, daemonId) {
+      const raw = Buffer.from(nonceBase64, "base64");
+      if (raw.length !== NONCE_BYTES) return false;
+      const prefix = raw.subarray(0, CAP_SENTINEL_PREFIX_BYTES);
+      const actual = raw.subarray(CAP_SENTINEL_PREFIX_BYTES);
+      const expected = computeCapableNonceSentinel(secret, role, meshId, daemonId, prefix);
+      return (0, import_crypto20.timingSafeEqual)(actual, expected);
     }
     function isNonce(value) {
       if (typeof value !== "string" || value.length === 0) return false;
@@ -128212,10 +128544,17 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     function canon(id4) {
       return canonicalDaemonId2(id4) ?? id4.trim();
     }
+    function hasOriginGrantCap(caps) {
+      return Array.isArray(caps) && caps.includes(MESH_HANDSHAKE_ORIGIN_GRANT_CAP);
+    }
     function hasKeyMaterial(input) {
       return Boolean(
-        input.clientOriginGrantPublicKey && input.clientOriginGrantPublicKey.trim() || input.serverOriginGrantPublicKey && input.serverOriginGrantPublicKey.trim() || input.clientKeyRotation || input.serverKeyRotation
+        input.clientCaps && input.clientCaps.length > 0 || input.serverCaps && input.serverCaps.length > 0 || input.clientOriginGrantPublicKey && input.clientOriginGrantPublicKey.trim() || input.serverOriginGrantPublicKey && input.serverOriginGrantPublicKey.trim() || input.clientKeyRotation || input.serverKeyRotation || input.clientKeyRotationChain && input.clientKeyRotationChain.length > 0 || input.serverKeyRotationChain && input.serverKeyRotationChain.length > 0
       );
+    }
+    function encodeCapsForTranscript(caps, fallbackPubKey) {
+      const effective = caps && caps.length > 0 ? caps : fallbackPubKey && fallbackPubKey.trim() ? [MESH_HANDSHAKE_ORIGIN_GRANT_CAP] : [];
+      return Buffer.from(effective.map((c) => c.trim()).join(","), "utf8");
     }
     function encodeSpkiBytesForTranscript(rawPublicKey) {
       if (!rawPublicKey || !rawPublicKey.trim()) return Buffer.alloc(0);
@@ -128237,14 +128576,29 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         "utf8"
       );
     }
+    function encodeRotationChainForTranscript(chain) {
+      if (!chain || chain.length === 0) return Buffer.alloc(0);
+      return Buffer.from(
+        chain.map((p) => encodeRotationForTranscript(p).toString("utf8")).join(";"),
+        "utf8"
+      );
+    }
     function computeTranscriptHmac(prefix, input) {
       const hmac2 = (0, import_crypto20.createHmac)("sha256", input.secret);
       hmac2.update(prefix, "utf8");
       if (hasKeyMaterial(input)) {
+        const capsC = encodeCapsForTranscript(input.clientCaps, input.clientOriginGrantPublicKey);
+        const capsS = encodeCapsForTranscript(input.serverCaps, input.serverOriginGrantPublicKey);
         const clientSpki = encodeSpkiBytesForTranscript(input.clientOriginGrantPublicKey);
         const serverSpki = encodeSpkiBytesForTranscript(input.serverOriginGrantPublicKey);
         const clientRot = encodeRotationForTranscript(input.clientKeyRotation);
         const serverRot = encodeRotationForTranscript(input.serverKeyRotation);
+        const clientChain = encodeRotationChainForTranscript(input.clientKeyRotationChain);
+        const serverChain = encodeRotationChainForTranscript(input.serverKeyRotationChain);
+        hmac2.update(`|capsC:${capsC.byteLength}:`, "utf8");
+        hmac2.update(capsC);
+        hmac2.update(`|capsS:${capsS.byteLength}:`, "utf8");
+        hmac2.update(capsS);
         hmac2.update(`|spkiC:${clientSpki.byteLength}:`, "utf8");
         hmac2.update(clientSpki);
         hmac2.update(`|spkiS:${serverSpki.byteLength}:`, "utf8");
@@ -128254,6 +128608,12 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           hmac2.update(clientRot);
           hmac2.update(`|rotS:${serverRot.byteLength}:`, "utf8");
           hmac2.update(serverRot);
+        }
+        if (clientChain.byteLength > 0 || serverChain.byteLength > 0) {
+          hmac2.update(`|chainC:${clientChain.byteLength}:`, "utf8");
+          hmac2.update(clientChain);
+          hmac2.update(`|chainS:${serverChain.byteLength}:`, "utf8");
+          hmac2.update(serverChain);
         }
       }
       return hmac2.digest("base64");
@@ -128283,6 +128643,18 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (a.length === 0 || a.length !== b.length) return false;
       return (0, import_crypto20.timingSafeEqual)(a, b);
     }
+    function parseOptionalCaps(value) {
+      if (value === void 0) return { ok: true };
+      if (!Array.isArray(value) || value.length > 16) return { ok: false };
+      const out = [];
+      for (const item of value) {
+        if (typeof item !== "string") return { ok: false };
+        const trimmed2 = item.trim();
+        if (!trimmed2 || trimmed2.length > 64) return { ok: false };
+        out.push(trimmed2);
+      }
+      return { ok: true, value: out };
+    }
     function parseOptionalOriginGrantPublicKey(value) {
       if (value === void 0) return { ok: true };
       if (typeof value !== "string") return { ok: false };
@@ -128297,6 +128669,19 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         return { ok: false };
       }
       return { ok: true, value };
+    }
+    function parseOptionalKeyRotationChain(value) {
+      if (value === void 0) return { ok: true };
+      if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
+        return { ok: false };
+      }
+      const out = [];
+      for (const item of value) {
+        const parsed = parseOptionalKeyRotation(item);
+        if (!parsed.ok || !parsed.value) return { ok: false };
+        out.push(parsed.value);
+      }
+      return { ok: true, value: out };
     }
     function parseHandshakeFrame(raw) {
       let value = raw;
@@ -128315,54 +128700,66 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
           if (!isNonEmptyString2(obj.meshId) || !isNonEmptyString2(obj.daemonId) || !isNonce(obj.nonce)) {
             return { error: "bad_frame" };
           }
+          const caps = parseOptionalCaps(obj.caps);
           const pubKey = parseOptionalOriginGrantPublicKey(obj.originGrantPublicKey);
           const rotation = parseOptionalKeyRotation(obj.keyRotation);
-          if (!pubKey.ok || !rotation.ok) return { error: "bad_frame" };
+          const rotationChain = parseOptionalKeyRotationChain(obj.keyRotationChain);
+          if (!caps.ok || !pubKey.ok || !rotation.ok || !rotationChain.ok) return { error: "bad_frame" };
           return {
             v: 1,
             kind: "mesh_hello",
             meshId: obj.meshId,
             daemonId: obj.daemonId,
             nonce: obj.nonce,
+            ...caps.value ? { caps: caps.value } : {},
             ...pubKey.value ? { originGrantPublicKey: pubKey.value } : {},
-            ...rotation.value ? { keyRotation: rotation.value } : {}
+            ...rotation.value ? { keyRotation: rotation.value } : {},
+            ...rotationChain.value ? { keyRotationChain: rotationChain.value } : {}
           };
         }
         case "mesh_challenge": {
           if (!isNonce(obj.nonce) || !isNonEmptyString2(obj.proof) || !isNonEmptyString2(obj.daemonId)) {
             return { error: "bad_frame" };
           }
+          const caps = parseOptionalCaps(obj.caps);
           const pubKey = parseOptionalOriginGrantPublicKey(obj.originGrantPublicKey);
           const rotation = parseOptionalKeyRotation(obj.keyRotation);
-          if (!pubKey.ok || !rotation.ok) return { error: "bad_frame" };
+          const rotationChain = parseOptionalKeyRotationChain(obj.keyRotationChain);
+          if (!caps.ok || !pubKey.ok || !rotation.ok || !rotationChain.ok) return { error: "bad_frame" };
           return {
             v: 1,
             kind: "mesh_challenge",
             nonce: obj.nonce,
             proof: obj.proof,
             daemonId: obj.daemonId,
+            ...caps.value ? { caps: caps.value } : {},
             ...pubKey.value ? { originGrantPublicKey: pubKey.value } : {},
-            ...rotation.value ? { keyRotation: rotation.value } : {}
+            ...rotation.value ? { keyRotation: rotation.value } : {},
+            ...rotationChain.value ? { keyRotationChain: rotationChain.value } : {}
           };
         }
         case "mesh_proof":
           if (!isNonEmptyString2(obj.proof)) return { error: "bad_frame" };
-          if (obj.originGrantPublicKey !== void 0 || obj.keyRotation !== void 0) {
+          if (obj.originGrantPublicKey !== void 0 || obj.keyRotation !== void 0 || obj.keyRotationChain !== void 0 || obj.caps !== void 0) {
             return { error: "bad_frame" };
           }
           return { v: 1, kind: "mesh_proof", proof: obj.proof };
         case "mesh_ok": {
           if (!isNonEmptyString2(obj.daemonId)) return { error: "bad_frame" };
           if (obj.proof !== void 0 && !isNonEmptyString2(obj.proof)) return { error: "bad_frame" };
+          const caps = parseOptionalCaps(obj.caps);
           const pubKey = parseOptionalOriginGrantPublicKey(obj.originGrantPublicKey);
           const rotation = parseOptionalKeyRotation(obj.keyRotation);
-          if (!pubKey.ok || !rotation.ok) return { error: "bad_frame" };
+          const rotationChain = parseOptionalKeyRotationChain(obj.keyRotationChain);
+          if (!caps.ok || !pubKey.ok || !rotation.ok || !rotationChain.ok) return { error: "bad_frame" };
           return {
             v: 1,
             kind: "mesh_ok",
             daemonId: obj.daemonId,
+            ...caps.value ? { caps: caps.value } : {},
             ...pubKey.value ? { originGrantPublicKey: pubKey.value } : {},
             ...rotation.value ? { keyRotation: rotation.value } : {},
+            ...rotationChain.value ? { keyRotationChain: rotationChain.value } : {},
             ...isNonEmptyString2(obj.proof) ? { proof: obj.proof } : {}
           };
         }
@@ -128384,14 +128781,32 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (!a || !b) return false;
       return encodeRotationForTranscript(a).equals(encodeRotationForTranscript(b));
     }
+    function rotationChainsEquivalent(a, b) {
+      if ((!a || a.length === 0) && (!b || b.length === 0)) return true;
+      if (!a || !b || a.length !== b.length) return false;
+      return encodeRotationChainForTranscript(a).equals(encodeRotationChainForTranscript(b));
+    }
+    function capsEquivalent(a, b) {
+      if ((!a || a.length === 0) && (!b || b.length === 0)) return true;
+      if (!a || !b || a.length !== b.length) return false;
+      return a.every((v, idx) => v === b[idx]);
+    }
     function createHandshakeInitiator(opts) {
       let state2 = "idle";
       let step = PENDING2;
-      const clientNonce = mintHandshakeNonce();
+      const localCaps = opts.caps !== void 0 ? opts.caps : opts.originGrantPublicKey ? [MESH_HANDSHAKE_ORIGIN_GRANT_CAP] : void 0;
+      const localHasOriginGrantCap = hasOriginGrantCap(localCaps);
+      const clientNonce = localHasOriginGrantCap ? mintCapableHandshakeNonce(opts.secret, "client", opts.meshId, opts.daemonId) : mintHandshakeNonce();
+      const localPubKey = localHasOriginGrantCap ? opts.originGrantPublicKey : void 0;
+      const localRotation = localHasOriginGrantCap ? opts.keyRotation : void 0;
+      const localRotationChain = localHasOriginGrantCap && opts.keyRotationChain && opts.keyRotationChain.length > 0 ? opts.keyRotationChain : void 0;
       let serverNonce = "";
       let serverDaemonId = "";
+      let negotiatedOriginGrant = false;
+      let serverCaps;
       let serverOriginGrantPublicKey;
       let serverKeyRotation;
+      let serverKeyRotationChain;
       const fail7 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
@@ -128413,8 +128828,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             meshId: opts.meshId,
             daemonId: opts.daemonId,
             nonce: clientNonce,
-            ...opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {},
-            ...opts.keyRotation ? { keyRotation: opts.keyRotation } : {}
+            ...localCaps && localCaps.length > 0 ? { caps: [...localCaps] } : {},
+            ...localPubKey ? { originGrantPublicKey: localPubKey } : {},
+            ...localRotation ? { keyRotation: localRotation } : {},
+            ...localRotationChain ? { keyRotationChain: [...localRotationChain] } : {}
           });
         },
         current: () => step,
@@ -128429,43 +128846,100 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             if (opts.serverDaemonIdExpected && canon(opts.serverDaemonIdExpected) !== canon(parsed.daemonId)) {
               return fail7("bad_proof", true);
             }
-            const inputs = {
+            const peerHasCap = hasOriginGrantCap(parsed.caps);
+            const peerSentKeyMaterial = Boolean(
+              parsed.originGrantPublicKey || parsed.keyRotation || parsed.keyRotationChain
+            );
+            if (peerSentKeyMaterial && !peerHasCap) {
+              return fail7("bad_proof", true);
+            }
+            if (localHasOriginGrantCap && peerHasCap && !parsed.originGrantPublicKey) {
+              return fail7("bad_proof", true);
+            }
+            if (localHasOriginGrantCap && !peerHasCap && hasCapableNonceSentinel(parsed.nonce, opts.secret, "server", opts.meshId, parsed.daemonId)) {
+              return fail7("bad_proof", true);
+            }
+            negotiatedOriginGrant = localHasOriginGrantCap && peerHasCap;
+            const inputs = negotiatedOriginGrant ? {
               secret: opts.secret,
               clientNonce,
               serverNonce: parsed.nonce,
               meshId: opts.meshId,
               clientDaemonId: opts.daemonId,
               serverDaemonId: parsed.daemonId,
-              clientOriginGrantPublicKey: opts.originGrantPublicKey,
+              clientCaps: localCaps,
+              serverCaps: parsed.caps,
+              clientOriginGrantPublicKey: localPubKey,
               serverOriginGrantPublicKey: parsed.originGrantPublicKey,
-              clientKeyRotation: opts.keyRotation,
-              serverKeyRotation: parsed.keyRotation
+              clientKeyRotation: localRotation,
+              serverKeyRotation: parsed.keyRotation,
+              clientKeyRotationChain: localRotationChain,
+              serverKeyRotationChain: parsed.keyRotationChain
+            } : {
+              secret: opts.secret,
+              clientNonce,
+              serverNonce: parsed.nonce,
+              meshId: opts.meshId,
+              clientDaemonId: opts.daemonId,
+              serverDaemonId: parsed.daemonId
             };
             if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail7("bad_proof", true);
-            if (parsed.originGrantPublicKey && !canAcceptPeerOriginGrantPublicKey(
-              opts.meshId,
-              canon(parsed.daemonId),
-              parsed.originGrantPublicKey,
-              { rotationProof: parsed.keyRotation }
-            )) {
-              return fail7("bad_proof", true);
+            if (negotiatedOriginGrant && parsed.originGrantPublicKey) {
+              if (!canAcceptPeerOriginGrantPublicKey(
+                opts.meshId,
+                canon(parsed.daemonId),
+                parsed.originGrantPublicKey,
+                {
+                  rotationProof: parsed.keyRotation,
+                  rotationChain: parsed.keyRotationChain
+                }
+              )) {
+                return fail7("bad_proof", true);
+              }
+              serverCaps = parsed.caps;
+              serverOriginGrantPublicKey = parsed.originGrantPublicKey;
+              serverKeyRotation = parsed.keyRotation;
+              serverKeyRotationChain = parsed.keyRotationChain;
+            } else {
+              serverCaps = void 0;
+              serverOriginGrantPublicKey = void 0;
+              serverKeyRotation = void 0;
+              serverKeyRotationChain = void 0;
             }
             serverNonce = parsed.nonce;
             serverDaemonId = parsed.daemonId;
-            serverOriginGrantPublicKey = parsed.originGrantPublicKey;
-            serverKeyRotation = parsed.keyRotation;
             state2 = "awaiting_ok";
-            opts.send({ v: MESH_HANDSHAKE_PROTOCOL_VERSION, kind: "mesh_proof", proof: computeClientProof(inputs) });
+            opts.send({
+              v: MESH_HANDSHAKE_PROTOCOL_VERSION,
+              kind: "mesh_proof",
+              proof: computeClientProof(inputs)
+            });
             return PENDING2;
           }
           if (parsed.kind !== "mesh_ok") return fail7("bad_frame", true);
           if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail7("bad_frame", true);
-          const canonChallengeKey = serverOriginGrantPublicKey ? canonicalizeOriginGrantPublicKey(serverOriginGrantPublicKey) : null;
-          const canonOkKey = parsed.originGrantPublicKey ? canonicalizeOriginGrantPublicKey(parsed.originGrantPublicKey) : null;
-          if (canonChallengeKey !== canonOkKey) {
+          if (!negotiatedOriginGrant) {
+            if (parsed.originGrantPublicKey !== void 0 || parsed.keyRotation !== void 0 || parsed.keyRotationChain !== void 0 || parsed.proof !== void 0 || hasOriginGrantCap(parsed.caps)) {
+              return fail7("bad_proof", true);
+            }
+            state2 = "done";
+            step = {
+              status: "ok",
+              meshId: opts.meshId,
+              peerDaemonId: canon(serverDaemonId)
+            };
+            return step;
+          }
+          if (!hasOriginGrantCap(parsed.caps) || !capsEquivalent(parsed.caps, serverCaps)) {
+            return fail7("bad_proof", true);
+          }
+          if (!originGrantPublicKeysEqual(serverOriginGrantPublicKey, parsed.originGrantPublicKey)) {
             return fail7("bad_proof", true);
           }
           if (parsed.keyRotation && !rotationProofsEquivalent(parsed.keyRotation, serverKeyRotation)) {
+            return fail7("bad_proof", true);
+          }
+          if (parsed.keyRotationChain && !rotationChainsEquivalent(parsed.keyRotationChain, serverKeyRotationChain)) {
             return fail7("bad_proof", true);
           }
           const okInputs = {
@@ -128475,15 +128949,17 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             meshId: opts.meshId,
             clientDaemonId: opts.daemonId,
             serverDaemonId,
-            clientOriginGrantPublicKey: opts.originGrantPublicKey,
+            clientCaps: localCaps,
+            serverCaps: parsed.caps ?? serverCaps,
+            clientOriginGrantPublicKey: localPubKey,
             serverOriginGrantPublicKey: parsed.originGrantPublicKey ?? serverOriginGrantPublicKey,
-            clientKeyRotation: opts.keyRotation,
-            serverKeyRotation: parsed.keyRotation ?? serverKeyRotation
+            clientKeyRotation: localRotation,
+            serverKeyRotation: parsed.keyRotation ?? serverKeyRotation,
+            clientKeyRotationChain: localRotationChain,
+            serverKeyRotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
           };
-          if (hasKeyMaterial(okInputs) || parsed.proof !== void 0) {
-            if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
-              return fail7("bad_proof", true);
-            }
+          if (!proofsEqual(computeOkProof(okInputs), parsed.proof)) {
+            return fail7("bad_proof", true);
           }
           const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
           const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : void 0;
@@ -128492,7 +128968,10 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               opts.meshId,
               canon(serverDaemonId),
               validPeerPubKey,
-              { rotationProof: parsed.keyRotation ?? serverKeyRotation }
+              {
+                rotationProof: parsed.keyRotation ?? serverKeyRotation,
+                rotationChain: parsed.keyRotationChain ?? serverKeyRotationChain
+              }
             );
             if (!recorded) return fail7("bad_proof", true);
           }
@@ -128511,12 +128990,19 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       let state2 = "awaiting_hello";
       let step = PENDING2;
       const decoySecret = (0, import_crypto20.randomBytes)(32).toString("base64");
+      const localCaps = opts.caps !== void 0 ? opts.caps : opts.originGrantPublicKey ? [MESH_HANDSHAKE_ORIGIN_GRANT_CAP] : void 0;
+      const localHasOriginGrantCap = hasOriginGrantCap(localCaps);
+      const localPubKey = localHasOriginGrantCap ? opts.originGrantPublicKey : void 0;
+      const localRotation = localHasOriginGrantCap ? opts.keyRotation : void 0;
+      const localRotationChain = localHasOriginGrantCap && opts.keyRotationChain && opts.keyRotationChain.length > 0 ? opts.keyRotationChain : void 0;
       let expectedClientProof = "";
       let expectedOkProof;
       let meshId = "";
       let peerDaemonId = "";
+      let negotiatedOriginGrant = false;
       let clientOriginGrantPublicKey;
       let clientKeyRotation;
+      let clientKeyRotationChain;
       const fail7 = (code, notifyPeer) => {
         state2 = "done";
         step = { status: "failed", code };
@@ -128539,22 +129025,53 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             if (parsed.kind !== "mesh_hello") return fail7("bad_frame", true);
             const canonicalPeer = canon(parsed.daemonId);
             const secret = opts.resolveSecret(parsed.meshId, canonicalPeer);
-            const serverNonce = mintHandshakeNonce();
-            const inputs = {
+            const serverNonce = localHasOriginGrantCap && secret ? mintCapableHandshakeNonce(secret, "server", parsed.meshId, opts.localDaemonId) : mintHandshakeNonce();
+            const clientHasCap = hasOriginGrantCap(parsed.caps);
+            const clientSentKeyMaterial = Boolean(
+              parsed.originGrantPublicKey || parsed.keyRotation || parsed.keyRotationChain
+            );
+            if (localHasOriginGrantCap) {
+              if (clientSentKeyMaterial && !clientHasCap) {
+                if (secret === null || secret === "") return fail7("unknown_peer", true);
+                return fail7("bad_proof", true);
+              }
+              if (clientHasCap && !parsed.originGrantPublicKey) {
+                if (secret === null || secret === "") return fail7("unknown_peer", true);
+                return fail7("bad_proof", true);
+              }
+              if (!clientHasCap && secret && hasCapableNonceSentinel(parsed.nonce, secret, "client", parsed.meshId, parsed.daemonId)) {
+                return fail7("bad_proof", true);
+              }
+            }
+            negotiatedOriginGrant = Boolean(
+              localHasOriginGrantCap && clientHasCap && localPubKey && parsed.originGrantPublicKey
+            );
+            const inputs = negotiatedOriginGrant ? {
               secret: secret ?? decoySecret,
               clientNonce: parsed.nonce,
               serverNonce,
               meshId: parsed.meshId,
               clientDaemonId: parsed.daemonId,
               serverDaemonId: opts.localDaemonId,
+              clientCaps: parsed.caps,
+              serverCaps: localCaps,
               clientOriginGrantPublicKey: parsed.originGrantPublicKey,
-              serverOriginGrantPublicKey: opts.originGrantPublicKey,
+              serverOriginGrantPublicKey: localPubKey,
               clientKeyRotation: parsed.keyRotation,
-              serverKeyRotation: opts.keyRotation
+              serverKeyRotation: localRotation,
+              clientKeyRotationChain: parsed.keyRotationChain,
+              serverKeyRotationChain: localRotationChain
+            } : {
+              secret: secret ?? decoySecret,
+              clientNonce: parsed.nonce,
+              serverNonce,
+              meshId: parsed.meshId,
+              clientDaemonId: parsed.daemonId,
+              serverDaemonId: opts.localDaemonId
             };
             const serverProof = computeServerProof(inputs);
             const clientProof = computeClientProof(inputs);
-            const okProof = hasKeyMaterial(inputs) ? computeOkProof(inputs) : void 0;
+            const okProof = negotiatedOriginGrant ? computeOkProof(inputs) : void 0;
             if (secret === null || secret === "") {
               proofsEqual(serverProof, clientProof);
               return fail7("unknown_peer", true);
@@ -128563,8 +129080,9 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             expectedOkProof = okProof;
             meshId = parsed.meshId;
             peerDaemonId = canonicalPeer;
-            clientOriginGrantPublicKey = parsed.originGrantPublicKey;
-            clientKeyRotation = parsed.keyRotation;
+            clientOriginGrantPublicKey = negotiatedOriginGrant ? parsed.originGrantPublicKey : void 0;
+            clientKeyRotation = negotiatedOriginGrant ? parsed.keyRotation : void 0;
+            clientKeyRotationChain = negotiatedOriginGrant ? parsed.keyRotationChain : void 0;
             state2 = "awaiting_proof";
             opts.send({
               v: MESH_HANDSHAKE_PROTOCOL_VERSION,
@@ -128572,20 +129090,28 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
               nonce: serverNonce,
               proof: serverProof,
               daemonId: opts.localDaemonId,
-              ...opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {},
-              ...opts.keyRotation ? { keyRotation: opts.keyRotation } : {}
+              // Always advertise local capabilities on mesh_challenge when localHasOriginGrantCap is true:
+              // an old initiator ignores unknown fields, whereas a new initiator whose mesh_hello was
+              // stripped of caps+key by a relay sees the server's capability and detects the downgrade!
+              ...localCaps && localCaps.length > 0 ? { caps: [...localCaps] } : {},
+              ...negotiatedOriginGrant && localPubKey ? { originGrantPublicKey: localPubKey } : {},
+              ...negotiatedOriginGrant && localRotation ? { keyRotation: localRotation } : {},
+              ...negotiatedOriginGrant && localRotationChain ? { keyRotationChain: [...localRotationChain] } : {}
             });
             return PENDING2;
           }
           if (parsed.kind !== "mesh_proof") return fail7("bad_frame", true);
           if (!proofsEqual(expectedClientProof, parsed.proof)) return fail7("bad_proof", true);
-          const validClientPubKey = clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey) ? clientOriginGrantPublicKey : void 0;
+          const validClientPubKey = negotiatedOriginGrant && clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey) ? clientOriginGrantPublicKey : void 0;
           if (validClientPubKey) {
             const recorded = recordAuthenticatedPeerOriginGrantPublicKey(
               meshId,
               peerDaemonId,
               validClientPubKey,
-              { rotationProof: clientKeyRotation }
+              {
+                rotationProof: clientKeyRotation,
+                rotationChain: clientKeyRotationChain
+              }
             );
             if (!recorded) return fail7("bad_proof", true);
           }
@@ -128600,9 +129126,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
             v: MESH_HANDSHAKE_PROTOCOL_VERSION,
             kind: "mesh_ok",
             daemonId: opts.localDaemonId,
-            ...opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {},
-            ...opts.keyRotation ? { keyRotation: opts.keyRotation } : {},
-            ...expectedOkProof ? { proof: expectedOkProof } : {}
+            ...negotiatedOriginGrant && localCaps && localCaps.length > 0 ? { caps: [...localCaps] } : {},
+            ...negotiatedOriginGrant && localPubKey ? { originGrantPublicKey: localPubKey } : {},
+            ...negotiatedOriginGrant && localRotation ? { keyRotation: localRotation } : {},
+            ...negotiatedOriginGrant && localRotationChain ? { keyRotationChain: [...localRotationChain] } : {},
+            ...negotiatedOriginGrant && expectedOkProof ? { proof: expectedOkProof } : {}
           });
           return step;
         }
@@ -128613,9 +129141,15 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       if (!effectivePublicKey) return void 0;
       const latest = getLatestHostKeyRotationProof(daemonId);
       if (!latest) return void 0;
-      const canonLatestNew = canonicalizeOriginGrantPublicKey(latest.newPublicKey);
-      const canonEffective = canonicalizeOriginGrantPublicKey(effectivePublicKey);
-      return canonLatestNew && canonEffective && canonLatestNew === canonEffective ? latest : void 0;
+      return originGrantPublicKeysEqual(latest.newPublicKey, effectivePublicKey) ? latest : void 0;
+    }
+    function resolveDefaultKeyRotationChain(daemonId, effectivePublicKey, explicitChain) {
+      if (explicitChain && explicitChain.length > 0) return explicitChain;
+      if (!effectivePublicKey) return void 0;
+      const chain = getHostKeyRotationChain(daemonId);
+      if (chain.length === 0) return void 0;
+      const last = chain[chain.length - 1];
+      return originGrantPublicKeysEqual(last.newPublicKey, effectivePublicKey) ? chain : void 0;
     }
     var WS_CONNECTING2 = 0;
     var WS_OPEN2 = 1;
@@ -128643,22 +129177,44 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         };
         const machine = side === "initiator" ? (() => {
           const initOpts = opts;
-          const effectiveKey = initOpts.originGrantPublicKey || getHostOriginGrantPublicKey(initOpts.daemonId);
+          const legacyDisabled = initOpts.caps !== void 0 && !hasOriginGrantCap(initOpts.caps) || initOpts.originGrantPublicKey === "";
+          const effectiveKey = legacyDisabled ? void 0 : initOpts.originGrantPublicKey || getHostOriginGrantPublicKey(initOpts.daemonId);
+          const effectiveCaps = initOpts.caps !== void 0 ? initOpts.caps : effectiveKey ? [MESH_HANDSHAKE_ORIGIN_GRANT_CAP] : void 0;
           const effectiveRotation = resolveDefaultKeyRotation(initOpts.daemonId, effectiveKey, initOpts.keyRotation);
+          const effectiveChain = resolveDefaultKeyRotationChain(
+            initOpts.daemonId,
+            effectiveKey,
+            initOpts.keyRotationChain
+          );
           return createHandshakeInitiator({
             ...initOpts,
+            ...effectiveCaps !== void 0 ? { caps: effectiveCaps } : {},
             originGrantPublicKey: effectiveKey,
             ...effectiveRotation ? { keyRotation: effectiveRotation } : {},
+            ...effectiveChain ? { keyRotationChain: effectiveChain } : {},
             send
           });
         })() : (() => {
           const respOpts = opts;
-          const effectiveKey = respOpts.originGrantPublicKey || getHostOriginGrantPublicKey(respOpts.localDaemonId);
-          const effectiveRotation = resolveDefaultKeyRotation(respOpts.localDaemonId, effectiveKey, respOpts.keyRotation);
+          const legacyDisabled = respOpts.caps !== void 0 && !hasOriginGrantCap(respOpts.caps) || respOpts.originGrantPublicKey === "";
+          const effectiveKey = legacyDisabled ? void 0 : respOpts.originGrantPublicKey || getHostOriginGrantPublicKey(respOpts.localDaemonId);
+          const effectiveCaps = respOpts.caps !== void 0 ? respOpts.caps : effectiveKey ? [MESH_HANDSHAKE_ORIGIN_GRANT_CAP] : void 0;
+          const effectiveRotation = resolveDefaultKeyRotation(
+            respOpts.localDaemonId,
+            effectiveKey,
+            respOpts.keyRotation
+          );
+          const effectiveChain = resolveDefaultKeyRotationChain(
+            respOpts.localDaemonId,
+            effectiveKey,
+            respOpts.keyRotationChain
+          );
           return createHandshakeResponder({
             ...respOpts,
+            ...effectiveCaps !== void 0 ? { caps: effectiveCaps } : {},
             originGrantPublicKey: effectiveKey,
             ...effectiveRotation ? { keyRotation: effectiveRotation } : {},
+            ...effectiveChain ? { keyRotationChain: effectiveChain } : {},
             send
           });
         })();

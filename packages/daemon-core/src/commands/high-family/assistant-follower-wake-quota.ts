@@ -83,11 +83,9 @@ export function hasInFlightFollowerWakeReservation(meshId: string, sender: strin
  *    conflict remains intact in the underlying rows across restarts.
  * 2. Future timestamps (`> now`) are clamped to `now` at first observation. All durable
  *    future-normalization writes (an append-only `follower_wake_quota_norm` provenance row
- *    written via `INSERT OR IGNORE`, bounded receipt updates, and quota-owned audit bounds)
- *    execute inside ONE SQLite transaction (`store.db.transaction`) with no swallowed
+ *    written via `INSERT OR IGNORE` plus the bounded `assistant_relay_receipts` / `turn_events`
+ *    updates) execute inside ONE SQLite transaction (`store.db.transaction`) with no swallowed
  *    errors inside the transaction, so any failure rolls back all writes atomically.
- *    Ledger audit rows are immutable; their effective timestamps live in
- *    `assistant_follower_wake_audit_bounds`, outside relay receipt retention.
  * 3. Original pre-normalization timestamps (`originalAtMs`, `originalRowAtMs`, `originalWakeAtMs`)
  *    and internal `conflict` flags are preserved from first observation and never overwritten
  *    across subsequent backward wall-clock steps or restarts.
@@ -130,10 +128,10 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
             atMs: number;
             repairedValue?: string;
         }
-        interface PendingAuditBound {
+        interface PendingAuditRepair {
             eventId: string;
             atMs: number;
-            valueJson: string;
+            repairedPayload: string;
         }
         interface PendingNormInsert {
             normKey: string;
@@ -145,7 +143,7 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
         const auditsByKey = new Map<string, Map<string, HydratedAuditEntry[]>>();
         const normByKey = new Map<string, PersistedQuotaNormalizationRecord>();
         const pendingReceiptRepairs: PendingReceiptRepair[] = [];
-        const pendingAuditBounds: PendingAuditBound[] = [];
+        const pendingAuditRepairs: PendingAuditRepair[] = [];
         const pendingNormInserts: PendingNormInsert[] = [];
         let receiptSeq = 0;
         let auditSeq = 0;
@@ -321,14 +319,6 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
         }
 
         try {
-            // Audit rows can outlive relay receipt retention. Keep their bounds for
-            // as long as the immutable source can be read, so pruning cannot renew a charge.
-            store.db.exec(`CREATE TABLE IF NOT EXISTS assistant_follower_wake_audit_bounds (
-                event_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, value TEXT NOT NULL
-            )`);
-            const auditBounds = new Map((store.db.prepare(
-                'SELECT event_id, at_ms, value FROM assistant_follower_wake_audit_bounds',
-            ).all() as Array<{ event_id: string; at_ms: number; value: string }>).map((row) => [row.event_id, row]));
             const auditRows = store.db.prepare(
                 "SELECT event_id, mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC",
             ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND) as Array<{
@@ -344,10 +334,7 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
                 const persistedEventId = str(row.event_id);
                 const eventId = persistedEventId || `audit-row-${auditSeq}`;
                 const normKey = `${FOLLOWER_WAKE_QUOTA_NORM_KIND}:audit:${eventId}`;
-                const priorBound = auditBounds.get(eventId);
-                const priorNorm = priorBound
-                    ? JSON.parse(priorBound.value) as PersistedQuotaNormalizationRecord
-                    : normByKey.get(normKey);
+                const priorNorm = normByKey.get(normKey);
                 const meshId = str(row.mesh_id);
                 const rowAtMs = Number(row.at_ms);
                 let sender = '';
@@ -396,7 +383,7 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
                     && (originalWakeAtMs > originalRowAtMs || originalRowAtMs - originalWakeAtMs > FOLLOWER_WAKE_RECONCILE_MAX_DRIFT_MS);
                 const conflict = priorNorm?.conflict === true || parsed.conflict === true || rawConflict || origConflict;
 
-                const isFuture = priorBound ? priorBound.at_ms > now :
+                const isFuture =
                     (hasRowAt && rowAtMs > now)
                     || (hasExplicitWakeAt && payloadWakeAt > now)
                     || (hasPayloadAt && payloadAt > now);
@@ -421,26 +408,41 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
                         );
                     }
                     if (persistedEventId) {
-                        pendingAuditBounds.push({
+                        if (!priorNorm) {
+                            pendingNormInserts.push({
+                                normKey,
+                                atMs: firstNormalizedAtMs,
+                                valueJson: JSON.stringify({
+                                    targetKind: 'audit',
+                                    targetId: persistedEventId,
+                                    wakeId,
+                                    originalAtMs,
+                                    originalRowAtMs,
+                                    originalWakeAtMs,
+                                    originalPayloadAtMs,
+                                    firstNormalizedAtMs,
+                                    conflict,
+                                } satisfies PersistedQuotaNormalizationRecord),
+                            });
+                        }
+                        const repairedPayload = JSON.stringify({
+                            ...parsed,
+                            atMs: now,
+                            wakeAtMs: now,
+                            futureNormalizedAtMs: now,
+                            firstNormalizedAtMs,
+                            originalAtMs,
+                            originalWakeAtMs,
+                            originalRowAtMs,
+                            originalPayloadAtMs,
+                            ...(conflict ? { conflict: true } : {}),
+                        });
+                        pendingAuditRepairs.push({
                             eventId: persistedEventId,
                             atMs: now,
-                            valueJson: JSON.stringify({
-                                targetKind: 'audit',
-                                targetId: persistedEventId,
-                                wakeId,
-                                originalAtMs,
-                                originalRowAtMs,
-                                originalWakeAtMs,
-                                originalPayloadAtMs,
-                                firstNormalizedAtMs,
-                                conflict,
-                            } satisfies PersistedQuotaNormalizationRecord),
+                            repairedPayload,
                         });
                     }
-                } else if (priorBound) {
-                    effectiveAtMs = priorBound.at_ms;
-                    effectiveWakeAtMs = priorBound.at_ms;
-                    effectiveRowAtMs = priorBound.at_ms;
                 } else {
                     effectiveRowAtMs = hasRowAt ? rowAtMs : (hasExplicitWakeAt ? payloadWakeAt : payloadAt);
                     effectiveWakeAtMs = hasExplicitWakeAt ? payloadWakeAt : effectiveRowAtMs;
@@ -487,7 +489,7 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
         }
 
         let repairTransactionFailed = false;
-        if (pendingReceiptRepairs.length > 0 || pendingAuditBounds.length > 0 || pendingNormInserts.length > 0) {
+        if (pendingReceiptRepairs.length > 0 || pendingAuditRepairs.length > 0 || pendingNormInserts.length > 0) {
             try {
                 const applyRepairs = store.db.transaction(() => {
                     for (const r of pendingReceiptRepairs) {
@@ -501,11 +503,10 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
                             ).run(r.atMs, r.receiptKey);
                         }
                     }
-                    for (const a of pendingAuditBounds) {
-                        store.db.prepare(`
-                            INSERT INTO assistant_follower_wake_audit_bounds (event_id, at_ms, value) VALUES (?, ?, ?)
-                            ON CONFLICT(event_id) DO UPDATE SET at_ms = MIN(at_ms, excluded.at_ms)
-                        `).run(a.eventId, a.atMs, a.valueJson);
+                    for (const a of pendingAuditRepairs) {
+                        store.db.prepare(
+                            'UPDATE turn_events SET at_ms = ?, recorded_at = MIN(recorded_at, ?), payload_json = ? WHERE event_id = ?',
+                        ).run(a.atMs, a.atMs, a.repairedPayload, a.eventId);
                     }
                     for (const n of pendingNormInserts) {
                         store.db.prepare(
@@ -921,7 +922,6 @@ export function clearFollowerWakeRateLimitForTest(opts?: { clearStore?: boolean 
     if (opts?.clearStore) {
         try {
             const db = MeshRuntimeStore.getInstance().db;
-            db.exec('DROP TABLE IF EXISTS assistant_follower_wake_audit_bounds');
             db.prepare('DELETE FROM assistant_relay_receipts WHERE kind IN (?, ?)').run(
                 FOLLOWER_WAKE_QUOTA_RECEIPT_KIND,
                 FOLLOWER_WAKE_QUOTA_NORM_KIND,

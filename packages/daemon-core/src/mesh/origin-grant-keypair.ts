@@ -5,6 +5,7 @@ import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
 
 const ORIGIN_GRANT_KEYS_FILENAME = 'artifact-origin-grant-keys.json';
+export const MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH = 4;
 
 export interface OriginGrantKeyRotationProof {
     hostDaemonId: string;
@@ -20,6 +21,7 @@ interface StoredKeyPairRecord {
     privateKey: string;
     createdAt: string;
     rotationProof?: OriginGrantKeyRotationProof;
+    rotationChain?: OriginGrantKeyRotationProof[];
 }
 
 interface StoredKeyPairsFile {
@@ -32,6 +34,7 @@ export interface CachedKeyPair {
     privateKeyObj: crypto.KeyObject;
     fileMtimeMs: number;
     rotationProof?: OriginGrantKeyRotationProof;
+    rotationChain?: OriginGrantKeyRotationProof[];
 }
 
 const keyPairCache = new Map<string, CachedKeyPair>();
@@ -87,6 +90,13 @@ export function canonicalizeOriginGrantPublicKey(rawPublicKey: unknown): string 
     return bytes ? bytes.toString('base64url') : null;
 }
 
+export function originGrantPublicKeysEqual(a: unknown, b: unknown): boolean {
+    const bytesA = canonicalOriginGrantPublicKeyBytes(a);
+    const bytesB = canonicalOriginGrantPublicKeyBytes(b);
+    if (!bytesA || !bytesB) return false;
+    return bytesA.equals(bytesB);
+}
+
 export function isValidRotationProofShape(value: unknown): value is OriginGrantKeyRotationProof {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as Record<string, unknown>;
@@ -131,11 +141,24 @@ function readStoredKeyPairs(filePath: string): Record<string, StoredKeyPairRecor
                 typeof v.privateKey === 'string' &&
                 v.privateKey.trim()
             ) {
+                const validChain = Array.isArray(v.rotationChain)
+                    ? v.rotationChain
+                          .filter(isValidRotationProofShape)
+                          .slice(-MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH)
+                    : isValidRotationProofShape(v.rotationProof)
+                      ? [v.rotationProof]
+                      : undefined;
+                const latestProof = isValidRotationProofShape(v.rotationProof)
+                    ? v.rotationProof
+                    : validChain && validChain.length > 0
+                      ? validChain[validChain.length - 1]
+                      : undefined;
                 out[k] = {
                     publicKey: v.publicKey.trim(),
                     privateKey: v.privateKey.trim(),
                     createdAt: typeof v.createdAt === 'string' ? v.createdAt : '',
-                    ...(isValidRotationProofShape(v.rotationProof) ? { rotationProof: v.rotationProof } : {}),
+                    ...(latestProof ? { rotationProof: latestProof } : {}),
+                    ...(validChain && validChain.length > 0 ? { rotationChain: validChain } : {}),
                 };
             }
         }
@@ -208,6 +231,7 @@ export function getOrCreateHostKeyPair(hostDaemonId?: string, env?: NodeJS.Proce
                 privateKeyObj,
                 fileMtimeMs: currentMtime,
                 ...(existing.rotationProof ? { rotationProof: existing.rotationProof } : {}),
+                ...(existing.rotationChain ? { rotationChain: existing.rotationChain } : {}),
             };
             keyPairCache.set(cacheKey, entry);
             return entry;
@@ -253,6 +277,17 @@ export function getLatestHostKeyRotationProof(
     return getOrCreateHostKeyPair(hostDaemonId, env).rotationProof;
 }
 
+export function getHostKeyRotationChain(
+    hostDaemonId?: string,
+    env?: NodeJS.ProcessEnv,
+): OriginGrantKeyRotationProof[] {
+    const entry = getOrCreateHostKeyPair(hostDaemonId, env);
+    if (entry.rotationChain && entry.rotationChain.length > 0) {
+        return [...entry.rotationChain];
+    }
+    return entry.rotationProof ? [entry.rotationProof] : [];
+}
+
 /**
  * Rotate the host's Ed25519 origin-grant signing keypair.
  * Immediately evicts the superseded key from the in-process keyPairCache,
@@ -267,6 +302,7 @@ export function rotateHostOriginGrantKeyPair(
     publicKey: string;
     previousPublicKey: string;
     rotationProof: OriginGrantKeyRotationProof;
+    rotationChain: OriginGrantKeyRotationProof[];
 } {
     const env = opts?.env;
     const configDir = getConfigDir(env);
@@ -292,9 +328,10 @@ export function rotateHostOriginGrantKeyPair(
 
     const rotatedAt = typeof opts?.nowMs === 'number' && Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
     const nonce = crypto.randomBytes(16).toString('hex');
+    const canonicalOldKey = canonicalizeOriginGrantPublicKey(previous.publicKey) ?? previous.publicKey;
     const canonicalRotation = buildCanonicalKeyRotationPayload({
         hostDaemonId: keyId,
-        oldPublicKey: previous.publicKey,
+        oldPublicKey: canonicalOldKey,
         newPublicKey,
         rotatedAt,
         nonce,
@@ -305,12 +342,20 @@ export function rotateHostOriginGrantKeyPair(
 
     const rotationProof: OriginGrantKeyRotationProof = {
         hostDaemonId: keyId,
-        oldPublicKey: previous.publicKey,
+        oldPublicKey: canonicalOldKey,
         newPublicKey,
         rotatedAt,
         nonce,
         signature,
     };
+
+    const priorChain =
+        previous.rotationChain && previous.rotationChain.length > 0
+            ? previous.rotationChain
+            : previous.rotationProof
+              ? [previous.rotationProof]
+              : [];
+    const rotationChain = [...priorChain, rotationProof].slice(-MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH);
 
     const storedAll = readStoredKeyPairs(filePath);
     storedAll[keyId] = {
@@ -318,6 +363,7 @@ export function rotateHostOriginGrantKeyPair(
         privateKey: newPrivateKey,
         createdAt: new Date(rotatedAt).toISOString(),
         rotationProof,
+        rotationChain,
     };
     writeStoredKeyPairs(filePath, storedAll);
 
@@ -326,6 +372,7 @@ export function rotateHostOriginGrantKeyPair(
         privateKeyObj: newPrivateKeyObj,
         fileMtimeMs: readFileMtimeMs(filePath),
         rotationProof,
+        rotationChain,
     };
     keyPairCache.set(cacheKey, nextEntry);
 
@@ -333,6 +380,7 @@ export function rotateHostOriginGrantKeyPair(
         publicKey: newPublicKey,
         previousPublicKey: previous.publicKey,
         rotationProof,
+        rotationChain,
     };
 }
 
@@ -354,16 +402,20 @@ export function verifyOriginGrantKeyRotationProof(
     if (!daemonIdsEquivalent(rawProof.hostDaemonId, expectedHost)) {
         return { ok: false, reason: 'rotation_host_mismatch' };
     }
-    if (trimStr(rawProof.oldPublicKey) !== currentKey) {
-        return { ok: false, reason: 'rotation_old_key_mismatch' };
-    }
-    const newPublicKey = trimStr(rawProof.newPublicKey);
-    if (!newPublicKey || newPublicKey === currentKey || !isValidOriginGrantPublicKey(newPublicKey)) {
-        return { ok: false, reason: 'rotation_new_key_invalid' };
-    }
     const oldPubKeyObj = parseOriginGrantPublicKeyObject(currentKey);
     if (!oldPubKeyObj) {
         return { ok: false, reason: 'rotation_pinned_key_invalid' };
+    }
+    if (!originGrantPublicKeysEqual(rawProof.oldPublicKey, currentKey)) {
+        return { ok: false, reason: 'rotation_old_key_mismatch' };
+    }
+    const newPublicKey = trimStr(rawProof.newPublicKey);
+    if (
+        !newPublicKey ||
+        !isValidOriginGrantPublicKey(newPublicKey) ||
+        originGrantPublicKeysEqual(newPublicKey, currentKey)
+    ) {
+        return { ok: false, reason: 'rotation_new_key_invalid' };
     }
     try {
         const normalizedSig = rawProof.signature.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -371,21 +423,101 @@ export function verifyOriginGrantKeyRotationProof(
         if (sigBuf.byteLength !== 64) {
             return { ok: false, reason: 'rotation_signature_invalid' };
         }
-        const canonicalPayload = buildCanonicalKeyRotationPayload({
-            hostDaemonId: rawProof.hostDaemonId,
-            oldPublicKey: currentKey,
-            newPublicKey,
-            rotatedAt: rawProof.rotatedAt,
-            nonce: rawProof.nonce,
-        });
-        const verified = crypto.verify(null, Buffer.from(canonicalPayload, 'utf8'), oldPubKeyObj, sigBuf);
+        const canonicalOld = canonicalizeOriginGrantPublicKey(rawProof.oldPublicKey) ?? trimStr(rawProof.oldPublicKey);
+        const canonicalNew = canonicalizeOriginGrantPublicKey(newPublicKey) ?? newPublicKey;
+        const candidatePayloads = [
+            buildCanonicalKeyRotationPayload({
+                hostDaemonId: rawProof.hostDaemonId,
+                oldPublicKey: canonicalOld,
+                newPublicKey: canonicalNew,
+                rotatedAt: rawProof.rotatedAt,
+                nonce: rawProof.nonce,
+            }),
+            buildCanonicalKeyRotationPayload({
+                hostDaemonId: rawProof.hostDaemonId,
+                oldPublicKey: trimStr(rawProof.oldPublicKey),
+                newPublicKey,
+                rotatedAt: rawProof.rotatedAt,
+                nonce: rawProof.nonce,
+            }),
+        ];
+        const verified = candidatePayloads.some((payload) =>
+            crypto.verify(null, Buffer.from(payload, 'utf8'), oldPubKeyObj, sigBuf),
+        );
         if (!verified) {
             return { ok: false, reason: 'rotation_signature_invalid' };
         }
-        return { ok: true, newPublicKey, proof: rawProof };
+        return { ok: true, newPublicKey: canonicalNew, proof: rawProof };
     } catch {
         return { ok: false, reason: 'rotation_signature_invalid' };
     }
+}
+
+export function verifyOriginGrantKeyRotationChain(
+    input: {
+        rotationProof?: unknown;
+        rotationChain?: unknown;
+    },
+    expected: {
+        hostDaemonId: string;
+        currentPinnedPublicKey: string;
+        targetPublicKey?: string;
+    },
+):
+    | { ok: true; newPublicKey: string; proof: OriginGrantKeyRotationProof; chain: OriginGrantKeyRotationProof[] }
+    | { ok: false; reason: string } {
+    const rawList: unknown[] = [];
+    if (Array.isArray(input.rotationChain) && input.rotationChain.length > 0) {
+        if (input.rotationChain.length > MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH) {
+            return { ok: false, reason: 'rotation_chain_too_long' };
+        }
+        rawList.push(...input.rotationChain);
+    } else if (input.rotationProof !== undefined) {
+        rawList.push(input.rotationProof);
+    } else {
+        return { ok: false, reason: 'invalid_rotation_proof_shape' };
+    }
+
+    const proofs: OriginGrantKeyRotationProof[] = [];
+    for (const item of rawList) {
+        if (!isValidRotationProofShape(item)) {
+            return { ok: false, reason: 'invalid_rotation_proof_shape' };
+        }
+        proofs.push(item);
+    }
+
+    const startIdx = proofs.findIndex((p) =>
+        originGrantPublicKeysEqual(p.oldPublicKey, expected.currentPinnedPublicKey),
+    );
+    if (startIdx === -1) {
+        return { ok: false, reason: 'rotation_old_key_mismatch' };
+    }
+
+    let workingKey = expected.currentPinnedPublicKey;
+    const verifiedSteps: OriginGrantKeyRotationProof[] = [];
+    for (let i = startIdx; i < proofs.length; i++) {
+        const step = verifyOriginGrantKeyRotationProof(proofs[i], {
+            hostDaemonId: expected.hostDaemonId,
+            currentPinnedPublicKey: workingKey,
+        });
+        if (!step.ok) return step;
+        workingKey = step.newPublicKey;
+        verifiedSteps.push(step.proof);
+    }
+
+    if (
+        expected.targetPublicKey !== undefined &&
+        !originGrantPublicKeysEqual(workingKey, expected.targetPublicKey)
+    ) {
+        return { ok: false, reason: 'rotation_new_key_mismatch' };
+    }
+
+    return {
+        ok: true,
+        newPublicKey: workingKey,
+        proof: verifiedSteps[verifiedSteps.length - 1]!,
+        chain: verifiedSteps,
+    };
 }
 
 export function __resetOriginGrantKeyPairCacheForTest(): void {

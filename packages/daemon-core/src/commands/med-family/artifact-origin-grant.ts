@@ -9,13 +9,18 @@ import {
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
 import {
     __resetOriginGrantKeyPairCacheForTest,
+    MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH,
     canonGrantDaemonId,
+    getHostKeyRotationChain,
     getHostOriginGrantPublicKey,
     getLatestHostKeyRotationProof,
     getOrCreateHostKeyPair,
     isValidOriginGrantPublicKey,
+    isValidRotationProofShape,
+    originGrantPublicKeysEqual,
     parseOriginGrantPublicKeyObject,
     rotateHostOriginGrantKeyPair,
+    verifyOriginGrantKeyRotationChain,
     verifyOriginGrantKeyRotationProof,
     type OriginGrantKeyRotationProof,
 } from '../../mesh/origin-grant-keypair.js';
@@ -30,10 +35,14 @@ import { resolveForwardedWorkerIdentity } from '../../mesh/worker-report-forward
 import type { CommandRouterResult } from '../router.js';
 
 export {
+    MAX_ORIGIN_GRANT_ROTATION_CHAIN_LENGTH,
     canonGrantDaemonId,
+    getHostKeyRotationChain,
     getHostOriginGrantPublicKey,
     isValidOriginGrantPublicKey,
+    originGrantPublicKeysEqual,
     rotateHostOriginGrantKeyPair,
+    verifyOriginGrantKeyRotationChain,
     verifyOriginGrantKeyRotationProof,
     applyAuthenticatedHostKeyRotation,
     type OriginGrantKeyRotationProof,
@@ -44,11 +53,37 @@ export const MAX_ORIGIN_GRANT_CLOCK_SKEW_MS = 30_000;
 export const MAX_TRACKED_NONCES = 4_096;
 
 interface ConsumedGrantNonceEntry {
+    scopeKey: string;
     canonicalPayload: string;
     expiresAt: number;
 }
 
 const consumedOriginGrantNonces = new Map<string, ConsumedGrantNonceEntry>();
+const consumedOriginGrantScopeCounts = new Map<string, number>();
+const initializedNonceDbs = new WeakSet<GrantNonceStoreDb>();
+
+function setInMemoryNonce(nonce: string, entry: ConsumedGrantNonceEntry): void {
+    const prev = consumedOriginGrantNonces.get(nonce);
+    if (prev) {
+        const prevCount = consumedOriginGrantScopeCounts.get(prev.scopeKey) ?? 0;
+        if (prevCount <= 1) consumedOriginGrantScopeCounts.delete(prev.scopeKey);
+        else consumedOriginGrantScopeCounts.set(prev.scopeKey, prevCount - 1);
+    }
+    consumedOriginGrantNonces.set(nonce, entry);
+    consumedOriginGrantScopeCounts.set(
+        entry.scopeKey,
+        (consumedOriginGrantScopeCounts.get(entry.scopeKey) ?? 0) + 1,
+    );
+}
+
+function deleteInMemoryNonce(nonce: string): void {
+    const prev = consumedOriginGrantNonces.get(nonce);
+    if (!prev) return;
+    consumedOriginGrantNonces.delete(nonce);
+    const prevCount = consumedOriginGrantScopeCounts.get(prev.scopeKey) ?? 0;
+    if (prevCount <= 1) consumedOriginGrantScopeCounts.delete(prev.scopeKey);
+    else consumedOriginGrantScopeCounts.set(prev.scopeKey, prevCount - 1);
+}
 
 export interface ArtifactOriginFetchGrant {
     meshId: string;
@@ -63,6 +98,7 @@ export interface ArtifactOriginFetchGrant {
     nonce: string;
     signature: string;
     keyRotation?: OriginGrantKeyRotationProof;
+    keyRotationChain?: OriginGrantKeyRotationProof[];
 }
 
 function trimStr(value: unknown): string {
@@ -120,7 +156,7 @@ function verifyCanonicalGrantSignature(
 function pruneExpiredConsumedNonces(nowMs: number): void {
     for (const [nonce, entry] of consumedOriginGrantNonces) {
         if (entry.expiresAt <= nowMs) {
-            consumedOriginGrantNonces.delete(nonce);
+            deleteInMemoryNonce(nonce);
         }
     }
 }
@@ -137,85 +173,134 @@ type NonceConsumeResult =
     | { ok: true }
     | { ok: false; reason: 'replayed_grant_nonce' | 'grant_capacity_exhausted' | 'nonce_store_error' };
 
+function countInMemoryNoncesForScope(scopeKey: string): number {
+    return consumedOriginGrantScopeCounts.get(scopeKey) ?? 0;
+}
+
+function ensureConsumedNoncesSchema(db: GrantNonceStoreDb): void {
+    if (initializedNonceDbs.has(db)) return;
+    const createTableSql = `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
+        nonce TEXT PRIMARY KEY,
+        mesh_id TEXT NOT NULL,
+        host_daemon_id TEXT NOT NULL DEFAULT '',
+        canonical_payload TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+    )`;
+    const createIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_expires
+        ON consumed_artifact_origin_grant_nonces(expires_at)`;
+    const createScopeIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_scope
+        ON consumed_artifact_origin_grant_nonces(mesh_id, host_daemon_id, expires_at)`;
+    if (typeof db.exec === 'function') {
+        db.exec(createTableSql);
+        db.exec(createIndexSql);
+    } else {
+        db.prepare(createTableSql).run();
+        db.prepare(createIndexSql).run();
+    }
+    try {
+        if (typeof db.exec === 'function') {
+            db.exec(createScopeIndexSql);
+        } else {
+            db.prepare(createScopeIndexSql).run();
+        }
+    } catch {
+        // Older table created before host_daemon_id column existed: add column then index.
+        const alterSql = `ALTER TABLE consumed_artifact_origin_grant_nonces ADD COLUMN host_daemon_id TEXT NOT NULL DEFAULT ''`;
+        if (typeof db.exec === 'function') {
+            db.exec(alterSql);
+            db.exec(createScopeIndexSql);
+        } else {
+            db.prepare(alterSql).run();
+            db.prepare(createScopeIndexSql).run();
+        }
+    }
+    initializedNonceDbs.add(db);
+}
+
 function consumeOriginGrantNonce(
     nonce: string,
     meshId: string,
+    hostDaemonId: string,
     canonicalPayload: string,
     expiresAt: number,
     nowMs: number,
     db?: GrantNonceStoreDb | null,
 ): NonceConsumeResult {
-    pruneExpiredConsumedNonces(nowMs);
+    const canonHost = canonGrantDaemonId(hostDaemonId);
+    const scopeKey = `${meshId.trim()}\0${canonHost}`;
     const inMem = consumedOriginGrantNonces.get(nonce);
-    if (inMem && inMem.expiresAt > nowMs) {
-        return { ok: false, reason: 'replayed_grant_nonce' };
+    if (inMem) {
+        if (inMem.expiresAt > nowMs) {
+            return { ok: false, reason: 'replayed_grant_nonce' };
+        }
+        deleteInMemoryNonce(nonce);
     }
+
+    if (countInMemoryNoncesForScope(scopeKey) >= MAX_TRACKED_NONCES) {
+        pruneExpiredConsumedNonces(nowMs);
+    }
+    const inMemScopeCount = countInMemoryNoncesForScope(scopeKey);
 
     if (db) {
         try {
-            const createTableSql = `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
-                nonce TEXT PRIMARY KEY,
-                mesh_id TEXT NOT NULL,
-                canonical_payload TEXT NOT NULL,
-                expires_at INTEGER NOT NULL
-            )`;
-            const createIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_expires
-                ON consumed_artifact_origin_grant_nonces(expires_at)`;
-            if (typeof db.exec === 'function') {
-                db.exec(createTableSql);
-                db.exec(createIndexSql);
-            } else {
-                db.prepare(createTableSql).run();
-                db.prepare(createIndexSql).run();
-            }
+            ensureConsumedNoncesSchema(db);
             db.prepare('DELETE FROM consumed_artifact_origin_grant_nonces WHERE expires_at <= ?').run(nowMs);
             const existing = db
                 .prepare('SELECT nonce, expires_at FROM consumed_artifact_origin_grant_nonces WHERE nonce = ?')
                 .get(nonce) as { nonce?: string; expires_at?: number } | undefined;
             if (existing && typeof existing.expires_at === 'number' && existing.expires_at > nowMs) {
-                if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) {
-                    consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt: existing.expires_at });
+                if (inMemScopeCount < MAX_TRACKED_NONCES) {
+                    setInMemoryNonce(nonce, {
+                        scopeKey,
+                        canonicalPayload,
+                        expiresAt: existing.expires_at,
+                    });
                 }
                 return { ok: false, reason: 'replayed_grant_nonce' };
             }
             const countRow = db
-                .prepare('SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces')
-                .get() as { cnt?: number } | undefined;
+                .prepare(
+                    `SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces
+                     WHERE mesh_id = ? AND (host_daemon_id = ? OR host_daemon_id = '')`,
+                )
+                .get(meshId, canonHost) as { cnt?: number } | undefined;
             const currentCount = typeof countRow?.cnt === 'number' ? countRow.cnt : 0;
             if (currentCount >= MAX_TRACKED_NONCES) {
                 return { ok: false, reason: 'grant_capacity_exhausted' };
             }
             db.prepare(
-                `INSERT INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, canonical_payload, expires_at)
-                 VALUES (?, ?, ?, ?)`,
-            ).run(nonce, meshId, canonicalPayload, expiresAt);
-            if (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
+                `INSERT INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, host_daemon_id, canonical_payload, expires_at)
+                 VALUES (?, ?, ?, ?, ?)`,
+            ).run(nonce, meshId, canonHost, canonicalPayload, expiresAt);
+            if (countInMemoryNoncesForScope(scopeKey) >= MAX_TRACKED_NONCES) {
                 const checkStmt = db.prepare(
                     'SELECT 1 AS present FROM consumed_artifact_origin_grant_nonces WHERE nonce = ?',
                 );
-                for (const cachedNonce of consumedOriginGrantNonces.keys()) {
+                for (const [cachedNonce, cachedEntry] of consumedOriginGrantNonces.entries()) {
+                    if (cachedEntry.scopeKey !== scopeKey) continue;
                     const row = checkStmt.get(cachedNonce) as { present?: number } | undefined;
                     if (!row?.present) {
-                        consumedOriginGrantNonces.delete(cachedNonce);
+                        deleteInMemoryNonce(cachedNonce);
                     }
-                    if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) break;
+                    if (countInMemoryNoncesForScope(scopeKey) < MAX_TRACKED_NONCES) break;
                 }
             }
         } catch {
             return { ok: false, reason: 'nonce_store_error' };
         }
-    } else if (consumedOriginGrantNonces.size >= MAX_TRACKED_NONCES) {
+    } else if (inMemScopeCount >= MAX_TRACKED_NONCES) {
         return { ok: false, reason: 'grant_capacity_exhausted' };
     }
 
-    if (consumedOriginGrantNonces.size < MAX_TRACKED_NONCES) {
-        consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt });
+    if (countInMemoryNoncesForScope(scopeKey) < MAX_TRACKED_NONCES) {
+        setInMemoryNonce(nonce, { scopeKey, canonicalPayload, expiresAt });
     }
     return { ok: true };
 }
 
 export function __resetOriginGrantStateForTest(): void {
     consumedOriginGrantNonces.clear();
+    consumedOriginGrantScopeCounts.clear();
     __resetOriginGrantKeyPairCacheForTest();
     __resetAuthenticatedPeerKeysForTest();
 }
@@ -252,10 +337,12 @@ export function mintArtifactOriginFetchGrant(args: {
     const canonicalPayload = buildCanonicalGrantPayload(base);
     const signature = signCanonicalGrantPayload(canonicalPayload, hostDaemonId);
     const keyRotation = getLatestHostKeyRotationProof(hostDaemonId);
+    const keyRotationChain = getHostKeyRotationChain(hostDaemonId);
     return {
         ...base,
         signature,
         ...(keyRotation ? { keyRotation } : {}),
+        ...(keyRotationChain.length > 0 ? { keyRotationChain } : {}),
     };
 }
 
@@ -348,7 +435,12 @@ export function verifyArtifactOriginFetchGrant(
         return { ok: false, reason: 'incomplete_grant_fields' };
     }
 
-    if (expiresAt <= issuedAt || nowMs > expiresAt || issuedAt > nowMs + MAX_ORIGIN_GRANT_CLOCK_SKEW_MS) {
+    if (
+        expiresAt <= issuedAt ||
+        expiresAt - issuedAt > ARTIFACT_ORIGIN_FETCH_GRANT_TTL_MS ||
+        nowMs > expiresAt ||
+        issuedAt > nowMs + MAX_ORIGIN_GRANT_CLOCK_SKEW_MS
+    ) {
         return { ok: false, reason: 'expired_or_invalid_grant_window' };
     }
 
@@ -394,14 +486,22 @@ export function verifyArtifactOriginFetchGrant(
         return { ok: false, reason: 'untrusted_or_missing_host_public_key' };
     }
 
-    if (candidate.keyRotation && typeof candidate.keyRotation === 'object') {
-        const rotationObj = candidate.keyRotation as Record<string, unknown>;
-        if (trimStr(rotationObj.oldPublicKey) === trustedPublicKey) {
+    const hasRotationChain = Array.isArray(candidate.keyRotationChain) && candidate.keyRotationChain.length > 0;
+    const hasSingleRotation = isValidRotationProofShape(candidate.keyRotation);
+    if (hasRotationChain || hasSingleRotation) {
+        const candidateProofs = hasRotationChain
+            ? (candidate.keyRotationChain as unknown[])
+            : [candidate.keyRotation];
+        const chainMatchesPinned = candidateProofs.some(
+            (p) => isValidRotationProofShape(p) && originGrantPublicKeysEqual(p.oldPublicKey, trustedPublicKey),
+        );
+        if (chainMatchesPinned) {
             const rotated = applyAuthenticatedHostKeyRotation({
                 meshId,
                 hostDaemonId,
                 currentPinnedPublicKey: trustedPublicKey,
                 rotationProof: candidate.keyRotation,
+                rotationChain: candidate.keyRotationChain,
             });
             if (rotated.ok) {
                 trustedPublicKey = rotated.newPublicKey;
@@ -429,6 +529,7 @@ export function verifyArtifactOriginFetchGrant(
         const consumed = consumeOriginGrantNonce(
             nonce,
             meshId,
+            hostDaemonId,
             canonicalPayload,
             expiresAt,
             nowMs,
