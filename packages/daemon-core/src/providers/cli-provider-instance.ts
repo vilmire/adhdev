@@ -155,6 +155,7 @@ export class CliProviderInstance implements ProviderInstance {
     // unconditionally (no episode-scoped baseline exists yet to prove stasis
     // against) — the historical `!prev → advanced` semantics, preserved.
     meshStallTranscriptSignalSampled = false;
+    meshStallTranscriptPendingSince: number | undefined;
     // FALSE-IDLE continuity epoch: monotonically bumped on EVERY entry into a busy
     // phase (→generating or →waiting_approval). The completedDebouncePending snapshots
     // this value at arm time (busyEpochAtArm); the flush guard requires it UNCHANGED
@@ -427,6 +428,12 @@ export class CliProviderInstance implements ProviderInstance {
         return probeSessionIdFromConfig(this, probe);
     }
 
+    getActionState() {
+        const status = this.adapter.getStatus({ allowParse: false });
+        return { type: this.type, category: 'cli', settings: this.settings,
+            activeChat: { activeModal: status.activeModal, activeInteractivePrompt: this.activeInteractivePrompt ?? status.activeInteractivePrompt } };
+    }
+
     getState(): ProviderState {
         return stateProjection.buildProviderState(this);
     }
@@ -501,15 +508,6 @@ export class CliProviderInstance implements ProviderInstance {
         observedAt?: number;
     } {
         return evidence.getLiveTurnPendingEvidence(this);
-    }
-
-    /**
-     * TERMINAL-ADMISSION-ALL-PATHS: observation bundle for the mesh-side terminal-
-     * admission choke point — see completion/evidence.ts (observations only, never a
-     * verdict; the ordered rules live in mesh/mesh-terminal-admission.ts).
-     */
-    getTerminalAdmissionObservations(nowMs?: number): evidence.TerminalAdmissionObservations {
-        return evidence.getTerminalAdmissionObservations(this, nowMs ?? Date.now());
     }
 
     /**
@@ -614,6 +612,8 @@ export class CliProviderInstance implements ProviderInstance {
     cancelledCompletionRecheck: CancelledCompletionRecheck | null = null;
     cancelledCompletionRecheckTimer: NodeJS.Timeout | null = null;
     lastExternalCompletionProbe: ExternalTranscriptProbe | null = null;
+    nativeHistoryReadPending = false;
+    lastExternalCompletionMessages: { historySessionId: string; messages: unknown[] } | null = null;
     // (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. Refreshed
     // on every completion probe; null when the provider surfaces none.
     lastNativeTurnTerminalMarkers: NativeTurnTerminalMarker[] | null = null;
@@ -818,7 +818,7 @@ export class CliProviderInstance implements ProviderInstance {
 
     /** MESH-STALL-WATCH — see checkMeshWorkerStall (cli-provider-mesh-session.ts). */
     checkMeshWorkerStall(now: number = Date.now()): void { checkMeshWorkerStall(this, now); }
-    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null { return probeNativeTranscriptSignals(this); }
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null { return probeNativeTranscriptSignals(this); }
 
     /**
      * TX-FSM Stage 2: is the bounded busy lease enabled for THIS provider?

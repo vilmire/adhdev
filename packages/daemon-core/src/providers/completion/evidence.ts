@@ -29,8 +29,6 @@ import {
     extractFinalSummaryFromMessagesAfter,
     readChatMessageTimestampMs,
     hasTrailingToolActivityAfterFinalAssistant,
-    countTrailingToolActivityAfterFinalAssistant,
-    selectFinalAssistantTurnEndMessage,
 } from '../chat-message-normalization.js';
 import { looksLikeActiveApprovalPromptText } from '../approval-utils.js';
 import { isNativeSourceCanonicalHistory, readProviderChatHistory } from '../../config/provider-native-history.js';
@@ -155,6 +153,9 @@ export interface EvidenceHost {
     };
     // Mutable evidence state (instance-owned).
     lastExternalCompletionProbe: ExternalTranscriptProbe | null;
+    /** A cooperative rebuild has not produced a fresh observation yet. */
+    nativeHistoryReadPending?: boolean;
+    lastExternalCompletionMessages?: { historySessionId: string; messages: unknown[] } | null;
     /** (NATIVE-TURN-SIGNAL) Terminal markers from the last native transcript read. */
     lastNativeTurnTerminalMarkers?: NativeTurnTerminalMarker[] | null;
     lastCompletionSummary: { content: string; receivedAt: number; sourceTimestampMs?: number } | null;
@@ -178,7 +179,7 @@ export interface EvidenceHost {
     // Instance-owned helpers the moved methods call.
     hasAdapterPendingResponse(): boolean;
     isModalParked(): boolean;
-    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null;
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null;
     busyLeaseGateEnabled(): boolean;
     /**
      * (NATIVE-TURN-SIGNAL) The provider's own terminal record for THIS turn, or null
@@ -280,7 +281,7 @@ export function completionHasFinalAssistantMessage(messages: unknown, turnStarte
  *
  * ★ NOT a substitute for terminal admission: these three discriminators are blind to a
  * transcript that is simply still GROWING with no trailing tool bubble yet in the tail —
- * that is what getTerminalAdmissionObservations below observes, and it is the shape the
+ * the turn-ledger admission rules observe freshness separately. This is the shape the
  * 2026-08-18 10:49 false completion took.
  */
 export function getLiveTurnPendingEvidence(host: EvidenceHost): {
@@ -319,93 +320,6 @@ export function getLiveTurnPendingEvidence(host: EvidenceHost): {
     return { pending: false };
 }
 
-/**
- * TERMINAL-ADMISSION-ALL-PATHS (provider_event path): the observation bundle the
- * mesh-side terminal-admission choke point needs, gathered HERE because this is
- * where the data lives — the mesh layer must not reach into provider internals
- * (import-boundary gate), so it duck-types this accessor off the live instance
- * instead.
- *
- * WHY THIS EXISTS AT ALL. getLiveTurnPendingEvidence above already vetoes an
- * adapter-pending, modal-parked, or trailing-tool turn. It is blind to one shape
- * the 10:49 incident actually took: a transcript that is still GROWING. The
- * completion engine DOES see that (it holds on `native_transcript_advancing`,
- * decideCompletionVerdict rule 5), but that hold is instance-local and bounded —
- * a provider-native event completion never passes through the engine flush at
- * all, and the engine's own hold releases at the growth-quiet window. So the
- * coordinator received `agent:generating_completed` for a session whose
- * transcript had grown to msgCount=542 one second earlier, and nothing on the
- * forwarding path re-asked the question.
- *
- * Every field is an OBSERVATION, never a verdict: the ordered rules stay in
- * evaluateTerminalAdmission (mesh/mesh-terminal-admission.ts), which is the one
- * place finality is decided.
- *
- * Fail-open by construction — an unavailable snapshot, a non-native-source
- * class, or a read error yields `undefined` for the field it could not observe,
- * and an undefined observation never manufactures a veto (rule 6 tests
- * `typeof newest === 'number'`). A probe error must never wedge a completion.
- */
-export interface TerminalAdmissionObservations {
-    activeModalPresent: boolean;
-    trailingActivityCount: number;
-    /** Newest transcript bubble of ANY kind (epoch ms) — rule 6's freshness probe. */
-    newestActivityAtMs?: number;
-    finalAssistantPresent: boolean;
-    nativeMarkersFieldPresent: boolean;
-    nativeMarkers?: NativeTurnTerminalMarker[];
-}
-
-export function getTerminalAdmissionObservations(host: EvidenceHost, nowMs: number): TerminalAdmissionObservations {
-    let activeModalPresent = false;
-    try { activeModalPresent = host.isModalParked() === true; } catch { /* fail open */ }
-
-    let trailingActivityCount = 0;
-    let newestActivityAtMs: number | undefined;
-    let finalAssistantPresent = false;
-    try {
-        const probe = host.probeNativeTranscriptSignals();
-        const messages = Array.isArray(probe?.messages) ? probe.messages as ChatMessage[] : null;
-        if (messages) {
-            trailingActivityCount = countTrailingToolActivityAfterFinalAssistant(messages);
-            finalAssistantPresent = !!selectFinalAssistantTurnEndMessage(messages);
-            for (const msg of messages) {
-                const ts = readChatMessageTimestampMs(msg);
-                if (typeof ts !== 'number' || !Number.isFinite(ts)) continue;
-                if (newestActivityAtMs === undefined || ts > newestActivityAtMs) newestActivityAtMs = ts;
-            }
-        }
-        // TRANSCRIPT-GROWTH as a freshness observation. The snapshot's own mtime age
-        // is the authority the completion engine's growth-hold uses; when the tail
-        // carries no per-bubble timestamps (PTY-parsed providers) it is the ONLY
-        // freshness signal available. Take whichever proves the transcript is FRESHER
-        // — a newer observation can only strengthen rule 6's veto, never weaken it.
-        const snapshot = probe?.snapshot;
-        if (snapshot?.available === true && typeof snapshot.detail?.ageMs === 'number'
-            && Number.isFinite(snapshot.detail.ageMs)) {
-            const mtimeAtMs = nowMs - snapshot.detail.ageMs;
-            if (newestActivityAtMs === undefined || mtimeAtMs > newestActivityAtMs) {
-                newestActivityAtMs = mtimeAtMs;
-            }
-        }
-    } catch { /* fail open — a probe error must never fabricate a veto */ }
-
-    // Marker FIELD presence is the version-skew discriminator (see
-    // TerminalAdmissionInput.nativeMarkersFieldPresent): an instance that never
-    // populated the field has not proven "this turn has NOT ended", so admission
-    // must fall through to the shape rules rather than read an absent list as an
-    // authoritative empty one.
-    const markers = host.lastNativeTurnTerminalMarkers;
-    return {
-        activeModalPresent,
-        trailingActivityCount,
-        ...(newestActivityAtMs !== undefined ? { newestActivityAtMs } : {}),
-        finalAssistantPresent,
-        nativeMarkersFieldPresent: Array.isArray(markers),
-        ...(Array.isArray(markers) ? { nativeMarkers: markers } : {}),
-    };
-}
-
 export function recordPendingTranscriptProbe(host: EvidenceHost, pending: CompletedDebouncePending): ExternalTranscriptProbe | null {
     const probe = host.lastExternalCompletionProbe;
     if (!probe) return null;
@@ -419,6 +333,7 @@ export function recordPendingTranscriptProbe(host: EvidenceHost, pending: Comple
 }
 
 export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allowManifestNativeSource?: boolean }): unknown[] | null {
+    host.nativeHistoryReadPending = false;
     const adapterOwnsMessagesElsewhere = (host.adapter as any)?.chatMessagesOwnedExternally === true;
     // KIMI-RC30-COMPLETION-SUMMARY-NATIVE-SNAPSHOT: production kimi routes
     // through ProviderCliAdapter (provider dir ships provider.v1.json, no
@@ -510,12 +425,24 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         // — omitting the flag here is what keeps the in-progress turn visible to the gate,
         // and no manifest declaration can override that.
     });
+    // Deferred snapshots are not fresh samples: old mtime/messages cannot prove
+    // no growth or clear a trailing-tool veto. Keep the previous observation
+    // and expose pending to watchdog/completion/admission decision sites.
+    if (restoredHistory.stale || restoredHistory.unavailableReason === 'native_history_loading') {
+        host.nativeHistoryReadPending = true;
+        // A stale reader snapshot has already passed source/session binding.
+        // Cold loading may reuse an older veto only for the same concrete pin.
+        const previous = host.lastExternalCompletionMessages;
+        return restoredHistory.stale ? restoredHistory.messages
+            : resolvedHandle && previous?.historySessionId === resolvedHandle ? previous.messages : [];
+    }
     // (NATIVE-TURN-SIGNAL) Capture the provider's own turn-terminal records from THIS read,
     // before the source check below can early-return. Refreshed on every probe so a stale
     // marker from a previous read can never satisfy a later turn's gate.
     if (host.type === 'codex-cli' && !resolvedHandle && restoredHistory.ownerConfirmed !== true) {
         host.lastNativeTurnTerminalMarkers = null;
         host.lastExternalCompletionProbe = null;
+        host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
     }
@@ -525,6 +452,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
 
     if (restoredHistory.source !== 'provider-native') {
         host.lastExternalCompletionProbe = null;
+        host.lastExternalCompletionMessages = null;
         host.publishTranscriptSignalObservation(null);
         return null;
     }
@@ -533,6 +461,7 @@ export function readExternalCompletionMessages(host: EvidenceHost, opts?: { allo
         restoredHistory.sourcePath,
         restoredHistory.sourceMtimeMs,
     );
+    host.lastExternalCompletionMessages = { historySessionId: resolvedHandle, messages: restoredHistory.messages };
     host.publishTranscriptSignalObservation(restoredHistory.messages);
     return restoredHistory.messages;
 }

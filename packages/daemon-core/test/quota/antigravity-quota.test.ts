@@ -176,6 +176,12 @@ function credentialPayload(overrides: Record<string, unknown> = {}, authMethod =
     };
 }
 
+/** Unsigned JWT carrying only the iss/sub claims the account match reads. */
+function identityJwt(sub: string, iss = 'https://accounts.google.com'): string {
+    const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    return `${b64({ alg: 'none' })}.${b64({ iss, sub })}.sig`;
+}
+
 /** Encode like go-keyring does for a non-clean-UTF8 secret. */
 function keyringBlob(payload: unknown): string {
     const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
@@ -455,6 +461,63 @@ describe('fetchAntigravityQuota', () => {
         expect(quota.session?.windowMinutes).toBe(SESSION_WINDOW_MINUTES);
         expect(quota.session?.usedPercent).toBeCloseTo((1 - 0.89260375) * 100, 3);
         expect(quota.session?.resetsAt).toBe(Date.parse('2026-10-18T09:35:01Z'));
+    });
+
+    describe('per model group (owner screen 2026-10-23: Gemini weekly exhausted, Claude/GPT healthy)', () => {
+        const claudeGptGroup = {
+            displayName: 'Claude and GPT models',
+            buckets: [
+                { bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', remainingFraction: 0.5565, resetTime: '2026-10-29T02:30:00Z' },
+                { bucketId: '3p-5h', displayName: 'Five Hour Limit Remaining', window: '5h', remainingFraction: 1, resetTime: '2026-10-23T07:30:00Z' },
+            ],
+        };
+        // proto3 JSON drops a zero-valued scalar: the exhausted weekly bucket
+        // arrives WITHOUT remainingFraction; the 5h limit is disabled.
+        const geminiExhaustedOmitted = {
+            displayName: 'Gemini Models',
+            buckets: [
+                { bucketId: 'gemini-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-10-24T14:40:00Z' },
+                { bucketId: 'gemini-5h', displayName: 'Five Hour Limit Remaining', window: '5h', disabled: true },
+            ],
+        };
+
+        it('keeps the exhausted Gemini weekly bucket (absent remainingFraction) instead of dropping it, tagged with its group', async () => {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const fetch = stubFetch(jsonResponse({ groups: [geminiExhaustedOmitted, claudeGptGroup] }));
+
+            const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+            expect(quota.status).toBe('ok');
+            const gemini = quota.buckets?.filter((b) => b.group === 'gemini');
+            const claudeGpt = quota.buckets?.filter((b) => b.group === 'claude-gpt');
+            expect(gemini).toHaveLength(1); // disabled 5h is not a bucket
+            expect(gemini?.[0].usedPercent).toBe(100);
+            expect(gemini?.[0].windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
+            expect(claudeGpt?.map((b) => b.usedPercent.toFixed(2))).toEqual(['44.35', '0.00']);
+        });
+
+        it('reads an explicit remainingFraction of 0 as exhausted too', async () => {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const gemini = {
+                displayName: 'Gemini Models',
+                buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0, resetTime: '2026-10-24T14:40:00Z' }],
+            };
+            const fetch = stubFetch(jsonResponse({ groups: [gemini, claudeGptGroup] }));
+
+            const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+            expect(quota.buckets?.find((b) => b.group === 'gemini')?.usedPercent).toBe(100);
+        });
+
+        it('both groups healthy: four group-tagged buckets, nothing exhausted', async () => {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const fetch = stubFetch(jsonResponse(CAPTURED_1_4_2_TWO_GROUP_RESPONSE));
+
+            const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+            expect(quota.buckets?.map((b) => b.group)).toEqual(['gemini', 'gemini', 'claude-gpt', 'claude-gpt']);
+            expect(quota.buckets?.every((b) => b.usedPercent < 100)).toBe(true);
+        });
     });
 
     it('maps the live response: window LABELS onto fixed axes', async () => {
@@ -848,7 +911,7 @@ describe('fetchAntigravityQuota', () => {
 
         const quota = await fetchAntigravityQuota(deps(spawn, fetch));
 
-        expect(quota.status).toBe('error');
+        expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('expired-token');
         expect(fetch.calls).toEqual([]);
     });
@@ -1175,5 +1238,117 @@ describe('Antigravity account uncertainty and credential continuity', () => {
         expect(quota.error).not.toMatch(/signed.out|log.in|account switch/i);
         expect(fetch.calls).toHaveLength(1);
         expect(spawn.calls).toEqual([]);
+    });
+});
+
+describe('Antigravity freshest credential selection and neutral expired-token status (mission bcf1e31c)', () => {
+    it('picks the fresh wincred token on win32 even when a stale antigravity-oauth-token file exists', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({
+            access_token: 'fresh-wincred-token',
+            expiry: FRESH_EXPIRY,
+        })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const readFile: QuotaReadFile = async () => JSON.stringify({
+            access_token: 'stale-file-token',
+            expiry_date: Date.parse('2026-05-04T00:00:00Z'),
+            token_type: 'Bearer',
+        });
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'win32',
+                USERPROFILE: 'C:\\Users\\test',
+            }, readFile),
+        );
+
+        expect(quota.status).toBe('ok');
+        expect(fetch.inits[0].headers?.Authorization).toBe('Bearer fresh-wincred-token');
+    });
+
+    it('never reads an unexpired Gemini CLI ~/.gemini/oauth_creds.json when the agy token is expired (returns unavailable, not someone else\'s quota)', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({
+            access_token: 'expired-agy-token',
+            expiry: STALE_EXPIRY,
+        })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const readPaths: string[] = [];
+        const readFile: QuotaReadFile = async (filePath) => {
+            readPaths.push(filePath);
+            if (filePath.endsWith('oauth_creds.json')) {
+                return JSON.stringify({
+                    access_token: 'unexpired-gemini-cli-token',
+                    expiry_date: Date.parse(FRESH_EXPIRY),
+                    token_type: 'Bearer',
+                });
+            }
+            const err = new Error('ENOENT') as NodeJS.ErrnoException;
+            err.code = 'ENOENT';
+            throw err;
+        };
+
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'win32',
+                USERPROFILE: 'C:\\Users\\test',
+            }, readFile),
+        );
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('expired-token');
+        expect(fetch.calls).toHaveLength(0);
+        expect(readPaths.some((p) => p.endsWith('oauth_creds.json'))).toBe(false);
+    });
+
+    async function pickWithFileIdentity(storeJwt: string | undefined, fileJwt: string | undefined) {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({
+            access_token: 'expired-store-token',
+            expiry: STALE_EXPIRY,
+            ...(storeJwt ? { id_token: storeJwt } : {}),
+        })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+        const readFile: QuotaReadFile = async () => JSON.stringify(credentialPayload({
+            access_token: 'fresh-file-token',
+            expiry: FRESH_EXPIRY,
+            ...(fileJwt ? { id_token: fileJwt } : {}),
+        }));
+        const quota = await fetchAntigravityQuota(
+            deps(spawn, fetch, {
+                ADHDEV_ANTIGRAVITY_PLATFORM: 'win32',
+                USERPROFILE: 'C:\\Users\\test',
+            }, readFile),
+        );
+        return { quota, fetch };
+    }
+
+    it('picks a fresh agy token file on win32/darwin when wincred/keychain holds an expired access token for the same account', async () => {
+        const { quota, fetch } = await pickWithFileIdentity(identityJwt('acct-1'), identityJwt('acct-1'));
+
+        expect(quota.status).toBe('ok');
+        expect(fetch.inits[0].headers?.Authorization).toBe('Bearer fresh-file-token');
+    });
+
+    it('fails closed: never adopts the token file when the identity claims differ', async () => {
+        const { quota, fetch } = await pickWithFileIdentity(identityJwt('acct-1'), identityJwt('acct-2'));
+
+        expect(quota.status).toBe('unavailable');
+        expect(fetch.calls).toHaveLength(0);
+    });
+
+    it('fails closed: never adopts the token file when neither credential carries identity claims', async () => {
+        const { quota, fetch } = await pickWithFileIdentity(undefined, undefined);
+
+        expect(quota.status).toBe('unavailable');
+        expect(fetch.calls).toHaveLength(0);
+    });
+
+    it('returns neutral status "unavailable" (not "error") when all credential sources have expired access tokens', async () => {
+        const spawn = stubSpawn(keyringBlob(credentialPayload({ expiry: STALE_EXPIRY })));
+        const fetch = stubFetch(jsonResponse(LIVE_RESPONSE));
+
+        const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+        expect(quota.status).toBe('unavailable');
+        expect(quota.metadata?.failureKind).toBe('expired-token');
+        expect(quota.error).toMatch(/unavailable until next CLI use/i);
     });
 });

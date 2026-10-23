@@ -451,7 +451,7 @@ describe('mesh route preview — Antigravity bucket-aware quota gate', () => {
         expect(result.stages.quota.clearOrder).toEqual([]);
         expect(result.stages.quota.gated).toEqual([{
             providerType: 'antigravity-cli',
-            reason: 'provider_quota_session_low',
+            reason: 'provider_quota_group_exhausted',
         }]);
         expect(result.stages.quota.winner).toBeUndefined();
     });

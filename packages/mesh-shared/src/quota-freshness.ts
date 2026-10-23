@@ -102,12 +102,15 @@ function backfillCheckAt(quota: MeshNodeFactsProviderQuota, now: number): number
 export function assessQuotaFreshness(quota: MeshNodeFactsProviderQuota, now: number = Date.now()): QuotaFreshness {
     const meta = quota.metadata
     const kind = meta?.failureKind
-    const userMustAct = (kind === 'no-data' && quota.provider !== 'codex-cli')
-        || (kind === 'expired-token' && ['grok-cli', 'kimi', 'antigravity-cli'].includes(quota.provider))
-    // Order matters: the aged-out Claude shape and the retained antigravity
-    // shape both ALSO mark lastGoodWindows (mesh routing trusts retained numbers
-    // until their reset), so they must be classified before the generic branch.
+    const userMustAct = kind === 'no-data' && quota.provider !== 'codex-cli'
+    const awaitsCliUse = kind === 'expired-token' && ['grok-cli', 'kimi', 'antigravity-cli'].includes(quota.provider)
+    // Order matters: the aged-out Claude shape and the retained expired-token
+    // shape both ALSO mark lastGoodWindows, so they must be classified before
+    // the generic branch. An expired short-lived access token that the CLI
+    // renews itself is NOT an auth failure requiring user action (userMustAct:
+    // false), while any retained lastGood numbers are marked stale.
     if (userMustAct) return hasReading(quota) ? { cue: 'stale', userMustAct: true } : { userMustAct: true }
+    if (awaitsCliUse) return hasReading(quota) ? { cue: 'stale', userMustAct: false } : { userMustAct: false }
     if (meta?.lastGoodWindows !== true) {
         // A successful fetch is not a perpetual live reading. Use the DATA
         // clock; a recent failed attempt must never rejuvenate old numbers.

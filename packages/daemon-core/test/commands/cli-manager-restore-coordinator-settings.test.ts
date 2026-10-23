@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DaemonCliManager } from '../../src/commands/cli-manager.js';
 import { ProviderLoader } from '../../src/providers/provider-loader.js';
 import { registerMeshCoordinator, unregisterMeshCoordinator } from '../../src/mesh/coordinator-registry.js';
+const OWNER = { namespace: 'restore-test', endpoint: 'unix:/tmp/restore-test.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_restore_test' };
 
 // Regression: a daemon restart re-attaches hosted CLI runtimes via
 // restoreHostedSessions. That path used to recreate instances with a bare {}
@@ -55,6 +56,7 @@ function createManager(loader: ProviderLoader, overrides: Partial<{
   return new DaemonCliManager({
     getServerConn: () => null,
     getP2p: () => null,
+    getHostedBindingOwner: () => OWNER,
     onStatusChange: vi.fn(),
     removeAgentTracking: vi.fn(),
     getInstanceManager: overrides.getInstanceManager || (() => null),
@@ -116,7 +118,7 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     const loader = setupLoader();
     const runtimeId = 'coordinator-runtime-1';
     const meshId = 'mesh-alpha';
-    registerMeshCoordinator({ meshId, sessionId: runtimeId, workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId, sessionId: runtimeId, workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
     try {
       const addInstance = vi.fn();
@@ -162,7 +164,7 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     // mark from the single unambiguous coordinator registered for this workspace.
     const loader = setupLoader();
     const meshId = 'mesh-rebind';
-    registerMeshCoordinator({ meshId, sessionId: 'old-coordinator-sessionid', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId, sessionId: 'old-coordinator-sessionid', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
     try {
       const addInstance = vi.fn();
@@ -187,7 +189,7 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     // hermes-cli, but the restored session is sample-cli. The cliType gate must refuse to
     // adopt the mark (rather than mis-mark a foreign session as the coordinator).
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-other-provider', sessionId: 'hermes-coordinator', workspace: workingDir, startedAt: 1, cliType: 'hermes-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-other-provider', sessionId: 'hermes-coordinator', workspace: workingDir, startedAt: 1, cliType: 'hermes-cli' });
 
     try {
       const addInstance = vi.fn();
@@ -211,8 +213,8 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     // Two coordinator entries share the workspace → the fallback cannot tell which mesh
     // the restored session belongs to, so it must stay unbound rather than guess.
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-one', sessionId: 'coord-one', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
-    registerMeshCoordinator({ meshId: 'mesh-two', sessionId: 'coord-two', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-one', sessionId: 'coord-one', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-two', sessionId: 'coord-two', workspace: workingDir, startedAt: 2, cliType: 'sample-cli' });
 
     try {
       const addInstance = vi.fn();
@@ -243,7 +245,7 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     const meshId = 'mesh-coexist';
     const coordinatorRuntimeId = 'real-coordinator-runtime';
     const workerRuntimeId = 'delegated-worker-runtime';
-    registerMeshCoordinator({ meshId, sessionId: coordinatorRuntimeId, workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId, sessionId: coordinatorRuntimeId, workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
     try {
       const addInstance = vi.fn();
@@ -274,7 +276,7 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     // We cannot tell which of the two is the renamed coordinator, so the fallback must stay
     // unbound for both rather than guess and risk marking the worker.
     const loader = setupLoader();
-    registerMeshCoordinator({ meshId: 'mesh-ambig-batch', sessionId: 'gone-coordinator-id', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
+    registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-ambig-batch', sessionId: 'gone-coordinator-id', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
     try {
       const addInstance = vi.fn();

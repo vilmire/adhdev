@@ -70,7 +70,7 @@ import { normalizeNodeCapabilitySlots, readString } from '@adhdev/mesh-shared';
 // rather than reimplemented, so the two dispatch paths can never disagree about
 // what "out of quota" means, and so the fail-open contract has exactly one
 // definition. See mesh-quota-routing.ts.
-import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, type LocalMeshNodeEntry } from '@adhdev/daemon-core';
+import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, quotaTargetsFromSlots, type LocalMeshNodeEntry } from '@adhdev/daemon-core';
 // F1: worker-protocol footer materialization on the direct-dispatch path — not
 // (yet) re-exported through mesh-tools-internal.ts, imported directly like the
 // quota-gate symbols above.
@@ -617,7 +617,10 @@ function checkRequestedLaunchType(
             supportedProviders: slotProviders,
         }, null, 2);
     }
-    const explicitBlock = evaluateProviderQuotaGate(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null);
+    // Judge the requested type by the model its slot would launch (Antigravity
+    // pools differ per model group); unresolved/ambiguous slots keep the headline.
+    const launchTarget = quotaTargetsFromSlots(normalizeNodeCapabilitySlots((node.policy as any)?.slots)).get(requestedType);
+    const explicitBlock = evaluateProviderQuotaGate(node, requestedType, ctx.mesh.policy?.quotaRouting ?? null, undefined, undefined, launchTarget);
     if (!explicitBlock) return { quotaWarning: null };
     return {
         quotaWarning: {
@@ -693,7 +696,10 @@ async function detectLaunchProviderType(ctx: MeshContext, node: LocalMeshNodeEnt
         failed.push(`${providerType}: ${detectedPayload?.error || 'not detected'}`);
     }
     if (detectedCandidates.length) {
-        const ranked = rankProvidersByQuotaGate(node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null);
+        const ranked = rankProvidersByQuotaGate(
+            node, detectedCandidates, ctx.mesh.policy?.quotaRouting ?? null, undefined, undefined,
+            quotaTargetsFromSlots(normalizeNodeCapabilitySlots((node.policy as any)?.slots)),
+        );
         if (ranked.clear.length) return { providerType: ranked.clear[0] };
         // Every detected provider is measurably out of quota. This is a WAIT,
         // not a configuration error: the windows reset on their own, so the

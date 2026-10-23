@@ -163,6 +163,8 @@ export const analyzeProbeTranscript: TranscriptAnalyzer = (payload, ctx) => {
         ? payload.providerObservedStatus
         : payload.status;
     const out: TranscriptObservation = {
+        ...(payload.stale === true ? { stale: true } : {}),
+        ...(typeof payload.unavailableReason === 'string' ? { unavailableReason: payload.unavailableReason } : {}),
         providerObservedStatus: typeof observed === 'string' ? observed.trim().toLowerCase() : '',
         activeModal: hasNonEmptyModalButtons(payload.activeModal),
         selfAttributing,
@@ -305,24 +307,36 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     // any hold that expired while the daemon was down are both just a tick.
     startTurnLoops(components as TurnWiredComponents);
 
-    // Hosted-session restore (B5: moved here from both hosts). Every bus
-    // subscriber is attached by now (S7), so each restored session's
-    // `registered{origin:'restore'}` reaches the mesh / liveness consumers; the
-    // composer-residue sweep is scheduled only after the restore batch settled.
-    if (cfg.restoreHostedSessions && !enrolled) {
-        try {
-            await s7.cliManager.restoreHostedSessions();
-        } catch (e: any) {
-            LOG.warn('Init', `Hosted session restore failed: ${e?.message || e}`);
+    let disposed = false;
+    const restoreAbort = new AbortController();
+    const afterRestore = () => {
+        if (disposed || ['pending', 'failed'].includes(s7.cliManager?.hostedRestoreState)) return;
+        try { reconcileOrphanedPlainAttemptsOnBoot(components as TurnWiredComponents); } catch (e: any) {
+            LOG.warn('TurnLedger', `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
         }
-    }
-    // Orphaned-plain-attempt closure (wiring-unification follow-up, design §5):
-    // MUST run after restore resolves — restore is what tells this reconciliation
-    // which sessions are legitimately still alive (an earlier check would see an
-    // empty registry and misclassify every one of them as orphaned).
-    try { reconcileOrphanedPlainAttemptsOnBoot(components as TurnWiredComponents); } catch (e: any) {
-        LOG.warn('TurnLedger', `Orphaned-plain-attempt reconciliation failed: ${e?.message || e}`);
-    }
+        components.composerResidueSweep = scheduleComposerResidueSweep(components);
+    };
+    // Subscribers are attached (S7). Keep assistant admission pending while
+    // recovery runs, but let the host open its command/verification transports.
+    // Maintenance promotion above retains its stricter awaited barrier.
+    let restoreStart: ReturnType<typeof setImmediate> | undefined;
+    if (cfg.restoreHostedSessions && !enrolled) {
+        restoreStart = setImmediate(() => {
+            void (async () => {
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    if (disposed) return;
+                    try {
+                        await s7.cliManager.restoreHostedSessions(undefined, restoreAbort.signal);
+                        break;
+                    } catch (e: any) {
+                        if (disposed) return;
+                        LOG.warn('Init', `Hosted session restore failed (attempt ${attempt}/2): ${e?.message || e}`);
+                    }
+                }
+                afterRestore();
+            })().catch(e => LOG.warn('Init', `Background hosted recovery failed: ${String(e)}`));
+        });
+    } else afterRestore();
 
     scheduleQuotaBootRefresh(components);
     scheduleModelDiscovery(components);
@@ -338,13 +352,11 @@ export async function startLoops(s7: MeshRuntimeStage): Promise<Disposer> {
     // noteMeshTransportReady / peer-open pushes it; the pusher's next check tick
     // covers a host that wires neither.
     setImmediate(() => { void s7.router.resumeMeshNodeStatePushOnStartup(); });
-    // ENTER-LOSS layer ③: one-shot composer-residue sweep.
-    components.composerResidueSweep = scheduleComposerResidueSweep(components);
-
-    let disposed = false;
     return () => {
         if (disposed) return;
         disposed = true;
+        restoreAbort.abort();
+        if (restoreStart) clearImmediate(restoreStart);
         s7.poller.stop();
         try { s7.instanceManager.stopTicking(); } catch { /* noop */ }
         s7.cdpInitializer.stop();

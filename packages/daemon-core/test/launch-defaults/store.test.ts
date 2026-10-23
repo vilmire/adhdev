@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { LaunchDefaultsStore, type LaunchDefaultsDocument, type LaunchDefaultsWrite,
     type LaunchDefaultsWriteResult, type LaunchValidationPorts } from '../../src/launch-defaults/index.js';
+import { processStartId } from '../../src/launch-defaults/owned-lock.js';
 
 // Real fixture files with only failure boundaries mocked. No daemon config paths.
 vi.mock('node:fs', async importOriginal => {
@@ -192,6 +193,21 @@ describe('document CAS and history', () => {
         expect(live.write(request({ expectedRevision: 1 }))).toMatchObject({ code: 'store_busy', committed: false, reason: `write_lock_held: ${lock}` });
         expect(fs.readFileSync(store.path)).toEqual(bytes);
         expect(JSON.parse(fs.readFileSync(join(lock, 'owner.json'), 'utf8'))).toMatchObject({ nonce: 'live' });
+    });
+    it.skipIf(process.platform === 'win32')('reclaims a lock held by a reused live pid with a different start identity', async () => {
+        saved();
+        const peer = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+        try {
+            const real = processStartId(peer.pid!);
+            expect(real).toMatch(/:\d+$/);
+            const lock = `${store.path}.lock`;
+            fs.mkdirSync(lock);
+            fs.writeFileSync(join(lock, 'owner.json'), JSON.stringify({ pid: peer.pid, nonce: 'crashed-before-reboot',
+                acquiredAt: 0, startId: real!.replace(/\d+$/, d => String(Number(d) + 1)) }));
+            const fresh = new LaunchDefaultsStore(join(dir, 'config'), ports);
+            expect(fresh.write(request({ expectedRevision: 1 }))).toMatchObject({ ok: true });
+            expect(fs.existsSync(lock)).toBe(false);
+        } finally { peer.kill('SIGKILL'); }
     });
     it('reclaims a lock whose recorded owner pid is dead and leaves no lock behind', () => {
         saved();

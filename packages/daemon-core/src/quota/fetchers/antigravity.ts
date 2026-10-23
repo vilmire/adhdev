@@ -322,6 +322,7 @@ import {
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { exhaustedByOmission, quotaPoolOf } from './antigravity-pools.js';
 import { isCredentialExpired, retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
 import { quotaReadNowClause } from '../refresh-command-hint.js';
 
@@ -806,7 +807,7 @@ function parseCredentials(
         return { kind: 'invalid', platform, reason: 'Antigravity credential has no access token' };
     }
 
-    const expiryRaw = token.expiry ?? token.expires_at;
+    const expiryRaw = token.expiry ?? token.expires_at ?? token.expiry_date;
     let expiresAtMs: number | null = null;
     if (typeof expiryRaw === 'string' && expiryRaw.trim() !== '') {
         const ms = new Date(expiryRaw).getTime();
@@ -832,6 +833,44 @@ function parseCredentials(
     };
 }
 
+type OkCredentialsResult = Extract<CredentialsResult, { kind: 'ok' }>;
+
+function isSameCredentialAccount(a: AntigravityCredentials, b: AntigravityCredentials): boolean {
+    // Fail closed: an account match must be proven by JWT claims on BOTH sides.
+    if (!a.identity || !b.identity) return false;
+    return a.identity.iss === b.identity.iss && a.identity.sub === b.identity.sub;
+}
+
+async function readOptionalAntigravityTokenFile(deps: Required<QuotaFetchDeps>, platform: string): Promise<OkCredentialsResult | null> {
+    let home = deps.env.HOME?.trim() || deps.env.USERPROFILE?.trim() || '';
+    if (!home && !isTestRuntimeEnv()) {
+        try { home = os.homedir().trim(); } catch { home = ''; }
+    }
+    if (!home) return null;
+    try {
+        const raw = await deps.readFile(path.join(home, LINUX_TOKEN_RELATIVE));
+        if (!raw?.trim()) return null;
+        const parsed = parseCredentials(decodeKeyringSecret(raw), platform);
+        return parsed.kind === 'ok' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+function pickFreshestCredential(candidates: OkCredentialsResult[], nowMs: number): OkCredentialsResult {
+    return candidates.reduce((best, candidate) => {
+        const bestUnexpired = !isExpired(best.credentials, nowMs);
+        const candidateUnexpired = !isExpired(candidate.credentials, nowMs);
+        if (candidateUnexpired !== bestUnexpired) return candidateUnexpired ? candidate : best;
+        const bestExpiry = best.credentials.expiresAtMs;
+        const candidateExpiry = candidate.credentials.expiresAtMs;
+        if (bestExpiry !== null && candidateExpiry !== null && candidateExpiry !== bestExpiry) {
+            return candidateExpiry > bestExpiry ? candidate : best;
+        }
+        return best;
+    });
+}
+
 async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<CredentialsResult> {
     // `ADHDEV_ANTIGRAVITY_PLATFORM` is a test seam so the win32, linux and
     // unsupported-platform branches are exercisable from a macOS test run;
@@ -841,22 +880,48 @@ async function readCredentials(deps: Required<QuotaFetchDeps>): Promise<Credenti
         return { kind: 'unsupported-platform', platform };
     }
 
-    let raw: string | null;
-    try {
-        if (platform === 'linux') {
+    if (platform === 'linux') {
+        let raw: string | null;
+        try {
             raw = await readLinuxTokenFile(deps);
-        } else {
-            // darwin / win32 — leave this ternary alone; both paths are live.
-            raw = platform === 'darwin' ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { kind: 'invalid', platform, reason: `Unable to read the Antigravity credential: ${message}` };
         }
+        if (raw === null || raw === '') {
+            return { kind: 'missing', platform };
+        }
+        return parseCredentials(decodeKeyringSecret(raw), platform);
+    }
+
+    let raw: string | null = null;
+    try {
+        // darwin / win32 — leave this ternary alone; both paths are live.
+        raw = platform === 'darwin' ? await readKeychainBlob(deps) : await readWinCredBlob(deps);
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { kind: 'invalid', platform, reason: `Unable to read the Antigravity credential: ${message}` };
     }
-    if (raw === null || raw === '') {
+
+    const storeResult = raw !== null && raw !== ''
+        ? parseCredentials(decodeKeyringSecret(raw), platform)
+        : null;
+    if (storeResult && storeResult.kind === 'invalid') {
+        return storeResult;
+    }
+
+    const fileCandidate = await readOptionalAntigravityTokenFile(deps, platform);
+    const compatibleFileCandidate = fileCandidate && (storeResult?.kind !== 'ok' || isSameCredentialAccount(storeResult.credentials, fileCandidate.credentials))
+        ? fileCandidate
+        : null;
+    const candidates: OkCredentialsResult[] = [
+        ...(storeResult?.kind === 'ok' ? [storeResult] : []),
+        ...(compatibleFileCandidate ? [compatibleFileCandidate] : []),
+    ];
+    if (candidates.length === 0) {
         return { kind: 'missing', platform };
     }
-    return parseCredentials(decodeKeyringSecret(raw), platform);
+    return pickFreshestCredential(candidates, deps.now());
 }
 
 function isExpired(credentials: AntigravityCredentials, nowMs: number): boolean {
@@ -938,6 +1003,7 @@ function bucketUsedPercent(bucket: Record<string, unknown>): number | null {
     if (fraction !== null) {
         return clampPercent((1 - fraction) * 100);
     }
+    if (exhaustedByOmission(bucket)) return 100;
     return null;
 }
 
@@ -980,8 +1046,10 @@ function collectBuckets(data: Record<string, unknown>): QuotaBucket[] {
         const usedPercent = bucketUsedPercent(bucket);
         if (usedPercent === null) return;
         const own = bucketName(bucket);
+        const pool = quotaPoolOf(groupLabel, bucket);
         out.push({
             name: groupLabel ? `${groupLabel} · ${own}` : own,
+            ...(pool ? { group: pool } : {}),
             usedPercent,
             windowMinutes: windowMinutes(bucket.window) ?? 0,
             resetsAt: toResetMs(bucket.resetTime),
@@ -1134,8 +1202,8 @@ async function fetchForCredentials(deps: Required<QuotaFetchDeps>, credentialsRe
         // the daemon can do renews this token — only the user running `agy`.
         return quotaFailure(
             'antigravity-cli',
-            'error',
-            `Antigravity access token expired — run \`agy\` once to refresh it, then quota will report again (within ~60 min on its own, ${quotaReadNowClause()}).`,
+            'unavailable',
+            `Antigravity quota reading unavailable until next CLI use — run \`agy\` once to refresh its short-lived access token (probed again within ~60 min on its own, ${quotaReadNowClause()}).`,
             { source, failureKind: 'expired-token' },
         );
     }

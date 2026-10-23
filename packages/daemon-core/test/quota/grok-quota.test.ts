@@ -261,7 +261,7 @@ describe('fetchGrokQuota', () => {
 
         const quota = await fetchGrokQuota(deps(home, stub.fetch));
 
-        expect(quota.status).toBe('error');
+        expect(quota.status).toBe('unavailable');
         expect(quota.metadata?.failureKind).toBe('expired-token');
         expect(stub.calls).toEqual([]);
     });

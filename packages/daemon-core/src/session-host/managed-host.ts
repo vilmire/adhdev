@@ -13,13 +13,21 @@ import {
     type SessionHostEndpoint,
     type SessionHostRequestType,
 } from '@adhdev/session-host-core';
-import { getProcessCommandLine, isManagedSessionHostCommandLine, parseNodeScriptPath } from '../commands/process-lifecycle.js';
+import { getProcessCommandLine, isManagedSessionHostCommandLine, sessionHostInstanceArg, parseNodeScriptPath } from '../commands/process-lifecycle.js';
 import { findPortableNode22, resolveConptyPrebuildCandidates } from '../commands/windows-atomic-upgrade.js';
 import { resolveInstanceDir } from '../commands/upgrade-log.js';
 import { getProcessInstanceContext } from '../config/instance-context.js';
 import { LOG } from '../logging/logger.js';
 import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
-import { ensureSessionHostReady as ensureSharedSessionHostReady } from './runtime-support.js';
+import {
+    ensureSessionHostReady as ensureSharedSessionHostReady,
+    isResourceExhaustionError,
+    SESSION_HOST_PROBE_TIMEOUT_MS,
+    recordSessionHostProbeFailure,
+    recordSessionHostProbeSuccess,
+    SessionHostUnavailableTransientError,
+    createSessionHostProbeInvocation,
+} from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 import { isPidAlive } from '../system/process-utils.js';
 
@@ -63,9 +71,8 @@ export interface ManagedSessionHostOptions {
      */
     extraStop?: (endpoint: SessionHostEndpoint) => boolean;
     /**
-     * Optional guard applied to a pidfile-tracked pid before killing it in
-     * `stopManagedSessionHostProcess`. Cloud verifies the command line is an ADHDev
-     * session-host daemon; standalone kills unconditionally (returns true here).
+     * Additional PID guard, defaulting to false. Every signal also requires
+     * a session-host argv identity matching this instance's config directory.
      */
     isManagedPid?: (pid: number) => boolean;
     /**
@@ -97,6 +104,11 @@ export interface ManagedSessionHostOptions {
      * old host has time to flush persistence cleanly).
      */
     evictGraceMs?: number;
+    /**
+     * Callback invoked whenever a replacement session-host is spawned so the
+     * caller can immediately reconcile or terminate sessions from the old host.
+     */
+    onHostReplaced?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
 }
 
 export interface ManagedSessionHost {
@@ -116,12 +128,10 @@ export interface ManagedSessionHost {
 export function createManagedSessionHost(options: ManagedSessionHostOptions): ManagedSessionHost {
     const appName = options.appName;
     const timeoutMs = options.timeoutMs ?? DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
-    const isManagedPid = options.isManagedPid ?? (() => true);
-    // Pid whose command line could not be read and which was therefore stopped
-    // defensively. Bounds the unverifiable-host restart to once per pid per
-    // process so a permanently unreadable host can never be killed in a loop.
-    let unverifiedStopPid: number | null = null;
-
+    const isManagedPid = options.isManagedPid ?? (() => false);
+    const canSignalPid = (pid: number): boolean => pid > 0 && pid !== process.pid
+        && isManagedPid(pid)
+        && isManagedSessionHostCommandLine(getProcessCommandLine(pid), instance().configDir);
     // Instance context is resolved lazily (per call, cached per process) rather
     // than at factory creation: entrypoints like daemon-standalone pin
     // ADHDEV_CONFIG_DIR during their bootstrap import, which can run after this
@@ -163,7 +173,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
     function getRunningSessionHostScriptPath(pid: number): string | null {
         const commandLine = getProcessCommandLine(pid);
-        if (!isManagedSessionHostCommandLine(commandLine)) return null;
+        if (!isManagedSessionHostCommandLine(commandLine, instance().configDir)) return null;
         return parseNodeScriptPath(commandLine);
     }
 
@@ -185,6 +195,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     function killPid(pid: number): boolean {
         assertMaintenanceLifecycle('session_host_kill', instance().configDir);
         try {
+            if (!canSignalPid(pid)) return false;
             if (process.platform === 'win32') {
                 hiddenExecFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
             } else {
@@ -308,7 +319,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
         // The host owns IPC/snapshots: keep it normal priority. Only its agent
         // PTY children are lowered in session-host-daemon/runtime.ts.
-        const child = spawn(nodeExecutable, [entry], {
+        const child = spawn(nodeExecutable, [entry, 'serve', sessionHostInstanceArg(instance().configDir)], {
             detached: true,
             stdio,
             windowsHide: true,
@@ -378,7 +389,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             if (fs.existsSync(pidFile)) {
                 const pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
                 if (Number.isFinite(pid) && pid !== process.pid) {
-                    const managed = isManagedPid(pid);
+                    const managed = canSignalPid(pid);
                     if (managed) {
                         stopped = killPid(pid) || stopped;
                     }
@@ -440,7 +451,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
      * host untouched, so this can never take down a healthy setup and can never
      * loop: the replacement host reports the current entry and matches.
      */
-    async function stopHostRunningFromForeignEntry(options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
+    async function stopHostRunningFromForeignEntry(deadline: number, probeInvocation: number, options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
         let currentEntry: string;
         try {
             currentEntry = resolveEntry();
@@ -448,20 +459,30 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             return; // Cannot determine our own entry — nothing to compare against.
         }
 
-        const client = new SessionHostClient({ endpoint: getEndpoint() });
+        const endpoint = getEndpoint();
+        const probeTimeoutMs = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, deadline - Date.now()));
+        const probeDeadline = Date.now() + probeTimeoutMs;
+        // A probe timeout disconnects its client; never borrow a controller
+        // socket that may have a 30s list_sessions request in flight.
+        const client = new SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs, registerAsShared: false });
         let reported: string | undefined;
+        let connected = false;
         try {
-            await client.connect();
+            await client.connect(probeTimeoutMs);
+            connected = true;
             const response = await client.request<SessionHostDiagnostics>({
                 type: 'get_host_diagnostics',
                 payload: { includeSessions: false },
-            });
+            }, { timeoutMs: Math.max(1, probeDeadline - Date.now()) });
+            recordSessionHostProbeSuccess(endpoint, response.success ? response.result : undefined);
             if (!response.success || !response.result) return;
             const value = response.result.hostEntryPath;
             reported = typeof value === 'string' && value.trim() ? value : undefined;
-        } catch {
-            // No host listening, or it cannot answer. Either way there is nothing
-            // to stop here; the normal spawn/ready path handles it.
+        } catch (error) {
+            // request() disconnects on timeout. Preserve the connected-RPC
+            // evidence before ensure probes a fresh connection below.
+            recordSessionHostProbeFailure(endpoint, connected ? error : undefined, String(getPid() ?? 'unknown'), probeInvocation);
+            if (isResourceExhaustionError(error)) throw new SessionHostUnavailableTransientError(endpoint, error);
             return;
         } finally {
             await client.close().catch(() => {});
@@ -485,6 +506,8 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     async function ensureReady(): Promise<SessionHostEndpoint> {
+        const ensureDeadline = Date.now() + timeoutMs;
+        const probeInvocation = createSessionHostProbeInvocation();
         const maintenance = readCooperativeMaintenance(instance().configDir);
         if (maintenance) {
             if (process.platform === 'win32') throw new Error('maintenance_windows_retained_host_unsupported');
@@ -495,7 +518,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             const birth = String(hiddenExecFileSync('/bin/ps', ['-o','lstart=','-p',String(h.pid)], { encoding: 'utf8', timeout: 5000 })).trim();
             const ownerText = String(hiddenExecFileSync(process.platform === 'darwin' ? '/usr/sbin/lsof' : '/usr/bin/lsof', ['-t', endpoint.path], { encoding: 'utf8', timeout: 5000 })).trim();
             if (!/^\d+$/.test(ownerText)) throw new Error('maintenance_retained_socket_owner_unknown');
-            const client = new SessionHostClient({ endpoint });
+            const client = new SessionHostClient({ endpoint, registerAsShared: false });
             try {
                 await client.connect();
                 const reply = await client.request<SessionHostDiagnostics>({ type: 'get_host_diagnostics', payload: { includeSessions: false } });
@@ -514,54 +537,14 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         }
         options.beforeEnsureReady?.();
 
-        // Defensive guard: on Windows the daemon may have been restarted from a
-        // new versioned prefix while a session-host from the old prefix is still
-        // running. Because the old host is reachable on the same socket endpoint,
-        // `ensureSharedSessionHostReady` would reuse it and lazy requires would
-        // resolve against the deleted tree. Detect the mismatch and stop the stale
-        // host before it can be reused.
-        //
-        // The command line is not always readable: `getProcessCommandLine` shells
-        // out to PowerShell (Get-CimInstance) with a wmic fallback, and AV/EDR
-        // policy, a locked-down execution policy or a 5s timeout make BOTH fail —
-        // structurally, every single time on an affected box. Treating that
-        // `null` as "looks fine" is what let a stale host from a deleted prefix
-        // survive for 9 days and take `create_session` down with
-        // `Failed to load native module: conpty.node`. So an unverifiable host is
-        // treated as possibly-stale and stopped: a wrong kill costs one immediate
-        // respawn, a missed kill costs a long-latent outage.
-        //
-        // Anti-loop: the unverifiable-host stop is allowed at most once per pid
-        // per process. If the freshly spawned host is *also* unreadable, the
-        // second `ensureReady` leaves it alone, so this can never degrade into a
-        // kill/respawn loop. A genuine prefix mismatch (readable command line) is
-        // not rate-limited — that evidence is conclusive.
+        // A stale prefix is actionable only when argv proves this instance.
+        // Unreadable and pre-identity hosts remain untouched.
         if (process.platform === 'win32') {
             const existingPid = getPid();
             if (existingPid !== null) {
                 const runningPath = getRunningSessionHostScriptPath(existingPid);
-                const currentEntry = resolveEntry();
-                if (runningPath === null) {
-                    if (unverifiedStopPid !== existingPid) {
-                        unverifiedStopPid = existingPid;
-                        LOG.warn(
-                            'SessionHost',
-                            `Could not read the command line of host pid ${existingPid}; cannot prove it runs from ${currentEntry}. ` +
-                                'Stopping it once and respawning rather than risking reuse of a stale-prefix host.',
-                        );
-                        stopManagedSessionHostProcess();
-                    } else {
-                        LOG.warn(
-                            'SessionHost',
-                            `Host pid ${existingPid} is still unverifiable; leaving it alone (already restarted once this process) ` +
-                                'to avoid a kill/respawn loop.',
-                        );
-                    }
-                } else if (!pathsEquivalent(runningPath, currentEntry)) {
-                    LOG.warn(
-                        'SessionHost',
-                        `Detected stale host pid ${existingPid} running from ${runningPath}; restarting from ${currentEntry}`,
-                    );
+                if (runningPath !== null && !pathsEquivalent(runningPath, resolveEntry())) {
+                    LOG.warn('SessionHost', `Detected stale host pid ${existingPid} running from ${runningPath}; restarting from ${resolveEntry()}`);
                     stopManagedSessionHostProcess();
                 }
             }
@@ -587,7 +570,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         // too old to report `hostEntryPath` yields undefined and is left alone —
         // unknown is never treated as a mismatch.
         if (process.platform === 'win32') {
-            await stopHostRunningFromForeignEntry();
+            await stopHostRunningFromForeignEntry(ensureDeadline, probeInvocation);
         } else {
             // POSIX, same shape (2026-10-01, Homebrew): `brew upgrade adhdev`
             // deletes the previous versioned Cellar prefix, and the 1.0.62 daemon
@@ -595,7 +578,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             // spawn helper lived in the deleted prefix, so every create_session
             // failed with `posix_spawn failed: No such file or directory`. An
             // in-place npm update keeps the same entry path and never trips this.
-            await stopHostRunningFromForeignEntry({ onlyWhenEntryMissing: true });
+            await stopHostRunningFromForeignEntry(ensureDeadline, probeInvocation, { onlyWhenEntryMissing: true });
         }
 
         // D4-b: re-verify conpty on the REUSE path, not just the spawn path.
@@ -653,14 +636,6 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         };
 
         const evictGraceMs = options.evictGraceMs ?? 4_000;
-        const canPositivelyEscalateSigkill = (pid: number): boolean => {
-            if (options.isManagedPid) {
-                if (!options.isManagedPid(pid)) return false;
-                if (options.identifiesPid && !options.identifiesPid(pid)) return false;
-                return true;
-            }
-            return isManagedSessionHostCommandLine(getProcessCommandLine(pid));
-        };
 
         const beforeSpawnHost = async (endpoint: SessionHostEndpoint): Promise<void> => {
             disconnectEndpointClients(endpoint);
@@ -673,12 +648,12 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                         `(endpoint=${endpoint.path}, cmd=${cmd || 'unverified'})`,
                 );
                 stopManagedSessionHostProcess();
-                if (process.platform !== 'win32' && isPidAlive(existingPid) && canPositivelyEscalateSigkill(existingPid)) {
-                    const deadline = Date.now() + evictGraceMs;
+                if (process.platform !== 'win32' && isPidAlive(existingPid) && canSignalPid(existingPid)) {
+                    const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
                     while (Date.now() < deadline && isPidAlive(existingPid)) {
                         await new Promise((resolve) => setTimeout(resolve, 25));
                     }
-                    if (isPidAlive(existingPid)) {
+                    if (isPidAlive(existingPid) && canSignalPid(existingPid)) {
                         LOG.warn(
                             'SessionHost',
                             `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
@@ -687,38 +662,24 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                         try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
                     }
                 }
+                if (isPidAlive(existingPid)) throw new SessionHostUnavailableTransientError(endpoint);
             } else if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
                 options.extraStop?.(endpoint);
             }
         };
 
-        try {
-            return await ensureSharedSessionHostReady({
-                appName,
-                endpoint: getEndpoint(),
-                spawnHost,
-                beforeSpawnHost,
-                isExistingHostAlive,
-                timeoutMs,
-                requiredRequestTypes: options.requiredRequestTypes,
-            });
-        } catch (error) {
-            stopManagedSessionHostProcess();
-            disconnectEndpointClients(getEndpoint());
-            return ensureSharedSessionHostReady({
-                appName,
-                endpoint: getEndpoint(),
-                spawnHost,
-                beforeSpawnHost,
-                isExistingHostAlive,
-                timeoutMs,
-                requiredRequestTypes: options.requiredRequestTypes,
-            }).catch((retryError) => {
-                const initialMessage = error instanceof Error ? error.message : String(error);
-                const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
-                throw new Error(`Session host failed to start after retry (${initialMessage}; retry: ${retryMessage})`);
-            });
-        }
+        return ensureSharedSessionHostReady({
+            appName,
+            probeInvocation,
+            endpoint: getEndpoint(),
+            spawnHost,
+            beforeSpawnHost,
+            onHostReplaced: options.onHostReplaced,
+            isExistingHostAlive,
+            existingHostIdentity: () => String(getPid() ?? 'unknown'),
+            timeoutMs: Math.max(1, ensureDeadline - Date.now()),
+            requiredRequestTypes: options.requiredRequestTypes,
+        });
     }
 
     return {

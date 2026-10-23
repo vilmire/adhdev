@@ -8,6 +8,7 @@
  * re-exports the public surface so call sites are unchanged.
  */
 
+import { isNativeHistorySnapshot, markNativeHistorySnapshot } from '../providers/spec/native-history-snapshot.js';
 import type { NativeTurnTerminalMarker } from '../chat/native-turn-signal.js';
 import * as fs from 'fs';
 import type { ProviderCanonicalHistoryConfig, ProviderHistoryBehavior } from '../providers/contracts.js';
@@ -26,6 +27,7 @@ type ProviderNativeHistoryReadResult = {
     turnTerminalMarkers?: NativeTurnTerminalMarker[];
     sourcePath: string;
     sourceMtimeMs: number;
+    stale?: boolean;
     providerSessionId?: string;
     workspace?: string;
     nativeHistoryCoverage?: string;
@@ -67,10 +69,17 @@ function getProviderNativeHistoryScript(
  * can never be recovered downstream — the activeChat / persisted-tail remaps
  * only carry what they are handed.
  */
+const normalizedNativeRecords = new WeakMap<any[], Map<string, HistoryMessage[]>>();
+
 function normalizeProviderNativeHistoryRecords(agentType: string, historySessionId: string, records: unknown): HistoryMessage[] {
     if (!Array.isArray(records)) return [];
     const normalizedSessionId = normalizeSavedHistorySessionId(historySessionId);
-    return records
+    const key = `${agentType}\0${normalizedSessionId}`;
+    const immutable = isNativeHistorySnapshot(records);
+    let byContext = immutable ? normalizedNativeRecords.get(records) : undefined;
+    const cached = byContext?.get(key);
+    if (cached) return cached;
+    const result = records
         .map((record: any) => {
             const base: HistoryMessage = {
                 ts: typeof record?.ts === 'string' ? record.ts : new Date(Number(record?.receivedAt) || Date.now()).toISOString(),
@@ -140,6 +149,12 @@ function normalizeProviderNativeHistoryRecords(agentType: string, historySession
             return sanitizeHistoryMessage(agentType, base);
         })
         .filter(Boolean) as HistoryMessage[];
+    if (immutable) {
+        markNativeHistorySnapshot(result);
+        if (!byContext) normalizedNativeRecords.set(records, byContext = new Map());
+        byContext.set(key, result);
+    }
+    return result;
 }
 
 function callProviderNativeHistoryRead(
@@ -213,6 +228,7 @@ function callProviderNativeHistoryRead(
         turnTerminalMarkers: Array.isArray((result as any).turnTerminalMarkers) ? (result as any).turnTerminalMarkers : undefined,
         sourcePath: typeof (result as any).sourcePath === 'string' ? (result as any).sourcePath : '',
         sourceMtimeMs: Number((result as any).sourceMtimeMs) || 0,
+        stale: (result as any).stale === true || undefined,
         providerSessionId: typeof (result as any).providerSessionId === 'string' ? (result as any).providerSessionId.trim() : undefined,
         workspace: typeof (result as any).workspace === 'string' ? (result as any).workspace.trim() : undefined,
         nativeHistoryCoverage: typeof (result as any).nativeHistoryCoverage === 'string' ? (result as any).nativeHistoryCoverage.trim() : undefined,
@@ -283,6 +299,40 @@ export function isNativeSourceCanonicalHistory(canonicalHistory?: ProviderCanoni
     return true;
 }
 
+const nativePages = new WeakMap<HistoryMessage[], Map<string, ReturnType<typeof pageHistoryRecords>>>();
+function pageNativeHistory(agentType: string, records: HistoryMessage[], options: Parameters<typeof readProviderChatHistory>[1]) {
+    const o = options || {};
+    const key = JSON.stringify([agentType, o.offset || 0, o.limit || 30, o.excludeRecentCount || 0, o.historyBehavior, o.excludeFromIdentity, o.excludeActivity === true]);
+    const immutable = isNativeHistorySnapshot(records);
+    let pages = immutable ? nativePages.get(records) : undefined;
+    const cached = pages?.get(key);
+    if (cached) return cached;
+    const result = pageHistoryRecords(agentType, records, o.offset || 0, o.limit || 30, o.excludeRecentCount || 0, o.historyBehavior, o.excludeFromIdentity, o.excludeActivity === true);
+    if (immutable) {
+        if (!pages) nativePages.set(records, pages = new Map());
+        if (pages.size >= 8) pages.delete(pages.keys().next().value!);
+        pages.set(key, result);
+    }
+    return result;
+}
+
+/** Await a cooperative provider reader using precisely the same normalized
+ * input and paging boundary as the synchronous compatibility API. */
+export async function readProviderChatHistoryAsync(agentType: string, options: Parameters<typeof readProviderChatHistory>[1] = {}): Promise<ReturnType<typeof readProviderChatHistory>> {
+    const fn = getProviderNativeHistoryScript(options.scripts, options.canonicalHistory, 'readSession');
+    if (typeof (fn as any)?.readAsync !== 'function') return readProviderChatHistory(agentType, options);
+    const name = getNativeHistoryScriptName(options.canonicalHistory, 'readSession');
+    let input: any;
+    readProviderChatHistory(agentType, { ...options, scripts: { ...options.scripts, [name]: value => { input = value; return null; } } });
+    if (!input) return readProviderChatHistory(agentType, options);
+    const result = await (fn as any).readAsync(input);
+    return readProviderChatHistory(agentType, { ...options, scripts: { ...options.scripts, [name]: () => result } });
+}
+
+export function hasAsyncProviderHistoryReader(canonicalHistory: ProviderCanonicalHistoryConfig | undefined, scripts: ProviderNativeHistoryScripts | undefined): boolean {
+    return typeof (getProviderNativeHistoryScript(scripts, canonicalHistory, 'readSession') as any)?.readAsync === 'function';
+}
+
 export function readProviderChatHistory(
     agentType: string,
     options: {
@@ -327,6 +377,7 @@ export function readProviderChatHistory(
     source: 'provider-native' | 'adhdev-mirror' | 'native-unavailable';
     sourcePath?: string;
     sourceMtimeMs?: number;
+    stale?: boolean;
     providerSessionId?: string;
     workspace?: string;
     nativeHistoryCoverage?: string;
@@ -354,10 +405,11 @@ export function readProviderChatHistory(
             };
         }
         return {
-            ...pageHistoryRecords(agentType, nativeResult.records, options.offset || 0, options.limit || 30, options.excludeRecentCount || 0, options.historyBehavior, options.excludeFromIdentity, options.excludeActivity === true),
+            ...pageNativeHistory(agentType, nativeResult.records, options),
             source: 'provider-native',
             sourcePath: nativeResult.sourcePath,
             sourceMtimeMs: nativeResult.sourceMtimeMs,
+            stale: nativeResult.stale,
             providerSessionId: nativeResult.providerSessionId,
             workspace: nativeResult.workspace,
             nativeHistoryCoverage: nativeResult.nativeHistoryCoverage,

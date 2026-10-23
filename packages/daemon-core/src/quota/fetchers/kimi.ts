@@ -151,7 +151,13 @@ function parseCredentials(raw: string): CredentialsResult {
     const expiresAt = typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
         ? expiresAtRaw
         : null;
-    return { kind: 'ok', credentials: { accessToken, expiresAt } };
+    return {
+        kind: 'ok',
+        credentials: {
+            accessToken,
+            expiresAt,
+        },
+    };
 }
 
 function readCredentials(deps: Required<QuotaFetchDeps>, oauthKey?: string): CredentialsResult {
@@ -323,11 +329,10 @@ async function fetchForCredentials(deps: Required<QuotaFetchDeps>, settings: Man
 
     const credentials = credentialsResult.credentials;
     if (isExpired(credentials, deps.now())) {
-        // Deliberately do not refresh: the CLI owns the token lifecycle.
         return quotaFailure(
             'kimi',
-            'error',
-            'Kimi access token expired normally (~15 min lifespan) — the kimi CLI renews it on next use. Quota is unavailable until then; an idle CLI does not renew it in the background.',
+            'unavailable',
+            'Kimi quota reading unavailable until next CLI use — the kimi CLI renews it on next use; an idle CLI does not renew it in the background.',
             { source: 'oauth', failureKind: 'expired-token' },
         );
     }
