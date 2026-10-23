@@ -25,7 +25,7 @@
 import { LOG } from '../logging/logger.js';
 import type { ProviderModule } from './contracts.js';
 import { ChatHistoryWriter, readChatHistory } from '../config/chat-history.js';
-import { isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readProviderChatHistory } from '../config/provider-native-history.js';
+import { hasAsyncProviderHistoryReader, isNativeSourceCanonicalHistory, materializeProviderNativeHistory, readProviderChatHistory, readProviderChatHistoryAsync } from '../config/provider-native-history.js';
 import { claimAntigravityConversation } from './native-history/antigravity-claim-registry.js';
 import { type PersistableCliHistoryMessage, projectCliChatMessage } from './cli-provider-history-dedup.js';
 import { STATUS_HYDRATION_TAIL_LIMIT } from './cli-provider-instance-types.js';
@@ -117,6 +117,10 @@ export function promoteProviderSessionId(
     const previousHistorySessionId = host.providerSessionId || host.instanceId;
     const previousProviderSessionId = host.providerSessionId;
     host.providerSessionId = nextSessionId;
+    if (hasAsyncProviderHistoryReader(host.provider.nativeHistory, host.provider.scripts as any)) {
+        host.lastPersistedHistoryMessages = [];
+        host.lastNativeSourceCanonicalCacheKey = undefined;
+    }
     // Conversation-binding lock (antigravity): the moment this session is
     // authoritatively bound to a conversation uuid, claim it so a concurrent
     // sibling session's newest-on-disk discovery can never resolve to the
@@ -163,6 +167,15 @@ export function shouldSuppressFreshLaunchStartupReplay(
     return newestMessageAt === 0;
 }
 
+const nativeHydrations = new WeakMap<HistorySyncHost, Promise<void>>();
+const nativeRestores = new WeakMap<HistorySyncHost, { sessionId: string; pending: Promise<void> }>();
+
+function nativeReadOptions(host: HistorySyncHost, limit: number) {
+    return { canonicalHistory: host.provider.nativeHistory, historySessionId: host.providerSessionId,
+        workspace: host.workingDir, offset: 0, limit,
+        historyBehavior: host.provider.historyBehavior, scripts: host.provider.scripts as any };
+}
+
 export function syncCanonicalSavedHistoryIfNeeded(
     host: HistorySyncHost,
     options: { full?: boolean } = {},
@@ -172,7 +185,7 @@ export function syncCanonicalSavedHistoryIfNeeded(
     if (!canonicalHistory) return false;
 
     // Per-status-report hydration reads only a bounded tail (snapshot needs at
-    // most the newest 60). The once-per-resume restore path passes full:true
+    // most a small recent window). The once-per-resume restore path passes full:true
     // because seedSessionHistory needs the COMPLETE transcript to seed dedup
     // state. The read-cache key encodes the window so the bounded and full
     // reads don't share/clobber each other's 2s cache entry.
@@ -186,6 +199,19 @@ export function syncCanonicalSavedHistoryIfNeeded(
         const cacheKey = [host.type, host.providerSessionId, host.workingDir, windowTag].join('\0');
         const now = Date.now();
         if (cacheKey === host.lastNativeSourceCanonicalCacheKey && now - host.lastNativeSourceCanonicalCheckAt < 2_000) {
+            return true;
+        }
+        if (hasAsyncProviderHistoryReader(canonicalHistory, host.provider.scripts as any)) {
+            if (nativeHydrations.has(host)) return true;
+            const sessionId = host.providerSessionId;
+            const pending = readProviderChatHistoryAsync(host.type, nativeReadOptions(host, limit)).then(history => {
+                if (host.providerSessionId !== sessionId) return;
+                if (history.source === 'provider-native') host.lastPersistedHistoryMessages = toPersistableMessages(history.messages);
+                host.lastNativeSourceCanonicalCacheKey = cacheKey;
+                host.lastNativeSourceCanonicalCheckAt = Date.now();
+            }).catch(error => LOG.debug('CLI', `[${host.type}] history hydration failed: ${String(error)}`));
+            nativeHydrations.set(host, pending);
+            void pending.finally(() => { if (nativeHydrations.get(host) === pending) nativeHydrations.delete(host); });
             return true;
         }
         host.lastNativeSourceCanonicalCacheKey = cacheKey;
@@ -203,6 +229,7 @@ export function syncCanonicalSavedHistoryIfNeeded(
         if (restoredHistory.source === 'provider-native') {
             host.lastPersistedHistoryMessages = toPersistableMessages(restoredHistory.messages);
         }
+        host.lastNativeSourceCanonicalCheckAt = Date.now();
         return true;
     }
 
@@ -235,6 +262,25 @@ export function syncCanonicalSavedHistoryIfNeeded(
 
 export function restorePersistedHistoryFromCurrentSession(host: HistorySyncHost): void {
     if (!host.providerSessionId) return;
+    if (hasAsyncProviderHistoryReader(host.provider.nativeHistory, host.provider.scripts as any)) {
+        const sessionId = host.providerSessionId;
+        if (nativeRestores.get(host)?.sessionId === sessionId) return;
+        const pending = readProviderChatHistoryAsync(host.type, nativeReadOptions(host, Number.MAX_SAFE_INTEGER)).then(history => {
+            if (host.providerSessionId !== sessionId || history.source !== 'provider-native') return;
+            host.historyWriter.seedSessionHistory(host.type, history.messages, sessionId, host.instanceId);
+            host.lastPersistedHistoryMessages = toPersistableMessages(history.messages.slice(-STATUS_HYDRATION_TAIL_LIMIT));
+            host.suppressIdleHistoryReplay = history.messages.length > 0;
+            host.lastNativeSourceCanonicalCacheKey = [host.type, sessionId, host.workingDir, `tail:${STATUS_HYDRATION_TAIL_LIMIT}`].join('\0');
+            host.lastNativeSourceCanonicalCheckAt = Date.now();
+        }).catch(error => LOG.debug('CLI', `[${host.type}] history restore failed: ${String(error)}`));
+        nativeHydrations.set(host, pending);
+        nativeRestores.set(host, { sessionId, pending });
+        void pending.finally(() => {
+            if (nativeHydrations.get(host) === pending) nativeHydrations.delete(host);
+            if (nativeRestores.get(host)?.pending === pending) nativeRestores.delete(host);
+        });
+        return;
+    }
     // Restore is the once-per-resume seeding path: it needs the COMPLETE
     // transcript so seedSessionHistory can prime dedup state. Pass full so the
     // hydration read is unbounded here (and only here).

@@ -40,6 +40,7 @@
  * ANTIGRAVITY-30S-CAP-PREMATURE, …) so the history stays greppable.
  */
 
+import { NATIVE_HISTORY_PENDING_MAX_WAIT_MS } from './native-history-pending.js';
 import { isCliGeneratingLikeStatus } from '../cli-provider-status-helpers';
 import { NATIVE_HISTORY_MESH_IDLE_SETTLE_MS } from '../cli-provider-instance-types';
 
@@ -96,7 +97,7 @@ export interface CompletionSignalReader {
     /** External-native tail probe (recordPendingTranscriptProbe result), only meaningful for external-native evidence. */
     externalNativeTailProbe(): { lastRole?: string; contentLen?: number } | null;
     /** TX-FSM Stage 1 growth snapshot; null = unavailable (fail-open). */
-    transcriptGrowth(): { available: boolean; growing: boolean; msgCount?: number; mtimeAgeMs?: number } | null;
+    transcriptGrowth(): { available: boolean; growing: boolean; pending?: boolean; msgCount?: number; mtimeAgeMs?: number } | null;
     busyLeaseGateEnabled(): boolean;
     /** TX-FSM Stage 2 lease; null = no lease issued. */
     busyLease(): { active: boolean; lastLiveAt?: number; expiresAt?: number; remainingMs?: number } | null;
@@ -586,7 +587,8 @@ export function decideCompletionVerdict(
     // the last append. Fail-open when no snapshot.
     if (block.reason === 'missing_final_assistant' && block.noExternalTranscriptSource === true) {
         const growth = reader.transcriptGrowth();
-        if (growth?.available === true && growth.growing === true) {
+        if (growth?.pending && waitedMs < NATIVE_HISTORY_PENDING_MAX_WAIT_MS) return hold('native_history_loading', {});
+        if (!growth?.pending && growth?.available === true && growth.growing === true) {
             return hold('native_transcript_advancing', {
                 msgCount: growth.msgCount ?? null,
                 sourceMtimeAgeMs: growth.mtimeAgeMs ?? 0,
@@ -595,7 +597,7 @@ export function decideCompletionVerdict(
         }
         // (TX-FSM Stage 2) Bounded busy lease: transcript not growing now, but proven live
         // within the lease bound — keep holding until the lease expires. Canary-gated.
-        if (growth?.available === true && reader.busyLeaseGateEnabled()) {
+        if (!growth?.pending && growth?.available === true && reader.busyLeaseGateEnabled()) {
             const lease = reader.busyLease();
             if (lease?.active === true) {
                 return hold('busy_lease_active', {

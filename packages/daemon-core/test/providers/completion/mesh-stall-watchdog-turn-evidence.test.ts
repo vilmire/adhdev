@@ -66,6 +66,20 @@ describe('checkMeshWorkerStall — turn-evidence emission', () => {
         expect(ev!.source).toBe('mesh_stall_watchdog');
     });
 
+    it('bounds pending deferral to 45s and ignores the retained stale growth snapshot after the cap', () => {
+        const { instance, emitted } = makeInstance({ turnEvidencePort: null });
+        const outputAt = 10_000;
+        instance.probeNativeTranscriptSignals = () => ({ pending: true, messages: [],
+            snapshot: { available: true, signals: { in_turn_progress: true }, detail: {} } });
+        instance.checkMeshWorkerStall(outputAt);
+        instance.checkMeshWorkerStall(outputAt + STALL_MS);
+        instance.checkMeshWorkerStall(outputAt + STALL_MS + 44_999);
+        expect(emitted).toHaveLength(0);
+        instance.checkMeshWorkerStall(outputAt + STALL_MS + 45_000);
+        expect(emitted).toHaveLength(1);
+        expect(emitted[0].event).toBe('monitor:no_progress');
+    });
+
     it('narrows an unrecognized observedStatus to "unknown" rather than leaking the raw string', () => {
         const observed: TurnEvidence[] = [];
         const port = createTurnEvidencePort({ observe: (e) => { observed.push(e); } });
