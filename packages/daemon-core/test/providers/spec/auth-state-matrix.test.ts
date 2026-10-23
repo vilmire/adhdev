@@ -1962,7 +1962,159 @@ const IDLE_CASES: MatrixCase[] = [
         expectedPreSendGuard: false,
         expectedModalButtons: false,
     },
+    // ── Round 8 MEDIUM-2: login menu ending in Esc:cancel / Esc to cancel quoted above settled idle composer ──
+    {
+        provider: 'cursor-cli',
+        category: 'e_idle',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'cursor idle footer with login menu ending in "Enter to confirm · Esc to cancel" quoted above composer',
+        screen: [
+            '  Cursor Agent',
+            '  Sign in required',
+            '  ❯ 1. Sign in with browser',
+            '    2. Use API key',
+            '  Enter to confirm · Esc to cancel',
+            '',
+            '  → Plan, search, build anything',
+            '  Claude 4.5 Sonnet · 14.2%',
+            '  ~/work/app · main',
+        ].join('\n'),
+        expectedState: 'idle',
+        expectedPreSendGuard: false,
+        expectedModalButtons: false,
+    },
+    {
+        provider: 'cursor-cli',
+        category: 'e_idle',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'cursor post-turn idle footer with login menu ending in standalone "Esc to cancel" quoted above footer',
+        screen: [
+            '  Welcome to Cursor Agent',
+            '  1. Sign in with browser',
+            '  2. Use API key',
+            '  Esc to cancel',
+            '',
+            '  Claude 4.5 Sonnet · 18.1%',
+            '  ~/work/app · main',
+        ].join('\n'),
+        expectedState: 'idle',
+        expectedPreSendGuard: false,
+        expectedModalButtons: false,
+    },
+    {
+        provider: 'cursor-cli',
+        category: 'e_idle',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'cursor idle footer with primary sign-in screen ("Press Enter to sign in ... or Esc to cancel.") quoted above footer',
+        screen: [
+            '  Welcome to Cursor Agent',
+            '  Press Enter to sign in with your browser, or Esc to cancel.',
+            '  [Enter] Sign in with browser    [Esc] Cancel',
+            '',
+            '  Claude 4.5 Sonnet · 14.2%',
+            '  ~/work/app · main',
+        ].join('\n'),
+        expectedState: 'idle',
+        expectedPreSendGuard: false,
+        expectedModalButtons: false,
+    },
+    {
+        provider: 'grok-cli',
+        category: 'e_idle',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'grok idle composer with Welcome to Grok CLI login menu ending in "Esc:cancel" quoted above composer',
+        screen: [
+            '  Welcome to Grok CLI',
+            '  1 (●) Sign in with browser (xAI account)',
+            '  2 (○) Paste your xAI API key',
+            '  1/2:select │ Enter:confirm',
+            '  Esc:cancel',
+            '  ╭──────────────────────────────────────────────────────────────────────────╮',
+            '  │ ❯                                                                        │',
+            '  ╰──────────────────────────────────────────────────────────────────────────╯',
+            '  Shift+Tab:mode │ Ctrl+x:shortcuts',
+        ].join('\n'),
+        expectedState: 'idle',
+        expectedPreSendGuard: false,
+        expectedModalButtons: false,
+    },
+    {
+        provider: 'grok-cli',
+        category: 'e_idle',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'grok idle composer with Sign in to Grok Build login menu ending in "Esc:cancel" quoted above composer',
+        screen: [
+            '  Sign in to Grok Build',
+            '  Approve in your browser, then rerun or continue here.',
+            '  Waiting for approval...',
+            '  Esc:cancel',
+            '  ╭──────────────────────────────────────────────────────────────────────────╮',
+            '  │ ❯                                                                        │',
+            '  ╰──────────────────────────────────────────────────────────────────────────╯',
+            '  Shift+Tab:mode │ Ctrl+x:shortcuts',
+        ].join('\n'),
+        expectedState: 'idle',
+        expectedPreSendGuard: false,
+        expectedModalButtons: false,
+    },
 ];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUND 8 MEDIUM-1 MIRROR CASES: real login screens with provider approval
+// questions quoted in transcript above them (both inline prose and standalone
+// question lines) → must classify as signing_in with preSendGuard=true and no
+// approval buttons across starting, idle, busy, and signing_in.
+// ─────────────────────────────────────────────────────────────────────────────
+const PROVIDER_APPROVAL_QUOTES: Record<ProviderId, [string, string]> = {
+    'claude-cli': [
+        'Do you want to proceed?',
+        'Select a model',
+    ],
+    'codex-cli': [
+        'Would you like to run the following command?',
+        'adhdev-mesh needs your approval.',
+    ],
+    'antigravity-cli': [
+        'Do you want to proceed?',
+        'Allow calling this tool?',
+    ],
+    'cursor-cli': [
+        'Run this command?',
+        'Do you want to proceed?',
+    ],
+    'grok-cli': [
+        'Do you want to proceed?',
+        'Run this command?',
+    ],
+    'kimi': [
+        '▶ Run command?',
+        'Run this command?',
+    ],
+};
+
+const LOGIN_WITH_QUOTED_APPROVAL_CASES: MatrixCase[] = LOGIN_CASES.flatMap((lc): MatrixCase[] => {
+    const [q1, q2] = PROVIDER_APPROVAL_QUOTES[lc.provider];
+    return [
+        {
+            ...lc,
+            variant: 'quoted_above_question',
+            name: `${lc.name} [inline approval quote above login: ⏺ The tool earlier printed "${q1}"…]`,
+            screen: `⏺ The tool earlier printed "${q1}"…\n${lc.screen}`,
+        },
+        {
+            ...lc,
+            variant: 'quoted_above_question',
+            name: `${lc.name} [raw approval question line above login: "${q1}"]`,
+            screen: `  ${q1}\n${lc.screen}`,
+        },
+        {
+            ...lc,
+            variant: 'quoted_above_question',
+            name: `${lc.name} [secondary approval/picker question line above login: "${q2}"]`,
+            screen: `  ${q2}\n${lc.screen}`,
+        },
+    ];
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EXPLICIT ROUND-6 REVIEW REPROS (180b479b)
@@ -2153,6 +2305,7 @@ const ROUND6_REVIEW_REPROS: MatrixCase[] = [
 
 export const ALL_MATRIX_CASES: MatrixCase[] = [
     ...LOGIN_CASES,
+    ...LOGIN_WITH_QUOTED_APPROVAL_CASES,
     ...TEMPLATES.flatMap(buildVariantsFromTemplate),
     ...IDLE_CASES,
     ...ROUND6_REVIEW_REPROS,
