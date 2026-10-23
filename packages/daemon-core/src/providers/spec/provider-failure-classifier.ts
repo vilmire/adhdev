@@ -78,6 +78,7 @@ function hasProviderFailureEnvelope(text: string): boolean {
 }
 
 const CLEAR_PROVIDER_CHROME_RE = /^[ \t]*(?:[⏺✻✢✳✶✽✷✸✹❯›](?:\s|$)|─{10,}[ \t]*$)/;
+const SIGN_IN_SCREEN_HEADER_RE = /^[ \t]*(?:[╭╰┌└┏┗│┃]|[›❯>▸]\s*(?:\d+\.\s*)?(?:Sign in|API key login is disabled|Press Enter to sign in)|(?:Claude Code\b|Welcome to (?:Claude Code|Cursor Agent|Grok CLI|Antigravity CLI)\b|Select login method:|Anthropic Console account\b|How do you want to sign in\?|Opening browser to sign in|Cloud gateway\s*[·•]\s*sign in\b|Browser didn't open\?|Paste code here if prompted\s*>|Sign in with ChatGPT to use Codex\b|Finish signing in via your browser\b|Preparing device code login\b|Use your own OpenAI API key\b|Paste or type your API key below\b|(?:Welcome back!\s+)?You are currently not signed in\.|Select Google Cloud sign-in method:|Authentication required\.\s+Please visit the URL to log in:|If you aren't automatically redirected, paste the authorization code below:|Signing in(?:\s+to your Google account)?(?:\.{3}|…)?|Cursor Agent\b|Sign in required\b|Signing in with the browser\b|If your browser didn't open,\s*click this link to log in:|Press q to show a QR code to log in\b|Press Enter to sign in\b|Sign in to Grok Build\b|Approve in your browser\b|Waiting for approval\.\.\.|Paste your xAI API key\b|Enter your (?:xAI )?API key\b|Sign in to Kimi Code\b|Visit the URL below in your browser to authorize:|Verification code:\s+[A-Z0-9-]+|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+Waiting for authorization|Your key will be saved to [^\n]*config\.toml))/i;
 const TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|Glob|LS|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|Ran|Explored|Edited|Wrote)\b/;
 const CLAUDE_ERROR_ENVELOPE_LINE_RE = /^[ \t]*⏺\s+api\s+error\s*:\s*(?:(?:http\s*)?40[123]\b|[^\n]*(?:"authentication_error"|"token_revoked"|"invalid_api_key"|"token_expired"|"invalid_token"))/i;
 const TRUNCATED_OUTPUT_LINE_RE = /^[ \t]*(?:…|\.\.\.)\s+\+\d+\s+lines\b/i;
@@ -311,7 +312,12 @@ export function stripToolAndCodeLines(raw: string): string {
             inToolBlock = false;
         }
         if (inAssistantProseBlock) {
-            if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
+            if (
+                /^[ \t]{2,}/.test(line)
+                && !CLEAR_PROVIDER_CHROME_RE.test(line)
+                && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)
+                && !SIGN_IN_SCREEN_HEADER_RE.test(line)
+            ) {
                 continue;
             }
             inAssistantProseBlock = false;

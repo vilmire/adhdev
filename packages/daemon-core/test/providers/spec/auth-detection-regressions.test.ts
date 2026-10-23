@@ -2381,6 +2381,266 @@ describe('Round 7 — LOW classifier findings: balanced fences with ⏺/✻, qua
     });
 });
 
+describe('Round 8 — MEDIUM-1: real login screens with quoted approval questions above them enter signing_in, block sends, and never expose approval buttons', () => {
+    const quotedApprovalAboveLoginCases: Array<{
+        label: string;
+        cli: string;
+        specFile: string;
+        idleFrame: string;
+        screen: string;
+    }> = [
+        {
+            label: 'codex login menu under ⏺ The tool earlier printed "Would you like to run the following command?"…',
+            cli: 'codex-cli',
+            specFile: '4.0.json',
+            idleFrame: '› \r\n  gpt-5.4 · 98% context left · ? for shortcuts\r\n',
+            screen: [
+                '⏺ The tool earlier printed "Would you like to run the following command?"…',
+                CODEX_SIGNIN_SCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'codex login menu under standalone "  Would you like to run the following command?"',
+            cli: 'codex-cli',
+            specFile: '4.0.json',
+            idleFrame: '› \r\n  gpt-5.4 · 98% context left · ? for shortcuts\r\n',
+            screen: [
+                '  Would you like to run the following command?',
+                CODEX_SIGNIN_SCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'antigravity login menu under standalone "  Allow calling this tool?"',
+            cli: 'antigravity-cli',
+            specFile: '4.0.json',
+            idleFrame: '❯ Type your message\r\n  ? for shortcuts\r\n',
+            screen: [
+                '  Allow calling this tool?',
+                AGY_SIGNIN_SELECTOR_SCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'cursor login menu under standalone "  Run this command?"',
+            cli: 'cursor-cli',
+            specFile: '1.0.json',
+            idleFrame: '  Cursor Agent\r\n  → Plan, search, build anything\r\n  Auto · 3.2%\r\n  ~/work/repo · main\r\n',
+            screen: [
+                '  Run this command?',
+                '  Cursor Agent',
+                '  Sign in required',
+                '  ❯ 1. Sign in with browser',
+                '    2. Use API key',
+                '  Enter to confirm · Esc to cancel',
+            ].join('\n'),
+        },
+        {
+            label: 'cursor browser sign-in screen under ⏺ The tool earlier printed "Run this command?"…',
+            cli: 'cursor-cli',
+            specFile: '1.0.json',
+            idleFrame: '  Cursor Agent\r\n  → Plan, search, build anything\r\n  Auto · 3.2%\r\n  ~/work/repo · main\r\n',
+            screen: [
+                '⏺ The tool earlier printed "Run this command?"…',
+                CURSOR_BROWSER_LOGIN_SUBSCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'grok API-key sign-in screen under ⏺ The tool earlier printed "Do you want to proceed?"…',
+            cli: 'grok-cli',
+            specFile: '1.0.json',
+            idleFrame: '  │ ❯ \r\n  Shift+Tab: mode · Ctrl+x: shortcuts\r\n',
+            screen: [
+                '⏺ The tool earlier printed "Do you want to proceed?"…',
+                GROK_SIGNIN_SCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'grok browser approval login screen under standalone "  Run this command?"',
+            cli: 'grok-cli',
+            specFile: '1.0.json',
+            idleFrame: '  │ ❯ \r\n  Shift+Tab: mode · Ctrl+x: shortcuts\r\n',
+            screen: [
+                '  Run this command?',
+                GROK_BROWSER_APPROVAL_SUBSCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'kimi login menu under standalone "  ▶ Run command?"',
+            cli: 'kimi',
+            specFile: '1.0.json',
+            idleFrame: '┌──────────────────────────────────────────┐\r\n│ >                                        │\r\n└──────────────────────────────────────────┘\r\n',
+            screen: [
+                '  ▶ Run command?',
+                '╭──────────────────────────────────────────────────────────╮',
+                '│ Sign in to Kimi Code                                     │',
+                '│ ❯ 1. Authorize via browser (device code)                 │',
+                '│   2. Paste API key                                       │',
+                '│ Esc to cancel                                            │',
+                '╰──────────────────────────────────────────────────────────╯',
+            ].join('\n'),
+        },
+        {
+            label: 'kimi device-code screen under ⏺ The tool earlier printed "▶ Run command?"…',
+            cli: 'kimi',
+            specFile: '1.0.json',
+            idleFrame: '┌──────────────────────────────────────────┐\r\n│ >                                        │\r\n└──────────────────────────────────────────┘\r\n',
+            screen: [
+                '⏺ The tool earlier printed "▶ Run command?"…',
+                KIMI_SIGNIN_DEVICE_CODE_SCREEN,
+            ].join('\n'),
+        },
+        {
+            label: 'claude login menu under standalone "  Do you want to proceed?"',
+            cli: 'claude-cli',
+            specFile: '4.0.json',
+            idleFrame: '────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n',
+            screen: [
+                '  Do you want to proceed?',
+                CLAUDE_SIGNIN_SCREEN,
+            ].join('\n'),
+        },
+    ];
+
+    it.each(quotedApprovalAboveLoginCases)(
+        '$label transitions to signing_in from starting/idle/busy, sets pre-send guard true, and blocks FsmDriver sends without modal buttons',
+        async ({ cli, specFile, idleFrame, screen }) => {
+            const spec = loadProviderSpec(cli, specFile);
+            expect(isAnchoredSignInViewport(screen, spec), 'isAnchoredSignInViewport').toBe(true);
+
+            for (const from of ['starting', 'idle', 'busy'] as const) {
+                const res = evaluateFsm(spec, from, screen, { row: 4, col: 2 }, undefined, clk(5_000, 0));
+                expect(res.fired?.to, `from ${from}`).toBe('signing_in');
+            }
+            const fromSigningIn = evaluateFsm(spec, 'signing_in', screen, { row: 4, col: 2 }, undefined, clk(5_000, 0));
+            expect(fromSigningIn.fired?.to ?? 'signing_in', 'from signing_in').toBe('signing_in');
+
+            vi.useFakeTimers();
+            try {
+                const factory = new DrivableFactory();
+                const driver = new FsmDriver({
+                    specPath: resolveProviderSpecPath(cli, specFile),
+                    workingDir: os.tmpdir(),
+                    hotReload: false,
+                    transportFactory: factory,
+                });
+                let activeModal: { title?: string; buttons: Array<{ index: number; label: string }> } | null = null;
+                driver.subscribe(ev => {
+                    if (ev.kind === 'state_changed') activeModal = ev.modal;
+                });
+                driver.start();
+                const pty = factory.last!;
+                const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+                pty.feed(idleFrame);
+                await vi.advanceTimersByTimeAsync(16_000);
+                expect(driver.currentStateId).toBe('idle');
+                pty.writes.length = 0;
+
+                pty.feed('\u001b[2J\u001b[H' + screen.replace(/\n/g, '\r\n') + '\r\n');
+                await vi.advanceTimersByTimeAsync(400);
+                expect(driver.currentStateId).toBe('signing_in');
+                expect(activeModal).toBeNull();
+
+                const disp = driver.sendMessageWithDisposition('secret prompt must not enter login field', false, `msg-r8-m1-${cli}`);
+                await vi.advanceTimersByTimeAsync(500);
+                expect(disp).toEqual({
+                    status: 'queued',
+                    queueDepth: 1,
+                    reason: 'auth_required',
+                });
+                expect(driver.currentStateId).toBe('signing_in');
+                expect(activeModal).toBeNull();
+                expect(nonFocusWrites()).toEqual([]);
+
+                driver.shutdown();
+            } finally {
+                vi.useRealTimers();
+            }
+        },
+    );
+});
+
+describe('Round 8 — MEDIUM-2: cursor and grok idle workers with quoted login menus ending in Esc to cancel / Esc:cancel stay idle and never stick or flap busy', () => {
+    const cursorQuotedLoginMenuIdle = [
+        '  Welcome to Cursor Agent',
+        '  1. Sign in with browser',
+        '  2. Use API key',
+        '  Esc to cancel',
+        '',
+        '  Claude 4.5 Sonnet · 18.1%',
+        '  ~/work/app · main',
+    ].join('\n');
+
+    const grokQuotedLoginMenuIdle = [
+        '  Welcome to Grok CLI',
+        '  1 (●) Sign in with browser (xAI account)',
+        '  2 (○) Paste your xAI API key',
+        '  1/2:select │ Enter:confirm',
+        '  Esc:cancel',
+        '  ╭──────────────────────────────────────────────────────────────────────────╮',
+        '  │ ❯                                                                        │',
+        '  ╰──────────────────────────────────────────────────────────────────────────╯',
+        '  Shift+Tab:mode │ Ctrl+x:shortcuts',
+    ].join('\n');
+
+    it('cursor-cli and grok-cli stay idle from idle and transition busy → idle without sticking or flapping when a login menu with Esc cancel hint is quoted above the settled composer', async () => {
+        const cursorSpec = loadProviderSpec('cursor-cli', '1.0.json');
+        expect(evaluateFsm(cursorSpec, 'idle', cursorQuotedLoginMenuIdle, { row: 6, col: 2 }, undefined, clk(5_000, 0)).fired).toBeNull();
+        expect(evaluateFsm(cursorSpec, 'busy', cursorQuotedLoginMenuIdle, { row: 6, col: 2 }, undefined, clk(5_000, 0)).fired?.to).toBe('idle');
+
+        const grokSpec = loadProviderSpec('grok-cli', '1.0.json');
+        expect(evaluateFsm(grokSpec, 'idle', grokQuotedLoginMenuIdle, { row: 8, col: 2 }, undefined, clk(5_000, 0)).fired).toBeNull();
+        expect(evaluateFsm(grokSpec, 'busy', grokQuotedLoginMenuIdle, { row: 8, col: 2 }, undefined, clk(5_000, 0)).fired?.to).toBe('idle');
+
+        vi.useFakeTimers();
+        try {
+            for (const tc of [
+                {
+                    cli: 'cursor-cli',
+                    specFile: '1.0.json',
+                    busyFrame: '  ⠙ Generating… ctrl+c to stop\r\n',
+                    settledIdleFrame: cursorQuotedLoginMenuIdle,
+                },
+                {
+                    cli: 'grok-cli',
+                    specFile: '1.0.json',
+                    busyFrame: '  ⠋ Reading file 2.4s [stop]\r\n  Esc:cancel\r\n',
+                    settledIdleFrame: grokQuotedLoginMenuIdle,
+                },
+            ]) {
+                const factory = new DrivableFactory();
+                const driver = new FsmDriver({
+                    specPath: resolveProviderSpecPath(tc.cli, tc.specFile),
+                    workingDir: os.tmpdir(),
+                    hotReload: false,
+                    transportFactory: factory,
+                });
+                const states: string[] = [];
+                driver.subscribe(ev => {
+                    if (ev.kind === 'state_changed') states.push(ev.state.id);
+                });
+                driver.start();
+                const pty = factory.last!;
+
+                pty.feed(tc.busyFrame);
+                await vi.advanceTimersByTimeAsync(1_000);
+                expect(driver.currentStateId, `${tc.cli} entered busy`).toBe('busy');
+
+                states.length = 0;
+                pty.feed('\u001b[2J\u001b[H' + tc.settledIdleFrame.replace(/\n/g, '\r\n') + '\r\n');
+                await vi.advanceTimersByTimeAsync(5_000);
+
+                expect(driver.currentStateId, `${tc.cli} settled to idle`).toBe('idle');
+                expect(states, `${tc.cli} transitioned once to idle without flapping`).toEqual(['idle']);
+
+                driver.shutdown();
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+
 
 
 

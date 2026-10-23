@@ -428,26 +428,15 @@ export function evaluateFsm(
         if (fires && !fired) fired = te;
     }
 
-    // Enforce canonical state-classification precedence (see
-    // STATES_OUTRANKING_SIGN_IN above): active structural modal/picker/choice
-    // and busy transitions outrank signing_in even ifsigning_in has a higher
-    // numeric priority than idle/startup-grace.
-    if (fired && fired.to === 'signing_in') {
-        const structuralOverride = transitions.find(
-            (te, idx) => te.fires && isStructuralOverrideTransition(outgoing[idx]),
-        );
-        if (structuralOverride) {
-            fired = structuralOverride;
-        } else if (
-            currentStateId === 'busy'
-            && spec.transitions.some(
-                t => isStructuralOverrideTransition(t)
-                    && t.when
-                    && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], 'busy-hold-precedence', signalSnapshot, absence).result,
-            )
-        ) {
-            fired = null;
-        }
+    // Enforce canonical sign-in precedence: every provider's `→signing_in`
+    // transition carries explicit vetoes for settled composer chrome, live
+    // busy spinners/footers, and active bottom-anchored modals. When a
+    // `signing_in` transition still fires after those vetoes, a real login
+    // screen is present in the live viewport and `signing_in` must win over
+    // any lower-confidence transition.
+    const signInFired = transitions.find(te => te.fires && te.to === 'signing_in');
+    if (signInFired) {
+        fired = signInFired;
     }
 
     // Validate destination exists (defensive — loader should catch this).

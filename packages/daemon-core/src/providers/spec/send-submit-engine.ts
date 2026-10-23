@@ -172,17 +172,11 @@ export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): bo
     const cleaned = stripToolAndCodeLines(stripped);
     if (!cleaned.trim()) return false;
 
-    // Enforce the canonical state-classification precedence documented in
-    // fsm-evaluator.ts (isStructuralOverrideTransition): when an active modal,
-    // picker, choice, or busy entry transition matches the viewport, it outranks
-    // signing_in and never triggers the pre-send auth guard.
-    for (const t of spec.transitions) {
-        if (!t.when || !isStructuralOverrideTransition(t)) continue;
-        if (evaluateConditionPreview(t.when, spec.sections, stripped).result) {
-            return false;
-        }
-    }
-
+    // Evaluate the provider spec's `to: 'signing_in'` transitions on both the
+    // raw ANSI-stripped viewport and the tool/code/fence/diff-stripped
+    // viewport. Each spec's `signing_in` transition carries explicit vetoes for
+    // settled idle composers, live busy spinners/footers, and active bottom
+    // modals; if `signing_in` still matches, fail safe by blocking the send.
     for (const t of spec.transitions) {
         if (t.to !== 'signing_in' || !t.when) continue;
         if (
