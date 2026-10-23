@@ -18,6 +18,7 @@
  */
 'use strict';
 
+import { nativeSourceAddress } from '../../chat/message-source-address.js';
 import { createCodexTurnProvenance } from '../native-history/codex-turn-provenance.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -29,7 +30,7 @@ import {
 } from '../native-history/transcript-claim-registry.js';
 import type { NativeTurnTerminalMarker } from '../../chat/native-turn-signal.js';
 import type { NativeHistoryConfig, NativeHistoryJsonlSource, NativeHistoryMessageMap } from './types.js';
-import { readJsonlLines } from './native-history-jsonl-cache.js';
+import { readJsonlLines, readProjectedJsonlRecords, projectedJsonlSnapshotState } from './native-history-jsonl-cache.js';
 import type { NativeHistoryInput, NativeHistoryMessage, NativeHistoryResult } from './native-history-types.js';
 import {
     splitTemplateDirLeaf, expandTemplateRootForEnumeration, templateVarsToGlob, dirUuid,
@@ -51,13 +52,116 @@ import {
     compileRecordShapes, compileUsageShapes, projectUsageRecord, projectMessages,
     parseTimestamp,
 } from './native-history-projection.js';
+import { markNativeHistorySnapshot } from './native-history-snapshot.js';
 import { jsonPathGet } from './native-history-jsonpath.js';
 
 export function executeNativeHistory(cfg: NativeHistoryConfig, input: NativeHistoryInput): NativeHistoryResult | null {
     if (!cfg?.source) return null;
-    if (cfg.source.kind === 'jsonl') return executeJsonl(cfg.source, input);
+    if (cfg.source.kind === 'jsonl') {
+        const work = executeJsonl(cfg.source, input);
+        let step = work.next();
+        while (!step.done) step = work.next();
+        return step.value;
+    }
     if (cfg.source.kind === 'sqlite') return executeSqlite(cfg.source, input);
     return null;
+}
+
+// Serialize cooperative rebuilds globally; continue the work already started
+// by a sync sampler instead of discarding and replaying its first chunk.
+let jsonlWorkQueue: Promise<unknown> = Promise.resolve();
+// All provider readers share the allowance for this event-loop turn. Charge
+// actual generator time, so twenty cold sessions cannot each spend 8ms before
+// timers/IPC run. The next check phase replenishes the bucket once.
+const JSONL_TURN_BUDGET_MS = 8;
+let jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
+let jsonlBudgetReset: NodeJS.Immediate | undefined;
+const startedJsonlWork = new WeakSet<Generator<void, NativeHistoryResult | null, void>>();
+function advanceJsonlWork(work: Generator<void, NativeHistoryResult | null, void>): IteratorResult<void, NativeHistoryResult | null> | undefined {
+    // A new generator can check the stat/projection cache before spending the
+    // parsing allowance. Cache misses yield before doing work if it is empty.
+    if (jsonlTurnRemainingMs <= 0 && startedJsonlWork.has(work)) return undefined;
+    startedJsonlWork.add(work);
+    if (!jsonlBudgetReset) jsonlBudgetReset = setImmediate(() => {
+        jsonlTurnRemainingMs = JSONL_TURN_BUDGET_MS;
+        jsonlBudgetReset = undefined;
+    });
+    const start = performance.now();
+    try { return work.next(); }
+    finally { jsonlTurnRemainingMs -= Math.max(0, performance.now() - start); }
+}
+function enqueueJsonlWork(work: Generator<void, NativeHistoryResult | null, void>): Promise<NativeHistoryResult | null> {
+    const run = async () => {
+        let step: IteratorResult<void, NativeHistoryResult | null> | undefined;
+        do {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            step = advanceJsonlWork(work);
+        } while (!step?.done);
+        return step.value;
+    };
+    const result = jsonlWorkQueue.then(run, run);
+    jsonlWorkQueue = result.catch(() => {});
+    return result;
+}
+export function executeNativeHistoryAsync(cfg: NativeHistoryConfig, input: NativeHistoryInput): Promise<NativeHistoryResult | null> {
+    if (cfg?.source?.kind !== 'jsonl') return Promise.resolve(executeNativeHistory(cfg, input));
+    return enqueueJsonlWork(executeJsonl(cfg.source, input, undefined, true));
+}
+
+/** Small cold reads and bounded appends finish in the sampling tick. Larger
+ * rebuilds run cooperatively and keep serving the last good source snapshot. */
+export function createCooperativeNativeHistoryReader(cfg: NativeHistoryConfig) {
+    const pending = new Map<string, Promise<NativeHistoryResult | null>>();
+    const snapshots = new Map<string, { result: NativeHistoryResult; touchedAt: number }>();
+    const loading: NativeHistoryResult = { messages: [], sourcePath: '', sourceMtimeMs: 0, unavailableReason: 'native_history_loading' };
+    const sourceFor = (input: NativeHistoryInput) => cfg.source?.kind === 'jsonl'
+        ? resolveJsonlSourcePathDetailed(cfg.source, input) : undefined;
+    // Resolve under EACH caller's attribution rules before sharing source work.
+    // Paging, forceRefresh, adapter status and completion flags aren't identity.
+    const keyFor = (input: NativeHistoryInput, resolution = sourceFor(input)) =>
+        resolution?.path ? JSON.stringify([input.agentType, claimKeyForPath(resolution.path)]) : undefined;
+    const boundResult = (input: NativeHistoryInput, result: NativeHistoryResult | null) => {
+        const requested = readRequestedSessionId(input);
+        return requested && result?.providerSessionId && !sameSessionUuid(requested, result.providerSessionId) ? null : result;
+    };
+    const reader = (input: NativeHistoryInput): NativeHistoryResult | null => {
+        if (cfg?.source?.kind !== 'jsonl') return executeNativeHistory(cfg, input);
+        const resolution = sourceFor(input)!;
+        const key = keyFor(input, resolution);
+        if (!key) return executeNativeHistory(cfg, input);
+        const now = Date.now();
+        for (const [k, snapshot] of snapshots) {
+            if (now - snapshot.touchedAt > 10 * 60_000) snapshots.delete(k);
+        }
+        const previous = snapshots.get(key);
+        if (previous) previous.touchedAt = now;
+        const stale = () => boundResult(input, previous ? { ...previous.result, stale: true } : loading);
+        if (pending.has(key)) return stale();
+        const work = executeJsonl(cfg.source, input, resolution, true);
+        let step = advanceJsonlWork(work);
+        // Both small cold reads and resumed appends may cross a chunk boundary.
+        // Let budgeted work (including old timestamp/tool seals) finish now.
+        while (step && !step.done && jsonlTurnRemainingMs > 0) step = advanceJsonlWork(work);
+        if (step?.done) {
+            if (step.value) snapshots.set(key, { result: step.value, touchedAt: now });
+            else snapshots.delete(key);
+            return step.value;
+        }
+        const result = enqueueJsonlWork(work).then(value => {
+            if (value) snapshots.set(key, { result: value, touchedAt: Date.now() });
+            else snapshots.delete(key);
+            return value;
+        });
+        pending.set(key, result);
+        void result.finally(() => { if (pending.get(key) === result) pending.delete(key); }).catch(() => {});
+        return stale();
+    };
+    reader.readAsync = async (input: NativeHistoryInput) => {
+        const result = reader(input);
+        const key = keyFor(input);
+        return boundResult(input, await ((key && pending.get(key)) || result));
+    };
+    return reader;
 }
 
 /**
@@ -250,8 +354,24 @@ function summarizeSessionFile(
 // JSONL
 // ────────────────────────────────────────────────────────────────────────────
 
-function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput): NativeHistoryResult | null {
-    const resolution = resolveJsonlSourcePathDetailed(src, input);
+interface CompactJsonlRecord {
+    messages: NativeHistoryMessage[];
+    fallbackTime: boolean;
+    usage?: NativeUsageRecord | null;
+    fallbackUsageTime: boolean;
+    sessionId?: unknown;
+    workspace?: string;
+    terminal?: any;
+    sourceAddresses?: { lineage: string; values: NativeHistoryMessage['_src'][] };
+}
+interface JsonlProjection {
+    messages: NativeHistoryMessage[];
+    usage?: NativeHistoryResult['usage'];
+    turnTerminalMarkers: NativeTurnTerminalMarker[];
+}
+const jsonlProjections = new WeakMap<CompactJsonlRecord[], Map<string, JsonlProjection>>();
+
+function* executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput, resolution = resolveJsonlSourcePathDetailed(src, input), cooperative = false): Generator<void, NativeHistoryResult | null, void> {
     const outcome = resolution.outcome;
     if (outcome && (outcome.attribution === 'ambiguous' || outcome.attribution === 'already_claimed')) {
         // Fail closed under same-cwd concurrency: never surface a transcript —
@@ -282,33 +402,51 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         return null;
     }
 
-    const mtime = safeMtimeMs(sourcePath);
-    // Completion evidence explicitly requests forceRefresh: it never trusts a
-    // reusable parse, even when the filesystem reports coarse or unchanged
-    // timestamps.
-    //
-    // What keeps the resulting full re-parse affordable is NOT a throttle on this
-    // path — there is none, despite what this comment used to claim. It is the
-    // caller's own cadence: the single forceRefresh caller is
-    // readExternalCompletionMessages (providers/completion/evidence.ts), reached
-    // via probeNativeTranscriptSignals / hasFreshNativeFinalAssistantForCurrentTurn,
-    // which by construction run only at the stall threshold (≥180s of PTY stasis)
-    // or during an armed completion-debounce retry — never on the routine 5s tick.
-    // If a future caller starts requesting forceRefresh at PTY frequency, that
-    // cadence assumption is what breaks, and this becomes a full re-parse per
-    // chunk. Relaxing forceRefresh to bypass only the memo (keeping the
-    // size/mtime resume path, which re-stats and reads actual bytes so it is not
-    // stale) is the known fix if that day comes.
-    const forceRefresh = input.forceRefresh === true || input.args?.forceRefresh === true;
-    const lines = readJsonlLines(sourcePath, forceRefresh);
+    const shapes = compileRecordShapes(src);
+    const pickUsage = compileUsageShapes(src);
+    const requested = readRequestedSessionId(input) || '';
+    // Parse/project each new record once. Store summaries instead of raw tool
+    // payloads, independently of the 16 MiB raw-object cache. A fresh stat is
+    // always performed, including forceRefresh completion probes.
+    const projectionKey = JSON.stringify([src, input.agentType]);
+    const lines: CompactJsonlRecord[] = yield* readProjectedJsonlRecords(sourcePath, projectionKey, (rec, i) => {
+        const shape = shapes.pick(rec);
+        const usageMap = pickUsage?.(rec);
+        const messages = shape ? projectMessages(rec, shape.map, i, i + 1, 1, '__projection__') : [];
+        let terminal: any;
+        if (input.agentType === 'codex-cli' && rec?.type === 'event_msg') {
+            const payload = rec?.payload;
+            terminal = { type: rec.type, timestamp: rec.timestamp, payload: payload && {
+                type: payload.type, turn_id: payload.turn_id,
+                error: payload.error && typeof payload.error === 'object' ? { type: payload.error.type } : payload.error,
+                last_agent_message: flattenJsonlText(payload.last_agent_message),
+            } };
+        } else if (input.agentType === 'kimi' && rec?.type === 'turn.ended') {
+            terminal = { type: rec.type, time: rec.time, reason: rec.reason, turnId: rec.turnId };
+        }
+        return {
+            messages,
+            fallbackTime: !!shape && (!shape.map.timestamp_ms || parseTimestamp(jsonPathGet(rec, shape.map.timestamp_ms)) == null),
+            usage: usageMap ? projectUsageRecord(rec, usageMap, 0) : undefined,
+            fallbackUsageTime: !!usageMap && (!usageMap.timestamp_ms || parseTimestamp(jsonPathGet(rec, usageMap.timestamp_ms)) == null),
+            sessionId: i === 0 && src.session_id_path ? jsonPathGet(rec, src.session_id_path) : undefined,
+            workspace: i < 5 ? readSessionMetaWorkspace([rec]) : undefined,
+            terminal,
+        };
+    }, cooperative ? () => jsonlTurnRemainingMs > 0 : undefined);
     if (lines.length === 0) return null;
+    // Seal with the revision actually read. Appends during message assembly
+    // may leave a usable prefix; rewrites must restart through the digest gate.
+    let revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
+    if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
+    const mtime = revision.sourceMtimeMs;
     // Prefer an in-transcript session_meta cwd; fall back to the input workspace
     // only when the spec opts in AND the resolved file lives under that
     // workspace's project slug (cursor-agent writes no session_meta and hides the
     // workspace in the lossy on-disk slug — see workspace_from_input). A store
     // whose workspace lives in a per-session sidecar json (kimi's state.json,
     // whose `wd_<slug>_<sha12>` dir is irreversible) reads it from there.
-    const transcriptWorkspace = readSessionMetaWorkspace(lines)
+    const transcriptWorkspace = lines.slice(0, 5).find(record => record.workspace)?.workspace
         ?? (src.workspace_from_sidecar ? readSidecarWorkspace(sourcePath, src.workspace_from_sidecar) : undefined)
         ?? (src.workspace_from_input ? workspaceFromInputIfSlugMatches(sourcePath, input) : undefined);
 
@@ -316,7 +454,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     // first record.
     let providerSessionId: string | undefined;
     if (src.session_id_from === 'first_record' && src.session_id_path) {
-        const v = jsonPathGet(lines[0], src.session_id_path);
+        const v = lines[0].sessionId;
         if (typeof v === 'string' && v) providerSessionId = v;
     } else if (src.session_id_from === 'dir_uuid') {
         providerSessionId = dirUuid(sourcePath) || undefined;
@@ -328,34 +466,58 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
     // Compare requested vs resolved by embedded uuid so a `session_<uuid>` pin
     // (kimi's on-disk session id carries a `session_` prefix) still matches the
     // bare uuid the executor extracts from the directory segment.
-    const requested = readRequestedSessionId(input) || '';
     if (requested && providerSessionId && !sameSessionUuid(providerSessionId, requested)) return null;
 
-    // Multi-shape (records[]) vs single-shape (message_map) projection.
-    const shapes = compileRecordShapes(src);
-    // Usage lines are matched on a SEPARATE pass-through of the same records:
-    // they are not messages, and a usage line that matched no message shape
-    // would otherwise be dropped before it could be counted.
-    const pickUsage = compileUsageShapes(src);
-    const messages: NativeHistoryMessage[] = [];
-    const usageRecords: NativeUsageRecord[] = [];
-    for (let i = 0; i < lines.length; i += 1) {
-        const rec = lines[i];
-        if (pickUsage) {
-            const usageMap = pickUsage(rec);
-            if (usageMap) {
-                const usageRecord = projectUsageRecord(rec, usageMap, mtime);
-                if (usageRecord) usageRecords.push(usageRecord);
+    const projectionContext = JSON.stringify([mtime, transcriptWorkspace, providerSessionId || requested || sourcePath]);
+    let byContext = jsonlProjections.get(lines);
+    let projection = byContext?.get(projectionContext);
+    if (!projection) {
+        if (cooperative && jsonlTurnRemainingMs <= 0) yield;
+        const messages: NativeHistoryMessage[] = [];
+        const usageRecords: NativeUsageRecord[] = [];
+        const lineage = providerSessionId || requested || sourcePath;
+        let sliceStartedAt = performance.now();
+        for (let i = 0; i < lines.length; i++) {
+            const rec = lines[i];
+            if (rec.usage) usageRecords.push(rec.fallbackUsageTime ? { ...rec.usage, receivedAt: mtime } : rec.usage);
+            // Committed records survive appends; hash their lineage once.
+            if (rec.sourceAddresses?.lineage !== lineage) {
+                rec.sourceAddresses = { lineage, values: rec.messages.map(original => original._src?.cls === 'n'
+                    ? nativeSourceAddress(lineage, original._src.addr) : original._src) };
+            }
+            for (const [messageIndex, original] of rec.messages.entries()) {
+                const msg = { ...original };
+                if (rec.fallbackTime) msg.receivedAt += mtime - ((lines.length - 1 - i) * 1000) - 1;
+                if (msg.toolBlockRef) {
+                    if (mtime > 0) msg.toolBlockRef = { ...msg.toolBlockRef, sourceMtimeMs: mtime };
+                    else delete msg.toolBlockRef;
+                }
+                // Stamp the same source lineage as the original full projection.
+                if (original._src?.cls === 'n') msg._src = rec.sourceAddresses.values[messageIndex];
+                if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
+                messages.push(msg);
+            }
+            if (i + 1 < lines.length && ((i + 1) % 256 === 0
+                || ((i + 1) % 16 === 0 && performance.now() - sliceStartedAt >= 1))) {
+                yield;
+                sliceStartedAt = performance.now();
             }
         }
-        const shape = shapes.pick(rec);
-        if (!shape) continue;
-        for (const msg of projectMessages(rec, shape.map, i, lines.length, mtime, providerSessionId || requested || sourcePath)) {
-            if (transcriptWorkspace) msg.workspace = transcriptWorkspace;
-            messages.push(msg);
-        }
+        // A live writer must not force an endless reassembly from record zero.
+        // Publish an append-validated prefix as stale; the next read catches
+        // its tail. A rewrite/replacement still invalidates all assembled data.
+        revision = projectedJsonlSnapshotState(sourcePath, projectionKey, lines);
+        if (!revision) return yield* executeJsonl(src, input, resolution, cooperative);
+        const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines.map(rec => rec.terminal));
+        projection = { messages: markNativeHistorySnapshot(messages), turnTerminalMarkers,
+            ...(usageRecords.length ? { usage: foldUsageRecords(usageRecords, {
+                providerSessionId: providerSessionId || '', agent: typeof input.agentType === 'string' ? input.agentType : 'unknown',
+            }) } : {}),
+        };
+        if (!byContext) jsonlProjections.set(lines, byContext = new Map());
+        byContext.set(projectionContext, projection);
     }
-    const turnTerminalMarkers = extractBuiltinTurnTerminalMarkers(input.agentType, lines);
+    const { messages, usage, turnTerminalMarkers } = projection;
     if (messages.length === 0 && turnTerminalMarkers.length === 0) return null;
 
     const workspaceHint = typeof input.workspace === 'string' && input.workspace.trim() ? input.workspace.trim() : '';
@@ -380,6 +542,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
 
     return {
         messages,
+        ...(revision.stale ? { stale: true } : {}),
         providerSessionId,
         sourcePath,
         sourceMtimeMs: mtime,
@@ -390,14 +553,7 @@ function executeJsonl(src: NativeHistoryJsonlSource, input: NativeHistoryInput):
         ownerConfirmed: input.agentType === 'codex-cli'
             ? (codexExactConfirmed || codexPromptConfirmed)
             : outcome?.ownerConfirmed,
-        ...(usageRecords.length > 0
-            ? {
-                usage: foldUsageRecords(usageRecords, {
-                    providerSessionId: providerSessionId || '',
-                    agent: typeof input.agentType === 'string' ? input.agentType : 'unknown',
-                }),
-            }
-            : {}),
+        ...(usage ? { usage } : {}),
         ...(turnTerminalMarkers.length > 0 ? { turnTerminalMarkers } : {}),
     };
 }

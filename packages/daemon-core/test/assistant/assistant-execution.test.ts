@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AssistantExecution, assistantExecution, checkAssistantExecutionGuard, createAssistantExecutionGuard } from '../../src/assistant/assistant-execution.js';
-import { prepareOwnerActionChat, assistantExecutionState } from '../../src/assistant/assistant-action-ingress.js';
+import { prepareOwnerActionChat, assistantExecutionState, ownerActionChoices } from '../../src/assistant/assistant-action-ingress.js';
 import { AssistantRegistry, setAssistantRegistryForTests } from '../../src/assistant/assistant-registry.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
 import { assistantActionSpecs } from '../../src/commands/high-family/assistant-action.js';
@@ -109,4 +109,21 @@ it('owner language asks for ambiguous choices, exact UI snapshots fence modal ch
     expect(prepareOwnerActionChat(components, 'ws', 'assistant', 'approve', action, 'stale')).toMatchObject({ success: false, code: 'owner_modal_selection_changed' });
     transport = 'cdp-webview'; expect(prepareOwnerActionChat(components, 'ws', 'assistant', '/assistant-action ' + JSON.stringify(action))).toMatchObject({ success: false, code: 'assistant_action_target_unavailable' });
     transport = 'pty'; adapters.delete('worker'); expect(prepareOwnerActionChat(components, 'ws', 'assistant', '/assistant-action ' + JSON.stringify(action))).toMatchObject({ success: false, code: 'assistant_action_target_unavailable' });
+});
+
+it('enumerates approval choices for 13 adapters without invoking rich getState', () => {
+    dir = mkdtempSync(join(tmpdir(), 'assistant-action-metadata-'));
+    const registry = new AssistantRegistry({ configDir: dir });
+    registry.bindSession({ sessionId: 'assistant', cliType: 'claude-cli', workspace: dir, at: 1 });
+    setAssistantRegistryForTests(registry);
+    setAssistantServicesForTests(createAssistantServices({ configDir: dir, listMeshes: () => [{ id: 'mesh' } as any] }));
+    const rich = vi.fn(() => { throw new Error('transcript hydration reached from approval enumeration'); });
+    const instance = { getState: rich, getActionState: () => ({ type: 'claude-cli', category: 'cli', settings: { assistant: true, meshNodeFor: 'mesh' } }) };
+    const components: any = { instanceManager: { getInstance: () => instance }, sessionRegistry: { get: () => ({ transport: 'pty' }) },
+        cliManager: { adapters: new Map(Array.from({ length: 13 }, (_, i) => [i ? `worker-${i}` : 'assistant', { getStatus: () => ({ activeModal: modal }) }])) } };
+    for (let i = 0; i < 2; i++) {
+        expect(assistantExecutionState(components).provider).toBe('claude-cli');
+        expect(ownerActionChoices(components)).toHaveLength(26);
+    }
+    expect(rich).not.toHaveBeenCalled();
 });

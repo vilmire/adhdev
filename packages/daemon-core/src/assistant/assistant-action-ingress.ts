@@ -4,7 +4,10 @@ import { getAssistantRegistry } from './assistant-registry.js';
 import { getAssistantServices } from './assistant-services.js';
 import { isNegativeApprovalLabel } from '../providers/approval-utils.js';
 
-interface Instance { getState?(): any }
+interface Instance { getState?(): any; getActionState?(): any }
+function actionState(instance: Instance | null | undefined) {
+    return instance?.getActionState ? instance.getActionState() : instance?.getState?.();
+}
 interface Adapter { getStatus?(): any }
 export interface ActionComponents {
     instanceManager?: { getInstance(id: string): Instance | undefined | null };
@@ -16,12 +19,12 @@ export function assistantExecutionState(components: ActionComponents): Execution
     const sid = entry?.sessionId ?? null;
     const runtime = sid ? components.instanceManager?.getInstance(sid) ?? null : null;
     const adapter = sid ? components.cliManager?.adapters.get(sid) ?? null : null;
-    const state = runtime?.getState?.();
+    const state = actionState(runtime);
     return { sessionId: sid, enabled: entry?.executionEnabled !== false, runtime, adapter,
         policyRevision: entry?.executionRevision ?? 0, provider: state?.type ?? '', assistant: state?.settings?.assistant === true };
 }
 export function actionTarget(components: ActionComponents, action: AssistantAction) {
-    const state = components.instanceManager?.getInstance(action.targetSessionId)?.getState?.();
+    const state = actionState(components.instanceManager?.getInstance(action.targetSessionId));
     const settings = state?.settings;
     const meshId = settings?.meshNodeFor || settings?.meshCoordinatorFor;
     if (meshId !== action.meshId || !getAssistantServices().listMeshes().some(m => m.id === meshId)) return null;
@@ -68,7 +71,7 @@ export type OwnerActionChoice = AssistantAction & {
 export function ownerActionChoices(components: ActionComponents) {
     const choices: OwnerActionChoice[] = [];
     for (const sid of components.cliManager?.adapters.keys() ?? []) {
-        const st = components.instanceManager?.getInstance(sid)?.getState?.();
+        const st = actionState(components.instanceManager?.getInstance(sid));
         const meshId = st?.settings?.meshNodeFor || st?.settings?.meshCoordinatorFor;
         const modal = components.cliManager?.adapters.get(sid)?.getStatus?.()?.activeModal ?? st?.activeChat?.activeModal;
         const providerType = typeof st?.type === 'string' ? st.type : '';
@@ -122,7 +125,7 @@ export function prepareOwnerActionChat(components: ActionComponents, source: unk
     if (expectedModal !== undefined && expectedModal !== modalIdentity(target.modal)) return { success: false as const, code: 'owner_modal_selection_changed' };
     // Bind consent to the exact provider-approval episode: a setup/trust or
     // resolved episode is refused, and a caller-supplied identity must still match.
-    const targetState = components.instanceManager?.getInstance(action.targetSessionId)?.getState?.();
+    const targetState = actionState(components.instanceManager?.getInstance(action.targetSessionId));
     const episode = liveApprovalEpisode(components, action.targetSessionId, typeof targetState?.type === 'string' ? targetState.type : '');
     if (episode.kind === 'unavailable') return { success: false as const, code: 'assistant_action_target_unavailable' };
     if (expectedApprovalTarget !== undefined && (episode.kind !== 'live' || !sameApprovalTarget(expectedApprovalTarget, episode.target))) {

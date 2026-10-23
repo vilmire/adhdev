@@ -71,7 +71,7 @@ export interface CompletionDiagnosticsHost {
     cachedInTurnCompletionSummaryContent(turnStartedAt?: number): string;
     recordPendingTranscriptProbe(pending: CompletedDebouncePending): ExternalTranscriptProbe | null;
     readExternalCompletionMessages(opts?: { allowManifestNativeSource?: boolean }): unknown[] | null;
-    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null;
+    probeNativeTranscriptSignals(): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null;
     busyLeaseGateEnabled(): boolean;
     inApprovalResumeGrace(now?: number): boolean;
     isMeshWorkerSession(): boolean;
@@ -330,7 +330,13 @@ export function buildCompletionSignalReader(
         }),
         transcriptGrowth: () => once('transcriptGrowth', () => {
             let snapshot: SignalSnapshot | null = null;
-            try { snapshot = host.probeNativeTranscriptSignals()?.snapshot ?? null; } catch { snapshot = null; }
+            let readPending = false;
+            try {
+                const probe = host.probeNativeTranscriptSignals();
+                snapshot = probe?.snapshot ?? null;
+                readPending = probe?.pending === true;
+            } catch { snapshot = null; }
+            if (readPending) return { available: false, growing: false, pending: true };
             if (!snapshot) return null;
             const available = snapshot.available === true;
             return {

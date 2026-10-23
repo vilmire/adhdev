@@ -8,7 +8,7 @@
  * state — which is why it moves cleanly.
  */
 
-import { executeNativeHistory, executeNativeHistoryList } from './spec/native-history-executor.js';
+import { executeNativeHistory, executeNativeHistoryList, createCooperativeNativeHistoryReader } from './spec/native-history-executor.js';
 import { trimInProgressTurnToolTail } from './chat-message-normalization.js';
 import {
   createNativeHistoryDispatcher,
@@ -136,7 +136,9 @@ export function applySpecNativeHistoryWiring(
 
         if (nh.source) {
           format = `spec-${nh.source.kind}`;
-          reader = (input: any) => executeNativeHistory(nh, input);
+          reader = nh.source.kind === 'jsonl'
+            ? createCooperativeNativeHistoryReader(nh)
+            : (input: any) => executeNativeHistory(nh, input);
           // Only jsonl stores are file-per-session and enumerable by a
           // directory walk. sqlite sources enumerate through their own
           // `session_query` (not implemented as a lister yet), so leave
@@ -191,13 +193,17 @@ export function applySpecNativeHistoryWiring(
           //
           // The trim is idempotent (see trimInProgressTurnToolTail), so an
           // out-of-tree script that still trims its own result is unaffected.
-          (resolved.scripts as any).readNativeHistory = (input: any) => {
-            const result = reader!(input);
+          const trimResult = (input: any, result: any) => {
             const wantsTrim = input?.excludeInProgressTurn === true || input?.args?.excludeInProgressTurn === true;
             if (!wantsTrim || !result || !Array.isArray(result.messages)) return result;
             const trimmed = trimInProgressTurnToolTail(result.messages);
             return trimmed === result.messages ? result : { ...result, messages: trimmed };
           };
+          const read = (input: any) => trimResult(input, reader!(input));
+          if (typeof (reader as any).readAsync === 'function') {
+            (read as any).readAsync = async (input: any) => trimResult(input, await (reader as any).readAsync(input));
+          }
+          (resolved.scripts as any).readNativeHistory = read;
           // Wire the enumerator alongside the reader. Without both the
           // `scripts.listSessions` marker AND the `listNativeHistory` fn,
           // `getProviderNativeHistoryScript(...,'listSessions')` resolves to

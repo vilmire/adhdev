@@ -30,7 +30,8 @@ import {
 } from './read-chat-message-identity.js';
 
 function shouldPreserveReadChatPayloadField(key: string): boolean {
-    return key === 'messageSource' || key === 'transcriptProvenance';
+    return key === 'messageSource' || key === 'transcriptProvenance'
+        || key === 'stale' || key === 'unavailableReason';
 }
 
 /**
@@ -416,7 +417,9 @@ export function buildReadChatCommandResult(
                 omittedBefore: identityCoverage === 'window' && (identity?.retainedIds.length ?? 0) > 0,
             },
         });
-        if (observation) notifyTranscriptObservation(observation.sessionId, observation);
+        if (observation && payload.stale !== true && payload.unavailableReason !== 'native_history_loading') {
+            notifyTranscriptObservation(observation.sessionId, observation);
+        }
     } catch {
         // Transcript projection must never be able to break read_chat itself.
     }
