@@ -60,6 +60,7 @@ import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
 import {
     ArtifactStore,
     MAX_ARTIFACT_MCP_PAGE_BYTES,
+    reassembleBase64ArtifactChunks,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,
 } from '../../artifacts/index.js';
@@ -736,10 +737,17 @@ export async function localArtifactRead(
             if (!p2pRes || p2pRes.success === false) {
                 return { ok: false, code: str(p2pRes?.code) || 'artifact_origin_unreachable', error: str(p2pRes?.error) || 'Failed to read artifact from origin daemon.' };
             }
-            const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
-            const rawContent = chunks.length > 0
-                ? Buffer.concat(chunks.map((c: string) => Buffer.from(String(c), 'base64'))).toString('utf8')
-                : (typeof p2pRes.content === 'string' ? p2pRes.content : '');
+            let rawContent = '';
+            if (Array.isArray(p2pRes.chunks) && p2pRes.chunks.length > 0) {
+                const reassembled = reassembleBase64ArtifactChunks(p2pRes.chunks, MAX_ARTIFACT_MCP_PAGE_BYTES);
+                if (!reassembled.ok) return { ok: false, code: reassembled.code, error: reassembled.error };
+                rawContent = reassembled.content;
+            } else if (typeof p2pRes.content === 'string') {
+                if (Buffer.byteLength(p2pRes.content, 'utf8') > MAX_ARTIFACT_MCP_PAGE_BYTES) {
+                    return { ok: false, code: 'artifact_too_large', error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
+                }
+                rawContent = p2pRes.content;
+            }
             return {
                 ok: true,
                 result: {
@@ -790,6 +798,9 @@ const artifactList = assistantVerb(ASSISTANT_VERB.artifactList, async (ports, ar
     const missionId = str(args.missionId ?? args.mission_id) || undefined;
     const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : undefined;
     if (p.remote) {
+        if (p.followedRemote?.allowArtifactRead === false) {
+            return fail('artifact_read_disabled', 'Artifact reading is disabled for this followed project.', { project: p.slug, meshId });
+        }
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'artifact_list', {
             ...(sessionId ? { sessionId } : {}),
             ...(missionId ? { missionId } : {}),
@@ -820,6 +831,9 @@ const artifactRead = assistantVerb(ASSISTANT_VERB.artifactRead, async (ports, ar
         ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES)
         : MAX_ARTIFACT_MCP_PAGE_BYTES;
     if (p.remote) {
+        if (p.followedRemote?.allowArtifactRead === false) {
+            return fail('artifact_read_disabled', 'Artifact reading is disabled for this followed project.', { project: p.slug, meshId });
+        }
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'artifact_read', { artifactId, offset: rawOffset, limit: rawLimit });
         if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
         const body = remoteBody(out);

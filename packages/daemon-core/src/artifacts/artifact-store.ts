@@ -16,6 +16,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+    assertNotSecretContent,
     assertNotSecretPath,
     readVerifiedArtifactFile,
     resolveArtifactFile,
@@ -745,33 +746,26 @@ export class ArtifactStore {
         }
         const filename = path.posix.basename(relPath) || relPath;
         const title = sanitizeArtifactTitle(input.title ?? undefined, filename);
-        const previewText =
-            typeof input.previewText === 'string'
-                ? Array.from(input.previewText).slice(0, MAX_PREVIEW_TEXT_CHARS).join('')
-                : null;
+        const previewText = typeof input.previewText === 'string'
+            ? Array.from(input.previewText).slice(0, MAX_PREVIEW_TEXT_CHARS).join('')
+            : null;
+        if (typeof input.previewText === 'string' && input.previewText.length > 0) {
+            assertNotSecretContent(Buffer.from(input.previewText, 'utf8'), kind);
+        }
+        if (previewText) assertNotSecretContent(Buffer.from(previewText, 'utf8'), kind);
         const now = Date.now();
-        const createdAt =
-            typeof input.createdAt === 'number' && Number.isFinite(input.createdAt)
-                ? Math.trunc(input.createdAt)
-                : now;
-        const updatedAt =
-            typeof input.updatedAt === 'number' && Number.isFinite(input.updatedAt)
-                ? Math.trunc(input.updatedAt)
-                : createdAt;
+        const createdAt = typeof input.createdAt === 'number' && Number.isFinite(input.createdAt) ? Math.trunc(input.createdAt) : now;
+        const updatedAt = typeof input.updatedAt === 'number' && Number.isFinite(input.updatedAt) ? Math.trunc(input.updatedAt) : createdAt;
         const taskId = typeof input.taskId === 'string' && input.taskId.trim() ? input.taskId.trim() : null;
         const meshId = typeof input.meshId === 'string' && input.meshId.trim() ? input.meshId.trim() : null;
-        const missionId =
-            typeof input.missionId === 'string' && input.missionId.trim() ? input.missionId.trim() : null;
-        const producerRole =
-            typeof input.producerRole === 'string' && input.producerRole.trim()
-                ? input.producerRole.trim()
-                : 'worker';
+        const missionId = typeof input.missionId === 'string' && input.missionId.trim() ? input.missionId.trim() : null;
+        const producerRole = typeof input.producerRole === 'string' && input.producerRole.trim() ? input.producerRole.trim() : 'worker';
 
         return runInImmediateTransaction(this.db, () => {
+            const pruneNow = Math.max(now, createdAt, updatedAt);
+            if (pruneNow >= 100_000_000_000) this.pruneExpired(pruneNow, ARTIFACT_RETENTION_MS, 100_000_000_000);
             const existing = this.db
-                .prepare<SessionArtifactDbRow>(
-                    `SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`,
-                )
+                .prepare<SessionArtifactDbRow>(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`)
                 .get(sessionId, relPath);
 
             if (existing) {
@@ -779,36 +773,16 @@ export class ArtifactStore {
                 this.db
                     .prepare(
                         `UPDATE session_artifacts
-                         SET task_id = ?,
-                             mesh_id = ?,
-                             mission_id = ?,
-                             producer_role = ?,
-                             origin_daemon_id = ?,
-                             workspace_root = ?,
-                             kind = ?,
-                             mime = ?,
-                             title = ?,
-                             size_bytes = ?,
-                             sha256 = ?,
-                             preview_text = ?,
-                             updated_at = ?
+                         SET task_id = ?, mesh_id = ?, mission_id = ?, producer_role = ?, origin_daemon_id = ?,
+                             workspace_root = ?, kind = ?, mime = ?, title = ?, size_bytes = ?, sha256 = ?,
+                             preview_text = ?, updated_at = ?
                          WHERE artifact_id = ?`,
                     )
                     .run(
-                        taskId ?? existing.task_id,
-                        meshId ?? existing.mesh_id ?? null,
-                        missionId ?? existing.mission_id ?? null,
-                        producerRole ?? existing.producer_role ?? null,
-                        originDaemonId,
-                        workspaceRoot,
-                        kind,
-                        mime,
-                        title,
-                        sizeBytes,
-                        sha256,
-                        previewText,
-                        nextUpdatedAt,
-                        existing.artifact_id,
+                        taskId ?? existing.task_id, meshId ?? existing.mesh_id ?? null,
+                        missionId ?? existing.mission_id ?? null, producerRole ?? existing.producer_role ?? null,
+                        originDaemonId, workspaceRoot, kind, mime, title, sizeBytes, sha256, previewText,
+                        nextUpdatedAt, existing.artifact_id,
                     );
 
                 const record: ArtifactRecord = {

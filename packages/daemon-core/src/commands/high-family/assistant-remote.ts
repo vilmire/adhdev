@@ -159,13 +159,8 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
             if (clamped <= cutoff) return;
             const key = followerWakeKey(meshId, sender);
             let list = rebuilt.get(key);
-            if (!list) {
-                list = [];
-                rebuilt.set(key, list);
-            }
-            if (!list.includes(clamped)) {
-                list.push(clamped);
-            }
+            if (!list) { list = []; rebuilt.set(key, list); }
+            if (!list.includes(clamped)) list.push(clamped);
         };
 
         try {
@@ -189,13 +184,7 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
         try {
             const auditRows = store.db.prepare(
                 "SELECT mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND at_ms > ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC",
-            ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND, cutoff) as Array<{
-                mesh_id?: unknown;
-                at_ms?: unknown;
-                verdict?: unknown;
-                rule?: unknown;
-                payload_json?: unknown;
-            }>;
+            ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND, cutoff) as Array<{ mesh_id?: unknown; at_ms?: unknown; verdict?: unknown; rule?: unknown; payload_json?: unknown }>;
             for (const row of auditRows) {
                 const meshId = str(row.mesh_id);
                 const atMs = Number(row.at_ms);
@@ -216,20 +205,14 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
             const existing: number[] = [];
             for (const rawT of followerWakeTimestamps.get(key) ?? []) {
                 const t = Math.min(rawT, now);
-                if (t > cutoff && !existing.includes(t)) {
-                    existing.push(t);
-                }
+                if (t > cutoff && !existing.includes(t)) existing.push(t);
             }
             for (const rawT of storeTimes) {
                 const t = Math.min(rawT, now);
-                if (t > cutoff && !existing.includes(t)) {
-                    existing.push(t);
-                }
+                if (t > cutoff && !existing.includes(t)) existing.push(t);
             }
             existing.sort((a, b) => a - b);
-            if (existing.length > 0) {
-                followerWakeTimestamps.set(key, existing);
-            }
+            if (existing.length > 0) followerWakeTimestamps.set(key, existing);
         }
         followerWakeHydratedStore = store;
     } catch {
@@ -240,9 +223,7 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
 function ensureFollowerWakeRateLimitHydrated(now: number): void {
     try {
         const currentStore = MeshRuntimeStore.getInstance();
-        if (followerWakeHydratedStore !== currentStore) {
-            rebuildFollowerWakeRateLimitFromStore(now);
-        }
+        if (followerWakeHydratedStore !== currentStore) rebuildFollowerWakeRateLimitFromStore(now);
     } catch {
         // Ignore if store cannot be opened.
     }
@@ -259,30 +240,17 @@ function checkFollowerWakeRateLimit(
     const recent: number[] = [];
     for (const rawT of followerWakeTimestamps.get(key) ?? []) {
         const t = Math.min(rawT, now);
-        if (t > cutoff && !recent.includes(t)) {
-            recent.push(t);
-        }
+        if (t > cutoff && !recent.includes(t)) recent.push(t);
     }
     recent.sort((a, b) => a - b);
-    if (recent.length > 0) {
-        followerWakeTimestamps.set(key, recent);
-    } else {
-        followerWakeTimestamps.delete(key);
-    }
+    if (recent.length > 0) followerWakeTimestamps.set(key, recent);
+    else followerWakeTimestamps.delete(key);
     const lastWakeAt = recent[recent.length - 1];
     if (lastWakeAt !== undefined && now - lastWakeAt < FOLLOWER_WAKE_COOLDOWN_MS) {
-        return {
-            ok: false,
-            reason: 'cooldown',
-            retryAfterMs: Math.max(1, FOLLOWER_WAKE_COOLDOWN_MS - (now - lastWakeAt)),
-        };
+        return { ok: false, reason: 'cooldown', retryAfterMs: Math.max(1, FOLLOWER_WAKE_COOLDOWN_MS - (now - lastWakeAt)) };
     }
     if (recent.length >= FOLLOWER_WAKE_MAX_PER_WINDOW) {
-        return {
-            ok: false,
-            reason: 'window_limit',
-            retryAfterMs: Math.max(1, (recent[0]! + FOLLOWER_WAKE_WINDOW_MS) - now),
-        };
+        return { ok: false, reason: 'window_limit', retryAfterMs: Math.max(1, (recent[0]! + FOLLOWER_WAKE_WINDOW_MS) - now) };
     }
     return { ok: true };
 }
@@ -296,13 +264,9 @@ function recordFollowerWake(meshId: string, sender: string, now: number): void {
     const recent: number[] = [];
     for (const rawT of followerWakeTimestamps.get(key) ?? []) {
         const t = Math.min(rawT, now);
-        if (t > cutoff && !recent.includes(t)) {
-            recent.push(t);
-        }
+        if (t > cutoff && !recent.includes(t)) recent.push(t);
     }
-    if (!recent.includes(now)) {
-        recent.push(now);
-    }
+    if (!recent.includes(now)) recent.push(now);
     recent.sort((a, b) => a - b);
     followerWakeTimestamps.set(key, recent);
     try {
@@ -313,13 +277,9 @@ function recordFollowerWake(meshId: string, sender: string, now: number): void {
         db.prepare(
             'INSERT OR REPLACE INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
         ).run(receiptKey, JSON.stringify({ meshId: trimmedMeshId, sender: canonSender, atMs: now }), now, FOLLOWER_WAKE_QUOTA_RECEIPT_KIND);
-        db.prepare('DELETE FROM assistant_relay_receipts WHERE kind = ? AND at_ms <= ?')
-            .run(FOLLOWER_WAKE_QUOTA_RECEIPT_KIND, cutoff);
+        db.prepare('DELETE FROM assistant_relay_receipts WHERE kind = ? AND at_ms <= ?').run(FOLLOWER_WAKE_QUOTA_RECEIPT_KIND, cutoff);
     } catch (err) {
-        LOG.warn(
-            'Assistant',
-            `Failed to persist follower wake quota reservation for mesh ${trimmedMeshId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        LOG.warn('Assistant', `Failed to persist follower wake quota reservation for mesh ${trimmedMeshId}: ${err instanceof Error ? err.message : String(err)}`);
     }
 }
 
@@ -486,17 +446,11 @@ function verifyFollowerAcl(
     op: string,
     args: Record<string, unknown>,
 ): { ok: true; acl: AssistantRemoteAccessBinding } | { ok: false; result: CommandRouterResult } {
-    if (!mesh) {
-        return { ok: false, result: fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`) };
-    }
-    if (!ports.isHostedHere(mesh)) {
-        return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
-    }
+    if (!mesh) return { ok: false, result: fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`) };
+    if (!ports.isHostedHere(mesh)) return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
     const self = ports.selfDaemonId();
     const acl = normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId);
-    if (!acl) {
-        return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
-    }
+    if (!acl) return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
     if (self && !daemonIdsEquivalent(acl.hostDaemonId, self)) {
         return { ok: false, result: fail('remote_access_denied', `Host daemon identity mismatch for mesh ${meshId}.`) };
     }
@@ -504,8 +458,7 @@ function verifyFollowerAcl(
         return {
             ok: false,
             result: fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
-                grantRevision: acl.grantRevision,
-                bindingRevision: acl.bindingRevision,
+                grantRevision: acl.grantRevision, bindingRevision: acl.bindingRevision,
             }),
         };
     }
@@ -519,70 +472,45 @@ function verifyFollowerAcl(
     }
     const claimedBindingRev = typeof args.bindingRevision === 'number'
         ? args.bindingRevision
-        : typeof followerClaim?.bindingRevision === 'number'
-            ? (followerClaim.bindingRevision as number)
-            : null;
+        : typeof followerClaim?.bindingRevision === 'number' ? (followerClaim.bindingRevision as number) : null;
     const claimedGrantRev = typeof args.grantRevision === 'number'
         ? args.grantRevision
-        : typeof followerClaim?.grantRevision === 'number'
-            ? (followerClaim.grantRevision as number)
-            : null;
+        : typeof followerClaim?.grantRevision === 'number' ? (followerClaim.grantRevision as number) : null;
     if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
             ok: false,
             result: fail('remote_access_denied', `Follower revision mismatch for mesh ${meshId}.`, {
-                actualBindingRevision: acl.bindingRevision,
-                actualGrantRevision: acl.grantRevision,
+                actualBindingRevision: acl.bindingRevision, actualGrantRevision: acl.grantRevision,
             }),
         };
     }
     if ((op === 'artifact_list' || op === 'artifact_read') && acl.allowArtifactRead === false) {
         return {
             ok: false,
-            result: fail(
-                'artifact_read_disabled',
-                `Remote follower artifact reading is disabled for mesh ${meshId}.`,
-                {
-                    bindingRevision: acl.bindingRevision,
-                    grantRevision: acl.grantRevision,
-                },
-            ),
+            result: fail('artifact_read_disabled', `Remote follower artifact reading is disabled for mesh ${meshId}.`, {
+                bindingRevision: acl.bindingRevision, grantRevision: acl.grantRevision,
+            }),
         };
     }
     if (!isAssistantFollowerAllowedOp(op) || !acl.allowedOps.includes(op)) {
-        return {
-            ok: false,
-            result: fail('remote_op_forbidden', `Operation '${op}' is not permitted for checkout-less remote followers.`),
-        };
+        return { ok: false, result: fail('remote_op_forbidden', `Operation '${op}' is not permitted for checkout-less remote followers.`) };
     }
     return { ok: true, acl };
 }
 
 const MISSING_OR_DEAD_SESSION_REASONS = new Set([
-    'session_exited',
-    'no_target',
-    'not_running',
-    'session_not_found',
-    'instance_not_found',
-    'runtime_missing',
-    'runtime_dead',
-    'coordinator_missing',
+    'session_exited', 'no_target', 'not_running', 'session_not_found',
+    'instance_not_found', 'runtime_missing', 'runtime_dead', 'coordinator_missing',
 ]);
 
 function isMissingOrDeadCoordinatorRuntime(sent: Record<string, unknown>): boolean {
     const code = str(sent.reason) || str(sent.code);
-    if (code && MISSING_OR_DEAD_SESSION_REASONS.has(code.toLowerCase())) {
-        return true;
-    }
+    if (code && MISSING_OR_DEAD_SESSION_REASONS.has(code.toLowerCase())) return true;
     const err = str(sent.error).toLowerCase();
-    return err.includes('cli instance not found')
-        || err.includes('no live session')
-        || err.includes('session has ended')
-        || err.includes('session not found')
-        || err.includes('instance not found')
-        || err.includes('not running')
-        || err.includes('process exited')
-        || err.includes('runtime not found for session')
+    return err.includes('cli instance not found') || err.includes('no live session')
+        || err.includes('session has ended') || err.includes('session not found')
+        || err.includes('instance not found') || err.includes('not running')
+        || err.includes('process exited') || err.includes('runtime not found for session')
         || err.includes('unknown session');
 }
 
@@ -592,27 +520,18 @@ async function isCoordinatorRuntimeLiveForFollower(
 ): Promise<boolean> {
     if (isConfirmedTerminalCoordinator(target)) return false;
     const targetRec = target as unknown as Record<string, unknown>;
-    if (targetRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(targetRec.runtime)) {
-        return false;
-    }
+    if (targetRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(targetRec.runtime)) return false;
     const liveStates = ports.liveSessionStates?.() ?? [];
     for (const s of liveStates) {
         if (!s || typeof s !== 'object') continue;
         const sRec = s as Record<string, unknown>;
-        const sid = typeof sRec.instanceId === 'string'
-            ? sRec.instanceId
-            : typeof sRec.sessionId === 'string'
-                ? sRec.sessionId
-                : '';
+        const sid = typeof sRec.instanceId === 'string' ? sRec.instanceId : typeof sRec.sessionId === 'string' ? sRec.sessionId : '';
         if (sid !== target.sessionId) continue;
         if (isConfirmedTerminalCoordinator(s)) return false;
-        if (sRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(sRec.runtime)) {
-            return false;
-        }
+        if (sRec.runtime !== undefined && !isLiveSessionHostRuntimeMetadata(sRec.runtime)) return false;
     }
     if (typeof ports.isCoordinatorLive === 'function') {
-        const live = await ports.isCoordinatorLive(target.sessionId);
-        if (!live) return false;
+        if (!(await ports.isCoordinatorLive(target.sessionId))) return false;
     }
     return true;
 }
@@ -635,9 +554,7 @@ function verifyRemoteFollowerBindingForWake(
     }
     const rawAcl = mesh.assistantRemoteAccess;
     const acl = normalizeAssistantRemoteAccessBinding(rawAcl, meshId);
-    if (!acl) {
-        return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
-    }
+    if (!acl) return { ok: false, result: fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`) };
     const self = ports.selfDaemonId();
     if (!self || !daemonIdsEquivalent(acl.hostDaemonId, self)) {
         return { ok: false, result: fail('remote_access_denied', `assistantRemoteAccess hostDaemonId mismatch for mesh ${meshId}.`) };
@@ -646,8 +563,7 @@ function verifyRemoteFollowerBindingForWake(
         return {
             ok: false,
             result: fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
-                grantRevision: acl.grantRevision,
-                bindingRevision: acl.bindingRevision,
+                grantRevision: acl.grantRevision, bindingRevision: acl.bindingRevision,
             }),
         };
     }
@@ -677,20 +593,15 @@ function verifyRemoteFollowerBindingForWake(
     }
     const claimedBindingRev = typeof args.bindingRevision === 'number'
         ? args.bindingRevision
-        : typeof followerClaim?.bindingRevision === 'number'
-            ? (followerClaim.bindingRevision as number)
-            : null;
+        : typeof followerClaim?.bindingRevision === 'number' ? (followerClaim.bindingRevision as number) : null;
     const claimedGrantRev = typeof args.grantRevision === 'number'
         ? args.grantRevision
-        : typeof followerClaim?.grantRevision === 'number'
-            ? (followerClaim.grantRevision as number)
-            : null;
+        : typeof followerClaim?.grantRevision === 'number' ? (followerClaim.grantRevision as number) : null;
     if (claimedBindingRev !== acl.bindingRevision || claimedGrantRev !== acl.grantRevision) {
         return {
             ok: false,
             result: fail('remote_access_denied', `Follower revision mismatch for mesh ${meshId}.`, {
-                actualBindingRevision: acl.bindingRevision,
-                actualGrantRevision: acl.grantRevision,
+                actualBindingRevision: acl.bindingRevision, actualGrantRevision: acl.grantRevision,
             }),
         };
     }

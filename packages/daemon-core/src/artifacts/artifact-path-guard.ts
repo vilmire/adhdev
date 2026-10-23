@@ -64,7 +64,7 @@ const SECRET_CONTENT_PATTERNS: readonly RegExp[] = [
     /\bAIza[0-9A-Za-z_-]{35}\b/,
     /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
     /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
-    /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET))\s*[:=]\s*['"]?[A-Za-z0-9/+._-]{16,}['"]?/,
+    /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET))\s*[:=]\s*['"]?[A-Za-z0-9/+._-]{16,}['"]?/i,
 ];
 
 /**
@@ -91,10 +91,10 @@ export function assertNotSecretPath(candidatePathOrRel: string): void {
 
 /**
  * OD-6 fail-closed secret content check: refuses files containing private keys
- * or credential/token patterns.
+ * or credential/token patterns (including polyglot/embedded payloads in image files).
  */
-export function assertNotSecretContent(buffer: Buffer, kind: ArtifactKind): void {
-    if (kind === 'image' || buffer.byteLength === 0) {
+export function assertNotSecretContent(buffer: Buffer, _kind: ArtifactKind): void {
+    if (buffer.byteLength === 0) {
         return;
     }
     const text = buffer.toString('utf8');

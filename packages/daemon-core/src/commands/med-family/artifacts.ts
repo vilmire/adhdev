@@ -25,8 +25,13 @@
 
 import * as fs from 'node:fs';
 import { daemonIdsEquivalent, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { readRouterCommandIngress } from '../command-args.js';
 import { hasWorkerCredentialInput, verifyArtifactCommandIngress } from './artifact-command-ingress.js';
-import { bindAuthenticatedMcpWorkspace } from '../mcp-command-ingress.js';
+import {
+    bindAuthenticatedMcpWorkspace,
+    readAuthenticatedMcpCommand,
+    readAuthenticatedMcpScope,
+} from '../mcp-command-ingress.js';
 import { defineCommandSpecs } from '../command-registry.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import type { CommandRouterDeps, CommandRouterResult } from '../router.js';
@@ -59,6 +64,7 @@ import {
     listWorkerAuthorizedArtifacts,
     resolveRegisteredSessionWorkspace,
     resolveRemoteWorkerForArtifact,
+    resolveRemoteWorkerTaskScopeFromHost,
 } from './artifact-sharing.js';
 
 export { handleArtifactFetchOrigin, handleArtifactIndexForwarded };
@@ -152,6 +158,9 @@ export interface ResolvedSessionAuthority {
     readonly isRemoteWorker?: boolean;
     readonly hostDaemonId?: string | null;
     readonly remoteClaim?: ForwardedWorkerReportClaim & { nodeId?: string };
+    readonly remoteInputArtifactIds?: readonly string[];
+    readonly remoteInputArtifacts?: readonly ArtifactRecord[];
+    readonly remoteRequestedArtifact?: ArtifactRecord | null;
 }
 
 async function resolveCallerAuthority(
@@ -181,10 +190,20 @@ async function resolveCallerAuthority(
 
     const explicitSessionId = rawSessionId || rawTargetSessionId;
     const explicitMeshId = trimString(args?.meshId);
-    const coordCandidateId = rawCallerSessionId || explicitSessionId;
+    const routerIngress = readRouterCommandIngress(args);
+    const mcp = readAuthenticatedMcpCommand(args, routerIngress?.command ?? '');
+    const mcpScope = mcp.valid ? readAuthenticatedMcpScope(args, routerIngress?.command ?? '') : null;
+
+    const coordCandidateId =
+        mcp.valid && mcpScope?.sessionId
+            ? mcpScope.sessionId
+            : ownerTrusted
+              ? rawCallerSessionId || explicitSessionId
+              : '';
     const coordEntry = coordCandidateId ? getCoordinatorForSession(coordCandidateId) : undefined;
     const isVerifiedCoordinator = Boolean(
         coordEntry &&
+            (ownerTrusted || (mcp.valid && mcpScope?.isCoordinator === true)) &&
             (!explicitMeshId || coordEntry.meshId === explicitMeshId) &&
             (!rawCallerSessionId || sessionIdsEquivalent(rawCallerSessionId, coordEntry.sessionId)),
     );
@@ -229,13 +248,17 @@ async function resolveCallerAuthority(
             const remote = await resolveRemoteWorkerForArtifact(ctx, { bind: rawBind, token: rawToken });
             if (remote) {
                 const remoteSessionId = trimString(remote.sessionId);
-                if (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, remoteSessionId)) {
+                if (
+                    (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, remoteSessionId)) ||
+                    (rawCallerSessionId && !sessionIdsEquivalent(rawCallerSessionId, remoteSessionId)) ||
+                    (explicitMeshId && explicitMeshId !== remote.meshId)
+                ) {
                     return {
                         ok: false,
                         result: {
                             success: false,
                             code: 'artifact_session_mismatch',
-                            error: `Worker credential belongs to session "${remoteSessionId}", not "${explicitSessionId}" (artifact_session_mismatch)`,
+                            error: `Worker credential belongs to session "${remoteSessionId}" in mesh "${remote.meshId}" (artifact_session_mismatch)`,
                         },
                     };
                 }
@@ -298,13 +321,39 @@ async function resolveCallerAuthority(
                         },
                     };
                 }
+                const remoteClaim: ForwardedWorkerReportClaim & { nodeId?: string } = {
+                    meshId: remote.meshId,
+                    sessionId: remoteSessionId,
+                    ...(remote.taskId ? { taskId: remote.taskId } : {}),
+                    ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
+                    ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
+                    ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
+                };
+                let hostScope:
+                    | {
+                          missionId: string | null;
+                          inputArtifactIds: readonly string[];
+                          inputArtifacts: readonly ArtifactRecord[];
+                          requestedArtifact: ArtifactRecord | null;
+                      }
+                    | undefined;
+                if (mode === 'list' || mode === 'fetch') {
+                    const scopeRes = await resolveRemoteWorkerTaskScopeFromHost(
+                        ctx,
+                        remote.ownerDaemonId,
+                        remoteClaim,
+                        requestedArtifactId || undefined,
+                    );
+                    if (!scopeRes.ok) return scopeRes;
+                    hostScope = scopeRes.scope;
+                }
                 return {
                     ok: true,
                     authority: {
                         sessionId: remoteSessionId,
                         taskId: remote.taskId ?? null,
                         meshId: remote.meshId,
-                        missionId: null,
+                        missionId: hostScope?.missionId ?? null,
                         producerRole: 'worker',
                         originDaemonId: selfDaemonId,
                         workspaceRoot: resolvedRemote.workspaceRoot,
@@ -313,14 +362,14 @@ async function resolveCallerAuthority(
                         title: resolvedRemote.title,
                         isRemoteWorker: true,
                         hostDaemonId: remote.ownerDaemonId,
-                        remoteClaim: {
-                            meshId: remote.meshId,
-                            sessionId: remoteSessionId,
-                            ...(remote.taskId ? { taskId: remote.taskId } : {}),
-                            ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
-                            ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
-                            ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
-                        },
+                        remoteClaim,
+                        ...(hostScope
+                            ? {
+                                  remoteInputArtifactIds: hostScope.inputArtifactIds,
+                                  remoteInputArtifacts: hostScope.inputArtifacts,
+                                  remoteRequestedArtifact: hostScope.requestedArtifact,
+                              }
+                            : {}),
                     },
                 };
             }
@@ -340,13 +389,17 @@ async function resolveCallerAuthority(
         }
 
         const workerSessionId = trimString(identity.sessionId);
-        if (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, workerSessionId)) {
+        if (
+            (explicitSessionId && !sessionIdsEquivalent(explicitSessionId, workerSessionId)) ||
+            (rawCallerSessionId && !sessionIdsEquivalent(rawCallerSessionId, workerSessionId)) ||
+            (explicitMeshId && explicitMeshId !== identity.meshId)
+        ) {
             return {
                 ok: false,
                 result: {
                     success: false,
                     code: 'artifact_session_mismatch',
-                    error: `Worker credential belongs to session "${workerSessionId}", not "${explicitSessionId}" (artifact_session_mismatch)`,
+                    error: `Worker credential belongs to session "${workerSessionId}" in mesh "${identity.meshId}", not "${explicitSessionId || rawCallerSessionId}" (artifact_session_mismatch)`,
                 },
             };
         }
@@ -743,21 +796,39 @@ async function resolveCallerAuthority(
         };
     }
 
-    const effectiveSessionId = explicitSessionId || (isVerifiedCoordinator ? rawCallerSessionId : '');
-    if (!effectiveSessionId) {
+    if (routerIngress?.source === 'ipc' && !ownerTrusted && !mcp.valid && (mode === 'list' || mode === 'fetch')) {
         return {
             ok: false,
             result: {
                 success: false,
-                code: 'invalid_arguments',
-                error: 'sessionId is required',
+                code: 'COMMAND_SOURCE_REJECTED',
+                error: 'Unauthenticated IPC call has no coordinator or session authority',
             },
         };
     }
 
+    const effectiveSessionId =
+        mcp.valid && mcpScope?.sessionId
+            ? mode === 'list' && isVerifiedCoordinator && explicitSessionId
+                ? explicitSessionId
+                : mcpScope.sessionId
+            : ownerTrusted
+              ? explicitSessionId || (isVerifiedCoordinator ? rawCallerSessionId : '')
+              : explicitSessionId;
+    if (!effectiveSessionId) {
+        return { ok: false, result: { success: false, code: 'invalid_arguments', error: 'sessionId is required' } };
+    }
+
+    const effectiveMeshId =
+        mcp.valid
+            ? mcpScope?.meshId || explicitMeshId || ''
+            : ownerTrusted
+              ? explicitMeshId || coordEntry?.meshId || ''
+              : explicitMeshId;
+
     const explicitTaskId = trimString(args?.taskId);
     if (explicitTaskId) {
-        if (!explicitMeshId && !ownerTrusted) {
+        if (!effectiveMeshId && !ownerTrusted) {
             return {
                 ok: false,
                 result: {
@@ -767,13 +838,10 @@ async function resolveCallerAuthority(
                 },
             };
         }
-        if (explicitMeshId) {
+        if (effectiveMeshId) {
             try {
                 const meshStore = getMeshRuntimeStore(ctx);
-                const queueEntry = meshStore.findQueueEntryById(explicitMeshId, explicitTaskId) as Record<
-                    string,
-                    unknown
-                > | null;
+                const queueEntry = meshStore.findQueueEntryById(effectiveMeshId, explicitTaskId) as Record<string, unknown> | null;
                 const assignedSession = trimString(queueEntry?.assignedSessionId);
                 const queueStatus = trimString(queueEntry?.status);
                 if (assignedSession && !sessionIdsEquivalent(assignedSession, effectiveSessionId)) {
@@ -798,7 +866,7 @@ async function resolveCallerAuthority(
                         result: {
                             success: false,
                             code: 'task_mismatch',
-                            error: `Task "${explicitTaskId}" is not actively assigned to session "${effectiveSessionId}" in mesh "${explicitMeshId}" (task_mismatch)`,
+                            error: `Task "${explicitTaskId}" is not actively assigned to session "${effectiveSessionId}" in mesh "${effectiveMeshId}" (task_mismatch)`,
                         },
                     };
                 }
@@ -809,7 +877,7 @@ async function resolveCallerAuthority(
                         result: {
                             success: false,
                             code: 'task_mismatch',
-                            error: `Task "${explicitTaskId}" ownership could not be verified in mesh "${explicitMeshId}" (task_mismatch)`,
+                            error: `Task "${explicitTaskId}" ownership could not be verified in mesh "${effectiveMeshId}" (task_mismatch)`,
                         },
                     };
                 }
@@ -833,26 +901,17 @@ async function resolveCallerAuthority(
         };
     }
 
-    if (!ownerTrusted && (mode === 'list' || mode === 'fetch') && explicitMeshId) {
+    if (!ownerTrusted && (mode === 'list' || mode === 'fetch') && effectiveMeshId) {
         let meshStore: any = null;
-        try {
-            meshStore = getMeshRuntimeStore(ctx);
-        } catch {
-            meshStore = null;
-        }
-        const authorizedInMesh = await isSessionAuthorizedForMesh(
-            ctx,
-            meshStore,
-            explicitMeshId,
-            effectiveSessionId,
-        );
+        try { meshStore = getMeshRuntimeStore(ctx); } catch { meshStore = null; }
+        const authorizedInMesh = await isSessionAuthorizedForMesh(ctx, meshStore, effectiveMeshId, effectiveSessionId);
         if (!authorizedInMesh) {
             return {
                 ok: false,
                 result: {
                     success: false,
                     code: 'artifact_session_mismatch',
-                    error: `Session "${effectiveSessionId}" is not an authorized member of mesh "${explicitMeshId}" (artifact_session_mismatch)`,
+                    error: `Session "${effectiveSessionId}" is not an authorized member of mesh "${effectiveMeshId}" (artifact_session_mismatch)`,
                 },
             };
         }
@@ -892,7 +951,7 @@ async function resolveCallerAuthority(
     }
 
     let producerRole: ArtifactProducerRole = 'user';
-    if (isVerifiedCoordinator || getCoordinatorForSession(effectiveSessionId)) {
+    if (isVerifiedCoordinator) {
         producerRole = 'coordinator';
     } else {
         try {
@@ -900,9 +959,7 @@ async function resolveCallerAuthority(
             if (assistantEntry?.sessionId && sessionIdsEquivalent(assistantEntry.sessionId, effectiveSessionId)) {
                 producerRole = 'assistant';
             }
-        } catch {
-            // Default to 'user'.
-        }
+        } catch { /* Default to 'user'. */ }
     }
 
     return {
@@ -910,7 +967,7 @@ async function resolveCallerAuthority(
         authority: {
             sessionId: effectiveSessionId,
             taskId: explicitTaskId || null,
-            meshId: explicitMeshId || coordEntry?.meshId || null,
+            meshId: effectiveMeshId || null,
             missionId: trimString(args?.missionId) || null,
             producerRole,
             originDaemonId: selfDaemonId,
@@ -935,22 +992,12 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
     }
 
     const { authority } = auth;
-    const rawPath =
-        trimString(args?.path) ||
-        trimString(args?.relPath) ||
-        trimString(args?.rawPath) ||
-        trimString(args?.filePath);
+    const rawPath = trimString(args?.path) || trimString(args?.relPath) || trimString(args?.rawPath) || trimString(args?.filePath);
     if (!rawPath) {
-        return {
-            success: false,
-            code: 'invalid_arguments',
-            error: 'Artifact file path is required',
-        };
+        return { success: false, code: 'invalid_arguments', error: 'Artifact file path is required' };
     }
 
-    const declaredKind = (trimString(args?.kind) || trimString(args?.declaredKind) || undefined) as
-        | ArtifactKind
-        | undefined;
+    const declaredKind = (trimString(args?.kind) || trimString(args?.declaredKind) || undefined) as ArtifactKind | undefined;
     const declaredMime = trimString(args?.mime) || trimString(args?.declaredMime) || undefined;
     const title = typeof args?.title === 'string' ? args.title : undefined;
 
@@ -972,19 +1019,11 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
 
         let finalRecord = registered.record;
         let finalAttachment = registered.attachment;
-        if (
-            authority.isRemoteWorker &&
-            authority.hostDaemonId &&
-            authority.remoteClaim &&
-            ctx.deps?.dispatchMeshCommand
-        ) {
+        if (authority.isRemoteWorker && authority.hostDaemonId && authority.remoteClaim && ctx.deps?.dispatchMeshCommand) {
             const rawForward = await ctx.deps.dispatchMeshCommand(
                 authority.hostDaemonId,
                 'artifact_index_forwarded',
-                {
-                    ...authority.remoteClaim,
-                    artifact: registered.record,
-                },
+                { ...authority.remoteClaim, artifact: registered.record },
             );
             const forwardAns = unwrapMeshRelayResult(rawForward, {
                 command: 'artifact_index_forwarded',
@@ -993,14 +1032,8 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
             if (forwardAns.success !== true) {
                 return {
                     success: false,
-                    code:
-                        (typeof forwardAns.code === 'string' && forwardAns.code) ||
-                        (typeof forwardAns.error === 'string' && forwardAns.error) ||
-                        'forward_failed',
-                    error:
-                        typeof forwardAns.detail === 'string'
-                            ? forwardAns.detail
-                            : String(forwardAns.error || 'Failed to forward artifact metadata to host daemon'),
+                    code: (typeof forwardAns.code === 'string' && forwardAns.code) || (typeof forwardAns.error === 'string' && forwardAns.error) || 'forward_failed',
+                    error: typeof forwardAns.detail === 'string' ? forwardAns.detail : String(forwardAns.error || 'Failed to forward artifact metadata to host daemon'),
                 };
             }
             if (forwardAns.artifact && typeof forwardAns.artifact === 'object') {
@@ -1018,9 +1051,7 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
                 title: authority.title,
                 forceUpsert: true,
             });
-            if (!publishedFrame) {
-                throw new Error('Transcript projection service is unavailable');
-            }
+            if (!publishedFrame) throw new Error('Transcript projection service is unavailable');
         } catch (pubErr) {
             const responseIngress = verifyArtifactCommandIngress(args, 'register');
             if (!responseIngress.ok) return responseIngress.result;
@@ -1073,10 +1104,7 @@ const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
 
     const { authority } = auth;
     const rawLimit = args?.limit;
-    const limit =
-        typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0
-            ? Math.trunc(rawLimit)
-            : undefined;
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) && rawLimit > 0 ? Math.trunc(rawLimit) : undefined;
     const filterMissionId = trimString(args?.missionId);
     const hasExplicitSession = Boolean(trimString(args?.sessionId) || trimString(args?.targetSessionId));
 
@@ -1094,23 +1122,13 @@ const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
                 limit,
             });
         } else if (!hasExplicitSession && authority.producerRole === 'worker') {
-            artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store, {
-                filterMissionId,
-                limit,
-            });
+            artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store, { filterMissionId, limit });
         } else {
             artifacts = store.listBySession(authority.sessionId, { limit });
-            if (filterMissionId) {
-                artifacts = artifacts.filter((rec) => rec.missionId === filterMissionId);
-            }
+            if (filterMissionId) artifacts = artifacts.filter((rec) => rec.missionId === filterMissionId);
         }
         const attachments = artifacts.map((record) => toChatAttachmentMeta(record));
-        return {
-            success: true,
-            sessionId: authority.sessionId,
-            artifacts,
-            attachments,
-        };
+        return { success: true, sessionId: authority.sessionId, artifacts, attachments };
     } catch (err) {
         return handleArtifactError(err);
     }
@@ -1134,16 +1152,13 @@ async function executeArtifactFetchOrRead(
     const { authority } = auth;
     const artifactId = trimString(args?.artifactId) || trimString(args?.id);
     if (!artifactId) {
-        return {
-            success: false,
-            code: 'invalid_arguments',
-            error: 'artifactId is required',
-        };
+        return { success: false, code: 'invalid_arguments', error: 'artifactId is required' };
     }
 
     try {
         const store = getArtifactStore(ctx);
-        const record = store.get(artifactId);
+        const localRecord = store.get(artifactId);
+        const record = localRecord ?? authority.remoteRequestedArtifact ?? null;
         if (!record) {
             return {
                 success: false,
@@ -1157,14 +1172,24 @@ async function executeArtifactFetchOrRead(
         const { trustedWorkspaceRoot } = accessCheck;
 
         const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
+        const effectiveOriginDaemonId =
+            trimString(record.originDaemonId) ||
+            (!localRecord && authority.isRemoteWorker ? trimString(authority.hostDaemonId) : '');
         const isRemoteOrigin = Boolean(
-            record.originDaemonId &&
-                selfDaemonId &&
-                !daemonIdsEquivalent(record.originDaemonId, selfDaemonId),
+            (!localRecord && authority.isRemoteWorker && effectiveOriginDaemonId) ||
+                (effectiveOriginDaemonId && selfDaemonId && !daemonIdsEquivalent(effectiveOriginDaemonId, selfDaemonId)),
         );
 
         if (isRemoteOrigin) {
-            return fetchArtifactFromOriginDaemon(ctx, authority, record, args, isReadCommand);
+            return fetchArtifactFromOriginDaemon(
+                ctx,
+                authority,
+                effectiveOriginDaemonId && effectiveOriginDaemonId !== record.originDaemonId
+                    ? { ...record, originDaemonId: effectiveOriginDaemonId }
+                    : record,
+                args,
+                isReadCommand,
+            );
         }
 
         if (isReadCommand) {

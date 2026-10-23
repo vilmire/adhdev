@@ -10,7 +10,11 @@ import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyHandler } from './types.js';
 import {
     ArtifactGuardError,
+    MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_MCP_PAGE_BYTES,
+    ORIGIN_FETCH_CHUNK_BYTES,
     type ArtifactStore,
+    reassembleBase64ArtifactChunks,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,
     type ArtifactKind,
@@ -21,6 +25,7 @@ import { verifyWorkerSessionBind } from '../../mesh/worker-mcp-isolation.js';
 import {
     resolveForwardedWorkerIdentity,
     resolveRemoteWorkerIdentity,
+    type ForwardedWorkerReportClaim,
     type WorkerAssignmentStamp,
 } from '../../mesh/worker-report-forwarded.js';
 import { currentMeshAttemptRef } from '../../providers/cli-provider-mesh-assignment.js';
@@ -417,6 +422,91 @@ export async function resolveRemoteWorkerForArtifact(
     });
 }
 
+export interface RemoteWorkerHostTaskScope {
+    readonly missionId: string | null;
+    readonly inputArtifactIds: readonly string[];
+    readonly inputArtifacts: readonly ArtifactRecord[];
+    readonly requestedArtifact: ArtifactRecord | null;
+}
+
+export async function resolveRemoteWorkerTaskScopeFromHost(
+    ctx: ArtifactCommandContext,
+    hostDaemonId: string,
+    remoteClaim: ForwardedWorkerReportClaim & { nodeId?: string },
+    requestedArtifactId?: string,
+): Promise<{ ok: true; scope: RemoteWorkerHostTaskScope } | { ok: false; result: CommandRouterResult }> {
+    if (!hostDaemonId || !ctx.deps?.dispatchMeshCommand) {
+        return {
+            ok: false,
+            result: {
+                success: false,
+                code: 'artifact_origin_unreachable',
+                error: `Host daemon "${hostDaemonId || 'unknown'}" is unreachable for remote worker task authorization (artifact_origin_unreachable)`,
+            },
+        };
+    }
+    try {
+        const rawScope = await ctx.deps.dispatchMeshCommand(
+            hostDaemonId,
+            'artifact_index_forwarded',
+            {
+                ...remoteClaim,
+                resolveScopeOnly: true,
+                ...(requestedArtifactId ? { artifactId: requestedArtifactId } : {}),
+            },
+        );
+        const scopeAns = unwrapMeshRelayResult(rawScope, {
+            command: 'artifact_index_forwarded',
+            peerDaemonId: hostDaemonId,
+        });
+        if (scopeAns.success !== true) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code:
+                        (typeof scopeAns.code === 'string' && scopeAns.code) ||
+                        (typeof scopeAns.error === 'string' && scopeAns.error) ||
+                        'unauthenticated',
+                    error:
+                        typeof scopeAns.detail === 'string'
+                            ? scopeAns.detail
+                            : String(scopeAns.error || 'Failed to resolve remote worker task scope from host daemon'),
+                },
+            };
+        }
+        const missionId = trimString(scopeAns.missionId) || null;
+        const inputArtifactIds = Array.isArray(scopeAns.inputArtifactIds)
+            ? scopeAns.inputArtifactIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0)
+            : [];
+        const inputArtifacts = Array.isArray(scopeAns.inputArtifacts)
+            ? (scopeAns.inputArtifacts.filter((a: unknown) => a && typeof a === 'object') as ArtifactRecord[])
+            : [];
+        const requestedArtifact =
+            scopeAns.requestedArtifact && typeof scopeAns.requestedArtifact === 'object'
+                ? (scopeAns.requestedArtifact as ArtifactRecord)
+                : null;
+        return {
+            ok: true,
+            scope: {
+                missionId,
+                inputArtifactIds,
+                inputArtifacts,
+                requestedArtifact,
+            },
+        };
+    } catch (err) {
+        return {
+            ok: false,
+            result: {
+                success: false,
+                code: 'artifact_origin_unreachable',
+                error: err instanceof Error ? err.message : String(err),
+            },
+        };
+    }
+}
+
 export async function authorizeCrossSessionArtifactAccess(
     ctx: ArtifactCommandContext,
     authority: ResolvedSessionAuthority,
@@ -445,7 +535,7 @@ export async function authorizeCrossSessionArtifactAccess(
             ? taskEntry.inputArtifactIds
             : Array.isArray(taskPayload.inputArtifactIds)
               ? taskPayload.inputArtifactIds
-              : [];
+              : (authority.remoteInputArtifactIds ?? []);
         const allowedIds = new Set(
             rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0),
         );
@@ -477,7 +567,7 @@ export async function authorizeCrossSessionArtifactAccess(
                 },
             };
         }
-        return { ok: true, trustedWorkspaceRoot: record.workspaceRoot };
+        return { ok: true, trustedWorkspaceRoot: record.workspaceRoot || null };
     }
     if (authority.isCoordinator && authority.meshId) {
         const meshStore = getMeshRuntimeStore(ctx);
@@ -506,7 +596,7 @@ export async function authorizeCrossSessionArtifactAccess(
     };
 }
 
-export const ORIGIN_FETCH_CHUNK_BYTES = 16 * 1024;
+export { ORIGIN_FETCH_CHUNK_BYTES, reassembleBase64ArtifactChunks };
 
 export function chunkArtifactBytesBase64(content: string): string[] {
     const buf = Buffer.from(content, 'utf8');
@@ -543,13 +633,16 @@ export function listWorkerAuthorizedArtifacts(
         ? taskEntry.inputArtifactIds
         : Array.isArray(taskPayload.inputArtifactIds)
           ? taskPayload.inputArtifactIds
-          : [];
+          : (authority.remoteInputArtifactIds ?? []);
+    const remoteArtifactById = new Map(
+        (authority.remoteInputArtifacts ?? []).map((rec) => [rec.artifactId, rec] as const),
+    );
     const seen = new Set<string>(own.map((rec) => rec.artifactId));
     const merged: ArtifactRecord[] = [...own];
     for (const rawId of rawInputIds) {
         const id = trimString(rawId);
         if (!id || seen.has(id)) continue;
-        const record = store.get(id);
+        const record = store.get(id) ?? remoteArtifactById.get(id);
         if (!record) continue;
         let recordMissionId = trimString(record.missionId);
         if (!recordMissionId && record.taskId) {
@@ -586,30 +679,40 @@ export async function fetchArtifactFromOriginDaemon(
     isReadCommand: boolean,
 ): Promise<CommandRouterResult> {
     const artifactId = record.artifactId;
-    if (!ctx.deps?.dispatchMeshCommand) {
+    const originDaemonId = trimString(record.originDaemonId) || trimString(authority.hostDaemonId);
+    if (!originDaemonId || !ctx.deps?.dispatchMeshCommand) {
         return {
             success: false,
             code: 'artifact_origin_unreachable',
-            error: `Artifact "${artifactId}" resides on origin daemon "${record.originDaemonId}", and no P2P mesh transport is available`,
+            error: `Artifact "${artifactId}" resides on origin daemon "${originDaemonId}", and no P2P mesh transport is available`,
         };
     }
-    const rawOrigin = await ctx.deps.dispatchMeshCommand(
-        record.originDaemonId!,
-        'artifact_fetch_origin',
-        {
-            meshId: record.meshId || authority.meshId || undefined,
-            artifactId: record.artifactId,
-            sessionId: record.sessionId,
-            mode: isReadCommand ? 'read' : 'fetch',
-            asChunks: true,
-            ...(args?.offset !== undefined ? { offset: args.offset } : {}),
-            ...(args?.pageOffset !== undefined ? { pageOffset: args.pageOffset } : {}),
-            ...(args?.limit !== undefined ? { limit: args.limit } : {}),
-        },
-    );
+    let rawOrigin: unknown;
+    try {
+        rawOrigin = await ctx.deps.dispatchMeshCommand(
+            originDaemonId,
+            'artifact_fetch_origin',
+            {
+                meshId: record.meshId || authority.meshId || undefined,
+                artifactId: record.artifactId,
+                sessionId: record.sessionId,
+                mode: isReadCommand ? 'read' : 'fetch',
+                asChunks: true,
+                ...(args?.offset !== undefined ? { offset: args.offset } : {}),
+                ...(args?.pageOffset !== undefined ? { pageOffset: args.pageOffset } : {}),
+                ...(args?.limit !== undefined ? { limit: args.limit } : {}),
+            },
+        );
+    } catch (err) {
+        return {
+            success: false,
+            code: 'artifact_origin_unreachable',
+            error: err instanceof Error ? err.message : String(err),
+        };
+    }
     const originAns = unwrapMeshRelayResult(rawOrigin, {
         command: 'artifact_fetch_origin',
-        peerDaemonId: record.originDaemonId!,
+        peerDaemonId: originDaemonId,
     });
     if (originAns.success !== true) {
         return {
@@ -621,14 +724,62 @@ export async function fetchArtifactFromOriginDaemon(
             error: String(originAns.error || 'Failed to fetch artifact from origin daemon'),
         };
     }
-    const chunks = Array.isArray(originAns.chunks) ? originAns.chunks : [];
-    const rawContent =
-        chunks.length > 0
-            ? Buffer.concat(chunks.map((c: unknown) => Buffer.from(String(c), 'base64'))).toString('utf8')
-            : String(originAns.content ?? '');
+    const maxBytes = isReadCommand ? MAX_ARTIFACT_MCP_PAGE_BYTES : MAX_ARTIFACT_BYTES;
+    let rawContent = '';
+    if (Array.isArray(originAns.chunks) && originAns.chunks.length > 0) {
+        const reassembled = reassembleBase64ArtifactChunks(originAns.chunks, maxBytes);
+        if (!reassembled.ok) {
+            return {
+                success: false,
+                code: reassembled.code,
+                error: reassembled.error,
+            };
+        }
+        rawContent = reassembled.content;
+    } else if (typeof originAns.content === 'string') {
+        if (Buffer.byteLength(originAns.content, 'utf8') > maxBytes) {
+            return {
+                success: false,
+                code: 'artifact_too_large',
+                error: `Artifact content exceeds ${maxBytes} bytes limit (artifact_too_large)`,
+            };
+        }
+        rawContent = originAns.content;
+    }
+    const encoding =
+        typeof originAns.encoding === 'string'
+            ? originAns.encoding
+            : record.kind === 'image'
+              ? 'base64'
+              : 'utf8';
+    const sha256Changed = Boolean(originAns.sha256Changed);
     return {
-        ...originAns,
         success: true,
+        artifactId: record.artifactId,
+        sessionId: record.sessionId,
+        relPath: record.relPath,
+        kind: record.kind,
+        mime: record.mime,
+        title: record.title,
+        encoding,
+        sizeBytes: typeof originAns.sizeBytes === 'number' ? originAns.sizeBytes : record.sizeBytes,
+        ...(isReadCommand
+            ? {
+                  totalBytes: typeof originAns.totalBytes === 'number' ? originAns.totalBytes : record.sizeBytes,
+                  offset: typeof originAns.offset === 'number' ? originAns.offset : 0,
+                  pageBytes:
+                      typeof originAns.pageBytes === 'number'
+                          ? originAns.pageBytes
+                          : Buffer.byteLength(rawContent, 'utf8'),
+                  hasMore: Boolean(originAns.hasMore),
+                  nextOffset: typeof originAns.nextOffset === 'number' ? originAns.nextOffset : null,
+              }
+            : {}),
+        sha256: typeof originAns.sha256 === 'string' ? originAns.sha256 : record.sha256,
+        registeredSha256:
+            typeof originAns.registeredSha256 === 'string' ? originAns.registeredSha256 : record.sha256,
+        sha256Changed,
+        hashChanged: Boolean(originAns.hashChanged ?? sha256Changed),
         content: isReadCommand ? wrapUntrustedArtifactContent(rawContent) : rawContent,
         artifact: record,
         attachment: toChatAttachmentMeta(record),
@@ -645,11 +796,12 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
         typeof args?.generation === 'number' && Number.isSafeInteger(args.generation)
             ? args.generation
             : undefined;
+    const resolveScopeOnly = args?.resolveScopeOnly === true;
     const rawArtifact =
         args?.artifact && typeof args.artifact === 'object' && !Array.isArray(args.artifact)
             ? (args.artifact as Record<string, unknown>)
             : null;
-    if (!meshId || !sessionId || !rawArtifact || !trimString(rawArtifact.artifactId)) {
+    if (!meshId || !sessionId || (!resolveScopeOnly && (!rawArtifact || !trimString(rawArtifact.artifactId)))) {
         return {
             success: false,
             code: 'invalid_arguments',
@@ -697,6 +849,13 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
             detail: `${resolved.refused}: ${resolved.detail}`,
         };
     }
+    if (resolveScopeOnly && !('live' in resolved)) {
+        return {
+            success: false,
+            code: 'stale_attempt',
+            error: 'Worker task attempt is no longer active (stale_attempt)',
+        };
+    }
     const ownerIdentity = 'live' in resolved ? resolved.live : resolved.late;
 
     try {
@@ -705,31 +864,119 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
             string,
             unknown
         > | null;
+        const queuePayload = (queueEntry?.payload ?? {}) as Record<string, unknown>;
         const missionId =
             trimString(queueEntry?.missionId) ||
-            trimString((queueEntry?.payload as Record<string, unknown> | undefined)?.missionId) ||
-            trimString(rawArtifact.missionId) ||
+            trimString(queuePayload.missionId) ||
+            (rawArtifact ? trimString(rawArtifact.missionId) : '') ||
             null;
 
         const store = getArtifactStore(ctx);
+        if (resolveScopeOnly) {
+            if (!queueEntry) {
+                return {
+                    success: false,
+                    code: 'unauthenticated',
+                    error: `Worker task "${ownerIdentity.taskId}" has no active queue assignment on host (unauthenticated)`,
+                };
+            }
+            const queueStatus = trimString(queueEntry.status);
+            if (queueStatus && queueStatus !== 'assigned') {
+                return {
+                    success: false,
+                    code: 'stale_attempt',
+                    error: `Task "${ownerIdentity.taskId}" is not in assigned state on host (stale_attempt)`,
+                };
+            }
+            const assignedSession = trimString(queueEntry.assignedSessionId);
+            if (assignedSession && !sessionIdsEquivalent(assignedSession, ownerIdentity.sessionId)) {
+                return {
+                    success: false,
+                    code: 'artifact_session_mismatch',
+                    error: `Task "${ownerIdentity.taskId}" is assigned to "${assignedSession}", not "${ownerIdentity.sessionId}" (artifact_session_mismatch)`,
+                };
+            }
+            const rawInputIds = Array.isArray(queueEntry.inputArtifactIds)
+                ? queueEntry.inputArtifactIds
+                : Array.isArray(queuePayload.inputArtifactIds)
+                  ? queuePayload.inputArtifactIds
+                  : [];
+            const inputArtifactIds = rawInputIds
+                .map((id: unknown) => trimString(id))
+                .filter((id: string) => id.length > 0);
+            const resolveRecMission = (rec: ArtifactRecord): string => {
+                const direct = trimString(rec.missionId);
+                if (direct) return direct;
+                if (!rec.taskId) return '';
+                try {
+                    const pe = meshStore.findQueueEntryById(rec.meshId || meshId, rec.taskId) as Record<string, unknown> | null;
+                    return trimString(pe?.missionId) || trimString((pe?.payload as Record<string, unknown> | undefined)?.missionId);
+                } catch {
+                    return '';
+                }
+            };
+            const inputArtifacts: ArtifactRecord[] = [];
+            const allowedSet = new Set(inputArtifactIds);
+            for (const id of inputArtifactIds) {
+                const rec = store.get(id);
+                if (!rec) continue;
+                const recMissionId = resolveRecMission(rec);
+                const sameMission = Boolean(missionId && recMissionId && missionId === recMissionId);
+                const sameMesh = !rec.meshId || rec.meshId === meshId;
+                if (sameMission && sameMesh) {
+                    inputArtifacts.push({
+                        ...rec,
+                        ...(recMissionId ? { missionId: recMissionId } : {}),
+                        originDaemonId: rec.originDaemonId || selfDaemonId || null,
+                    });
+                }
+            }
+            let requestedArtifact: ArtifactRecord | null = null;
+            const reqArtifactId = trimString(args?.artifactId);
+            if (reqArtifactId) {
+                const reqRec = store.get(reqArtifactId);
+                if (reqRec) {
+                    const reqMissionId = resolveRecMission(reqRec);
+                    const isAllowed =
+                        sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) ||
+                        (Boolean(missionId && reqMissionId && missionId === reqMissionId) &&
+                            (!reqRec.meshId || reqRec.meshId === meshId) &&
+                            allowedSet.has(reqArtifactId));
+                    requestedArtifact = {
+                        ...reqRec,
+                        ...(reqMissionId ? { missionId: reqMissionId } : {}),
+                        originDaemonId: reqRec.originDaemonId || selfDaemonId || null,
+                        ...(isAllowed ? {} : { previewText: null, workspaceRoot: '' }),
+                    };
+                }
+            }
+            return {
+                success: true,
+                missionId,
+                inputArtifactIds,
+                inputArtifacts,
+                requestedArtifact,
+            };
+        }
+
         const upserted = store.upsertForwardedArtifact({
-            artifactId: trimString(rawArtifact.artifactId),
+            artifactId: trimString(rawArtifact!.artifactId),
             sessionId: ownerIdentity.sessionId,
             taskId: ownerIdentity.taskId,
             meshId,
             missionId,
             producerRole: 'worker',
             originDaemonId: senderDaemonId,
-            workspaceRoot: trimString(rawArtifact.workspaceRoot),
-            relPath: trimString(rawArtifact.relPath),
-            kind: trimString(rawArtifact.kind) as ArtifactKind,
-            mime: trimString(rawArtifact.mime),
-            sizeBytes: Number(rawArtifact.sizeBytes) || 0,
-            sha256: trimString(rawArtifact.sha256),
-            title: typeof rawArtifact.title === 'string' ? rawArtifact.title : null,
-            previewText: typeof rawArtifact.previewText === 'string' ? rawArtifact.previewText : null,
-            createdAt: Number(rawArtifact.createdAt) || Date.now(),
-            updatedAt: Number(rawArtifact.updatedAt) || Date.now(),
+            workspaceRoot: trimString(rawArtifact!.workspaceRoot),
+            relPath: trimString(rawArtifact!.relPath),
+            kind: trimString(rawArtifact!.kind) as ArtifactKind,
+            mime: trimString(rawArtifact!.mime),
+            sizeBytes: Number(rawArtifact!.sizeBytes) || 0,
+            sha256: trimString(rawArtifact!.sha256),
+            title: typeof rawArtifact!.title === 'string' ? rawArtifact!.title : null,
+            previewText: typeof rawArtifact!.previewText === 'string' ? rawArtifact!.previewText : null,
+            createdAt: Number(rawArtifact!.createdAt) || Date.now(),
+            updatedAt: Number(rawArtifact!.updatedAt) || Date.now(),
         });
         return {
             success: true,
@@ -832,7 +1079,23 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
             });
             return {
                 success: true,
-                ...readRes,
+                artifactId: readRes.artifactId,
+                sessionId: readRes.sessionId,
+                relPath: readRes.relPath,
+                kind: readRes.kind,
+                mime: readRes.mime,
+                title: readRes.title,
+                encoding: readRes.encoding,
+                sizeBytes: readRes.sizeBytes,
+                totalBytes: readRes.totalBytes,
+                offset: readRes.offset,
+                pageBytes: readRes.pageBytes,
+                hasMore: readRes.hasMore,
+                nextOffset: readRes.nextOffset,
+                sha256: readRes.sha256,
+                registeredSha256: readRes.registeredSha256,
+                sha256Changed: readRes.sha256Changed,
+                hashChanged: readRes.hashChanged,
                 chunks: chunkArtifactBytesBase64(readRes.content),
                 chunkByteSize: ORIGIN_FETCH_CHUNK_BYTES,
                 artifact: record,
@@ -845,7 +1108,18 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
         });
         return {
             success: true,
-            ...fetched,
+            artifactId: fetched.artifactId,
+            sessionId: fetched.sessionId,
+            relPath: fetched.relPath,
+            kind: fetched.kind,
+            mime: fetched.mime,
+            title: fetched.title,
+            encoding: fetched.encoding,
+            sizeBytes: fetched.sizeBytes,
+            sha256: fetched.sha256,
+            registeredSha256: fetched.registeredSha256,
+            sha256Changed: fetched.sha256Changed,
+            hashChanged: fetched.hashChanged,
             chunks: chunkArtifactBytesBase64(fetched.content),
             chunkByteSize: ORIGIN_FETCH_CHUNK_BYTES,
             artifact: record,

@@ -37,4 +37,34 @@ describe('authenticated MCP command capability (independent of owner authority)'
         const unrelated = attachAuthenticatedMcpCommand({}, 'get_command_history', () => true);
         expect(readAuthenticatedMcpCommand(unrelated, 'get_command_history').present).toBe(false);
     });
+
+    it('rejects forged payload sessionId/callerSessionId when bound to a session and never stamps owner-only fetch aliases', () => {
+        for (const cmd of ['artifact_fetch', 'session_artifact_fetch'] as const) {
+            const rawFetch = attachAuthenticatedMcpCommand({ sessionId: 'registered', artifactId: 'art_0123456789abcdef' }, cmd, () => true);
+            expect(readAuthenticatedMcpCommand(rawFetch, cmd)).toEqual({ present: false, valid: false });
+        }
+
+        const forgedRead = (attachAuthenticatedMcpCommand as any)(
+            { sessionId: 'victim', artifactId: 'art_0123456789abcdef' },
+            'artifact_read',
+            () => true,
+            { sessionId: 'registered' },
+        );
+        expect(readAuthenticatedMcpCommand(forgedRead, 'artifact_read')).toEqual({ present: true, valid: false });
+
+        const forgedCaller = (attachAuthenticatedMcpCommand as any)(
+            { sessionId: 'registered', callerSessionId: 'coord-forged' },
+            'artifact_list',
+            () => true,
+            { sessionId: 'registered' },
+        );
+        expect(readAuthenticatedMcpCommand(forgedCaller, 'artifact_list')).toEqual({ present: true, valid: false });
+
+        const forgedWorkerMeshRead = attachAuthenticatedMcpCommand(
+            { sessionId: 'worker-unregistered-coord', meshId: 'mesh-1', artifactId: 'art_0123456789abcdef' },
+            'artifact_read',
+            () => true,
+        );
+        expect(readAuthenticatedMcpCommand(forgedWorkerMeshRead, 'artifact_read')).toEqual({ present: true, valid: false });
+    });
 });

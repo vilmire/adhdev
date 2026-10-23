@@ -29,6 +29,7 @@ import {
     markTrustedOwnerIngress,
     preserveTrustedOwnerIngress,
 } from '../../src/commands/command-args.js';
+import { attachAuthenticatedMcpCommand } from '../../src/commands/mcp-command-ingress.js';
 import {
     artifactHandlers,
     setArtifactCommandRuntimeForDeps,
@@ -2056,20 +2057,82 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 expect(bareList.code).toBe('COMMAND_SOURCE_REJECTED');
             }
 
-            // Positive control 2: Registered coordinator MCP IPC can list its own session and mesh-authorized worker session
+            // Positive control 2 & Finding 1 regression: Registered coordinator MCP IPC can list/read only via authenticated MCP capability; forged coordinator sessionId over unauthenticated IPC or forged sessionId over MCP is refused
             registerMeshCoordinator({
                 meshId: 'mesh-1',
                 sessionId: 'coord-sess',
                 workspace: workspaceA,
             });
             try {
+                // Forged coordinator sessionId over unauthenticated IPC is refused for list, read, and fetch
                 for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
-                    const coordWorkerList = await router.execute(
+                    const unauthCoordList = await router.execute(
+                        listAlias,
+                        {
+                            sessionId: 'worker-sess',
+                            callerSessionId: 'coord-sess',
+                            meshId: 'mesh-1',
+                        },
+                        'ipc',
+                    );
+                    expect(unauthCoordList.success, `unauthenticated coordinator ipc ${listAlias}`).toBe(false);
+                    expect(unauthCoordList.code).toBe('COMMAND_SOURCE_REJECTED');
+
+                    const unauthMeshList = await router.execute(
                         listAlias,
                         {
                             sessionId: 'worker-sess',
                             meshId: 'mesh-1',
                         },
+                        'ipc',
+                    );
+                    expect(unauthMeshList.success, `unauthenticated meshId ipc ${listAlias}`).toBe(false);
+                    expect(unauthMeshList.code).toBe('COMMAND_SOURCE_REJECTED');
+                }
+                for (const fetchAlias of ['artifact_read', 'artifact_fetch', 'session_artifact_fetch'] as const) {
+                    const unauthCoordFetch = await router.execute(
+                        fetchAlias,
+                        {
+                            callerSessionId: 'coord-sess',
+                            meshId: 'mesh-1',
+                            artifactId: workerArtId,
+                        },
+                        'ipc',
+                    );
+                    expect(unauthCoordFetch.success, `unauthenticated coordinator ipc ${fetchAlias}`).toBe(false);
+                    expect(unauthCoordFetch.code).toBe('COMMAND_SOURCE_REJECTED');
+                }
+
+                // Forged sessionId over MCP is refused
+                for (const cmd of ['artifact_register', 'artifact_list', 'artifact_read'] as const) {
+                    const forgedMcpPayload = (attachAuthenticatedMcpCommand as any)(
+                        {
+                            sessionId: 'worker-sess',
+                            artifactId: workerArtId,
+                            path: 'report.md',
+                        },
+                        cmd,
+                        () => true,
+                        { sessionId: 'victim' },
+                    );
+                    const forgedMcpRes = await router.execute(cmd, forgedMcpPayload, 'ipc');
+                    expect(forgedMcpRes.success, `forged MCP sessionId ${cmd}`).toBe(false);
+                    expect(forgedMcpRes.code).toBe('COMMAND_SOURCE_REJECTED');
+                }
+
+                // Genuine coordinator over authenticated MCP works for list and read
+                for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
+                    const coordWorkerList = await router.execute(
+                        listAlias,
+                        (attachAuthenticatedMcpCommand as any)(
+                            {
+                                sessionId: 'worker-sess',
+                                meshId: 'mesh-1',
+                            },
+                            listAlias,
+                            () => true,
+                            { sessionId: 'coord-sess', meshId: 'mesh-1', isCoordinator: true },
+                        ),
                         'ipc',
                     );
                     expect(coordWorkerList.success, `coordinator ${listAlias} worker-sess`).toBe(true);
@@ -2077,24 +2140,51 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
 
                     const coordSelfList = await router.execute(
                         listAlias,
-                        {
-                            sessionId: 'coord-sess',
-                            callerSessionId: 'coord-sess',
-                            meshId: 'mesh-1',
-                        },
+                        (attachAuthenticatedMcpCommand as any)(
+                            {
+                                sessionId: 'coord-sess',
+                                callerSessionId: 'coord-sess',
+                                meshId: 'mesh-1',
+                            },
+                            listAlias,
+                            () => true,
+                            { sessionId: 'coord-sess', meshId: 'mesh-1', isCoordinator: true },
+                        ),
                         'ipc',
                     );
                     expect(coordSelfList.success, `coordinator ${listAlias} coord-sess`).toBe(true);
                 }
 
+                const coordRead = await router.execute(
+                    'artifact_read',
+                    (attachAuthenticatedMcpCommand as any)(
+                        {
+                            callerSessionId: 'coord-sess',
+                            meshId: 'mesh-1',
+                            artifactId: workerArtId,
+                        },
+                        'artifact_read',
+                        () => true,
+                        { sessionId: 'coord-sess', meshId: 'mesh-1', isCoordinator: true },
+                    ),
+                    'ipc',
+                );
+                expect(coordRead.success).toBe(true);
+                expect(coordRead.content).toBe(wrapUntrustedArtifactContent('WORKER-REPORT-CONTENT'));
+
                 // Negative control 3: Coordinator cannot list foreign session outside mesh-1 or with mismatched callerSessionId
                 for (const listAlias of ['artifact_list', 'session_artifact_list'] as const) {
                     const foreignList = await router.execute(
                         listAlias,
-                        {
-                            sessionId: 'foreign-sess',
-                            meshId: 'mesh-1',
-                        },
+                        (attachAuthenticatedMcpCommand as any)(
+                            {
+                                sessionId: 'foreign-sess',
+                                meshId: 'mesh-1',
+                            },
+                            listAlias,
+                            () => true,
+                            { sessionId: 'coord-sess', meshId: 'mesh-1', isCoordinator: true },
+                        ),
                         'ipc',
                     );
                     expect(foreignList.success, `coordinator ${listAlias} foreign-sess`).toBe(false);
@@ -2102,15 +2192,20 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
 
                     const spoofedCallerList = await router.execute(
                         listAlias,
-                        {
-                            sessionId: 'worker-sess',
-                            callerSessionId: 'foreign-sess',
-                            meshId: 'mesh-1',
-                        },
+                        (attachAuthenticatedMcpCommand as any)(
+                            {
+                                sessionId: 'worker-sess',
+                                callerSessionId: 'foreign-sess',
+                                meshId: 'mesh-1',
+                            },
+                            listAlias,
+                            () => true,
+                            { sessionId: 'coord-sess', meshId: 'mesh-1', isCoordinator: true },
+                        ),
                         'ipc',
                     );
                     expect(spoofedCallerList.success, `spoofed caller ${listAlias}`).toBe(false);
-                    expect(spoofedCallerList.code).toBe('artifact_session_mismatch');
+                    expect(spoofedCallerList.code).toBe('COMMAND_SOURCE_REJECTED');
                 }
 
                 // Negative control 4: Unauthenticated IPC register with forged taskId / meshId / callerSessionId
@@ -2561,9 +2656,16 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 }),
             };
 
+            let lastOriginResult: any = null;
             hostEndpoint = new FakeRpcEndpoint(async (senderDaemonId, command, args) => {
                 if (command === 'artifact_index_forwarded') {
                     return (artifactHandlers as any).artifact_index_forwarded(
+                        hostCtx,
+                        { ...args, [MESH_SENDER_DAEMON_ID_ARG]: senderDaemonId },
+                    );
+                }
+                if (command === 'artifact_fetch_origin') {
+                    return (artifactHandlers as any).artifact_fetch_origin(
                         hostCtx,
                         { ...args, [MESH_SENDER_DAEMON_ID_ARG]: senderDaemonId },
                     );
@@ -2573,10 +2675,12 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
 
             remoteEndpoint = new FakeRpcEndpoint(async (senderDaemonId, command, args) => {
                 if (command === 'artifact_fetch_origin') {
-                    return (artifactHandlers as any).artifact_fetch_origin(
+                    const ans = await (artifactHandlers as any).artifact_fetch_origin(
                         remoteCtx,
                         { ...args, [MESH_SENDER_DAEMON_ID_ARG]: senderDaemonId },
                     );
+                    lastOriginResult = ans;
+                    return ans;
                 }
                 throw new Error(`Unexpected command on remote: ${command}`);
             });
@@ -2647,20 +2751,141 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                     startedAt: Date.now(),
                     cliType: 'claude-cli',
                 });
-                const hostRead = await artifactHandlers.artifact_read(hostCtx, {
-                    artifactId: remoteReg.artifactId,
-                    callerSessionId: 'coord-p2p-1',
-                    meshId: 'mesh-p2p-1',
-                });
+                const hostRead = await artifactHandlers.artifact_read(
+                    hostCtx,
+                    (attachAuthenticatedMcpCommand as any)(
+                        {
+                            artifactId: remoteReg.artifactId,
+                            callerSessionId: 'coord-p2p-1',
+                            meshId: 'mesh-p2p-1',
+                        },
+                        'artifact_read',
+                        () => true,
+                        { sessionId: 'coord-p2p-1', meshId: 'mesh-p2p-1', isCoordinator: true },
+                    ),
+                );
                 expect(hostRead.success).toBe(true);
                 expect(hostRead.content).toContain('<untrusted_artifact_content>');
                 expect(hostRead.content).toContain(largeMarkdown);
                 expect(hostRead.content).toContain('</untrusted_artifact_content>');
-                expect(hostRead.chunkByteSize).toBe(16 * 1024);
-                expect(Array.isArray(hostRead.chunks)).toBe(true);
-                expect((hostRead.chunks as string[]).length).toBeGreaterThanOrEqual(4);
+                // Finding 3: artifact_fetch_origin sends base64 chunks without duplicating full content,
+                // and fetchArtifactFromOriginDaemon does not leak chunks/chunkByteSize into the caller result
+                expect(lastOriginResult?.content).toBeUndefined();
+                expect(lastOriginResult?.chunkByteSize).toBe(16 * 1024);
+                expect(Array.isArray(lastOriginResult?.chunks)).toBe(true);
+                expect((lastOriginResult?.chunks as string[]).length).toBeGreaterThanOrEqual(4);
+                expect(hostRead.chunks).toBeUndefined();
+                expect(hostRead.chunkByteSize).toBeUndefined();
                 // Verify the response was split into multiple 16 KB mesh_chunk frames over MeshRpcEndpoint
                 expect(chunkFramesObserved.length).toBeGreaterThanOrEqual(2);
+
+                // 3) Finding 2: Remote-machine worker OD-4 list and read of allowed inputArtifactIds vs refused unlisted artifact
+                sessionRegistry.register({
+                    sessionId: 'sess-host-producer',
+                    parentSessionId: null,
+                    providerType: 'claude-cli',
+                    transport: 'pty',
+                    workspace: workspaceA,
+                });
+                fs.writeFileSync(path.join(workspaceA, 'host-shared.md'), '# Host Shared Spec\nFor remote worker.\n');
+                fs.writeFileSync(path.join(workspaceA, 'host-unlisted.md'), '# Host Private Spec\nNot in inputArtifactIds.\n');
+                const hostShared = artifactStore.register({
+                    sessionId: 'sess-host-producer',
+                    meshId: 'mesh-p2p-1',
+                    missionId: 'mission-p2p-1',
+                    originDaemonId: 'daemon_host_1',
+                    workspaceRoot: workspaceA,
+                    path: 'host-shared.md',
+                    title: 'Host Shared Spec',
+                }).record;
+                const hostUnlisted = artifactStore.register({
+                    sessionId: 'sess-host-producer',
+                    meshId: 'mesh-p2p-1',
+                    missionId: 'mission-p2p-1',
+                    originDaemonId: 'daemon_host_1',
+                    workspaceRoot: workspaceA,
+                    path: 'host-unlisted.md',
+                    title: 'Host Private Spec',
+                }).record;
+
+                meshStore.db
+                    .prepare("UPDATE mesh_queue SET payload = json_set(payload, '$.inputArtifactIds', json(?)) WHERE mesh_id = ? AND id = ?")
+                    .run(JSON.stringify([hostShared.artifactId]), 'mesh-p2p-1', 'task-remote-1');
+
+                const remoteWorkerList = await artifactHandlers.artifact_list(remoteCtx, {
+                    bind: remoteBind.bind,
+                    token: remoteToken.token,
+                });
+                expect(remoteWorkerList.success).toBe(true);
+                const listedIds = (remoteWorkerList.artifacts as any[]).map((a) => a.artifactId);
+                expect(listedIds).toContain(remoteReg.artifactId);
+                expect(listedIds).toContain(hostShared.artifactId);
+                expect(listedIds).not.toContain(hostUnlisted.artifactId);
+
+                const remoteWorkerAllowedRead = await artifactHandlers.artifact_read(remoteCtx, {
+                    artifactId: hostShared.artifactId,
+                    bind: remoteBind.bind,
+                    token: remoteToken.token,
+                });
+                expect(remoteWorkerAllowedRead.success).toBe(true);
+                expect(remoteWorkerAllowedRead.content).toContain('# Host Shared Spec\nFor remote worker.');
+
+                const remoteWorkerDeniedRead = await artifactHandlers.artifact_read(remoteCtx, {
+                    artifactId: hostUnlisted.artifactId,
+                    bind: remoteBind.bind,
+                    token: remoteToken.token,
+                });
+                expect(remoteWorkerDeniedRead.success).toBe(false);
+                expect(remoteWorkerDeniedRead.code).toBe('artifact_access_denied');
+
+                // Fail closed when host is unreachable
+                const savedDispatch = remoteDeps.dispatchMeshCommand;
+                remoteDeps.dispatchMeshCommand = undefined;
+                try {
+                    const unreachableList = await artifactHandlers.artifact_list(remoteCtx, {
+                        bind: remoteBind.bind,
+                        token: remoteToken.token,
+                    });
+                    expect(unreachableList.success).toBe(false);
+                    const unreachableRead = await artifactHandlers.artifact_read(remoteCtx, {
+                        artifactId: hostShared.artifactId,
+                        bind: remoteBind.bind,
+                        token: remoteToken.token,
+                    });
+                    expect(unreachableRead.success).toBe(false);
+                } finally {
+                    remoteDeps.dispatchMeshCommand = savedDispatch;
+                }
+
+                // 4) Finding 3: Oversized chunk set is rejected before Buffer.concat
+                const savedHostDispatch = deps.dispatchMeshCommand;
+                const concatSpy = vi.spyOn(Buffer, 'concat');
+                try {
+                    deps.dispatchMeshCommand = async () => ({
+                        success: true,
+                        chunks: Array.from({ length: 20 }, () => Buffer.alloc(16 * 1024, 0x41).toString('base64')),
+                    });
+                    concatSpy.mockClear();
+                    const oversizedRead = await artifactHandlers.artifact_read(
+                        hostCtx,
+                        (attachAuthenticatedMcpCommand as any)(
+                            {
+                                artifactId: remoteReg.artifactId,
+                                callerSessionId: 'coord-p2p-1',
+                                meshId: 'mesh-p2p-1',
+                            },
+                            'artifact_read',
+                            () => true,
+                            { sessionId: 'coord-p2p-1', meshId: 'mesh-p2p-1', isCoordinator: true },
+                        ),
+                    );
+                    expect(oversizedRead.success).toBe(false);
+                    expect(oversizedRead.code).toBe('artifact_too_large');
+                    expect(concatSpy).not.toHaveBeenCalled();
+                } finally {
+                    concatSpy.mockRestore();
+                    deps.dispatchMeshCommand = savedHostDispatch;
+                }
             } finally {
                 unregisterMeshCoordinator('coord-p2p-1');
                 remoteMeshStore.close();

@@ -3980,6 +3980,91 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 success: true,
                 artifactId,
             });
+
+            // 9. Local allowArtifactRead===false on followedRemote entry refuses locally without dispatching remote RPC
+            await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                {
+                    action: 'follow',
+                    hostDaemonId: HOST_A,
+                    hostLabel: 'Host-A',
+                    meshId: MESH_PREFEX_SIM,
+                    name: 'AlphaSim',
+                    sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                    grantRevision: 1,
+                    bindingRevision: 1,
+                    allowArtifactRead: false,
+                },
+                'p2p',
+                { ownerVerified: true },
+            );
+            hostOnline = false;
+            try {
+                const localDeniedList: any = await asstRouter.execute(
+                    'assistant_artifact_list',
+                    { project: 'alpha-sim' },
+                    'standalone',
+                );
+                expect(localDeniedList).toMatchObject({
+                    success: false,
+                    code: 'artifact_read_disabled',
+                });
+                const localDeniedRead: any = await asstRouter.execute(
+                    'assistant_artifact_read',
+                    { project: 'alpha-sim', artifactId },
+                    'standalone',
+                );
+                expect(localDeniedRead).toMatchObject({
+                    success: false,
+                    code: 'artifact_read_disabled',
+                });
+            } finally {
+                hostOnline = true;
+            }
+
+            // 10. localArtifactRead rejects oversized P2P chunk sets before Buffer.concat
+            await withHostEnv(async () => {
+                const { localArtifactRead } = await import('../../src/commands/high-family/assistant.js');
+                const { ArtifactStore } = await import('../../src/artifacts/index.js');
+                const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+                const remoteRec = store.upsertForwarded({
+                    artifactId: 'art_1122334455667788',
+                    sessionId: 'sess-remote-w',
+                    meshId: MESH_PREFEX_SIM,
+                    originDaemonId: 'daemon_remote_origin',
+                    workspaceRoot: artifactWorkspace,
+                    relPath: 'remote.md',
+                    kind: 'markdown',
+                    mime: 'text/markdown',
+                    sizeBytes: 1024,
+                    sha256: 'c'.repeat(64),
+                }).record;
+                const concatSpy = vi.spyOn(Buffer, 'concat');
+                try {
+                    const overRes = await localArtifactRead(
+                        { selfDaemonId: () => HOST_A } as any,
+                        MESH_PREFEX_SIM,
+                        { artifactId: remoteRec.artifactId },
+                        {
+                            deps: {
+                                dispatchMeshCommand: async () => ({
+                                    success: true,
+                                    chunks: Array.from({ length: 18 }, () =>
+                                        Buffer.alloc(16 * 1024, 0x42).toString('base64'),
+                                    ),
+                                }),
+                            },
+                        } as any,
+                    );
+                    expect(overRes).toMatchObject({
+                        ok: false,
+                        code: 'artifact_too_large',
+                    });
+                    expect(concatSpy).not.toHaveBeenCalled();
+                } finally {
+                    concatSpy.mockRestore();
+                }
+            });
         } finally {
             rmSync(artifactWorkspace, { recursive: true, force: true });
         }
