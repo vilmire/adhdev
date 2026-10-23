@@ -7,11 +7,13 @@ import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { stateById, statusForState, type CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
+import { isAnchoredSignInViewport } from '../../../src/providers/spec/send-submit-engine.js';
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
-import { detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js';
+import { detectAuthFailureOnlyReply, detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js';
 import {
     classifyAuthBillingOutput,
     createLiveAuthState,
+    noteLiveAuthMatch,
     resolveLiveAuthSuspect,
 } from '../../../src/providers/spec/live-auth-advisory.js';
 import { projectAdapterStatus } from '../../../src/providers/spec/adapter-status-projection.js';
@@ -920,3 +922,345 @@ describe('Review Finding 8 — completion ledger does not emit false turn comple
         expect(events.some(e => e.event === 'agent:ready')).toBe(true);
     });
 });
+
+describe('Round 3 Finding 1 — pre-send screen guard blocks idle auth-expiry delivery into login screen', () => {
+    it('blocks send and transitions to signing_in when a healthy idle Claude session clears the terminal and renders the Select login method screen', async () => {
+        vi.useFakeTimers();
+        try {
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('claude-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            // 1. Healthy Claude reaches idle
+            pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
+            await vi.advanceTimersByTimeAsync(600);
+            expect(driver.currentStateId).toBe('idle');
+            expect(driver.hasSeenReady()).toBe(true);
+            pty.writes.length = 0;
+
+            // 2. Terminal is cleared and the login screen renders while FSM is still in idle
+            pty.feed(
+                '\u001b[2J\u001b[H' +
+                'Claude Code v2.1.309\r\n\r\n' +
+                'Select login method:\r\n' +
+                ' ❯ 1. Claude account with subscription\r\n' +
+                '   2. Anthropic Console account\r\n',
+            );
+            await vi.advanceTimersByTimeAsync(200);
+
+            // 3. Next send must NOT write task body or CR into the login screen
+            const disp = driver.sendMessageWithDisposition('secret task body after idle auth expiry', false, 'msg-idle-expiry-1');
+            await vi.advanceTimersByTimeAsync(1_000);
+
+            expect(nonFocusWrites()).toEqual([]);
+            expect(disp).toEqual({
+                status: 'queued',
+                queueDepth: 1,
+                reason: 'auth_required',
+            });
+            expect(driver.currentStateId).toBe('signing_in');
+            expect(driver.hasQueuedSend('msg-idle-expiry-1')).toBe(true);
+
+            // 4. Once login completes and the normal idle composer returns, the queued task drains cleanly
+            pty.feed('\u001b[2J\u001b[H────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(driver.currentStateId).toBe('idle');
+            expect(nonFocusWrites().join('')).toContain('secret task body after idle auth expiry');
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('still sends normally on a healthy idle session with sign-in text in scrollback or recent tool output above composer chrome', async () => {
+        vi.useFakeTimers();
+        try {
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('claude-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            // Print sign-in text into scrollback AND in tool output above the active idle composer chrome
+            const scrollbackPadding = Array.from({ length: 45 }, (_, i) =>
+                i === 2
+                    ? 'Select login method:\r\n ❯ 1. Claude account with subscription\r\n   2. Anthropic Console account'
+                    : `scrollback line ${i}`,
+            ).join('\r\n');
+            const activeIdleWithToolSignIn = [
+                '⏺ Read(test/auth.test.ts)',
+                '  ⎿  Select login method:',
+                '       1. Claude account with subscription',
+                '       2. Anthropic Console account',
+                '────────────────────',
+                '❯ ',
+                '────────────────────',
+                '  Opus 4.6 · 18% context',
+            ].join('\r\n');
+
+            pty.feed(`${scrollbackPadding}\r\n${activeIdleWithToolSignIn}\r\n`);
+            await vi.advanceTimersByTimeAsync(600);
+            expect(driver.currentStateId).toBe('idle');
+            expect(driver.hasSeenReady()).toBe(true);
+            pty.writes.length = 0;
+
+            const disp = driver.sendMessageWithDisposition('healthy task with scrollback sign-in text', false, 'msg-healthy-1');
+            await vi.advanceTimersByTimeAsync(1_000);
+
+            expect(disp).toEqual({ status: 'delivered' });
+            expect(driver.currentStateId).toBe('idle');
+            expect(nonFocusWrites().join('')).toContain('healthy task with scrollback sign-in text');
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('matches active sign-in viewports for all 6 providers and sub-screens, and rejects viewports where composer chrome is present below login text', () => {
+        const providerCases: Array<{ cli: string; file: string; signInScreens: string[]; idleWithLoginAbove: string }> = [
+            {
+                cli: 'antigravity-cli',
+                file: '4.0.json',
+                signInScreens: [AGY_SIGNIN_SELECTOR_SCREEN, AGY_OAUTH_PASTE_CODE_SCREEN],
+                idleWithLoginAbove: [
+                    AGY_SIGNIN_SELECTOR_SCREEN,
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '> Type your message or @path/to/file',
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '? for shortcuts                                          Gemini 3.7 Flash · high',
+                ].join('\n'),
+            },
+            {
+                cli: 'claude-cli',
+                file: '4.0.json',
+                signInScreens: [
+                    CLAUDE_SIGNIN_SCREEN,
+                    CLAUDE_OAUTH_PASTE_CODE_SCREEN,
+                    CLAUDE_CONSOLE_SUBSCREEN,
+                    CLAUDE_OPENING_BROWSER_SUBSCREEN,
+                    CLAUDE_CLOUD_GATEWAY_SUBSCREEN,
+                ],
+                idleWithLoginAbove: [
+                    CLAUDE_SIGNIN_SCREEN,
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '❯ ',
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '  ⏸ manual mode on · ← for agents',
+                ].join('\n'),
+            },
+            {
+                cli: 'codex-cli',
+                file: '4.0.json',
+                signInScreens: [
+                    CODEX_SIGNIN_SCREEN,
+                    CODEX_FINISH_BROWSER_SUBSCREEN,
+                    CODEX_PREPARING_DEVICE_CODE_SUBSCREEN,
+                    CODEX_API_KEY_BOX_SUBSCREEN,
+                    CODEX_API_KEY_DISABLED_SUBSCREEN,
+                ],
+                idleWithLoginAbove: [
+                    CODEX_SIGNIN_SCREEN,
+                    '› Ask Codex to do anything',
+                    '  gpt-5.4-codex medium · /tmp/ws · 92% left',
+                    '  ? for shortcuts',
+                ].join('\n'),
+            },
+            {
+                cli: 'cursor-cli',
+                file: '1.0.json',
+                signInScreens: [CURSOR_SIGNIN_SCREEN],
+                idleWithLoginAbove: [
+                    CURSOR_SIGNIN_SCREEN,
+                    '  Claude 4.5 Sonnet · 4.2%',
+                    '  /tmp/ws',
+                ].join('\n'),
+            },
+            {
+                cli: 'grok-cli',
+                file: '1.0.json',
+                signInScreens: [GROK_SIGNIN_SCREEN],
+                idleWithLoginAbove: [
+                    GROK_SIGNIN_SCREEN,
+                    '  │ ❯ ',
+                    '  Shift+Tab: mode · Ctrl+x: shortcuts',
+                ].join('\n'),
+            },
+            {
+                cli: 'kimi',
+                file: '1.0.json',
+                signInScreens: [KIMI_SIGNIN_DEVICE_CODE_SCREEN],
+                idleWithLoginAbove: [
+                    KIMI_SIGNIN_DEVICE_CODE_SCREEN,
+                    '  ╭──────────────────────────────────────────╮',
+                    '  │ >                                        │',
+                    '  ╰──────────────────────────────────────────╯',
+                ].join('\n'),
+            },
+        ];
+
+        for (const c of providerCases) {
+            const spec = loadProviderSpec(c.cli, c.file);
+            for (const s of c.signInScreens) {
+                expect(isAnchoredSignInViewport(s, spec), `${c.cli} sign-in screen`).toBe(true);
+            }
+            expect(isAnchoredSignInViewport(c.idleWithLoginAbove, spec), `${c.cli} idle composer below login text`).toBe(false);
+        }
+    });
+});
+
+describe('Round 3 Finding 2 — fenced code blocks, unified-diff context lines, and blank-separated tool continuations do not cause mid-turn auth advisories', () => {
+    const t0 = 1_800_000_000_000;
+    const ctx = { cliType: 'claude-cli', sessionLabel: 'sess-r3-f2', isCoordinator: false };
+
+    it.each([
+        [
+            'fenced code block containing an indented API Error: 401 Unauthorized',
+            [
+                '⏺ Here is the reproduction snippet:',
+                '```text',
+                '  API Error: 401 Unauthorized',
+                '```',
+                '✻ Thinking… (esc to interrupt)',
+            ].join('\n'),
+        ],
+        [
+            'tilde-fenced code block containing an indented API Error: 401 Unauthorized',
+            [
+                '~~~',
+                '  API Error: 401 Unauthorized',
+                '~~~',
+                '✻ Thinking… (esc to interrupt)',
+            ].join('\n'),
+        ],
+        [
+            'unified-diff context line with API Error: 401 Unauthorized',
+            [
+                'diff --git a/test/auth.test.ts b/test/auth.test.ts',
+                '--- a/test/auth.test.ts',
+                '+++ b/test/auth.test.ts',
+                '@@ -10,4 +10,5 @@ describe("auth", () => {',
+                ' API Error: 401 Unauthorized',
+                '+expect(true).toBe(true);',
+                ' });',
+            ].join('\n'),
+        ],
+        [
+            'indented tool continuation after a blank line',
+            [
+                '  ⎿  Running test suite...',
+                '',
+                '     API Error: 401 Unauthorized',
+            ].join('\n'),
+        ],
+    ])('does NOT classify or fire mid-turn advisory for %s', (_label, screen) => {
+        expect(detectProviderFailure(screen)).toBeNull();
+
+        const state = createLiveAuthState();
+        const failure = classifyAuthBillingOutput('claude-cli', screen);
+        if (failure) noteLiveAuthMatch(state, ctx, failure);
+        // Even if a prior suspicion existed on the session, mid-turn resolution at age 20s / quietMs 10s must not fire on this screen
+        if (!state.suspect) {
+            state.suspect = {
+                failure: { errorReason: 'auth_failed', failureKind: 'auth', message: 'prior suspect' },
+                suspectedAtMs: t0,
+            };
+        }
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: true,
+            now: t0 + 20_000,
+            quietMs: 10_000,
+            tail: screen,
+            readScreen: () => screen,
+        });
+        expect(res.advisory).toBeUndefined();
+        expect(res.latch).toBeUndefined();
+    });
+
+    it('still triggers mid-turn advisory on a genuine provider 401 rendering anchored at line start near the bottom', () => {
+        const genuineScreen = [
+            '⏺ Working on the task...',
+            'API Error: 401 Unauthorized — OAuth token has expired.',
+        ].join('\n');
+        const failure = classifyAuthBillingOutput('claude-cli', genuineScreen);
+        expect(failure).toMatchObject({ errorReason: 'auth_failed', failureKind: 'auth' });
+
+        const state = createLiveAuthState();
+        state.suspect = { failure: failure!, suspectedAtMs: t0 };
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: true,
+            now: t0 + 20_000,
+            quietMs: 10_000,
+            tail: genuineScreen,
+            readScreen: () => genuineScreen,
+        });
+        expect(res.advisory).toBeDefined();
+        expect(res.advisory?.kind).toBe('auth_error');
+    });
+});
+
+describe('Round 3 Finding 5 — native Anthropic JSON authentication_error and Invalid authentication credentials', () => {
+    it('classifies raw {"type":"error","error":{"type":"authentication_error","message":"Unauthorized"}} without API Error: 401 prefix', () => {
+        const rawJson = '{"type":"error","error":{"type":"authentication_error","message":"Unauthorized"}}';
+        expect(detectProviderFailure(rawJson)).toMatchObject({
+            errorReason: 'auth_failed',
+            failureKind: 'auth',
+        });
+        expect(detectAuthFailureOnlyReply(rawJson)).toMatchObject({
+            errorReason: 'auth_failed',
+            failureKind: 'auth',
+        });
+
+        const t0 = 1_800_000_000_000;
+        const state = createLiveAuthState();
+        state.suspect = {
+            failure: detectProviderFailure(rawJson)!,
+            suspectedAtMs: t0,
+        };
+        const res = resolveLiveAuthSuspect(
+            state,
+            { cliType: 'claude-cli', sessionLabel: 'sess-json-auth', isCoordinator: false },
+            {
+                midTurn: true,
+                now: t0 + 20_000,
+                quietMs: 10_000,
+                tail: rawJson,
+                readScreen: () => rawJson,
+            },
+        );
+        expect(res.advisory).toBeDefined();
+        expect(res.advisory?.kind).toBe('auth_error');
+    });
+
+    it('classifies "Invalid authentication credentials" in both banner and JSON form', () => {
+        for (const sample of [
+            'Invalid authentication credentials',
+            'Error: Invalid authentication credentials',
+            'API Error: Invalid authentication credentials',
+            '{"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}',
+        ]) {
+            expect(detectProviderFailure(sample), sample).toMatchObject({
+                errorReason: 'auth_failed',
+                failureKind: 'auth',
+            });
+            expect(detectAuthFailureOnlyReply(sample), sample).toMatchObject({
+                errorReason: 'auth_failed',
+                failureKind: 'auth',
+            });
+        }
+    });
+});
+

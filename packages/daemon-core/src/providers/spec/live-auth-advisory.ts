@@ -113,19 +113,27 @@ export const LIVE_AUTH_ADVISORY_RULE_ID = 'builtin.live_auth_marker';
 const KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
 
 /**
- * Strictly anchored mid-turn auth failure pattern (evaluated ONLY after
- * `stripAnsi` and `stripToolAndCodeLines`). Matches native JSON auth errors or
- * line-anchored CLI/HTTP 401 / login-expired banners; never matches prose or
- * 403 quota lines.
+ * Strictly anchored mid-turn auth failure line pattern (evaluated ONLY after
+ * `stripAnsi` and `stripToolAndCodeLines`, and only on lines near the bottom
+ * of the screen). Matches native JSON auth errors or line-anchored CLI/HTTP 401
+ * / login-expired banners at column 0..2; never matches indented tool/code/diff
+ * lines, prose, or 403 quota lines.
  */
-const ANCHORED_MID_TURN_AUTH_RE = /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:[^\n]*"type"\s*:\s*"authentication_error"\b|[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S)/i;
+const ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S)/i;
 
 function hasAnchoredMidTurnAuthFailure(cliType: string, rawSurface: string): boolean {
     const masked = maskForeignProviderText(cliType, rawSurface);
     const stripped = stripAnsi(masked).replace(/\r\n?/g, '\n');
     const filtered = stripToolAndCodeLines(stripped);
     if (!filtered.trim()) return false;
-    return ANCHORED_MID_TURN_AUTH_RE.test(filtered);
+    const rawNonEmpty = stripped.split('\n').filter(l => l.trim().length > 0);
+    const bottomWindow = new Set(rawNonEmpty.slice(-8));
+    for (const line of filtered.split('\n')) {
+        if (ANCHORED_MID_TURN_AUTH_LINE_RE.test(line) && bottomWindow.has(line)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 export interface LiveAuthState {

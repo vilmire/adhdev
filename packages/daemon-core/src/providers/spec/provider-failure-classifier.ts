@@ -77,6 +77,9 @@ function hasProviderFailureEnvelope(text: string): boolean {
         || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
 }
 
+const CLEAR_PROVIDER_CHROME_RE = /^[ \t]*(?:[⏺✻✢✳✶✽✷✸✹❯›](?:\s|$)|─{10,}[ \t]*$)/;
+const TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|Glob|LS|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|Ran|Explored|Edited|Wrote)\b/;
+
 /**
  * Strip lines that are clearly tool-result blocks, diffs, line-numbered file
  * dumps, code comments, JSON properties, or unit-test assertions so code/tool
@@ -85,19 +88,59 @@ function hasProviderFailureEnvelope(text: string): boolean {
  */
 export function stripToolAndCodeLines(raw: string): string {
     let inToolBlock = false;
+    let inFence: '`' | '~' | null = null;
+    let inDiffHunk = false;
     const out: string[] = [];
     for (const line of raw.split('\n')) {
         const trimmed = line.trim();
-        if (!trimmed) {
+        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
             inToolBlock = false;
+            inFence = null;
+            inDiffHunk = false;
+            if (TOOL_HEADER_LINE_RE.test(line)) {
+                inToolBlock = true;
+                continue;
+            }
+        }
+        const fenceMatch = trimmed.match(/^(```+|~~~+)/);
+        if (fenceMatch) {
+            const ch = fenceMatch[1][0] as '`' | '~';
+            if (inFence === null) {
+                inFence = ch;
+                continue;
+            }
+            if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed)) {
+                inFence = null;
+                continue;
+            }
+        }
+        if (inFence !== null) {
             continue;
         }
-        if (/^[⎿└├]/.test(trimmed)) {
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed)) {
+            inDiffHunk = false;
+            continue;
+        }
+        if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed)) {
+            inDiffHunk = true;
+            continue;
+        }
+        if (inDiffHunk) {
+            if (!trimmed) continue;
+            if (!/^[ \t]*[⏺✻✢✳✶✽✷✸✹❯›●✗✖⚠!]/.test(line) && /^(?:[ +-]|\\ No newline)/.test(line)) {
+                continue;
+            }
+            inDiffHunk = false;
+        }
+        if (!trimmed) {
+            continue;
+        }
+        if (/^[⎿└├]/.test(trimmed) || TOOL_HEADER_LINE_RE.test(line)) {
             inToolBlock = true;
             continue;
         }
         if (inToolBlock) {
-            if (/^[ \t]{2,}/.test(line) && !/^[ \t]*(?:[⏺✻✢✳✶✽❯›]|─{10,})/.test(line)) {
+            if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line)) {
                 continue;
             }
             inToolBlock = false;
@@ -164,13 +207,14 @@ export function detectProviderFailure(output: string, _exitCode?: number): Provi
 
     const auth = [
         // Native provider error JSON payloads (Anthropic authentication_error, OpenAI/Codex token_revoked/invalid_api_key)
-        /"type"\s*:\s*"authentication_error"\b/,
+        /"type"\s*:\s*"authentication_error"/,
         /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
         // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
         /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
         /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
         /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
         // Anchored CLI auth / token / not-signed-in statements
+        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
         /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
         /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
         /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
@@ -216,12 +260,13 @@ const AUTH_ONLY_SEGMENT_RE = new RegExp('^(?:'
         String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
         // "Please run /login", "Run /login to re-authenticate"
         String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
-        // "Not logged in", "Invalid API key", "Authentication required"
+        // "Not logged in", "Invalid API key", "Invalid authentication credentials", "Authentication required"
         String.raw`not\s+(?:logged|signed)\s+in`,
-        String.raw`invalid\s+api\s+key`,
+        String.raw`(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:api\s+key|authentication\s+credentials)`,
         String.raw`(?:authentication|login)\s+(?:required|failed)`,
-        // "API Error: 401 {…authentication_error…}" — the CLI's raw 401 echo.
+        // "API Error: 401 {…authentication_error…}" or raw Anthropic authentication_error JSON.
         String.raw`api\s+error:\s*401\b.*`,
+        String.raw`\{.*"type"\s*:\s*"authentication_error".*\}`,
     ].join('|')
     + ')$');
 /** A banner is a line or two; anything longer is a real reply. */
@@ -244,9 +289,10 @@ const AUTH_ONLY_REPLY_MAX_CHARS = 600;
 export function detectAuthFailureOnlyReply(reply: string): ProviderFailure | null {
     const text = stripAnsi(reply).replace(/\s+/g, ' ').trim().toLowerCase();
     if (!text || text.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
-    // The raw 401 echo carries JSON (with its own punctuation) and may be followed
+    // The raw 401 / JSON echo carries JSON (with its own punctuation) and may be followed
     // by "· Please run /login": split only on the CLI's `·` / newline joiners there.
-    const segments = (/^api\s+error:\s*401\b/.test(text) ? text.split(/\s*·\s*/) : text.split(/\s*[.!?·;\n]\s*/))
+    const isJsonOrRaw401 = /^(?:api\s+error:\s*401\b|\{.*"type"\s*:\s*"authentication_error")/.test(text);
+    const segments = (isJsonOrRaw401 ? text.split(/\s*·\s*/) : text.split(/\s*[.!?·;\n]\s*/))
         .map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, ''))
         .filter(Boolean);
     if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;

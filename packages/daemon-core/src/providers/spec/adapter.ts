@@ -182,7 +182,7 @@ export class TerminalAdapter {
     }
 
     snapshot(): string {
-        return this.lastScreen || this.computeScreen();
+        return this.pty !== null ? this.computeScreen() : (this.lastScreen || this.computeScreen());
     }
 
     /**

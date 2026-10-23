@@ -162321,7 +162321,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.screen.resize(rows, cols);
       }
       snapshot() {
-        return this.lastScreen || this.computeScreen();
+        return this.pty !== null ? this.computeScreen() : this.lastScreen || this.computeScreen();
       }
       /**
        * Full-buffer snapshot including scrollback history. Unlike snapshot()
@@ -162781,6 +162781,181 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_fsm_types();
     init_fsm_loader();
     init_logger();
+    var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
+    var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+    function stripAnsi2(text4) {
+      const s2 = String(text4 || "");
+      if (s2.indexOf("\x1B") === -1) return s2;
+      return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
+    }
+    var AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
+    function hasProviderFailureEnvelope(text4) {
+      return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
+    }
+    var CLEAR_PROVIDER_CHROME_RE = /^[ \t]*(?:[⏺✻✢✳✶✽✷✸✹❯›](?:\s|$)|─{10,}[ \t]*$)/;
+    var TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|Glob|LS|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|Ran|Explored|Edited|Wrote)\b/;
+    function stripToolAndCodeLines(raw) {
+      let inToolBlock = false;
+      let inFence = null;
+      let inDiffHunk = false;
+      const out = [];
+      for (const line of raw.split("\n")) {
+        const trimmed2 = line.trim();
+        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
+          inToolBlock = false;
+          inFence = null;
+          inDiffHunk = false;
+          if (TOOL_HEADER_LINE_RE.test(line)) {
+            inToolBlock = true;
+            continue;
+          }
+        }
+        const fenceMatch = trimmed2.match(/^(```+|~~~+)/);
+        if (fenceMatch) {
+          const ch = fenceMatch[1][0];
+          if (inFence === null) {
+            inFence = ch;
+            continue;
+          }
+          if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed2)) {
+            inFence = null;
+            continue;
+          }
+        }
+        if (inFence !== null) {
+          continue;
+        }
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed2)) {
+          inDiffHunk = false;
+          continue;
+        }
+        if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed2)) {
+          inDiffHunk = true;
+          continue;
+        }
+        if (inDiffHunk) {
+          if (!trimmed2) continue;
+          if (!/^[ \t]*[⏺✻✢✳✶✽✷✸✹❯›●✗✖⚠!]/.test(line) && /^(?:[ +-]|\\ No newline)/.test(line)) {
+            continue;
+          }
+          inDiffHunk = false;
+        }
+        if (!trimmed2) {
+          continue;
+        }
+        if (/^[⎿└├]/.test(trimmed2) || TOOL_HEADER_LINE_RE.test(line)) {
+          inToolBlock = true;
+          continue;
+        }
+        if (inToolBlock) {
+          if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line)) {
+            continue;
+          }
+          inToolBlock = false;
+        }
+        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
+        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed2)) continue;
+        out.push(line);
+      }
+      return out.join("\n");
+    }
+    function detectProviderFailure(output, _exitCode) {
+      const stripped = stripAnsi2(output).replace(/\r\n?/g, "\n");
+      const filtered = stripToolAndCodeLines(stripped);
+      const linesText = filtered.replace(/[ \t]+/g, " ").trim().toLowerCase();
+      const text4 = linesText.replace(/\s+/g, " ").trim();
+      if (!text4) return null;
+      const quota = hasProviderFailureEnvelope(text4) && [
+        /\b(?:usage|quota|credit)\s+limit\b/,
+        /\bquota\s*(?:exhausted|refresh)/,
+        /\bbilling\s+cycle\b/
+      ].some((pattern) => pattern.test(text4));
+      if (quota) {
+        return {
+          errorReason: "quota_exceeded",
+          failureKind: "quota",
+          message: "Kimi usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets."
+        };
+      }
+      const billing = [
+        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
+        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
+        /\bpayment_required\b/,
+        /\binsufficient\s+(?:balance|credits?)\b/
+      ].some((pattern) => pattern.test(text4));
+      if (billing) {
+        return {
+          errorReason: "billing_failed",
+          failureKind: "billing",
+          message: "Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying."
+        };
+      }
+      const auth = [
+        // Native provider error JSON payloads (Anthropic authentication_error, OpenAI/Codex token_revoked/invalid_api_key)
+        /"type"\s*:\s*"authentication_error"/,
+        /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
+        // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
+        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
+        /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
+        // Anchored CLI auth / token / not-signed-in statements
+        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
+        /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
+        // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
+        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/
+      ].some((pattern) => pattern.test(linesText));
+      if (auth) {
+        return {
+          errorReason: "auth_failed",
+          failureKind: "auth",
+          // Provider-neutral wording: the AUTH axis now serves every spec-backed
+          // CLI (see observeProviderFailureOutput), so naming Kimi here would send
+          // a claude-cli operator to re-login against the wrong tool. The billing
+          // and quota messages above stay Kimi-specific because those axes remain
+          // kimi-scoped.
+          //
+          // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
+          // (assert: detectProviderFailure(message) === null). It travels
+          // into mesh failure events that the daemon INJECTS into coordinator and
+          // worker PTYs — the previous wording ("Provider authentication failed…")
+          // matched the bare `authentication failed` rule above, so every delivery
+          // of an auth-failure event poisoned the receiving session's own tail and
+          // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
+          // wording out of every pattern in this file when editing it.
+          message: AUTH_FAILURE_MESSAGE
+        };
+      }
+      return null;
+    }
+    var AUTH_ONLY_SEGMENT_RE = new RegExp("^(?:" + [
+      // "Login expired", "OAuth token has expired", "Your session has expired"
+      String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
+      // "Please run /login", "Run /login to re-authenticate"
+      String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
+      // "Not logged in", "Invalid API key", "Invalid authentication credentials", "Authentication required"
+      String.raw`not\s+(?:logged|signed)\s+in`,
+      String.raw`(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:api\s+key|authentication\s+credentials)`,
+      String.raw`(?:authentication|login)\s+(?:required|failed)`,
+      // "API Error: 401 {…authentication_error…}" or raw Anthropic authentication_error JSON.
+      String.raw`api\s+error:\s*401\b.*`,
+      String.raw`\{.*"type"\s*:\s*"authentication_error".*\}`
+    ].join("|") + ")$");
+    var AUTH_ONLY_REPLY_MAX_CHARS = 600;
+    function detectAuthFailureOnlyReply(reply) {
+      const text4 = stripAnsi2(reply).replace(/\s+/g, " ").trim().toLowerCase();
+      if (!text4 || text4.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
+      const isJsonOrRaw401 = /^(?:api\s+error:\s*401\b|\{.*"type"\s*:\s*"authentication_error")/.test(text4);
+      const segments = (isJsonOrRaw401 ? text4.split(/\s*·\s*/) : text4.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
+      if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
+      const failure7 = detectProviderFailure(text4);
+      return failure7?.failureKind === "auth" ? failure7 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
+    }
     var WIN32_PTY_WRITE_CHUNK_CHARS = 1024;
     var WIN32_PTY_WRITE_CHUNK_GAP_MS = 8;
     function chunkPreservingSurrogates(text4, size) {
@@ -162940,6 +163115,50 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var LATCH_WATCHDOG_SLACK_MS = 50;
     var UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
     var PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
+    var PRE_SEND_COMPOSER_OR_BUSY_CHROME_RE = /(?:esc to interrupt|ctrl\+c to interrupt|esc:interrupt|ctrl\+c to stop|esc to cancel|• Working|thinking\)|──────────\n[ \t]*[❯›>]|Context left until auto-compact|\b\d+%\s+context\b|\b\d+%\s+left\b|\bclaude-(?:opus|sonnet|haiku)|(?:Opus|Sonnet|Haiku)\s+\d|\? for shortcuts|Type your message|·\s*\d+(?:\.\d+)?%|→\s*Plan,\s*search,\s*build anything|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│\s*❯|(?:^|\n)[ \t]*›(?:[ \t]*|[ \t]+(?![1-9]\.)[^\n]*)(?:\n|$))/i;
+    var PRE_SEND_ANCHORED_SIGN_IN_LINE_RE = /^[ \t]{0,4}(?:(?:[❯›>•*▸⠋│]\s*)?(?:[1-9]\.\s+)?(?:Claude account with subscription|Anthropic Console account|Sign in with your Console account|Sign in with ChatGPT|Continue with ChatGPT|Use API key|Provide your own API key|Sign in with Device Code|Sign in with Google|Use Gemini API Key|Vertex AI|Enter Authorization Code|Press Enter to (?:log|sign) in|Sign in to Kimi Code|Waiting for authorization)|Let's get started\b|Select (?:a |Google Cloud )?(?:login|sign-in) method\b|How do you want to sign in\?|Opening browser to sign in|Cloud gateway\s*[·•]\s*sign in\b|Browser didn't open\?|Paste code here if prompted\b|Waiting for (?:authentication|authorization|login)\b|Sign in to (?:Claude|Codex|Cursor|Grok|Kimi)\b|Log in to Claude\b|Please (?:run \/login|sign in|log in|set your API key|visit the (?:following )?URL to (?:authenticate|log in))\b|Not (?:logged|signed) in\b|Welcome back!\s*You are currently not signed in\b|Authentication required\b|Finish signing in via your browser\b|Preparing device code login\b|Use your own OpenAI API key\b|>?\s*API key login is disabled\b|Open this link in your browser to sign in\b|Enter (?:this one-time code|the authorization code|your API key)\b|How would you like to authenticate\b|Or visit:\s*https:\/\/cursor\.com\b|Authenticate with Cursor\b|XAI_API_KEY\b|Paste your xAI API key to continue\b|Invalid API key\b|kimi login\b|Scan the QR code\b|Visit https:\/\/[^\s]*(?:moonshot|kimi))/i;
+    function isAnchoredSignInViewport(viewport, spec) {
+      if (!viewport) return false;
+      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      if (!stripped.trim()) return false;
+      if (PRE_SEND_COMPOSER_OR_BUSY_CHROME_RE.test(stripped)) return false;
+      if ((!spec || spec.id === "kimi") && /│\s*>\s*│/.test(stripped)) return false;
+      if (spec?.transitions) {
+        for (const t of spec.transitions) {
+          if (t.to !== "signing_in" || !t.when) continue;
+          const whenObj = t.when;
+          const conds = Array.isArray(whenObj.all) ? whenObj.all : [whenObj];
+          for (const c of conds) {
+            const negPattern = typeof c.not_matches === "string" ? c.not_matches : typeof c.not?.matches === "string" ? c.not.matches : "";
+            if (negPattern) {
+              try {
+                if (new RegExp(negPattern, "i").test(stripped)) return false;
+              } catch {
+              }
+            }
+          }
+        }
+      }
+      const cleaned = stripToolAndCodeLines(stripped);
+      if (!cleaned.trim()) return false;
+      const nonEmptyLines = cleaned.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim().length > 0);
+      if (nonEmptyLines.length === 0) return false;
+      const bottomRegion = nonEmptyLines.slice(-12);
+      let lastMatchIdx = -1;
+      for (let i = 0; i < bottomRegion.length; i += 1) {
+        if (PRE_SEND_ANCHORED_SIGN_IN_LINE_RE.test(bottomRegion[i])) {
+          lastMatchIdx = i;
+        }
+      }
+      if (lastMatchIdx === -1) return false;
+      if (bottomRegion.length - 1 - lastMatchIdx > 5) return false;
+      for (let j = lastMatchIdx + 1; j < bottomRegion.length; j += 1) {
+        if (/^[ \t]*(?:[❯›][ \t]*|─{10,}[ \t]*)$/.test(bottomRegion[j])) {
+          return false;
+        }
+      }
+      return true;
+    }
     var SendSubmitEngine = class {
       constructor(host) {
         this.host = host;
@@ -163154,16 +163373,38 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.beginSend(text4, bracketedPaste, messageId);
         return { status: "delivered" };
       }
+      /** True when the most recent canSendNow() check blocked on an anchored
+       *  sign-in viewport while the FSM still reported idle. */
+      lastPreSendAuthBlocked = false;
+      isPreSendAuthRequired() {
+        let viewport = "";
+        try {
+          viewport = this.host.adapter?.snapshot?.() ?? "";
+        } catch {
+          viewport = "";
+        }
+        if (isAnchoredSignInViewport(viewport, this.host.spec)) {
+          this.lastPreSendAuthBlocked = true;
+          this.host.onPreSendAuthRequired?.();
+          return true;
+        }
+        this.lastPreSendAuthBlocked = false;
+        return false;
+      }
       /** True when a send can be written to the PTY right now. */
       canSendNow() {
+        this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
-        return this.host.currentStatus() === "idle";
+        if (this.host.currentStatus() !== "idle") return false;
+        if (this.isPreSendAuthRequired()) return false;
+        return true;
       }
       /** Human-readable reason a send was queued — logged, never used for control flow. */
       sendBlockedReason() {
         if (!this.host.readySeenOnce) return "machine not ready yet";
         if (this.isSendInFlight()) return `previous send still in flight (${Date.now() - this.sendInFlightAt}ms)`;
+        if (this.lastPreSendAuthBlocked) return "auth_required";
         return `machine is ${this.host.currentStatus()}`;
       }
       /** In-flight latch with its self-expiry applied, so a send the CLI never
@@ -163233,11 +163474,21 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         if (this.isSendInFlight()) return;
         if (this.pendingSends.length === 0) return;
+        if (this.isPreSendAuthRequired()) return;
         const next = this.pendingSends.shift();
         LOG.info("FsmDriver", `[${this.host.specTag()}] draining queued send (len=${next.text.length}, remaining=${this.pendingSends.length})`);
         if (this.pendingSendDrainTimer) clearTimeout(this.pendingSendDrainTimer);
         this.pendingSendDrainTimer = setTimeout(() => {
           this.pendingSendDrainTimer = null;
+          if (this.host.currentStatus() !== "idle" || this.isPreSendAuthRequired()) {
+            this.pendingSends.unshift(next);
+            this.sendInFlight = false;
+            if (this.latchWatchdogTimer) {
+              clearTimeout(this.latchWatchdogTimer);
+              this.latchWatchdogTimer = null;
+            }
+            return;
+          }
           this.beginSend(next.text, next.bracketedPaste, next.messageId);
         }, 50);
         this.sendInFlight = true;
@@ -164624,7 +164875,8 @@ trust_level = "trusted"
           specTag: () => this.specTag(),
           // ★ The engine gates on this but never computes it — see the note on
           // the `sends` field.
-          currentStatus: () => this.currentStatus()
+          currentStatus: () => this.currentStatus(),
+          onPreSendAuthRequired: () => this.enterPreSendSigningIn()
         });
         this.redrawNudge = new RedrawNudger({
           isGenerating: () => this.currentStatus() === "generating",
@@ -165223,6 +165475,34 @@ trust_level = "trusted"
           return st ? statusForState(st) : "idle";
         };
         this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
+      }
+      /** Transition to `signing_in` when the pre-send screen guard detects an
+       *  active anchored login screen on a session the FSM still considered idle. */
+      enterPreSendSigningIn() {
+        const target = stateById(this.spec, "signing_in");
+        if (!target || this.currentStateId === "signing_in") return;
+        const now = Date.now();
+        const from = this.currentStateId;
+        this.currentStateId = "signing_in";
+        this.stateEnteredAt = now;
+        this.lastModalParseMissKey = null;
+        this.regionLastChangedAt.clear();
+        this.stableVerdictCache.clear();
+        this.pushHistory("signing_in", target.label ?? "signing_in", {
+          reason: "transition",
+          via: `${from}\u2192signing_in`,
+          matchedRules: ["pre_send_auth_guard"]
+        });
+        LOG.info("FsmDriver", `[${this.specTag()}] ${from} \u2192 signing_in (pre_send_auth_guard)`);
+        const statusOf = (id4) => {
+          const st = stateById(this.spec, id4);
+          return st ? statusForState(st) : "idle";
+        };
+        this.redrawNudge.onTransition(statusOf(from), statusOf("signing_in"), "pre_send_auth_guard");
+        this.emitStateChanged(true);
+        this.scheduleWakeForState();
+        this.focusPrimer.scheduleStallWatchdog();
+        this.redrawNudge.schedule();
       }
       /** Snapshot the full FSM evaluation that produced a transition into the
        *  separate fsmSnapshotHistory ring buffer (max 20). The transitions[]
@@ -166400,136 +166680,6 @@ ${text4}` : text4;
         }
       }
       return messages.filter((m) => typeof m.content === "string" && m.content.trim().length > 0);
-    }
-    var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
-    var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-    function stripAnsi2(text4) {
-      const s2 = String(text4 || "");
-      if (s2.indexOf("\x1B") === -1) return s2;
-      return s2.replace(ANSI_OSC_DCS_RE, "").replace(ANSI_CSI_RE, "");
-    }
-    var AUTH_FAILURE_MESSAGE = "Provider credential was rejected by the CLI. Re-authenticate this CLI in this environment before retrying.";
-    function hasProviderFailureEnvelope(text4) {
-      return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
-    }
-    function stripToolAndCodeLines(raw) {
-      let inToolBlock = false;
-      const out = [];
-      for (const line of raw.split("\n")) {
-        const trimmed2 = line.trim();
-        if (!trimmed2) {
-          inToolBlock = false;
-          continue;
-        }
-        if (/^[⎿└├]/.test(trimmed2)) {
-          inToolBlock = true;
-          continue;
-        }
-        if (inToolBlock) {
-          if (/^[ \t]{2,}/.test(line) && !/^[ \t]*(?:[⏺✻✢✳✶✽❯›]|─{10,})/.test(line)) {
-            continue;
-          }
-          inToolBlock = false;
-        }
-        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
-        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
-        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed2)) continue;
-        out.push(line);
-      }
-      return out.join("\n");
-    }
-    function detectProviderFailure(output, _exitCode) {
-      const stripped = stripAnsi2(output).replace(/\r\n?/g, "\n");
-      const filtered = stripToolAndCodeLines(stripped);
-      const linesText = filtered.replace(/[ \t]+/g, " ").trim().toLowerCase();
-      const text4 = linesText.replace(/\s+/g, " ").trim();
-      if (!text4) return null;
-      const quota = hasProviderFailureEnvelope(text4) && [
-        /\b(?:usage|quota|credit)\s+limit\b/,
-        /\bquota\s*(?:exhausted|refresh)/,
-        /\bbilling\s+cycle\b/
-      ].some((pattern) => pattern.test(text4));
-      if (quota) {
-        return {
-          errorReason: "quota_exceeded",
-          failureKind: "quota",
-          message: "Kimi usage quota reached \u2014 the current window is exhausted but the account itself is fine. It will resume automatically once the quota resets."
-        };
-      }
-      const billing = [
-        /\b(?:kimi code\s+)?(?:subscription|membership|plan)\s+(?:has\s+|is\s+)?(?:expired|inactive|suspended|cancelled|canceled)\b/,
-        /\b(?:payment|billing)\s+(?:is\s+)?(?:required|failed|overdue)\b/,
-        /\bpayment_required\b/,
-        /\binsufficient\s+(?:balance|credits?)\b/
-      ].some((pattern) => pattern.test(text4));
-      if (billing) {
-        return {
-          errorReason: "billing_failed",
-          failureKind: "billing",
-          message: "Kimi billing/subscription failed. Renew the subscription or payment entitlement before retrying."
-        };
-      }
-      const auth = [
-        // Native provider error JSON payloads (Anthropic authentication_error, OpenAI/Codex token_revoked/invalid_api_key)
-        /"type"\s*:\s*"authentication_error"\b/,
-        /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
-        // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
-        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
-        /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
-        // Anchored CLI auth / token / not-signed-in statements
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
-        /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
-        // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
-        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/
-      ].some((pattern) => pattern.test(linesText));
-      if (auth) {
-        return {
-          errorReason: "auth_failed",
-          failureKind: "auth",
-          // Provider-neutral wording: the AUTH axis now serves every spec-backed
-          // CLI (see observeProviderFailureOutput), so naming Kimi here would send
-          // a claude-cli operator to re-login against the wrong tool. The billing
-          // and quota messages above stay Kimi-specific because those axes remain
-          // kimi-scoped.
-          //
-          // ★SELF-MATCH GUARD: this message MUST NOT itself classify as a failure
-          // (assert: detectProviderFailure(message) === null). It travels
-          // into mesh failure events that the daemon INJECTS into coordinator and
-          // worker PTYs — the previous wording ("Provider authentication failed…")
-          // matched the bare `authentication failed` rule above, so every delivery
-          // of an auth-failure event poisoned the receiving session's own tail and
-          // got IT flagged next (the 2026-09-21 coordinator kill loop). Keep the
-          // wording out of every pattern in this file when editing it.
-          message: AUTH_FAILURE_MESSAGE
-        };
-      }
-      return null;
-    }
-    var AUTH_ONLY_SEGMENT_RE = new RegExp("^(?:" + [
-      // "Login expired", "OAuth token has expired", "Your session has expired"
-      String.raw`(?:your\s+|the\s+)?(?:login|session|credentials?|(?:oauth\s+|access\s+|auth\s+|refresh\s+)?token)\s+(?:has\s+|have\s+|is\s+|are\s+)?expired`,
-      // "Please run /login", "Run /login to re-authenticate"
-      String.raw`(?:please\s+)?(?:run|use)\s+\/login(?:\s+to\s+[a-z\s-]{1,40})?`,
-      // "Not logged in", "Invalid API key", "Authentication required"
-      String.raw`not\s+(?:logged|signed)\s+in`,
-      String.raw`invalid\s+api\s+key`,
-      String.raw`(?:authentication|login)\s+(?:required|failed)`,
-      // "API Error: 401 {…authentication_error…}" — the CLI's raw 401 echo.
-      String.raw`api\s+error:\s*401\b.*`
-    ].join("|") + ")$");
-    var AUTH_ONLY_REPLY_MAX_CHARS = 600;
-    function detectAuthFailureOnlyReply(reply) {
-      const text4 = stripAnsi2(reply).replace(/\s+/g, " ").trim().toLowerCase();
-      if (!text4 || text4.length > AUTH_ONLY_REPLY_MAX_CHARS) return null;
-      const segments = (/^api\s+error:\s*401\b/.test(text4) ? text4.split(/\s*·\s*/) : text4.split(/\s*[.!?·;\n]\s*/)).map((segment) => segment.replace(/^[\s:,-]+|[\s:,.!-]+$/g, "")).filter(Boolean);
-      if (segments.length === 0 || !segments.every((segment) => AUTH_ONLY_SEGMENT_RE.test(segment))) return null;
-      const failure7 = detectProviderFailure(text4);
-      return failure7?.failureKind === "auth" ? failure7 : { errorReason: "auth_failed", failureKind: "auth", message: AUTH_FAILURE_MESSAGE };
     }
     function buildSpecDebugSnapshot(v, driver) {
       let screen = "";
@@ -167948,13 +168098,20 @@ ${text4}` : text4;
     var ADVISORY_COOLDOWN_MS = 10 * 6e4;
     var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
     var KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
-    var ANCHORED_MID_TURN_AUTH_RE = /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:[^\n]*"type"\s*:\s*"authentication_error"\b|[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S)/i;
+    var ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S)/i;
     function hasAnchoredMidTurnAuthFailure(cliType, rawSurface) {
       const masked = maskForeignProviderText(cliType, rawSurface);
       const stripped = stripAnsi2(masked).replace(/\r\n?/g, "\n");
       const filtered = stripToolAndCodeLines(stripped);
       if (!filtered.trim()) return false;
-      return ANCHORED_MID_TURN_AUTH_RE.test(filtered);
+      const rawNonEmpty = stripped.split("\n").filter((l) => l.trim().length > 0);
+      const bottomWindow = new Set(rawNonEmpty.slice(-8));
+      for (const line of filtered.split("\n")) {
+        if (ANCHORED_MID_TURN_AUTH_LINE_RE.test(line) && bottomWindow.has(line)) {
+          return true;
+        }
+      }
+      return false;
     }
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
@@ -189662,6 +189819,8 @@ ${notice.notice}${supersededHint}`;
     var MAX_ESCALATED_REMEMBERED = 512;
     var ESCALATION_RECHECK_MS = 5e3;
     var ESCALATION_MAX_RECHECKS = 6;
+    var STATUS_ONLY_KEY = "status_only:waiting_external";
+    var STATUS_ONLY_RESOLVE_POLL_MS = 1e3;
     function stillWaiting(state2) {
       return !!state2 && (state2.status === "waiting_approval" || state2.activeChat?.status === "waiting_approval");
     }
@@ -189676,6 +189835,37 @@ ${notice.notice}${supersededHint}`;
       const now = deps.now ?? Date.now;
       const held = /* @__PURE__ */ new Map();
       const escalated = /* @__PURE__ */ new Set();
+      const statusOnlyWatchers = /* @__PURE__ */ new Map();
+      const stopStatusOnlyWatcher = (sessionId) => {
+        const w = statusOnlyWatchers.get(sessionId);
+        if (w !== void 0) {
+          clearTimer(w);
+          statusOnlyWatchers.delete(sessionId);
+        }
+      };
+      const clearStatusOnlyEscalation = (sessionId) => {
+        stopStatusOnlyWatcher(sessionId);
+        escalated.delete(`${sessionId}\0${STATUS_ONLY_KEY}`);
+      };
+      const armStatusOnlyWatcher = (sessionId) => {
+        stopStatusOnlyWatcher(sessionId);
+        const poll2 = () => {
+          statusOnlyWatchers.delete(sessionId);
+          if (!escalated.has(`${sessionId}\0${STATUS_ONLY_KEY}`)) return;
+          let st = null;
+          try {
+            st = deps.readState(sessionId);
+          } catch {
+            st = null;
+          }
+          if (!stillWaiting(st) || currentApprovalEpisodeKey(st) !== STATUS_ONLY_KEY) {
+            clearStatusOnlyEscalation(sessionId);
+            return;
+          }
+          statusOnlyWatchers.set(sessionId, setTimer(poll2, STATUS_ONLY_RESOLVE_POLL_MS));
+        };
+        statusOnlyWatchers.set(sessionId, setTimer(poll2, STATUS_ONLY_RESOLVE_POLL_MS));
+      };
       const fire = (sessionId) => {
         const entry = held.get(sessionId);
         if (!entry) return;
@@ -189694,6 +189884,7 @@ ${notice.notice}${supersededHint}`;
             return;
           }
           held.delete(sessionId);
+          if (!stillWaiting(state2)) clearStatusOnlyEscalation(sessionId);
           LOG.info("StatusEvent", `approval escalation retired session=${sessionId} (resolved before escalation)`);
           return;
         }
@@ -189701,6 +189892,9 @@ ${notice.notice}${supersededHint}`;
         if (escalated.has(`${sessionId}\0${currentKey}`)) return;
         escalated.add(`${sessionId}\0${entry.key}`);
         escalated.add(`${sessionId}\0${currentKey}`);
+        if (entry.key === STATUS_ONLY_KEY || currentKey === STATUS_ONLY_KEY) {
+          armStatusOnlyWatcher(sessionId);
+        }
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
           const oldest = escalated.values().next().value;
           if (oldest === void 0) break;
@@ -189711,8 +189905,19 @@ ${notice.notice}${supersededHint}`;
       };
       return {
         hold(rawEvent) {
-          if (rawEvent.event !== "agent:waiting_approval") return false;
           const sessionId = typeof rawEvent.targetSessionId === "string" ? rawEvent.targetSessionId.trim() : "";
+          if (rawEvent.event !== "agent:waiting_approval") {
+            if (sessionId) {
+              let st = null;
+              try {
+                st = deps.readState(sessionId);
+              } catch {
+                st = null;
+              }
+              if (!stillWaiting(st)) clearStatusOnlyEscalation(sessionId);
+            }
+            return false;
+          }
           if (!sessionId) return false;
           let state2;
           try {
@@ -189723,6 +189928,7 @@ ${notice.notice}${supersededHint}`;
           if (!state2 || !isCoordinatorFirstSession(state2.settings ?? null)) return false;
           const key4 = currentApprovalEpisodeKey(state2);
           if (!key4) return false;
+          if (key4 !== STATUS_ONLY_KEY) clearStatusOnlyEscalation(sessionId);
           if (escalated.has(`${sessionId}\0${key4}`)) return true;
           const existing = held.get(sessionId);
           if (existing?.key === key4) {
@@ -189741,11 +189947,14 @@ ${notice.notice}${supersededHint}`;
             clearTimer(entry.timer);
             held.delete(sessionId);
           }
+          stopStatusOnlyWatcher(sessionId);
           for (const k of [...escalated]) if (k.startsWith(`${sessionId}\0`)) escalated.delete(k);
         },
         dispose() {
           for (const entry of held.values()) clearTimer(entry.timer);
           held.clear();
+          for (const w of statusOnlyWatchers.values()) clearTimer(w);
+          statusOnlyWatchers.clear();
           escalated.clear();
         },
         get heldCount() {
@@ -189998,6 +190207,7 @@ ${notice.notice}${supersededHint}`;
       }) : null;
       const unsubProviderEvent = bus.on("provider_event", (e) => {
         const raw = e.event;
+        if (raw.event !== "agent:waiting_approval") escalation?.hold(raw);
         const serverEvent = projectServerStatusEvent(raw, resolveHideMute);
         if (!serverEvent) return;
         LOG.debug("StatusEvent", `${String(raw.event)} (${String(raw.providerType || raw.ideType || "")})`);
@@ -190011,6 +190221,7 @@ ${notice.notice}${supersededHint}`;
       }, { name: "host.status-event" });
       const unsubTurn = deps.turnCommits === false ? () => {
       } : bus.on("turn", (e) => {
+        escalation?.hold({ event: "turn", targetSessionId: e.sessionId });
         const durationSec = durations.observe(e);
         const serverEvent = projectTurnStatusEvent(e, e.at, resolveHideMute, { resolveSessionMeta, durationSec });
         if (!serverEvent) return;

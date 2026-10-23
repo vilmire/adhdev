@@ -89,6 +89,8 @@ const MAX_ESCALATED_REMEMBERED = 512;
 /** Re-check cadence while a still-waiting session's episode key is momentarily unreadable. */
 const ESCALATION_RECHECK_MS = 5_000;
 const ESCALATION_MAX_RECHECKS = 6;
+const STATUS_ONLY_KEY = 'status_only:waiting_external';
+const STATUS_ONLY_RESOLVE_POLL_MS = 1_000;
 
 function stillWaiting(state: SessionStateLike): boolean {
     return !!state && (state.status === 'waiting_approval' || state.activeChat?.status === 'waiting_approval');
@@ -104,6 +106,36 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
     // restarting the window and starve the owner push.
     const held = new Map<string, { key: string; raw: Record<string, unknown>; timer: unknown; firstHeldAt: number; rechecks: number }>();
     const escalated = new Set<string>();
+    const statusOnlyWatchers = new Map<string, unknown>();
+
+    const stopStatusOnlyWatcher = (sessionId: string) => {
+        const w = statusOnlyWatchers.get(sessionId);
+        if (w !== undefined) {
+            clearTimer(w);
+            statusOnlyWatchers.delete(sessionId);
+        }
+    };
+
+    const clearStatusOnlyEscalation = (sessionId: string) => {
+        stopStatusOnlyWatcher(sessionId);
+        escalated.delete(`${sessionId}\u0000${STATUS_ONLY_KEY}`);
+    };
+
+    const armStatusOnlyWatcher = (sessionId: string) => {
+        stopStatusOnlyWatcher(sessionId);
+        const poll = () => {
+            statusOnlyWatchers.delete(sessionId);
+            if (!escalated.has(`${sessionId}\u0000${STATUS_ONLY_KEY}`)) return;
+            let st: SessionStateLike = null;
+            try { st = deps.readState(sessionId); } catch { st = null; }
+            if (!stillWaiting(st) || currentApprovalEpisodeKey(st) !== STATUS_ONLY_KEY) {
+                clearStatusOnlyEscalation(sessionId);
+                return;
+            }
+            statusOnlyWatchers.set(sessionId, setTimer(poll, STATUS_ONLY_RESOLVE_POLL_MS));
+        };
+        statusOnlyWatchers.set(sessionId, setTimer(poll, STATUS_ONLY_RESOLVE_POLL_MS));
+    };
 
     const fire = (sessionId: string) => {
         const entry = held.get(sessionId);
@@ -121,6 +153,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
                 return;
             }
             held.delete(sessionId);
+            if (!stillWaiting(state)) clearStatusOnlyEscalation(sessionId);
             LOG.info('StatusEvent', `approval escalation retired session=${sessionId} (resolved before escalation)`);
             return;
         }
@@ -130,6 +163,9 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         // from the same worker: escalate it rather than retiring silently.
         escalated.add(`${sessionId}\u0000${entry.key}`);
         escalated.add(`${sessionId}\u0000${currentKey}`);
+        if (entry.key === STATUS_ONLY_KEY || currentKey === STATUS_ONLY_KEY) {
+            armStatusOnlyWatcher(sessionId);
+        }
         while (escalated.size > MAX_ESCALATED_REMEMBERED) {
             const oldest = escalated.values().next().value;
             if (oldest === undefined) break;
@@ -141,8 +177,15 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
 
     return {
         hold(rawEvent) {
-            if (rawEvent.event !== 'agent:waiting_approval') return false;
             const sessionId = typeof rawEvent.targetSessionId === 'string' ? rawEvent.targetSessionId.trim() : '';
+            if (rawEvent.event !== 'agent:waiting_approval') {
+                if (sessionId) {
+                    let st: SessionStateLike = null;
+                    try { st = deps.readState(sessionId); } catch { st = null; }
+                    if (!stillWaiting(st)) clearStatusOnlyEscalation(sessionId);
+                }
+                return false;
+            }
             if (!sessionId) return false;
             let state: SessionStateLike;
             try { state = deps.readState(sessionId); } catch { return false; }
@@ -150,6 +193,7 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
             const key = currentApprovalEpisodeKey(state);
             // No identifiable live episode: fail open to the previous behaviour.
             if (!key) return false;
+            if (key !== STATUS_ONLY_KEY) clearStatusOnlyEscalation(sessionId);
             if (escalated.has(`${sessionId}\u0000${key}`)) return true;
             const existing = held.get(sessionId);
             if (existing?.key === key) { existing.raw = rawEvent; return true; }
@@ -162,11 +206,14 @@ export function createApprovalEscalationGate(deps: ApprovalEscalationGateDeps): 
         retire(sessionId) {
             const entry = held.get(sessionId);
             if (entry) { clearTimer(entry.timer); held.delete(sessionId); }
+            stopStatusOnlyWatcher(sessionId);
             for (const k of [...escalated]) if (k.startsWith(`${sessionId}\u0000`)) escalated.delete(k);
         },
         dispose() {
             for (const entry of held.values()) clearTimer(entry.timer);
             held.clear();
+            for (const w of statusOnlyWatchers.values()) clearTimer(w);
+            statusOnlyWatchers.clear();
             escalated.clear();
         },
         get heldCount() { return held.size; },
