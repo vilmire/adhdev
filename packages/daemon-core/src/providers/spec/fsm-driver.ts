@@ -797,6 +797,7 @@ export class FsmDriver implements ISpecDriver {
 
     /** Transition to `signing_in` when the pre-send screen guard detects an active anchored login screen while idle. */
     private enterPreSendSigningIn(): void {
+        if (this.currentStatus() !== 'idle') return;
         if (!stateById(this.spec, 'signing_in') || this.currentStateId === 'signing_in') return;
         this.commitTransition({ to: 'signing_in', label: 'pre_send_auth_guard', eligible: true, holdSatisfied: true, holdRemainingMs: 0, condResult: true, fires: true, priority: 0 }, Date.now());
         if (!this.tornDown && this.adapter.hasActivePty()) { this.reevaluate(true); this.armPostTransitionReevaluate(); } else this.emitStateChanged(true);

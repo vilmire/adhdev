@@ -34,7 +34,7 @@
 'use strict';
 
 import { LOG } from '../../logging/logger.js';
-import type { CliSpecV4, FsmStatus } from './fsm-types.js';
+import { stateById, type CliSpecV4, type FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
 import { evaluateConditionPreview } from './fsm-evaluator.js';
 import { stripAnsi, stripToolAndCodeLines } from './provider-failure-classifier.js';
@@ -160,6 +160,10 @@ export interface DriverHost {
  */
 export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): boolean {
     if (!viewport || !spec?.transitions) return false;
+    // TerminalAdapter.snapshot() returns the full fixed-height PTY grid padded
+    // with trailing blank rows; trim them so from_bottom sections (status_tail,
+    // footer, viewport) anchor to the last visible content line just as
+    // FsmDriver.reevaluate's trimBlankEnds view does.
     const stripped = stripAnsi(viewport)
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n')
@@ -167,6 +171,18 @@ export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): bo
     if (!stripped.trim()) return false;
     const cleaned = stripToolAndCodeLines(stripped);
     if (!cleaned.trim()) return false;
+
+    for (const t of spec.transitions) {
+        if (!t.when || t.to === 'signing_in') continue;
+        const fromList = Array.isArray(t.from) ? t.from : [t.from];
+        if (!fromList.includes('idle') && !fromList.includes('starting')) continue;
+        const targetState = stateById(spec, t.to);
+        if (targetState?.modal) {
+            if (evaluateConditionPreview(t.when, spec.sections, stripped).result) {
+                return false;
+            }
+        }
+    }
 
     for (const t of spec.transitions) {
         if (t.to !== 'signing_in' || !t.when) continue;
@@ -481,9 +497,8 @@ export class SendSubmitEngine {
         this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
-        const status = this.host.currentStatus();
-        if ((status === 'idle' || status === 'approval') && this.isPreSendAuthRequired()) return false;
-        if (status !== 'idle') return false;
+        if (this.host.currentStatus() !== 'idle') return false;
+        if (this.isPreSendAuthRequired()) return false;
         return true;
     }
 
