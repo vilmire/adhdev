@@ -7,6 +7,7 @@ import { validateFsmSpec } from '../../../src/providers/spec/fsm-loader.js';
 import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-evaluator.js';
 import { stateById, statusForState, type CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
+import { TerminalAdapter } from '../../../src/providers/spec/adapter.js';
 import { isAnchoredSignInViewport } from '../../../src/providers/spec/send-submit-engine.js';
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
 import { detectAuthFailureOnlyReply, detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js';
@@ -1263,4 +1264,374 @@ describe('Round 3 Finding 5 — native Anthropic JSON authentication_error and I
         }
     });
 });
+
+// ── Round 4 regression tests (Codex review 23a93201) ─────────────────────────
+
+const CURSOR_BROWSER_LOGIN_SUBSCREEN = [
+    '',
+    '  Signing in with the browser',
+    '  If your browser didn\'t open, click this link to log in: https://cursor.com/login?code=ABCD-1234',
+    '  Press q to show a QR code to log in',
+    '',
+].join('\n');
+
+const GROK_BROWSER_APPROVAL_SUBSCREEN = [
+    '',
+    '  Approve in your browser',
+    '  Waiting for approval...',
+    '',
+].join('\n');
+
+const GROK_SIGN_IN_BUILD_SUBSCREEN = [
+    '',
+    '  Sign in to Grok Build',
+    '  Enter your xAI API key',
+    '',
+].join('\n');
+
+const CODEX_PASTE_API_KEY_ONLY_SUBSCREEN = [
+    '',
+    '  Paste or type your API key below. It will be stored locally in auth.json.',
+    '  ╭──────────────────────────────────────────────────╮',
+    '  │ >                                                │',
+    '  ╰──────────────────────────────────────────────────╯',
+    '',
+].join('\n');
+
+const KIMI_API_KEY_SAVED_SUBSCREEN = [
+    '',
+    '  Your key will be saved to ~/.kimi/config.toml',
+    '',
+].join('\n');
+
+describe('Round 4 Finding 1 — pre-send guard evaluates provider spec signing_in entry conditions across all login screens', () => {
+    const ALL_PROVIDER_LOGIN_CASES: Array<{
+        cli: string;
+        file: string;
+        readyFrame: string;
+        loginScreens: Array<{ name: string; screen: string }>;
+    }> = [
+        {
+            cli: 'claude-cli',
+            file: '4.0.json',
+            readyFrame: '────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n',
+            loginScreens: [
+                { name: 'Select login method', screen: CLAUDE_SIGNIN_SCREEN },
+                { name: 'Console sub-screen', screen: CLAUDE_CONSOLE_SUBSCREEN },
+                { name: 'Opening browser', screen: CLAUDE_OPENING_BROWSER_SUBSCREEN },
+                { name: 'Browser paste code', screen: CLAUDE_OAUTH_PASTE_CODE_SCREEN },
+                { name: 'Cloud gateway', screen: CLAUDE_CLOUD_GATEWAY_SUBSCREEN },
+            ],
+        },
+        {
+            cli: 'codex-cli',
+            file: '4.0.json',
+            readyFrame: '› Ask Codex to do anything\r\n  gpt-5.4-codex medium · /tmp/ws · 92% left\r\n  ? for shortcuts\r\n',
+            loginScreens: [
+                { name: 'ChatGPT / Device Code / API key menu', screen: CODEX_SIGNIN_SCREEN },
+                { name: 'Finish signing in via your browser', screen: CODEX_FINISH_BROWSER_SUBSCREEN },
+                { name: 'Preparing device code login', screen: CODEX_PREPARING_DEVICE_CODE_SUBSCREEN },
+                { name: 'Use your own OpenAI API key box', screen: CODEX_API_KEY_BOX_SUBSCREEN },
+                { name: 'API key login is disabled', screen: CODEX_API_KEY_DISABLED_SUBSCREEN },
+                { name: 'Paste or type your API key below standalone', screen: CODEX_PASTE_API_KEY_ONLY_SUBSCREEN },
+            ],
+        },
+        {
+            cli: 'cursor-cli',
+            file: '1.0.json',
+            readyFrame: '  Claude 4.5 Sonnet · 4.2%\r\n  /tmp/ws\r\n',
+            loginScreens: [
+                { name: 'Press Enter to sign in', screen: CURSOR_SIGNIN_SCREEN },
+                { name: 'Signing in with the browser / QR code', screen: CURSOR_BROWSER_LOGIN_SUBSCREEN },
+            ],
+        },
+        {
+            cli: 'grok-cli',
+            file: '1.0.json',
+            readyFrame: '  │ ❯ \r\n  Shift+Tab:mode │ Ctrl+x:shortcuts\r\n',
+            loginScreens: [
+                { name: 'Paste your xAI API key', screen: GROK_SIGNIN_SCREEN },
+                { name: 'Approve in your browser / Waiting for approval...', screen: GROK_BROWSER_APPROVAL_SUBSCREEN },
+                { name: 'Sign in to Grok Build / Enter your xAI API key', screen: GROK_SIGN_IN_BUILD_SUBSCREEN },
+            ],
+        },
+        {
+            cli: 'kimi',
+            file: '1.0.json',
+            readyFrame: '  ╭──────────────────────────────────────────╮\r\n  │ >                                        │\r\n  ╰──────────────────────────────────────────╯\r\n',
+            loginScreens: [
+                { name: 'Kimi device code / Waiting for authorization', screen: KIMI_SIGNIN_DEVICE_CODE_SCREEN },
+                { name: 'Your key will be saved to config.toml', screen: KIMI_API_KEY_SAVED_SUBSCREEN },
+            ],
+        },
+        {
+            cli: 'antigravity-cli',
+            file: '4.0.json',
+            readyFrame: '────────────────────────────────────────\r\n> Type your message or @path/to/file\r\n────────────────────────────────────────\r\n  ? for shortcuts\r\n',
+            loginScreens: [
+                { name: 'Select Google Cloud sign-in method', screen: AGY_SIGNIN_SELECTOR_SCREEN },
+                { name: 'OAuth URL / paste authorization code', screen: AGY_OAUTH_PASTE_CODE_SCREEN },
+            ],
+        },
+    ];
+
+    it('blocks send and transitions to signing_in on every login screen across all 6 providers', async () => {
+        vi.useFakeTimers();
+        try {
+            for (const provider of ALL_PROVIDER_LOGIN_CASES) {
+                const spec = loadProviderSpec(provider.cli, provider.file);
+                for (const login of provider.loginScreens) {
+                    const label = `${provider.cli}: ${login.name}`;
+                    expect(isAnchoredSignInViewport(login.screen, spec), label).toBe(true);
+
+                    const factory = new DrivableFactory();
+                    const driver = new FsmDriver({
+                        specPath: resolveProviderSpecPath(provider.cli, provider.file),
+                        workingDir: os.tmpdir(),
+                        hotReload: false,
+                        transportFactory: factory,
+                    });
+                    driver.start();
+                    const pty = factory.last!;
+                    const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+                    pty.feed(provider.readyFrame);
+                    await vi.advanceTimersByTimeAsync(2_000);
+                    expect(driver.currentStateId, `${label} initial idle`).toBe('idle');
+                    expect(driver.hasSeenReady(), `${label} readySeenOnce`).toBe(true);
+                    pty.writes.length = 0;
+
+                    // Clear viewport and render the login screen while FSM is in idle
+                    pty.feed('\u001b[2J\u001b[H' + login.screen.replace(/\n/g, '\r\n'));
+                    await vi.advanceTimersByTimeAsync(200);
+
+                    const msgId = `msg-${provider.cli}-${login.name}`;
+                    const disp = driver.sendMessageWithDisposition('do not write into auth screen', false, msgId);
+                    await vi.advanceTimersByTimeAsync(500);
+
+                    expect(nonFocusWrites(), `${label} no PTY writes`).toEqual([]);
+                    expect(disp, `${label} disposition`).toEqual({
+                        status: 'queued',
+                        queueDepth: 1,
+                        reason: 'auth_required',
+                    });
+                    expect(driver.currentStateId, `${label} transitioned to signing_in`).toBe('signing_in');
+                    expect(driver.hasQueuedSend(msgId), `${label} queued`).toBe(true);
+
+                    driver.shutdown();
+                }
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe('Round 4 Finding 2 — ordinary text does not block send, and forced signing_in exits and drains on a quiet terminal', () => {
+    it('does NOT block send or force signing_in on a cleared screen showing "Let\'s get started with the implementation."', async () => {
+        vi.useFakeTimers();
+        try {
+            const spec = loadProviderSpec('claude-cli', '4.0.json');
+            const ordinaryScreen = 'Let\'s get started with the implementation.\n';
+            expect(isAnchoredSignInViewport(ordinaryScreen, spec)).toBe(false);
+
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('claude-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
+            await vi.advanceTimersByTimeAsync(600);
+            expect(driver.currentStateId).toBe('idle');
+            pty.writes.length = 0;
+
+            // Clear screen to ordinary assistant prose with no composer chrome
+            pty.feed('\u001b[2J\u001b[HLet\'s get started with the implementation.\r\n');
+            await vi.advanceTimersByTimeAsync(200);
+
+            const disp = driver.sendMessageWithDisposition('follow-up task on cleared screen', false, 'msg-ordinary-1');
+            await vi.advanceTimersByTimeAsync(500);
+
+            expect(disp).toEqual({ status: 'delivered' });
+            expect(driver.currentStateId).toBe('idle');
+            expect(nonFocusWrites().join('')).toContain('follow-up task on cleared screen');
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('exits forced signing_in within the 15s grace period on a quiet terminal once the login screen disappears, and drains the queued task', async () => {
+        vi.useFakeTimers();
+        try {
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('claude-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            // 1. Reach idle
+            pty.feed('────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n');
+            await vi.advanceTimersByTimeAsync(600);
+            expect(driver.currentStateId).toBe('idle');
+            pty.writes.length = 0;
+
+            // 2. Real login screen appears while idle and blocks a send -> forced signing_in
+            pty.feed('\u001b[2J\u001b[H' + CLAUDE_SIGNIN_SCREEN.replace(/\n/g, '\r\n'));
+            await vi.advanceTimersByTimeAsync(200);
+            const disp = driver.sendMessageWithDisposition('queued task waiting for login recovery', false, 'msg-quiet-drain-1');
+            expect(disp).toEqual({
+                status: 'queued',
+                queueDepth: 1,
+                reason: 'auth_required',
+            });
+            expect(driver.currentStateId).toBe('signing_in');
+            expect(nonFocusWrites()).toEqual([]);
+
+            // 3. Login screen disappears onto a quiet terminal (even without full composer chrome)
+            pty.feed('\u001b[2J\u001b[HLogin successful.\r\n');
+            // Terminal stays completely quiet from here on; within the 15s grace period signing_in must exit to idle and drain the queued task
+            await vi.advanceTimersByTimeAsync(16_000);
+
+            expect(driver.currentStateId).toBe('idle');
+            expect(driver.hasQueuedSend('msg-quiet-drain-1')).toBe(false);
+            expect(nonFocusWrites().join('')).toContain('queued task waiting for login recovery');
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe('Round 4 Finding 3 — chrome-looking lines inside an open fence or diff hunk do not reset protection', () => {
+    const t0 = 1_800_000_000_000;
+    const ctx = { cliType: 'claude-cli', sessionLabel: 'sess-r4-f3', isCoordinator: false };
+
+    it.each([
+        [
+            'fenced block containing a 12-dash box-drawing line before API Error: 401 Unauthorized',
+            [
+                '⏺ Example terminal transcript:',
+                '```text',
+                '────────────',
+                'API Error: 401 Unauthorized',
+                '```',
+                '✻ Thinking… (esc to interrupt)',
+            ].join('\n'),
+        ],
+        [
+            'fenced block containing "❯ sample prompt" before API Error: 401 Unauthorized',
+            [
+                '⏺ Example terminal transcript:',
+                '```',
+                '❯ sample prompt',
+                'API Error: 401 Unauthorized',
+                '```',
+                '✻ Thinking… (esc to interrupt)',
+            ].join('\n'),
+        ],
+        [
+            'tilde-fenced block containing both 12-dash rule and "❯ sample prompt" before API Error: 401 Unauthorized',
+            [
+                '~~~markdown',
+                '────────────────────',
+                '❯ sample prompt',
+                'API Error: 401 Unauthorized',
+                '~~~',
+            ].join('\n'),
+        ],
+        [
+            'unified-diff hunk containing chrome-looking context lines before API Error: 401 Unauthorized',
+            [
+                'diff --git a/test/fixture.txt b/test/fixture.txt',
+                '--- a/test/fixture.txt',
+                '+++ b/test/fixture.txt',
+                '@@ -1,4 +1,5 @@',
+                ' ────────────',
+                ' ❯ sample prompt',
+                ' API Error: 401 Unauthorized',
+                '+ok',
+            ].join('\n'),
+        ],
+    ])('returns null from detectProviderFailure and emits no advisory for %s', (_label, screen) => {
+        expect(detectProviderFailure(screen)).toBeNull();
+        expect(classifyAuthBillingOutput('claude-cli', screen)).toBeNull();
+
+        const state = createLiveAuthState();
+        state.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: 'prior suspect' },
+            suspectedAtMs: t0,
+        };
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: true,
+            now: t0 + 20_000,
+            quietMs: 10_000,
+            tail: screen,
+            readScreen: () => screen,
+        });
+        expect(res.advisory).toBeUndefined();
+        expect(res.latch).toBeUndefined();
+    });
+});
+
+describe('Round 4 Finding 4 — TerminalAdapter.snapshot caches serialized screen across unchanged reads', () => {
+    it('does not recompute screen.getText() on repeated snapshots when no new PTY output or resize occurred', () => {
+        const factory = new DrivableFactory();
+        const adapter = new TerminalAdapter(
+            {
+                binary: 'claude',
+                cols: 80,
+                rows: 24,
+                transportFactory: factory,
+            },
+            {},
+        );
+        adapter.start();
+        const pty = factory.last!;
+        const internalScreen = (adapter as unknown as { screen: { getText: () => string } }).screen;
+        const getTextSpy = vi.spyOn(internalScreen, 'getText');
+
+        pty.feed('Hello from PTY\r\n');
+        const first = adapter.snapshot();
+        expect(first).toContain('Hello from PTY');
+        expect(getTextSpy).toHaveBeenCalledTimes(1);
+
+        // Repeated snapshots with no new PTY output must reuse cached screen without calling getText()
+        expect(adapter.snapshot()).toBe(first);
+        expect(adapter.snapshot()).toBe(first);
+        expect(adapter.snapshot()).toBe(first);
+        expect(getTextSpy).toHaveBeenCalledTimes(1);
+
+        // New PTY output invalidates the cache and recomputes once
+        pty.feed('Second line\r\n');
+        const second = adapter.snapshot();
+        expect(second).toContain('Second line');
+        expect(getTextSpy).toHaveBeenCalledTimes(2);
+        expect(adapter.snapshot()).toBe(second);
+        expect(getTextSpy).toHaveBeenCalledTimes(2);
+
+        // Resize also invalidates the cache and recomputes once
+        adapter.resize(100, 30);
+        expect(adapter.snapshot()).toContain('Second line');
+        expect(getTextSpy).toHaveBeenCalledTimes(3);
+        expect(adapter.snapshot()).toContain('Second line');
+        expect(getTextSpy).toHaveBeenCalledTimes(3);
+
+        adapter.kill();
+    });
+});
+
 

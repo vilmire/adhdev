@@ -41,6 +41,7 @@ function resolveSize(size: number | string | undefined, total: number): number {
 export function resolveSections(
     sectionsObj: Record<string, SectionDef>,
     lines: string[],
+    viewportStartRow = 0,
 ): ResolvedSection[] {
     const total = lines.length;
     const anchored = new Map<string, { fromLine: number; toLine: number }>();
@@ -133,7 +134,7 @@ export function resolveSections(
             to = total;
         } else if (sec.from_bottom !== undefined) {
             const sz = resolveSize(sec.from_bottom, total);
-            from = total - sz;
+            from = Math.max(viewportStartRow, total - sz);
             to = total;
         }
 

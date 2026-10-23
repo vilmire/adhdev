@@ -94482,7 +94482,7 @@ ${body}`;
       const pct = Number(m[1]);
       return Math.max(0, Math.min(total, Math.round(total * pct / 100)));
     }
-    function resolveSections(sectionsObj, lines) {
+    function resolveSections(sectionsObj, lines, viewportStartRow = 0) {
       const total = lines.length;
       const anchored = /* @__PURE__ */ new Map();
       const sectionEntries = Object.entries(sectionsObj);
@@ -94547,7 +94547,7 @@ ${body}`;
           to = total;
         } else if (sec.from_bottom !== void 0) {
           const sz = resolveSize(sec.from_bottom, total);
-          from = total - sz;
+          from = Math.max(viewportStartRow, total - sz);
           to = total;
         }
         anchored.set(id4, { fromLine: from, toLine: to });
@@ -94969,7 +94969,7 @@ ${detail.join("\n")}` : stripped;
       if (isAny(cond)) {
         const children = cond.any.map((c) => evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.some((c) => c.result);
-        const pending = children.filter((c) => !c.result).map((c) => c.remainingMs ?? Infinity);
+        const pending = children.filter((c) => !c.result).map((c) => c.remainingMs && c.remainingMs > 0 ? c.remainingMs : Infinity);
         const remainingMs = result ? 0 : pending.length ? Math.min(...pending) : 0;
         return { kind: "any", result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
       }
@@ -95050,7 +95050,7 @@ ${detail.join("\n")}` : stripped;
       const lines = screenText.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
       const cleanScreen = lines.join("\n");
       const absence = viewportStartRow && viewportStartRow > 0 ? { viewportScreen: lines.slice(viewportStartRow).join("\n"), inNot: false } : void 0;
-      const sections = resolveSections(spec.sections ?? {}, lines);
+      const sections = resolveSections(spec.sections ?? {}, lines, viewportStartRow ?? 0);
       const outgoing = outgoingTransitions(spec, currentStateId);
       const transitions = [];
       let fired = null;
@@ -162273,6 +162273,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       screenTimer = null;
       tickTimer = null;
       lastScreen = "";
+      screenVersion = 0;
+      cachedScreen = "";
+      cachedScreenVersion = -1;
       /** Debug-only ring buffer of PTY input/output/resize/cursor events. */
       events = [];
       lastCursorKey = "";
@@ -162303,6 +162306,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             "exit",
             `exitCode=${exitCode === null ? "unknown" : exitCode}${signal ? ` signal=${signal}` : ""}`
           );
+          if (this.cachedScreenVersion !== this.screenVersion) {
+            try {
+              this.computeScreen();
+            } catch {
+            }
+          }
           this.handlers.on_exit?.({ ...info, exitCode, signal });
           this.pty = null;
         });
@@ -162319,8 +162328,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.recordEvent("resize", `${cols}x${rows}`);
         this.pty?.resize(cols, rows);
         this.screen.resize(rows, cols);
+        this.screenVersion += 1;
       }
       snapshot() {
+        if (this.cachedScreenVersion === this.screenVersion) {
+          return this.cachedScreen;
+        }
         return this.pty !== null ? this.computeScreen() : this.lastScreen || this.computeScreen();
       }
       /**
@@ -162408,6 +162421,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       }
       kill() {
         this.stopTimers();
+        if (this.cachedScreenVersion !== this.screenVersion) {
+          try {
+            this.computeScreen();
+          } catch {
+          }
+        }
         try {
           this.pty?.kill();
         } catch {
@@ -162421,6 +162440,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
        *  anyway) is killed, as before. */
       detach() {
         this.stopTimers();
+        if (this.cachedScreenVersion !== this.screenVersion) {
+          try {
+            this.computeScreen();
+          } catch {
+          }
+        }
         try {
           if (typeof this.pty?.detach === "function") this.pty.detach();
           else this.pty?.kill();
@@ -162432,6 +162457,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       onChunk(chunk) {
         this.recordEvent("output", capPreview(escapeControl(chunk)), chunk.length);
         this.screen.write(chunk);
+        this.screenVersion += 1;
         try {
           this.handlers.on_pty_data?.(chunk);
         } catch {
@@ -162439,7 +162465,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         if (this.screenTimer) return;
         this.screenTimer = setTimeout(() => {
           this.screenTimer = null;
-          const snap = this.computeScreen();
+          const snap = this.snapshot();
           const cur = this.screen.getCursorPosition();
           const curKey = `${cur.row},${cur.col}`;
           if (curKey !== this.lastCursorKey) {
@@ -162455,7 +162481,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }, this.screenDebounceMs);
       }
       computeScreen() {
-        return this.screen.getText();
+        const text4 = this.screen.getText();
+        this.cachedScreen = text4;
+        this.cachedScreenVersion = this.screenVersion;
+        return text4;
       }
       stopTimers() {
         if (this.screenTimer) {
@@ -162781,6 +162810,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_fsm_types();
     init_fsm_loader();
     init_logger();
+    init_fsm_evaluator();
     var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
     var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
     function stripAnsi2(text4) {
@@ -162801,20 +162831,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const out = [];
       for (const line of raw.split("\n")) {
         const trimmed2 = line.trim();
-        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
-          inToolBlock = false;
-          inFence = null;
-          inDiffHunk = false;
-          if (TOOL_HEADER_LINE_RE.test(line)) {
-            inToolBlock = true;
-            continue;
-          }
-        }
         const fenceMatch = trimmed2.match(/^(```+|~~~+)/);
         if (fenceMatch) {
           const ch = fenceMatch[1][0];
           if (inFence === null) {
             inFence = ch;
+            inDiffHunk = false;
+            inToolBlock = false;
             continue;
           }
           if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed2)) {
@@ -162831,19 +162854,27 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed2)) {
           inDiffHunk = true;
+          inToolBlock = false;
           continue;
         }
         if (inDiffHunk) {
           if (!trimmed2) continue;
-          if (!/^[ \t]*[⏺✻✢✳✶✽✷✸✹❯›●✗✖⚠!]/.test(line) && /^(?:[ +-]|\\ No newline)/.test(line)) {
+          if (/^(?:[ +-]|\\ No newline)/.test(line)) {
             continue;
           }
           inDiffHunk = false;
         }
+        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
+          inToolBlock = false;
+          if (TOOL_HEADER_LINE_RE.test(line)) {
+            inToolBlock = true;
+            continue;
+          }
+        }
         if (!trimmed2) {
           continue;
         }
-        if (/^[⎿└├]/.test(trimmed2) || TOOL_HEADER_LINE_RE.test(line)) {
+        if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed2) || TOOL_HEADER_LINE_RE.test(line)) {
           inToolBlock = true;
           continue;
         }
@@ -162855,7 +162886,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
         if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
-        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed2)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw)\s+\S|(?:if|else\s+if|expect|it|test|describe|assert)\s*(?:\(|\.[a-z]+\s*\())/.test(trimmed2)) continue;
         out.push(line);
       }
       return out.join("\n");
@@ -163115,49 +163146,19 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var LATCH_WATCHDOG_SLACK_MS = 50;
     var UNCONFIRMED_SUBMIT_DRAIN_DELAY_MS = 350;
     var PASTE_PLACEHOLDER_RE = /\[Pasted\s*(?:text|Content)[^\]\n]*\]/i;
-    var PRE_SEND_COMPOSER_OR_BUSY_CHROME_RE = /(?:esc to interrupt|ctrl\+c to interrupt|esc:interrupt|ctrl\+c to stop|esc to cancel|• Working|thinking\)|──────────\n[ \t]*[❯›>]|Context left until auto-compact|\b\d+%\s+context\b|\b\d+%\s+left\b|\bclaude-(?:opus|sonnet|haiku)|(?:Opus|Sonnet|Haiku)\s+\d|\? for shortcuts|Type your message|·\s*\d+(?:\.\d+)?%|→\s*Plan,\s*search,\s*build anything|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│\s*❯|(?:^|\n)[ \t]*›(?:[ \t]*|[ \t]+(?![1-9]\.)[^\n]*)(?:\n|$))/i;
-    var PRE_SEND_ANCHORED_SIGN_IN_LINE_RE = /^[ \t]{0,4}(?:(?:[❯›>•*▸⠋│]\s*)?(?:[1-9]\.\s+)?(?:Claude account with subscription|Anthropic Console account|Sign in with your Console account|Sign in with ChatGPT|Continue with ChatGPT|Use API key|Provide your own API key|Sign in with Device Code|Sign in with Google|Use Gemini API Key|Vertex AI|Enter Authorization Code|Press Enter to (?:log|sign) in|Sign in to Kimi Code|Waiting for authorization)|Let's get started\b|Select (?:a |Google Cloud )?(?:login|sign-in) method\b|How do you want to sign in\?|Opening browser to sign in|Cloud gateway\s*[·•]\s*sign in\b|Browser didn't open\?|Paste code here if prompted\b|Waiting for (?:authentication|authorization|login)\b|Sign in to (?:Claude|Codex|Cursor|Grok|Kimi)\b|Log in to Claude\b|Please (?:run \/login|sign in|log in|set your API key|visit the (?:following )?URL to (?:authenticate|log in))\b|Not (?:logged|signed) in\b|Welcome back!\s*You are currently not signed in\b|Authentication required\b|Finish signing in via your browser\b|Preparing device code login\b|Use your own OpenAI API key\b|>?\s*API key login is disabled\b|Open this link in your browser to sign in\b|Enter (?:this one-time code|the authorization code|your API key)\b|How would you like to authenticate\b|Or visit:\s*https:\/\/cursor\.com\b|Authenticate with Cursor\b|XAI_API_KEY\b|Paste your xAI API key to continue\b|Invalid API key\b|kimi login\b|Scan the QR code\b|Visit https:\/\/[^\s]*(?:moonshot|kimi))/i;
     function isAnchoredSignInViewport(viewport, spec) {
-      if (!viewport) return false;
-      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      if (!viewport || !spec?.transitions) return false;
+      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
       if (!stripped.trim()) return false;
-      if (PRE_SEND_COMPOSER_OR_BUSY_CHROME_RE.test(stripped)) return false;
-      if ((!spec || spec.id === "kimi") && /│\s*>\s*│/.test(stripped)) return false;
-      if (spec?.transitions) {
-        for (const t of spec.transitions) {
-          if (t.to !== "signing_in" || !t.when) continue;
-          const whenObj = t.when;
-          const conds = Array.isArray(whenObj.all) ? whenObj.all : [whenObj];
-          for (const c of conds) {
-            const negPattern = typeof c.not_matches === "string" ? c.not_matches : typeof c.not?.matches === "string" ? c.not.matches : "";
-            if (negPattern) {
-              try {
-                if (new RegExp(negPattern, "i").test(stripped)) return false;
-              } catch {
-              }
-            }
-          }
-        }
-      }
       const cleaned = stripToolAndCodeLines(stripped);
       if (!cleaned.trim()) return false;
-      const nonEmptyLines = cleaned.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim().length > 0);
-      if (nonEmptyLines.length === 0) return false;
-      const bottomRegion = nonEmptyLines.slice(-12);
-      let lastMatchIdx = -1;
-      for (let i = 0; i < bottomRegion.length; i += 1) {
-        if (PRE_SEND_ANCHORED_SIGN_IN_LINE_RE.test(bottomRegion[i])) {
-          lastMatchIdx = i;
+      for (const t of spec.transitions) {
+        if (t.to !== "signing_in" || !t.when) continue;
+        if (evaluateConditionPreview(t.when, spec.sections, stripped).result && evaluateConditionPreview(t.when, spec.sections, cleaned).result) {
+          return true;
         }
       }
-      if (lastMatchIdx === -1) return false;
-      if (bottomRegion.length - 1 - lastMatchIdx > 5) return false;
-      for (let j = lastMatchIdx + 1; j < bottomRegion.length; j += 1) {
-        if (/^[ \t]*(?:[❯›][ \t]*|─{10,}[ \t]*)$/.test(bottomRegion[j])) {
-          return false;
-        }
-      }
-      return true;
+      return false;
     }
     var SendSubmitEngine = class {
       constructor(host) {
@@ -163396,8 +163397,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
-        if (this.host.currentStatus() !== "idle") return false;
-        if (this.isPreSendAuthRequired()) return false;
+        const status = this.host.currentStatus();
+        if ((status === "idle" || status === "approval") && this.isPreSendAuthRequired()) return false;
+        if (status !== "idle") return false;
         return true;
       }
       /** Human-readable reason a send was queued — logged, never used for control flow. */
@@ -165402,7 +165404,7 @@ trust_level = "trusted"
           regionLastChangedAt: this.regionLastChangedAt,
           stableVerdictCache: this.stableVerdictCache
         }, currentLines, cursor, now);
-        const markerScan = this.bgMarker.enabled ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines)) : null;
+        const markerScan = this.bgMarker.enabled ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines, currentLines.length - screen.split("\n").length)) : null;
         const prevForEval = this.prevScreenLines;
         const ev = this.evalFsmNow(this.bgMarker.frame(guard2, markerScan), screen, cursor, now);
         this.lastFsmEval = ev;
@@ -165458,17 +165460,13 @@ trust_level = "trusted"
       }
       commitTransition(fired, now, ev) {
         const from = this.currentStateId;
-        this.pushFsmSnapshot(from, fired, now, ev);
+        if (ev) this.pushFsmSnapshot(from, fired, now, ev);
         this.currentStateId = fired.to;
         this.stateEnteredAt = now;
         this.lastModalParseMissKey = null;
         this.regionLastChangedAt.clear();
         this.stableVerdictCache.clear();
-        this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, {
-          reason: "transition",
-          via: `${from}\u2192${fired.to}`,
-          matchedRules: summarizeTransition(fired)
-        });
+        this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, { reason: "transition", via: `${from}\u2192${fired.to}`, matchedRules: ev ? summarizeTransition(fired) : [fired.label] });
         LOG.info("FsmDriver", `[${this.specTag()}] ${from} \u2192 ${fired.to} (${fired.label})`);
         const statusOf = (id4) => {
           const st = stateById(this.spec, id4);
@@ -165476,33 +165474,14 @@ trust_level = "trusted"
         };
         this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
       }
-      /** Transition to `signing_in` when the pre-send screen guard detects an
-       *  active anchored login screen on a session the FSM still considered idle. */
+      /** Transition to `signing_in` when the pre-send screen guard detects an active anchored login screen while idle. */
       enterPreSendSigningIn() {
-        const target = stateById(this.spec, "signing_in");
-        if (!target || this.currentStateId === "signing_in") return;
-        const now = Date.now();
-        const from = this.currentStateId;
-        this.currentStateId = "signing_in";
-        this.stateEnteredAt = now;
-        this.lastModalParseMissKey = null;
-        this.regionLastChangedAt.clear();
-        this.stableVerdictCache.clear();
-        this.pushHistory("signing_in", target.label ?? "signing_in", {
-          reason: "transition",
-          via: `${from}\u2192signing_in`,
-          matchedRules: ["pre_send_auth_guard"]
-        });
-        LOG.info("FsmDriver", `[${this.specTag()}] ${from} \u2192 signing_in (pre_send_auth_guard)`);
-        const statusOf = (id4) => {
-          const st = stateById(this.spec, id4);
-          return st ? statusForState(st) : "idle";
-        };
-        this.redrawNudge.onTransition(statusOf(from), statusOf("signing_in"), "pre_send_auth_guard");
-        this.emitStateChanged(true);
-        this.scheduleWakeForState();
-        this.focusPrimer.scheduleStallWatchdog();
-        this.redrawNudge.schedule();
+        if (!stateById(this.spec, "signing_in") || this.currentStateId === "signing_in") return;
+        this.commitTransition({ to: "signing_in", label: "pre_send_auth_guard", eligible: true, holdSatisfied: true, holdRemainingMs: 0, condResult: true, fires: true, priority: 0 }, Date.now());
+        if (!this.tornDown && this.adapter.hasActivePty()) {
+          this.reevaluate(true);
+          this.armPostTransitionReevaluate();
+        } else this.emitStateChanged(true);
       }
       /** Snapshot the full FSM evaluation that produced a transition into the
        *  separate fsmSnapshotHistory ring buffer (max 20). The transitions[]

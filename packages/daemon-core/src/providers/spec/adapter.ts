@@ -109,6 +109,9 @@ export class TerminalAdapter {
     private screenTimer: ReturnType<typeof setTimeout> | null = null;
     private tickTimer: ReturnType<typeof setInterval> | null = null;
     private lastScreen = '';
+    private screenVersion = 0;
+    private cachedScreen = '';
+    private cachedScreenVersion = -1;
     /** Debug-only ring buffer of PTY input/output/resize/cursor events. */
     private events: SpecPtyEvent[] = [];
     private lastCursorKey = '';
@@ -159,6 +162,9 @@ export class TerminalAdapter {
                 'exit',
                 `exitCode=${exitCode === null ? 'unknown' : exitCode}${signal ? ` signal=${signal}` : ''}`,
             );
+            if (this.cachedScreenVersion !== this.screenVersion) {
+                try { this.computeScreen(); } catch { /* ignore */ }
+            }
             // Preserve the authoritative session-host tombstone all the way to
             // SpecCliAdapter. Collapsing null to 0 or narrowing this to only an
             // exit code reopens the mesh ledger blind spot for external deaths.
@@ -179,9 +185,13 @@ export class TerminalAdapter {
         this.recordEvent('resize', `${cols}x${rows}`);
         this.pty?.resize(cols, rows);
         this.screen.resize(rows, cols);
+        this.screenVersion += 1;
     }
 
     snapshot(): string {
+        if (this.cachedScreenVersion === this.screenVersion) {
+            return this.cachedScreen;
+        }
         return this.pty !== null ? this.computeScreen() : (this.lastScreen || this.computeScreen());
     }
 
@@ -279,6 +289,9 @@ export class TerminalAdapter {
 
     kill(): void {
         this.stopTimers();
+        if (this.cachedScreenVersion !== this.screenVersion) {
+            try { this.computeScreen(); } catch { /* ignore */ }
+        }
         try { this.pty?.kill(); } catch { /* ignore */ }
         this.pty = null;
         this.screen.dispose();
@@ -290,6 +303,9 @@ export class TerminalAdapter {
      *  anyway) is killed, as before. */
     detach(): void {
         this.stopTimers();
+        if (this.cachedScreenVersion !== this.screenVersion) {
+            try { this.computeScreen(); } catch { /* ignore */ }
+        }
         try {
             if (typeof this.pty?.detach === 'function') this.pty.detach();
             else this.pty?.kill();
@@ -324,12 +340,13 @@ export class TerminalAdapter {
         // `rawTailSeq` recorded alongside evidence built from `on_pty_data`
         // is guaranteed to correspond to a screen state that includes it.
         this.screen.write(chunk);
+        this.screenVersion += 1;
         try { this.handlers.on_pty_data?.(chunk); } catch { /* user side */ }
         // Coalesce snapshot emission — rapid bursts shouldn't fire 200x.
         if (this.screenTimer) return;
         this.screenTimer = setTimeout(() => {
             this.screenTimer = null;
-            const snap = this.computeScreen();
+            const snap = this.snapshot();
             // Record cursor movement at the (debounced) screen-change boundary
             // rather than per output chunk, so the timeline isn't flooded.
             const cur = this.screen.getCursorPosition();
@@ -345,7 +362,10 @@ export class TerminalAdapter {
     }
 
     private computeScreen(): string {
-        return this.screen.getText();
+        const text = this.screen.getText();
+        this.cachedScreen = text;
+        this.cachedScreenVersion = this.screenVersion;
+        return text;
     }
 
     private stopTimers(): void {
