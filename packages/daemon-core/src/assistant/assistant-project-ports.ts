@@ -79,6 +79,10 @@ export interface CoordinatorTurns {
     committed: Array<{ attemptId: string; outcome: string; at: number }>;
 }
 
+export type CoordinatorLiveness = 'live' | 'dead' | 'unknown';
+
+export const SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 100;
+
 export interface AssistantProjectPorts {
     selfDaemonId(): string;
     localNodeFacts?(): MeshNodeFacts;
@@ -87,8 +91,8 @@ export interface AssistantProjectPorts {
     isHostedHere(mesh: LocalMeshEntry): boolean;
     aliases(): Record<string, string>;
     coordinators(meshId: string): AssistantCoordinatorView[];
-    /** Verify a coordinator runtime is live using real session-host runtime evidence (not a static stub). */
-    isCoordinatorLive?(sessionId: string): Promise<boolean> | boolean;
+    /** Verify a coordinator runtime liveness ('live' | 'dead' | 'unknown') using real session-host runtime evidence. */
+    isCoordinatorLive?(sessionId: string): Promise<CoordinatorLiveness | boolean> | CoordinatorLiveness | boolean;
     /** Newest coordinator registry session of the mesh (live or not) — read_chat history fallback. */
     lastCoordinatorSessionId(meshId: string): string | null;
     queueCounts(meshId: string): QueueCounts | null;
@@ -216,17 +220,17 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
                     ...(started.has(v.sessionId) ? { startedAt: started.get(v.sessionId) } : {}),
                 }));
         },
-        isCoordinatorLive: async (sessionId) => {
+        isCoordinatorLive: async (sessionId): Promise<CoordinatorLiveness> => {
             const id = readText(sessionId);
-            if (!id) return false;
+            if (!id) return 'dead';
             let components: DaemonComponents | undefined;
             try {
                 components = ctx.components();
             } catch {
-                return true;
+                return 'live';
             }
-            if (!components) return true;
-            if (components.sessionRegistry?.wasInstanceTerminated?.(id)) return false;
+            if (!components) return 'live';
+            if (components.sessionRegistry?.wasInstanceTerminated?.(id)) return 'dead';
 
             const byCat = typeof components.instanceManager?.getByCategory === 'function'
                 ? (components.instanceManager.getByCategory('cli') as unknown as CliInstanceLike[])
@@ -235,30 +239,44 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
             const inst = (components.instanceManager?.getInstance?.(id)
                 ?? allInstances.find((i) => readText(i?.getState?.()?.instanceId) === id)) as Record<string, any> | undefined;
             if (inst) {
-                if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) return false;
+                if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) return 'dead';
                 const state = inst.getState?.();
                 const adapter = inst.adapter ?? (typeof inst.getAdapter === 'function' ? inst.getAdapter() : undefined);
                 const runtimeMeta = (typeof adapter?.getRuntimeMetadata === 'function' ? adapter.getRuntimeMetadata() : undefined)
                     ?? state?.runtime;
                 if (runtimeMeta && typeof runtimeMeta === 'object' && !isLiveSessionHostRuntimeMetadata(runtimeMeta)) {
-                    return false;
+                    return 'dead';
                 }
             }
 
-            const listSessions = (components as any).router?.deps?.sessionHostControl?.listSessions
-                ?? (components as any).sessionHost?.control?.listSessions;
-            if (typeof listSessions === 'function') {
+            const sessionHostControl = (components as any).router?.deps?.sessionHostControl
+                ?? (components as any).sessionHost?.control
+                ?? (components as any).sessionHostControl;
+            if (sessionHostControl && typeof sessionHostControl.listSessions === 'function') {
+                const timedOut = Symbol('session_host_liveness_timeout');
+                let timer: ReturnType<typeof setTimeout> | undefined;
                 try {
-                    const records = await listSessions();
+                    const records = await Promise.race([
+                        Promise.resolve().then(() => sessionHostControl.listSessions()),
+                        new Promise<typeof timedOut>((resolve) => {
+                            timer = setTimeout(() => resolve(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
+                            timer.unref?.();
+                        }),
+                    ]);
+                    if (records === timedOut) return 'unknown';
                     if (Array.isArray(records)) {
-                        const record = records.find((r: any) => readText(r?.sessionId) === id);
-                        if (!record || !isLiveSessionHostRuntimeMetadata(record)) return false;
+                        const record = records.find((r: any) => readText(r?.sessionId ?? r?.runtimeId) === id);
+                        if (!record || !isLiveSessionHostRuntimeMetadata(record)) return 'dead';
+                        return 'live';
                     }
+                    return 'unknown';
                 } catch {
-                    return false;
+                    return 'unknown';
+                } finally {
+                    if (timer !== undefined) clearTimeout(timer);
                 }
             }
-            return true;
+            return 'live';
         },
         lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
         queueCounts: (meshId) => {

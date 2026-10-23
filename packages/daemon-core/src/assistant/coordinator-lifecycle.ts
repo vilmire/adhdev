@@ -133,6 +133,8 @@ export interface CoordinatorLaunchOutcome {
 export interface EnsureCoordinatorPorts {
     /** This daemon's live coordinator sessions of the mesh. */
     coordinators(meshId: string): AssistantCoordinatorView[];
+    /** Optional gate invoked inside the per-mesh lock right before launching when no live coordinator was found. */
+    beforeLaunch?(meshId: string): Promise<CoordinatorLaunchOutcome | void> | CoordinatorLaunchOutcome | void;
     /** In-process `launch_mesh_coordinator`. */
     launch(input: { meshId: string; extraSystemPrompt: string; managedByAssistant: true }): Promise<CoordinatorLaunchOutcome>;
     /** `set_conversation_prefs { hidden: true }` — best-effort. */
@@ -169,6 +171,18 @@ export function ensureCoordinator(meshId: string, ports: EnsureCoordinatorPorts)
     return withMeshLock(meshId, async (): Promise<EnsureCoordinatorResult> => {
         const live = pickCoordinator(ports.coordinators(meshId));
         if (live) return { ok: true, sessionId: live.sessionId, launched: false, managedByAssistant: live.managedByAssistant };
+        if (typeof ports.beforeLaunch === 'function') {
+            const gate = await ports.beforeLaunch(meshId);
+            if (gate && gate.success === false) {
+                const code = typeof gate.code === 'string' && gate.code ? gate.code : 'coordinator_launch_denied';
+                const error = typeof gate.error === 'string' && gate.error ? gate.error : code;
+                const detail: Record<string, unknown> = {};
+                for (const [k, v] of Object.entries(gate)) {
+                    if (k !== 'success' && k !== 'code' && k !== 'error') detail[k] = v;
+                }
+                return { ok: false, code, error, detail };
+            }
+        }
         const launched = await ports.launch({
             meshId,
             extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT,

@@ -106,6 +106,33 @@ describe('ensureCoordinator', () => {
         const p = ports({ hide: vi.fn(async () => { throw new Error('nope'); }) });
         expect(await ensureCoordinator('mesh_a', p)).toMatchObject({ ok: true, launched: true });
     });
+
+    it('rechecks beforeLaunch inside the per-mesh lock when an earlier launch exited immediately', async () => {
+        let launchesAllowed = 1;
+        const p = ports({
+            beforeLaunch: vi.fn(async () => {
+                if (launchesAllowed <= 0) {
+                    return { success: false, code: 'wake_rate_limited', error: 'cooldown', reason: 'cooldown' };
+                }
+                launchesAllowed -= 1;
+                return { success: true };
+            }),
+            launch: vi.fn(async () => {
+                await new Promise((r) => setTimeout(r, 5));
+                // Coordinator exits immediately before registering as live in p.live
+                return { success: true, sessionId: 'coord-ephemeral' };
+            }),
+        } as any);
+        const results = await Promise.all([
+            ensureCoordinator('mesh_a', p),
+            ensureCoordinator('mesh_a', p),
+            ensureCoordinator('mesh_a', p),
+        ]);
+        expect(p.launch).toHaveBeenCalledTimes(1);
+        expect(results[0]).toMatchObject({ ok: true, sessionId: 'coord-ephemeral', launched: true });
+        expect(results[1]).toMatchObject({ ok: false, code: 'wake_rate_limited', detail: { reason: 'cooldown' } });
+        expect(results[2]).toMatchObject({ ok: false, code: 'wake_rate_limited', detail: { reason: 'cooldown' } });
+    });
 });
 
 describe('withMeshLock', () => {
