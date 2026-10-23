@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildCloudStatusReportPayload } from '../../src/status/reporter.js';
+import { projectServerStatusEvent } from '../../src/status/status-event.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 import { createStatusEventEmitter } from '../../src/status/status-event.js';
 
@@ -197,8 +198,10 @@ describe('buildCloudStatusReportPayload — server WS content boundary', () => {
  * The full `launch` record, the thinking level, and any label / free text stay
  * on P2P.
  */
-describe('buildCloudStatusReportPayload — picker question text stays off the server', () => {
-    it('a waiting_choice session with a live picker adds no question/option text to the payload', () => {
+describe('buildCloudStatusReportPayload — status_report snapshot carries no picker text', () => {
+    // Scope: the status_report SNAPSHOT path only. The separate status_event path
+    // deliberately forwards modalMessage/modalButtons for push (see below).
+    it('a waiting_choice session with a live picker adds no question/option text to the status_report payload', () => {
         const picker = { promptId: 'p1', questions: [{ questionId: 'q1', question: 'PICKER-QUESTION-TEXT?', options: [{ label: 'PICKER-OPTION-LABEL' }] }] };
         const withPicker = sessionWithContent({
             status: 'waiting_choice',
@@ -211,6 +214,38 @@ describe('buildCloudStatusReportPayload — picker question text stays off the s
         expect(wire).not.toContain('PICKER-OPTION-LABEL');
         const [bare] = buildCloudStatusReportPayload([sessionWithContent({ status: 'waiting_choice' })], undefined, 1).sessions;
         expect(Object.keys(payload.sessions[0]!).sort()).toEqual(Object.keys(bare!).sort());
+    });
+});
+
+describe('projectServerStatusEvent — documented push exception for picker text', () => {
+    // CLAUDE.md "Push notification exception": modalMessage/modalButtons reach the
+    // server for agent:waiting_choice so the push is actionable. Pinned, not widened.
+    it('forwards only the first-question projection, never the structured prompt', () => {
+        const payload = projectServerStatusEvent({
+            event: 'agent:waiting_choice',
+            interactivePrompt: { promptId: 'p1', questions: [{ question: 'FULL-STRUCT-Q', options: [{ label: 'x' }] }] },
+            promptId: 'p1',
+            multiSelect: true,
+            modalMessage: 'Which approach?',
+            modalButtons: ['A', 'B'],
+        } as never) as Record<string, unknown> | null;
+        expect(payload?.modalMessage).toBe('Which approach?');
+        expect(payload?.modalButtons).toEqual(['A', 'B']);
+        expect(JSON.stringify(payload)).not.toContain('FULL-STRUCT-Q');
+        expect(payload).not.toHaveProperty('interactivePrompt');
+        expect(payload).not.toHaveProperty('promptId');
+    });
+
+    it('does not truncate modalMessage daemon-side (the 80-char cut is server-side) — pinned so a change is deliberate', () => {
+        const long = 'q'.repeat(300);
+        const payload = projectServerStatusEvent({ event: 'agent:waiting_choice', modalMessage: long } as never) as Record<string, unknown> | null;
+        expect(payload?.modalMessage).toBe(long);
+    });
+
+    it('does not bound modalButtons count or length daemon-side (known gap, pinned)', () => {
+        const many = Array.from({ length: 40 }, (_, i) => `opt-${i}-${'z'.repeat(200)}`);
+        const payload = projectServerStatusEvent({ event: 'agent:waiting_choice', modalButtons: many } as never) as Record<string, unknown> | null;
+        expect((payload?.modalButtons as string[]).length).toBe(40);
     });
 });
 

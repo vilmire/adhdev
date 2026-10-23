@@ -191,8 +191,8 @@ export class AssistantRelay {
     /** Durable read and notification acknowledgements, scoped to the recipient. */
     private readonly gaps: RelayGapTracker;
     private readonly deliveryPolicy: RelayDeliveryPolicy;
-    /** sessionId -> whether the episode's signal already carried question text. */
-    private readonly modalOpen = new Map<string, boolean>();
+    /** sessionId -> whether the episode's signal already carried the question (structured prompt or approval modal). */
+    private readonly modalOpen = new Map<string, 'bare' | 'detailed'>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
     /** Exact attempt reports returned by the authorized evidence reader. The
@@ -903,8 +903,8 @@ export class AssistantRelay {
         const seen = this.modalOpen.get(sessionId);
         // One line per episode; a later event of the same episode (modal then
         // prompt) only adds a line when the first carried no question text.
-        if (seen === true || (seen === false && !detail)) return;
-        this.modalOpen.set(sessionId, !!detail);
+        if (seen === 'detailed' || (seen === 'bare' && !detail)) return;
+        this.modalOpen.set(sessionId, detail ? 'detailed' : 'bare');
         const slug = this.ports.projectSlug(meshId);
         if (slug !== null) this.pushLine('relay', buildApprovalSignal(slug, detail), meshId);
     }
