@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { claimKeyForPath, executeNativeHistory } from '../../src/providers/spec/native-history-executor.js';
+import { claimKeyForPath, executeNativeHistory, createCooperativeNativeHistoryReader } from '../../src/providers/spec/native-history-executor.js';
 import { __resetSentPromptRegistry, recordSentPrompt } from '../../src/providers/native-history/sent-prompt-registry.js';
 import { __resetTranscriptClaimRegistry } from '../../src/providers/native-history/transcript-claim-registry.js';
 import { readCliProviderNativeHistory } from '../../src/commands/chat-commands-read-native.js';
@@ -239,6 +239,15 @@ describe('targeted Codex native identity through real JSONL read consumer', () =
     expect(writes).toHaveBeenCalled();
     const next = await read(helpers());
     expect(next.providerSessionId).toBe(UUID);
+    expect((next.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
+  });
+  it.each([false, true])('awaits cooperative native history for read_chat and chat_history, live=%s', async (live) => {
+    provider.scripts.readNativeHistory = createCooperativeNativeHistoryReader(source);
+    const h: any = helpers(live);
+    const result = await page(h, { providerSessionId: UUID, limit: 1 });
+    expect(result.source).toBe('provider-native');
+    expect((result.messages as any[]).map(m => m.content)).toEqual(['SYNTHETIC_FOREIGN_ANSWER']);
+    const next = await read(h, { providerSessionId: UUID });
     expect((next.messages as any[]).map(m => m.content)).toContain('SYNTHETIC_FOREIGN_ANSWER');
   });
   it('keeps old-born/new-mtime same-workspace candidate unconfirmed and workspace-scoped', () => {
