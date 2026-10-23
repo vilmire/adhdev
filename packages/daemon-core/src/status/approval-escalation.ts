@@ -56,10 +56,13 @@ export function currentApprovalEpisodeKey(state: SessionStateLike): string | nul
     const approval = state.activeChat?.providerApproval;
     if (approval) {
         if (approval.lifecycle !== 'pending' || approval.resolvedAt != null || approval.evidence !== 'live') return null;
-        return typeof approval.modalKey === 'string' && approval.modalKey ? `modal:${approval.modalKey}` : null;
+        if (typeof approval.modalKey === 'string' && approval.modalKey) return `modal:${approval.modalKey}`;
+        if ((approval as { source?: unknown }).source === 'status_only') return 'status_only:waiting_external';
+        return null;
     }
     const modal = state.activeChat?.activeModal;
-    if (!modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) return null;
+    if (!modal) return 'status_only:waiting_external';
+    if (!Array.isArray(modal.buttons) || modal.buttons.length === 0) return null;
     return `legacy:${JSON.stringify([String(modal.message ?? ''), modal.buttons.map(String)])}`;
 }
 

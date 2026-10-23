@@ -119,6 +119,40 @@ describe('coordinator-first owner escalation', () => {
         expect(w.server).toHaveLength(1);
         w.stop();
     });
+
+    it('holds and deduplicates status_only waiting_external (signing_in) on a delegated worker so it never triggers an owner push storm', () => {
+        const w = world();
+        // signing_in (waiting_external) projects to status: 'waiting_approval', activeModal: null, providerApproval: undefined
+        state = {
+            status: 'waiting_approval',
+            settings: workerSettings,
+            activeChat: { status: 'waiting_approval', activeModal: null, providerApproval: undefined },
+        };
+        const askExternal = () => w.bus.emit({
+            kind: 'provider_event',
+            sessionId: 'w1',
+            event: { event: 'agent:waiting_approval', targetSessionId: 'w1', providerType: 'claude-cli', timestamp: 1 },
+        } as any);
+
+        askExternal();
+        expect(w.dashboard).toHaveLength(1);
+        // Must hold during the coordinator-first window instead of failing open
+        expect(w.server).toHaveLength(0);
+
+        // Repeated waiting_approval emissions (e.g. stall nudge or re-entry) must not bypass the hold or storm the owner
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        askExternal();
+        expect(w.server).toHaveLength(0);
+
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS / 2);
+        expect(w.server).toHaveLength(1);
+
+        // Subsequent emissions for the same status_only episode are dropped
+        askExternal();
+        vi.advanceTimersByTime(OWNER_APPROVAL_ESCALATION_MS * 2);
+        expect(w.server).toHaveLength(1);
+        w.stop();
+    });
 });
 
 describe('episode identity helpers', () => {

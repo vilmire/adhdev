@@ -83,19 +83,31 @@ function hasProviderFailureEnvelope(text: string): boolean {
  * output containing "401", "Unauthorized", or "not signed in" cannot trigger
  * live provider failure suspicions.
  */
-function stripToolAndCodeLines(raw: string): string {
-    return raw
-        .split('\n')
-        .filter((line) => {
-            const trimmed = line.trim();
-            if (!trimmed) return false;
-            if (/^[⎿└├]/.test(trimmed)) return false;
-            if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed)) return false;
-            if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed)) return false;
-            if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed)) return false;
-            return true;
-        })
-        .join('\n');
+export function stripToolAndCodeLines(raw: string): string {
+    let inToolBlock = false;
+    const out: string[] = [];
+    for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            inToolBlock = false;
+            continue;
+        }
+        if (/^[⎿└├]/.test(trimmed)) {
+            inToolBlock = true;
+            continue;
+        }
+        if (inToolBlock) {
+            if (/^[ \t]{2,}/.test(line) && !/^[ \t]*(?:[⏺✻✢✳✶✽❯›]|─{10,})/.test(line)) {
+                continue;
+            }
+            inToolBlock = false;
+        }
+        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed)) continue;
+        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed)) continue;
+        out.push(line);
+    }
+    return out.join('\n');
 }
 
 export function detectProviderFailure(output: string, _exitCode?: number): ProviderFailure | null {
