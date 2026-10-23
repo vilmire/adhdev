@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     AssistantRegistry,
     busyInputModeToSendPolicy,
@@ -9,6 +9,7 @@ import {
     matchesAssistantRestore,
     subscribeAssistantRegistry,
 } from '../../src/assistant/assistant-registry.js';
+import { REVOCATION_REFUSAL_CODES } from '../../src/assistant/assistant-remote-relay.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 
 /**
@@ -87,9 +88,13 @@ describe('AssistantRegistry', () => {
     it('prunes a dead binding only against the full live set', () => {
         const r = reg();
         bind(r);
-        expect(r.pruneAfterRestore(new Set(['rt_1', 'rt_x']))).toBeNull();
+        const owner = { endpoint: 'unix:/tmp/preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
+        r.bindSession({ sessionId: 'rt_1', cliType: 'claude-cli', workspace: '/assistant', at: 1, hostOwner: owner });
+        expect(r.pruneAfterRestore(new Set(['rt_1', 'rt_x']), owner)).toBeNull();
         expect(r.read()!.sessionId).toBe('rt_1');
-        expect(r.pruneAfterRestore(new Set(['rt_x']))).toBe('rt_1');
+        expect(r.pruneAfterRestore(new Set(['rt_x']))).toBeNull();
+        expect(r.pruneAfterRestore(new Set(['rt_x']), { ...owner, endpoint: 'unix:/tmp/standalone.sock' })).toBeNull();
+        expect(r.pruneAfterRestore(new Set(['rt_x']), owner)).toBe('rt_1');
         expect(r.read()!.sessionId).toBeNull();
     });
 
@@ -121,6 +126,112 @@ describe('AssistantRegistry', () => {
         expect(e.busyInputMode).toBe('queue');
         expect(e.aliases).toEqual({ a: 'm' });
         expect(e.sessionId).toBeNull();
+    });
+
+    it('distinguishes unreadable from missing or corrupt: keeps previous cache, returns transient error on cold read, and never revokes or corrupt-asides', () => {
+        const SELF = 'daemon_mach_follower01';
+        const r = reg();
+        bind(r);
+        r.reconcileOwnerBinding(SELF);
+        r.upsertFollowedRemoteProject({
+            hostDaemonId: 'daemon_mach_host01',
+            meshId: 'mesh_1',
+            name: 'Proj1',
+            slug: 'proj1',
+            sanitizedRepoIdentity: null,
+            bindingRevision: 1,
+            grantRevision: 1,
+            state: 'followed',
+        });
+
+        // Make assistant.json transiently unreadable (simulates ENFILE/EMFILE/EACCES on readFileSync while file exists)
+        chmodSync(file(), 0o000);
+        try {
+            // 1. reload() on a warm registry keeps the previous cache and never returns null or local_owner_binding_missing
+            const reloaded = r.reload();
+            expect(reloaded).not.toBeNull();
+            expect(reloaded?.ownerBinding?.daemonId).toBe(SELF);
+            const warmCheck = r.verifyLocalOwnerBinding(SELF);
+            expect(warmCheck.ok).toBe(true);
+
+            // 2. A write during an unreadable assistant.json must NEVER rename the valid file to .corrupt-*
+            r.updateSettings({ reviewTurn: false });
+            expect(readdirSync(dir).filter((f) => f.startsWith('assistant.json.corrupt-'))).toEqual([]);
+
+            // 3. On a cold registry (no prior cache), unreadable file returns transient local_owner_binding_unreadable (never local_owner_binding_missing) and does not cache null
+            chmodSync(file(), 0o000);
+            const cold = reg();
+            expect(cold.read()).toBeNull();
+            const coldCheck = cold.verifyLocalOwnerBinding(SELF);
+            expect(coldCheck.ok).toBe(false);
+            if (!coldCheck.ok) {
+                expect(coldCheck.code).toBe('local_owner_binding_unreadable');
+                expect(REVOCATION_REFUSAL_CODES.has(coldCheck.code)).toBe(false);
+            }
+
+            // Once read pressure clears, the same cold registry reads from disk without needing a restart
+            chmodSync(file(), 0o600);
+            const recoveredCheck = cold.verifyLocalOwnerBinding(SELF);
+            expect(recoveredCheck.ok).toBe(true);
+        } finally {
+            try { chmodSync(file(), 0o600); } catch { /* ignore */ }
+        }
+    });
+
+    it('refuses bindSession, ensureBaseEntry, and every write path on a cold registry after an ENFILE read, leaving assistant.json byte-identical', () => {
+        const SELF = 'daemon_mach_follower01';
+        const r = reg();
+        bind(r);
+        r.updateSettings({ aliases: { alpha: 'mesh_alpha' } });
+        r.reconcileOwnerBinding(SELF);
+        r.upsertFollowedRemoteProject({
+            hostDaemonId: 'daemon_mach_host01',
+            meshId: 'mesh_alpha',
+            name: 'Alpha',
+            slug: 'alpha',
+            sanitizedRepoIdentity: 'github.com/acme/alpha',
+            bindingRevision: 1,
+            grantRevision: 1,
+            state: 'followed',
+        });
+
+        const originalBytes = readFileSync(file());
+        const enfileError = Object.assign(new Error('ENFILE: file table overflow'), { code: 'ENFILE' });
+
+        // Simulate a cold registry whose initial read fails with ENFILE, followed immediately by
+        // FD pressure clearing before loadMemoryBudget() / keepCorruptAside() / writeFileAtomic600() run.
+        const cold = reg();
+        const loadSpy = vi.spyOn(cold as any, 'load');
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() => bind(cold, 'rt_overwrite_attempt', 9999)).toThrow(/local_owner_binding_unreadable/);
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() => cold.reconcileOwnerBinding(SELF, { forceNewRevision: true })).toThrow(/local_owner_binding_unreadable/);
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() =>
+            cold.upsertFollowedRemoteProject({
+                hostDaemonId: 'daemon_mach_host02',
+                meshId: 'mesh_beta',
+                name: 'Beta',
+                slug: 'beta',
+                sanitizedRepoIdentity: null,
+                bindingRevision: 1,
+                grantRevision: 1,
+                state: 'followed',
+            }),
+        ).toThrow(/local_owner_binding_unreadable/);
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() => cold.updateSettings({ reviewTurn: false })).toThrow(/local_owner_binding_unreadable/);
+        expect(() => (cold as any).write({ ...r.read()!, sessionId: 'rt_direct_write' })).toThrow(/local_owner_binding_unreadable/);
+
+        expect(Buffer.compare(readFileSync(file()), originalBytes)).toBe(0);
+        expect(readdirSync(dir).filter((f) => f.startsWith('assistant.json.corrupt-'))).toEqual([]);
+
+        loadSpy.mockRestore();
+        expect(cold.read()).toEqual(r.read());
     });
 });
 

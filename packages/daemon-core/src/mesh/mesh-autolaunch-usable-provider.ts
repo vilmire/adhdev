@@ -4,7 +4,7 @@ import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
 import { ALL_PROVIDERS_QUOTA_GATED_SKIP_REASON, type ProviderQuotaGateBlock } from './mesh-quota-routing.js';
-import { recordLastQuotaRanking, quotaSpreadBonusByProvider } from './mesh-quota-ranking-records.js';
+import { recordLastQuotaRanking, quotaSpreadBonusByProvider, quotaTargetsFromSlots } from './mesh-quota-ranking-records.js';
 import type { QuotaFactsContext } from './mesh-quota-sources.js';
 import type { QuotaFallbackCandidate } from './mesh-quota-fallback.js';
 import { nodeSatisfiesRequiredTags, buildMeshNodeCapabilityTags } from './mesh-work-queue.js';
@@ -60,7 +60,7 @@ export async function resolveUsableProvider(
     // downstream guard derives from it — is byte-identical to before.
     const slots = resolveNodeCapabilitySlots(node, meshId);
     if (!slots.length) return { reason: 'missing_provider_priority' };
-    const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext) : undefined;
+    const quotaBonusByProvider = task ? quotaSpreadBonusByProvider(node, quotaRouting, Date.now(), quotaFactsContext, quotaTargetsFromSlots(slots)) : undefined;
     const orderedSlots = task
         ? orderSlotsForProviderSelection(slots, meshId ?? '', nodeId, node, task, quotaBonusByProvider)
         : slots;

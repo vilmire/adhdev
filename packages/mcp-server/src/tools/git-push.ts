@@ -1,3 +1,4 @@
+import { PUBLIC_PUBLISH_APPROVAL_SCHEMA } from './mesh-tool-schemas-refine-config.js';
 import type { CommandTransport } from '../transports/mode.js';
 
 export const GIT_PUSH_TOOL = {
@@ -10,6 +11,7 @@ export const GIT_PUSH_TOOL = {
   inputSchema: {
     type: 'object' as const,
     properties: {
+      approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
       workspace: {
         type: 'string',
         description: 'Absolute path to the workspace/repository directory.',
@@ -33,6 +35,7 @@ export async function gitPush(
     workspace: string;
     remote?: string;
     branch?: string;
+    approved_publish_shas?: string[] | Record<string, string[]>;
   },
 ): Promise<string> {
   let raw: any = await transport.command('git_push', {
@@ -44,6 +47,7 @@ export async function gitPush(
     // after the plain push failed for lack of upstream — so a first push naming
     // an explicit remote+branch succeeded without ever gaining tracking.
     setUpstream: true,
+    approvedPublishShas: args.approved_publish_shas,
   });
   raw = raw?.push ?? raw;
 

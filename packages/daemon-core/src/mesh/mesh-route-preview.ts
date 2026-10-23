@@ -2,7 +2,7 @@ import type { NodeCapabilitySlot } from '@adhdev/mesh-shared';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { resolveNodeCapabilitySlots } from './mesh-node-slots.js';
-import { quotaSpreadBonusByProvider } from './mesh-quota-ranking-records.js';
+import { quotaSpreadBonusByProvider, quotaTargetsFromSlots } from './mesh-quota-ranking-records.js';
 import { type QuotaFactsContext } from './mesh-quota-sources.js';
 import {
     selectProviderWithDiagnostics,
@@ -127,7 +127,7 @@ export function buildNodeRoutePreview(args: {
     };
     const slots = resolveNodeCapabilitySlots(args.node, args.meshId);
     const quotaBonusByProvider = quotaSpreadBonusByProvider(
-        args.node, args.quotaRouting, now, quotaFactsContext,
+        args.node, args.quotaRouting, now, quotaFactsContext, quotaTargetsFromSlots(slots),
     );
     const orderedSlots = orderSlotsForProviderSelection(
         slots,

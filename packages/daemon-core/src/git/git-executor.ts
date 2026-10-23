@@ -24,6 +24,7 @@ const DEFAULT_MAX_BUFFER = 1024 * 1024;
 export const GIT_STATUS_TIMEOUT_MS = process.platform === 'win32' ? 30_000 : 20_000;
 
 export interface GitExecutorOptions {
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   maxBuffer?: number;
 }
@@ -284,7 +285,7 @@ async function execGitRaw(
       // Pin the child locale so stderr stays English for the phrase matchers
       // downstream (mapExecError's "not a git repository", gitCheckpoint's
       // "nothing to commit", …). See git-locale.ts.
-      env: gitChildEnv(),
+      env: { ...gitChildEnv(), ...options.env },
     });
     return {
       stdout: normalizeGitOutput(result.stdout),

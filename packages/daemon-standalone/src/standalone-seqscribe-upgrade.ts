@@ -43,6 +43,7 @@ import type { IncomingMessage } from 'http';
 export const STANDALONE_DASHBOARD_WS_PATH = '/ws';
 
 export interface StandaloneUpgradeGate {
+  isAllowedHost?(req: IncomingMessage): boolean;
   isAllowedOrigin(req: IncomingMessage): boolean;
   isRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean;
 }
@@ -88,7 +89,12 @@ export function routeStandaloneUpgrade(
   options: StandaloneUpgradeRouteOptions,
 ): StandaloneUpgradeRoute {
   const rawUrl = req.url || '/';
-  const pathname = new URL(rawUrl, `http://${req.headers.host || 'localhost'}`).pathname;
+  let pathname = '/';
+  try {
+    pathname = new URL(rawUrl, 'http://localhost').pathname;
+  } catch {
+    return { kind: 'reject', status: 403 };
+  }
   const mesh = options.mesh;
   if (mesh && (pathname === mesh.rpcPath || pathname === mesh.seqscribePath)) {
     // Daemon peers: no Origin / dashboard-token gate (see the header). The
@@ -103,8 +109,9 @@ export function routeStandaloneUpgrade(
       ? 'seqscribe'
       : null;
   if (kind === null) return { kind: 'ignore' };
-  // Validate Origin before upgrade (same gate as the HTTP CORS check):
-  // without it any page could open a WS to this daemon.
+  // Validate Host and Origin before upgrade (same gate as the HTTP CORS/Host check):
+  // without it any page or DNS-rebinding host could open a WS to this daemon.
+  if (gate.isAllowedHost && !gate.isAllowedHost(req)) return { kind: 'reject', status: 403 };
   if (!gate.isAllowedOrigin(req)) return { kind: 'reject', status: 403 };
   if (!gate.isRequestAuthenticated(req, rawUrl)) return { kind: 'reject', status: 401 };
   if (kind === 'seqscribe' && !options.seqscribeLaneAvailable) return { kind: 'reject', status: 503 };

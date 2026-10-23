@@ -935,7 +935,7 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
     if (policy.requireApprovalForPush) rules.push('- **Ask for user approval** before pushing to remote (the refine path enforces it)');
     if (policy.allowAutoPublishSubmoduleMainCommits) {
-        rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main (non-force, after validation and patch-equivalence pass)');
+        rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to a PROVEN PRIVATE submodule origin/main (non-force, after validation and patch-equivalence pass). A remote not proven private (including oss and adhdev-providers) is NEVER published automatically: the refine stops with `publish_approval_required` listing every commit (sha, subject, author/committer, guard scan). Show that list to the owner and, only after explicit approval, rerun with a per-repo `approved_publish_shas` mapping (`oss`, `adhdev-providers`, `root`; keys for other submodules are their paths), each set resolving uniquely in the repository and pending set to exactly those full commit SHAs (ambiguous, missing or extra entries are refused; flat arrays are accepted only when exactly one public repo is pending; missing private pattern config refuses public publish)');
     }
     rules.push('- **Ask for user approval** before destructive git operations (force push, reset, etc.)');
 
@@ -1040,7 +1040,8 @@ export const ASSISTANT_RELAY_SECTION = `## Requests relayed by the assistant
 
 - A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised — make it self-contained: outcome, current state, what is still pending, and any question you need answered.
 - A question, status check or read-only lookup is answered directly from \`mesh_*\` reads — do not enqueue tasks for it. When a request says not to enqueue or not to edit, obey it.
-- Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it — do not ask for that approval in chat text.`;
+- Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it — do not ask for that approval in chat text.
+- **Never open an interactive picker to ask the user a clarification or decision** (\`AskUserQuestion\` or any single/multi-choice tool). Permission approvals are different: they stay on the Inbox/approval flow above. A picker blocks your whole turn and the assistant cannot see the question or relay an answer. Put the question in your final message as plain text — the question, numbered options, and your recommendation — and END the turn so the assistant can relay it and return the answer. Keep working on anything that does not depend on the answer.`;
 
 function buildSafetyTailSection(coordinatorCliType?: string): string {
     const coordinatorNote = coordinatorCliType

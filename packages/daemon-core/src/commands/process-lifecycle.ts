@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { LOG } from '../logging/logger.js';
 
@@ -135,6 +137,11 @@ export function parseNodeScriptPath(commandLine: string | null): string | null {
     return idx === -1 ? rest : rest.slice(0, idx);
 }
 
+/** Non-secret, argv-safe identity, including the legacy default config directory. */
+export function sessionHostInstanceArg(configDir: string): string {
+    return `--instance-config-key=${createHash('sha256').update(path.resolve(configDir)).digest('hex')}`;
+}
+
 /**
  * Positively identify whether a process command line is a running
  * `session-host-daemon` server instance.
@@ -145,7 +152,7 @@ export function parseNodeScriptPath(commandLine: string | null): string | null {
  * trailing prompt arguments. Instead, inspect only the executable token and the
  * script-path token passed to Node.
  */
-export function isManagedSessionHostCommandLine(commandLine: string | null | undefined): boolean {
+export function isManagedSessionHostCommandLine(commandLine: string | null | undefined, configDir?: string): boolean {
     if (!commandLine) return false;
     const tokens: string[] = [];
     const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
@@ -154,12 +161,16 @@ export function isManagedSessionHostCommandLine(commandLine: string | null | und
         tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
     }
     if (tokens.length === 0) return false;
+    // Exact argv token, never a substring inside a prompt or another flag.
+    const matchesInstance = (args: string[]) => configDir === undefined
+        || args.filter(arg => arg.startsWith('--instance-config-key=')).length === 1
+            && args.includes(sessionHostInstanceArg(configDir));
 
     const execNormalized = tokens[0].replace(/\\/g, '/').toLowerCase();
     const execBase = (execNormalized.split('/').pop() || '').replace(/\.exe$/, '');
     if (execBase === 'adhdev-sessiond') {
         const subcommand = tokens[1]?.toLowerCase();
-        return !subcommand || subcommand === 'serve';
+        return (!subcommand || subcommand === 'serve') && matchesInstance(tokens.slice(2));
     }
     if (execBase !== 'node') return false;
 
@@ -198,7 +209,7 @@ export function isManagedSessionHostCommandLine(commandLine: string | null | und
     if (!isSessionHostEntry) return false;
 
     const subcommand = tokens[idx + 1]?.toLowerCase();
-    return !subcommand || subcommand === 'serve' || subcommand.startsWith('-');
+    return (!subcommand || subcommand === 'serve' || subcommand.startsWith('-')) && matchesInstance(tokens.slice(idx + 1));
 }
 
 function normalizeWindowsPath(value: string): string {

@@ -7,6 +7,8 @@ vi.mock('child_process', () => ({ execFileSync: cp.execFileSync }))
 
 import {
   getProcessCommandLine,
+  isManagedSessionHostCommandLine,
+  sessionHostInstanceArg,
   killProcess,
   listOwnedNodeProcesses,
   parseNodeScriptPath,
@@ -18,6 +20,18 @@ import {
 describe('process-lifecycle utilities', () => {
   let platformDescriptor: PropertyDescriptor | undefined
   let killSpy: ReturnType<typeof vi.spyOn>
+
+  it('matches only the exact instance argv token of a genuine host server', () => {
+    const configDir = '/tmp/preview-config'
+    const arg = sessionHostInstanceArg(configDir)
+    const host = 'node /opt/adhdev/vendor/session-host-daemon/index.js serve'
+    expect(isManagedSessionHostCommandLine(`${host} ${arg}`, configDir)).toBe(true)
+    for (const command of [host, `${host} ${arg}-suffix`, `${host} ${sessionHostInstanceArg('/tmp/stable-config')}`,
+      `${host} ${arg} ${arg}`, `node /opt/agent.js "${host} ${arg}"`,
+      `node /opt/adhdev/vendor/session-host-daemon/index.js list ${arg}`]) {
+      expect(isManagedSessionHostCommandLine(command, configDir)).toBe(false)
+    }
+  })
 
   beforeEach(() => {
     cp.execFileSync.mockReset()

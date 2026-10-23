@@ -162,7 +162,7 @@ interface WsMessage {
 
 // ─── Standalone Server ───
 
-class StandaloneServer {
+export class StandaloneServer {
   private httpServer: ReturnType<typeof createServer> | null = null;
   private wss: WebSocketServer | null = null;
   /**
@@ -424,7 +424,12 @@ class StandaloneServer {
         case 'dashboard': {
           const ownerGuard = this.http.captureOwnerAuthGuard(req, req.url || '/');
           this.wss!.handleUpgrade(req, socket, head, (ws) => {
-            this.handleWsConnection(ws, ownerGuard ? 'standalone' : 'ipc', ownerGuard ?? undefined);
+            this.handleWsConnection(
+              ws,
+              ownerGuard ? 'standalone' : 'ipc',
+              ownerGuard ?? undefined,
+              (commandType) => this.http.captureUnauthenticatedArtifactReadGuard(req, commandType),
+            );
           });
           return;
         }
@@ -566,7 +571,12 @@ class StandaloneServer {
 
   // ─── WebSocket Handler ───
 
-  private handleWsConnection(ws: WebSocket, source: 'standalone' | 'ipc', isOwnerAuthorized?: () => boolean): void {
+  private handleWsConnection(
+    ws: WebSocket,
+    source: 'standalone' | 'ipc',
+    isOwnerAuthorized?: () => boolean,
+    captureReadGuard?: (commandType: string) => (() => boolean) | null,
+  ): void {
     // Max client limit to prevent connection storms
     const MAX_WS_CLIENTS = 10;
     if (this.clients.size >= MAX_WS_CLIENTS) {
@@ -609,13 +619,21 @@ class StandaloneServer {
             : (msg as any);
           const { type, payload } = normalizeCommandEnvelope(envelope);
           const requestId = msg.requestId;
-          const liveOwnerAuthorized = source === 'standalone'
+          // A no-auth daemon has no owner credential; its artifact READ verbs
+          // get a narrow owner grant instead (captureUnauthenticatedArtifactReadGuard).
+          // Re-evaluate `isOwnerAuthorized()` per message so a `/ws` opened while
+          // authenticated falls back to `captureReadGuard` after password/token
+          // auth is cleared at runtime.
+          const ownerGuard = source === 'standalone'
             && typeof isOwnerAuthorized === 'function'
-            && Boolean(isOwnerAuthorized());
+            && isOwnerAuthorized()
+            ? isOwnerAuthorized
+            : captureReadGuard?.(type) ?? undefined;
+          const liveOwnerAuthorized = Boolean(ownerGuard && ownerGuard());
           const effectiveSource: 'standalone' | 'ipc' = liveOwnerAuthorized ? 'standalone' : 'ipc';
           const result = await this.executeCommand(type, payload || {}, effectiveSource, {
             ownerVerified: liveOwnerAuthorized,
-            verifyCurrentOwner: liveOwnerAuthorized ? isOwnerAuthorized : undefined,
+            verifyCurrentOwner: liveOwnerAuthorized ? ownerGuard : undefined,
           });
           ws.send(JSON.stringify({ type: 'command_result', requestId, data: result }));
         }
@@ -966,7 +984,11 @@ async function main(): Promise<void> {
   await new Promise<void>(() => {});
 }
 
-main().catch((e) => {
-  console.error('Fatal error:', e);
-  process.exit(1);
-});
+const isDirectEntry = !process.env.VITEST_WORKER_ID
+  || /(?:^|[\\/])index\.[cm]?[jt]s$/.test(process.argv[1] || '');
+if (isDirectEntry) {
+  main().catch((e) => {
+    console.error('Fatal error:', e);
+    process.exit(1);
+  });
+}

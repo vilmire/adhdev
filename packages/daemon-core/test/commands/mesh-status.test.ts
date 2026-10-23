@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, realpath } from 'node:fs/promises'
 import { cleanupTempDir, resetMeshRuntimeStore } from '../helpers/temp-cleanup.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -2353,7 +2353,8 @@ describe('mesh_status', () => {
   })
 
   it('prefers the live coordinator runtime workspace over stale node.workspace', async () => {
-    const { dir, repoRoot } = await createTempGitRepo('mesh-status-live-workspace-')
+    const { dir, repoRoot: rawRoot } = await createTempGitRepo('mesh-status-live-workspace-')
+    const repoRoot = await realpath(rawRoot)
     try {
       const { router } = createRouter({
         listSessions: vi.fn(async () => [

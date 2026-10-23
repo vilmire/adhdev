@@ -1376,6 +1376,17 @@ describe('Repo Mesh coordinator prompt — correctness of the operating rules (b
     expect(section).toContain('dashboard Inbox')
   })
 
+  it('forbids asking the owner through an interactive picker — plain-text question, end the turn', () => {
+    const p = prompt()
+    const section = p.slice(p.indexOf('## Requests relayed by the assistant'))
+    expect(section).toContain('Never open an interactive picker to ask the user a clarification or decision')
+    expect(section).toContain('Permission approvals are different: they stay on the Inbox/approval flow')
+    expect(section).toContain('AskUserQuestion')
+    expect(section).toContain('numbered options')
+    expect(section).toContain('END the turn')
+    expect(section).toContain('Keep working on anything that does not depend on the answer')
+  })
+
   it('does not ask workers for a terminal-scraped JSON result block — report_completion is the record', () => {
     const p = prompt()
     expect(p).not.toContain('The daemon parses this automatically')
