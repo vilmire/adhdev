@@ -300,6 +300,7 @@ export class SessionHostClient {
   private sendRawRequestOnSocket<T = unknown>(
     socket: net.Socket,
     request: SessionHostRequest,
+    timeoutMs = this.requestTimeoutMs,
   ): Promise<SessionHostResponse<T>> {
     const requestId = generateUUID();
     const envelope: SessionHostRequestEnvelope = {
@@ -307,11 +308,10 @@ export class SessionHostClient {
       requestId,
       request,
     };
-    const timeoutMs = this.requestTimeoutMs > 0 ? this.requestTimeoutMs : 30_000;
     const timeoutLabel = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}s` : `${timeoutMs}ms`;
     return new Promise<SessionHostResponse<T>>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        const timeoutError = new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`);
+        const timeoutError = Object.assign(new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`), { code: 'SESSION_HOST_REQUEST_TIMEOUT', requestType: request.type });
         if (this.socket === socket) {
           this.disconnect(timeoutError);
         } else {
@@ -329,7 +329,7 @@ export class SessionHostClient {
     });
   }
 
-  async connect(): Promise<void> {
+  async connect(timeoutMs = this.requestTimeoutMs): Promise<void> {
     if (this.socket && !this.socket.destroyed) {
       if (this.connectPromise) await this.connectPromise;
       return;
@@ -403,11 +403,23 @@ export class SessionHostClient {
 
     const connectTask = (async () => {
       await new Promise<void>((resolve, reject) => {
-        socket.once('connect', () => {
-          establishedSockets.add(socket);
-          resolve();
-        });
-        socket.once('error', reject);
+        const cleanup = () => {
+          clearTimeout(timer);
+          socket.off('connect', connected);
+          socket.off('error', failed);
+          socket.off('close', closed);
+        };
+        const connected = () => { cleanup(); establishedSockets.add(socket); resolve(); };
+        const failed = (error: Error) => { cleanup(); reject(error); };
+        const closed = () => failed(new Error('Session host connection closed before connect'));
+        const timer = setTimeout(() => {
+          const error = Object.assign(new Error(`Session host connect timed out after ${timeoutMs}ms`), { code: 'SESSION_HOST_CONNECT_TIMEOUT' });
+          failed(error);
+          if (this.socket === socket) this.disconnect(error);
+        }, timeoutMs);
+        socket.once('connect', connected);
+        socket.once('error', failed);
+        socket.once('close', closed);
       });
       if (this.attachedSessions.size > 0 && this.socket === socket && !socket.destroyed) {
         for (const [sessionId, sub] of [...this.attachedSessions.entries()]) {
@@ -440,12 +452,33 @@ export class SessionHostClient {
     };
   }
 
-  async request<T = unknown>(request: SessionHostRequest): Promise<SessionHostResponse<T>> {
-    await this.connect();
+  async request<T = unknown>(request: SessionHostRequest, options: { timeoutMs?: number } = {}): Promise<SessionHostResponse<T>> {
+    const timeoutMs = Math.max(1, options.timeoutMs ?? this.requestTimeoutMs);
+    const deadline = Date.now() + timeoutMs;
+    const alreadyConnected = this.isConnected() && !this.connectPromise;
+    // A probe must also bound a connect/re-attach already in flight on this
+    // client; that task may have started with the normal 30s timeout.
+    if (options.timeoutMs !== undefined) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.connect(timeoutMs),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+              const error = Object.assign(new Error(`Session host connect timed out after ${timeoutMs}ms`), { code: 'SESSION_HOST_CONNECT_TIMEOUT' });
+              reject(error);
+              this.disconnect(error);
+            }, timeoutMs);
+          }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    } else {
+      await this.connect(timeoutMs);
+    }
     const requestSocket = this.socket;
     if (!requestSocket) throw new Error('Session host socket unavailable');
 
-    const response = await this.sendRawRequestOnSocket<T>(requestSocket, request);
+    const response = await this.sendRawRequestOnSocket<T>(requestSocket, request, options.timeoutMs === undefined || alreadyConnected ? timeoutMs : Math.max(1, deadline - Date.now()));
     if (response.success) {
       if (request.type === 'attach_session') {
         this.attachedSessions.set(request.payload.sessionId, {

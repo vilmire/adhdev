@@ -597,7 +597,10 @@ export class DaemonCliManager {
     async reconcileHostedSessionsAfterHostReplace(
         liveRecords?: HostedCliRuntimeDescriptor[],
     ): Promise<{ readopted: number; terminated: string[] }> {
-        const records = liveRecords ?? (await this.deps.listHostedCliRuntimes?.()) ?? [];
+        const records = liveRecords ?? await this.deps.listHostedCliRuntimes?.();
+        // No authoritative list means no permission to prune. Rejected lists
+        // propagate before any adapters, registry entries or mesh state change.
+        if (!records) return { readopted: 0, terminated: [] };
         const liveIds = new Set(
             records
                 .map((r) => r.runtimeId)

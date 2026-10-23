@@ -22,7 +22,9 @@ import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
 import {
     ensureSessionHostReady as ensureSharedSessionHostReady,
     isResourceExhaustionError,
-    isSessionHostUnavailableTransientError,
+    SESSION_HOST_PROBE_TIMEOUT_MS,
+    recordSessionHostProbeFailure,
+    recordSessionHostProbeSuccess,
 } from './runtime-support.js';
 import { DEFAULT_SESSION_HOST_READY_TIMEOUT_MS } from '../runtime-defaults.js';
 import { isPidAlive } from '../system/process-utils.js';
@@ -449,7 +451,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
      * host untouched, so this can never take down a healthy setup and can never
      * loop: the replacement host reports the current entry and matches.
      */
-    async function stopHostRunningFromForeignEntry(options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
+    async function stopHostRunningFromForeignEntry(deadline: number, options: { onlyWhenEntryMissing?: boolean } = {}): Promise<void> {
         let currentEntry: string;
         try {
             currentEntry = resolveEntry();
@@ -459,23 +461,30 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
         const endpoint = getEndpoint();
         const existingClient = (SessionHostClient as { findConnectedClient?: (ep?: SessionHostEndpoint) => SessionHostClient | null }).findConnectedClient?.(endpoint) ?? null;
-        const client = existingClient || new SessionHostClient({ endpoint });
+        const probeTimeoutMs = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, deadline - Date.now()));
+        const probeDeadline = Date.now() + probeTimeoutMs;
+        const client = existingClient || new SessionHostClient({ endpoint, requestTimeoutMs: probeTimeoutMs });
         const shouldClose = !existingClient;
         let reported: string | undefined;
+        let connected = Boolean(existingClient);
         try {
             if (!existingClient) {
-                await client.connect();
+                await client.connect(probeTimeoutMs);
+                connected = true;
             }
             const response = await client.request<SessionHostDiagnostics>({
                 type: 'get_host_diagnostics',
                 payload: { includeSessions: false },
-            });
+            }, { timeoutMs: Math.max(1, probeDeadline - Date.now()) });
+            recordSessionHostProbeSuccess(endpoint, response.success ? response.result : undefined);
             if (!response.success || !response.result) return;
             const value = response.result.hostEntryPath;
             reported = typeof value === 'string' && value.trim() ? value : undefined;
-        } catch {
-            // No host listening, or it cannot answer. Either way there is nothing
-            // to stop here; the normal spawn/ready path handles it.
+        } catch (error) {
+            // request() disconnects on timeout. Preserve the connected-RPC
+            // evidence before ensure probes a fresh connection below.
+            recordSessionHostProbeFailure(endpoint, connected ? error : undefined, String(getPid() ?? 'unknown'));
+            if (isResourceExhaustionError(error)) throw error;
             return;
         } finally {
             if (shouldClose) {
@@ -501,6 +510,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
     }
 
     async function ensureReady(): Promise<SessionHostEndpoint> {
+        const ensureDeadline = Date.now() + timeoutMs;
         const maintenance = readCooperativeMaintenance(instance().configDir);
         if (maintenance) {
             if (process.platform === 'win32') throw new Error('maintenance_windows_retained_host_unsupported');
@@ -603,7 +613,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         // too old to report `hostEntryPath` yields undefined and is left alone —
         // unknown is never treated as a mismatch.
         if (process.platform === 'win32') {
-            await stopHostRunningFromForeignEntry();
+            await stopHostRunningFromForeignEntry(ensureDeadline);
         } else {
             // POSIX, same shape (2026-10-01, Homebrew): `brew upgrade adhdev`
             // deletes the previous versioned Cellar prefix, and the 1.0.62 daemon
@@ -611,7 +621,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             // spawn helper lived in the deleted prefix, so every create_session
             // failed with `posix_spawn failed: No such file or directory`. An
             // in-place npm update keeps the same entry path and never trips this.
-            await stopHostRunningFromForeignEntry({ onlyWhenEntryMissing: true });
+            await stopHostRunningFromForeignEntry(ensureDeadline, { onlyWhenEntryMissing: true });
         }
 
         // D4-b: re-verify conpty on the REUSE path, not just the spawn path.
@@ -690,7 +700,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 );
                 stopManagedSessionHostProcess();
                 if (process.platform !== 'win32' && isPidAlive(existingPid) && canPositivelyEscalateSigkill(existingPid)) {
-                    const deadline = Date.now() + evictGraceMs;
+                    const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
                     while (Date.now() < deadline && isPidAlive(existingPid)) {
                         await new Promise((resolve) => setTimeout(resolve, 25));
                     }
@@ -708,41 +718,17 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             }
         };
 
-        try {
-            return await ensureSharedSessionHostReady({
-                appName,
-                endpoint: getEndpoint(),
-                spawnHost,
-                beforeSpawnHost,
-                onHostReplaced: options.onHostReplaced,
-                isExistingHostAlive,
-                timeoutMs,
-                requiredRequestTypes: options.requiredRequestTypes,
-            });
-        } catch (error) {
-            if (isSessionHostUnavailableTransientError(error) || isResourceExhaustionError(error)) {
-                throw error;
-            }
-            stopManagedSessionHostProcess();
-            disconnectEndpointClients(getEndpoint());
-            return ensureSharedSessionHostReady({
-                appName,
-                endpoint: getEndpoint(),
-                spawnHost,
-                beforeSpawnHost,
-                onHostReplaced: options.onHostReplaced,
-                isExistingHostAlive,
-                timeoutMs,
-                requiredRequestTypes: options.requiredRequestTypes,
-            }).catch((retryError) => {
-                if (isSessionHostUnavailableTransientError(retryError) || isResourceExhaustionError(retryError)) {
-                    throw retryError;
-                }
-                const initialMessage = error instanceof Error ? error.message : String(error);
-                const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
-                throw new Error(`Session host failed to start after retry (${initialMessage}; retry: ${retryMessage})`);
-            });
-        }
+        return ensureSharedSessionHostReady({
+            appName,
+            endpoint: getEndpoint(),
+            spawnHost,
+            beforeSpawnHost,
+            onHostReplaced: options.onHostReplaced,
+            isExistingHostAlive,
+            existingHostIdentity: () => String(getPid() ?? 'unknown'),
+            timeoutMs: Math.max(1, ensureDeadline - Date.now()),
+            requiredRequestTypes: options.requiredRequestTypes,
+        });
     }
 
     return {

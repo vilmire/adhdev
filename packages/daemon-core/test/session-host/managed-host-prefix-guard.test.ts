@@ -275,7 +275,7 @@ describe('managed session-host prefix guard', () => {
     })
   })
 
-  it('stops a live unresponsive session-host PID before spawning a replacement on POSIX (preventing split-brain)', async () => {
+  it('preserves a live PID when no connected RPC proves it unresponsive before the deadline', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     const homeDir = makeTempHome()
     const originalHome = process.env.HOME
@@ -330,8 +330,7 @@ describe('managed session-host prefix guard', () => {
     expect(events).not.toContain('spawn-while-old-alive')
     const firstKill = events.findIndex((e) => e.startsWith('kill:'))
     const firstSpawn = events.indexOf('spawn')
-    expect(firstKill).toBeGreaterThan(-1)
-    expect(firstSpawn).toBeGreaterThan(-1)
-    expect(firstKill).toBeLessThan(firstSpawn)
+    expect(firstKill).toBe(-1)
+    expect(firstSpawn).toBe(-1)
   })
 })

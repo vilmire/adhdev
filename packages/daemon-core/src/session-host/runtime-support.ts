@@ -103,118 +103,89 @@ function getMissingRequestTypes(
     return requiredRequestTypes.filter((requestType) => !supported.has(requestType));
 }
 
-async function assertRequiredRequestTypes(
-    client: SessionHostClient,
-    requiredRequestTypes: readonly SessionHostRequestType[],
-): Promise<void> {
-    if (requiredRequestTypes.length === 0) return;
+// Evidence survives controller disconnects and ensure calls, but never crosses a
+// known PID change. Three consecutive connected-RPC timeouts within a minute
+// prove a wedge. A failed connect (including resource exhaustion) is not proof.
+export const SESSION_HOST_PROBE_TIMEOUT_MS = 3_000;
+const UNRESPONSIVE_WINDOW_MS = 60_000;
+const UNRESPONSIVE_TIMEOUT_COUNT = 3;
+const probeEvidence = new Map<string, { identity?: string; count: number; firstAt: number }>();
+const hostIdentities = new Map<string, string>();
+let spawnGeneration = 0;
+const endpointKey = (endpoint: SessionHostEndpoint): string => `${endpoint.kind}:${endpoint.path}`;
 
-    const response = await client.request<SessionHostDiagnostics>({
-        type: 'get_host_diagnostics',
-        payload: { includeSessions: false },
-    });
-    const missing = getMissingRequestTypes(response.success ? response.result : undefined, requiredRequestTypes);
-    if (missing.length > 0) {
-        const detail = response.success ? '' : ` (${response.error || 'capability probe failed'})`;
-        throw new SessionHostCompatibilityError(
-            `Session host does not support required request types: ${missing.join(', ')}${detail}`,
-        );
+export function getObservedSessionHostIdentity(endpoint: SessionHostEndpoint): string | undefined {
+    return hostIdentities.get(endpointKey(endpoint));
+}
+
+export function recordSessionHostProbeFailure(endpoint: SessionHostEndpoint, error: unknown, identity?: string): boolean {
+    const key = endpointKey(endpoint);
+    const timedOut = !isResourceExhaustionError(error) && error instanceof Error
+        && /Session host request timed out.*get_host_diagnostics/.test(error.message);
+    if (!timedOut) { probeEvidence.delete(key); return false; }
+    const now = Date.now();
+    // Prune expired endpoints as well as the current one; app namespaces can vary.
+    for (const [other, evidence] of probeEvidence) {
+        if (now - evidence.firstAt > UNRESPONSIVE_WINDOW_MS) probeEvidence.delete(other);
+    }
+    const prior = probeEvidence.get(key);
+    const evidence = prior && prior.identity === identity
+        ? { ...prior, count: prior.count + 1 }
+        : { identity, count: 1, firstAt: now };
+    probeEvidence.set(key, evidence);
+    return evidence.count >= UNRESPONSIVE_TIMEOUT_COUNT;
+}
+
+export function recordSessionHostProbeSuccess(endpoint: SessionHostEndpoint, diagnostics?: SessionHostDiagnostics): void {
+    probeEvidence.delete(endpointKey(endpoint));
+    if (typeof diagnostics?.hostStartedAt === 'number') {
+        hostIdentities.set(endpointKey(endpoint), `started:${diagnostics.hostStartedAt}`);
     }
 }
 
-async function probeExistingClient(
-    client: SessionHostClient,
-    requiredRequestTypes: readonly SessionHostRequestType[] = [],
-): Promise<
-    | { status: 'ok' }
-    | { status: 'disconnected' }
-    | { status: 'transient_error'; error: unknown }
-    | { status: 'unresponsive'; error: unknown }
-> {
-    if (typeof (client as { isConnected?: () => boolean }).isConnected === 'function' && !client.isConnected()) {
-        return { status: 'disconnected' };
-    }
-    try {
-        const response = await client.request<SessionHostDiagnostics>({
-            type: 'get_host_diagnostics',
-            payload: { includeSessions: false },
-        });
-        if (requiredRequestTypes.length > 0) {
-            const missing = getMissingRequestTypes(response.success ? response.result : undefined, requiredRequestTypes);
-            if (missing.length > 0) {
-                const detail = response.success ? '' : ` (${response.error || 'capability probe failed'})`;
-                throw new SessionHostCompatibilityError(
-                    `Session host does not support required request types: ${missing.join(', ')}${detail}`,
-                );
-            }
-        } else if (!response.success) {
-            return {
-                status: 'unresponsive',
-                error: new Error(response.error || 'Session host diagnostics probe failed'),
-            };
-        }
-        return { status: 'ok' };
-    } catch (error) {
-        if (error instanceof SessionHostCompatibilityError) throw error;
-        if (isResourceExhaustionError(error)) {
-            return { status: 'transient_error', error };
-        }
-        return { status: 'unresponsive', error };
-    }
-}
-
-async function probeNewConnection(
+async function probeHost(
     endpoint: SessionHostEndpoint,
-    requiredRequestTypes: readonly SessionHostRequestType[] = [],
-): Promise<{ ok: true } | { ok: false; error: unknown }> {
-    const client = new SessionHostClient({ endpoint });
+    existing: SessionHostClient | null,
+    requiredRequestTypes: readonly SessionHostRequestType[],
+    timeoutMs: number,
+    identity?: string,
+): Promise<{ ok: true } | { ok: false; error: unknown; proven: boolean }> {
+    const usableExisting = existing && (typeof existing.isConnected !== 'function' || existing.isConnected()) ? existing : null;
+    const client = usableExisting || new SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs });
+    const deadline = Date.now() + timeoutMs;
+    let connected = Boolean(usableExisting);
     try {
-        await client.connect();
-        await assertRequiredRequestTypes(client, requiredRequestTypes);
+        if (!connected) { await client.connect(timeoutMs); connected = true; }
+        // Always send an RPC, even without required capabilities: connect alone
+        // cannot distinguish an accepting socket from a wedged userland host.
+        const response = await client.request<SessionHostDiagnostics>({
+            type: 'get_host_diagnostics', payload: { includeSessions: false },
+        }, { timeoutMs: Math.max(1, deadline - Date.now()) });
+        recordSessionHostProbeSuccess(endpoint, response.success ? response.result : undefined);
+        if (!response.success) throw new Error(response.error || 'Session host diagnostics probe failed');
+        const missing = getMissingRequestTypes(response.result, requiredRequestTypes);
+        if (missing.length > 0) {
+            throw new SessionHostCompatibilityError(`Session host does not support required request types: ${missing.join(', ')}`);
+        }
         return { ok: true };
     } catch (error) {
         if (error instanceof SessionHostCompatibilityError) throw error;
-        return { ok: false, error };
+        const proven = recordSessionHostProbeFailure(endpoint, connected ? error : undefined, identity);
+        return { ok: false, error, proven };
     } finally {
-        await client.close().catch(() => {});
+        if (!usableExisting) await client.close().catch(() => {});
     }
-}
-
-async function canConnect(
-    endpoint: SessionHostEndpoint,
-    requiredRequestTypes: readonly SessionHostRequestType[] = [],
-): Promise<boolean> {
-    const result = await probeNewConnection(endpoint, requiredRequestTypes);
-    return result.ok;
-}
-
-async function waitForReady(
-    endpoint: SessionHostEndpoint,
-    timeoutMs = STARTUP_TIMEOUT_MS,
-    requiredRequestTypes: readonly SessionHostRequestType[] = [],
-): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        if (await canConnect(endpoint, requiredRequestTypes)) return;
-        await new Promise((resolve) => setTimeout(resolve, STARTUP_POLL_MS));
-    }
-    throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
 }
 
 export async function ensureSessionHostReady(options: {
     appName?: string;
-    /**
-     * Explicit endpoint to probe/await. The managed-host factory passes its
-     * instance-namespaced endpoint here so the connect probe, the spawned
-     * child, and the wait loop all target the SAME namespace; when omitted the
-     * legacy default endpoint for appName is derived (no instance key).
-     */
     endpoint?: SessionHostEndpoint;
     existingClient?: SessionHostClient | null;
     spawnHost: () => void;
     beforeSpawnHost?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
     onHostReplaced?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
     isExistingHostAlive?: () => boolean;
+    existingHostIdentity?: () => string | undefined;
     isExistingSocketPresent?: (endpoint: SessionHostEndpoint) => boolean;
     canConnectRetries?: number;
     verifyRetries?: number;
@@ -224,77 +195,53 @@ export async function ensureSessionHostReady(options: {
     requiredRequestTypes?: readonly SessionHostRequestType[];
 }): Promise<SessionHostEndpoint> {
     const endpoint = options.endpoint || getDefaultSessionHostEndpoint(options.appName || resolveSessionHostAppName());
-    const requiredRequestTypes = options.requiredRequestTypes || [];
-    const resolveExistingClient = (): SessionHostClient | null => (
-        options.existingClient
-        ?? (SessionHostClient as { findConnectedClient?: (ep?: SessionHostEndpoint) => SessionHostClient | null }).findConnectedClient?.(endpoint)
-        ?? null
-    );
-
-    let provenUnresponsiveViaExistingClient = false;
+    const timeoutMs = Math.max(1, options.timeoutMs ?? STARTUP_TIMEOUT_MS);
+    const deadline = Date.now() + timeoutMs;
+    const remaining = () => Math.max(0, deadline - Date.now());
+    const required = options.requiredRequestTypes || [];
+    const resolveClient = () => options.existingClient
+        ?? (SessionHostClient as { findConnectedClient?: (ep: SessionHostEndpoint) => SessionHostClient | null }).findConnectedClient?.(endpoint)
+        ?? null;
     let lastError: unknown;
-
-    const existing = resolveExistingClient();
-    if (existing) {
-        const existingResult = await probeExistingClient(existing, requiredRequestTypes);
-        if (existingResult.status === 'ok') return endpoint;
-        if (existingResult.status === 'unresponsive') {
-            provenUnresponsiveViaExistingClient = true;
-            lastError = existingResult.error;
-        } else if (existingResult.status === 'transient_error') {
-            lastError = existingResult.error;
+    let proven = false;
+    const retries = Math.max(0, options.canConnectRetries ?? options.verifyRetries ?? 2);
+    const delay = options.canConnectRetryDelayMs ?? options.verifyRetryDelayMs ?? 150;
+    for (let attempt = 0; attempt <= retries && remaining() > 0; attempt++) {
+        if (attempt > 0) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(remaining(), 250, delay * 2 ** (attempt - 1))));
+            if (remaining() <= 0) break;
         }
+        const result = await probeHost(endpoint, resolveClient(), required,
+            Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()), options.existingHostIdentity?.());
+        if (result.ok) return endpoint;
+        lastError = result.error;
+        proven = result.proven;
+        if (proven || (!options.isExistingHostAlive?.() && !isResourceExhaustionError(lastError))) break;
     }
-
-    if (!provenUnresponsiveViaExistingClient) {
-        const initialProbe = await probeNewConnection(endpoint, requiredRequestTypes);
-        if (initialProbe.ok) return endpoint;
-        lastError = initialProbe.error;
-    }
-
-    if (!provenUnresponsiveViaExistingClient && (options.isExistingHostAlive?.() || isResourceExhaustionError(lastError))) {
-        const retries = Math.max(1, options.canConnectRetries ?? options.verifyRetries ?? 2);
-        const defaultDelay = Math.min(150, Math.max(10, Math.floor((options.timeoutMs ?? STARTUP_TIMEOUT_MS) / 6)));
-        const baseDelayMs = options.canConnectRetryDelayMs ?? options.verifyRetryDelayMs ?? defaultDelay;
-        for (let attempt = 0; attempt < retries; attempt += 1) {
-            if (options.isExistingHostAlive && !options.isExistingHostAlive() && !isResourceExhaustionError(lastError)) {
-                break;
-            }
-            const backoffMs = Math.min(250, baseDelayMs * Math.pow(2, attempt));
-            await new Promise((resolve) => setTimeout(resolve, backoffMs));
-
-            const retryExisting = resolveExistingClient();
-            if (retryExisting) {
-                const retryExistingResult = await probeExistingClient(retryExisting, requiredRequestTypes);
-                if (retryExistingResult.status === 'ok') return endpoint;
-                if (retryExistingResult.status === 'unresponsive') {
-                    provenUnresponsiveViaExistingClient = true;
-                    lastError = retryExistingResult.error;
-                    break;
-                }
-            }
-
-            const retryProbe = await probeNewConnection(endpoint, requiredRequestTypes);
-            if (retryProbe.ok) return endpoint;
-            lastError = retryProbe.error;
-        }
-    }
-
     const hostAlive = Boolean(options.isExistingHostAlive?.());
-    const socketPresent = options.isExistingSocketPresent
-        ? Boolean(options.isExistingSocketPresent(endpoint))
-        : isExistingSocketPathPresent(endpoint);
-
-    if (!provenUnresponsiveViaExistingClient && (isResourceExhaustionError(lastError) || (hostAlive && socketPresent))) {
+    const endpointMayExist = endpoint.kind === 'pipe' || (options.isExistingSocketPresent
+        ? options.isExistingSocketPresent(endpoint) : isExistingSocketPathPresent(endpoint));
+    if (isResourceExhaustionError(lastError) || (!proven && hostAlive && endpointMayExist) || remaining() <= 0) {
         throw new SessionHostUnavailableTransientError(endpoint, lastError);
     }
-
-    (SessionHostClient as { disconnectClients?: (ep?: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
+    (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
     await options.beforeSpawnHost?.(endpoint);
+    // Eviction may consume the remaining budget. Never start another unbounded
+    // probe loop (or a second replacement) in this ensure call.
+    if (remaining() <= 0) throw new SessionHostUnavailableTransientError(endpoint, lastError);
     options.spawnHost();
-    await waitForReady(endpoint, options.timeoutMs, requiredRequestTypes);
-    await options.onHostReplaced?.(endpoint);
-    return endpoint;
+    probeEvidence.delete(endpointKey(endpoint));
+    hostIdentities.set(endpointKey(endpoint), `spawn:${++spawnGeneration}`);
+    while (remaining() > 0) {
+        const result = await probeHost(endpoint, null, required, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()));
+        if (result.ok) {
+            await options.onHostReplaced?.(endpoint);
+            return endpoint;
+        }
+        lastError = result.error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(STARTUP_POLL_MS, remaining())));
+    }
+    throw new SessionHostUnavailableTransientError(endpoint, lastError);
 }
 
 export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Promise<HostedCliRuntimeDescriptor[]> {
@@ -307,7 +254,7 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
             payload: {},
         });
         if (!response.success || !response.result) {
-            return [];
+            throw new Error(`Session host list_sessions failed: ${response.error || 'missing result'}`);
         }
         return response.result
             .filter((record) => record.category === 'cli' && ['running', 'interrupted'].includes(record.lifecycle))

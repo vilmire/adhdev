@@ -462,3 +462,20 @@ test('findConnectedClient returns an established client for the endpoint and cle
     await h.cleanup()
   }
 })
+
+
+test('a per-request probe timeout overrides the 30s default on an existing connection', async () => {
+  const h = await makeHarness()
+  try {
+    await h.client.connect()
+    const started = Date.now()
+    const request = h.client.request({ type: 'get_host_diagnostics', payload: { includeSessions: false } }, { timeoutMs: 25 })
+    const outcome = await Promise.race([
+      request.then(() => 'unexpected success', e => e),
+      settle(250).then(() => 'probe exceeded its budget'),
+    ])
+    assert.ok(outcome instanceof Error, String(outcome))
+    assert.match(outcome.message, /timed out after 25ms/)
+    assert.ok(Date.now() - started < 250)
+  } finally { h.peer()?.destroy(); await h.cleanup() }
+})

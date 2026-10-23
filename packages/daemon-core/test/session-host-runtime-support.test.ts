@@ -52,7 +52,8 @@ vi.mock('@adhdev/session-host-core', () => {
   }
 })
 
-import { ensureSessionHostReady } from '../src/session-host/runtime-support'
+import * as runtimeSupport from '../src/session-host/runtime-support'
+import { ensureSessionHostReady, listHostedCliRuntimes } from '../src/session-host/runtime-support'
 import { DaemonCliManager } from '../src/commands/cli-manager'
 import { ProviderInstanceManager } from '../src/providers/provider-instance-manager'
 import { SessionRegistry } from '../src/sessions/registry'
@@ -196,7 +197,7 @@ describe('session host runtime support compatibility', () => {
     expect(mocks.state.disconnectClientsCalls).toBe(0)
   })
 
-  it('reuses the existing controller connection without opening a new socket, and only replaces a live host when the existing connection times out', async () => {
+  it('reuses the existing controller connection without opening a new socket, and only replaces a live host after three existing-connection timeouts', async () => {
     const beforeSpawnHost = vi.fn()
     const spawnHost = vi.fn()
     mocks.state.existingClient = {
@@ -237,7 +238,7 @@ describe('session host runtime support compatibility', () => {
       isExistingHostAlive: () => true,
       isExistingSocketPresent: () => true,
       beforeSpawnHost,
-      canConnectRetries: 1,
+      canConnectRetries: 2,
       canConnectRetryDelayMs: 5,
       requiredRequestTypes: ['delete_session'],
       timeoutMs: 50,
@@ -267,6 +268,150 @@ describe('session host runtime support compatibility', () => {
 
     expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
     expect(spawnHost).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['unix', 'pipe'] as const)('bounds fresh-connection request timeouts across ensure calls before replacing a wedged %s host', async (kind) => {
+    const spawnHost = vi.fn()
+    const beforeSpawnHost = vi.fn()
+    const options = {
+      endpoint: { kind, path: `/tmp/fresh-wedge-r2-${kind}.sock` }, spawnHost, beforeSpawnHost,
+      isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
+      canConnectRetries: 0, timeoutMs: 100,
+    }
+    for (let count = 0; count < 2; count++) {
+      mocks.state.diagnosticsResults = [new Error('Session host request timed out after 10ms (get_host_diagnostics)')]
+      await expect(ensureSessionHostReady(options)).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+      expect(spawnHost).not.toHaveBeenCalled()
+    }
+    mocks.state.diagnosticsResults = [new Error('Session host request timed out after 10ms (get_host_diagnostics)')]
+    await expect(ensureSessionHostReady(options)).resolves.toBeDefined()
+    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
+    expect(spawnHost).toHaveBeenCalledTimes(1)
+  })
+
+  it('probes through a fresh client after an explicitly supplied controller has dropped its socket', async () => {
+    const dropped = { isConnected: () => false, request: vi.fn() }
+    mocks.state.diagnosticsResults = Array(3).fill(new Error('Session host request timed out (get_host_diagnostics)'))
+    const spawnHost = vi.fn()
+    await expect(ensureSessionHostReady({ appName: 'dropped-controller-r2', existingClient: dropped as any,
+      spawnHost, isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
+      canConnectRetryDelayMs: 1, timeoutMs: 100 })).resolves.toBeDefined()
+    expect(spawnHost).toHaveBeenCalledTimes(1)
+    expect(dropped.request).not.toHaveBeenCalled()
+  })
+
+  it('carries a foreign-entry diagnostic timeout into ensure after that client disconnects', async () => {
+    const endpoint = { kind: 'unix' as const, path: '/tmp/preflight-evidence-r2.sock' }
+    const timeout = new Error('Session host request timed out after 10ms (get_host_diagnostics)')
+    const record = (runtimeSupport as any).recordSessionHostProbeFailure
+    expect(record).toBeTypeOf('function')
+    record(endpoint, timeout, 'pid-42')
+    record(endpoint, timeout, 'pid-42')
+    mocks.state.diagnosticsResults = [timeout]
+    const spawnHost = vi.fn()
+    await expect(ensureSessionHostReady({ endpoint, spawnHost, existingHostIdentity: () => 'pid-42',
+      isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
+      canConnectRetries: 0, timeoutMs: 100 } as any)).resolves.toEqual(endpoint)
+    expect(spawnHost).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['ENFILE', 'EMFILE', 'EAGAIN', 'ENOBUFS'])('never treats repeated %s connects as proof, including on Windows pipes', async (code) => {
+    const spawnHost = vi.fn()
+    const endpoint = { kind: 'pipe' as const, path: `pipe-r2-${code}` }
+    for (let n = 0; n < 4; n++) {
+      mocks.state.connectResults = Array(4).fill(Object.assign(new Error(code), { code }))
+      await expect(ensureSessionHostReady({ endpoint, spawnHost, isExistingHostAlive: () => true,
+        canConnectRetries: 0, timeoutMs: 100 })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    }
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('preserves a live Windows pipe host on an unproven connect failure', async () => {
+    mocks.state.connectResults = ['fail', 'fail', 'fail']
+    const spawnHost = vi.fn()
+    await expect(ensureSessionHostReady({ endpoint: { kind: 'pipe', path: 'pipe-r2-connect' }, spawnHost,
+      isExistingHostAlive: () => true, canConnectRetries: 0, timeoutMs: 100 })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
+  })
+
+  it('gives existing-client diagnostics an explicit timeout within the ensure budget', async () => {
+    const request = vi.fn(async () => ({ success: true, result: {} }))
+    mocks.state.existingClient = { isConnected: () => true, request }
+    await ensureSessionHostReady({ appName: 'probe-budget-r2', spawnHost: vi.fn(), timeoutMs: 25 })
+    expect(request.mock.calls[0][1]).toEqual({ timeoutMs: expect.any(Number) })
+    expect((request.mock.calls[0] as any)[1].timeoutMs).toBeLessThanOrEqual(25)
+  })
+
+  it.each(['success', 'connect failure', 'PID change', 'expired window'])('discards old timeout evidence after %s', async (reset) => {
+    const endpoint = { kind: 'unix' as const, path: `/tmp/evidence-reset-r2-${reset}.sock` }
+    const timeout = new Error('Session host request timed out after 10ms (get_host_diagnostics)')
+    const record = runtimeSupport.recordSessionHostProbeFailure
+    record(endpoint, timeout, 'pid-1')
+    record(endpoint, timeout, 'pid-1')
+    if (reset === 'success') runtimeSupport.recordSessionHostProbeSuccess(endpoint)
+    if (reset === 'connect failure') record(endpoint, new Error('connect failed'), 'pid-1')
+    const now = Date.now()
+    if (reset === 'expired window') vi.spyOn(Date, 'now').mockReturnValue(now + 60_001)
+    try {
+      expect(record(endpoint, timeout, reset === 'PID change' ? 'pid-2' : 'pid-1')).toBe(false)
+    } finally { vi.restoreAllMocks() }
+  })
+
+  it('never replaces on ENFILE even after earlier connected timeout evidence reached the bound', async () => {
+    const endpoint = { kind: 'unix' as const, path: '/tmp/prior-proof-enfile-r2.sock' }
+    const timeout = new Error('Session host request timed out (get_host_diagnostics)')
+    for (let n = 0; n < 3; n++) runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout)
+    mocks.state.connectResults = [Object.assign(new Error('ENFILE'), { code: 'ENFILE' })]
+    const spawnHost = vi.fn()
+    await expect(ensureSessionHostReady({ endpoint, spawnHost, canConnectRetries: 0,
+      isExistingHostAlive: () => true, isExistingSocketPresent: () => true, timeoutMs: 100 }))
+      .rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('caps the complete ensure probe loop at timeoutMs', async () => {
+    vi.useFakeTimers()
+    try {
+      const request = vi.fn((_request, options) => new Promise((_resolve, reject) => {
+        setTimeout(() => reject(new Error('Session host request timed out (get_host_diagnostics)')), options?.timeoutMs ?? 30_000)
+      }))
+      mocks.state.existingClient = { isConnected: () => true, request }
+      const spawnHost = vi.fn()
+      const result = ensureSessionHostReady({ appName: 'total-budget-r2', spawnHost,
+        isExistingHostAlive: () => true, isExistingSocketPresent: () => true, timeoutMs: 80 })
+      const checked = expect(result).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+      await vi.advanceTimersByTimeAsync(80)
+      await checked
+      expect(spawnHost).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('leaves tracked adapters intact when the hosted-runtime listing rejects', async () => {
+    const detach = vi.fn()
+    const cliManager = new DaemonCliManager({ getP2p: () => null, getInstanceManager: () => null,
+      listHostedCliRuntimes: async () => { throw new Error('list failed') } })
+    ;(cliManager as any).adapters.set('live-list-r2', { detach })
+    await expect(cliManager.reconcileHostedSessionsAfterHostReplace()).rejects.toThrow('list failed')
+    expect(detach).not.toHaveBeenCalled()
+    expect((cliManager as any).adapters.has('live-list-r2')).toBe(true)
+  })
+
+  it('throws on a failed list_sessions rather than reporting an empty host', async () => {
+    mocks.state.existingClient = { request: vi.fn(async () => ({ success: false, error: 'ENFILE' })) }
+    await expect(listHostedCliRuntimes({ kind: 'unix', path: '/tmp/list-r2.sock' })).rejects.toThrow('ENFILE')
+  })
+
+  it('does not reconcile away tracked sessions when there is no successful hosted-runtime list', async () => {
+    const detach = vi.fn()
+    const removeInstance = vi.fn()
+    const cliManager = new DaemonCliManager({ getP2p: () => null,
+      getInstanceManager: () => ({ getByCategory: () => [], removeInstance }) as any })
+    ;(cliManager as any).adapters.set('live-r2', { detach })
+    await cliManager.reconcileHostedSessionsAfterHostReplace()
+    expect(detach).not.toHaveBeenCalled()
+    expect(removeInstance).not.toHaveBeenCalled()
   })
 
   it('leaves no ghost sessions selectable as coordinator after a forced host replace', async () => {
