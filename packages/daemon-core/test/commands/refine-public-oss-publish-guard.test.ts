@@ -15,8 +15,8 @@ import { runMeshRefineSubmoduleReachabilityGate } from '../../src/commands/route
  * worktree), so the Refinery's own `git push origin <commit>:refs/heads/main`
  * runs the checker itself, fail-closed, before sending anything.
  *
- * Fixture trick: the guard recognises the public repo by URL (`…/vilmire/adhdev`), so the
- * "origin" is a local bare repo whose PATH ends in vilmire/adhdev.
+ * Local bare origins are explicitly public via remote.origin.adhdev-private=false.
+ * Tests exercising private behavior explicitly override that local setting.
  */
 
 const GOOD = { name: 'vilmire', email: 'vilmire@users.noreply.github.com' }
@@ -61,6 +61,7 @@ function fixture(opts: { originSubpath: string; id: typeof GOOD; content: string
   git(base, ['commit', '-q', '-m', 'root'], GOOD)
   git(base, ['submodule', 'add', '-q', origin, 'sub'], GOOD)
   const sub = join(base, 'sub')
+  git(sub, ['config', 'remote.origin.adhdev-private', 'false'])
   writeFileSync(join(sub, 'local-only.txt'), opts.content)
   git(sub, ['add', 'local-only.txt'], opts.id)
   git(sub, ['commit', '-q', '-m', 'sub local only'], opts.id)
@@ -293,6 +294,7 @@ describe('review approval regressions', () => {
   })
   it('P1-4: unknown local destinations need approval; providers also runs the identity guard', async () => {
     const unknown = fixture({ originSubpath: 'unknown/repo', id: GOOD, content: 'clean\n' })
+    git(unknown.sub, ['config', '--unset', 'remote.origin.adhdev-private'])
     expect((await runMeshRefineSubmoduleReachabilityGate(unknown.base, unknown.mergedTree, AUTO_PUBLISH_ON)).entries[0].autoPublishAttempted).toBe(false)
     const providers = fixture({ originSubpath: 'vilmire/adhdev-providers', id: BAD, content: 'clean\n' })
     const gate = await runMeshRefineSubmoduleReachabilityGate(providers.base, providers.mergedTree, approved(providers))

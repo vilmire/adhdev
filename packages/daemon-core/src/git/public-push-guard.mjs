@@ -37,8 +37,14 @@ const KNOWN_PUBLIC_RE = /[:/]vilmire\/adhdev(?:-providers)?(?:\.git)?\/?$/i;
 
 // Only the known private GitHub repository is trusted by URL. Host aliases and
 // local/file URLs need explicit remote.<name>.adhdev-private=true configuration.
-function isKnownPrivateUrl(url) {
-  return /^(?:https:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/(?:git@)?github\.com(?::[0-9]+)?\/|git@github\.com:)vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(String(url || '').trim());
+function isKnownPrivateUrl(value) {
+  const url = String(value || '').trim();
+  if (/^git@github\.com:vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(url)) return true;
+  try {
+    const parsed = new URL(url);
+    return ['https:', 'ssh:'].includes(parsed.protocol) && parsed.hostname === 'github.com'
+      && !parsed.search && !parsed.hash && /^\/vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(parsed.pathname);
+  } catch { return false; }
 }
 
 /** Public means not proven private; URL-only classification has no local override. */

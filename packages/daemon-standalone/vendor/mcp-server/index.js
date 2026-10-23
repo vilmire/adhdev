@@ -69191,8 +69191,15 @@ ${upstream}`;
         A2 = "(?![A-Za-z0-9])";
       }
     });
-    function isKnownPrivateUrl(url) {
-      return /^(?:https:\/\/(?:[^/@]+@)?github\.com\/|ssh:\/\/(?:git@)?github\.com(?::[0-9]+)?\/|git@github\.com:)vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(String(url || "").trim());
+    function isKnownPrivateUrl(value) {
+      const url = String(value || "").trim();
+      if (/^git@github\.com:vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(url)) return true;
+      try {
+        const parsed = new URL(url);
+        return ["https:", "ssh:"].includes(parsed.protocol) && parsed.hostname === "github.com" && !parsed.search && !parsed.hash && /^\/vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(parsed.pathname);
+      } catch {
+        return false;
+      }
     }
     function isPublicRemoteUrl(url) {
       return !isKnownPrivateUrl(url);
