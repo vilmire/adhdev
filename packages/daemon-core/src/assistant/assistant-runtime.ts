@@ -450,8 +450,11 @@ export function wireAssistantRuntime(
                 });
             }
         },
-        onAccessRevoked: (meshId, code) => {
-            const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+        onAccessRevoked: (keyOrMeshId, code) => {
+            const followed = registry.getFollowedRemoteProject(keyOrMeshId)
+                ?? registry.listFollowedRemoteProjects().find((e) => e.key === keyOrMeshId)
+                ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === 'followed')
+                ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === 'revoked');
             if (followed) {
                 const reason = str(code) || 'host_revoked';
                 registry.updateFollowedRemoteProject(followed.key, {

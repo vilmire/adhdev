@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     AssistantRegistry,
     busyInputModeToSendPolicy,
@@ -172,6 +172,62 @@ describe('AssistantRegistry', () => {
         } finally {
             try { chmodSync(file(), 0o600); } catch { /* ignore */ }
         }
+    });
+
+    it('refuses bindSession, ensureBaseEntry, and every write path on a cold registry after an ENFILE read, leaving assistant.json byte-identical', () => {
+        const SELF = 'daemon_mach_follower01';
+        const r = reg();
+        bind(r);
+        r.updateSettings({ aliases: { alpha: 'mesh_alpha' } });
+        r.reconcileOwnerBinding(SELF);
+        r.upsertFollowedRemoteProject({
+            hostDaemonId: 'daemon_mach_host01',
+            meshId: 'mesh_alpha',
+            name: 'Alpha',
+            slug: 'alpha',
+            sanitizedRepoIdentity: 'github.com/acme/alpha',
+            bindingRevision: 1,
+            grantRevision: 1,
+            state: 'followed',
+        });
+
+        const originalBytes = readFileSync(file());
+        const enfileError = Object.assign(new Error('ENFILE: file table overflow'), { code: 'ENFILE' });
+
+        // Simulate a cold registry whose initial read fails with ENFILE, followed immediately by
+        // FD pressure clearing before loadMemoryBudget() / keepCorruptAside() / writeFileAtomic600() run.
+        const cold = reg();
+        const loadSpy = vi.spyOn(cold as any, 'load');
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() => bind(cold, 'rt_overwrite_attempt', 9999)).toThrow(/local_owner_binding_unreadable/);
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() => cold.reconcileOwnerBinding(SELF, { forceNewRevision: true })).toThrow(/local_owner_binding_unreadable/);
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() =>
+            cold.upsertFollowedRemoteProject({
+                hostDaemonId: 'daemon_mach_host02',
+                meshId: 'mesh_beta',
+                name: 'Beta',
+                slug: 'beta',
+                sanitizedRepoIdentity: null,
+                bindingRevision: 1,
+                grantRevision: 1,
+                state: 'followed',
+            }),
+        ).toThrow(/local_owner_binding_unreadable/);
+
+        loadSpy.mockReturnValueOnce({ kind: 'unreadable', error: enfileError });
+        expect(() => cold.updateSettings({ reviewTurn: false })).toThrow(/local_owner_binding_unreadable/);
+        expect(() => (cold as any).write({ ...r.read()!, sessionId: 'rt_direct_write' })).toThrow(/local_owner_binding_unreadable/);
+
+        expect(Buffer.compare(readFileSync(file()), originalBytes)).toBe(0);
+        expect(readdirSync(dir).filter((f) => f.startsWith('assistant.json.corrupt-'))).toEqual([]);
+
+        loadSpy.mockRestore();
+        expect(cold.read()).toEqual(r.read());
     });
 });
 

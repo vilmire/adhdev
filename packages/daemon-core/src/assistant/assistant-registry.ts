@@ -403,6 +403,9 @@ export class AssistantRegistry {
      */
     bindSession(input: BindAssistantSessionInput): { entry: AssistantRegistryEntry; previous: AssistantTurnState | null } {
         const prev = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         const preLaunchBudget = prev ? undefined : this.loadMemoryBudget();
         const sameSession = !!prev && prev.sessionId === input.sessionId;
         const at = isNum(input.at) ? input.at : Date.now();
@@ -432,6 +435,9 @@ export class AssistantRegistry {
     /** Owner settings. Unknown busy modes are refused rather than coerced. */
     updateSettings(patch: AssistantSettingsPatch): AssistantRegistryEntry | null {
         const prev = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         if (!prev) return null;
         if (patch.busyInputMode !== undefined && !BUSY_INPUT_MODES.includes(patch.busyInputMode)) {
             throw new Error(`invalid busyInputMode: ${String(patch.busyInputMode)}`);
@@ -680,7 +686,11 @@ export class AssistantRegistry {
     ): FollowedRemoteProjectEntry {
         const canonicalHost = canonicalDaemonId(input.hostDaemonId) ?? input.hostDaemonId;
         const key = input.key || followedRemoteProjectKey(canonicalHost, input.meshId);
-        const existing = this.read()?.followedRemoteProjects?.[key];
+        const current = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
+        const existing = current?.followedRemoteProjects?.[key];
         const nowIso = new Date().toISOString();
         const normalized = normalizeFollowedRemoteProjectEntry({
             ...existing,
@@ -708,6 +718,9 @@ export class AssistantRegistry {
         patch: Partial<FollowedRemoteProjectEntry>,
     ): FollowedRemoteProjectEntry | null {
         const base = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         const existing = base?.followedRemoteProjects?.[key];
         if (!base || !existing) return null;
         const merged = normalizeFollowedRemoteProjectEntry({
@@ -729,6 +742,9 @@ export class AssistantRegistry {
 
     removeFollowedRemoteProject(key: string): boolean {
         const base = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         if (!base?.followedRemoteProjects?.[key]) return false;
         const nextMap = { ...base.followedRemoteProjects };
         delete nextMap[key];
@@ -741,6 +757,9 @@ export class AssistantRegistry {
 
     private ensureBaseEntry(at: number): AssistantRegistryEntry {
         const prev = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         if (prev) return prev;
         const preLaunchBudget = this.loadMemoryBudget();
         return {
@@ -757,6 +776,17 @@ export class AssistantRegistry {
             lastTurnState: null,
             ...(preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}),
         };
+    }
+
+    private unreadableError(): Error & { code: 'local_owner_binding_unreadable'; cause?: unknown } {
+        const errCode = this.lastReadError?.code ?? 'EUNREADABLE';
+        const msg = this.lastReadError?.message ?? 'unreadable';
+        const err = new Error(
+            `local_owner_binding_unreadable: Local assistant registry could not be read (${errCode}: ${msg}); refusing to overwrite ${this.path}.`,
+        ) as Error & { code: 'local_owner_binding_unreadable'; cause?: unknown };
+        err.code = 'local_owner_binding_unreadable';
+        if (this.lastReadError) err.cause = this.lastReadError;
+        return err;
     }
 
     private load():
@@ -794,6 +824,9 @@ export class AssistantRegistry {
     }
 
     private write(entry: AssistantRegistryEntry): AssistantRegistryEntry {
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         this.keepCorruptAside();
         writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}\n`);
         this.lastReadError = null;

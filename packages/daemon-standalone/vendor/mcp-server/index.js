@@ -91150,6 +91150,9 @@ ${result.stderr}`, result.code);
            */
           bindSession(input) {
             const prev = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
             const preLaunchBudget = prev ? void 0 : this.loadMemoryBudget();
             const sameSession = !!prev && prev.sessionId === input.sessionId;
             const at = isNum(input.at) ? input.at : Date.now();
@@ -91178,6 +91181,9 @@ ${result.stderr}`, result.code);
           /** Owner settings. Unknown busy modes are refused rather than coerced. */
           updateSettings(patch) {
             const prev = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
             if (!prev) return null;
             if (patch.busyInputMode !== void 0 && !BUSY_INPUT_MODES.includes(patch.busyInputMode)) {
               throw new Error(`invalid busyInputMode: ${String(patch.busyInputMode)}`);
@@ -91388,7 +91394,11 @@ ${result.stderr}`, result.code);
           upsertFollowedRemoteProject(input) {
             const canonicalHost = canonicalDaemonId2(input.hostDaemonId) ?? input.hostDaemonId;
             const key4 = input.key || followedRemoteProjectKey(canonicalHost, input.meshId);
-            const existing = this.read()?.followedRemoteProjects?.[key4];
+            const current4 = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
+            const existing = current4?.followedRemoteProjects?.[key4];
             const nowIso = (/* @__PURE__ */ new Date()).toISOString();
             const normalized = normalizeFollowedRemoteProjectEntry({
               ...existing,
@@ -91412,6 +91422,9 @@ ${result.stderr}`, result.code);
           }
           updateFollowedRemoteProject(key4, patch) {
             const base = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
             const existing = base?.followedRemoteProjects?.[key4];
             if (!base || !existing) return null;
             const merged = normalizeFollowedRemoteProjectEntry({
@@ -91432,6 +91445,9 @@ ${result.stderr}`, result.code);
           }
           removeFollowedRemoteProject(key4) {
             const base = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
             if (!base?.followedRemoteProjects?.[key4]) return false;
             const nextMap = { ...base.followedRemoteProjects };
             delete nextMap[key4];
@@ -91443,6 +91459,9 @@ ${result.stderr}`, result.code);
           }
           ensureBaseEntry(at) {
             const prev = this.read();
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
             if (prev) return prev;
             const preLaunchBudget = this.loadMemoryBudget();
             return {
@@ -91459,6 +91478,16 @@ ${result.stderr}`, result.code);
               lastTurnState: null,
               ...preLaunchBudget ? { memoryBudget: resolveMemoryBudgets(preLaunchBudget) } : {}
             };
+          }
+          unreadableError() {
+            const errCode = this.lastReadError?.code ?? "EUNREADABLE";
+            const msg = this.lastReadError?.message ?? "unreadable";
+            const err = new Error(
+              `local_owner_binding_unreadable: Local assistant registry could not be read (${errCode}: ${msg}); refusing to overwrite ${this.path}.`
+            );
+            err.code = "local_owner_binding_unreadable";
+            if (this.lastReadError) err.cause = this.lastReadError;
+            return err;
           }
           load() {
             let raw;
@@ -91487,6 +91516,9 @@ ${result.stderr}`, result.code);
             }
           }
           write(entry) {
+            if (!this.cache && this.lastReadError !== null) {
+              throw this.unreadableError();
+            }
             this.keepCorruptAside();
             writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}
 `);
@@ -107438,6 +107470,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               if (out.ok) {
                 this.healAt.delete(key4);
                 this.ports.onAccessRecovered?.(key4);
+              } else if (out.kind === "refused" && REVOCATION_REFUSAL_CODES.has(out.code)) {
+                this.healAt.delete(key4);
+                this.ports.onAccessRevoked?.(key4, out.code, out.error);
               } else {
                 this.healAt.set(key4, this.now() + POLL_BACKOFF_MS);
               }
@@ -107838,8 +107873,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
           }
         },
-        onAccessRevoked: (meshId, code) => {
-          const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
+        onAccessRevoked: (keyOrMeshId, code) => {
+          const followed = registry.getFollowedRemoteProject(keyOrMeshId) ?? registry.listFollowedRemoteProjects().find((e) => e.key === keyOrMeshId) ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === "followed") ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === "revoked");
           if (followed) {
             const reason = str12(code) || "host_revoked";
             registry.updateFollowedRemoteProject(followed.key, {

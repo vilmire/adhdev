@@ -66,11 +66,37 @@ describe('self-heal of a stale non-explicit revocation', () => {
         await h.poller.tick();
         expect(onAccessRecovered).toHaveBeenCalledWith(KEY_1);
     });
-    it('stays revoked (and backs off) while the host still refuses', async () => {
+    it('stays revoked (and backs off) while the host refuses with a transient non-explicit code', async () => {
         const onAccessRecovered = vi.fn();
-        const h = make(refused('host_revoked'), { openThreads: () => [], staleRevoked: () => [{ key: KEY_1, meshId: MESH, target }], onAccessRecovered });
+        const h = make(refused('remote_access_denied'), { openThreads: () => [], staleRevoked: () => [{ key: KEY_1, meshId: MESH, target }], onAccessRecovered });
         await h.poller.tick();
         expect(onAccessRecovered).not.toHaveBeenCalled();
+        expect(h.onAccessRevoked).not.toHaveBeenCalled();
+    });
+
+    it('transitions to host_revoked and stops probing when a healStaleRevoked probe fails with an explicit revocation code', async () => {
+        const onAccessRecovered = vi.fn();
+        let reason = 'remote_access_denied';
+        const onAccessRevoked = vi.fn((_key: string, code: string) => {
+            reason = code;
+        });
+        const poll = vi.fn(async () => refused('host_revoked'));
+        const h = make(refused('host_revoked'), {
+            openThreads: () => [],
+            poll,
+            staleRevoked: () => (isSelfHealableRevocationReason(reason) ? [{ key: KEY_1, meshId: MESH, target }] : []),
+            onAccessRecovered,
+            onAccessRevoked,
+        });
+        await h.poller.tick();
+        expect(onAccessRecovered).not.toHaveBeenCalled();
+        expect(onAccessRevoked).toHaveBeenCalledWith(KEY_1, 'host_revoked', 'host_revoked err');
+        expect(reason).toBe('host_revoked');
+        expect(poll).toHaveBeenCalledTimes(1);
+
+        // Subsequent tick does not probe again because the entry transitioned to host_revoked
+        await h.poller.tick();
+        expect(poll).toHaveBeenCalledTimes(1);
     });
 
     it('cross-host same-meshId: keys healAt and recovery by canonical entry.key (hostDaemonId::meshId), never bare meshId', async () => {

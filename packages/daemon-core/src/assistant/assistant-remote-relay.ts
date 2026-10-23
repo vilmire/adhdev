@@ -217,6 +217,9 @@ export class AssistantRemoteRelayPoller {
             if (out.ok) {
                 this.healAt.delete(key);
                 this.ports.onAccessRecovered?.(key);
+            } else if (out.kind === 'refused' && REVOCATION_REFUSAL_CODES.has(out.code)) {
+                this.healAt.delete(key);
+                this.ports.onAccessRevoked?.(key, out.code, out.error);
             } else {
                 this.healAt.set(key, this.now() + POLL_BACKOFF_MS);
             }
