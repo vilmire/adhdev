@@ -31,6 +31,7 @@ vi.mock('@adhdev/session-host-core', async (importOriginal) => {
   return { ...actual, SessionHostClient: FakeClient }
 })
 
+import { sessionHostInstanceArg } from '../../src/commands/process-lifecycle'
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
 import { LOG } from '../../src/logging/logger'
 
@@ -49,7 +50,7 @@ describe('managed session-host on POSIX: host from a deleted prefix', () => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     originalConfigDir = process.env.ADHDEV_CONFIG_DIR
     // `ps` reports the host's command line, so the pid is provably ours.
-    cp.execFileSync.mockImplementation(() => `node ${host.reportedEntry}`)
+    cp.execFileSync.mockImplementation(() => `node ${host.reportedEntry} serve ${sessionHostInstanceArg(process.env.ADHDEV_CONFIG_DIR!)}`)
     warnSpy = vi.spyOn(LOG, 'warn')
     killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
       if (pid === STALE_PID && (signal === 0 || signal === undefined)) return true
@@ -76,7 +77,7 @@ describe('managed session-host on POSIX: host from a deleted prefix', () => {
   }
 
   async function ensure(appName: string) {
-    const managed = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
+    const managed = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
     try {
       await managed.ensureReady()
     } catch {
