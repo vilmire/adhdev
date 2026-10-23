@@ -95088,6 +95088,15 @@ ${detail.join("\n")}` : stripped;
         transitions.push(te);
         if (fires && !fired) fired = te;
       }
+      if (fired && fired.to === "approval" && (currentStateId === "starting" || currentStateId === "signing_in" || currentStateId === "idle") && !fired.label.includes("timeout")) {
+        const signInMatches = spec.transitions.some(
+          (t) => t.to === "signing_in" && t.when && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], "signing_in-precedence", signalSnapshot, absence).result
+        );
+        if (signInMatches) {
+          const outgoingSignIn = transitions.find((te) => te.to === "signing_in" && te.fires);
+          fired = outgoingSignIn ?? null;
+        }
+      }
       if (fired && !stateById(spec, fired.to)) {
         legacyTrace.push({ kind: "state_skip", text: `transition target ${fired.to} not found` });
         fired = null;
@@ -162810,7 +162819,6 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     init_fsm_types();
     init_fsm_loader();
     init_logger();
-    init_fsm_types();
     init_fsm_evaluator();
     var ANSI_OSC_DCS_RE = /\x1B\][^\x07]*(?:\x07|\x1B\\)|\x1B[P^_X][\s\S]*?(?:\x07|\x1B\\)/g;
     var ANSI_CSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
@@ -162825,43 +162833,112 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     var CLEAR_PROVIDER_CHROME_RE = /^[ \t]*(?:[⏺✻✢✳✶✽✷✸✹❯›](?:\s|$)|─{10,}[ \t]*$)/;
     var TOOL_HEADER_LINE_RE = /^[ \t]*[⏺●•]\s+(?:Bash|Read|Edit|Write|Grep|Glob|LS|Task|MultiEdit|NotebookEdit|WebFetch|WebSearch|Ran|Explored|Edited|Wrote)\b/;
+    var CLAUDE_ERROR_ENVELOPE_LINE_RE = /^[ \t]*⏺\s+api\s+error\s*:\s*(?:(?:http\s*)?40[123]\b|[^\n]*(?:"authentication_error"|"token_revoked"|"invalid_api_key"|"token_expired"|"invalid_token"))/i;
     var TRUNCATED_OUTPUT_LINE_RE = /^[ \t]*(?:…|\.\.\.)\s+\+\d+\s+lines\b/i;
     var STRONG_TURN_BOUNDARY_LINE_RE = /^[ \t]{0,2}(?:⏺(?:\s|$)|[✻✢✳✶✽✷✸✹](?:\s|$))/;
     var COMPOSER_DIVIDER_LINE_RE = /^[ \t]*─{10,}[ \t]*$/;
     var COL0_COMPOSER_DIVIDER_LINE_RE = /^─{10,}[ \t]*$/;
     var COMPOSER_PROMPT_LINE_RE = /^[ \t]*[❯›>](?:\s|$)/;
     var MAX_OPEN_BLOCK_SPAN_LINES = 40;
-    function hasMatchingClosingFence(lines, openIdx, ch) {
+    var MAX_CLOSED_BLOCK_LOOKAHEAD_LINES = 512;
+    function findMatchingClosingFence(lines, openIdx, ch) {
       const closeRe = new RegExp(`^${ch}{3,}\\s*$`);
-      const limit = Math.min(lines.length, openIdx + 1 + MAX_OPEN_BLOCK_SPAN_LINES);
+      const limit = Math.min(lines.length, openIdx + 1 + MAX_CLOSED_BLOCK_LOOKAHEAD_LINES);
       for (let j = openIdx + 1; j < limit; j += 1) {
         const candidate = lines[j];
         if (TRUNCATED_OUTPUT_LINE_RE.test(candidate) || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate) || TOOL_HEADER_LINE_RE.test(candidate)) {
-          return false;
+          return -1;
         }
         if (closeRe.test(candidate.trim())) {
-          return true;
+          return j;
         }
       }
-      return false;
+      return -1;
+    }
+    function findClosedDiffHunkEnd(lines, openIdx) {
+      const headerMatch = lines[openIdx].trim().match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+      const expectedOld = headerMatch ? Number(headerMatch[2] ?? 1) : 0;
+      const expectedNew = headerMatch ? Number(headerMatch[4] ?? 1) : 0;
+      let oldSeen = 0;
+      let newSeen = 0;
+      let sawDiffChange = false;
+      let lastDiffIdx = -1;
+      const limit = Math.min(lines.length, openIdx + 1 + MAX_CLOSED_BLOCK_LOOKAHEAD_LINES);
+      for (let j = openIdx + 1; j < limit; j += 1) {
+        const candidate = lines[j];
+        const trimmed2 = candidate.trim();
+        if (TRUNCATED_OUTPUT_LINE_RE.test(candidate) || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate) || TOOL_HEADER_LINE_RE.test(candidate) || COL0_COMPOSER_DIVIDER_LINE_RE.test(candidate) && j + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[j + 1])) {
+          return expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew ? lastDiffIdx : -1;
+        }
+        if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S|@@\s+-\d+|```+|~~~+)/i.test(trimmed2)) {
+          return oldSeen > 0 || newSeen > 0 ? lastDiffIdx : -1;
+        }
+        if (candidate.startsWith("+")) {
+          newSeen += 1;
+          sawDiffChange = true;
+          lastDiffIdx = j;
+          continue;
+        }
+        if (candidate.startsWith("-")) {
+          oldSeen += 1;
+          sawDiffChange = true;
+          lastDiffIdx = j;
+          continue;
+        }
+        if (candidate.startsWith(" ")) {
+          oldSeen += 1;
+          newSeen += 1;
+          lastDiffIdx = j;
+          continue;
+        }
+        if (candidate.startsWith("\\ No newline")) {
+          lastDiffIdx = j;
+          continue;
+        }
+        break;
+      }
+      if (lastDiffIdx === -1) return -1;
+      if (expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew || sawDiffChange) {
+        return lastDiffIdx;
+      }
+      return -1;
     }
     function stripToolAndCodeLines(raw) {
       let inToolBlock = false;
       let inFence = null;
-      let fenceHasClose = false;
+      let fenceCloseIdx = -1;
       let fenceLines = 0;
       let inDiffHunk = false;
+      let diffHunkCloseIdx = -1;
       let diffHunkLines = 0;
       const out = [];
       const lines = raw.split("\n");
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i];
         const trimmed2 = line.trim();
+        if (inFence !== null && fenceCloseIdx !== -1) {
+          if (i < fenceCloseIdx) {
+            continue;
+          }
+          inFence = null;
+          fenceCloseIdx = -1;
+          fenceLines = 0;
+          continue;
+        }
+        if (inDiffHunk && diffHunkCloseIdx !== -1) {
+          if (i <= diffHunkCloseIdx) {
+            continue;
+          }
+          inDiffHunk = false;
+          diffHunkCloseIdx = -1;
+          diffHunkLines = 0;
+        }
         if (TRUNCATED_OUTPUT_LINE_RE.test(line)) {
           inFence = null;
-          fenceHasClose = false;
+          fenceCloseIdx = -1;
           fenceLines = 0;
           inDiffHunk = false;
+          diffHunkCloseIdx = -1;
           diffHunkLines = 0;
           inToolBlock = false;
           continue;
@@ -162871,27 +162948,27 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const ch = fenceMatch[1][0];
           if (inFence === null) {
             inFence = ch;
-            fenceHasClose = hasMatchingClosingFence(lines, i, ch);
+            fenceCloseIdx = findMatchingClosingFence(lines, i, ch);
             fenceLines = 0;
             inDiffHunk = false;
+            diffHunkCloseIdx = -1;
             diffHunkLines = 0;
-            inToolBlock = false;
             continue;
           }
           if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed2)) {
             inFence = null;
-            fenceHasClose = false;
+            fenceCloseIdx = -1;
             fenceLines = 0;
             continue;
           }
         }
         if (inFence !== null) {
           const isStrongTurnBoundary = STRONG_TURN_BOUNDARY_LINE_RE.test(line) || TOOL_HEADER_LINE_RE.test(line);
-          const isComposerBoundary = COMPOSER_DIVIDER_LINE_RE.test(line) && i + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]) && (!fenceHasClose || /^[ \t]*[❯›>][ \t]*$/.test(lines[i + 1]) || i + 2 < lines.length && COMPOSER_DIVIDER_LINE_RE.test(lines[i + 2]));
+          const isComposerBoundary = COMPOSER_DIVIDER_LINE_RE.test(line) && i + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]);
           fenceLines += 1;
           if (isStrongTurnBoundary || isComposerBoundary || fenceLines > MAX_OPEN_BLOCK_SPAN_LINES) {
             inFence = null;
-            fenceHasClose = false;
+            fenceCloseIdx = -1;
             fenceLines = 0;
           } else {
             continue;
@@ -162899,13 +162976,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         if (/^(?:diff --git\b|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S|\+\+\+\s+\S)/i.test(trimmed2)) {
           inDiffHunk = false;
+          diffHunkCloseIdx = -1;
           diffHunkLines = 0;
           continue;
         }
         if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed2)) {
           inDiffHunk = true;
+          diffHunkCloseIdx = findClosedDiffHunkEnd(lines, i);
           diffHunkLines = 0;
-          inToolBlock = false;
           continue;
         }
         if (inDiffHunk) {
@@ -162914,11 +162992,13 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           diffHunkLines += 1;
           if (isStrongTurnBoundary || isComposerBoundary || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
             inDiffHunk = false;
+            diffHunkCloseIdx = -1;
             diffHunkLines = 0;
-          } else if (!trimmed2 || /^(?:[ +-]|\\ No newline)/.test(line)) {
+          } else if (/^(?:[ +-]|\\ No newline)/.test(line)) {
             continue;
           } else {
             inDiffHunk = false;
+            diffHunkCloseIdx = -1;
             diffHunkLines = 0;
           }
         }
@@ -162926,6 +163006,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           inToolBlock = false;
           if (TOOL_HEADER_LINE_RE.test(line)) {
             inToolBlock = true;
+            continue;
+          }
+          if (/^[ \t]*⏺(?:\s|$)/.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
             continue;
           }
         }
@@ -162985,19 +163068,19 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         /"type"\s*:\s*"authentication_error"/,
         /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
         // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
-        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
-        /(?:^|\n)\s*(?:[●⏺✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)|⏺\s+api\s+error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
+        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
         /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
         // Anchored CLI auth / token / not-signed-in statements
-        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●⏺✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
+        /(?:^|[.!?·:;\n]\s*|"message"\s*:\s*"\s*)(?:[●✗✖⚠!]\s+)?(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+(?:authentication\s+credentials|api\s+key)\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
         /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
         // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
-        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●⏺✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
-        /(?:^|[.!?·:;\n]\s*)(?:[●⏺✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/
+        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/
       ].some((pattern) => pattern.test(linesText));
       if (auth) {
         return {
@@ -163210,17 +163293,6 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       if (!stripped.trim()) return false;
       const cleaned = stripToolAndCodeLines(stripped);
       if (!cleaned.trim()) return false;
-      for (const t of spec.transitions) {
-        if (!t.when || t.to === "signing_in") continue;
-        const fromList = Array.isArray(t.from) ? t.from : [t.from];
-        if (!fromList.includes("idle") && !fromList.includes("starting")) continue;
-        const targetState = stateById(spec, t.to);
-        if (targetState?.modal) {
-          if (evaluateConditionPreview(t.when, spec.sections, stripped).result) {
-            return false;
-          }
-        }
-      }
       for (const t of spec.transitions) {
         if (t.to !== "signing_in" || !t.when) continue;
         if (evaluateConditionPreview(t.when, spec.sections, stripped).result && evaluateConditionPreview(t.when, spec.sections, cleaned).result) {
@@ -168146,7 +168218,7 @@ ${text4}` : text4;
     var ADVISORY_COOLDOWN_MS = 10 * 6e4;
     var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
     var KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
-    var ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S)/i;
+    var ANCHORED_MID_TURN_AUTH_LINE_RE = /^[ \t]{0,2}(?:(?:[●⏺✗✖⚠!]\s+)?(?:\{[^\n]*"type"\s*:\s*"authentication_error"|\{[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|api\s+error\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{))|(?:[●✗✖⚠!]\s+)?(?:(?:http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|(?:(?:api\s+error|http\s+error|error)\s*:\s*)?invalid\s+authentication\s+credentials\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S))/i;
     function hasAnchoredMidTurnAuthFailure(cliType, rawSurface) {
       const masked = maskForeignProviderText(cliType, rawSurface);
       const stripped = stripAnsi2(masked).replace(/\r\n?/g, "\n");

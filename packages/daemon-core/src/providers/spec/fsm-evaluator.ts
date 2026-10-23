@@ -392,6 +392,26 @@ export function evaluateFsm(
         if (fires && !fired) fired = te;
     }
 
+    // Explicit precedence: when a signing_in entry condition matches the
+    // viewport, signing_in wins over approval (excluding elapsed-timeout
+    // escalations such as signing_in→approval-timeout).
+    if (
+        fired
+        && fired.to === 'approval'
+        && (currentStateId === 'starting' || currentStateId === 'signing_in' || currentStateId === 'idle')
+        && !fired.label.includes('timeout')
+    ) {
+        const signInMatches = spec.transitions.some(
+            t => t.to === 'signing_in'
+                && t.when
+                && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], 'signing_in-precedence', signalSnapshot, absence).result,
+        );
+        if (signInMatches) {
+            const outgoingSignIn = transitions.find(te => te.to === 'signing_in' && te.fires);
+            fired = outgoingSignIn ?? null;
+        }
+    }
+
     // Validate destination exists (defensive — loader should catch this).
     if (fired && !stateById(spec, fired.to)) {
         legacyTrace.push({ kind: 'state_skip', text: `transition target ${fired.to} not found` });

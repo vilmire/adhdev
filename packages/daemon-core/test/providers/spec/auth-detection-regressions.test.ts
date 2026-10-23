@@ -1962,5 +1962,343 @@ describe('Round 5 — MEDIUM-3: unclosed fences terminate at strong turn boundar
     });
 });
 
+describe('Round 6 — NEW HIGH: login menus with Esc/cancel hints stay in signing_in, block sends, and never expose approval cards', () => {
+    const claudeLoginWithEsc = [
+        ' Select login method:',
+        '❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise',
+        '  2. Anthropic Console account · API usage billing',
+        '  3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, or Vertex AI',
+        '',
+        ' Esc to cancel',
+    ].join('\n');
+
+    const claudeLoginWithoutEsc = [
+        ' Select login method:',
+        '❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise',
+        '  2. Anthropic Console account · API usage billing',
+        '  3. 3rd-party platform · Amazon Bedrock, Microsoft Foundry, or Vertex AI',
+    ].join('\n');
+
+    const codexLoginWithCancelHint = [
+        '  Sign in with ChatGPT to use Codex',
+        '',
+        '  › 1. Sign in with ChatGPT',
+        '    2. Sign in with Device Code',
+        '    3. Provide your own API key',
+        '',
+        '  enter to submit | esc to cancel',
+    ].join('\n');
+
+    const agyLoginWithCancelHint = [
+        '  Welcome back! You are currently not signed in.',
+        '  Select Google Cloud sign-in method:',
+        '  ❯ 1. Sign in with Google (Browser OAuth)',
+        '    2. Use Application Default Credentials (ADC)',
+        '',
+        '  Esc to cancel',
+    ].join('\n');
+
+    const cursorLoginWithCancelHint = [
+        '  Welcome to Cursor Agent',
+        '  Signing in with the browser...',
+        '  ❯ 1. Sign in with browser',
+        '    2. Sign in with API key',
+        '',
+        '  Press Enter to sign in · Esc to cancel',
+    ].join('\n');
+
+    const grokLoginWithCancelHint = [
+        '  Welcome to Grok CLI',
+        '  Sign in to Grok Build',
+        '  1 (●) Sign in with browser',
+        '  2 (○) Paste your xAI API key',
+        '',
+        '  1/2:select  Esc:cancel',
+    ].join('\n');
+
+    const kimiLoginWithCancelHint = [
+        '╭──────────────────────────────────────────────────────────╮',
+        '│ Sign in to Kimi Code                                     │',
+        '│ ❯ 1. Authorize via browser (device code)                 │',
+        '│   2. Paste API key                                       │',
+        '│                                                          │',
+        '│ Esc to cancel                                            │',
+        '╰──────────────────────────────────────────────────────────╯',
+    ].join('\n');
+
+    const providerLoginMenus: Array<{
+        label: string;
+        cli: string;
+        specFile: string;
+        idleFrame: string;
+        loginScreen: string;
+    }> = [
+        {
+            label: 'claude-cli Select login method with Esc to cancel',
+            cli: 'claude-cli',
+            specFile: '4.0.json',
+            idleFrame: '────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n',
+            loginScreen: claudeLoginWithEsc,
+        },
+        {
+            label: 'claude-cli Select login method without Esc to cancel',
+            cli: 'claude-cli',
+            specFile: '4.0.json',
+            idleFrame: '────────────────────\r\n❯ \r\n────────────────────\r\n  Opus 4.6 · 12% context\r\n',
+            loginScreen: claudeLoginWithoutEsc,
+        },
+        {
+            label: 'codex-cli login menu with enter to submit | esc to cancel',
+            cli: 'codex-cli',
+            specFile: '4.0.json',
+            idleFrame: '› \r\n  gpt-5.4 · 98% context left · ? for shortcuts\r\n',
+            loginScreen: codexLoginWithCancelHint,
+        },
+        {
+            label: 'antigravity-cli login menu with Esc to cancel',
+            cli: 'antigravity-cli',
+            specFile: '4.0.json',
+            idleFrame: '❯ Type your message\r\n  ? for shortcuts\r\n',
+            loginScreen: agyLoginWithCancelHint,
+        },
+        {
+            label: 'cursor-cli login menu with Esc to cancel',
+            cli: 'cursor-cli',
+            specFile: '1.0.json',
+            idleFrame: '  Cursor Agent\r\n  → Plan, search, build anything\r\n  Auto · 3.2%\r\n  ~/work/repo · main\r\n',
+            loginScreen: cursorLoginWithCancelHint,
+        },
+        {
+            label: 'grok-cli login menu with 1/2:select and Esc:cancel',
+            cli: 'grok-cli',
+            specFile: '1.0.json',
+            idleFrame: '  │ ❯ \r\n  Shift+Tab: mode · Ctrl+x: shortcuts\r\n',
+            loginScreen: grokLoginWithCancelHint,
+        },
+        {
+            label: 'kimi login menu with Esc to cancel',
+            cli: 'kimi',
+            specFile: '1.0.json',
+            idleFrame: '┌──────────────────────────────────────────┐\r\n│ >                                        │\r\n└──────────────────────────────────────────┘\r\n',
+            loginScreen: kimiLoginWithCancelHint,
+        },
+    ];
+
+    it.each(providerLoginMenus)(
+        '$label enters/stays in signing_in, isAnchoredSignInViewport is true, and never transitions to approval',
+        ({ cli, specFile, loginScreen }) => {
+            const spec = loadProviderSpec(cli, specFile);
+            expect(isAnchoredSignInViewport(loginScreen, spec)).toBe(true);
+
+            const fromStarting = evaluateFsm(spec, 'starting', loginScreen, { row: 3, col: 2 }, undefined, clk(2_000, 0));
+            expect(fromStarting.fired?.to).toBe('signing_in');
+
+            const fromSigningIn = evaluateFsm(spec, 'signing_in', loginScreen, { row: 3, col: 2 }, undefined, clk(5_000, 0));
+            expect(fromSigningIn.fired?.to ?? 'signing_in').toBe('signing_in');
+
+            const fromIdle = evaluateFsm(spec, 'idle', loginScreen, { row: 3, col: 2 }, undefined, clk(5_000, 0));
+            expect(fromIdle.fired?.to).not.toBe('approval');
+            expect(fromIdle.fired?.to).not.toBe('trust');
+            expect(fromIdle.fired?.to).not.toBe('picker');
+        },
+    );
+
+    it.each(providerLoginMenus)(
+        '$label blocks sends on FsmDriver (from starting and from idle) and exposes no approval card or buttons',
+        async ({ cli, specFile, idleFrame, loginScreen }) => {
+            vi.useFakeTimers();
+            try {
+                // 1. Boot directly into login menu -> must enter signing_in with no modal card
+                const bootFactory = new DrivableFactory();
+                const bootDriver = new FsmDriver({
+                    specPath: resolveProviderSpecPath(cli, specFile),
+                    workingDir: os.tmpdir(),
+                    hotReload: false,
+                    transportFactory: bootFactory,
+                });
+                let bootModal: { title?: string; buttons: Array<{ index: number; label: string }> } | null = null;
+                bootDriver.subscribe(ev => {
+                    if (ev.kind === 'state_changed') bootModal = ev.modal;
+                });
+                bootDriver.start();
+                const bootPty = bootFactory.last!;
+                bootPty.feed(loginScreen.replace(/\n/g, '\r\n') + '\r\n');
+                await vi.advanceTimersByTimeAsync(1_000);
+                expect(bootDriver.currentStateId).toBe('signing_in');
+                expect(bootModal).toBeNull();
+                bootDriver.shutdown();
+
+                // 2. Reach idle first, then render login menu with cancel hint -> must block send, enter signing_in, and expose no modal card
+                const idleFactory = new DrivableFactory();
+                const idleDriver = new FsmDriver({
+                    specPath: resolveProviderSpecPath(cli, specFile),
+                    workingDir: os.tmpdir(),
+                    hotReload: false,
+                    transportFactory: idleFactory,
+                });
+                let activeModal: { title?: string; buttons: Array<{ index: number; label: string }> } | null = null;
+                idleDriver.subscribe(ev => {
+                    if (ev.kind === 'state_changed') activeModal = ev.modal;
+                });
+                idleDriver.start();
+                const idlePty = idleFactory.last!;
+                const nonFocusWrites = () => idlePty.writes.filter(w => w !== '\u001b[I');
+
+                idlePty.feed(idleFrame);
+                await vi.advanceTimersByTimeAsync(16_000);
+                expect(idleDriver.currentStateId).toBe('idle');
+                idlePty.writes.length = 0;
+
+                idlePty.feed('\u001b[2J\u001b[H' + loginScreen.replace(/\n/g, '\r\n') + '\r\n');
+                await vi.advanceTimersByTimeAsync(400);
+                expect(idleDriver.currentStateId).not.toBe('approval');
+                expect(activeModal).toBeNull();
+
+                const disp = idleDriver.sendMessageWithDisposition('do not type into login menu', false, `msg-r6-${cli}`);
+                await vi.advanceTimersByTimeAsync(500);
+                expect(disp).toEqual({
+                    status: 'queued',
+                    queueDepth: 1,
+                    reason: 'auth_required',
+                });
+                expect(idleDriver.currentStateId).toBe('signing_in');
+                expect(activeModal).toBeNull();
+                expect(nonFocusWrites()).toEqual([]);
+
+                idleDriver.shutdown();
+            } finally {
+                vi.useRealTimers();
+            }
+        },
+    );
+});
+
+describe('Round 6 — NEW MEDIUM: balanced >40-line fences, balanced fences with composer chrome, and >40-line diff hunks stay suppressed', () => {
+    const t0 = 1_860_000_000_000;
+    const ctx = { cliType: 'claude-cli', sessionLabel: 'sess-r6-fences', isCoordinator: false };
+
+    // 1. A 45-line balanced fence in tool output (`⏺ Bash(cat docs/auth.md)`) with a quoted 401 JSON at line 44,
+    //    plus indented tool lines after the closing fence to verify inToolBlock is preserved across the fence.
+    const toolBalanced45LineFence = [
+        '⏺ Bash(cat docs/auth.md)',
+        '  ⎿  # Authentication Troubleshooting',
+        '     ```json',
+        ...Array.from({ length: 43 }, (_, i) => `     "line_${i + 1}": "documentation line ${i + 1}",`),
+        '     {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+        '     ```',
+        '     API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Still inside tool block"}}',
+    ].join('\n');
+
+    // 2. A 45-line col-0 balanced fence (codex style) with a 401 at line 44.
+    const codexCol0Balanced45LineFence = [
+        '• Here is the 45-line example response payload:',
+        '```json',
+        ...Array.from({ length: 43 }, (_, i) => `{"step": ${i + 1}, "status": "ok"}`),
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}',
+        '```',
+    ].join('\n');
+
+    // 3. A balanced fence quoting a composer block (`───`/`❯ `/`───`) followed by a quoted 401.
+    const balancedFenceQuotingComposer = [
+        '⏺ Example transcript showing an expired session after the composer prompt:',
+        '```text',
+        '────────────────────',
+        '❯ ',
+        '────────────────────',
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+        '```',
+    ].join('\n');
+
+    // 4. A diff hunk longer than 40 lines with a quoted 401 near its end.
+    const longDiffHunkWith401NearEnd = [
+        'diff --git a/src/auth.ts b/src/auth.ts',
+        '--- a/src/auth.ts',
+        '+++ b/src/auth.ts',
+        '@@ -1,45 +1,46 @@',
+        ...Array.from({ length: 42 }, (_, i) => ` const line${i + 1} = ${i + 1};`),
+        '+// Example: API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+        ' API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+        ' const tailLine = true;',
+    ].join('\n');
+
+    it.each([
+        ['45-line balanced fence in tool output with quoted 401 JSON at line 44 and trailing indented tool line', toolBalanced45LineFence],
+        ['45-line col-0 balanced fence (codex style) with a 401 at line 44', codexCol0Balanced45LineFence],
+        ['balanced fence quoting a composer block (───/❯ /───) followed by a quoted 401', balancedFenceQuotingComposer],
+        ['diff hunk longer than 40 lines with a quoted 401 near its end', longDiffHunkWith401NearEnd],
+    ])('suppresses %s in detectProviderFailure, classifyAuthBillingOutput, and resolveLiveAuthSuspect', (_label, screen) => {
+        expect(detectProviderFailure(screen)).toBeNull();
+        expect(classifyAuthBillingOutput('claude-cli', screen)).toBeNull();
+        expect(classifyAuthBillingOutput('codex-cli', screen)).toBeNull();
+
+        const state = createLiveAuthState();
+        state.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: '401 Unauthorized' },
+            suspectedAtMs: t0,
+        };
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: true,
+            now: t0 + 20_000,
+            quietMs: 10_000,
+            tail: screen,
+            readScreen: () => screen,
+        });
+        expect(res.advisory).toBeUndefined();
+        expect(res.latch).toBeUndefined();
+    });
+
+    it('still detects a real 401 after an unclosed fence that exceeds the 40-line cap', () => {
+        const unclosed45LineFenceThenReal401 = [
+            '```json',
+            ...Array.from({ length: 42 }, (_, i) => `{"line": ${i + 1}}`),
+            'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+        ].join('\n');
+        expect(detectProviderFailure(unclosed45LineFenceThenReal401)?.errorReason).toBe('auth_failed');
+    });
+});
+
+describe('Round 6 — NEW MEDIUM: ⏺-prefixed assistant prose is never classified as an auth failure unless it carries an API Error 401/authentication_error envelope', () => {
+    const t0 = 1_870_000_000_000;
+    const ctx = { cliType: 'claude-cli', sessionLabel: 'sess-r6-prose', isCoordinator: false };
+
+    it.each([
+        '⏺ Please run /login in the other terminal before retrying…',
+        '⏺ Your session expired handling now refreshes the cookie…',
+        '⏺ Invalid API key responses are now mapped to a 401…',
+    ])('does NOT detect assistant prose line: %s', (line) => {
+        expect(detectProviderFailure(line)).toBeNull();
+        expect(detectAuthFailureOnlyReply(line)).toBeNull();
+        expect(classifyAuthBillingOutput('claude-cli', line)).toBeNull();
+
+        const state = createLiveAuthState();
+        state.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: '401 Unauthorized' },
+            suspectedAtMs: t0,
+        };
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: false,
+            now: t0 + 10_000,
+            quietMs: 6_000,
+            tail: line,
+            readScreen: () => line,
+        });
+        expect(res.advisory).toBeUndefined();
+        expect(res.latch).toBeUndefined();
+    });
+
+    it('still detects ⏺ API Error: 401 {…authentication_error…}', () => {
+        const realErrorLine = '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}';
+        expect(detectProviderFailure(realErrorLine)).toMatchObject({
+            errorReason: 'auth_failed',
+            failureKind: 'auth',
+        });
+        expect(classifyAuthBillingOutput('claude-cli', realErrorLine)).toMatchObject({
+            errorReason: 'auth_failed',
+            failureKind: 'auth',
+        });
+    });
+});
+
+
 
 
