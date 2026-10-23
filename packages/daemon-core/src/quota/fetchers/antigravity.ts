@@ -322,6 +322,7 @@ import {
 } from '../types.js';
 import type { QuotaChildProcess, QuotaFetchDeps } from './deps.js';
 import { assertInjectedNetworkFetchInTest, resolveDeps } from './deps.js';
+import { exhaustedByOmission, quotaPoolOf } from './antigravity-pools.js';
 import { isCredentialExpired, retryAfterMs, toIsoResetMs as toResetMs, toNumber } from './coerce.js';
 import { quotaReadNowClause } from '../refresh-command-hint.js';
 
@@ -1002,6 +1003,7 @@ function bucketUsedPercent(bucket: Record<string, unknown>): number | null {
     if (fraction !== null) {
         return clampPercent((1 - fraction) * 100);
     }
+    if (exhaustedByOmission(bucket)) return 100;
     return null;
 }
 
@@ -1044,8 +1046,10 @@ function collectBuckets(data: Record<string, unknown>): QuotaBucket[] {
         const usedPercent = bucketUsedPercent(bucket);
         if (usedPercent === null) return;
         const own = bucketName(bucket);
+        const pool = quotaPoolOf(groupLabel, bucket);
         out.push({
             name: groupLabel ? `${groupLabel} · ${own}` : own,
+            ...(pool ? { group: pool } : {}),
             usedPercent,
             windowMinutes: windowMinutes(bucket.window) ?? 0,
             resetsAt: toResetMs(bucket.resetTime),

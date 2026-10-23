@@ -109,7 +109,7 @@ describe('managed session-host conpty reuse guard', () => {
     expect(() => host.spawnHost()).not.toThrow()
     // And ensureReady still completes its normal (here: failing) flow rather
     // than throwing the conpty error out of the new pre-reuse check.
-    await expect(host.ensureReady()).rejects.toThrow(/did not become ready|failed to start/i)
+    await expect(host.ensureReady()).rejects.toThrow(/did not become ready|failed to start|temporarily unavailable/i)
   })
 
   it('never engages on non-win32 platforms', async () => {
@@ -147,7 +147,7 @@ describe('managed session-host conpty reuse guard', () => {
     return entry
   }
 
-  it('stops a REACHABLE host instead of reusing it when the active prefix has no conpty prebuild', async () => {
+  it('runs conpty recovery without signaling an unproven host', async () => {
     const homeDir = stageHome()
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     const appName = `adhdev-reuse-missing-${process.pid}-${Date.now()}`
@@ -155,13 +155,7 @@ describe('managed session-host conpty reuse guard', () => {
     stagePidFile(homeDir, appName, zombiePid)
     const entry = stagePackagedEntryWithoutConpty(homeDir, false)
 
-    // `ensureReady` ALSO stops the host on its pre-existing failure/retry path,
-    // so "a stop happened" attributes nothing on its own. `extraStop` runs
-    // inside every stop, making stops countable: the pre-existing path
-    // contributes a fixed two (the initial failure handler and its retry), and
-    // the reuse guard contributes exactly one more, ahead of them. Counting is
-    // therefore what distinguishes the guard from the baseline — and this
-    // assertion fails (2 !== 3) if the reuse guard is removed.
+    // The conpty guard can ask for an extra stop, but an unproven PID is preserved.
     let stops = 0
     const host = createManagedSessionHost({
       appName,
@@ -178,7 +172,8 @@ describe('managed session-host conpty reuse guard', () => {
 
     await host.ensureReady().catch(() => {})
 
-    expect(stops).toBe(3)
+    expect(stops).toBe(1)
+    expect(taskkillCalls()).toHaveLength(0)
   })
 
   it('does NOT stop a reachable host when the packaged prefix still has its conpty prebuild', async () => {

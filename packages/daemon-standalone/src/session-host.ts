@@ -1,3 +1,4 @@
+import { getProcessInstanceContext } from '../../daemon-core/src/config/instance-context.js';
 import * as childProcess from 'child_process';
 import {
   createManagedSessionHost,
@@ -17,7 +18,7 @@ function identifiesStandaloneSessionHostPid(pid: number): boolean {
 
 function isManagedStandaloneSessionHostPid(pid: number): boolean {
   const commandLine = getProcessCommandLine(pid);
-  return isManagedSessionHostCommandLine(commandLine);
+  return isManagedSessionHostCommandLine(commandLine, getProcessInstanceContext().configDir);
 }
 
 // Shared managed-host helpers (env/pidfile/kill/spawn/ensureReady). Standalone keeps

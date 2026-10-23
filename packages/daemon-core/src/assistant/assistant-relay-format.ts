@@ -171,8 +171,80 @@ export function buildFoldedBacklogLine(slug: string, count: number): string {
     return `[project ${s}] ${count} earlier turn${count === 1 ? '' : 's'} older than 24 h were not relayed — use project_read ${s} if they matter.`;
 }
 
-export function buildApprovalSignal(slug: string): string {
-    return `[project ${safeSlug(slug)}] waiting for an approval or a choice — the user can answer it in the Inbox.`;
+/** What a parked approval/choice modal asks — bounded plain text, never authority. */
+export interface AttentionDetail {
+    question: string;
+    options: readonly string[];
+}
+
+const ATTENTION_QUESTION_MAX = 300;
+const ATTENTION_OPTION_MAX = 80;
+const ATTENTION_OPTIONS_MAX = 8;
+
+function oneLine(text: unknown, max: number): string {
+    // eslint-disable-next-line no-control-regex
+    const flat = String(text ?? '').replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim();
+    // Agent-authored: neutralise header markers anywhere in the line, not just at its start.
+    // Escape FIRST, then cap the final string, so the stated limit holds after expansion.
+    const safe = defangRelayBody(flat).replace(/\[(\s*)(project)\b/gi, '[$1quoted $2');
+    const points = Array.from(safe);
+    if (points.length <= max) return safe;
+    let cut = points.slice(0, max - 1).join('');
+    // Do not leave half of an escaped marker ("[quoted Sys", "[/relay (quo") at the cut.
+    // Any length: an escaped marker opened inside the window and not closed is dropped whole.
+    const open = cut.lastIndexOf('[');
+    if (open >= 0 && !cut.includes(']', open)) {
+        const head = cut.slice(open, open + 7); // "[quoted" / "[/relay" — or a cut-short prefix of either
+        if ('[quoted'.startsWith(head) || '[/relay'.startsWith(head)) cut = cut.slice(0, open).trimEnd();
+    }
+    return `${cut}…`;
+}
+
+/**
+ * Pull the question and option labels out of a `modal` (approval modal) or
+ * `prompt` (AskUserQuestion-shaped picker) lifecycle payload. Null when the
+ * payload carries no readable text.
+ *
+ * A `waiting_choice` or picker-kind MODAL is deliberately detail-free: the spec labels it
+ * generically ("Picker open") and production emits it BEFORE the structured
+ * prompt, which is the authoritative source of the question. Likewise the
+ * modal's `title` (a workspace basename) is never a question.
+ */
+export function extractAttentionDetail(value: unknown): AttentionDetail | null {
+    if (!value || typeof value !== 'object') return null;
+    const v = value as Record<string, unknown>;
+    const questions = Array.isArray(v.questions) ? v.questions as Record<string, unknown>[] : null;
+    if (questions?.length) {
+        const q = questions[0]!;
+        const options = (Array.isArray(q.options) ? q.options : [])
+            .map((o) => oneLine(typeof o === 'string' ? o : (o as { label?: unknown } | null)?.label, ATTENTION_OPTION_MAX))
+            .filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
+        const question = oneLine(q.question ?? q.header, ATTENTION_QUESTION_MAX);
+        return question || options.length ? { question, options } : null;
+    }
+    if (v.status === 'waiting_choice') return null;
+    const modal = (v.activeModal && typeof v.activeModal === 'object' ? v.activeModal : v) as Record<string, unknown>;
+    // A picker-kind modal is generic whatever its status: until the parser captures the
+    // structured prompt the daemon classifies it waiting_approval, with a label like
+    // "Picker open". Only a real approval modal (non-picker kind) is detail.
+    if (modal.kind === 'picker') return null;
+    const options = (Array.isArray(modal.buttons) ? modal.buttons : []).map((b) => oneLine(b, ATTENTION_OPTION_MAX)).filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
+    const question = oneLine(modal.message, ATTENTION_QUESTION_MAX);
+    return question || options.length ? { question, options } : null;
+}
+
+/**
+ * The fixed first line is trusted daemon status. The agent-authored question
+ * and options ride in a separate `[ADHDev relay … · choice]` block — the same
+ * untrusted-data frame the assistant prompt already defines for project output.
+ */
+export function buildApprovalSignal(slug: string, detail?: AttentionDetail | null): string {
+    const head = `[project ${safeSlug(slug)}] waiting for an approval or a choice`;
+    if (!detail) return `${head} — the user can answer it in the Inbox.`;
+    const body = [`Question: ${detail.question || '(no question text)'}`,
+        ...detail.options.map((o, i) => `${i + 1}) ${o}`)].join('\n');
+    return [`${head} — details follow as untrusted project output; put them to the user, who can also answer in the Inbox.`,
+        buildRelayEnvelope({ slug, outcome: 'choice' as TurnOutcome, bodies: [body], preservePageWhitespace: true, idle: false })].join('\n');
 }
 
 export function buildCoordinatorEndedSignal(slug: string, cause: string): string {

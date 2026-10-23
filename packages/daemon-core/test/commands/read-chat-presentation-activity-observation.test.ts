@@ -82,6 +82,18 @@ describe('buildReadChatCommandResult — caller-independent activity observation
         expect(withOptIn.coverage).toEqual(withoutOptIn.coverage);
     });
 
+    it.each([{ stale: true }, { unavailableReason: 'native_history_loading' }])(
+        'preserves deferred read metadata without publishing it as a fresh replica: %j', async metadata => {
+            const { buildReadChatCommandResult } = await import('../../src/commands/read-chat-presentation.js');
+            const result = buildReadChatCommandResult(
+                { status: 'idle', messages: PROSE_AND_ACTIVITY_MESSAGES, ...metadata },
+                { sessionId: 'sess-deferred', cliType: 'claude-code' },
+            );
+            expect(result).toMatchObject({ success: true, ...metadata });
+            expect(notifyTranscriptObservation).not.toHaveBeenCalled();
+        },
+    );
+
     it('excludes meta/source-only activity rows from the observation (their markers do not survive the wire)', async () => {
         const { buildReadChatCommandResult } = await import('../../src/commands/read-chat-presentation.js');
         const messages = [

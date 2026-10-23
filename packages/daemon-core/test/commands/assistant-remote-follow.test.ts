@@ -2140,7 +2140,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
             }
 
-            // N2b (R3f): remoteFailure with 'remote_access_denied' via default project ports stores 'remote_access_denied' and is NOT recoverable by ensure_binding
+            // N2b: remoteFailure with 'remote_access_denied' via default project ports no longer revokes (only explicit host_revoked does)
             assistantRegistry.updateFollowedRemoteProject(key, { state: 'followed' });
             setAssistantProjectPortsForTests(null);
             try {
@@ -2162,16 +2162,9 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                     closeThread: (meshId) => store.closeThread(meshId),
                 });
             }
-            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
-            expect(assistantRegistry.getFollowedRemoteProject(key)?.revokedReason).toBe('remote_access_denied');
-            expect(assistantRegistry.getFollowedRemoteProject(key)?.lastErrorCode).toBe('remote_access_denied');
-            await asstRouter.execute(
-                ASSISTANT_REMOTE_FOLLOW_COMMAND,
-                { action: 'ensure_binding' },
-                'p2p',
-                { ownerVerified: true },
-            );
-            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('revoked');
+            // A non-explicit refusal (remote_access_denied — e.g. host ENFILE) must NOT persist a revocation.
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.state).toBe('followed');
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.revokedReason).toBeUndefined();
 
             // N2a (R3d): After forceNewRevision (reconcile_binding), entries at old bindingRevision=1 MUST NOT be recovered
             assistantRegistry.updateFollowedRemoteProject(key, {
