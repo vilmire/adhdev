@@ -43,7 +43,7 @@ import { parseReportContinuation } from '../../assistant/report-continuation.js'
  * revoked/removed member drops off the roster and is refused.
  */
 
-import { createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import {
     ASSISTANT_ACCOUNT_SLOT,
     ASSISTANT_FOLLOWER_ALLOWED_OPS,
@@ -141,6 +141,7 @@ export const UNTRUSTED_RELAY_NOTICE = '[UNTRUSTED_RELAY_NOTICE] Relayed from a r
 
 interface FollowerWakeReservation {
     id: number;
+    wakeId: string;
     key: string;
     meshId: string;
     sender: string;
@@ -150,7 +151,7 @@ interface FollowerWakeReservation {
     settled: boolean;
 }
 
-const followerWakeTimestamps = new Map<string, number[]>();
+const followerWakeRecords = new Map<string, Map<string, number>>();
 const followerWakeInFlightReservations = new Map<string, Set<FollowerWakeReservation>>();
 let followerWakeHydratedStore: MeshRuntimeStore | null = null;
 let followerWakePersistSeq = 0;
@@ -174,32 +175,60 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
     const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
     try {
         const store = MeshRuntimeStore.getInstance();
-        const rebuilt = new Map<string, number[]>();
-        const pushWakeTimestamp = (meshId: string, sender: string, atMs: number): void => {
+        const rebuilt = new Map<string, Map<string, { atMs: number; status: 'reserved' | 'charged' | 'audit' }>>();
+        const recordWake = (
+            meshId: string,
+            sender: string,
+            wakeId: string,
+            atMs: number,
+            status: 'reserved' | 'charged' | 'audit',
+        ): void => {
             if (!meshId || !sender || !Number.isFinite(atMs)) return;
             const clamped = Math.min(atMs, now);
             if (clamped <= cutoff) return;
             const key = followerWakeKey(meshId, sender);
-            let list = rebuilt.get(key);
-            if (!list) {
-                list = [];
-                rebuilt.set(key, list);
+            const id = wakeId || `${status}:${key}:${clamped}`;
+            let map = rebuilt.get(key);
+            if (!map) {
+                map = new Map();
+                rebuilt.set(key, map);
             }
-            if (!list.includes(clamped)) {
-                list.push(clamped);
+            const existing = map.get(id);
+            if (!existing) {
+                map.set(id, { atMs: clamped, status });
+                return;
+            }
+            if (existing.status === 'charged') {
+                return;
+            }
+            if (status === 'charged' || status === 'audit') {
+                map.set(id, { atMs: clamped, status });
             }
         };
 
         try {
             ensureAssistantRelaySchema(store.db);
             const receiptRows = store.db.prepare(
-                'SELECT value, at_ms FROM assistant_relay_receipts WHERE kind = ? AND at_ms > ? ORDER BY at_ms ASC',
-            ).all(FOLLOWER_WAKE_QUOTA_RECEIPT_KIND, cutoff) as Array<{ value?: unknown; at_ms?: unknown }>;
+                'SELECT receipt_key, value, at_ms FROM assistant_relay_receipts WHERE kind = ? AND at_ms > ? ORDER BY at_ms ASC',
+            ).all(FOLLOWER_WAKE_QUOTA_RECEIPT_KIND, cutoff) as Array<{
+                receipt_key?: unknown;
+                value?: unknown;
+                at_ms?: unknown;
+            }>;
             for (const row of receiptRows) {
                 const atMs = Number(row.at_ms);
                 try {
                     const parsed = JSON.parse(String(row.value ?? '{}')) as Record<string, unknown>;
-                    pushWakeTimestamp(str(parsed.meshId), str(parsed.sender), atMs);
+                    const wakeId = str(parsed.wakeId) || str(row.receipt_key);
+                    const status = str(parsed.status) === 'charged' ? 'charged' : 'reserved';
+                    const rawAt = Number(parsed.atMs);
+                    recordWake(
+                        str(parsed.meshId),
+                        str(parsed.sender),
+                        wakeId,
+                        Number.isFinite(rawAt) ? rawAt : atMs,
+                        status,
+                    );
                 } catch {
                     // Ignore malformed row.
                 }
@@ -210,8 +239,9 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
 
         try {
             const auditRows = store.db.prepare(
-                "SELECT mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND at_ms > ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC",
+                "SELECT event_id, mesh_id, at_ms, verdict, rule, payload_json FROM turn_events WHERE kind = ? AND at_ms > ? AND (verdict = 'recorded' OR rule IN ('cold_wake_launched', 'launch_failed')) ORDER BY at_ms ASC",
             ).all(FOLLOWER_COORDINATOR_WAKE_EVENT_KIND, cutoff) as Array<{
+                event_id?: unknown;
                 mesh_id?: unknown;
                 at_ms?: unknown;
                 verdict?: unknown;
@@ -220,37 +250,64 @@ export function rebuildFollowerWakeRateLimitFromStore(now: number = Date.now()):
             }>;
             for (const row of auditRows) {
                 const meshId = str(row.mesh_id);
-                const atMs = Number(row.at_ms);
+                const rowAtMs = Number(row.at_ms);
                 let sender = '';
+                let wakeId = str(row.event_id);
+                let wakeAtMs = rowAtMs;
                 try {
                     const parsed = JSON.parse(String(row.payload_json ?? '{}')) as Record<string, unknown>;
                     sender = str(parsed.senderDaemonId) || str(parsed.activeDaemonId);
+                    wakeId = str(parsed.wakeId) || wakeId;
+                    const payloadWakeAt = Number(parsed.wakeAtMs);
+                    if (Number.isFinite(payloadWakeAt)) {
+                        wakeAtMs = payloadWakeAt;
+                    }
                 } catch {
                     sender = '';
                 }
-                pushWakeTimestamp(meshId, sender, atMs);
+                recordWake(meshId, sender, wakeId, wakeAtMs, 'audit');
             }
         } catch {
             // Best-effort scan of turn_events.
         }
 
-        for (const [key, storeTimes] of rebuilt) {
-            const existing: number[] = [];
-            for (const rawT of followerWakeTimestamps.get(key) ?? []) {
+        for (const [key, existingMap] of followerWakeRecords) {
+            if (rebuilt.has(key)) continue;
+            const pruned = new Map<string, number>();
+            for (const [id, rawT] of existingMap) {
                 const t = Math.min(rawT, now);
-                if (t > cutoff && !existing.includes(t)) {
-                    existing.push(t);
+                if (t > cutoff) {
+                    pruned.set(id, t);
                 }
             }
-            for (const rawT of storeTimes) {
-                const t = Math.min(rawT, now);
-                if (t > cutoff && !existing.includes(t)) {
-                    existing.push(t);
+            if (pruned.size > 0) {
+                followerWakeRecords.set(key, pruned);
+            } else {
+                followerWakeRecords.delete(key);
+            }
+        }
+
+        for (const [key, storeMap] of rebuilt) {
+            const merged = new Map<string, number>();
+            const existingMap = followerWakeRecords.get(key);
+            if (existingMap) {
+                for (const [id, rawT] of existingMap) {
+                    const t = Math.min(rawT, now);
+                    if (t > cutoff) {
+                        merged.set(id, t);
+                    }
                 }
             }
-            existing.sort((a, b) => a - b);
-            if (existing.length > 0) {
-                followerWakeTimestamps.set(key, existing);
+            for (const [id, entry] of storeMap) {
+                const t = Math.min(entry.atMs, now);
+                if (t > cutoff) {
+                    merged.set(id, t);
+                }
+            }
+            if (merged.size > 0) {
+                followerWakeRecords.set(key, merged);
+            } else {
+                followerWakeRecords.delete(key);
             }
         }
         followerWakeHydratedStore = store;
@@ -291,18 +348,20 @@ function checkFollowerWakeRateLimit(
         }
     }
     const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
+    const recentMap = new Map<string, number>();
     const recent: number[] = [];
-    for (const rawT of followerWakeTimestamps.get(key) ?? []) {
+    for (const [id, rawT] of followerWakeRecords.get(key) ?? []) {
         const t = Math.min(rawT, now);
         if (t > cutoff) {
+            recentMap.set(id, t);
             recent.push(t);
         }
     }
     recent.sort((a, b) => a - b);
-    if (recent.length > 0) {
-        followerWakeTimestamps.set(key, recent);
+    if (recentMap.size > 0) {
+        followerWakeRecords.set(key, recentMap);
     } else {
-        followerWakeTimestamps.delete(key);
+        followerWakeRecords.delete(key);
     }
     const lastWakeAt = recent[recent.length - 1];
     if (lastWakeAt !== undefined && now - lastWakeAt < FOLLOWER_WAKE_COOLDOWN_MS) {
@@ -336,21 +395,24 @@ function reserveFollowerWakeSlot(
     const trimmedMeshId = meshId.trim();
     const key = followerWakeKey(trimmedMeshId, canonSender);
     const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
-    const recent: number[] = [];
-    for (const rawT of followerWakeTimestamps.get(key) ?? []) {
-        const t = Math.min(rawT, now);
-        if (t > cutoff) {
-            recent.push(t);
-        }
-    }
-    recent.push(now);
-    recent.sort((a, b) => a - b);
-    followerWakeTimestamps.set(key, recent);
 
     followerWakePersistSeq += 1;
-    const receiptKey = `${FOLLOWER_WAKE_QUOTA_RECEIPT_KIND}:${key}:${now}:${followerWakePersistSeq}`;
+    const wakeId = `wake:${key}:${now}:${followerWakePersistSeq}:${randomBytes(4).toString('hex')}`;
+    const receiptKey = `${FOLLOWER_WAKE_QUOTA_RECEIPT_KIND}:${wakeId}`;
+
+    const recentMap = new Map<string, number>();
+    for (const [id, rawT] of followerWakeRecords.get(key) ?? []) {
+        const t = Math.min(rawT, now);
+        if (t > cutoff) {
+            recentMap.set(id, t);
+        }
+    }
+    recentMap.set(wakeId, now);
+    followerWakeRecords.set(key, recentMap);
+
     const reservation: FollowerWakeReservation = {
         id: followerWakePersistSeq,
+        wakeId,
         key,
         meshId: trimmedMeshId,
         sender: canonSender,
@@ -373,7 +435,7 @@ function reserveFollowerWakeSlot(
             'INSERT OR REPLACE INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
         ).run(
             receiptKey,
-            JSON.stringify({ meshId: trimmedMeshId, sender: canonSender, atMs: now, status: 'reserved' }),
+            JSON.stringify({ wakeId, meshId: trimmedMeshId, sender: canonSender, atMs: now, status: 'reserved' }),
             now,
             FOLLOWER_WAKE_QUOTA_RECEIPT_KIND,
         );
@@ -404,17 +466,16 @@ function settleFollowerWakeReservation(
         }
     }
 
-    const currentList = followerWakeTimestamps.get(reservation.key) ?? [];
-    const reservedIdx = currentList.indexOf(reservation.atMs);
-    if (reservedIdx >= 0) {
-        currentList.splice(reservedIdx, 1);
+    const currentMap = followerWakeRecords.get(reservation.key);
+    if (currentMap) {
+        currentMap.delete(reservation.wakeId);
     }
 
     if (!opts.charge) {
-        if (currentList.length > 0) {
-            followerWakeTimestamps.set(reservation.key, currentList);
+        if (currentMap && currentMap.size > 0) {
+            followerWakeRecords.set(reservation.key, currentMap);
         } else {
-            followerWakeTimestamps.delete(reservation.key);
+            followerWakeRecords.delete(reservation.key);
         }
         try {
             const db = MeshRuntimeStore.getInstance().db;
@@ -427,16 +488,15 @@ function settleFollowerWakeReservation(
     }
 
     const cutoff = settledAtMs - FOLLOWER_WAKE_WINDOW_MS;
-    const updated: number[] = [];
-    for (const rawT of currentList) {
+    const updatedMap = new Map<string, number>();
+    for (const [id, rawT] of currentMap ?? []) {
         const t = Math.min(rawT, settledAtMs);
         if (t > cutoff) {
-            updated.push(t);
+            updatedMap.set(id, t);
         }
     }
-    updated.push(settledAtMs);
-    updated.sort((a, b) => a - b);
-    followerWakeTimestamps.set(reservation.key, updated);
+    updatedMap.set(reservation.wakeId, settledAtMs);
+    followerWakeRecords.set(reservation.key, updatedMap);
     reservation.atMs = settledAtMs;
 
     try {
@@ -446,7 +506,13 @@ function settleFollowerWakeReservation(
             'INSERT OR REPLACE INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
         ).run(
             reservation.receiptKey,
-            JSON.stringify({ meshId: reservation.meshId, sender: reservation.sender, atMs: settledAtMs, status: 'charged' }),
+            JSON.stringify({
+                wakeId: reservation.wakeId,
+                meshId: reservation.meshId,
+                sender: reservation.sender,
+                atMs: settledAtMs,
+                status: 'charged',
+            }),
             settledAtMs,
             FOLLOWER_WAKE_QUOTA_RECEIPT_KIND,
         );
@@ -461,7 +527,7 @@ function settleFollowerWakeReservation(
 }
 
 export function clearFollowerWakeRateLimitForTest(opts?: { clearStore?: boolean }): void {
-    followerWakeTimestamps.clear();
+    followerWakeRecords.clear();
     followerWakeInFlightReservations.clear();
     followerWakeHydratedStore = null;
     if (opts?.clearStore) {
@@ -517,7 +583,7 @@ function recordFollowerSendReceipt(key: string, receipt: FollowerSendReceipt, no
 
 export function clearFollowerSendReceiptsForTest(): void {
     followerSendReceipts.clear();
-    followerWakeTimestamps.clear();
+    followerWakeRecords.clear();
     followerWakeInFlightReservations.clear();
     followerWakeHydratedStore = null;
 }
@@ -835,6 +901,8 @@ interface WakeAuditContext {
     clientId: string;
     senderDaemonId: string;
     now: number;
+    wakeId?: string;
+    wakeAtMs?: number;
 }
 
 function recordFollowerWakeAuditEvent(
@@ -848,7 +916,7 @@ function recordFollowerWakeAuditEvent(
         reason?: string;
     },
 ): void {
-    const { acl, meshId, clientId, senderDaemonId, now } = ctx;
+    const { acl, meshId, clientId, senderDaemonId, now, wakeId, wakeAtMs } = ctx;
     const tag = entry.verdict === 'recorded'
         ? `b${acl.bindingRevision}:g${acl.grantRevision}:${entry.sessionId}`
         : `${entry.stage}:${entry.rule}:${entry.reason ?? 'none'}:${entry.sessionId}`;
@@ -880,6 +948,8 @@ function recordFollowerWakeAuditEvent(
                 status: entry.status,
                 stage: entry.stage,
                 ...(entry.reason ? { reason: entry.reason } : {}),
+                ...(wakeId ? { wakeId } : {}),
+                ...(wakeAtMs !== undefined ? { wakeAtMs } : {}),
                 atMs: now,
             },
             observedBy: acl.hostDaemonId,
@@ -980,12 +1050,14 @@ async function followerProjectSend(
         });
     }
 
-    const auditCtx = (atMs: number = Date.now()): WakeAuditContext => ({
+    const auditCtx = (atMs: number = Date.now(), reservation?: FollowerWakeReservation | null): WakeAuditContext => ({
         acl,
         meshId,
         clientId,
         senderDaemonId: canonSender,
         now: atMs,
+        ...(reservation?.wakeId ? { wakeId: reservation.wakeId } : {}),
+        ...(reservation ? { wakeAtMs: reservation.atMs } : {}),
     });
 
     const wakeFollowerCoordinator = async (): Promise<
@@ -1169,7 +1241,7 @@ async function followerProjectSend(
 
             if (!coord.ok) {
                 const failReason = str(coord.code) || 'launch_failed';
-                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: 'none', verdict: 'rejected', rule: 'launch_failed', status: 'failed', stage: 'launch', reason: failReason });
+                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: 'none', verdict: 'rejected', rule: 'launch_failed', status: 'failed', stage: 'launch', reason: failReason });
                 return {
                     ok: false as const,
                     result: fail('launch_failed', coord.error || 'Failed to launch coordinator on host.', { ...coord.detail, launchCode: coord.code }),
@@ -1178,7 +1250,7 @@ async function followerProjectSend(
 
             // Audit the cold launch itself immediately so a launched coordinator never survives without an audit row.
             if (coord.launched) {
-                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: 'recorded', rule: 'cold_wake_launched', status: 'launched', stage: 'launch' });
+                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'recorded', rule: 'cold_wake_launched', status: 'launched', stage: 'launch' });
             }
 
             // Re-validate grant & binding revision, follower binding, and toggle under a short mutex in case a revoke raced the wake.
@@ -1187,7 +1259,7 @@ async function followerProjectSend(
             const postWakeCheck = verifyFollowerAcl(ports, postWakeMesh, meshId, sender, 'send', args);
             if (!postWakeCheck.ok) {
                 const reason = str((postWakeCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
-                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason });
+                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason });
                 return { ok: false as const, result: postWakeCheck.result };
             }
             acl = postWakeCheck.acl;
@@ -1195,13 +1267,13 @@ async function followerProjectSend(
             const postBindingCheck = verifyRemoteFollowerBindingForWake(ports, postWakeMesh, meshId, sender, args);
             if (!postBindingCheck.ok) {
                 const reason = str((postBindingCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
-                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason });
+                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason });
                 return { ok: false as const, result: postBindingCheck.result };
             }
             acl = postBindingCheck.acl;
 
             if (acl.allowCoordinatorLaunch === false) {
-                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason: 'wake_disabled' });
+                recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'rejected', rule: 'post_launch_denied', status: 'denied', stage: 'post_launch', reason: 'wake_disabled' });
                 return {
                     ok: false as const,
                     result: fail('wake_disabled', 'Remote follower coordinator wake was disabled on the host during coordinator launch.'),

@@ -81,7 +81,7 @@ export interface CoordinatorTurns {
 
 export type CoordinatorLiveness = 'live' | 'dead' | 'unknown';
 
-export const SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 100;
+export const SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 1_500;
 
 export interface AssistantProjectPorts {
     selfDaemonId(): string;

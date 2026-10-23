@@ -4740,6 +4740,330 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             });
             expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
         });
+    }, 15_000);
+
+    it('23l. [Round 5 MEDIUM] cold wake with >1s hide gap is counted once across daemon restart (second wake after 61s allowed, third within 15m refused), stale reserved rows expire after 15m, and 1500ms liveness probe does not hold withMeshRemoteAccessMutex', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        let currentNow = Date.parse('2026-10-20T08:00:00Z');
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        try {
+            let wakeCount = 0;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+            hostExecute.mockClear();
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    wakeCount += 1;
+                    const sessionId = `coord-r5-wake-${wakeCount}`;
+                    hostCoordinators[MESH_PREFEX_SIM] = [
+                        { sessionId, idle: true, modalParked: false, managedByAssistant: true },
+                    ];
+                    return { success: true, sessionId };
+                }
+                if (cmd === 'set_conversation_prefs') {
+                    // Simulate both real async event-loop delay and a > 1s hide gap between quota settlement (post-launch) and turn_events audit (post-hide)
+                    await new Promise((r) => setTimeout(r, 30));
+                    currentNow += 1_500;
+                    return { success: true };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            // 1. Wake #1 with a 1.5s (> 1s) hide gap
+            const wake1: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake 1 with 1.5s hide gap',
+                        clientId: 'r5-hide-gap-wake-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(wake1).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-1' },
+            });
+
+            // Verify the persisted receipt and audit row have timestamps 1.5s apart and share a stable wakeId
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                const receipts = db
+                    .prepare("SELECT value, at_ms FROM assistant_relay_receipts WHERE kind = 'follower_wake_quota'")
+                    .all() as Array<{ value: string; at_ms: number }>;
+                const audits = db
+                    .prepare("SELECT at_ms, payload_json FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake' AND rule = 'cold_wake_launched'")
+                    .all(MESH_PREFEX_SIM) as Array<{ at_ms: number; payload_json: string }>;
+                expect(receipts).toHaveLength(1);
+                expect(audits).toHaveLength(1);
+                expect(audits[0]!.at_ms - receipts[0]!.at_ms).toBeGreaterThan(1_000);
+                const receiptVal = JSON.parse(receipts[0]!.value);
+                const auditPayload = JSON.parse(audits[0]!.payload_json);
+                expect(typeof receiptVal.wakeId).toBe('string');
+                expect(receiptVal.wakeId.length).toBeGreaterThan(0);
+                expect(auditPayload.wakeId).toBe(receiptVal.wakeId);
+            });
+
+            // 2. Restart daemon after +61s: Wake #1 must be reconstructed ONCE, so Wake #2 is ALLOWED
+            currentNow += 61_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const wake2: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake 2 after +61s and restart',
+                        clientId: 'r5-hide-gap-wake-2',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(wake2).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-2' },
+            });
+
+            // 3. Restart again and advance another +61s (still within 15m window): Wake #3 is REFUSED with window_limit
+            currentNow += 61_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const wake3Refused: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake 3 within 15m window',
+                        clientId: 'r5-hide-gap-wake-3',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(wake3Refused).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'window_limit',
+            });
+
+            // 4. Stale 'reserved' row without completion: counts conservatively inside 15m and expires after 15m
+            currentNow += 16 * 60_000;
+            clearFollowerWakeRateLimitForTest({ clearStore: true });
+            MeshRuntimeStore.resetForTests();
+
+            await withHostEnv(async () => {
+                const db = MeshRuntimeStore.getInstance().db;
+                db.prepare("DELETE FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake'").run(MESH_PREFEX_SIM);
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:crash-reserved-1',
+                    JSON.stringify({ wakeId: 'wake:crash-1', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow, status: 'reserved' }),
+                    currentNow,
+                    'follower_wake_quota',
+                );
+                db.prepare(
+                    'INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)',
+                ).run(
+                    'follower_wake_quota:crash-reserved-2',
+                    JSON.stringify({ wakeId: 'wake:crash-2', meshId: MESH_PREFEX_SIM, sender: ASSISTANT_B, atMs: currentNow + 61_000, status: 'reserved' }),
+                    currentNow + 61_000,
+                    'follower_wake_quota',
+                );
+            });
+
+            // Inside the 15m window (at +122s), the 2 uncompleted 'reserved' rows count conservatively and block a 3rd wake
+            currentNow += 122_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const blockedByReserved: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Blocked by two uncompleted reserved rows inside 15m',
+                        clientId: 'r5-reserved-active-block',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(blockedByReserved).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+                reason: 'window_limit',
+            });
+
+            // Advance past 15 minutes from both stale reserved rows -> they expire and cold wakes succeed again
+            currentNow += 15 * 60_000 + 1_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+
+            const afterStaleExpiry: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Allowed after stale reserved rows expire past 15m',
+                        clientId: 'r5-stale-reserved-expired',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(afterStaleExpiry).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-3' },
+            });
+
+            // 5. 1500ms liveness probe detects 'dead' on a 200ms (>100ms) response without holding withMeshRemoteAccessMutex
+            currentNow += 65_000;
+            const { createSessionHostControlPlane } = await import('@adhdev/session-host-core');
+            const { SessionHostController } = await import('../../src/session-host/session-host-controller.js');
+            const probeEvents: string[] = [];
+            let notifyProbeStarted!: () => void;
+            const probeStarted = new Promise<void>((resolve) => {
+                notifyProbeStarted = resolve;
+            });
+
+            const slowDeadController = Object.assign(Object.create(SessionHostController.prototype), {
+                plane: createSessionHostControlPlane({
+                    request: async <T>() => {
+                        probeEvents.push('probe_started');
+                        notifyProbeStarted();
+                        await new Promise((r) => setTimeout(r, 200));
+                        probeEvents.push('probe_finished');
+                        return [
+                            {
+                                sessionId: 'coord-r5-stale-sh',
+                                runtimeKey: 'claude-cli-alpha',
+                                displayName: 'Claude Code',
+                                workspaceLabel: 'alpha',
+                                transport: 'pty',
+                                providerType: 'claude-cli',
+                                category: 'cli',
+                                workspace: '/tmp/alpha',
+                                launchCommand: { command: 'claude', args: [] },
+                                createdAt: 1,
+                                startedAt: 1,
+                                lastActivityAt: 2,
+                                lifecycle: 'stopped',
+                                surfaceKind: 'recovery_snapshot',
+                                writeOwner: null,
+                                attachedClients: [],
+                                buffer: { scrollbackBytes: 0, snapshotSeq: 0 },
+                                meta: {},
+                            },
+                        ] as unknown as T;
+                    },
+                }),
+            });
+
+            await withHostEnv(async () => {
+                setAssistantProjectPortsForTests(() => {
+                    const defaultPorts = createDefaultProjectPorts({
+                        components: () => ({
+                            instanceManager: {
+                                getByCategory: () => [
+                                    {
+                                        getDrainStatus: () => 'idle',
+                                        isModalParked: () => false,
+                                        getState: () => ({
+                                            instanceId: 'coord-r5-stale-sh',
+                                            connected: true,
+                                            status: 'idle',
+                                            settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: false },
+                                            runtime: { runtimeId: 'coord-r5-stale-sh', lifecycle: 'running', surfaceKind: 'live_runtime' },
+                                        }),
+                                    },
+                                ],
+                            },
+                            router: { deps: { sessionHostControl: slowDeadController } },
+                        }) as any,
+                        selfDaemonId: HOST_A,
+                        execute: hostExecute as any,
+                    });
+                    return {
+                        ...defaultPorts,
+                        listMeshes: () => loadMeshConfig().meshes,
+                        isHostedHere: (m: LocalMeshEntry) => m.id === MESH_PREFEX_SIM,
+                        coordinatorTurns: () => ({ open: false, committed: [] }),
+                    };
+                });
+
+                const router = createRouter(HOST_A);
+                const sendDuringProbe = router.execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Send during 200ms dead liveness probe',
+                        clientId: 'r5-probe-no-mutex-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                );
+
+                await probeStarted;
+
+                // Owner set_policy acquires withMeshRemoteAccessMutex and must commit BEFORE the 200ms probe finishes
+                const policyRes: any = await router.execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowCoordinatorLaunch: true },
+                    'p2p',
+                    { ownerVerified: true },
+                );
+                expect(policyRes).toMatchObject({ success: true, access: { allowCoordinatorLaunch: true } });
+                probeEvents.push('owner_policy_committed');
+
+                const probeSendRes: any = await sendDuringProbe;
+                expect(probeEvents).toEqual(['probe_started', 'owner_policy_committed', 'probe_finished']);
+                expect(probeSendRes).toMatchObject({
+                    success: true,
+                    result: { status: 'queued', launched: true, coordinatorSessionId: 'coord-r5-wake-4' },
+                });
+            });
+        } finally {
+            nowSpy.mockRestore();
+        }
     });
 });
 
