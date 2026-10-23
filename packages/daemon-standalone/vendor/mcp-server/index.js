@@ -93046,10 +93046,11 @@ ${body}`;
         LaunchDefaultsStore = class {
           constructor(configDir, ports, lockOptions = {}) {
             this.ports = ports;
-            this.lockOptions = lockOptions;
+            this.lockOptions = { probePeerIdentity: true, ...lockOptions };
             this.path = (0, import_node_path12.join)((0, import_node_path12.resolve)(configDir), "launch-defaults.json");
           }
           path;
+          lockOptions;
           read() {
             let contents;
             try {
@@ -93302,7 +93303,7 @@ ${body}`;
             this.configDir = opts.configDir ?? getConfigDir2();
             this.dir = (0, import_node_path13.join)(this.configDir, "assistant", "staged");
             this.now = opts.now ?? (() => /* @__PURE__ */ new Date());
-            this.lockOptions = opts.lock ?? {};
+            this.lockOptions = { probePeerIdentity: true, ...opts.lock };
           }
           path(id4) {
             return (0, import_node_path13.join)(this.dir, `${id4}.json`);
