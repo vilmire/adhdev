@@ -4,12 +4,14 @@
  * parked sessions (coordinator and worker), and relay hooks start as no-ops.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { createSessionHostControlPlane, type SessionHostRecord } from '@adhdev/session-host-core';
 import {
     createDefaultProjectPorts,
     preloadAssistantProjectReaders,
     setAssistantRelayHooks,
 } from '../../src/assistant/assistant-project-ports.js';
 import { createAssistantServices, setAssistantServicesForTests } from '../../src/assistant/assistant-services.js';
+import { SessionHostController } from '../../src/session-host/session-host-controller.js';
 
 const inst = (instanceId: string, status: string, settings: Record<string, unknown>) => ({
     getState: () => ({ instanceId, status, settings }),
@@ -142,5 +144,77 @@ describe('createDefaultProjectPorts', () => {
         expect(mixedPorts.coordinators('mesh_a')).toEqual([
             { sessionId: 'coord-parse-error-live', idle: true, modalParked: false, managedByAssistant: true },
         ]);
+    });
+
+    it('isCoordinatorLive invokes real SessionHostController.prototype.listSessions with its receiver and returns live / dead / unknown', async () => {
+        const liveRecord: SessionHostRecord = {
+            sessionId: 'coord-sh-live',
+            runtimeKey: 'claude-cli-alpha',
+            displayName: 'Claude Code @ alpha',
+            workspaceLabel: 'alpha',
+            transport: 'pty',
+            providerType: 'claude-cli',
+            category: 'cli',
+            workspace: '/tmp/alpha',
+            launchCommand: { command: 'claude', args: [] },
+            createdAt: 1,
+            startedAt: 1,
+            lastActivityAt: 2,
+            lifecycle: 'running',
+            surfaceKind: 'live_runtime',
+            writeOwner: null,
+            attachedClients: [],
+            buffer: { scrollbackBytes: 0, snapshotSeq: 0 },
+            meta: {},
+        };
+        const deadRecord: SessionHostRecord = {
+            ...liveRecord,
+            sessionId: 'coord-sh-dead',
+            lifecycle: 'stopped',
+            surfaceKind: 'recovery_snapshot',
+        };
+
+        let requestImpl: () => Promise<SessionHostRecord[]> = async () => [liveRecord, deadRecord];
+        const realController = Object.assign(Object.create(SessionHostController.prototype), {
+            plane: createSessionHostControlPlane({
+                request: async <T>() => (await requestImpl()) as unknown as T,
+            }),
+        }) as SessionHostController;
+        expect(realController.listSessions).toBe(SessionHostController.prototype.listSessions);
+
+        const ports = createDefaultProjectPorts({
+            components: () => ({
+                instanceManager: {
+                    getByCategory: () => [
+                        {
+                            getState: () => ({
+                                instanceId: 'coord-sh-live',
+                                connected: true,
+                                status: 'idle',
+                                settings: { meshCoordinatorFor: 'mesh_a' },
+                                runtime: { runtimeId: 'coord-sh-live', lifecycle: 'running', surfaceKind: 'live_runtime' },
+                            }),
+                        },
+                    ],
+                },
+                router: { deps: { sessionHostControl: realController } },
+            }) as any,
+            execute: async () => ({ success: true }),
+            selfDaemonId: 'daemon_mach_self',
+        });
+
+        expect(await ports.isCoordinatorLive!('coord-sh-live')).toBe('live');
+        expect(await ports.isCoordinatorLive!('coord-sh-dead')).toBe('dead');
+        expect(await ports.isCoordinatorLive!('coord-sh-missing')).toBe('dead');
+
+        // Timeout / rejection from listSessions yields 'unknown', never 'dead'
+        requestImpl = async () => {
+            throw new Error('Session host request timed out: list_sessions');
+        };
+        expect(await ports.isCoordinatorLive!('coord-sh-live')).toBe('unknown');
+
+        // Hung listSessions promise also resolves to 'unknown' via probe timeout
+        requestImpl = () => new Promise<SessionHostRecord[]>(() => {});
+        expect(await ports.isCoordinatorLive!('coord-sh-live')).toBe('unknown');
     });
 });

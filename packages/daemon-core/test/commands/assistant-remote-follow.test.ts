@@ -4579,6 +4579,411 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             nowSpy.mockRestore();
         }
     });
+
+    it('23j. [Round 4 Finding 1 MEDIUM] 5 concurrent sends reserve OD-3 quota before launch: 1 cold-launches while the rest reuse without charging, and immediate coordinator exit never launches beyond the cap', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        let currentNow = Date.parse('2026-10-20T06:00:00Z');
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        try {
+            // Part A: 5 concurrent sends when the first launch succeeds and stays live -> 1 launch, 4 reuses, and reuses are NOT charged.
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+            let releaseFirstLaunch!: () => void;
+            const firstLaunchGate = new Promise<void>((resolve) => {
+                releaseFirstLaunch = resolve;
+            });
+            let notifyFirstLaunchStarted!: () => void;
+            const firstLaunchStarted = new Promise<void>((resolve) => {
+                notifyFirstLaunchStarted = resolve;
+            });
+
+            hostExecute.mockClear();
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    notifyFirstLaunchStarted();
+                    await firstLaunchGate;
+                    currentNow += 5_000;
+                    hostCoordinators[MESH_PREFEX_SIM] = [
+                        { sessionId: 'coord-r4-live-1', idle: true, modalParked: false, managedByAssistant: true },
+                    ];
+                    return { success: true, sessionId: 'coord-r4-live-1' };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            const burst1Results = await withHostEnv(async () => {
+                const router = createRouter(HOST_A);
+                const p1 = router.execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Concurrent send 1',
+                        clientId: 'r4-f1-live-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                );
+                await firstLaunchStarted;
+
+                // Persisted in-flight reservation must already exist in assistant_relay_receipts BEFORE launch completes!
+                const inFlightReceipts = MeshRuntimeStore.getInstance().db
+                    .prepare("SELECT value, at_ms FROM assistant_relay_receipts WHERE kind = 'follower_wake_quota'")
+                    .all() as Array<{ value: string; at_ms: number }>;
+                expect(inFlightReceipts.length).toBeGreaterThanOrEqual(1);
+                expect(JSON.parse(inFlightReceipts[inFlightReceipts.length - 1]!.value)).toMatchObject({
+                    meshId: MESH_PREFEX_SIM,
+                    sender: ASSISTANT_B,
+                    status: 'reserved',
+                });
+
+                const rest = [2, 3, 4, 5].map((i) =>
+                    router.execute(
+                        'assistant_remote_project',
+                        {
+                            meshId: MESH_PREFEX_SIM,
+                            op: 'send',
+                            text: `Concurrent send ${i}`,
+                            clientId: `r4-f1-live-${i}`,
+                            followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                            _meshDirectDispatch: true,
+                            [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                        },
+                        'mesh',
+                    ),
+                );
+                await new Promise((r) => setTimeout(r, 15));
+                releaseFirstLaunch();
+                return Promise.all([p1, ...rest]);
+            });
+
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(1);
+            const launchedCount = burst1Results.filter((r: any) => r.success && r.result?.launched === true).length;
+            const reusedCount = burst1Results.filter((r: any) => r.success && r.result?.launched === false).length;
+            expect(launchedCount).toBe(1);
+            expect(reusedCount).toBe(4);
+
+            // Because the 4 reuses were NOT charged, only 1 of the 2-per-15m slots was used!
+            // Advance 61s past the post-launch timestamp (still within the 15m window), and test Part B:
+            // 5 concurrent sends where the launched coordinator EXITS IMMEDIATELY!
+            currentNow += 61_000;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+
+            let releaseExitLaunch!: () => void;
+            const exitLaunchGate = new Promise<void>((resolve) => {
+                releaseExitLaunch = resolve;
+            });
+            let notifyExitLaunchStarted!: () => void;
+            const exitLaunchStarted = new Promise<void>((resolve) => {
+                notifyExitLaunchStarted = resolve;
+            });
+
+            hostExecute.mockClear();
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    notifyExitLaunchStarted();
+                    await exitLaunchGate;
+                    currentNow += 2_000;
+                    // Coordinator exits immediately: hostCoordinators remains empty!
+                    hostCoordinators[MESH_PREFEX_SIM] = [];
+                    return { success: true, sessionId: 'coord-r4-ephemeral-2' };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            const burst2Results: any[] = await withHostEnv(async () => {
+                const router = createRouter(HOST_A);
+                const p1 = router.execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Immediate-exit burst send 1',
+                        clientId: 'r4-f1-exit-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                );
+                await exitLaunchStarted;
+
+                const rest = [2, 3, 4, 5].map((i) =>
+                    router.execute(
+                        'assistant_remote_project',
+                        {
+                            meshId: MESH_PREFEX_SIM,
+                            op: 'send',
+                            text: `Immediate-exit burst send ${i}`,
+                            clientId: `r4-f1-exit-${i}`,
+                            followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                            _meshDirectDispatch: true,
+                            [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                        },
+                        'mesh',
+                    ),
+                );
+                await new Promise((r) => setTimeout(r, 15));
+                releaseExitLaunch();
+                return Promise.all([p1, ...rest]);
+            });
+
+            // Only 1 launch must have occurred in burst 2; the other 4 concurrent sends must be rate-limited (cooldown/window_limit)!
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(1);
+            expect(burst2Results[0]).toMatchObject({
+                success: true,
+                result: { launched: true, coordinatorSessionId: 'coord-r4-ephemeral-2' },
+            });
+            for (const r of burst2Results.slice(1)) {
+                expect(r).toMatchObject({
+                    success: false,
+                    code: 'wake_rate_limited',
+                });
+            }
+
+            // Now 2 cold launches have occurred within the 15-minute window (burst 1 + burst 2).
+            // Advance another 61s (past cooldown, still within the 15m window): 5 more concurrent sends must ALL be refused with window_limit and 0 launches!
+            currentNow += 61_000;
+            hostExecute.mockClear();
+            const burst3Results: any[] = await withHostEnv(async () => {
+                const router = createRouter(HOST_A);
+                return Promise.all(
+                    [1, 2, 3, 4, 5].map((i) =>
+                        router.execute(
+                            'assistant_remote_project',
+                            {
+                                meshId: MESH_PREFEX_SIM,
+                                op: 'send',
+                                text: `Cap-exhausted burst send ${i}`,
+                                clientId: `r4-f1-cap-${i}`,
+                                followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                                _meshDirectDispatch: true,
+                                [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                            },
+                            'mesh',
+                        ),
+                    ),
+                );
+            });
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+            for (const r of burst3Results) {
+                expect(r).toMatchObject({
+                    success: false,
+                    code: 'wake_rate_limited',
+                    reason: 'window_limit',
+                });
+            }
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
+    it('23k. [Round 4 Finding 2 MEDIUM] real SessionHostController.prototype.listSessions with live record delivers without cold wake (including when wake is OFF), and timeout yields unknown without cold wake', async () => {
+        const { createSessionHostControlPlane } = await import('@adhdev/session-host-core');
+        const { SessionHostController } = await import('../../src/session-host/session-host-controller.js');
+
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        const liveRecord = {
+            sessionId: 'coord-alpha-1',
+            runtimeKey: 'claude-cli-alpha',
+            displayName: 'Claude Code @ alpha',
+            workspaceLabel: 'alpha',
+            transport: 'pty' as const,
+            providerType: 'claude-cli',
+            category: 'cli' as const,
+            workspace: '/Users/secret/private/alpha-sim',
+            launchCommand: { command: 'claude', args: [] },
+            createdAt: 1,
+            startedAt: 1,
+            lastActivityAt: 2,
+            lifecycle: 'running' as const,
+            surfaceKind: 'live_runtime' as const,
+            writeOwner: null,
+            attachedClients: [],
+            buffer: { scrollbackBytes: 0, snapshotSeq: 0 },
+            meta: {},
+        };
+
+        let listSessionsImpl: () => Promise<any[]> = async () => [liveRecord];
+        const realSessionHostController = Object.assign(Object.create(SessionHostController.prototype), {
+            plane: createSessionHostControlPlane({
+                request: async <T>() => (await listSessionsImpl()) as unknown as T,
+            }),
+        });
+        expect(realSessionHostController.listSessions).toBe(SessionHostController.prototype.listSessions);
+
+        hostExecute.mockClear();
+        hostExecute.mockImplementation(async (cmd: string, args: any) => {
+            if (cmd === 'send_chat') {
+                return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+            }
+            if (cmd === 'launch_mesh_coordinator') {
+                return { success: true, sessionId: 'coord-should-never-launch' };
+            }
+            return { success: true };
+        });
+
+        await withHostEnv(async () => {
+            setAssistantProjectPortsForTests(() => {
+                const defaultPorts = createDefaultProjectPorts({
+                    components: () => ({
+                        instanceManager: {
+                            getByCategory: () => [
+                                {
+                                    getDrainStatus: () => 'idle',
+                                    isModalParked: () => false,
+                                    getState: () => ({
+                                        instanceId: 'coord-alpha-1',
+                                        connected: true,
+                                        status: 'idle',
+                                        settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: false },
+                                        runtime: { runtimeId: 'coord-alpha-1', lifecycle: 'running', surfaceKind: 'live_runtime' },
+                                    }),
+                                },
+                            ],
+                        },
+                        router: { deps: { sessionHostControl: realSessionHostController } },
+                    }) as any,
+                    selfDaemonId: HOST_A,
+                    execute: hostExecute as any,
+                });
+                return {
+                    ...defaultPorts,
+                    listMeshes: () => loadMeshConfig().meshes,
+                    isHostedHere: (m: LocalMeshEntry) => m.id === MESH_PREFEX_SIM,
+                    coordinatorTurns: () => ({ open: false, committed: [] }),
+                };
+            });
+
+            // 1. Live record on real SessionHostController -> result is live, message delivered with no cold wake
+            const router = createRouter(HOST_A);
+            const liveSendRes: any = await router.execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Send to live session-host coordinator',
+                    clientId: 'r4-f2-live-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            );
+            expect(liveSendRes).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: false, coordinatorSessionId: 'coord-alpha-1' },
+            });
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+
+            // 2. Wake set to OFF (allowCoordinatorLaunch: false) with a live coordinator -> message is still delivered!
+            const policyOff: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowCoordinatorLaunch: false },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(policyOff).toMatchObject({ success: true, access: { allowCoordinatorLaunch: false } });
+
+            const wakeOffLiveSend: any = await router.execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Send with wake OFF to live coordinator',
+                    clientId: 'r4-f2-wake-off-live-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            );
+            expect(wakeOffLiveSend).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: false, coordinatorSessionId: 'coord-alpha-1' },
+            });
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+
+            // 3. Re-enable wake, then make listSessions time out -> liveness is unknown, message is sent to existing coordinator with NO cold wake
+            await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'set_policy', meshId: MESH_PREFEX_SIM, allowCoordinatorLaunch: true },
+                'p2p',
+                { ownerVerified: true },
+            );
+            listSessionsImpl = () => new Promise<any[]>(() => {});
+
+            const timeoutSendRes: any = await router.execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Send when listSessions times out',
+                    clientId: 'r4-f2-timeout-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            );
+            expect(timeoutSendRes).toMatchObject({
+                success: true,
+                result: { status: 'queued', launched: false, coordinatorSessionId: 'coord-alpha-1' },
+            });
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+
+            // 4. Even if send_chat fails while listSessions is unknown (timeout), it refuses transiently and NEVER launches a second coordinator
+            hostExecute.mockImplementationOnce(async (cmd: string) => {
+                if (cmd === 'send_chat') {
+                    return { success: false, error: 'session_not_found: transient session-host IPC stall' };
+                }
+                return { success: true };
+            });
+            const timeoutTransientFailRes: any = await router.execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Send when listSessions times out and send_chat fails',
+                    clientId: 'r4-f2-timeout-fail-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            );
+            expect(timeoutTransientFailRes).toMatchObject({
+                success: false,
+                code: 'send_failed',
+            });
+            expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+        });
+    });
 });
 
 
