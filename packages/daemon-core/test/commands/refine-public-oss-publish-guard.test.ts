@@ -1,3 +1,4 @@
+import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -105,12 +106,13 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
     expect(f.originMain()).toContain(f.localOnly)
   })
 
-  it('explicitly private submodule remotes keep their behavior', async () => {
+  it('a local private marker cannot bypass public identity and approval checks', async () => {
     const f = fixture({ originSubpath: 'someone/other-repo', id: BAD, content: 'clean\n' })
     git(f.sub, ['config', 'remote.origin.adhdev-private', 'true'])
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
-    expect(gate.status).toBe('passed')
-    expect(f.originMain()).toContain(f.localOnly)
+    expect(gate.status).toBe('failed')
+    expect(gate.unreachable[0].publishApproval).toBeDefined()
+    expect(f.originMain()).not.toContain(f.localOnly)
   })
 })
 
@@ -219,13 +221,13 @@ describe('★owner rule: the Refinery never publishes to a PUBLIC remote without
     expect(f.originMain()).not.toContain(f.localOnly)
   })
 
-  it('a private remote is unchanged: auto-published with no approval argument', async () => {
+  it('a local private marker still requires exact public approval', async () => {
     const f = fixture({ originSubpath: 'someone/private-repo', id: GOOD, content: 'clean\n' })
     git(f.sub, ['config', 'remote.origin.adhdev-private', 'true'])
     const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
-    expect(gate.status).toBe('passed')
-    expect(gate.entries[0].publishApproval).toBeUndefined()
-    expect(f.originMain()).toContain(f.localOnly)
+    expect(gate.status).toBe('failed')
+    expect(gate.unreachable[0].publishApproval).toBeDefined()
+    expect(f.originMain()).not.toContain(f.localOnly)
   })
 })
 
@@ -314,10 +316,16 @@ it('P1-5: the shared root publication assertion still runs the identity guard af
 
 it('round4 P2-A: missing private pattern config refuses an approved public publish', async () => {
   const f = fixture({ originSubpath: 'public', id: GOOD, content: 'clean\n' })
-  rmSync(join(f.base, '.adhdev/public-push-patterns.json'))
-  const request = await evaluatePublicPublishApproval(f.sub, f.localOnly, 'main', [f.localOnly])
-  expect(request).toBeDefined()
-  expect(request?.commits.some(c => c.guardScan === 'error')).toBe(true)
+  const previous = process.env.ADHDEV_PRIVATE_ROOT
+  try {
+    git(f.base, ['remote', 'add', 'origin', 'https://github.com/vilmire/adhdev-cloud.git'])
+    process.env.ADHDEV_PRIVATE_ROOT = f.base
+    rmSync(join(f.base, '.adhdev/public-push-patterns.json'))
+    const request = await evaluatePublicPublishApproval(f.sub, f.localOnly, 'main', [f.localOnly])
+    expect(request).toBeDefined()
+    expect(request?.commits.some(c => c.guardScan === 'error')).toBe(true)
+  } finally { process.env.ADHDEV_PRIVATE_ROOT = previous }
+
 })
 
 it('round4 P2-A: configured fleet patterns reach the in-process scanner', async () => {
@@ -354,3 +362,5 @@ it('round4 P2-B: per-repo approvals permit two public repos; a flat array refuse
   expect(f.originMain()).toContain(f.localOnly)
   expect(other.originMain()).toContain(other.localOnly)
 })
+
+useSyntheticPublicPushPatterns()

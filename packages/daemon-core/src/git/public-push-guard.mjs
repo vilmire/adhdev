@@ -24,11 +24,12 @@
 //   - Messages and identities are read NUL-delimited (git forbids NUL in them).
 //   - `diff --git a/<path> b/<path>` lines are scanned: file NAMES leak too.
 
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { StringDecoder } from 'node:string_decoder';
 import { devNull } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import { findLeaks, findLeaksWithPatterns, currentUserNames } from './personal-paths.mjs';
 
 export const REQUIRED_NAME = 'vilmire';
@@ -36,51 +37,65 @@ export const REQUIRED_EMAIL = 'vilmire@users.noreply.github.com';
 
 // Supplied by private repo config; never embed owner/fleet patterns in OSS.
 export function loadPublicPushPatterns(repo) {
-  let dir = resolve(repo);
-  while (true) {
-    try {
-      const patterns = JSON.parse(readFileSync(resolve(dir, '.adhdev/public-push-patterns.json'), 'utf8'));
-      if (!['ownerNames', 'knownHosts'].every(key => Array.isArray(patterns[key]) && patterns[key].length && patterns[key].every(v => typeof v === 'string' && v.trim()))) throw new Error('invalid pattern lists');
-      if (patterns.blockedText !== undefined && (!Array.isArray(patterns.blockedText) || !patterns.blockedText.every(v => typeof v === 'string' && v.trim()))) throw new Error('invalid literal patterns');
-      return patterns;
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw new Error(`public push pattern config unavailable: ${error.message}`);
-    }
-    const parent = dirname(dir);
-    if (parent === dir) throw new Error('public push pattern config unavailable; refusing public publish');
-    dir = parent;
+  // This is an explicit private root, never a directory-search starting point.
+  // Git root and destination checks also reject public linked worktrees.
+  try {
+    const git = args => execFileSync('git', ['--no-replace-objects', '-C', repo, ...args], { encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\n$/, '');
+    const root = git(['rev-parse', '--show-toplevel']);
+    const urls = git(['remote', 'get-url', '--push', '--all', 'origin']).split('\n');
+    const configured = git(['config', '--get-all', 'remote.origin.url']).split('\n');
+    if (![...urls, ...configured].every(isKnownPrivateUrl)) throw new Error();
+    const patterns = JSON.parse(readFileSync(resolve(root, '.adhdev/public-push-patterns.json'), 'utf8'));
+    if (!['ownerNames', 'knownHosts', 'blockedText'].every(key => Array.isArray(patterns[key]) && patterns[key].length && patterns[key].every(v => typeof v === 'string' && v.trim()))) throw new Error();
+    return patterns;
+  } catch {
+    // JSON parse errors can contain private literals; never relay their text.
+    throw new Error('public push pattern config unavailable or invalid at private root; refusing public publish');
   }
 }
 
 const ZERO = /^0+$/;
-const KNOWN_PUBLIC_PATHS = new Set(['vilmire/adhdev', 'vilmire/adhdev-providers', 'vilmire/homebrew-adhdev']);
+const REPO_KEYS = new Map([['vilmire/adhdev-cloud', 'root'], ['vilmire/adhdev', 'oss'], ['vilmire/adhdev-providers', 'adhdev-providers'], ['vilmire/homebrew-adhdev', 'homebrew-adhdev']]);
 
 // All transports use the same canonical path and authority. Invalid input never
 // supplies private evidence, even when a local private marker is present.
-export function parseRemoteUrl(value) {
+function parseRemoteDetails(value) {
   try {
-    let input = String(value || '').trim();
-    if (!input || /[\x00-\x20\\]/.test(input)) return null;
+    let input = String(value || '');
+    if (!input || /[\x00-\x20\\~]/.test(input)) return null;
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
       const scp = /^(?:[^@/:]+@)?([^/:]+):(.+)$/.exec(input);
       input = scp ? `ssh://${scp[1]}/${scp[2]}` : `file:///${input.replace(/^\/+/, '')}`;
     }
+    // URL() normalises literal/encoded dot segments itself. Preserve the raw
+    // path to validate private evidence BEFORE any normalisation can erase it.
+    const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(input)?.[1] || '';
+    const decoded = decodeURIComponent(rawPath);
+    if (/[\x00-\x20\\~]/.test(decoded)) return null;
+    const privateEligible = !/[?#]/.test(input) && !/%2f|%5c/i.test(rawPath) && !/(?:\.git){2,}(?:\/|$)/i.test(decoded) && !/(?:^|\/)\.git(?:\/|$)/i.test(decoded);
     const url = new URL(input);
     if (!['https:', 'http:', 'ssh:', 'git:', 'file:'].includes(url.protocol)) return null;
     const parts = [];
-    for (const part of decodeURIComponent(url.pathname).split('/')) {
+    for (const part of decoded.split('/')) {
       if (!part || part === '.') continue;
       if (part === '..') parts.pop(); else parts.push(part);
     }
-    const path = parts.join('/').replace(/\.git$/i, '').toLowerCase();
+    const path = parts.join('/').replace(/(?:\/?\.git)+$/i, '').toLowerCase();
     if (!path) return null;
-    return { protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port || ({ 'https:': '443', 'http:': '80', 'ssh:': '22', 'git:': '9418' }[url.protocol] || ''), path };
+    return { privateEligible, protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port || ({ 'https:': '443', 'http:': '80', 'ssh:': '22', 'git:': '9418' }[url.protocol] || ''), path };
   } catch { return null; }
 }
 
+export function parseRemoteUrl(value) {
+  const parsed = parseRemoteDetails(value);
+  if (!parsed) return null;
+  const { privateEligible, ...identity } = parsed;
+  return identity;
+}
+
 function isKnownPrivateUrl(value) {
-  const url = parseRemoteUrl(value);
-  return !!url && url.host === 'github.com' && url.path === 'vilmire/adhdev-cloud'
+  const url = parseRemoteDetails(value);
+  return !!url && url.privateEligible && url.host === 'github.com' && url.path === 'vilmire/adhdev-cloud'
     && ((url.protocol === 'https:' && url.port === '443') || (url.protocol === 'ssh:' && url.port === '22'));
 }
 
@@ -128,28 +143,71 @@ function runGit(cwd, args, { input, env, onStdout } = {}) {
 const tryGit = async (cwd, args) => { try { return (await runGit(cwd, args)).trim(); } catch { return null; } };
 
 /** Anchor private config in the superproject, never a public submodule override. */
-export async function loadPublicPushPatternsForRepo(cwd) {
-  let repo = resolve(cwd);
+export async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT) {
+  if (privateRoot) return loadPublicPushPatterns(privateRoot);
+  let repo = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
   const seen = new Set();
   while (!seen.has(repo)) {
     seen.add(repo);
-    const parent = await tryGit(repo, ['rev-parse', '--show-superproject-working-tree']);
+    const parent = (await runGit(repo, ['rev-parse', '--show-superproject-working-tree'])).trim();
     if (!parent) return loadPublicPushPatterns(repo);
     repo = resolve(parent);
   }
   throw new Error('cyclic superproject config lookup; refusing public publish');
 }
 
+/** Repository identity is evidence from origin AND the actual push destination.
+ * A different known repository may never consume this repository's approval.
+ */
+export async function publicPushRepoKey(cwd, remoteName = 'origin') {
+  const keys = new Set();
+  const { urls } = await pushDestinations(cwd, remoteName);
+  const seen = new Set();
+  const collect = async (repo, values, depth = 0) => {
+    if (depth > 16) throw new Error('public publish repository identity chain too deep');
+    for (const value of values) {
+      const parsed = parseRemoteUrl(value);
+      if (parsed?.host === 'github.com' && REPO_KEYS.has(parsed.path)) {
+        keys.add(REPO_KEYS.get(parsed.path));
+        continue;
+      }
+      // A local mirror is public, but its own origin can establish WHICH repo
+      // needs approval. Follow metadata only; never fetch or execute a transport.
+      let local;
+      try {
+        if (value.startsWith('file://')) local = fileURLToPath(value);
+        else if (!/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(value)) local = resolve(repo, value);
+      } catch { /* invalid local path is not identity evidence */ }
+      if (!local || seen.has(local)) continue;
+      seen.add(local);
+      const origin = await tryGit(local, ['remote', 'get-url', '--all', 'origin']);
+      if (origin) await collect(local, origin.split('\n'), depth + 1);
+    }
+  };
+  const origin = await tryGit(cwd, ['remote', 'get-url', '--all', 'origin']);
+  await collect(cwd, [...urls, ...(origin ? origin.split('\n') : [])]);
+  if (keys.size > 1) throw new Error('public publish repository key mismatch between origin and push destination');
+  if (keys.size) return [...keys][0];
+  const root = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
+  const parent = (await runGit(root, ['rev-parse', '--show-superproject-working-tree'])).trim();
+  if (parent) {
+    const key = relative(parent, root).split('\\').join('/');
+    if (key !== 'root') return key; // reserve root for a proven root repository
+  }
+  throw new Error('public publish repository identity unavailable; refusing root approval fallback');
+}
+
 /** All configured and rewritten push destinations; an unreadable config throws. */
 export async function pushDestinations(cwd, remoteName = 'origin') {
   // get-url --all applies insteadOf/pushInsteadOf and Git's pushurl/url fallback.
-  const urls = (await runGit(cwd, ['remote', 'get-url', '--push', '--all', remoteName])).trim().split('\n').filter(Boolean);
-  const pushurls = await tryGit(cwd, ['config', '--get-all', `remote.${remoteName}.pushurl`]);
+  const urls = (await runGit(cwd, ['remote', 'get-url', '--push', '--all', remoteName])).replace(/\n$/, '').split('\n');
+  const pushurls = await runGit(cwd, ['config', '--get-all', `remote.${remoteName}.pushurl`]).catch(() => null);
   const configured = pushurls || await runGit(cwd, ['config', '--get-all', `remote.${remoteName}.url`]);
-  if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
-  const all = [...urls, ...configured.trim().split('\n')];
-  const explicitlyPrivate = await tryGit(cwd, ['config', '--local', '--bool', '--get', `remote.${remoteName}.adhdev-private`]) === 'true';
-  return { urls, isPublic: all.some(url => { const parsed = parseRemoteUrl(url); return !parsed || KNOWN_PUBLIC_PATHS.has(parsed.path); }) || (!explicitlyPrivate && all.some(isPublicRemoteUrl)) };
+  if (!urls.length || urls.every(url => !url)) throw new Error(`no push destinations for ${remoteName}`);
+  const all = [...urls, ...configured.replace(/\n$/, '').split('\n')];
+  // Local adhdev-private markers cannot broaden this allow-list. Every URL,
+  // including configured aliases and rewrites, must prove the same private repo.
+  return { urls, isPublic: all.some(isPublicRemoteUrl) };
 }
 
 // Parse a command into argv, then quote each argument for Git's command runner.
@@ -192,7 +250,7 @@ async function networkEnv(cwd) {
  * Unlike the history scan's optional proof, unreadable approval evidence is fatal.
  */
 export async function publicPushPendingCommits(cwd, commit, remoteRef, urls) {
-  if (!urls.length) throw new Error('no readable push destination');
+  if (!urls.length || urls.every(url => !url)) throw new Error('no readable push destination');
   const pending = new Set();
   for (const destination of urls) {
     const rewritten = (await runGit(cwd, ['ls-remote', '--get-url', '--', destination])).trim();
@@ -356,7 +414,7 @@ export function createDiffTreeParser(scan) {
   let lineNo = 0;
   let inHunk = false;
   let pending = []; // {text, file, line} for the current commit
-  let tail = '';
+  let tail = [];
   const flush = () => {
     if (!pending.length) return;
     const block = pending.map((p) => p.text).join('\n');
@@ -388,13 +446,18 @@ export function createDiffTreeParser(scan) {
   };
   return {
     feed(chunk) {
-      const lines = (tail + chunk).split('\n');
-      tail = lines.pop();
-      for (const line of lines) handle(line);
+      let start = 0;
+      for (let nl = chunk.indexOf('\n'); nl !== -1; nl = chunk.indexOf('\n', start)) {
+        const part = chunk.slice(start, nl);
+        if (tail.length) { tail.push(part); handle(tail.join('')); tail = []; }
+        else handle(part);
+        start = nl + 1;
+      }
+      if (start < chunk.length) tail.push(chunk.slice(start));
     },
     end() {
-      if (tail) handle(tail);
-      tail = '';
+      if (tail.length) handle(tail.join(''));
+      tail = [];
       flush();
       return out;
     },
@@ -489,6 +552,7 @@ async function tagViolations(reader, objectSha, scan, scanRef) {
  * @returns {Promise<{ violations: object[], checked: number }>}
  */
 export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns } = {}) {
+  if (!patterns && !findLeaksFn) patterns = await loadPublicPushPatternsForRepo(cwd);
   const names = new Set([...currentUserNames(), ...ownerNames, ...(patterns?.ownerNames || [])]);
   const scan = findLeaksFn || ((t) => patterns ? findLeaksWithPatterns(t, patterns, names) : findLeaks(t, names));
   // Ref names have no public repository-owner context: owner account tokens

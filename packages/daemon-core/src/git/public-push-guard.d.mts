@@ -1,5 +1,5 @@
-export function loadPublicPushPatternsForRepo(repo: string): Promise<PublicPushPatterns>;
-export interface PublicPushPatterns { ownerNames: string[]; knownHosts: string[]; blockedText?: string[] }
+export function loadPublicPushPatternsForRepo(repo: string, privateRoot?: string): Promise<PublicPushPatterns>;
+export interface PublicPushPatterns { ownerNames: string[]; knownHosts: string[]; blockedText: string[] }
 export function loadPublicPushPatterns(repo: string): PublicPushPatterns;
 export function parseRemoteUrl(url: string): { protocol: string; host: string; port: string; path: string } | null;
 export const REQUIRED_NAME: string;
@@ -17,3 +17,5 @@ export function assertPublishableToPublicOss(cwd: string, commit: string, opts?:
 export function createDiffTreeParser(scan: (t: string) => Array<{ line: number; match: string; name?: string }>): { feed(chunk: string): void; end(): PushViolation[] };
 
 export function publicPushPendingCommits(cwd: string, commit: string, remoteRef: string, urls: string[]): Promise<string[]>;
+
+export function publicPushRepoKey(cwd: string, remoteName?: string): Promise<string>;

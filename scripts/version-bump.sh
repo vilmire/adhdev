@@ -460,6 +460,7 @@ fi
 HEAD_SHA=$(git rev-parse HEAD)
 
 echo "  ⬆ Pushing branch ($PUSH_BRANCH) before the tag..."
+node scripts/check-public-push.mjs --repo . --ref "HEAD:origin/$PUSH_BRANCH"
 if ! git push origin "HEAD:refs/heads/$PUSH_BRANCH"; then
     echo ""
     echo "❌ Branch push FAILED — aborting before the tag is pushed."
@@ -478,6 +479,7 @@ if ! git push origin "HEAD:refs/heads/$PUSH_BRANCH"; then
 fi
 
 echo "  ⬆ Branch pushed — now pushing tag v$NEW_VERSION (this triggers CI/publish)..."
+node scripts/check-public-push.mjs --repo . --ref "refs/tags/v$NEW_VERSION"
 if ! git push origin "refs/tags/v$NEW_VERSION"; then
     echo ""
     echo "❌ Tag push FAILED (the branch push already SUCCEEDED)."

@@ -11,6 +11,7 @@
  * consuming the `RefineContext` produced by sync_base and either returning a terminal
  * blocked_review result or continuing with the context extended by its own verdict.
  */
+import { resolveMeshPolicy } from '../repo-mesh-types.js';
 import type { DaemonCommandRouter } from './router.js';
 import {
     buildSubmodulePublishRequiredNextStep,
@@ -164,6 +165,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
                 worktreeRoot: node.workspace,
                 approvedPublishShas: ctx.args?.approvedPublishShas,
+                ...(!resolveMeshPolicy((mesh as any)?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}),
             });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,

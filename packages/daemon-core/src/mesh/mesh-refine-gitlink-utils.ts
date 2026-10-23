@@ -19,7 +19,7 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations, publicPushPendingCommits, loadPublicPushPatternsForRepo } from '../git/public-push-guard.mjs';
+import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations, publicPushRepoKey, publicPushPendingCommits, loadPublicPushPatternsForRepo } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
@@ -681,6 +681,7 @@ type MeshRefineSubmoduleReachabilitySummary = {
     durationMs: number;
     autoPublishAllowed?: boolean;
     autoPublishPolicySource?: string;
+    publicRepoCount?: number;
     error?: string;
 };
 
@@ -850,8 +851,10 @@ export class PublicPublishApprovalRequired extends Error {
     }
 }
 
-export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: PublicPublishApprovals, remoteName = 'origin', repoKey = 'root'): Promise<void> {
-    const request = await evaluatePublicPublishApproval(repo, commit, branch, approvalsForRepo(approvedShas, repoKey), remoteName);
+export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: PublicPublishApprovals, remoteName = 'origin', repoKey?: string, publicRepoCount = 1): Promise<void> {
+    const actualRepoKey = await publicPushRepoKey(repo, remoteName);
+    if (repoKey !== undefined && repoKey !== actualRepoKey) throw new Error('public publish repository key mismatch');
+    const request = await evaluatePublicPublishApproval(repo, commit, branch, approvalsForRepo(approvedShas, actualRepoKey, publicRepoCount), remoteName);
     if (request) throw new PublicPublishApprovalRequired(request);
     const destinations = await pushDestinations(repo, remoteName);
     if (destinations.isPublic) {
@@ -864,7 +867,7 @@ export async function assertRefineryPublishApproved(repo: string, commit: string
 export async function runMeshRefineSubmoduleReachabilityGate(
     repoRoot: string,
     mergedTree: string,
-    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string; approvedPublishShas?: PublicPublishApprovals } = {},
+    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string; approvedPublishShas?: PublicPublishApprovals; rootCommit?: string; rootBranch?: string } = {},
 ): Promise<MeshRefineSubmoduleReachabilitySummary> {
     const startedAt = Date.now();
     const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
@@ -975,16 +978,19 @@ export async function runMeshRefineSubmoduleReachabilityGate(
 
         let publicRepoCount = 0;
         if (Array.isArray(options.approvedPublishShas)) {
-            try { if ((await pushDestinations(repoRoot)).isPublic) publicRepoCount++; } catch { /* a root without origin is not being pushed */ }
+            // Only count an actual pending root publication. Missing/unreadable
+            // destination or advertisement evidence must abort the entire batch.
+            if (options.rootCommit) {
+                const destination = await pushDestinations(repoRoot);
+                if (destination.isPublic && (await publicPushPendingCommits(repoRoot, options.rootCommit, `refs/heads/${options.rootBranch || 'main'}`, destination.urls)).length) publicRepoCount++;
+            }
             for (const link of gitlinks) {
                 const repo = pathResolve(repoRoot, link.path);
-                try {
-                    const destination = await pushDestinations(repo);
-                    if (destination.isPublic) {
-                        const branch = await resolveSubmoduleDefaultBranch({ submoduleRepoPath: repo, superprojectWorkspace: repoRoot, submodulePath: link.path });
-                        if ((await publicPushPendingCommits(repo, link.commit, `refs/heads/${branch}`, destination.urls)).length) publicRepoCount++;
-                    }
-                } catch { publicRepoCount++; } // unreadable evidence cannot authorize a flat approval
+                const destination = await pushDestinations(repo);
+                if (destination.isPublic) {
+                    const branch = await resolveSubmoduleDefaultBranch({ submoduleRepoPath: repo, superprojectWorkspace: repoRoot, submodulePath: link.path });
+                    if ((await publicPushPendingCommits(repo, link.commit, `refs/heads/${branch}`, destination.urls)).length) publicRepoCount++;
+                }
             }
         }
 
@@ -1114,7 +1120,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                             const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
                             entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
                             const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true
-                                ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, approvalsForRepo(options.approvedPublishShas, gitlink.path, publicRepoCount), 'origin', repoRoot)
+                                ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, approvalsForRepo(options.approvedPublishShas, await publicPushRepoKey(submodulePath), publicRepoCount), 'origin', repoRoot)
                                 : undefined;
                             if (publishApproval) {
                                 // ★Public remote without per-commit owner approval: stop BEFORE pushing.
@@ -1187,6 +1193,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
         return {
             status: unreachable.length ? 'failed' : 'passed',
             checked: entries.length,
+            publicRepoCount,
             unreachable: unreachable.map(entry => ({ ...entry, publishRequired: entry.publishRequired !== false })),
             entries: entries.map(entry => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
             durationMs: Date.now() - startedAt,

@@ -327,7 +327,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     // below already reports) rather than an await that never settles.
                     const { stdout: tip } = await execFileAsync('git', ['--no-replace-objects', 'rev-parse', `${baseBranch}^{commit}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     const publishCommit = tip.trim();
-                    await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas);
+                    await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas, 'origin', undefined, Math.max(1, submoduleReachability?.publicRepoCount || 0));
                     // Push exactly what was approved/scanned, even if the branch moves.
                     await execFileAsync('git', ['push', 'origin', `${publishCommit}:refs/heads/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: 30_000 });
                     pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };

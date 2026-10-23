@@ -1,3 +1,4 @@
+import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
 import { describe, expect, it, vi } from 'vitest';
 import { DaemonCommandHandler } from '../../src/commands/handler.js';
 import {
@@ -228,6 +229,7 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
   try {
     git('init', '-q', '-b', 'main');
     git('init', '-q', '--bare', '-b', 'main', join(root, 'origin.git'));
+    git('--git-dir=' + join(root, 'origin.git'), 'config', 'remote.origin.url', 'https://github.com/vilmire/adhdev-cloud.git');
     git('remote', 'add', 'mirror', join(root, 'origin.git'));
     git('config', 'user.name', identity === 'valid' ? 'vilmire' : 'Other'); git('config', 'user.email', identity === 'valid' ? 'vilmire@users.noreply.github.com' : 'other@example.com');
     mkdirSync(join(root, '.adhdev'));
@@ -255,3 +257,5 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+useSyntheticPublicPushPatterns()

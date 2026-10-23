@@ -1,3 +1,4 @@
+import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
@@ -114,6 +115,7 @@ function initGitRepo(repo: string) {
   // cleanup. A bare sibling repo mirrors production (Refinery always pushes to origin).
   const originBare = `${repo}-origin.git`
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', originBare])
+  execFileSync('git', ['--git-dir=' + originBare, 'config', 'remote.origin.url', 'https://github.com/vilmire/adhdev-cloud.git'])
   execFileSync('git', ['remote', 'add', 'origin', originBare], { cwd: repo })
   execFileSync('git', ['config', 'remote.origin.adhdev-private', 'true'], { cwd: repo })
   execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo })
@@ -1835,3 +1837,5 @@ describe('P1-5 root public publishing', () => {
     }
   }, 90000)
 })
+
+useSyntheticPublicPushPatterns()

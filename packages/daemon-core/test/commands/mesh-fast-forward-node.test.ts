@@ -1,3 +1,4 @@
+import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
@@ -21,8 +22,8 @@ function git(cwd: string, args: string[]): string {
 }
 
 function configureUser(repo: string) {
-  git(repo, ['config', 'user.email', 'test@example.com'])
-  git(repo, ['config', 'user.name', 'Test User'])
+  git(repo, ['config', 'user.email', 'vilmire@users.noreply.github.com'])
+  git(repo, ['config', 'user.name', 'vilmire'])
 }
 
 function commitFile(repo: string, path: string, content: string, message: string) {
@@ -37,6 +38,7 @@ function createRemoteBackedRepo(root: string) {
   const work = join(root, 'work')
   mkdirSync(seed, { recursive: true })
   git(root, ['init', '--bare', '-q', origin])
+  git(origin, ['config', 'remote.origin.url', 'https://github.com/vilmire/adhdev-cloud.git'])
   git(seed, ['init', '-q', '-b', 'main'])
   configureUser(seed)
   commitFile(seed, 'README.md', 'base\n', 'init')
@@ -171,6 +173,7 @@ describe('fast_forward_mesh_node', () => {
         mode: 'push',
         execute: true,
         nodeId: 'node-push',
+        approvedPublishShas: { root: [localHead] },
       })
 
       expect(result).toMatchObject({ success: true, allowed: true, willRun: true, executed: true, code: 'push_applied', mode: 'push' })
@@ -512,19 +515,14 @@ describe('P2 submodule push visibility enforcement', () => {
       })
       const before = git(child.origin, ['rev-parse', 'main'])
       commitFile(sub, 'LOCAL.md', 'submodule change\n', 'submodule change')
-      const tip = git(sub, ['rev-parse', 'HEAD'])
       git(work, ['add', '.'])
       git(work, ['commit', '-qm', 'root gitlink'])
-      const result = await fastForwardMeshNode({ workspace: work, execute: true, mode: 'push', pushSubmodules: true, allowAutoPublishSubmoduleMainCommits: true })
+      const rootPending = git(work, ['rev-list', 'origin/main..HEAD']).split('\n').filter(Boolean)
+      const result = await fastForwardMeshNode({ workspace: work, approvedPublishShas: { root: rootPending }, execute: true, mode: 'push', pushSubmodules: true, allowAutoPublishSubmoduleMainCommits: true })
       const entry = result.submodulePushes?.[0]
       expect(entry).toBeDefined()
-      if (visibility === 'private') {
-        expect(entry).toMatchObject({ pushed: true, skipped: false, code: 'submodule_pushed' })
-        expect(git(child.origin, ['rev-parse', 'main'])).toBe(tip)
-      } else {
-        expect(entry).toMatchObject({ pushed: false, skipped: true, code: 'submodule_public_publish_requires_approval' })
-        expect(git(child.origin, ['rev-parse', 'main'])).toBe(before)
-      }
+      expect(entry).toMatchObject({ pushed: false, skipped: true, code: 'submodule_public_publish_requires_approval' })
+      expect(git(child.origin, ['rev-parse', 'main'])).toBe(before)
     } finally {
       classification?.mockRestore()
       rmSync(root, { recursive: true, force: true })
@@ -538,6 +536,8 @@ it('round4 P1-C: workspace public push refuses without exact approval, then scan
     const { origin, work } = createRemoteBackedRepo(root)
     git(work, ['config', 'remote.origin.adhdev-private', 'false'])
     const before = git(origin, ['rev-parse', 'main'])
+    git(work, ['config', 'user.name', 'Other'])
+    git(work, ['config', 'user.email', 'other@example.com'])
     commitFile(work, 'new.txt', 'clean\n', 'new change')
     const tip = git(work, ['rev-parse', 'HEAD'])
     const denied = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true })
@@ -575,3 +575,5 @@ it('round4 P1-C: exact mapped approval permits a clean public workspace push and
     expect(git(origin, ['rev-parse', 'main'])).toBe(tip)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+useSyntheticPublicPushPatterns()

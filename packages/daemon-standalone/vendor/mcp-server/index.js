@@ -28319,18 +28319,18 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
       if (cwd && cwd !== ws) bases.push(cwd);
       for (const base of bases) {
-        for (const relative19 of MESH_JSON_CONFIG_LOCATIONS) {
-          const configPath = (0, import_path.join)(base, relative19);
+        for (const relative20 of MESH_JSON_CONFIG_LOCATIONS) {
+          const configPath = (0, import_path.join)(base, relative20);
           if (!(0, import_fs.existsSync)(configPath)) continue;
           try {
             const parsed = parseConfigText(configPath, (0, import_fs.readFileSync)(configPath, "utf-8"));
             const result = normalizeRepoMeshDeclarativeConfig(parsed);
             if (!result.valid || !result.config) {
-              return { source: relative19, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
+              return { source: relative20, sourceType: "invalid", path: configPath, error: result.errors.join("; ") };
             }
-            return { config: result.config, source: relative19, sourceType: "repo_file", path: configPath };
+            return { config: result.config, source: relative20, sourceType: "repo_file", path: configPath };
           } catch (error) {
-            return { source: relative19, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+            return { source: relative20, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
           }
         }
       }
@@ -28607,8 +28607,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return String(value).replace(/\r\n/g, "\n");
     }
     function isPathInside(parent, child) {
-      const relative19 = path3.relative(path3.resolve(parent), path3.resolve(child));
-      return relative19 === "" || !relative19.startsWith("..") && !path3.isAbsolute(relative19);
+      const relative20 = path3.relative(path3.resolve(parent), path3.resolve(child));
+      return relative20 === "" || !relative20.startsWith("..") && !path3.isAbsolute(relative20);
     }
     async function validateWorkspace(workspace) {
       if (typeof workspace !== "string" || workspace.length === 0 || workspace.includes("\0")) {
@@ -28856,8 +28856,8 @@ ${renderWorkerProtocolFooter2(input)}`;
       return { valid: errors.length === 0, errors, config: errors.length === 0 ? config : void 0 };
     }
     function loadChangeImpactConfig(repoRoot) {
-      for (const relative19 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path2.join)(repoRoot, relative19);
+      for (const relative20 of CHANGE_IMPACT_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path2.join)(repoRoot, relative20);
         if (!(0, import_fs2.existsSync)(configPath)) continue;
         try {
           const text4 = (0, import_fs2.readFileSync)(configPath, "utf-8");
@@ -28868,10 +28868,10 @@ ${renderWorkerProtocolFooter2(input)}`;
             mtimeMs = text4.length;
           }
           const parsed = parseConfigText(configPath, text4);
-          const validation = validateChangeImpactConfig(parsed, relative19);
+          const validation = validateChangeImpactConfig(parsed, relative20);
           if (!validation.valid) {
             return {
-              source: relative19,
+              source: relative20,
               sourceType: "invalid",
               path: configPath,
               error: validation.errors.join("; "),
@@ -28880,14 +28880,14 @@ ${renderWorkerProtocolFooter2(input)}`;
           }
           return {
             config: validation.config,
-            source: relative19,
+            source: relative20,
             sourceType: "repo_file",
             path: configPath,
             sourceKey: `file:${configPath}:${mtimeMs}`
           };
         } catch (error) {
           return {
-            source: relative19,
+            source: relative20,
             sourceType: "invalid",
             path: configPath,
             error: error?.message || String(error),
@@ -31035,47 +31035,55 @@ ${renderWorkerProtocolFooter2(input)}`;
       }
     });
     function loadPublicPushPatterns(repo) {
-      let dir = (0, import_node_path4.resolve)(repo);
-      while (true) {
-        try {
-          const patterns = JSON.parse((0, import_node_fs3.readFileSync)((0, import_node_path4.resolve)(dir, ".adhdev/public-push-patterns.json"), "utf8"));
-          if (!["ownerNames", "knownHosts"].every((key4) => Array.isArray(patterns[key4]) && patterns[key4].length && patterns[key4].every((v) => typeof v === "string" && v.trim()))) throw new Error("invalid pattern lists");
-          if (patterns.blockedText !== void 0 && (!Array.isArray(patterns.blockedText) || !patterns.blockedText.every((v) => typeof v === "string" && v.trim()))) throw new Error("invalid literal patterns");
-          return patterns;
-        } catch (error) {
-          if (error.code !== "ENOENT") throw new Error(`public push pattern config unavailable: ${error.message}`);
-        }
-        const parent = (0, import_node_path4.dirname)(dir);
-        if (parent === dir) throw new Error("public push pattern config unavailable; refusing public publish");
-        dir = parent;
+      try {
+        const git4 = (args) => (0, import_node_child_process22.execFileSync)("git", ["--no-replace-objects", "-C", repo, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] }).replace(/\n$/, "");
+        const root = git4(["rev-parse", "--show-toplevel"]);
+        const urls = git4(["remote", "get-url", "--push", "--all", "origin"]).split("\n");
+        const configured = git4(["config", "--get-all", "remote.origin.url"]).split("\n");
+        if (![...urls, ...configured].every(isKnownPrivateUrl)) throw new Error();
+        const patterns = JSON.parse((0, import_node_fs3.readFileSync)((0, import_node_path4.resolve)(root, ".adhdev/public-push-patterns.json"), "utf8"));
+        if (!["ownerNames", "knownHosts", "blockedText"].every((key4) => Array.isArray(patterns[key4]) && patterns[key4].length && patterns[key4].every((v) => typeof v === "string" && v.trim()))) throw new Error();
+        return patterns;
+      } catch {
+        throw new Error("public push pattern config unavailable or invalid at private root; refusing public publish");
       }
     }
-    function parseRemoteUrl(value) {
+    function parseRemoteDetails(value) {
       try {
-        let input = String(value || "").trim();
-        if (!input || /[\x00-\x20\\]/.test(input)) return null;
+        let input = String(value || "");
+        if (!input || /[\x00-\x20\\~]/.test(input)) return null;
         if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
           const scp = /^(?:[^@/:]+@)?([^/:]+):(.+)$/.exec(input);
           input = scp ? `ssh://${scp[1]}/${scp[2]}` : `file:///${input.replace(/^\/+/, "")}`;
         }
+        const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(input)?.[1] || "";
+        const decoded = decodeURIComponent(rawPath);
+        if (/[\x00-\x20\\~]/.test(decoded)) return null;
+        const privateEligible = !/[?#]/.test(input) && !/%2f|%5c/i.test(rawPath) && !/(?:\.git){2,}(?:\/|$)/i.test(decoded) && !/(?:^|\/)\.git(?:\/|$)/i.test(decoded);
         const url = new URL(input);
         if (!["https:", "http:", "ssh:", "git:", "file:"].includes(url.protocol)) return null;
         const parts = [];
-        for (const part of decodeURIComponent(url.pathname).split("/")) {
+        for (const part of decoded.split("/")) {
           if (!part || part === ".") continue;
           if (part === "..") parts.pop();
           else parts.push(part);
         }
-        const path106 = parts.join("/").replace(/\.git$/i, "").toLowerCase();
+        const path106 = parts.join("/").replace(/(?:\/?\.git)+$/i, "").toLowerCase();
         if (!path106) return null;
-        return { protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port || ({ "https:": "443", "http:": "80", "ssh:": "22", "git:": "9418" }[url.protocol] || ""), path: path106 };
+        return { privateEligible, protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port || ({ "https:": "443", "http:": "80", "ssh:": "22", "git:": "9418" }[url.protocol] || ""), path: path106 };
       } catch {
         return null;
       }
     }
+    function parseRemoteUrl(value) {
+      const parsed = parseRemoteDetails(value);
+      if (!parsed) return null;
+      const { privateEligible, ...identity2 } = parsed;
+      return identity2;
+    }
     function isKnownPrivateUrl(value) {
-      const url = parseRemoteUrl(value);
-      return !!url && url.host === "github.com" && url.path === "vilmire/adhdev-cloud" && (url.protocol === "https:" && url.port === "443" || url.protocol === "ssh:" && url.port === "22");
+      const url = parseRemoteDetails(value);
+      return !!url && url.privateEligible && url.host === "github.com" && url.path === "vilmire/adhdev-cloud" && (url.protocol === "https:" && url.port === "443" || url.protocol === "ssh:" && url.port === "22");
     }
     function isPublicRemoteUrl(url) {
       return !isKnownPrivateUrl(url);
@@ -31131,28 +31139,61 @@ ${renderWorkerProtocolFooter2(input)}`;
         }
       });
     }
-    async function loadPublicPushPatternsForRepo(cwd) {
-      let repo = (0, import_node_path4.resolve)(cwd);
+    async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT) {
+      if (privateRoot) return loadPublicPushPatterns(privateRoot);
+      let repo = (await runGit2(cwd, ["rev-parse", "--show-toplevel"])).trim();
       const seen2 = /* @__PURE__ */ new Set();
       while (!seen2.has(repo)) {
         seen2.add(repo);
-        const parent = await tryGit(repo, ["rev-parse", "--show-superproject-working-tree"]);
+        const parent = (await runGit2(repo, ["rev-parse", "--show-superproject-working-tree"])).trim();
         if (!parent) return loadPublicPushPatterns(repo);
         repo = (0, import_node_path4.resolve)(parent);
       }
       throw new Error("cyclic superproject config lookup; refusing public publish");
     }
+    async function publicPushRepoKey(cwd, remoteName = "origin") {
+      const keys = /* @__PURE__ */ new Set();
+      const { urls } = await pushDestinations(cwd, remoteName);
+      const seen2 = /* @__PURE__ */ new Set();
+      const collect = async (repo, values, depth = 0) => {
+        if (depth > 16) throw new Error("public publish repository identity chain too deep");
+        for (const value of values) {
+          const parsed = parseRemoteUrl(value);
+          if (parsed?.host === "github.com" && REPO_KEYS.has(parsed.path)) {
+            keys.add(REPO_KEYS.get(parsed.path));
+            continue;
+          }
+          let local;
+          try {
+            if (value.startsWith("file://")) local = (0, import_node_url.fileURLToPath)(value);
+            else if (!/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(value)) local = (0, import_node_path4.resolve)(repo, value);
+          } catch {
+          }
+          if (!local || seen2.has(local)) continue;
+          seen2.add(local);
+          const origin2 = await tryGit(local, ["remote", "get-url", "--all", "origin"]);
+          if (origin2) await collect(local, origin2.split("\n"), depth + 1);
+        }
+      };
+      const origin = await tryGit(cwd, ["remote", "get-url", "--all", "origin"]);
+      await collect(cwd, [...urls, ...origin ? origin.split("\n") : []]);
+      if (keys.size > 1) throw new Error("public publish repository key mismatch between origin and push destination");
+      if (keys.size) return [...keys][0];
+      const root = (await runGit2(cwd, ["rev-parse", "--show-toplevel"])).trim();
+      const parent = (await runGit2(root, ["rev-parse", "--show-superproject-working-tree"])).trim();
+      if (parent) {
+        const key4 = (0, import_node_path4.relative)(parent, root).split("\\").join("/");
+        if (key4 !== "root") return key4;
+      }
+      throw new Error("public publish repository identity unavailable; refusing root approval fallback");
+    }
     async function pushDestinations(cwd, remoteName = "origin") {
-      const urls = (await runGit2(cwd, ["remote", "get-url", "--push", "--all", remoteName])).trim().split("\n").filter(Boolean);
-      const pushurls = await tryGit(cwd, ["config", "--get-all", `remote.${remoteName}.pushurl`]);
+      const urls = (await runGit2(cwd, ["remote", "get-url", "--push", "--all", remoteName])).replace(/\n$/, "").split("\n");
+      const pushurls = await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.pushurl`]).catch(() => null);
       const configured = pushurls || await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.url`]);
-      if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
-      const all = [...urls, ...configured.trim().split("\n")];
-      const explicitlyPrivate = await tryGit(cwd, ["config", "--local", "--bool", "--get", `remote.${remoteName}.adhdev-private`]) === "true";
-      return { urls, isPublic: all.some((url) => {
-        const parsed = parseRemoteUrl(url);
-        return !parsed || KNOWN_PUBLIC_PATHS.has(parsed.path);
-      }) || !explicitlyPrivate && all.some(isPublicRemoteUrl) };
+      if (!urls.length || urls.every((url) => !url)) throw new Error(`no push destinations for ${remoteName}`);
+      const all = [...urls, ...configured.replace(/\n$/, "").split("\n")];
+      return { urls, isPublic: all.some(isPublicRemoteUrl) };
     }
     function commandWords(command) {
       const words = [];
@@ -31212,7 +31253,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       return env2;
     }
     async function publicPushPendingCommits(cwd, commit2, remoteRef, urls) {
-      if (!urls.length) throw new Error("no readable push destination");
+      if (!urls.length || urls.every((url) => !url)) throw new Error("no readable push destination");
       const pending = /* @__PURE__ */ new Set();
       for (const destination of urls) {
         const rewritten = (await runGit2(cwd, ["ls-remote", "--get-url", "--", destination])).trim();
@@ -31342,7 +31383,7 @@ ${renderWorkerProtocolFooter2(input)}`;
       let lineNo = 0;
       let inHunk = false;
       let pending = [];
-      let tail = "";
+      let tail = [];
       const flush = () => {
         if (!pending.length) return;
         const block2 = pending.map((p) => p.text).join("\n");
@@ -31382,13 +31423,21 @@ ${renderWorkerProtocolFooter2(input)}`;
       };
       return {
         feed(chunk) {
-          const lines = (tail + chunk).split("\n");
-          tail = lines.pop();
-          for (const line of lines) handle(line);
+          let start = 0;
+          for (let nl = chunk.indexOf("\n"); nl !== -1; nl = chunk.indexOf("\n", start)) {
+            const part = chunk.slice(start, nl);
+            if (tail.length) {
+              tail.push(part);
+              handle(tail.join(""));
+              tail = [];
+            } else handle(part);
+            start = nl + 1;
+          }
+          if (start < chunk.length) tail.push(chunk.slice(start));
         },
         end() {
-          if (tail) handle(tail);
-          tail = "";
+          if (tail.length) handle(tail.join(""));
+          tail = [];
           flush();
           return out;
         }
@@ -31512,6 +31561,7 @@ ${message}`)) out.push({ kind: "path", sha: cur, file: "(tag object)", line: l.l
       return out;
     }
     async function checkPush(entries, { cwd = process.cwd(), remoteName = "origin", remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns } = {}) {
+      if (!patterns && !findLeaksFn) patterns = await loadPublicPushPatternsForRepo(cwd);
       const names = /* @__PURE__ */ new Set([...currentUserNames(), ...ownerNames, ...patterns?.ownerNames || []]);
       const scan = findLeaksFn || ((t) => patterns ? findLeaksWithPatterns(t, patterns, names) : findLeaks(t, names));
       const refOwners = /* @__PURE__ */ new Set([REQUIRED_NAME, ...names]);
@@ -31566,6 +31616,7 @@ ${BLOCKED_HINT}`);
       return { checked };
     }
     var import_node_child_process22;
+    var import_node_url;
     var import_node_string_decoder;
     var import_node_os22;
     var import_node_fs3;
@@ -31573,7 +31624,7 @@ ${BLOCKED_HINT}`);
     var REQUIRED_NAME;
     var REQUIRED_EMAIL;
     var ZERO;
-    var KNOWN_PUBLIC_PATHS;
+    var REPO_KEYS;
     var REPO_LOCATION_VARS2;
     var tryGit;
     var SHA_LINE;
@@ -31582,6 +31633,7 @@ ${BLOCKED_HINT}`);
       "src/git/public-push-guard.mjs"() {
         "use strict";
         import_node_child_process22 = require("child_process");
+        import_node_url = require("url");
         import_node_string_decoder = require("string_decoder");
         import_node_os22 = require("os");
         import_node_fs3 = require("fs");
@@ -31590,7 +31642,7 @@ ${BLOCKED_HINT}`);
         REQUIRED_NAME = "vilmire";
         REQUIRED_EMAIL = "vilmire@users.noreply.github.com";
         ZERO = /^0+$/;
-        KNOWN_PUBLIC_PATHS = /* @__PURE__ */ new Set(["vilmire/adhdev", "vilmire/adhdev-providers", "vilmire/homebrew-adhdev"]);
+        REPO_KEYS = /* @__PURE__ */ new Map([["vilmire/adhdev-cloud", "root"], ["vilmire/adhdev", "oss"], ["vilmire/adhdev-providers", "adhdev-providers"], ["vilmire/homebrew-adhdev", "homebrew-adhdev"]]);
         REPO_LOCATION_VARS2 = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CEILING_DIRECTORIES"];
         tryGit = async (cwd, args) => {
           try {
@@ -32021,10 +32073,10 @@ ${BLOCKED_HINT}`);
       }
       return { valid: errors.length === 0, errors, bootstrapCommands, commands, ...schedule ? { schedule } : {}, rejectedCommands, bootstrapMode, deprecationWarnings };
     }
-    function readConfigFromBaseRef(gitCwd, ref2, relative19) {
+    function readConfigFromBaseRef(gitCwd, ref2, relative20) {
       if (!ref2 || ref2.startsWith("-")) return void 0;
       try {
-        return (0, import_child_process2.execFileSync)("git", ["show", `${ref2}:${relative19}`], {
+        return (0, import_child_process2.execFileSync)("git", ["show", `${ref2}:${relative20}`], {
           cwd: gitCwd,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -32064,26 +32116,26 @@ ${BLOCKED_HINT}`);
         if (!validation.valid) return { source: "mesh.policy.refineConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.refineConfig", sourceType: "mesh_policy" };
       }
-      for (const relative19 of MESH_REFINE_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path4.join)(workspace, relative19);
+      for (const relative20 of MESH_REFINE_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path4.join)(workspace, relative20);
         if (!(0, import_fs4.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs4.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshRefineConfig(parsed, relative19);
-          if (!validation.valid) return { source: relative19, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative19, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshRefineConfig(parsed, relative20);
+          if (!validation.valid) return { source: relative20, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative20, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative19, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative20, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       const baseRefs = (options?.baseRefs || []).filter((ref2) => typeof ref2 === "string" && ref2.trim().length > 0);
       for (const ref2 of baseRefs) {
-        for (const relative19 of MESH_REFINE_CONFIG_LOCATIONS) {
-          const text4 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative19);
+        for (const relative20 of MESH_REFINE_CONFIG_LOCATIONS) {
+          const text4 = readConfigFromBaseRef(options?.gitCwd || workspace, ref2.trim(), relative20);
           if (text4 === void 0) continue;
-          const source2 = `${ref2.trim()}:${relative19}`;
+          const source2 = `${ref2.trim()}:${relative20}`;
           try {
-            const parsed = parseConfigText(relative19, text4);
+            const parsed = parseConfigText(relative20, text4);
             const validation = validateMeshRefineConfig(parsed, source2);
             if (!validation.valid) return { source: source2, sourceType: "invalid", baseRef: ref2.trim(), error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
             return { config: parsed, source: source2, sourceType: "repo_file", baseRef: ref2.trim() };
@@ -32545,28 +32597,28 @@ ${BLOCKED_HINT}`);
         if (!validation.valid) return { source: "mesh.policy.worktreeBootstrapConfig", sourceType: "invalid", error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
         return { config: inline, source: "mesh.policy.worktreeBootstrapConfig", sourceType: "mesh_policy" };
       }
-      for (const relative19 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
-        const configPath = (0, import_path5.join)(workspace, relative19);
+      for (const relative20 of MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS) {
+        const configPath = (0, import_path5.join)(workspace, relative20);
         if (!(0, import_fs5.existsSync)(configPath)) continue;
         try {
           const parsed = parseConfigText(configPath, (0, import_fs5.readFileSync)(configPath, "utf-8"));
-          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative19);
-          if (!validation.valid) return { source: relative19, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
-          return { config: parsed, source: relative19, sourceType: "repo_file", path: configPath };
+          const validation = validateMeshWorktreeBootstrapConfig(parsed, relative20);
+          if (!validation.valid) return { source: relative20, sourceType: "invalid", path: configPath, error: String(validation.rejectedCommands[0]?.reason || validation.errors.join("; ")) };
+          return { config: parsed, source: relative20, sourceType: "repo_file", path: configPath };
         } catch (error) {
-          return { source: relative19, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
+          return { source: relative20, sourceType: "invalid", path: configPath, error: error?.message || String(error) };
         }
       }
       return { source: "unavailable", sourceType: "unavailable", error: `No worktree bootstrap config found. Checked: ${MESH_WORKTREE_BOOTSTRAP_CONFIG_LOCATIONS.join(", ")}` };
     }
     function computeStaleInputsDigest(workspace, staleInputs) {
       const digest4 = {};
-      for (const relative19 of staleInputs ?? []) {
-        const filePath2 = (0, import_path5.join)(workspace, relative19);
+      for (const relative20 of staleInputs ?? []) {
+        const filePath2 = (0, import_path5.join)(workspace, relative20);
         try {
-          digest4[relative19] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs5.readFileSync)(filePath2)).digest("hex");
+          digest4[relative20] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs5.readFileSync)(filePath2)).digest("hex");
         } catch {
-          digest4[relative19] = "absent";
+          digest4[relative20] = "absent";
         }
       }
       return digest4;
@@ -33161,8 +33213,10 @@ ${tail}`;
       if (!evidenceError && !scanError && invalidApproved.length === 0 && unapproved.length === 0 && extraApproved.length === 0) return void 0;
       return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved, invalidApproved, ...evidenceError || scanError ? { error: evidenceError || scanError } : {} };
     }
-    async function assertRefineryPublishApproved(repo, commit2, branch, approvedShas, remoteName = "origin", repoKey = "root") {
-      const request = await evaluatePublicPublishApproval(repo, commit2, branch, approvalsForRepo(approvedShas, repoKey), remoteName);
+    async function assertRefineryPublishApproved(repo, commit2, branch, approvedShas, remoteName = "origin", repoKey, publicRepoCount = 1) {
+      const actualRepoKey = await publicPushRepoKey(repo, remoteName);
+      if (repoKey !== void 0 && repoKey !== actualRepoKey) throw new Error("public publish repository key mismatch");
+      const request = await evaluatePublicPublishApproval(repo, commit2, branch, approvalsForRepo(approvedShas, actualRepoKey, publicRepoCount), remoteName);
       if (request) throw new PublicPublishApprovalRequired(request);
       const destinations = await pushDestinations(repo, remoteName);
       if (destinations.isPublic) {
@@ -33248,20 +33302,16 @@ ${tail}`;
         }).filter((entry) => !!entry);
         let publicRepoCount = 0;
         if (Array.isArray(options.approvedPublishShas)) {
-          try {
-            if ((await pushDestinations(repoRoot)).isPublic) publicRepoCount++;
-          } catch {
+          if (options.rootCommit) {
+            const destination = await pushDestinations(repoRoot);
+            if (destination.isPublic && (await publicPushPendingCommits(repoRoot, options.rootCommit, `refs/heads/${options.rootBranch || "main"}`, destination.urls)).length) publicRepoCount++;
           }
           for (const link of gitlinks) {
             const repo = (0, import_path6.resolve)(repoRoot, link.path);
-            try {
-              const destination = await pushDestinations(repo);
-              if (destination.isPublic) {
-                const branch = await resolveSubmoduleDefaultBranch({ submoduleRepoPath: repo, superprojectWorkspace: repoRoot, submodulePath: link.path });
-                if ((await publicPushPendingCommits(repo, link.commit, `refs/heads/${branch}`, destination.urls)).length) publicRepoCount++;
-              }
-            } catch {
-              publicRepoCount++;
+            const destination = await pushDestinations(repo);
+            if (destination.isPublic) {
+              const branch = await resolveSubmoduleDefaultBranch({ submoduleRepoPath: repo, superprojectWorkspace: repoRoot, submodulePath: link.path });
+              if ((await publicPushPendingCommits(repo, link.commit, `refs/heads/${branch}`, destination.urls)).length) publicRepoCount++;
             }
           }
         }
@@ -33362,7 +33412,7 @@ ${tail}`;
                   entry.publishRequired = true;
                   const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
                   entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
-                  const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, approvalsForRepo(options.approvedPublishShas, gitlink.path, publicRepoCount), "origin", repoRoot) : void 0;
+                  const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, approvalsForRepo(options.approvedPublishShas, await publicPushRepoKey(submodulePath), publicRepoCount), "origin", repoRoot) : void 0;
                   if (publishApproval) {
                     entry.autoPublishAllowed = true;
                     entry.autoPublishAttempted = false;
@@ -33425,6 +33475,7 @@ ${tail}`;
         return {
           status: unreachable2.length ? "failed" : "passed",
           checked: entries.length,
+          publicRepoCount,
           unreachable: unreachable2.map((entry) => ({ ...entry, publishRequired: entry.publishRequired !== false })),
           entries: entries.map((entry) => entry.reachable ? entry : { ...entry, publishRequired: entry.publishRequired !== false }),
           durationMs: Date.now() - startedAt,
@@ -46032,8 +46083,8 @@ ${pattern}
         import_node_crypto42 = require("crypto");
       }
     });
-    function privateDirectory(home, relative19 = "") {
-      const target = path31.resolve(home, relative19);
+    function privateDirectory(home, relative20 = "") {
+      const target = path31.resolve(home, relative20);
       const within = path31.relative(path31.resolve(home), target);
       if (within === ".." || within.startsWith(`..${path31.sep}`) || path31.isAbsolute(within)) {
         throw new Error("worker_private_home_path_escape");
@@ -67862,7 +67913,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
           hasNpmLock ? { command: "npm", args: ["ci"] } : { command: "npm", args: ["install"] }
         );
       }
-      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative19) => (0, import_fs19.existsSync)((0, import_path14.join)(workspace, relative19)));
+      const staleInputs = CANDIDATE_STALE_INPUTS.filter((relative20) => (0, import_fs19.existsSync)((0, import_path14.join)(workspace, relative20)));
       if (!commands.length) {
         return { commands, staleInputs };
       }
@@ -110023,7 +110074,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
         autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
         worktreeRoot: node.workspace,
-        approvedPublishShas: ctx.args?.approvedPublishShas
+        approvedPublishShas: ctx.args?.approvedPublishShas,
+        ...!resolveMeshPolicy2(mesh?.policy).requireApprovalForPush ? { rootCommit: branchHead, rootBranch: baseBranch } : {}
       });
       recordMeshRefineStage(refineStages, "submodule_reachability", submoduleReachability.status, submoduleReachabilityStarted, {
         checked: submoduleReachability.checked,
@@ -110202,6 +110254,7 @@ ${hintLines.join("\n")}` : "",
     var init_router_refine_preflight_stages = __esm2({
       "src/commands/router-refine-preflight-stages.ts"() {
         "use strict";
+        init_repo_mesh_types();
         init_mesh_refine_gates();
       }
     });
@@ -111064,7 +111117,7 @@ ${e?.stderr || ""}`;
         try {
           const { stdout: tip } = await execFileAsync6("git", ["--no-replace-objects", "rev-parse", `${baseBranch}^{commit}`], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv() });
           const publishCommit = tip.trim();
-          await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas);
+          await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas, "origin", void 0, Math.max(1, submoduleReachability?.publicRepoCount || 0));
           await execFileAsync6("git", ["push", "origin", `${publishCommit}:refs/heads/${baseBranch}`], { cwd: repoRoot, encoding: "utf8", windowsHide: true, env: gitChildEnv(), timeout: 3e4 });
           pushResult = { pushed: true, remote: "origin", branch: baseBranch, durationMs: Date.now() - pushStarted };
           recordMeshRefineStage(refineStages, "push", "passed", pushStarted, pushResult);
@@ -120207,7 +120260,7 @@ ${marker2}`,
       }
     }
     var UPGRADE_HELPER_ENV = "ADHDEV_DAEMON_UPGRADE_HELPER";
-    var execFileSync12 = ((...args) => {
+    var execFileSync13 = ((...args) => {
       assertWorkerBridgeLifecycleAdmission("helper_exec");
       return (0, import_child_process11.execFileSync)(...args);
     });
@@ -120301,7 +120354,7 @@ ${marker2}`,
       for (const name of names) {
         const shimPath = path46.join(binDir, name);
         if (!fs40.existsSync(shimPath)) continue;
-        execFileSync12(shimPath, ["--version"], {
+        execFileSync13(shimPath, ["--version"], {
           encoding: "utf8",
           stdio: "pipe",
           timeout: 3e4,
@@ -120325,7 +120378,7 @@ ${marker2}`,
         ' for(const f of fs.readdirSync(d))if(f.endsWith(".node"))process.dlopen({exports:{}},path.join(d,f));}'
       ].join("");
       try {
-        execFileSync12(process.execPath, ["-e", script, packageRoot], {
+        execFileSync13(process.execPath, ["-e", script, packageRoot], {
           encoding: "utf8",
           stdio: "pipe",
           timeout: 3e4,
@@ -120360,9 +120413,9 @@ ${marker2}`,
       for (const shim of backup.binShims) {
         try {
           const entry = fs40.realpathSync(shim);
-          const relative19 = path46.relative(backup.packageRoot, entry);
-          if (relative19.startsWith("..") || path46.isAbsolute(relative19)) continue;
-          const previousFirstLine = fs40.readFileSync(path46.join(backup.backupDir, "package", relative19), "utf8").split("\n", 1)[0];
+          const relative20 = path46.relative(backup.packageRoot, entry);
+          if (relative20.startsWith("..") || path46.isAbsolute(relative20)) continue;
+          const previousFirstLine = fs40.readFileSync(path46.join(backup.backupDir, "package", relative20), "utf8").split("\n", 1)[0];
           if (!/^#!\/\S*node$/.test(previousFirstLine)) continue;
           const current4 = fs40.readFileSync(entry, "utf8");
           const currentFirstLine = current4.split("\n", 1)[0];
@@ -125240,8 +125293,8 @@ ${marker2}`,
           if ((0, import_fs26.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os48 === "win32") {
-          const { dirname: dirname55 } = await import("path");
-          const appDir = dirname55(appPath);
+          const { dirname: dirname54 } = await import("path");
+          const appDir = dirname54(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -130389,8 +130442,8 @@ ${output}` : "";
       const sourceMtimeMs = statMtimeMs(sessionPath);
       const brainRootPath = brainRoot();
       if (sessionPath.startsWith(brainRootPath + path64.sep) && sessionPath.endsWith(".jsonl")) {
-        const relative19 = sessionPath.slice(brainRootPath.length + 1);
-        const uuidFromPath = relative19.split(path64.sep)[0];
+        const relative20 = sessionPath.slice(brainRootPath.length + 1);
+        const uuidFromPath = relative20.split(path64.sep)[0];
         const resolvedSessionId = sessionId || (isUuidLike(uuidFromPath) ? uuidFromPath : "");
         if (!resolvedSessionId) return null;
         const messages = parseBrainTranscript(sessionPath, resolvedSessionId, workspace);
@@ -149155,7 +149208,7 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
-          const { dirname: dirname55, join: join136 } = await import("path");
+          const { dirname: dirname54, join: join136 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -149195,7 +149248,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync60(dirname55(absolutePath), { recursive: true });
+          mkdirSync60(dirname54(absolutePath), { recursive: true });
           writeFileSync50(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
@@ -149265,14 +149318,14 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { existsSync: existsSync120, readFileSync: readFileSync110, mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
-          const { dirname: dirname55, join: join136 } = await import("path");
+          const { dirname: dirname54, join: join136 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
           let existingPath = join136(workspace, relativePath);
           let existedAsYaml = false;
-          for (const relative19 of MESH_JSON_CONFIG_LOCATIONS2) {
-            const candidate = join136(workspace, relative19);
+          for (const relative20 of MESH_JSON_CONFIG_LOCATIONS2) {
+            const candidate = join136(workspace, relative20);
             if (!existsSync120(candidate)) continue;
             try {
               const text4 = readFileSync110(candidate, "utf-8");
@@ -149283,7 +149336,7 @@ ${output}` : "";
                 existedAsYaml = !/\.json$/i.test(candidate);
               }
             } catch (e) {
-              return { success: false, error: `existing ${relative19} is unparseable, refusing to overwrite: ${e?.message || e}` };
+              return { success: false, error: `existing ${relative20} is unparseable, refusing to overwrite: ${e?.message || e}` };
             }
             break;
           }
@@ -149329,7 +149382,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync60(dirname55(absolutePath), { recursive: true });
+          mkdirSync60(dirname54(absolutePath), { recursive: true });
           writeFileSync50(absolutePath, serialized, "utf-8");
           return {
             success: true,
@@ -150950,7 +151003,7 @@ ${ptyResult.output.slice(-2e3)}`);
             };
           }
           const { existsSync: existsSync120, readFileSync: readFileSync110, writeFileSync: writeFileSync50, mkdirSync: mkdirSync60 } = await import("fs");
-          const { dirname: dirname55 } = await import("path");
+          const { dirname: dirname54 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
@@ -150978,7 +151031,7 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync60(dirname55(mcpConfigPath), { recursive: true });
+              mkdirSync60(dirname54(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
