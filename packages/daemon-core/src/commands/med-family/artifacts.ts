@@ -56,6 +56,7 @@ import {
     handleArtifactFetchOrigin,
     handleArtifactIndexForwarded,
     isSessionAuthorizedForMesh,
+    listWorkerAuthorizedArtifacts,
     resolveRegisteredSessionWorkspace,
     resolveRemoteWorkerForArtifact,
 } from './artifact-sharing.js';
@@ -1090,6 +1091,11 @@ const handleArtifactList: MedFamilyHandler = async (ctx, args) => {
         } else if (!hasExplicitSession && authority.isCoordinator && authority.meshId) {
             artifacts = store.listByMesh(authority.meshId, {
                 ...(filterMissionId ? { missionId: filterMissionId } : {}),
+                limit,
+            });
+        } else if (!hasExplicitSession && authority.producerRole === 'worker') {
+            artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store, {
+                filterMissionId,
                 limit,
             });
         } else {

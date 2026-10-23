@@ -699,6 +699,89 @@ const discover = assistantVerb(ASSISTANT_VERB.discoverRepos, async (ports, args)
 
 // ── artifact_list / artifact_read ───────────────────────────────────────────
 
+export function localArtifactList(meshId: string, args: Record<string, unknown>) {
+    const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+    const sessionId = str(args.sessionId ?? args.session_id) || undefined;
+    const missionId = str(args.missionId ?? args.mission_id) || undefined;
+    const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : undefined;
+    const artifacts = store.listByMesh(meshId, { sessionId, missionId, limit });
+    return { meshId, artifacts, attachments: artifacts.map(toChatAttachmentMeta) };
+}
+
+export async function localArtifactRead(
+    ports: AssistantProjectPorts,
+    meshId: string,
+    args: Record<string, unknown>,
+    ctx?: HighFamilyContext,
+): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; code: string; error: string }> {
+    const artifactId = str(args.artifactId ?? args.artifact_id);
+    if (!artifactId) return { ok: false, code: 'invalid_args', error: 'artifactId required' };
+    const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+    const record = store.getById(artifactId);
+    if (!record) return { ok: false, code: 'artifact_not_found', error: `Artifact '${artifactId}' not found.` };
+    if (record.meshId !== meshId) {
+        return { ok: false, code: 'cross_mesh_artifact_denied', error: `Artifact '${artifactId}' does not belong to mesh '${meshId}'.` };
+    }
+    const rawOffset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
+    const rawLimit = typeof args.limit === 'number' && Number.isFinite(args.limit)
+        ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES)
+        : MAX_ARTIFACT_MCP_PAGE_BYTES;
+    const self = ports.selfDaemonId();
+    if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
+        try {
+            const p2pRaw: any = await ctx.deps.dispatchMeshCommand(record.originDaemonId, 'artifact_fetch_origin', {
+                artifactId, meshId, offset: rawOffset, limit: rawLimit, asChunks: true,
+            });
+            const p2pRes = p2pRaw && typeof p2pRaw === 'object' && 'result' in p2pRaw && p2pRaw.result && typeof p2pRaw.result === 'object' ? p2pRaw.result : p2pRaw;
+            if (!p2pRes || p2pRes.success === false) {
+                return { ok: false, code: str(p2pRes?.code) || 'artifact_origin_unreachable', error: str(p2pRes?.error) || 'Failed to read artifact from origin daemon.' };
+            }
+            const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
+            const rawContent = chunks.length > 0
+                ? Buffer.concat(chunks.map((c: string) => Buffer.from(String(c), 'base64'))).toString('utf8')
+                : (typeof p2pRes.content === 'string' ? p2pRes.content : '');
+            return {
+                ok: true,
+                result: {
+                    artifactId,
+                    artifact: record,
+                    attachment: toChatAttachmentMeta(record),
+                    content: wrapUntrustedArtifactContent(rawContent),
+                    totalBytes: typeof p2pRes.totalBytes === 'number' ? p2pRes.totalBytes : record.sizeBytes,
+                    offset: typeof p2pRes.offset === 'number' ? p2pRes.offset : rawOffset,
+                    pageBytes: typeof p2pRes.pageBytes === 'number' ? p2pRes.pageBytes : Buffer.byteLength(rawContent, 'utf8'),
+                    hasMore: Boolean(p2pRes.hasMore),
+                    nextOffset: typeof p2pRes.nextOffset === 'number' ? p2pRes.nextOffset : null,
+                    source: 'p2p_origin',
+                    originDaemonId: record.originDaemonId,
+                },
+            };
+        } catch (err) {
+            return { ok: false, code: 'artifact_origin_unreachable', error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+    try {
+        const readRes = store.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
+        return {
+            ok: true,
+            result: {
+                artifactId,
+                artifact: record,
+                attachment: toChatAttachmentMeta(record),
+                content: wrapUntrustedArtifactContent(readRes.content),
+                totalBytes: readRes.totalBytes,
+                offset: readRes.offset,
+                pageBytes: readRes.pageBytes,
+                hasMore: readRes.hasMore,
+                nextOffset: readRes.nextOffset,
+                source: 'local',
+            },
+        };
+    } catch (err: any) {
+        return { ok: false, code: str(err?.code) || 'artifact_read_failed', error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
 const artifactList = assistantVerb(ASSISTANT_VERB.artifactList, async (ports, args) => {
     const p = await resolveProject(ports, args.project);
     if (!p.ok) return p.result;
@@ -722,14 +805,8 @@ const artifactList = assistantVerb(ASSISTANT_VERB.artifactList, async (ports, ar
             attachments,
         };
     }
-    const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-    const artifacts = store.listByMesh(meshId, { sessionId, missionId, limit });
-    const attachments = artifacts.map(toChatAttachmentMeta);
-    return {
-        ...wrap(p.slug, meshId, { meshId, artifacts, attachments }),
-        artifacts,
-        attachments,
-    };
+    const listed = localArtifactList(meshId, args);
+    return { ...wrap(p.slug, meshId, listed), artifacts: listed.artifacts, attachments: listed.attachments };
 });
 
 const artifactRead = assistantVerb(ASSISTANT_VERB.artifactRead, async (ports, args, ctx) => {
@@ -743,86 +820,14 @@ const artifactRead = assistantVerb(ASSISTANT_VERB.artifactRead, async (ports, ar
         ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES)
         : MAX_ARTIFACT_MCP_PAGE_BYTES;
     if (p.remote) {
-        const out = await callRemote(ports, { ...p, remote: p.remote }, 'artifact_read', {
-            artifactId,
-            offset: rawOffset,
-            limit: rawLimit,
-        });
+        const out = await callRemote(ports, { ...p, remote: p.remote }, 'artifact_read', { artifactId, offset: rawOffset, limit: rawLimit });
         if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
         const body = remoteBody(out);
-        return {
-            ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: 'relay' }),
-            ...body,
-        };
+        return { ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: 'relay' }), ...body };
     }
-    const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-    const record = store.getById(artifactId);
-    if (!record) return fail('artifact_not_found', `Artifact '${artifactId}' not found.`, { project: p.slug, meshId });
-    if (record.meshId !== meshId) {
-        return fail('cross_mesh_artifact_denied', `Artifact '${artifactId}' does not belong to mesh '${meshId}'.`, { project: p.slug, meshId });
-    }
-    const self = ports.selfDaemonId();
-    if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
-        try {
-            const p2pRaw: any = await ctx.deps.dispatchMeshCommand(record.originDaemonId, 'artifact_fetch_origin', {
-                artifactId,
-                meshId,
-                offset: rawOffset,
-                limit: rawLimit,
-                asChunks: true,
-            });
-            const p2pRes = p2pRaw && typeof p2pRaw === 'object' && 'result' in p2pRaw && p2pRaw.result && typeof p2pRaw.result === 'object'
-                ? p2pRaw.result
-                : p2pRaw;
-            if (!p2pRes || p2pRes.success === false) {
-                return fail(str(p2pRes?.code) || 'artifact_origin_unreachable', str(p2pRes?.error) || 'Failed to read artifact from origin daemon.', { project: p.slug, meshId });
-            }
-            const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
-            const rawContent = chunks.length > 0
-                ? Buffer.concat(chunks.map((c: string) => Buffer.from(String(c), 'base64'))).toString('utf8')
-                : (typeof p2pRes.content === 'string' ? p2pRes.content : '');
-            const body = {
-                artifactId,
-                artifact: record,
-                attachment: toChatAttachmentMeta(record),
-                content: wrapUntrustedArtifactContent(rawContent),
-                totalBytes: typeof p2pRes.totalBytes === 'number' ? p2pRes.totalBytes : record.sizeBytes,
-                offset: typeof p2pRes.offset === 'number' ? p2pRes.offset : rawOffset,
-                pageBytes: typeof p2pRes.pageBytes === 'number' ? p2pRes.pageBytes : Buffer.byteLength(rawContent, 'utf8'),
-                hasMore: Boolean(p2pRes.hasMore),
-                nextOffset: typeof p2pRes.nextOffset === 'number' ? p2pRes.nextOffset : null,
-                source: 'p2p_origin',
-                originDaemonId: record.originDaemonId,
-            };
-            return {
-                ...wrap(p.slug, meshId, body),
-                ...body,
-            };
-        } catch (err) {
-            return fail('artifact_origin_unreachable', err instanceof Error ? err.message : String(err), { project: p.slug, meshId });
-        }
-    }
-    try {
-        const readRes = store.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
-        const body = {
-            artifactId,
-            artifact: record,
-            attachment: toChatAttachmentMeta(record),
-            content: wrapUntrustedArtifactContent(readRes.content),
-            totalBytes: readRes.totalBytes,
-            offset: readRes.offset,
-            pageBytes: readRes.pageBytes,
-            hasMore: readRes.hasMore,
-            nextOffset: readRes.nextOffset,
-            source: 'local',
-        };
-        return {
-            ...wrap(p.slug, meshId, body),
-            ...body,
-        };
-    } catch (err: any) {
-        return fail(str(err?.code) || 'artifact_read_failed', err instanceof Error ? err.message : String(err), { project: p.slug, meshId });
-    }
+    const read = await localArtifactRead(ports, meshId, args, ctx);
+    if (!read.ok) return fail(read.code, read.error, { project: p.slug, meshId });
+    return { ...wrap(p.slug, meshId, read.result), ...read.result };
 });
 
 export const assistantProjectHandlers: Record<string, HighFamilyHandler> = {

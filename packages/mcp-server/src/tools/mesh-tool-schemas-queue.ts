@@ -70,9 +70,9 @@ const ENQUEUE_TASK_DISCOVERY_META = {
  */
 export const MESH_ENQUEUE_TASK_TOOL = {
     name: 'mesh_enqueue_task',
-    description: 'Enqueue ONE worker task; an idle node claims it. Default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids — '
+    description: 'Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids — '
         + 'grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational warnings. '
-        + 'mesh_enqueue_batch enqueues several tasks at once; same-session continuation uses mesh_send_task. '
+        + 'mesh_enqueue_batch enqueues several such tasks at once. Same-session continuation belongs in mesh_send_task. '
         + 'Warns on in-flight duplicates.',
     _meta: ENQUEUE_TASK_DISCOVERY_META,
     inputSchema: {

@@ -100613,6 +100613,51 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
       };
     }
+    function chunkArtifactBytesBase64(content) {
+      const buf = Buffer.from(content, "utf8");
+      if (buf.length === 0) return [];
+      const chunks = [];
+      for (let i = 0; i < buf.length; i += ORIGIN_FETCH_CHUNK_BYTES) {
+        chunks.push(buf.subarray(i, i + ORIGIN_FETCH_CHUNK_BYTES).toString("base64"));
+      }
+      return chunks;
+    }
+    function listWorkerAuthorizedArtifacts(ctx, authority, store2, options) {
+      const own = store2.listBySession(authority.sessionId, { limit: options?.limit });
+      const meshStore = getMeshRuntimeStore(ctx);
+      const taskEntry = authority.meshId && authority.taskId ? meshStore.findQueueEntryById(authority.meshId, authority.taskId) : null;
+      const taskPayload = taskEntry?.payload ?? {};
+      const workerMissionId = trimString22(taskEntry?.missionId) || trimString22(taskPayload.missionId) || authority.missionId || "";
+      const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds) ? taskEntry.inputArtifactIds : Array.isArray(taskPayload.inputArtifactIds) ? taskPayload.inputArtifactIds : [];
+      const seen2 = new Set(own.map((rec5) => rec5.artifactId));
+      const merged = [...own];
+      for (const rawId of rawInputIds) {
+        const id4 = trimString22(rawId);
+        if (!id4 || seen2.has(id4)) continue;
+        const record6 = store2.get(id4);
+        if (!record6) continue;
+        let recordMissionId = trimString22(record6.missionId);
+        if (!recordMissionId && record6.taskId) {
+          try {
+            const prodEntry = meshStore.findQueueEntryById(
+              record6.meshId || authority.meshId || "",
+              record6.taskId
+            );
+            recordMissionId = trimString22(prodEntry?.missionId) || trimString22(prodEntry?.payload?.missionId);
+          } catch {
+            recordMissionId = "";
+          }
+        }
+        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
+        const sameMesh = !record6.meshId || !authority.meshId || record6.meshId === authority.meshId;
+        if (sameMission && sameMesh) {
+          seen2.add(id4);
+          merged.push(record6);
+        }
+      }
+      const filtered = options?.filterMissionId ? merged.filter((rec5) => rec5.missionId === options.filterMissionId) : merged;
+      return options?.limit !== void 0 ? filtered.slice(0, options.limit) : filtered;
+    }
     async function fetchArtifactFromOriginDaemon(ctx, authority, record6, args, isReadCommand) {
       const artifactId = record6.artifactId;
       if (!ctx.deps?.dispatchMeshCommand) {
@@ -100630,6 +100675,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           artifactId: record6.artifactId,
           sessionId: record6.sessionId,
           mode: isReadCommand ? "read" : "fetch",
+          asChunks: true,
           ...args?.offset !== void 0 ? { offset: args.offset } : {},
           ...args?.pageOffset !== void 0 ? { pageOffset: args.pageOffset } : {},
           ...args?.limit !== void 0 ? { limit: args.limit } : {}
@@ -100646,7 +100692,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           error: String(originAns.error || "Failed to fetch artifact from origin daemon")
         };
       }
-      const rawContent = String(originAns.content ?? "");
+      const chunks = Array.isArray(originAns.chunks) ? originAns.chunks : [];
+      const rawContent = chunks.length > 0 ? Buffer.concat(chunks.map((c) => Buffer.from(String(c), "base64"))).toString("utf8") : String(originAns.content ?? "");
       return {
         ...originAns,
         success: true,
@@ -100655,6 +100702,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         attachment: toChatAttachmentMeta(record6)
       };
     }
+    var ORIGIN_FETCH_CHUNK_BYTES;
     var handleArtifactIndexForwarded;
     var handleArtifactFetchOrigin;
     var init_artifact_sharing = __esm2({
@@ -100671,6 +100719,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         init_coordinator_registry();
         init_assistant_registry();
         init_artifacts2();
+        ORIGIN_FETCH_CHUNK_BYTES = 16 * 1024;
         handleArtifactIndexForwarded = async (ctx, args) => {
           const senderDaemonId = readMeshSender(args);
           const meshId = trimString22(args?.meshId);
@@ -100817,7 +100866,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 }
               }
             }
-            const mode = trimString22(args?.mode) === "read" ? "read" : "fetch";
+            const rawMode = trimString22(args?.mode);
+            const mode = rawMode === "fetch" ? "fetch" : rawMode === "read" || args?.asChunks === true || typeof args?.offset === "number" || typeof args?.pageOffset === "number" || typeof args?.limit === "number" ? "read" : "fetch";
             if (mode === "read") {
               const readOffset = typeof args?.offset === "number" ? args.offset : typeof args?.pageOffset === "number" ? args.pageOffset : void 0;
               const readLimit = typeof args?.limit === "number" ? args.limit : void 0;
@@ -100830,6 +100880,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               return {
                 success: true,
                 ...readRes,
+                chunks: chunkArtifactBytesBase64(readRes.content),
+                chunkByteSize: ORIGIN_FETCH_CHUNK_BYTES,
                 artifact: record6,
                 attachment: toChatAttachmentMeta(record6)
               };
@@ -100841,6 +100893,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             return {
               success: true,
               ...fetched,
+              chunks: chunkArtifactBytesBase64(fetched.content),
+              chunkByteSize: ORIGIN_FETCH_CHUNK_BYTES,
               artifact: record6,
               attachment: toChatAttachmentMeta(record6)
             };
@@ -101824,6 +101878,11 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             } else if (!hasExplicitSession && authority.isCoordinator && authority.meshId) {
               artifacts = store2.listByMesh(authority.meshId, {
                 ...filterMissionId ? { missionId: filterMissionId } : {},
+                limit
+              });
+            } else if (!hasExplicitSession && authority.producerRole === "worker") {
+              artifacts = listWorkerAuthorizedArtifacts(ctx, authority, store2, {
+                filterMissionId,
                 limit
               });
             } else {
@@ -111923,6 +111982,82 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const want = normalizeRepoIdentity(repoIdentity);
       return want ? meshes.find((m) => normalizeRepoIdentity(m.repoIdentity ?? "") === want) : void 0;
     }
+    function localArtifactList(meshId, args) {
+      const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+      const sessionId = str10(args.sessionId ?? args.session_id) || void 0;
+      const missionId = str10(args.missionId ?? args.mission_id) || void 0;
+      const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
+      const artifacts = store2.listByMesh(meshId, { sessionId, missionId, limit });
+      return { meshId, artifacts, attachments: artifacts.map(toChatAttachmentMeta) };
+    }
+    async function localArtifactRead(ports, meshId, args, ctx) {
+      const artifactId = str10(args.artifactId ?? args.artifact_id);
+      if (!artifactId) return { ok: false, code: "invalid_args", error: "artifactId required" };
+      const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+      const record6 = store2.getById(artifactId);
+      if (!record6) return { ok: false, code: "artifact_not_found", error: `Artifact '${artifactId}' not found.` };
+      if (record6.meshId !== meshId) {
+        return { ok: false, code: "cross_mesh_artifact_denied", error: `Artifact '${artifactId}' does not belong to mesh '${meshId}'.` };
+      }
+      const rawOffset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
+      const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
+      const self = ports.selfDaemonId();
+      if (record6.originDaemonId && (!self || !daemonIdsEquivalent4(record6.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
+        try {
+          const p2pRaw = await ctx.deps.dispatchMeshCommand(record6.originDaemonId, "artifact_fetch_origin", {
+            artifactId,
+            meshId,
+            offset: rawOffset,
+            limit: rawLimit,
+            asChunks: true
+          });
+          const p2pRes = p2pRaw && typeof p2pRaw === "object" && "result" in p2pRaw && p2pRaw.result && typeof p2pRaw.result === "object" ? p2pRaw.result : p2pRaw;
+          if (!p2pRes || p2pRes.success === false) {
+            return { ok: false, code: str10(p2pRes?.code) || "artifact_origin_unreachable", error: str10(p2pRes?.error) || "Failed to read artifact from origin daemon." };
+          }
+          const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
+          const rawContent = chunks.length > 0 ? Buffer.concat(chunks.map((c) => Buffer.from(String(c), "base64"))).toString("utf8") : typeof p2pRes.content === "string" ? p2pRes.content : "";
+          return {
+            ok: true,
+            result: {
+              artifactId,
+              artifact: record6,
+              attachment: toChatAttachmentMeta(record6),
+              content: wrapUntrustedArtifactContent(rawContent),
+              totalBytes: typeof p2pRes.totalBytes === "number" ? p2pRes.totalBytes : record6.sizeBytes,
+              offset: typeof p2pRes.offset === "number" ? p2pRes.offset : rawOffset,
+              pageBytes: typeof p2pRes.pageBytes === "number" ? p2pRes.pageBytes : Buffer.byteLength(rawContent, "utf8"),
+              hasMore: Boolean(p2pRes.hasMore),
+              nextOffset: typeof p2pRes.nextOffset === "number" ? p2pRes.nextOffset : null,
+              source: "p2p_origin",
+              originDaemonId: record6.originDaemonId
+            }
+          };
+        } catch (err) {
+          return { ok: false, code: "artifact_origin_unreachable", error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      try {
+        const readRes = store2.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
+        return {
+          ok: true,
+          result: {
+            artifactId,
+            artifact: record6,
+            attachment: toChatAttachmentMeta(record6),
+            content: wrapUntrustedArtifactContent(readRes.content),
+            totalBytes: readRes.totalBytes,
+            offset: readRes.offset,
+            pageBytes: readRes.pageBytes,
+            hasMore: readRes.hasMore,
+            nextOffset: readRes.nextOffset,
+            source: "local"
+          }
+        };
+      } catch (err) {
+        return { ok: false, code: str10(err?.code) || "artifact_read_failed", error: err instanceof Error ? err.message : String(err) };
+      }
+    }
     async function localAttemptReport(ports, meshId, sessionId, attemptId) {
       const authorized = ports.coordinatorSessionAuthorized?.(meshId, sessionId) ?? (ports.lastCoordinatorSessionId(meshId) === sessionId || ports.coordinators(meshId).some((c) => c.sessionId === sessionId));
       if (!authorized) return { body: null, source: "unavailable", reason: "coordinator_session_no_longer_authorized" };
@@ -112265,22 +112400,16 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
             const body = remoteBody(out);
-            const artifacts2 = Array.isArray(body.artifacts) ? body.artifacts : [];
-            const attachments2 = Array.isArray(body.attachments) ? body.attachments : [];
+            const artifacts = Array.isArray(body.artifacts) ? body.artifacts : [];
+            const attachments = Array.isArray(body.attachments) ? body.attachments : [];
             return {
-              ...wrap(p.slug, meshId, { ...body, artifacts: artifacts2, attachments: attachments2, host: p.remote.label, via: "relay" }),
-              artifacts: artifacts2,
-              attachments: attachments2
+              ...wrap(p.slug, meshId, { ...body, artifacts, attachments, host: p.remote.label, via: "relay" }),
+              artifacts,
+              attachments
             };
           }
-          const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-          const artifacts = store2.listByMesh(meshId, { sessionId, missionId, limit });
-          const attachments = artifacts.map(toChatAttachmentMeta);
-          return {
-            ...wrap(p.slug, meshId, { meshId, artifacts, attachments }),
-            artifacts,
-            attachments
-          };
+          const listed = localArtifactList(meshId, args);
+          return { ...wrap(p.slug, meshId, listed), artifacts: listed.artifacts, attachments: listed.attachments };
         });
         artifactRead = assistantVerb(ASSISTANT_VERB2.artifactRead, async (ports, args, ctx) => {
           const artifactId = str10(args.artifactId ?? args.artifact_id);
@@ -112291,82 +112420,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const rawOffset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
           const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
           if (p.remote) {
-            const out = await callRemote(ports, { ...p, remote: p.remote }, "artifact_read", {
-              artifactId,
-              offset: rawOffset,
-              limit: rawLimit
-            });
+            const out = await callRemote(ports, { ...p, remote: p.remote }, "artifact_read", { artifactId, offset: rawOffset, limit: rawLimit });
             if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
             const body = remoteBody(out);
-            return {
-              ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: "relay" }),
-              ...body
-            };
+            return { ...wrap(p.slug, meshId, { ...body, host: p.remote.label, via: "relay" }), ...body };
           }
-          const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-          const record6 = store2.getById(artifactId);
-          if (!record6) return fail4("artifact_not_found", `Artifact '${artifactId}' not found.`, { project: p.slug, meshId });
-          if (record6.meshId !== meshId) {
-            return fail4("cross_mesh_artifact_denied", `Artifact '${artifactId}' does not belong to mesh '${meshId}'.`, { project: p.slug, meshId });
-          }
-          const self = ports.selfDaemonId();
-          if (record6.originDaemonId && (!self || !daemonIdsEquivalent4(record6.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
-            try {
-              const p2pRaw = await ctx.deps.dispatchMeshCommand(record6.originDaemonId, "artifact_fetch_origin", {
-                artifactId,
-                meshId,
-                offset: rawOffset,
-                limit: rawLimit,
-                asChunks: true
-              });
-              const p2pRes = p2pRaw && typeof p2pRaw === "object" && "result" in p2pRaw && p2pRaw.result && typeof p2pRaw.result === "object" ? p2pRaw.result : p2pRaw;
-              if (!p2pRes || p2pRes.success === false) {
-                return fail4(str10(p2pRes?.code) || "artifact_origin_unreachable", str10(p2pRes?.error) || "Failed to read artifact from origin daemon.", { project: p.slug, meshId });
-              }
-              const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
-              const rawContent = chunks.length > 0 ? Buffer.concat(chunks.map((c) => Buffer.from(String(c), "base64"))).toString("utf8") : typeof p2pRes.content === "string" ? p2pRes.content : "";
-              const body = {
-                artifactId,
-                artifact: record6,
-                attachment: toChatAttachmentMeta(record6),
-                content: wrapUntrustedArtifactContent(rawContent),
-                totalBytes: typeof p2pRes.totalBytes === "number" ? p2pRes.totalBytes : record6.sizeBytes,
-                offset: typeof p2pRes.offset === "number" ? p2pRes.offset : rawOffset,
-                pageBytes: typeof p2pRes.pageBytes === "number" ? p2pRes.pageBytes : Buffer.byteLength(rawContent, "utf8"),
-                hasMore: Boolean(p2pRes.hasMore),
-                nextOffset: typeof p2pRes.nextOffset === "number" ? p2pRes.nextOffset : null,
-                source: "p2p_origin",
-                originDaemonId: record6.originDaemonId
-              };
-              return {
-                ...wrap(p.slug, meshId, body),
-                ...body
-              };
-            } catch (err) {
-              return fail4("artifact_origin_unreachable", err instanceof Error ? err.message : String(err), { project: p.slug, meshId });
-            }
-          }
-          try {
-            const readRes = store2.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
-            const body = {
-              artifactId,
-              artifact: record6,
-              attachment: toChatAttachmentMeta(record6),
-              content: wrapUntrustedArtifactContent(readRes.content),
-              totalBytes: readRes.totalBytes,
-              offset: readRes.offset,
-              pageBytes: readRes.pageBytes,
-              hasMore: readRes.hasMore,
-              nextOffset: readRes.nextOffset,
-              source: "local"
-            };
-            return {
-              ...wrap(p.slug, meshId, body),
-              ...body
-            };
-          } catch (err) {
-            return fail4(str10(err?.code) || "artifact_read_failed", err instanceof Error ? err.message : String(err), { project: p.slug, meshId });
-          }
+          const read2 = await localArtifactRead(ports, meshId, args, ctx);
+          if (!read2.ok) return fail4(read2.code, read2.error, { project: p.slug, meshId });
+          return { ...wrap(p.slug, meshId, read2.result), ...read2.result };
         });
         assistantProjectHandlers = {
           ...remoteProjectHandlers,
@@ -114863,89 +114924,11 @@ ${defangRelayBody(text4)}`;
           if (typeof args.attemptId !== "string" || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== "string" || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail5("invalid_args");
           return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
-        case "artifact_list": {
-          const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-          const sessionId = str12(args.sessionId) || void 0;
-          const missionId = str12(args.missionId) || void 0;
-          const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : void 0;
-          const artifacts = store2.listByMesh(meshId, { sessionId, missionId, limit });
-          return {
-            success: true,
-            result: {
-              meshId,
-              artifacts,
-              attachments: artifacts.map(toChatAttachmentMeta)
-            }
-          };
-        }
+        case "artifact_list":
+          return { success: true, result: localArtifactList(meshId, args) };
         case "artifact_read": {
-          const artifactId = str12(args.artifactId);
-          if (!artifactId) return fail5("invalid_args", "artifactId required");
-          const store2 = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-          const record6 = store2.getById(artifactId);
-          if (!record6) return fail5("artifact_not_found", `Artifact '${artifactId}' not found.`);
-          if (record6.meshId !== meshId) {
-            return fail5("cross_mesh_artifact_denied", `Artifact '${artifactId}' does not belong to mesh '${meshId}'.`);
-          }
-          const rawOffset = typeof args.offset === "number" && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
-          const rawLimit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
-          const self = ports.selfDaemonId();
-          if (record6.originDaemonId && (!self || !daemonIdsEquivalent4(record6.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
-            try {
-              const p2pRaw = await ctx.deps.dispatchMeshCommand(record6.originDaemonId, "artifact_fetch_origin", {
-                artifactId,
-                meshId,
-                offset: rawOffset,
-                limit: rawLimit,
-                asChunks: true
-              });
-              const p2pRes = p2pRaw && typeof p2pRaw === "object" && "result" in p2pRaw && p2pRaw.result && typeof p2pRaw.result === "object" ? p2pRaw.result : p2pRaw;
-              if (!p2pRes || p2pRes.success === false) {
-                return fail5(str12(p2pRes?.code) || "artifact_origin_unreachable", str12(p2pRes?.error) || "Failed to read artifact from origin daemon.");
-              }
-              const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
-              const rawContent = chunks.length > 0 ? Buffer.concat(chunks.map((c) => Buffer.from(String(c), "base64"))).toString("utf8") : typeof p2pRes.content === "string" ? p2pRes.content : "";
-              const wrappedContent = wrapUntrustedArtifactContent(rawContent);
-              return {
-                success: true,
-                result: {
-                  artifactId,
-                  artifact: record6,
-                  attachment: toChatAttachmentMeta(record6),
-                  content: wrappedContent,
-                  totalBytes: typeof p2pRes.totalBytes === "number" ? p2pRes.totalBytes : record6.sizeBytes,
-                  offset: typeof p2pRes.offset === "number" ? p2pRes.offset : rawOffset,
-                  pageBytes: typeof p2pRes.pageBytes === "number" ? p2pRes.pageBytes : Buffer.byteLength(rawContent, "utf8"),
-                  hasMore: Boolean(p2pRes.hasMore),
-                  nextOffset: typeof p2pRes.nextOffset === "number" ? p2pRes.nextOffset : null,
-                  source: "p2p_origin",
-                  originDaemonId: record6.originDaemonId
-                }
-              };
-            } catch (err) {
-              return fail5("artifact_origin_unreachable", err instanceof Error ? err.message : String(err));
-            }
-          }
-          try {
-            const readRes = store2.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
-            return {
-              success: true,
-              result: {
-                artifactId,
-                artifact: record6,
-                attachment: toChatAttachmentMeta(record6),
-                content: wrapUntrustedArtifactContent(readRes.content),
-                totalBytes: readRes.totalBytes,
-                offset: readRes.offset,
-                pageBytes: readRes.pageBytes,
-                hasMore: readRes.hasMore,
-                nextOffset: readRes.nextOffset,
-                source: "local"
-              }
-            };
-          } catch (err) {
-            return fail5(str12(err?.code) || "artifact_read_failed", err instanceof Error ? err.message : String(err));
-          }
+          const read2 = await localArtifactRead(ports, meshId, args, ctx);
+          return read2.ok ? { success: true, result: read2.result } : fail5(read2.code, read2.error);
         }
         case "inventory":
           if (isFollower) return fail5("remote_op_forbidden", "inventory is not permitted for remote followers");
@@ -115008,7 +114991,6 @@ ${defangRelayBody(text4)}`;
         init_assistant();
         init_assistant_store();
         init_mesh_config();
-        init_artifacts();
         init_mesh_config_store();
         REMOTE_SEND_MAX_CHARS = 64e3;
         REMOTE_POLL_MAX_COMMITS = 5;
@@ -115067,16 +115049,12 @@ ${defangRelayBody(text4)}`;
           }
         };
         assistantRemoteProjectCatalog = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) {
-            return fail5("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
-          }
+          if (!isTrustedOwnerIngress(rawArgs)) return fail5("owner_ingress_required", "Remote project catalog requires verified owner ingress.");
           try {
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) {
-              return fail5("host_identity_unavailable", "This daemon has no canonical daemon identity.");
-            }
+            if (!hostDaemonId) return fail5("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             const now = Date.now();
             const hostedMeshes2 = ports.listMeshes().filter((m) => ports.isHostedHere(m));
             const projects2 = hostedMeshes2.map((m) => {
@@ -115109,21 +115087,14 @@ ${defangRelayBody(text4)}`;
                 observedAt: now
               };
             });
-            return {
-              success: true,
-              hostDaemonId,
-              projects: projects2,
-              observedAt: now
-            };
+            return { success: true, hostDaemonId, projects: projects2, observedAt: now };
           } catch (e) {
             if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
             throw e;
           }
         };
         assistantRemoteProjectAccess = async (ctx, rawArgs) => {
-          if (!isTrustedOwnerIngress(rawArgs)) {
-            return fail5("owner_ingress_required", "Remote project access changes require verified owner ingress.");
-          }
+          if (!isTrustedOwnerIngress(rawArgs)) return fail5("owner_ingress_required", "Remote project access changes require verified owner ingress.");
           const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
           const action2 = str12(args.action) || "get";
           const meshId = str12(args.meshId);
@@ -115135,9 +115106,7 @@ ${defangRelayBody(text4)}`;
             const ports = await projectPortsFor(ctx);
             const rawSelf = ports.selfDaemonId();
             const hostDaemonId = canonicalDaemonId2(rawSelf) ?? rawSelf;
-            if (!hostDaemonId) {
-              return fail5("host_identity_unavailable", "This daemon has no canonical daemon identity.");
-            }
+            if (!hostDaemonId) return fail5("host_identity_unavailable", "This daemon has no canonical daemon identity.");
             if (action2 === "get") {
               const mesh = ports.listMeshes().find((m) => m.id === meshId);
               if (!mesh) return fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
@@ -115145,11 +115114,7 @@ ${defangRelayBody(text4)}`;
               if (mesh.assistantRemoteAccess !== void 0 && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
                 return fail5("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
               }
-              return {
-                success: true,
-                action: "get",
-                access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)
-              };
+              return { success: true, action: "get", access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
             }
             return await withMeshRemoteAccessMutex(meshId, () => {
               try {
@@ -115167,15 +115132,9 @@ ${defangRelayBody(text4)}`;
                   if (action2 === "set_policy") {
                     const hasLaunchToggle = typeof args.allowCoordinatorLaunch === "boolean";
                     const hasArtifactToggle = typeof args.allowArtifactRead === "boolean";
-                    if (!hasLaunchToggle && !hasArtifactToggle) {
-                      return fail5("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
-                    }
-                    if (rawAcl !== void 0 && !existing) {
-                      return fail5("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                    }
-                    if (!existing) {
-                      return fail5("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
-                    }
+                    if (!hasLaunchToggle && !hasArtifactToggle) return fail5("invalid_args", "allowCoordinatorLaunch or allowArtifactRead boolean is required");
+                    if (rawAcl !== void 0 && !existing) return fail5("remote_access_corrupt", `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                    if (!existing) return fail5("remote_access_denied", `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                     if (existing.status !== "active") {
                       return fail5("host_revoked", `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
                         grantRevision: existing.grantRevision,
@@ -115197,26 +115156,14 @@ ${defangRelayBody(text4)}`;
                   if (action2 === "grant") {
                     const rawActiveDaemonId = str12(args.activeDaemonId);
                     const activeDaemonId = canonicalDaemonId2(rawActiveDaemonId);
-                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) {
-                      return fail5("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
-                    }
-                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) {
-                      return fail5("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
-                    }
+                    if (!activeDaemonId || !activeDaemonId.startsWith("daemon_mach_")) return fail5("invalid_active_daemon_id", "activeDaemonId is required and must be a canonical daemon id.");
+                    if (hostDaemonId && daemonIdsEquivalent4(activeDaemonId, hostDaemonId)) return fail5("grant_self_not_allowed", "Cannot grant remote follower access to the host daemon itself.");
                     const slot = str12(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                    if (slot !== ASSISTANT_ACCOUNT_SLOT) {
-                      return fail5("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
-                    }
+                    if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail5("invalid_args", `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
                     const bindingRevision = typeof args.bindingRevision === "number" && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
-                    if (bindingRevision === null) {
-                      return fail5("invalid_args", "bindingRevision must be a positive integer");
-                    }
+                    if (bindingRevision === null) return fail5("invalid_args", "bindingRevision must be a positive integer");
                     if (existing && daemonIdsEquivalent4(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                      return fail5(
-                        "binding_revision_stale",
-                        "Requested bindingRevision is older than the host ACL bindingRevision.",
-                        { actualBindingRevision: existing.bindingRevision }
-                      );
+                      return fail5("binding_revision_stale", "Requested bindingRevision is older than the host ACL bindingRevision.", { actualBindingRevision: existing.bindingRevision });
                     }
                     const nextGrantRevision2 = baseGrantRevision + 1;
                     const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === "boolean" ? args.allowCoordinatorLaunch : existing?.allowCoordinatorLaunch ?? true;
@@ -115266,9 +115213,7 @@ ${defangRelayBody(text4)}`;
                   return { success: true, action: "revoke", access: tombstone };
                 });
               } catch (err) {
-                if (err instanceof MeshConfigStrictLockError) {
-                  return fail5(err.code, err.message);
-                }
+                if (err instanceof MeshConfigStrictLockError) return fail5(err.code, err.message);
                 throw err;
               }
             });
@@ -196651,7 +196596,7 @@ var ENQUEUE_TASK_DISCOVERY_META = {
 };
 var MESH_ENQUEUE_TASK_TOOL = {
   name: "mesh_enqueue_task",
-  description: "Enqueue ONE worker task; an idle node claims it. Default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids \u2014 grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational warnings. mesh_enqueue_batch enqueues several tasks at once; same-session continuation uses mesh_send_task. Warns on in-flight duplicates.",
+  description: "Enqueue ONE worker task; an idle node claims it. The default way to delegate: when a step needs queued work to finish first, pass depends_on with those task ids \u2014 grow the plan as results arrive. Omit provider/model/thinking for ordinary new tasks; classify difficulty honestly. Node targeting is branch affinity only. Intentional provider pins are honored with informational warnings. mesh_enqueue_batch enqueues several such tasks at once. Same-session continuation belongs in mesh_send_task. Warns on in-flight duplicates.",
   _meta: ENQUEUE_TASK_DISCOVERY_META,
   inputSchema: {
     type: "object",

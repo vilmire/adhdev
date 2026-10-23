@@ -2257,7 +2257,15 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 sessionId: 'sess-worker-b',
             });
 
-            // ALLOW: Worker B reads regShared.artifactId
+            // ALLOW: Worker B reads regShared.artifactId and lists it via artifact_list
+            const listB = await artifactHandlers.artifact_list(ctx, {
+                bind: bindB.bind,
+                token: tokenB.token,
+            });
+            expect(listB.success).toBe(true);
+            expect((listB.artifacts as any[]).map((a) => a.artifactId)).toContain(regShared.artifactId);
+            expect((listB.artifacts as any[]).map((a) => a.artifactId)).not.toContain(regUnlisted.artifactId);
+
             const allowedRead = await artifactHandlers.artifact_read(ctx, {
                 artifactId: regShared.artifactId,
                 bind: bindB.bind,
@@ -2648,6 +2656,9 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 expect(hostRead.content).toContain('<untrusted_artifact_content>');
                 expect(hostRead.content).toContain(largeMarkdown);
                 expect(hostRead.content).toContain('</untrusted_artifact_content>');
+                expect(hostRead.chunkByteSize).toBe(16 * 1024);
+                expect(Array.isArray(hostRead.chunks)).toBe(true);
+                expect((hostRead.chunks as string[]).length).toBeGreaterThanOrEqual(4);
                 // Verify the response was split into multiple 16 KB mesh_chunk frames over MeshRpcEndpoint
                 expect(chunkFramesObserved.length).toBeGreaterThanOrEqual(2);
             } finally {

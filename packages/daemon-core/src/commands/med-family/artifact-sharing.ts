@@ -10,6 +10,7 @@ import type { CommandRouterResult } from '../router.js';
 import type { MedFamilyHandler } from './types.js';
 import {
     ArtifactGuardError,
+    type ArtifactStore,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,
     type ArtifactKind,
@@ -505,6 +506,78 @@ export async function authorizeCrossSessionArtifactAccess(
     };
 }
 
+export const ORIGIN_FETCH_CHUNK_BYTES = 16 * 1024;
+
+export function chunkArtifactBytesBase64(content: string): string[] {
+    const buf = Buffer.from(content, 'utf8');
+    if (buf.length === 0) return [];
+    const chunks: string[] = [];
+    for (let i = 0; i < buf.length; i += ORIGIN_FETCH_CHUNK_BYTES) {
+        chunks.push(buf.subarray(i, i + ORIGIN_FETCH_CHUNK_BYTES).toString('base64'));
+    }
+    return chunks;
+}
+
+export function listWorkerAuthorizedArtifacts(
+    ctx: ArtifactCommandContext,
+    authority: ResolvedSessionAuthority,
+    store: ArtifactStore,
+    options?: { filterMissionId?: string; limit?: number },
+): ArtifactRecord[] {
+    const own = store.listBySession(authority.sessionId, { limit: options?.limit });
+    const meshStore = getMeshRuntimeStore(ctx);
+    const taskEntry =
+        authority.meshId && authority.taskId
+            ? (meshStore.findQueueEntryById(authority.meshId, authority.taskId) as Record<
+                  string,
+                  unknown
+              > | null)
+            : null;
+    const taskPayload = (taskEntry?.payload ?? {}) as Record<string, unknown>;
+    const workerMissionId =
+        trimString(taskEntry?.missionId) ||
+        trimString(taskPayload.missionId) ||
+        authority.missionId ||
+        '';
+    const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds)
+        ? taskEntry.inputArtifactIds
+        : Array.isArray(taskPayload.inputArtifactIds)
+          ? taskPayload.inputArtifactIds
+          : [];
+    const seen = new Set<string>(own.map((rec) => rec.artifactId));
+    const merged: ArtifactRecord[] = [...own];
+    for (const rawId of rawInputIds) {
+        const id = trimString(rawId);
+        if (!id || seen.has(id)) continue;
+        const record = store.get(id);
+        if (!record) continue;
+        let recordMissionId = trimString(record.missionId);
+        if (!recordMissionId && record.taskId) {
+            try {
+                const prodEntry = meshStore.findQueueEntryById(
+                    record.meshId || authority.meshId || '',
+                    record.taskId,
+                ) as Record<string, unknown> | null;
+                recordMissionId =
+                    trimString(prodEntry?.missionId) ||
+                    trimString((prodEntry?.payload as Record<string, unknown> | undefined)?.missionId);
+            } catch {
+                recordMissionId = '';
+            }
+        }
+        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
+        const sameMesh = !record.meshId || !authority.meshId || record.meshId === authority.meshId;
+        if (sameMission && sameMesh) {
+            seen.add(id);
+            merged.push(record);
+        }
+    }
+    const filtered = options?.filterMissionId
+        ? merged.filter((rec) => rec.missionId === options.filterMissionId)
+        : merged;
+    return options?.limit !== undefined ? filtered.slice(0, options.limit) : filtered;
+}
+
 export async function fetchArtifactFromOriginDaemon(
     ctx: ArtifactCommandContext,
     authority: ResolvedSessionAuthority,
@@ -528,6 +601,7 @@ export async function fetchArtifactFromOriginDaemon(
             artifactId: record.artifactId,
             sessionId: record.sessionId,
             mode: isReadCommand ? 'read' : 'fetch',
+            asChunks: true,
             ...(args?.offset !== undefined ? { offset: args.offset } : {}),
             ...(args?.pageOffset !== undefined ? { pageOffset: args.pageOffset } : {}),
             ...(args?.limit !== undefined ? { limit: args.limit } : {}),
@@ -547,7 +621,11 @@ export async function fetchArtifactFromOriginDaemon(
             error: String(originAns.error || 'Failed to fetch artifact from origin daemon'),
         };
     }
-    const rawContent = String(originAns.content ?? '');
+    const chunks = Array.isArray(originAns.chunks) ? originAns.chunks : [];
+    const rawContent =
+        chunks.length > 0
+            ? Buffer.concat(chunks.map((c: unknown) => Buffer.from(String(c), 'base64'))).toString('utf8')
+            : String(originAns.content ?? '');
     return {
         ...originAns,
         success: true,
@@ -727,7 +805,17 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
                 }
             }
         }
-        const mode = trimString(args?.mode) === 'read' ? 'read' : 'fetch';
+        const rawMode = trimString(args?.mode);
+        const mode =
+            rawMode === 'fetch'
+                ? 'fetch'
+                : rawMode === 'read' ||
+                    args?.asChunks === true ||
+                    typeof args?.offset === 'number' ||
+                    typeof args?.pageOffset === 'number' ||
+                    typeof args?.limit === 'number'
+                  ? 'read'
+                  : 'fetch';
         if (mode === 'read') {
             const readOffset =
                 typeof args?.offset === 'number'
@@ -745,6 +833,8 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
             return {
                 success: true,
                 ...readRes,
+                chunks: chunkArtifactBytesBase64(readRes.content),
+                chunkByteSize: ORIGIN_FETCH_CHUNK_BYTES,
                 artifact: record,
                 attachment: toChatAttachmentMeta(record),
             };
@@ -756,6 +846,8 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
         return {
             success: true,
             ...fetched,
+            chunks: chunkArtifactBytesBase64(fetched.content),
+            chunkByteSize: ORIGIN_FETCH_CHUNK_BYTES,
             artifact: record,
             attachment: toChatAttachmentMeta(record),
         };

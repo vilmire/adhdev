@@ -69,15 +69,9 @@ import { ensureCoordinator, pickCoordinator, type AssistantCoordinatorView } fro
 import { compactTranscriptTail, coordinatorState, followerStatusView } from '../../assistant/project-views.js';
 import { ASSISTANT_REMOTE_PROJECT_COMMAND, ASSISTANT_REMOTE_OPS, type AssistantRemoteOp } from '../../assistant/assistant-remote-host.js';
 import type { AssistantProjectPorts } from '../../assistant/assistant-project-ports.js';
-import { coordinatorPorts, localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
+import { coordinatorPorts, localArtifactList, localArtifactRead, localProjectRead, localProjectSend, localProjectStatus, localAttemptReport, readTailArg } from './assistant.js';
 import { applyNote, noteTextRefusal, parseNoteOp, projectPortsFor } from './assistant-store.js';
 import { normalizeAssistantRemoteAccessBinding } from '../../config/mesh-config.js';
-import {
-    ArtifactStore,
-    MAX_ARTIFACT_MCP_PAGE_BYTES,
-    toChatAttachmentMeta,
-    wrapUntrustedArtifactContent,
-} from '../../artifacts/index.js';
 import {
     MeshConfigStrictLockError,
     readMeshConfigFromDisk,
@@ -1019,95 +1013,11 @@ async function run(
             if (typeof args.attemptId !== 'string' || !args.attemptId || args.attemptId.length > 200 || typeof args.coordinatorSessionId !== 'string' || !args.coordinatorSessionId || args.coordinatorSessionId.length > 200) return fail('invalid_args');
             return { success: true, result: await localAttemptReport(ports, meshId, args.coordinatorSessionId, args.attemptId) };
         }
-        case 'artifact_list': {
-            const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-            const sessionId = str(args.sessionId) || undefined;
-            const missionId = str(args.missionId) || undefined;
-            const limit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : undefined;
-            const artifacts = store.listByMesh(meshId, { sessionId, missionId, limit });
-            return {
-                success: true,
-                result: {
-                    meshId,
-                    artifacts,
-                    attachments: artifacts.map(toChatAttachmentMeta),
-                },
-            };
-        }
+        case 'artifact_list':
+            return { success: true, result: localArtifactList(meshId, args) };
         case 'artifact_read': {
-            const artifactId = str(args.artifactId);
-            if (!artifactId) return fail('invalid_args', 'artifactId required');
-            const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
-            const record = store.getById(artifactId);
-            if (!record) return fail('artifact_not_found', `Artifact '${artifactId}' not found.`);
-            if (record.meshId !== meshId) {
-                return fail('cross_mesh_artifact_denied', `Artifact '${artifactId}' does not belong to mesh '${meshId}'.`);
-            }
-            const rawOffset = typeof args.offset === 'number' && Number.isFinite(args.offset) ? Math.max(0, Math.floor(args.offset)) : 0;
-            const rawLimit = typeof args.limit === 'number' && Number.isFinite(args.limit)
-                ? Math.min(Math.max(1, Math.floor(args.limit)), MAX_ARTIFACT_MCP_PAGE_BYTES)
-                : MAX_ARTIFACT_MCP_PAGE_BYTES;
-            const self = ports.selfDaemonId();
-            if (record.originDaemonId && (!self || !daemonIdsEquivalent(record.originDaemonId, self)) && ctx?.deps?.dispatchMeshCommand) {
-                try {
-                    const p2pRaw: any = await ctx.deps.dispatchMeshCommand(record.originDaemonId, 'artifact_fetch_origin', {
-                        artifactId,
-                        meshId,
-                        offset: rawOffset,
-                        limit: rawLimit,
-                        asChunks: true,
-                    });
-                    const p2pRes = p2pRaw && typeof p2pRaw === 'object' && 'result' in p2pRaw && p2pRaw.result && typeof p2pRaw.result === 'object'
-                        ? p2pRaw.result
-                        : p2pRaw;
-                    if (!p2pRes || p2pRes.success === false) {
-                        return fail(str(p2pRes?.code) || 'artifact_origin_unreachable', str(p2pRes?.error) || 'Failed to read artifact from origin daemon.');
-                    }
-                    const chunks = Array.isArray(p2pRes.chunks) ? p2pRes.chunks : [];
-                    const rawContent = chunks.length > 0
-                        ? Buffer.concat(chunks.map((c: string) => Buffer.from(String(c), 'base64'))).toString('utf8')
-                        : (typeof p2pRes.content === 'string' ? p2pRes.content : '');
-                    const wrappedContent = wrapUntrustedArtifactContent(rawContent);
-                    return {
-                        success: true,
-                        result: {
-                            artifactId,
-                            artifact: record,
-                            attachment: toChatAttachmentMeta(record),
-                            content: wrappedContent,
-                            totalBytes: typeof p2pRes.totalBytes === 'number' ? p2pRes.totalBytes : record.sizeBytes,
-                            offset: typeof p2pRes.offset === 'number' ? p2pRes.offset : rawOffset,
-                            pageBytes: typeof p2pRes.pageBytes === 'number' ? p2pRes.pageBytes : Buffer.byteLength(rawContent, 'utf8'),
-                            hasMore: Boolean(p2pRes.hasMore),
-                            nextOffset: typeof p2pRes.nextOffset === 'number' ? p2pRes.nextOffset : null,
-                            source: 'p2p_origin',
-                            originDaemonId: record.originDaemonId,
-                        },
-                    };
-                } catch (err) {
-                    return fail('artifact_origin_unreachable', err instanceof Error ? err.message : String(err));
-                }
-            }
-            try {
-                const readRes = store.readArtifactContent(artifactId, { offset: rawOffset, limit: rawLimit });
-                return {
-                    success: true,
-                    result: {
-                        artifactId,
-                        artifact: record,
-                        attachment: toChatAttachmentMeta(record),
-                        content: wrapUntrustedArtifactContent(readRes.content),
-                        totalBytes: readRes.totalBytes,
-                        offset: readRes.offset,
-                        pageBytes: readRes.pageBytes,
-                        hasMore: readRes.hasMore,
-                        nextOffset: readRes.nextOffset,
-                        source: 'local',
-                    },
-                };
-            } catch (err: any) {
-                return fail(str(err?.code) || 'artifact_read_failed', err instanceof Error ? err.message : String(err));
-            }
+            const read = await localArtifactRead(ports, meshId, args, ctx);
+            return read.ok ? { success: true, result: read.result } : fail(read.code, read.error);
         }
         case 'inventory':
             if (isFollower) return fail('remote_op_forbidden', 'inventory is not permitted for remote followers');
@@ -1166,16 +1076,12 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
  * notes, or secrets.
  */
 const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyContext, rawArgs: any) => {
-    if (!isTrustedOwnerIngress(rawArgs)) {
-        return fail('owner_ingress_required', 'Remote project catalog requires verified owner ingress.');
-    }
+    if (!isTrustedOwnerIngress(rawArgs)) return fail('owner_ingress_required', 'Remote project catalog requires verified owner ingress.');
     try {
         const ports = await projectPortsFor(ctx);
         const rawSelf = ports.selfDaemonId();
         const hostDaemonId = canonicalDaemonId(rawSelf) ?? rawSelf;
-        if (!hostDaemonId) {
-            return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
-        }
+        if (!hostDaemonId) return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
         const now = Date.now();
         const hostedMeshes = ports.listMeshes().filter((m) => ports.isHostedHere(m));
         const projects: RemoteProjectCatalogItem[] = hostedMeshes.map((m) => {
@@ -1186,34 +1092,20 @@ const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyC
             const allowCoordinatorLaunch = acl ? acl.allowCoordinatorLaunch !== false : true;
             const allowArtifactRead = acl ? acl.allowArtifactRead !== false : true;
             return {
-                hostDaemonId,
-                meshId: m.id,
-                name: m.name,
+                hostDaemonId, meshId: m.id, name: m.name,
                 sanitizedRepoIdentity: sanitizeRemoteRepoIdentity(m.repoRemoteUrl || m.repoIdentity),
                 coordinatorState: coordinatorState(views),
-                allowCoordinatorLaunch,
-                allowArtifactRead,
+                allowCoordinatorLaunch, allowArtifactRead,
                 capabilities: {
-                    status: true,
-                    read: true,
-                    poll: true,
-                    report: true,
-                    send: true,
-                    artifact_list: allowArtifactRead,
-                    artifact_read: allowArtifactRead,
+                    status: true, read: true, poll: true, report: true, send: true,
+                    artifact_list: allowArtifactRead, artifact_read: allowArtifactRead,
                     coordinatorPresent: Boolean(live?.sessionId || lastSessionId),
-                    allowCoordinatorLaunch,
-                    allowArtifactRead,
+                    allowCoordinatorLaunch, allowArtifactRead,
                 },
                 observedAt: now,
             };
         });
-        return {
-            success: true,
-            hostDaemonId,
-            projects,
-            observedAt: now,
-        };
+        return { success: true, hostDaemonId, projects, observedAt: now };
     } catch (e) {
         if (isDaemonComponentsNotReady(e)) return componentsNotReadyResult(e);
         throw e;
@@ -1226,9 +1118,7 @@ const assistantRemoteProjectCatalog: HighFamilyHandler = async (ctx: HighFamilyC
  * `'personal'` assistant slot and one active deputy daemon on a locally hosted mesh.
  */
 const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyContext, rawArgs: any) => {
-    if (!isTrustedOwnerIngress(rawArgs)) {
-        return fail('owner_ingress_required', 'Remote project access changes require verified owner ingress.');
-    }
+    if (!isTrustedOwnerIngress(rawArgs)) return fail('owner_ingress_required', 'Remote project access changes require verified owner ingress.');
     const args: Record<string, unknown> = rawArgs && typeof rawArgs === 'object' ? rawArgs : {};
     const action = str(args.action) || 'get';
     const meshId = str(args.meshId);
@@ -1241,9 +1131,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
         const ports = await projectPortsFor(ctx);
         const rawSelf = ports.selfDaemonId();
         const hostDaemonId = canonicalDaemonId(rawSelf) ?? rawSelf;
-        if (!hostDaemonId) {
-            return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
-        }
+        if (!hostDaemonId) return fail('host_identity_unavailable', 'This daemon has no canonical daemon identity.');
 
         if (action === 'get') {
             const mesh = ports.listMeshes().find((m) => m.id === meshId);
@@ -1252,11 +1140,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
             if (mesh.assistantRemoteAccess !== undefined && !normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId)) {
                 return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
             }
-            return {
-                success: true,
-                action: 'get',
-                access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId),
-            };
+            return { success: true, action: 'get', access: normalizeAssistantRemoteAccessBinding(mesh.assistantRemoteAccess, meshId) };
         }
 
         return await withMeshRemoteAccessMutex(meshId, () => {
@@ -1279,19 +1163,12 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                     if (action === 'set_policy') {
                         const hasLaunchToggle = typeof args.allowCoordinatorLaunch === 'boolean';
                         const hasArtifactToggle = typeof args.allowArtifactRead === 'boolean';
-                        if (!hasLaunchToggle && !hasArtifactToggle) {
-                            return fail('invalid_args', 'allowCoordinatorLaunch or allowArtifactRead boolean is required');
-                        }
-                        if (rawAcl !== undefined && !existing) {
-                            return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
-                        }
-                        if (!existing) {
-                            return fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
-                        }
+                        if (!hasLaunchToggle && !hasArtifactToggle) return fail('invalid_args', 'allowCoordinatorLaunch or allowArtifactRead boolean is required');
+                        if (rawAcl !== undefined && !existing) return fail('remote_access_corrupt', `Persisted assistantRemoteAccess on mesh ${meshId} is corrupt.`);
+                        if (!existing) return fail('remote_access_denied', `No valid assistantRemoteAccess grant for mesh ${meshId}.`);
                         if (existing.status !== 'active') {
                             return fail('host_revoked', `Assistant remote access for mesh ${meshId} has been revoked by the host.`, {
-                                grantRevision: existing.grantRevision,
-                                bindingRevision: existing.bindingRevision,
+                                grantRevision: existing.grantRevision, bindingRevision: existing.bindingRevision,
                             });
                         }
                         const updated: AssistantRemoteAccessBinding = {
@@ -1310,48 +1187,23 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                     if (action === 'grant') {
                         const rawActiveDaemonId = str(args.activeDaemonId);
                         const activeDaemonId = canonicalDaemonId(rawActiveDaemonId);
-                        if (!activeDaemonId || !activeDaemonId.startsWith('daemon_mach_')) {
-                            return fail('invalid_active_daemon_id', 'activeDaemonId is required and must be a canonical daemon id.');
-                        }
-                        if (hostDaemonId && daemonIdsEquivalent(activeDaemonId, hostDaemonId)) {
-                            return fail('grant_self_not_allowed', 'Cannot grant remote follower access to the host daemon itself.');
-                        }
+                        if (!activeDaemonId || !activeDaemonId.startsWith('daemon_mach_')) return fail('invalid_active_daemon_id', 'activeDaemonId is required and must be a canonical daemon id.');
+                        if (hostDaemonId && daemonIdsEquivalent(activeDaemonId, hostDaemonId)) return fail('grant_self_not_allowed', 'Cannot grant remote follower access to the host daemon itself.');
                         const slot = str(args.accountSlot) || ASSISTANT_ACCOUNT_SLOT;
-                        if (slot !== ASSISTANT_ACCOUNT_SLOT) {
-                            return fail('invalid_args', `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
-                        }
-                        const bindingRevision = typeof args.bindingRevision === 'number' && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1
-                            ? args.bindingRevision
-                            : null;
-                        if (bindingRevision === null) {
-                            return fail('invalid_args', 'bindingRevision must be a positive integer');
-                        }
+                        if (slot !== ASSISTANT_ACCOUNT_SLOT) return fail('invalid_args', `accountSlot must be '${ASSISTANT_ACCOUNT_SLOT}'`);
+                        const bindingRevision = typeof args.bindingRevision === 'number' && Number.isInteger(args.bindingRevision) && args.bindingRevision >= 1 ? args.bindingRevision : null;
+                        if (bindingRevision === null) return fail('invalid_args', 'bindingRevision must be a positive integer');
                         if (existing && daemonIdsEquivalent(existing.activeDaemonId, activeDaemonId) && bindingRevision < existing.bindingRevision) {
-                            return fail(
-                                'binding_revision_stale',
-                                'Requested bindingRevision is older than the host ACL bindingRevision.',
-                                { actualBindingRevision: existing.bindingRevision },
-                            );
+                            return fail('binding_revision_stale', 'Requested bindingRevision is older than the host ACL bindingRevision.', { actualBindingRevision: existing.bindingRevision });
                         }
                         const nextGrantRevision = baseGrantRevision + 1;
-                        const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === 'boolean'
-                            ? args.allowCoordinatorLaunch
-                            : (existing?.allowCoordinatorLaunch ?? true);
-                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean'
-                            ? args.allowArtifactRead
-                            : (existing?.allowArtifactRead ?? true);
+                        const allowCoordinatorLaunch = typeof args.allowCoordinatorLaunch === 'boolean' ? args.allowCoordinatorLaunch : (existing?.allowCoordinatorLaunch ?? true);
+                        const allowArtifactRead = typeof args.allowArtifactRead === 'boolean' ? args.allowArtifactRead : (existing?.allowArtifactRead ?? true);
                         const binding: AssistantRemoteAccessBinding = {
-                            hostDaemonId,
-                            meshId,
-                            accountSlot: ASSISTANT_ACCOUNT_SLOT,
-                            activeDaemonId,
-                            bindingRevision,
-                            grantRevision: nextGrantRevision,
-                            status: 'active',
+                            hostDaemonId, meshId, accountSlot: ASSISTANT_ACCOUNT_SLOT, activeDaemonId,
+                            bindingRevision, grantRevision: nextGrantRevision, status: 'active',
                             allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
-                            allowCoordinatorLaunch,
-                            allowArtifactRead,
-                            grantedAt: now,
+                            allowCoordinatorLaunch, allowArtifactRead, grantedAt: now,
                         };
                         mesh.assistantRemoteAccess = binding;
                         mesh.updatedAt = new Date(now).toISOString();
@@ -1363,22 +1215,15 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
 
                     // action === 'revoke'
                     const nextGrantRevision = baseGrantRevision + 1;
-                    const revokedActiveDaemonId = existing?.activeDaemonId
-                        ?? (canonicalDaemonId(str(args.activeDaemonId)) ?? (str(args.activeDaemonId) || 'revoked'));
+                    const revokedActiveDaemonId = existing?.activeDaemonId ?? (canonicalDaemonId(str(args.activeDaemonId)) ?? (str(args.activeDaemonId) || 'revoked'));
                     const revokedBindingRevision = existing?.bindingRevision ?? 1;
                     const tombstone: AssistantRemoteAccessBinding = {
-                        hostDaemonId,
-                        meshId,
-                        accountSlot: ASSISTANT_ACCOUNT_SLOT,
-                        activeDaemonId: revokedActiveDaemonId,
-                        bindingRevision: revokedBindingRevision,
-                        grantRevision: nextGrantRevision,
-                        status: 'revoked',
+                        hostDaemonId, meshId, accountSlot: ASSISTANT_ACCOUNT_SLOT, activeDaemonId: revokedActiveDaemonId,
+                        bindingRevision: revokedBindingRevision, grantRevision: nextGrantRevision, status: 'revoked',
                         allowedOps: [...ASSISTANT_FOLLOWER_ALLOWED_OPS],
                         allowCoordinatorLaunch: existing?.allowCoordinatorLaunch ?? true,
                         allowArtifactRead: existing?.allowArtifactRead ?? true,
-                        grantedAt: existing?.grantedAt ?? now,
-                        revokedAt: now,
+                        grantedAt: existing?.grantedAt ?? now, revokedAt: now,
                     };
                     mesh.assistantRemoteAccess = tombstone;
                     mesh.updatedAt = new Date(now).toISOString();
@@ -1388,9 +1233,7 @@ const assistantRemoteProjectAccess: HighFamilyHandler = async (ctx: HighFamilyCo
                     return { success: true, action: 'revoke', access: tombstone };
                 });
             } catch (err) {
-                if (err instanceof MeshConfigStrictLockError) {
-                    return fail(err.code, err.message);
-                }
+                if (err instanceof MeshConfigStrictLockError) return fail(err.code, err.message);
                 throw err;
             }
         });
