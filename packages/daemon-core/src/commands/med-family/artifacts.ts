@@ -342,7 +342,7 @@ async function resolveCallerAuthority(
                         ctx,
                         remote.ownerDaemonId,
                         remoteClaim,
-                        requestedArtifactId || undefined,
+                        mode === 'fetch' ? requestedArtifactId || undefined : undefined,
                     );
                     if (!scopeRes.ok) return scopeRes;
                     hostScope = scopeRes.scope;

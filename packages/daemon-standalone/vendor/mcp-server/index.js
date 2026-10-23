@@ -68176,6 +68176,295 @@ ${includeRefs[0]}`;
         _recordByEffect = /* @__PURE__ */ new WeakMap();
       }
     });
+    var mcp_command_ingress_exports = {};
+    __export2(mcp_command_ingress_exports, {
+      __resetMcpSessionCredentialsForTest: () => __resetMcpSessionCredentialsForTest,
+      attachAuthenticatedMcpCommand: () => attachAuthenticatedMcpCommand,
+      bindAuthenticatedMcpWorkspace: () => bindAuthenticatedMcpWorkspace,
+      ensureMcpSessionCredential: () => ensureMcpSessionCredential,
+      getMcpSessionCredentialForSession: () => getMcpSessionCredentialForSession,
+      mintMcpSessionCredential: () => mintMcpSessionCredential,
+      preserveAuthenticatedMcpCommand: () => preserveAuthenticatedMcpCommand,
+      readAuthenticatedMcpCommand: () => readAuthenticatedMcpCommand,
+      readAuthenticatedMcpScope: () => readAuthenticatedMcpScope,
+      revokeMcpSessionCredential: () => revokeMcpSessionCredential,
+      verifyMcpSessionCredential: () => verifyMcpSessionCredential
+    });
+    function record2(value) {
+      return value !== null && typeof value === "object" && !Array.isArray(value);
+    }
+    function trimString2(value) {
+      return typeof value === "string" ? value.trim() : "";
+    }
+    function mintMcpSessionCredential(scope) {
+      const sessionId = trimString2(scope.sessionId);
+      if (!sessionId) {
+        throw new Error("mintMcpSessionCredential requires a non-empty sessionId");
+      }
+      const previousToken = credentialStore.bySessionId.get(sessionId);
+      if (previousToken) {
+        credentialStore.byToken.delete(previousToken);
+      }
+      const token = `mcp_sess_${(0, import_node_crypto6.randomBytes)(24).toString("base64url")}`;
+      const meshId = trimString2(scope.meshId) || void 0;
+      const entry = {
+        token,
+        sessionId,
+        ...meshId ? { meshId } : {},
+        isCoordinator: scope.isCoordinator === true
+      };
+      credentialStore.byToken.set(token, entry);
+      credentialStore.bySessionId.set(sessionId, token);
+      return token;
+    }
+    function ensureMcpSessionCredential(scope) {
+      const sessionId = trimString2(scope.sessionId);
+      if (!sessionId) {
+        throw new Error("ensureMcpSessionCredential requires a non-empty sessionId");
+      }
+      const existingToken = credentialStore.bySessionId.get(sessionId);
+      if (existingToken) {
+        const existing = credentialStore.byToken.get(existingToken);
+        if (existing) {
+          const meshId = trimString2(scope.meshId) || void 0;
+          if (meshId) existing.meshId = meshId;
+          else delete existing.meshId;
+          if (typeof scope.isCoordinator === "boolean") {
+            existing.isCoordinator = scope.isCoordinator;
+          }
+          return existingToken;
+        }
+      }
+      return mintMcpSessionCredential(scope);
+    }
+    function getMcpSessionCredentialForSession(sessionId) {
+      const sid = trimString2(sessionId);
+      if (!sid) return null;
+      return credentialStore.bySessionId.get(sid) ?? null;
+    }
+    function revokeMcpSessionCredential(sessionId) {
+      const sid = trimString2(sessionId);
+      if (!sid) return;
+      const token = credentialStore.bySessionId.get(sid);
+      if (token) {
+        credentialStore.byToken.delete(token);
+        credentialStore.bySessionId.delete(sid);
+      }
+    }
+    function __resetMcpSessionCredentialsForTest() {
+      credentialStore.byToken.clear();
+      credentialStore.bySessionId.clear();
+    }
+    function verifyMcpSessionCredential(credential) {
+      const token = trimString2(credential);
+      if (!token) return null;
+      const entry = credentialStore.byToken.get(token);
+      if (!entry) return null;
+      if (credentialStore.bySessionId.get(entry.sessionId) !== token) return null;
+      if (entry.isCoordinator) {
+        const coord = getCoordinatorForSession(entry.sessionId);
+        if (!coord) return null;
+        if (entry.meshId && coord.meshId !== entry.meshId) return null;
+        return {
+          sessionId: entry.sessionId,
+          meshId: coord.meshId,
+          isCoordinator: true
+        };
+      }
+      return {
+        sessionId: entry.sessionId,
+        ...entry.meshId ? { meshId: entry.meshId } : {},
+        isCoordinator: false
+      };
+    }
+    function hasWorkerCredentialFields(args) {
+      const rawBind = args?.bind;
+      const rawToken = args?.token;
+      return typeof rawBind === "string" && rawBind.trim().length > 0 || typeof rawToken === "string" && rawToken.trim().length > 0 || rawBind !== void 0 && rawBind !== null || rawToken !== void 0 && rawToken !== null;
+    }
+    function resolveBoundMcpScope(args, command, explicitScope) {
+      if (explicitScope === void 0 || explicitScope === null) {
+        return { validScope: false };
+      }
+      const scopeObj = typeof explicitScope === "string" ? { sessionId: explicitScope } : explicitScope;
+      const boundSessionId = trimString2(scopeObj.sessionId);
+      const isWorkerScoped = scopeObj.isCoordinator === false && hasWorkerCredentialFields(args);
+      if (!boundSessionId && !isWorkerScoped) {
+        return { validScope: false };
+      }
+      const isAssistantCmd = command === "assistant_artifact_list" || command === "assistant_artifact_read";
+      if (isAssistantCmd) {
+        if (!boundSessionId || scopeObj.isCoordinator === true || hasWorkerCredentialFields(args)) {
+          return { validScope: false };
+        }
+        const payloadAssistantSid = trimString2(args.assistantSessionId) || trimString2(args.assistant_session_id);
+        if (payloadAssistantSid && !sessionIdsEquivalent(payloadAssistantSid, boundSessionId)) {
+          return { validScope: false };
+        }
+        return { validScope: true, boundSessionId, isCoordinator: false };
+      }
+      const payloadSessionId = trimString2(args.sessionId) || trimString2(args.targetSessionId);
+      const payloadCallerSessionId = trimString2(args.callerSessionId);
+      const payloadMeshId = trimString2(args.meshId);
+      const isListCmd = command === "artifact_list" || command === "session_artifact_list";
+      const coord = boundSessionId ? getCoordinatorForSession(boundSessionId) : void 0;
+      const boundMeshId = trimString2(scopeObj.meshId) || (scopeObj.isCoordinator !== false ? coord?.meshId : void 0) || void 0;
+      const isCoordinator = typeof scopeObj.isCoordinator === "boolean" ? scopeObj.isCoordinator && Boolean(coord && (!boundMeshId || coord.meshId === boundMeshId)) : Boolean(coord && (!boundMeshId || coord.meshId === boundMeshId));
+      if (boundSessionId) {
+        if (payloadCallerSessionId && !sessionIdsEquivalent(payloadCallerSessionId, boundSessionId)) {
+          return { validScope: false };
+        }
+        if (payloadMeshId && (!boundMeshId || payloadMeshId !== boundMeshId)) {
+          return { validScope: false };
+        }
+        if (!isCoordinator && payloadMeshId && !hasWorkerCredentialFields(args)) {
+          return { validScope: false };
+        }
+        if (payloadSessionId && !sessionIdsEquivalent(payloadSessionId, boundSessionId) && !(isCoordinator && isListCmd)) {
+          return { validScope: false };
+        }
+      }
+      return {
+        validScope: true,
+        boundSessionId: boundSessionId || payloadSessionId || void 0,
+        boundMeshId: boundMeshId || (isWorkerScoped ? payloadMeshId || void 0 : void 0),
+        isCoordinator
+      };
+    }
+    function argumentsKey(args) {
+      const sessionAlias = typeof args.sessionId === "string" ? args.sessionId.trim() : void 0;
+      return JSON.stringify(Object.keys(args).filter((key4) => key4 !== "_interactionId" && !(key4 === "targetSessionId" && sessionAlias && args[key4] === sessionAlias)).sort().map((key4) => [key4, args[key4]]));
+    }
+    function attachAuthenticatedMcpCommand(args, command, verifyCurrent, scope) {
+      if (!ARTIFACT_COMMANDS.has(command) || typeof verifyCurrent !== "function") return args;
+      let live = false;
+      try {
+        live = verifyCurrent() === true;
+      } catch {
+      }
+      const bound = resolveBoundMcpScope(args, command, scope);
+      capabilities.set(args, {
+        command,
+        argumentsKey: argumentsKey(args),
+        verifyCurrent,
+        explicitScope: scope,
+        revoked: !live || !bound.validScope,
+        scopeResolved: bound.validScope,
+        boundSessionId: bound.boundSessionId,
+        boundMeshId: bound.boundMeshId,
+        isCoordinator: bound.isCoordinator
+      });
+      return args;
+    }
+    function preserveAuthenticatedMcpCommand(source2, target) {
+      if (record2(source2)) {
+        const capability = capabilities.get(source2);
+        if (capability) capabilities.set(target, capability);
+      }
+      return target;
+    }
+    function readAuthenticatedMcpCommand(args, command) {
+      const capability = record2(args) ? capabilities.get(args) : void 0;
+      if (!capability) return { present: false, valid: false };
+      if (capability.revoked) return { present: true, valid: false };
+      const effectiveCommand = command || capability.command;
+      try {
+        if (capability.verifyCurrent() !== true) {
+          capability.revoked = true;
+          return { present: true, valid: false };
+        }
+        if (capability.command !== effectiveCommand || !record2(args) || capability.argumentsKey !== argumentsKey(args)) {
+          return { present: true, valid: false };
+        }
+        if (!capability.scopeResolved) {
+          const bound = resolveBoundMcpScope(args, capability.command, capability.explicitScope);
+          if (!bound.validScope) {
+            capability.revoked = true;
+            return { present: true, valid: false };
+          }
+          capability.scopeResolved = true;
+          capability.boundSessionId = bound.boundSessionId;
+          capability.boundMeshId = bound.boundMeshId;
+          capability.isCoordinator = bound.isCoordinator;
+        }
+        return {
+          present: true,
+          valid: !capability.revoked
+        };
+      } catch {
+        capability.revoked = true;
+        return { present: true, valid: false };
+      }
+    }
+    function readAuthenticatedMcpScope(args, command) {
+      const capability = record2(args) ? capabilities.get(args) : void 0;
+      if (!capability) return null;
+      if (!readAuthenticatedMcpCommand(args, command || capability.command).valid) return null;
+      return {
+        ...capability.boundSessionId ? { sessionId: capability.boundSessionId } : {},
+        ...capability.boundMeshId ? { meshId: capability.boundMeshId } : {},
+        isCoordinator: Boolean(capability.isCoordinator)
+      };
+    }
+    function bindAuthenticatedMcpWorkspace(args, workspaceRoot) {
+      const capability = record2(args) ? capabilities.get(args) : void 0;
+      if (!capability) return true;
+      if (!readAuthenticatedMcpCommand(args, capability.command).valid) return false;
+      if (!workspaceRoot && capability.isCoordinator) return true;
+      if (!workspaceRoot) return false;
+      if (capability.workspaceRoot === void 0) capability.workspaceRoot = workspaceRoot;
+      return capability.workspaceRoot === workspaceRoot;
+    }
+    var import_node_crypto6;
+    var ARTIFACT_COMMANDS;
+    var STATE_KEY;
+    var shared;
+    var capabilities;
+    var CREDENTIAL_STORE_KEY;
+    var sharedCredentials;
+    var credentialStore;
+    var init_mcp_command_ingress = __esm2({
+      "src/commands/mcp-command-ingress.ts"() {
+        "use strict";
+        import_node_crypto6 = require("crypto");
+        init_dist();
+        init_coordinator_registry();
+        ARTIFACT_COMMANDS = /* @__PURE__ */ new Set([
+          "artifact_register",
+          "session_artifact_register",
+          "artifact_list",
+          "session_artifact_list",
+          "artifact_read",
+          "assistant_artifact_list",
+          "assistant_artifact_read"
+        ]);
+        STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.authenticatedMcpCommandIngress");
+        shared = globalThis;
+        if (!shared[STATE_KEY]) {
+          Object.defineProperty(shared, STATE_KEY, {
+            value: /* @__PURE__ */ new WeakMap(),
+            enumerable: false,
+            configurable: false,
+            writable: false
+          });
+        }
+        capabilities = shared[STATE_KEY];
+        CREDENTIAL_STORE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.mcpSessionCredentials");
+        sharedCredentials = globalThis;
+        if (!sharedCredentials[CREDENTIAL_STORE_KEY]) {
+          Object.defineProperty(sharedCredentials, CREDENTIAL_STORE_KEY, {
+            value: {
+              byToken: /* @__PURE__ */ new Map(),
+              bySessionId: /* @__PURE__ */ new Map()
+            },
+            enumerable: false,
+            configurable: false,
+            writable: false
+          });
+        }
+        credentialStore = sharedCredentials[CREDENTIAL_STORE_KEY];
+      }
+    });
     var coordinator_registry_exports = {};
     __export2(coordinator_registry_exports, {
       findLiveCoordinatorsForContextFile: () => findLiveCoordinatorsForContextFile,
@@ -68207,6 +68496,11 @@ ${includeRefs[0]}`;
           if (typeof entry?.sessionId === "string" && typeof entry?.meshId === "string") {
             const typedEntry = entry;
             _registry.set(typedEntry.sessionId, typedEntry);
+            ensureMcpSessionCredential({
+              sessionId: typedEntry.sessionId,
+              meshId: typedEntry.meshId,
+              isCoordinator: true
+            });
             const targetPath = resolveEntryContextFilePath(typedEntry);
             const sep21 = typedEntry.injection?.contextFile?.separators;
             if (targetPath && isValidRecordedSeparators(sep21)) {
@@ -68260,6 +68554,11 @@ ${includeRefs[0]}`;
         }
       }
       _registry.set(entry.sessionId, entry);
+      ensureMcpSessionCredential({
+        sessionId: entry.sessionId,
+        meshId: entry.meshId,
+        isCoordinator: true
+      });
       saveRegistry();
       if (targetPath && entry.workspace) {
         markAntigravityCoordinatorRegistered({
@@ -68345,6 +68644,7 @@ ${includeRefs[0]}`;
       }
     }
     function unregisterMeshCoordinator(sessionId) {
+      revokeMcpSessionCredential(sessionId);
       const entry = _registry.get(sessionId);
       if (_registry.delete(sessionId)) {
         saveRegistry();
@@ -68377,6 +68677,7 @@ ${includeRefs[0]}`;
       for (const entry of [..._registry.values()]) {
         if (liveSessionIds.has(entry.sessionId)) continue;
         _registry.delete(entry.sessionId);
+        revokeMcpSessionCredential(entry.sessionId);
         pruned.push(entry);
       }
       if (pruned.length > 0) {
@@ -68406,6 +68707,8 @@ ${includeRefs[0]}`;
     }
     var import_path15;
     var import_fs21;
+    var COORD_REGISTRY_KEY;
+    var sharedCoordRegistry;
     var _registry;
     var _pendingFailedCleanupBySessionId;
     var init_coordinator_registry = __esm2({
@@ -68415,8 +68718,22 @@ ${includeRefs[0]}`;
         import_fs21 = require("fs");
         init_config();
         init_antigravity_coordinator_rules();
-        _registry = /* @__PURE__ */ new Map();
-        _pendingFailedCleanupBySessionId = /* @__PURE__ */ new Map();
+        init_mcp_command_ingress();
+        COORD_REGISTRY_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.meshCoordinatorRegistry");
+        sharedCoordRegistry = globalThis;
+        if (!sharedCoordRegistry[COORD_REGISTRY_KEY]) {
+          Object.defineProperty(sharedCoordRegistry, COORD_REGISTRY_KEY, {
+            value: {
+              registry: /* @__PURE__ */ new Map(),
+              pendingFailedCleanupBySessionId: /* @__PURE__ */ new Map()
+            },
+            enumerable: false,
+            configurable: false,
+            writable: false
+          });
+        }
+        _registry = sharedCoordRegistry[COORD_REGISTRY_KEY].registry;
+        _pendingFailedCleanupBySessionId = sharedCoordRegistry[COORD_REGISTRY_KEY].pendingFailedCleanupBySessionId;
       }
     });
     function extractJsonObjectFromSummary(summary) {
@@ -70175,7 +70492,7 @@ ${upstream}`;
           if (e.code !== "EEXIST") throw e;
         }
         syncDir2();
-        const tmp = path322.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto6.randomUUID)()}.tmp`), fd = fs21.openSync(tmp, "wx", 384);
+        const tmp = path322.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto7.randomUUID)()}.tmp`), fd = fs21.openSync(tmp, "wx", 384);
         try {
           fs21.writeFileSync(fd, JSON.stringify(state2));
           fs21.fsyncSync(fd);
@@ -70197,12 +70514,12 @@ ${upstream}`;
       const h = s2.retainedHost;
       if (facts.pid !== h.pid || facts.socketOwnerPid !== h.pid || facts.birth !== h.birth || facts.entryPath !== h.entryPath || facts.nodePath !== h.nodePath || facts.hostEntryPath !== h.entryPath || facts.hostStartedAt !== h.hostStartedAt || facts.endpoint !== h.endpoint) throw new Error("maintenance_retained_host_identity_changed");
       for (const f of h.files) {
-        if (fs21.realpathSync(f.path) !== f.path || !fs21.statSync(f.path).isFile() || (0, import_node_crypto6.createHash)("sha256").update(fs21.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
+        if (fs21.realpathSync(f.path) !== f.path || !fs21.statSync(f.path).isFile() || (0, import_node_crypto7.createHash)("sha256").update(fs21.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
       }
     }
     var fs21;
     var path322;
-    var import_node_crypto6;
+    var import_node_crypto7;
     var import_node_async_hooks;
     var MAINTENANCE_BOOT_NONCE;
     var MAINTENANCE_FILE;
@@ -70218,18 +70535,18 @@ ${upstream}`;
         "use strict";
         fs21 = __toESM2(require("fs"));
         path322 = __toESM2(require("path"));
-        import_node_crypto6 = require("crypto");
+        import_node_crypto7 = require("crypto");
         import_node_async_hooks = require("async_hooks");
         init_dist();
         init_config();
         init_load_better_sqlite3();
-        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto6.randomUUID)();
+        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto7.randomUUID)();
         MAINTENANCE_FILE = "cooperative-maintenance.json";
         marker = "cooperative-maintenance.enrolled";
         seen = /* @__PURE__ */ new Set();
         context = new import_node_async_hooks.AsyncLocalStorage();
         activeAdmissions = 0;
-        sha2 = (s2) => (0, import_node_crypto6.createHash)("sha256").update(s2).digest("hex");
+        sha2 = (s2) => (0, import_node_crypto7.createHash)("sha256").update(s2).digest("hex");
         hash2 = (s2) => typeof s2 === "string" && /^[a-f0-9]{64}$/.test(s2);
         id3 = (s2) => typeof s2 === "string" && !!s2 && s2.trim() === s2;
       }
@@ -75489,199 +75806,6 @@ ${upstream}`;
         init_mesh_queue_observability();
         init_mesh_work_queue();
         init_mesh_candidacy_predicates();
-      }
-    });
-    function record2(value) {
-      return value !== null && typeof value === "object" && !Array.isArray(value);
-    }
-    function trimString2(value) {
-      return typeof value === "string" ? value.trim() : "";
-    }
-    function hasWorkerCredentialFields(args) {
-      const rawBind = args?.bind;
-      const rawToken = args?.token;
-      return typeof rawBind === "string" && rawBind.trim().length > 0 || typeof rawToken === "string" && rawToken.trim().length > 0 || rawBind !== void 0 && rawBind !== null || rawToken !== void 0 && rawToken !== null;
-    }
-    function resolveBoundMcpScope(args, command, explicitScope) {
-      const payloadSessionId = trimString2(args.sessionId) || trimString2(args.targetSessionId);
-      const payloadCallerSessionId = trimString2(args.callerSessionId);
-      const payloadMeshId = trimString2(args.meshId);
-      const isListCmd = command === "artifact_list" || command === "session_artifact_list";
-      if (explicitScope !== void 0) {
-        const scopeObj = typeof explicitScope === "string" ? { sessionId: explicitScope } : explicitScope ?? {};
-        const boundSessionId = trimString2(scopeObj.sessionId);
-        const coord2 = boundSessionId ? getCoordinatorForSession(boundSessionId) : void 0;
-        const boundMeshId = trimString2(scopeObj.meshId) || coord2?.meshId || void 0;
-        const isCoordinator = typeof scopeObj.isCoordinator === "boolean" ? scopeObj.isCoordinator && Boolean(coord2 && (!boundMeshId || coord2.meshId === boundMeshId)) : Boolean(coord2 && (!boundMeshId || coord2.meshId === boundMeshId));
-        if (!boundSessionId && !hasWorkerCredentialFields(args)) return { validScope: false };
-        if (boundSessionId) {
-          if (payloadCallerSessionId && !sessionIdsEquivalent(payloadCallerSessionId, boundSessionId)) {
-            return { validScope: false };
-          }
-          if (payloadMeshId && (!boundMeshId || payloadMeshId !== boundMeshId)) {
-            return { validScope: false };
-          }
-          if (!isCoordinator && payloadMeshId && !hasWorkerCredentialFields(args)) {
-            return { validScope: false };
-          }
-          if (payloadSessionId && !sessionIdsEquivalent(payloadSessionId, boundSessionId) && !(isCoordinator && isListCmd)) {
-            return { validScope: false };
-          }
-        }
-        return { validScope: true, boundSessionId: boundSessionId || void 0, boundMeshId, isCoordinator };
-      }
-      if (hasWorkerCredentialFields(args)) {
-        return {
-          validScope: true,
-          boundSessionId: payloadSessionId || void 0,
-          boundMeshId: payloadMeshId || void 0,
-          isCoordinator: false
-        };
-      }
-      if (payloadMeshId) {
-        if (isListCmd) {
-          let coord3 = payloadCallerSessionId ? getCoordinatorForSession(payloadCallerSessionId) : void 0;
-          if (payloadCallerSessionId && (!coord3 || coord3.meshId !== payloadMeshId)) {
-            return { validScope: false };
-          }
-          if (!coord3 && payloadSessionId) {
-            const bySession = getCoordinatorForSession(payloadSessionId);
-            if (bySession?.meshId === payloadMeshId) coord3 = bySession;
-          }
-          if (!coord3) {
-            coord3 = listCoordinatorsForMesh(payloadMeshId)[0];
-          }
-          if (!coord3 || coord3.meshId !== payloadMeshId) return { validScope: false };
-          return { validScope: true, boundSessionId: coord3.sessionId, boundMeshId: coord3.meshId, isCoordinator: true };
-        }
-        const coordId = payloadCallerSessionId || payloadSessionId;
-        const coord2 = coordId ? getCoordinatorForSession(coordId) : void 0;
-        if (!coord2 || coord2.meshId !== payloadMeshId) return { validScope: false };
-        if (payloadSessionId && !sessionIdsEquivalent(payloadSessionId, coord2.sessionId)) {
-          return { validScope: false };
-        }
-        return { validScope: true, boundSessionId: coord2.sessionId, boundMeshId: coord2.meshId, isCoordinator: true };
-      }
-      if (payloadCallerSessionId && payloadSessionId && !sessionIdsEquivalent(payloadCallerSessionId, payloadSessionId)) {
-        return { validScope: false };
-      }
-      const sid = payloadSessionId || payloadCallerSessionId;
-      if (!sid) return { validScope: false };
-      const coord = getCoordinatorForSession(sid);
-      if (payloadCallerSessionId && !coord) return { validScope: false };
-      return { validScope: true, boundSessionId: sid, boundMeshId: coord?.meshId, isCoordinator: Boolean(coord) };
-    }
-    function argumentsKey(args) {
-      const sessionAlias = typeof args.sessionId === "string" ? args.sessionId.trim() : void 0;
-      return JSON.stringify(Object.keys(args).filter((key4) => key4 !== "_interactionId" && !(key4 === "targetSessionId" && sessionAlias && args[key4] === sessionAlias)).sort().map((key4) => [key4, args[key4]]));
-    }
-    function attachAuthenticatedMcpCommand(args, command, verifyCurrent, scope) {
-      if (!ARTIFACT_COMMANDS.has(command) || typeof verifyCurrent !== "function") return args;
-      let live = false;
-      try {
-        live = verifyCurrent() === true;
-      } catch {
-      }
-      const bound = resolveBoundMcpScope(args, command, scope);
-      capabilities.set(args, {
-        command,
-        argumentsKey: argumentsKey(args),
-        verifyCurrent,
-        explicitScope: scope,
-        revoked: !live || scope !== void 0 && !bound.validScope,
-        scopeResolved: bound.validScope,
-        boundSessionId: bound.boundSessionId,
-        boundMeshId: bound.boundMeshId,
-        isCoordinator: bound.isCoordinator
-      });
-      return args;
-    }
-    function preserveAuthenticatedMcpCommand(source2, target) {
-      if (record2(source2)) {
-        const capability = capabilities.get(source2);
-        if (capability) capabilities.set(target, capability);
-      }
-      return target;
-    }
-    function readAuthenticatedMcpCommand(args, command) {
-      const capability = record2(args) ? capabilities.get(args) : void 0;
-      if (!capability) return { present: false, valid: false };
-      if (capability.revoked) return { present: true, valid: false };
-      const effectiveCommand = command || capability.command;
-      try {
-        if (capability.verifyCurrent() !== true) {
-          capability.revoked = true;
-          return { present: true, valid: false };
-        }
-        if (capability.command !== effectiveCommand || !record2(args) || capability.argumentsKey !== argumentsKey(args)) {
-          return { present: true, valid: false };
-        }
-        if (!capability.scopeResolved) {
-          const bound = resolveBoundMcpScope(args, capability.command, capability.explicitScope);
-          if (!bound.validScope) {
-            capability.revoked = true;
-            return { present: true, valid: false };
-          }
-          capability.scopeResolved = true;
-          capability.boundSessionId = bound.boundSessionId;
-          capability.boundMeshId = bound.boundMeshId;
-          capability.isCoordinator = bound.isCoordinator;
-        }
-        return {
-          present: true,
-          valid: !capability.revoked
-        };
-      } catch {
-        capability.revoked = true;
-        return { present: true, valid: false };
-      }
-    }
-    function readAuthenticatedMcpScope(args, command) {
-      const capability = record2(args) ? capabilities.get(args) : void 0;
-      if (!capability) return null;
-      if (!readAuthenticatedMcpCommand(args, command || capability.command).valid) return null;
-      return {
-        ...capability.boundSessionId ? { sessionId: capability.boundSessionId } : {},
-        ...capability.boundMeshId ? { meshId: capability.boundMeshId } : {},
-        isCoordinator: Boolean(capability.isCoordinator)
-      };
-    }
-    function bindAuthenticatedMcpWorkspace(args, workspaceRoot) {
-      const capability = record2(args) ? capabilities.get(args) : void 0;
-      if (!capability) return true;
-      if (!readAuthenticatedMcpCommand(args, capability.command).valid) return false;
-      if (!workspaceRoot && capability.isCoordinator) return true;
-      if (!workspaceRoot) return false;
-      if (capability.workspaceRoot === void 0) capability.workspaceRoot = workspaceRoot;
-      return capability.workspaceRoot === workspaceRoot;
-    }
-    var ARTIFACT_COMMANDS;
-    var STATE_KEY;
-    var shared;
-    var capabilities;
-    var init_mcp_command_ingress = __esm2({
-      "src/commands/mcp-command-ingress.ts"() {
-        "use strict";
-        init_dist();
-        init_coordinator_registry();
-        ARTIFACT_COMMANDS = /* @__PURE__ */ new Set([
-          "artifact_register",
-          "session_artifact_register",
-          "artifact_list",
-          "session_artifact_list",
-          "artifact_read"
-        ]);
-        STATE_KEY = /* @__PURE__ */ Symbol.for("adhdev.daemon-core.authenticatedMcpCommandIngress");
-        shared = globalThis;
-        if (!shared[STATE_KEY]) {
-          Object.defineProperty(shared, STATE_KEY, {
-            value: /* @__PURE__ */ new WeakMap(),
-            enumerable: false,
-            configurable: false,
-            writable: false
-          });
-        }
-        capabilities = shared[STATE_KEY];
       }
     });
     function isMeshCommandContext(value) {
@@ -82205,11 +82329,25 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         recentUnroutableDiagnostics = /* @__PURE__ */ new Map();
       }
     });
+    var standalone_mcp_auth_exports = {};
+    __export2(standalone_mcp_auth_exports, {
+      ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV: () => ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV,
+      ADHDEV_DAEMON_AUTH_FILE_ENV: () => ADHDEV_DAEMON_AUTH_FILE_ENV2,
+      ADHDEV_DAEMON_AUTH_FILE_FLAG: () => ADHDEV_DAEMON_AUTH_FILE_FLAG2,
+      ADHDEV_INTERNAL_AUTH_HEADER: () => ADHDEV_INTERNAL_AUTH_HEADER2,
+      ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV2,
+      ADHDEV_MCP_SESSION_CREDENTIAL_HEADER: () => ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2,
+      ADHDEV_WORKER_CREDENTIAL_HEADER: () => ADHDEV_WORKER_CREDENTIAL_HEADER2,
+      WORKER_MCP_DAEMON_VERBS: () => WORKER_MCP_DAEMON_VERBS,
+      isWorkerMcpDaemonVerb: () => isWorkerMcpDaemonVerb
+    });
     function isWorkerMcpDaemonVerb(type2) {
       return typeof type2 === "string" && WORKER_VERB_SET.has(type2);
     }
     var ADHDEV_INTERNAL_AUTH_HEADER2;
     var ADHDEV_WORKER_CREDENTIAL_HEADER2;
+    var ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2;
+    var ADHDEV_MCP_SESSION_CREDENTIAL_ENV2;
     var ADHDEV_DAEMON_AUTH_FILE_ENV2;
     var ADHDEV_DAEMON_AUTH_FILE_FLAG2;
     var ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV;
@@ -82220,6 +82358,8 @@ Check each mission's state and report. Do not leave a finished mission in 'activ
         "use strict";
         ADHDEV_INTERNAL_AUTH_HEADER2 = "x-adhdev-internal-auth";
         ADHDEV_WORKER_CREDENTIAL_HEADER2 = "x-adhdev-worker-credential";
+        ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2 = "x-adhdev-mcp-session-credential";
+        ADHDEV_MCP_SESSION_CREDENTIAL_ENV2 = "ADHDEV_MCP_SESSION_CREDENTIAL";
         ADHDEV_DAEMON_AUTH_FILE_ENV2 = "ADHDEV_DAEMON_AUTH_FILE";
         ADHDEV_DAEMON_AUTH_FILE_FLAG2 = "--daemon-auth-file";
         ADHDEV_COORDINATOR_MCP_AUTH_FILE_ENV = "ADHDEV_COORDINATOR_MCP_AUTH_FILE";
@@ -91839,7 +91979,7 @@ ${result.stderr}`, result.code);
       }
     });
     function sha1(text4) {
-      return (0, import_node_crypto14.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto15.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -91868,7 +92008,7 @@ ${result.stderr}`, result.code);
     function jcsBytesOf(payload) {
       return utf8Bytes(jcs(payload));
     }
-    var import_node_crypto14;
+    var import_node_crypto15;
     var HEAD_OVERHEAD_BYTES;
     var TRIPWIRE_REWRITE_SHARE;
     var TRIPWIRE_MIN_LIVE;
@@ -91879,7 +92019,7 @@ ${result.stderr}`, result.code);
     var init_transcript_keyed_frame = __esm2({
       "src/seqscribe/transcript-keyed-frame.ts"() {
         "use strict";
-        import_node_crypto14 = require("crypto");
+        import_node_crypto15 = require("crypto");
         init_dist2();
         init_fractional_index();
         init_transcript_keyed_codec();
@@ -92743,7 +92883,7 @@ ${result.stderr}`, result.code);
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto15.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto16.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     function configureTranscriptProjection(deps) {
       activeService?.dispose();
@@ -92769,7 +92909,7 @@ ${result.stderr}`, result.code);
       activeService?.markPtyOutputActivity(sessionId);
     }
     var fs70;
-    var import_node_crypto15;
+    var import_node_crypto16;
     var MAX_TRACKED_SESSIONS;
     var TRANSCRIPT_PTY_DIRTY_THROTTLE_MS;
     var TRANSCRIPT_STAT_POLL_INTERVAL_MS;
@@ -92779,7 +92919,7 @@ ${result.stderr}`, result.code);
       "src/seqscribe/transcript-publisher.ts"() {
         "use strict";
         fs70 = __toESM2(require("fs"));
-        import_node_crypto15 = require("crypto");
+        import_node_crypto16 = require("crypto");
         init_logger();
         init_message_identity_ledger();
         init_transcript_keyed_codec();
@@ -93414,7 +93554,7 @@ ${result.stderr}`, result.code);
           if (!reclaim2(lock, alive, now, options.maxAgeMs)) return held();
           continue;
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto17.randomBytes)(16).toString("hex"), acquiredAt: now() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto18.randomBytes)(16).toString("hex"), acquiredAt: now() };
         try {
           (0, import_node_fs6.writeFileSync)((0, import_node_path7.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -93438,7 +93578,7 @@ ${result.stderr}`, result.code);
     }
     var import_node_fs6;
     var import_node_path7;
-    var import_node_crypto17;
+    var import_node_crypto18;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var init_owned_lock = __esm2({
@@ -93446,7 +93586,7 @@ ${result.stderr}`, result.code);
         "use strict";
         import_node_fs6 = require("fs");
         import_node_path7 = require("path");
-        import_node_crypto17 = require("crypto");
+        import_node_crypto18 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
       }
@@ -94317,6 +94457,7 @@ ${result.stderr}`, result.code);
         init_config();
         init_memory_store();
         init_store_guards();
+        init_mcp_command_ingress();
         ASSISTANT_REGISTRY_FILE = "assistant.json";
         BUSY_INPUT_MODES = ["queue", "interrupt", "steer"];
         DEFAULT_BUSY_INPUT_MODE = "queue";
@@ -94396,6 +94537,10 @@ ${result.stderr}`, result.code);
             if (!sameSession) next.lastTurnState = { state: "idle", at, sessionId: input.sessionId };
             if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
             else delete next.mcpConfigPath;
+            if (!sameSession && prev?.sessionId) {
+              revokeMcpSessionCredential(prev.sessionId);
+            }
+            ensureMcpSessionCredential({ sessionId: input.sessionId, isCoordinator: false });
             const entry = this.write(next);
             return { entry, previous: sameSession ? null : prev?.lastTurnState ?? null };
           }
@@ -94466,6 +94611,7 @@ ${result.stderr}`, result.code);
             if (cause === "daemon_shutdown") return false;
             const prev = this.read();
             if (!prev || !prev.sessionId || prev.sessionId !== sessionId) return false;
+            revokeMcpSessionCredential(sessionId);
             const next = { ...prev, sessionId: null };
             delete next.mcpConfigPath;
             this.write(next);
@@ -94480,6 +94626,7 @@ ${result.stderr}`, result.code);
             const prev = this.read();
             if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
             const cleared = prev.sessionId;
+            revokeMcpSessionCredential(cleared);
             const next = { ...prev, sessionId: null };
             delete next.mcpConfigPath;
             this.write(next);
@@ -95890,7 +96037,7 @@ ${body}`;
     });
     var import_node_fs9;
     var import_node_path10;
-    var import_node_crypto19;
+    var import_node_crypto20;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -95899,7 +96046,7 @@ ${body}`;
         "use strict";
         import_node_fs9 = require("fs");
         import_node_path10 = require("path");
-        import_node_crypto19 = require("crypto");
+        import_node_crypto20 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -95923,7 +96070,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto19.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto20.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -96174,7 +96321,7 @@ ${body}`;
     }
     var import_node_fs10;
     var import_node_path11;
-    var import_node_crypto20;
+    var import_node_crypto21;
     var entryKeys;
     var origins;
     var integer;
@@ -96184,7 +96331,7 @@ ${body}`;
         "use strict";
         import_node_fs10 = require("fs");
         import_node_path11 = require("path");
-        import_node_crypto20 = require("crypto");
+        import_node_crypto21 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -96269,7 +96416,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto20.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto21.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs10.openSync)(temp, "wx", 384);
@@ -96408,7 +96555,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto21.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto222.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -96421,7 +96568,7 @@ ${body}`;
     }
     var import_node_fs11;
     var import_node_path12;
-    var import_node_crypto21;
+    var import_node_crypto222;
     var ID2;
     var proposalKeys;
     var text2;
@@ -96432,7 +96579,7 @@ ${body}`;
         "use strict";
         import_node_fs11 = require("fs");
         import_node_path12 = require("path");
-        import_node_crypto21 = require("crypto");
+        import_node_crypto222 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -96464,7 +96611,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto21.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto222.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -96475,7 +96622,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs11.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto21.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto222.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs11.openSync)(tmp, "wx", 384);
               try {
@@ -98864,6 +99011,9 @@ ${detail.join("\n")}` : stripped;
         init_mcp_command_ingress();
       }
     });
+    function maxBase64EncodedBytes(rawBytes) {
+      return Math.ceil(Math.max(0, rawBytes) / 3) * 4;
+    }
     function wrapUntrustedArtifactContent(content) {
       const safeBody = String(content ?? "").replace(
         /<\s*(\/?)\s*untrusted_artifact_content\b[^>]*>/gi,
@@ -99535,13 +99685,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         MAX_TITLE_CHARS = 200;
         WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
         SECRET_BASENAME_PATTERNS = [
-          /^\.env(\..+)?$/i,
+          /^\.env/i,
           /\.pem$/i,
           /\.key$/i,
           /\.p12$/i,
           /\.pfx$/i,
           /\.kdbx$/i,
-          /^id_(rsa|ed25519|ecdsa|dsa)(\..+)?$/i,
+          /^id_(rsa|ed25519|ecdsa|dsa)/i,
           /^\.npmrc$/i,
           /^\.pypirc$/i,
           /^\.netrc$/i,
@@ -100138,15 +100288,18 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             }
             if (previewText) assertNotSecretContent(Buffer.from(previewText, "utf8"), kind);
             const now = Date.now();
-            const createdAt = typeof input.createdAt === "number" && Number.isFinite(input.createdAt) ? Math.trunc(input.createdAt) : now;
-            const updatedAt = typeof input.updatedAt === "number" && Number.isFinite(input.updatedAt) ? Math.trunc(input.updatedAt) : createdAt;
+            const maxClockSkewMs = 6e4;
+            const maxAllowedTimestamp = now + maxClockSkewMs;
+            const rawCreatedAt = typeof input.createdAt === "number" && Number.isFinite(input.createdAt) && input.createdAt > 0 ? Math.trunc(input.createdAt) : now;
+            const createdAt = Math.min(rawCreatedAt, maxAllowedTimestamp);
+            const rawUpdatedAt = typeof input.updatedAt === "number" && Number.isFinite(input.updatedAt) && input.updatedAt > 0 ? Math.trunc(input.updatedAt) : createdAt;
+            const updatedAt = Math.max(createdAt, Math.min(rawUpdatedAt, maxAllowedTimestamp));
             const taskId = typeof input.taskId === "string" && input.taskId.trim() ? input.taskId.trim() : null;
             const meshId = typeof input.meshId === "string" && input.meshId.trim() ? input.meshId.trim() : null;
             const missionId = typeof input.missionId === "string" && input.missionId.trim() ? input.missionId.trim() : null;
             const producerRole = typeof input.producerRole === "string" && input.producerRole.trim() ? input.producerRole.trim() : "worker";
             return runInImmediateTransaction(this.db, () => {
-              const pruneNow = Math.max(now, createdAt, updatedAt);
-              if (pruneNow >= 1e11) this.pruneExpired(pruneNow, ARTIFACT_RETENTION_MS, 1e11);
+              if (now >= 1e11) this.pruneExpired(now, ARTIFACT_RETENTION_MS, 1e11);
               const existing = this.db.prepare(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`).get(sessionId, relPath);
               if (existing) {
                 const nextUpdatedAt = Math.max(updatedAt, existing.updated_at);
@@ -100904,6 +101057,13 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
             meshId: record6.meshId || authority.meshId || void 0,
             artifactId: record6.artifactId,
             sessionId: record6.sessionId,
+            requesterSessionId: authority.sessionId,
+            requesterRole: authority.isCoordinator ? "coordinator" : authority.producerRole,
+            ...authority.taskId ? { requesterTaskId: authority.taskId } : {},
+            ...authority.missionId ? { requesterMissionId: authority.missionId } : {},
+            ...authority.remoteClaim?.attemptId ? { requesterAttemptId: authority.remoteClaim.attemptId } : {},
+            ...authority.remoteClaim?.nodeId ? { requesterNodeId: authority.remoteClaim.nodeId } : {},
+            ...authority.remoteClaim?.generation !== void 0 ? { requesterGeneration: authority.remoteClaim.generation } : {},
             mode: isReadCommand ? "read" : "fetch",
             asChunks: true,
             ...args?.offset !== void 0 ? { offset: args.offset } : {},
@@ -100929,10 +101089,20 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
           error: String(originAns.error || "Failed to fetch artifact from origin daemon")
         };
       }
-      const maxBytes = isReadCommand ? MAX_ARTIFACT_MCP_PAGE_BYTES : MAX_ARTIFACT_BYTES;
+      const rawMaxBytes = isReadCommand ? MAX_ARTIFACT_MCP_PAGE_BYTES : MAX_ARTIFACT_BYTES;
+      const encoding = typeof originAns.encoding === "string" ? originAns.encoding : record6.kind === "image" ? "base64" : "utf8";
+      const isBase64Encoded = encoding === "base64" || record6.kind === "image";
+      const transportMaxBytes = isBase64Encoded ? maxBase64EncodedBytes(rawMaxBytes) : rawMaxBytes;
+      if (typeof originAns.sizeBytes === "number" && originAns.sizeBytes > MAX_ARTIFACT_BYTES || typeof originAns.totalBytes === "number" && originAns.totalBytes > MAX_ARTIFACT_BYTES || isReadCommand && typeof originAns.pageBytes === "number" && originAns.pageBytes > MAX_ARTIFACT_MCP_PAGE_BYTES) {
+        return {
+          success: false,
+          code: "artifact_too_large",
+          error: `Artifact content exceeds ${rawMaxBytes} bytes limit (artifact_too_large)`
+        };
+      }
       let rawContent = "";
       if (Array.isArray(originAns.chunks) && originAns.chunks.length > 0) {
-        const reassembled = reassembleBase64ArtifactChunks(originAns.chunks, maxBytes);
+        const reassembled = reassembleBase64ArtifactChunks(originAns.chunks, transportMaxBytes);
         if (!reassembled.ok) {
           return {
             success: false,
@@ -100942,16 +101112,26 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         }
         rawContent = reassembled.content;
       } else if (typeof originAns.content === "string") {
-        if (Buffer.byteLength(originAns.content, "utf8") > maxBytes) {
+        if (Buffer.byteLength(originAns.content, "utf8") > transportMaxBytes) {
           return {
             success: false,
             code: "artifact_too_large",
-            error: `Artifact content exceeds ${maxBytes} bytes limit (artifact_too_large)`
+            error: `Artifact content exceeds ${rawMaxBytes} bytes limit (artifact_too_large)`
           };
         }
         rawContent = originAns.content;
       }
-      const encoding = typeof originAns.encoding === "string" ? originAns.encoding : record6.kind === "image" ? "base64" : "utf8";
+      let decodedByteLength = Buffer.byteLength(rawContent, "utf8");
+      if (isBase64Encoded && rawContent.length > 0) {
+        decodedByteLength = Buffer.from(rawContent, "base64").byteLength;
+        if (decodedByteLength > rawMaxBytes || decodedByteLength > MAX_ARTIFACT_BYTES) {
+          return {
+            success: false,
+            code: "artifact_too_large",
+            error: `Decoded image artifact content (${decodedByteLength} bytes) exceeds ${rawMaxBytes} bytes limit (artifact_too_large)`
+          };
+        }
+      }
       const sha256Changed = Boolean(originAns.sha256Changed);
       return {
         success: true,
@@ -100966,7 +101146,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         ...isReadCommand ? {
           totalBytes: typeof originAns.totalBytes === "number" ? originAns.totalBytes : record6.sizeBytes,
           offset: typeof originAns.offset === "number" ? originAns.offset : 0,
-          pageBytes: typeof originAns.pageBytes === "number" ? originAns.pageBytes : Buffer.byteLength(rawContent, "utf8"),
+          pageBytes: typeof originAns.pageBytes === "number" ? originAns.pageBytes : decodedByteLength,
           hasMore: Boolean(originAns.hasMore),
           nextOffset: typeof originAns.nextOffset === "number" ? originAns.nextOffset : null
         } : {},
@@ -101118,25 +101298,32 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               const reqArtifactId = trimString3(args?.artifactId);
               if (reqArtifactId) {
                 const reqRec = store2.get(reqArtifactId);
-                if (reqRec) {
-                  const reqMissionId = resolveRecMission(reqRec);
-                  const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || Boolean(missionId && reqMissionId && missionId === reqMissionId) && (!reqRec.meshId || reqRec.meshId === meshId) && allowedSet.has(reqArtifactId);
-                  requestedArtifact = {
-                    ...reqRec,
-                    ...reqMissionId ? { missionId: reqMissionId } : {},
-                    originDaemonId: reqRec.originDaemonId || selfDaemonId || null,
-                    ...isAllowed ? {} : { previewText: null, workspaceRoot: "" }
+                if (!reqRec) {
+                  return { success: false, code: "artifact_not_found", error: `Artifact not found: ${reqArtifactId} (artifact_not_found)` };
+                }
+                const reqMissionId = resolveRecMission(reqRec);
+                const isAllowed = sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) || Boolean(missionId && reqMissionId && missionId === reqMissionId) && (!reqRec.meshId || reqRec.meshId === meshId) && allowedSet.has(reqArtifactId);
+                if (!isAllowed) {
+                  return {
+                    success: false,
+                    code: "artifact_access_denied",
+                    error: `Worker session "${ownerIdentity.sessionId}" is not authorized to access artifact "${reqArtifactId}" (artifact_access_denied)`
                   };
                 }
+                requestedArtifact = {
+                  ...reqRec,
+                  ...reqMissionId ? { missionId: reqMissionId } : {},
+                  originDaemonId: reqRec.originDaemonId || selfDaemonId || null
+                };
               }
-              return {
-                success: true,
-                missionId,
-                inputArtifactIds,
-                inputArtifacts,
-                requestedArtifact
-              };
+              return { success: true, missionId, inputArtifactIds, inputArtifacts, requestedArtifact };
             }
+            const hostNow = Date.now();
+            const maxForwardedTimestamp = hostNow + 6e4;
+            const rawCreated = Number(rawArtifact.createdAt);
+            const clampedCreatedAt = Number.isFinite(rawCreated) && rawCreated > 0 ? Math.min(Math.trunc(rawCreated), maxForwardedTimestamp) : hostNow;
+            const rawUpdated = Number(rawArtifact.updatedAt);
+            const clampedUpdatedAt = Number.isFinite(rawUpdated) && rawUpdated > 0 ? Math.max(clampedCreatedAt, Math.min(Math.trunc(rawUpdated), maxForwardedTimestamp)) : clampedCreatedAt;
             const upserted = store2.upsertForwardedArtifact({
               artifactId: trimString3(rawArtifact.artifactId),
               sessionId: ownerIdentity.sessionId,
@@ -101153,8 +101340,8 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
               sha256: trimString3(rawArtifact.sha256),
               title: typeof rawArtifact.title === "string" ? rawArtifact.title : null,
               previewText: typeof rawArtifact.previewText === "string" ? rawArtifact.previewText : null,
-              createdAt: Number(rawArtifact.createdAt) || Date.now(),
-              updatedAt: Number(rawArtifact.updatedAt) || Date.now()
+              createdAt: clampedCreatedAt,
+              updatedAt: clampedUpdatedAt
             });
             return {
               success: true,
@@ -101172,66 +101359,122 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
         handleArtifactFetchOrigin = async (ctx, args) => {
           const senderDaemonId = readMeshSender(args);
           if (!senderDaemonId) {
-            return {
-              success: false,
-              code: "unauthenticated",
-              error: "artifact_fetch_origin requires an authenticated mesh peer sender"
-            };
+            return { success: false, code: "unauthenticated", error: "artifact_fetch_origin requires an authenticated mesh peer sender" };
           }
           const artifactId = trimString3(args?.artifactId) || trimString3(args?.id);
           if (!artifactId) {
-            return {
-              success: false,
-              code: "invalid_arguments",
-              error: "artifactId is required"
-            };
+            return { success: false, code: "invalid_arguments", error: "artifactId is required" };
           }
           try {
             const store2 = getArtifactStore(ctx);
             const record6 = store2.get(artifactId);
             if (!record6) {
-              return {
-                success: false,
-                code: "artifact_not_found",
-                error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)`
-              };
+              return { success: false, code: "artifact_not_found", error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
             }
             const reqMeshId = trimString3(args?.meshId);
             if (reqMeshId && record6.meshId && record6.meshId !== reqMeshId) {
-              return {
-                success: false,
-                code: "artifact_session_mismatch",
-                error: `Artifact "${artifactId}" does not belong to mesh "${reqMeshId}" (artifact_session_mismatch)`
-              };
+              return { success: false, code: "artifact_session_mismatch", error: `Artifact "${artifactId}" does not belong to mesh "${reqMeshId}" (artifact_session_mismatch)` };
             }
             const meshIdToVerify = record6.meshId || reqMeshId;
-            if (meshIdToVerify) {
-              const cmdRes = await ctx.getMeshForCommand?.(meshIdToVerify, void 0, {
-                preferInline: true
-              });
-              const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
-              if (meshObj) {
-                const hostDaemonId = trimString3(meshObj?.meshHost?.hostDaemonId) || trimString3(meshObj?.hostDaemonId);
-                const nodes = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
-                const isKnownPeer = hostDaemonId && daemonIdsEquivalent4(hostDaemonId, senderDaemonId) || nodes.some((n) => {
-                  const nd = readMeshNodeDaemonId(n) || trimString3(n?.daemonId);
-                  return Boolean(nd && daemonIdsEquivalent4(nd, senderDaemonId));
-                });
-                if (!isKnownPeer) {
+            if (!meshIdToVerify) {
+              return { success: false, code: "unauthenticated", error: `Artifact "${artifactId}" has no mesh binding for cross-daemon origin fetch (unauthenticated)` };
+            }
+            const cmdRes = await ctx.getMeshForCommand?.(meshIdToVerify, void 0, { preferInline: true });
+            const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
+            if (!meshObj) {
+              return { success: false, code: "unauthenticated", error: `Mesh "${meshIdToVerify}" is not available to authorize origin fetch (unauthenticated)` };
+            }
+            const hostDaemonId = trimString3(meshObj?.meshHost?.hostDaemonId) || trimString3(meshObj?.hostDaemonId);
+            const nodes = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
+            const isKnownPeer = hostDaemonId && daemonIdsEquivalent4(hostDaemonId, senderDaemonId) || nodes.some((n) => {
+              const nd = readMeshNodeDaemonId(n) || trimString3(n?.daemonId);
+              return Boolean(nd && daemonIdsEquivalent4(nd, senderDaemonId));
+            });
+            if (!isKnownPeer) {
+              return { success: false, code: "unauthenticated", error: `Sender daemon "${senderDaemonId}" is not an authorized member of mesh "${meshIdToVerify}"` };
+            }
+            const selfDaemonId = trimString3(ctx.deps?.statusInstanceId);
+            const isSelfHost = Boolean(hostDaemonId && selfDaemonId && daemonIdsEquivalent4(hostDaemonId, selfDaemonId));
+            const isSenderHost = Boolean(hostDaemonId && daemonIdsEquivalent4(hostDaemonId, senderDaemonId));
+            const requesterRole = trimString3(args?.requesterRole);
+            if (isSelfHost || !isSenderHost || requesterRole === "worker") {
+              const requesterSessionId = trimString3(args?.requesterSessionId);
+              if (!requesterSessionId) {
+                return { success: false, code: "artifact_access_denied", error: "artifact_fetch_origin requires an authorized requesting worker session (artifact_access_denied)" };
+              }
+              const requesterTaskId = trimString3(args?.requesterTaskId) || void 0;
+              const requesterAttemptId = trimString3(args?.requesterAttemptId) || void 0;
+              const requesterGeneration = typeof args?.requesterGeneration === "number" && Number.isSafeInteger(args.requesterGeneration) ? args.requesterGeneration : void 0;
+              const nodeDaemonId = (nodeId) => {
+                const node = nodes.find((n) => meshNodeIdMatches7(n, nodeId) || trimString3(n?.id) === nodeId || trimString3(n?.nodeId) === nodeId);
+                return node ? readMeshNodeDaemonId(node) || trimString3(node?.daemonId) : void 0;
+              };
+              const isSelfDaemon = selfDaemonId ? (d) => daemonIdsEquivalent4(d, selfDaemonId) : void 0;
+              const resolvedWorker = resolveForwardedWorkerIdentity(
+                {
+                  meshId: meshIdToVerify,
+                  sessionId: requesterSessionId,
+                  ...requesterTaskId ? { taskId: requesterTaskId } : {},
+                  ...requesterAttemptId ? { attemptId: requesterAttemptId } : {},
+                  ...requesterGeneration !== void 0 ? { generation: requesterGeneration } : {}
+                },
+                { senderDaemonId, nodeDaemonId },
+                Date.now(),
+                isSelfDaemon
+              );
+              if ("refused" in resolvedWorker || !("live" in resolvedWorker)) {
+                return {
+                  success: false,
+                  code: "artifact_access_denied",
+                  error: `Worker session "${requesterSessionId}" is not authorized to fetch artifact "${record6.artifactId}" (artifact_access_denied)`
+                };
+              }
+              const workerOwner = resolvedWorker.live;
+              const meshStore = getMeshRuntimeStore(ctx);
+              const queueEntry = meshStore.findQueueEntryById(meshIdToVerify, workerOwner.taskId);
+              if (!queueEntry) {
+                return { success: false, code: "artifact_access_denied", error: `Worker task "${workerOwner.taskId}" has no active queue assignment on host (artifact_access_denied)` };
+              }
+              const queueStatus = trimString3(queueEntry.status);
+              if (queueStatus && queueStatus !== "assigned") {
+                return { success: false, code: "artifact_access_denied", error: `Worker task "${workerOwner.taskId}" is not in assigned state (artifact_access_denied)` };
+              }
+              const assignedSession = trimString3(queueEntry.assignedSessionId);
+              if (assignedSession && !sessionIdsEquivalent(assignedSession, workerOwner.sessionId)) {
+                return { success: false, code: "artifact_access_denied", error: `Worker task "${workerOwner.taskId}" is not assigned to "${workerOwner.sessionId}" (artifact_access_denied)` };
+              }
+              if (!sessionIdsEquivalent(record6.sessionId, workerOwner.sessionId)) {
+                const queuePayload = queueEntry.payload ?? {};
+                const workerMissionId = trimString3(queueEntry.missionId) || trimString3(queuePayload.missionId) || "";
+                const rawInputIds = Array.isArray(queueEntry.inputArtifactIds) ? queueEntry.inputArtifactIds : Array.isArray(queuePayload.inputArtifactIds) ? queuePayload.inputArtifactIds : [];
+                const allowedSet = new Set(rawInputIds.map((id4) => trimString3(id4)).filter((id4) => id4.length > 0));
+                let recMissionId = trimString3(record6.missionId);
+                if (!recMissionId && record6.taskId) {
+                  try {
+                    const pe = meshStore.findQueueEntryById(record6.meshId || meshIdToVerify, record6.taskId);
+                    recMissionId = trimString3(pe?.missionId) || trimString3(pe?.payload?.missionId);
+                  } catch {
+                    recMissionId = "";
+                  }
+                }
+                const sameMission = Boolean(workerMissionId && recMissionId && workerMissionId === recMissionId);
+                const sameMesh = !record6.meshId || record6.meshId === meshIdToVerify;
+                if (!sameMission || !sameMesh || !allowedSet.has(record6.artifactId)) {
                   return {
                     success: false,
-                    code: "unauthenticated",
-                    error: `Sender daemon "${senderDaemonId}" is not an authorized member of mesh "${meshIdToVerify}"`
+                    code: "artifact_access_denied",
+                    error: `Worker session "${workerOwner.sessionId}" is not authorized to fetch artifact "${record6.artifactId}" outside its OD-4 task scope (artifact_access_denied)`
                   };
                 }
               }
             }
+            const boundArtifactId = record6.artifactId;
             const rawMode = trimString3(args?.mode);
             const mode = rawMode === "fetch" ? "fetch" : rawMode === "read" || args?.asChunks === true || typeof args?.offset === "number" || typeof args?.pageOffset === "number" || typeof args?.limit === "number" ? "read" : "fetch";
             if (mode === "read") {
               const readOffset = typeof args?.offset === "number" ? args.offset : typeof args?.pageOffset === "number" ? args.pageOffset : void 0;
               const readLimit = typeof args?.limit === "number" ? args.limit : void 0;
-              const readRes = store2.readArtifactContent(artifactId, {
+              const readRes = store2.readArtifactContent(boundArtifactId, {
                 sessionId: record6.sessionId,
                 trustedWorkspaceRoot: record6.workspaceRoot,
                 ...readOffset !== void 0 ? { offset: readOffset } : {},
@@ -101262,7 +101505,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 attachment: toChatAttachmentMeta(record6)
               };
             }
-            const fetched = store2.fetchArtifactContent(artifactId, {
+            const fetched = store2.fetchArtifactContent(boundArtifactId, {
               sessionId: record6.sessionId,
               trustedWorkspaceRoot: record6.workspaceRoot
             });
@@ -101493,7 +101736,7 @@ ${UNTRUSTED_ARTIFACT_CLOSE_TAG}`;
                 ctx,
                 remote.ownerDaemonId,
                 remoteClaim,
-                requestedArtifactId || void 0
+                mode === "fetch" ? requestedArtifactId || void 0 : void 0
               );
               if (!scopeRes.ok) return scopeRes;
               hostScope = scopeRes.scope;
@@ -106337,7 +106580,7 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
-    var import_node_crypto23;
+    var import_node_crypto24;
     var import_node_os22;
     var import_node_path16;
     var refused;
@@ -106346,7 +106589,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto23 = require("crypto");
+        import_node_crypto24 = require("crypto");
         import_node_os22 = require("os");
         import_node_path16 = require("path");
         init_managed_mcp_process();
@@ -106551,7 +106794,7 @@ ${asText(streams.stderr)}
               this.instances.set(input.type, instance);
             }
             const record6 = {
-              invocationId: (0, import_node_crypto23.randomUUID)(),
+              invocationId: (0, import_node_crypto24.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
@@ -106623,7 +106866,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto24;
+    var import_node_crypto25;
     var import_node_fs14;
     var import_node_path17;
     var ID3;
@@ -106632,7 +106875,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto24 = require("crypto");
+        import_node_crypto25 = require("crypto");
         import_node_fs14 = require("fs");
         import_node_path17 = require("path");
         init_config();
@@ -106652,7 +106895,7 @@ ${asText(streams.stderr)}
             const record6 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto24.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto25.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -106721,7 +106964,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto25.createHash)("sha256");
+      const hash3 = (0, import_node_crypto26.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs15.readFileSync)((0, import_node_path18.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path18.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -106744,13 +106987,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta._sourceTrust }, treeDigest: digest4 };
     }
-    var import_node_crypto25;
+    var import_node_crypto26;
     var import_node_fs15;
     var import_node_path18;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto25 = require("crypto");
+        import_node_crypto26 = require("crypto");
         import_node_fs15 = require("fs");
         import_node_path18 = require("path");
         init_manifest();
@@ -110749,7 +110992,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises10.lstat)(root)).isSymbolicLink() || await (0, import_promises10.realpath)(root) !== (0, import_node_path19.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key4 = (0, import_node_crypto26.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
+      const key4 = (0, import_node_crypto27.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
       return (0, import_node_path19.join)(root, key4);
     }
     async function verifyCheckout(workspace, identity2) {
@@ -110818,7 +111061,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         throw busy();
       }
       const ownerPath = (0, import_node_path19.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
       try {
         await (0, import_promises10.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -110844,7 +111087,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises10.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
         await (0, import_promises10.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -110966,7 +111209,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process14;
     var import_node_util8;
-    var import_node_crypto26;
+    var import_node_crypto27;
     var import_promises10;
     var import_node_path19;
     var exec5;
@@ -110985,7 +111228,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process14 = require("child_process");
         import_node_util8 = require("util");
-        import_node_crypto26 = require("crypto");
+        import_node_crypto27 = require("crypto");
         import_promises10 = require("fs/promises");
         import_node_path19 = require("path");
         init_config();
@@ -111030,13 +111273,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity2) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key4 = (0, import_node_crypto27.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto27.createHmac)("sha256", key4).update(`${grant.target}
+      const key4 = (0, import_node_crypto28.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto28.createHmac)("sha256", key4).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto27.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto28.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity2) {
       const hostId = str9(args?.hostDaemonId);
@@ -111065,7 +111308,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto27;
+    var import_node_crypto28;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -111074,7 +111317,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto27 = require("crypto");
+        import_node_crypto28 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -111306,7 +111549,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest4 = (0, import_node_crypto28.createHash)("sha256").update(body).digest("hex");
+        const digest4 = (0, import_node_crypto29.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
       } catch {
         return false;
@@ -111343,7 +111586,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto28.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -111537,7 +111780,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto28.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto29.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -111614,7 +111857,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto28;
+    var import_node_crypto29;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -111625,7 +111868,7 @@ ${b.text}`).join("\n\n");
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
-        import_node_crypto28 = require("crypto");
+        import_node_crypto29 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -112273,8 +112516,75 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     function wrap(project, meshId, result) {
       return { success: true, project, meshId, result };
     }
+    function authorizeAssistantArtifactCaller(args, verb) {
+      const rawArgs = args && typeof args === "object" && !Array.isArray(args) ? args : {};
+      const routerIngress = readRouterCommandIngress(rawArgs);
+      if (routerIngress) {
+        if (routerIngress.source === "standalone" || routerIngress.source === "p2p" || routerIngress.source === "ws") {
+          const expectedOwnerSource = routerIngress.source === "standalone" ? "standalone" : "p2p";
+          if (isTrustedOwnerIngress(rawArgs, expectedOwnerSource)) {
+            return null;
+          }
+          return fail4(
+            "COMMAND_SOURCE_REJECTED",
+            `${verb} requires an authenticated owner or bound assistant session`
+          );
+        }
+        if (routerIngress.source !== "ipc" || routerIngress.inProcess) {
+          return fail4(
+            "COMMAND_SOURCE_REJECTED",
+            `${verb} requires an authenticated owner or bound assistant session`
+          );
+        }
+      } else if (isTrustedOwnerIngress(rawArgs, "standalone") || isTrustedOwnerIngress(rawArgs, "p2p")) {
+        return null;
+      }
+      if (routerIngress?.hasForgedProvenanceFields || routerIngress?.hasRevokedOwnerProof || hasRevokedTrustedOwnerIngress(rawArgs) || "ownerVerified" in rawArgs || "_ownerVerified" in rawArgs || "source" in rawArgs || COMMAND_SOURCE_ARG in rawArgs || rawArgs.bind !== void 0 || rawArgs.token !== void 0) {
+        return fail4(
+          "COMMAND_SOURCE_REJECTED",
+          `${verb} rejected forged provenance or worker credentials on assistant ingress`
+        );
+      }
+      const boundSid = str10(getAssistantRegistry().read()?.sessionId);
+      const callerSid = readAssistantSessionId(rawArgs);
+      if (!boundSid || !callerSid || callerSid !== boundSid) {
+        return fail4(
+          "COMMAND_SOURCE_REJECTED",
+          `${verb} requires the bound assistant session`
+        );
+      }
+      const mcpCmd = readAuthenticatedMcpCommand(rawArgs, verb);
+      if (mcpCmd.present) {
+        if (!mcpCmd.valid) {
+          return fail4(
+            "COMMAND_SOURCE_REJECTED",
+            `${verb} MCP capability is invalid or revoked`
+          );
+        }
+        const mcpScope = readAuthenticatedMcpScope(rawArgs, verb);
+        if (!mcpScope || mcpScope.isCoordinator || mcpScope.sessionId !== boundSid) {
+          return fail4(
+            "COMMAND_SOURCE_REJECTED",
+            `${verb} MCP scope does not match the bound assistant session`
+          );
+        }
+        return null;
+      }
+      const credScope = verifyMcpSessionCredential(rawArgs.mcpSessionCredential);
+      if (credScope && !credScope.isCoordinator && credScope.sessionId === boundSid) {
+        return null;
+      }
+      return fail4(
+        "COMMAND_SOURCE_REJECTED",
+        `${verb} requires an authenticated owner or session-bound assistant capability`
+      );
+    }
     function assistantVerb(verb, run3) {
       return async (ctx, args) => {
+        if (verb === ASSISTANT_VERB2.artifactList || verb === ASSISTANT_VERB2.artifactRead) {
+          const authFailure = authorizeAssistantArtifactCaller(args, verb);
+          if (authFailure) return authFailure;
+        }
         const gate = assistantToolGate(verb, args, getAssistantServices());
         if (gate) return gate;
         try {
@@ -112535,16 +112845,28 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           if (!p2pRes || p2pRes.success === false) {
             return { ok: false, code: str10(p2pRes?.code) || "artifact_origin_unreachable", error: str10(p2pRes?.error) || "Failed to read artifact from origin daemon." };
           }
+          const isBase64Image = record6.kind === "image" || p2pRes.encoding === "base64";
+          const transportMaxBytes = isBase64Image ? maxBase64EncodedBytes(MAX_ARTIFACT_MCP_PAGE_BYTES) : MAX_ARTIFACT_MCP_PAGE_BYTES;
+          if (typeof p2pRes.totalBytes === "number" && p2pRes.totalBytes > MAX_ARTIFACT_BYTES || typeof p2pRes.pageBytes === "number" && p2pRes.pageBytes > MAX_ARTIFACT_MCP_PAGE_BYTES) {
+            return { ok: false, code: "artifact_too_large", error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
+          }
           let rawContent = "";
           if (Array.isArray(p2pRes.chunks) && p2pRes.chunks.length > 0) {
-            const reassembled = reassembleBase64ArtifactChunks(p2pRes.chunks, MAX_ARTIFACT_MCP_PAGE_BYTES);
+            const reassembled = reassembleBase64ArtifactChunks(p2pRes.chunks, transportMaxBytes);
             if (!reassembled.ok) return { ok: false, code: reassembled.code, error: reassembled.error };
             rawContent = reassembled.content;
           } else if (typeof p2pRes.content === "string") {
-            if (Buffer.byteLength(p2pRes.content, "utf8") > MAX_ARTIFACT_MCP_PAGE_BYTES) {
+            if (Buffer.byteLength(p2pRes.content, "utf8") > transportMaxBytes) {
               return { ok: false, code: "artifact_too_large", error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
             }
             rawContent = p2pRes.content;
+          }
+          let decodedByteLength = Buffer.byteLength(rawContent, "utf8");
+          if (isBase64Image && rawContent.length > 0) {
+            decodedByteLength = Buffer.from(rawContent, "base64").byteLength;
+            if (decodedByteLength > MAX_ARTIFACT_MCP_PAGE_BYTES || decodedByteLength > MAX_ARTIFACT_BYTES) {
+              return { ok: false, code: "artifact_too_large", error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
+            }
           }
           return {
             ok: true,
@@ -112555,7 +112877,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               content: wrapUntrustedArtifactContent(rawContent),
               totalBytes: typeof p2pRes.totalBytes === "number" ? p2pRes.totalBytes : record6.sizeBytes,
               offset: typeof p2pRes.offset === "number" ? p2pRes.offset : rawOffset,
-              pageBytes: typeof p2pRes.pageBytes === "number" ? p2pRes.pageBytes : Buffer.byteLength(rawContent, "utf8"),
+              pageBytes: typeof p2pRes.pageBytes === "number" ? p2pRes.pageBytes : decodedByteLength,
               hasMore: Boolean(p2pRes.hasMore),
               nextOffset: typeof p2pRes.nextOffset === "number" ? p2pRes.nextOffset : null,
               source: "p2p_origin",
@@ -112636,6 +112958,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_discover_repos();
         init_mesh_config_store();
         init_artifacts();
+        init_command_args();
+        init_mcp_command_ingress();
         ASSISTANT_PROJECTS_SOURCES = ["ipc", "standalone", "p2p", "ws"];
         environment = assistantVerb(ASSISTANT_VERB2.environment, async (ports) => {
           await ports.refreshMemberMeshes?.();
@@ -113090,15 +113414,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
     }
-    var import_node_crypto29;
+    var import_node_crypto30;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto29 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto30 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto30.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -113284,7 +113608,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    var import_node_crypto30;
+    var import_node_crypto31;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -113300,7 +113624,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto30 = require("crypto");
+        import_node_crypto31 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -113312,7 +113636,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto30.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto31.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -119608,6 +119932,8 @@ ${tail}` : ""
       ADHDEV_DAEMON_AUTH_FILE_ENV: () => ADHDEV_DAEMON_AUTH_FILE_ENV2,
       ADHDEV_DAEMON_AUTH_FILE_FLAG: () => ADHDEV_DAEMON_AUTH_FILE_FLAG2,
       ADHDEV_INTERNAL_AUTH_HEADER: () => ADHDEV_INTERNAL_AUTH_HEADER2,
+      ADHDEV_MCP_SESSION_CREDENTIAL_ENV: () => ADHDEV_MCP_SESSION_CREDENTIAL_ENV2,
+      ADHDEV_MCP_SESSION_CREDENTIAL_HEADER: () => ADHDEV_MCP_SESSION_CREDENTIAL_HEADER2,
       ADHDEV_WORKER_CREDENTIAL_HEADER: () => ADHDEV_WORKER_CREDENTIAL_HEADER2,
       ALWAYS_ON_TRACE_CATEGORIES: () => ALWAYS_ON_TRACE_CATEGORIES,
       AgentStreamPoller: () => AgentStreamPoller,
@@ -119851,6 +120177,7 @@ ${tail}` : ""
       __clearLocalRecordsForTests: () => __clearLocalRecordsForTests,
       __inFlightStatusReadCountForTests: () => __inFlightStatusReadCountForTests,
       __resetGitStatusCacheForTests: () => __resetGitStatusCacheForTests,
+      __resetMcpSessionCredentialsForTest: () => __resetMcpSessionCredentialsForTest,
       __resetMeshPublisherForTests: () => __resetMeshPublisherForTests,
       __setCliInventoryTestOverridesForTests: () => __setCliInventoryTestOverridesForTests,
       __writeTaskStatusForTests: () => __writeTaskStatusForTests,
@@ -120021,6 +120348,7 @@ ${tail}` : ""
       encodeMeshHandlerErrorCode: () => encodeMeshHandlerErrorCode,
       enqueueTask: () => enqueueTask,
       enqueueTaskBatch: () => enqueueTaskBatch,
+      ensureMcpSessionCredential: () => ensureMcpSessionCredential,
       ensureSessionHostReady: () => ensureSessionHostReady,
       estimateProjectedEntryBytes: () => estimateProjectedEntryBytes,
       evaluateFsm: () => evaluateFsm,
@@ -120088,6 +120416,7 @@ ${tail}` : ""
       getLocalRecordSummary: () => getLocalRecordSummary,
       getLogInstanceTag: () => getLogInstanceTag,
       getLogLevel: () => getLogLevel,
+      getMcpSessionCredentialForSession: () => getMcpSessionCredentialForSession,
       getMesh: () => getMesh,
       getMeshByRepo: () => getMeshByRepo,
       getMeshMission: () => getMeshMission,
@@ -120239,6 +120568,7 @@ ${tail}` : ""
       migrateTurnLedgerV1: () => migrateTurnLedgerV1,
       migrateTurnLedgerV2: () => migrateTurnLedgerV2,
       migrateTurnLedgerV3: () => migrateTurnLedgerV3,
+      mintMcpSessionCredential: () => mintMcpSessionCredential,
       mintPeerSecret: () => mintPeerSecret,
       minutesUntilQuotaCheck: () => minutesUntilQuotaCheck2,
       missionSetHash: () => missionSetHash,
@@ -120326,6 +120656,8 @@ ${tail}` : ""
       quotaRiskSnapshotForCandidates: () => quotaRiskSnapshotForCandidates,
       rankProvidersByQuotaGate: () => rankProvidersByQuotaGate2,
       readAntigravityCliSession: () => readSession3,
+      readAuthenticatedMcpCommand: () => readAuthenticatedMcpCommand,
+      readAuthenticatedMcpScope: () => readAuthenticatedMcpScope,
       readCachedInlineMeshActiveSessionDetails: () => readCachedInlineMeshActiveSessionDetails,
       readChatHistory: () => readChatHistory,
       readClaudeCliSession: () => readSession,
@@ -120391,6 +120723,7 @@ ${tail}` : ""
       resolveInstanceContext: () => resolveInstanceContext,
       resolveInstanceDir: () => resolveInstanceDir,
       resolveInterruptCapability: () => resolveInterruptCapability,
+      resolveLiveArtifactWorkerScope: () => resolveLiveArtifactWorkerScope,
       resolveMaxNodes: () => resolveMaxNodes,
       resolveMaxParallelTasks: () => resolveMaxParallelTasks,
       resolveMeshConnectWaitMs: () => resolveMeshConnectWaitMs,
@@ -120425,6 +120758,7 @@ ${tail}` : ""
       retiredMeshToolError: () => retiredMeshToolError2,
       retractCoordinatorNotices: () => retractCoordinatorNotices,
       retractDispatchBlockedNotices: () => retractDispatchBlockedNotices,
+      revokeMcpSessionCredential: () => revokeMcpSessionCredential,
       rotateCaptureLogIfNeeded: () => rotateCaptureLogIfNeeded,
       routeNotice: () => routeNotice,
       runAsyncBatch: () => runAsyncBatch,
@@ -120511,6 +120845,7 @@ ${tail}` : ""
       validateMeshTaskModeRequest: () => validateMeshTaskModeRequest2,
       validateMeshWorktreeBootstrapConfig: () => validateMeshWorktreeBootstrapConfig,
       verifyHeldObservationFleet: () => verifyHeldObservationFleet,
+      verifyMcpSessionCredential: () => verifyMcpSessionCredential,
       verifyRetainedMaintenanceHost: () => verifyRetainedMaintenanceHost,
       withMaintenanceAdmission: () => withMaintenanceAdmission,
       withMeshDirectDispatch: () => withMeshDirectDispatch,
@@ -124040,7 +124375,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         logMeshCommandEvent(event, fields);
       }
     };
-    var import_node_crypto7 = require("crypto");
+    var import_node_crypto8 = require("crypto");
     var import_ws2 = __toESM2(require_ws());
     init_dist();
     init_logger();
@@ -124412,7 +124747,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         this.pingIntervalMs = options.pingIntervalMs ?? WS_MESH_PING_INTERVAL_MS;
         this.maxMissedPongs = options.maxMissedPongs ?? WS_MESH_MAX_MISSED_PONGS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
-        this.idNonce = `${this.idNonce}_${(0, import_node_crypto7.randomBytes)(3).toString("hex")}`;
+        this.idNonce = `${this.idNonce}_${(0, import_node_crypto8.randomBytes)(3).toString("hex")}`;
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       /** Register the inbound-command handler. It returns a result or throws. */
@@ -125181,7 +125516,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var import_node_child_process8 = require("child_process");
     var fs43 = __toESM2(require("fs"));
     var path50 = __toESM2(require("path"));
-    var import_node_crypto12 = require("crypto");
+    var import_node_crypto13 = require("crypto");
     init_dist();
     init_mesh_queue_trigger();
     init_mesh_queue_autolaunch();
@@ -125811,11 +126146,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_install();
     var fs322 = __toESM2(require("fs"));
     var path39 = __toESM2(require("path"));
-    var import_node_crypto8 = require("crypto");
+    var import_node_crypto9 = require("crypto");
     var import_node_child_process7 = require("child_process");
     init_config();
     init_cooperative_gate();
-    var sha3 = (v) => (0, import_node_crypto8.createHash)("sha256").update(v).digest("hex");
+    var sha3 = (v) => (0, import_node_crypto9.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
       const nodePath = fs322.realpathSync(process.execPath), entryPath = fs322.realpathSync(process.argv[1]);
       const birth = (0, import_node_child_process7.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
@@ -125861,7 +126196,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return r;
     }
     function durable(file, r) {
-      const temp = file + "." + (0, import_node_crypto8.randomUUID)() + ".tmp", fd = fs322.openSync(temp, "wx", 384);
+      const temp = file + "." + (0, import_node_crypto9.randomUUID)() + ".tmp", fd = fs322.openSync(temp, "wx", 384);
       try {
         fs322.writeFileSync(fd, JSON.stringify(r));
         fs322.fsyncSync(fd);
@@ -125884,7 +126219,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return out;
     }
     function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
-      const dir = ensureDirectory(root), operationId = (0, import_node_crypto8.randomUUID)();
+      const dir = ensureDirectory(root), operationId = (0, import_node_crypto9.randomUUID)();
       const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path39.join(dir, operationId + ".json"), r);
       return operationId;
@@ -128864,18 +129199,18 @@ ${marker2}`,
     }, { meshSender: "authenticated_peer" });
     var fs41 = __toESM2(require("fs"));
     var path48 = __toESM2(require("path"));
-    var import_node_crypto10 = require("crypto");
+    var import_node_crypto11 = require("crypto");
     init_config();
     init_cooperative_gate();
     var fs40 = __toESM2(require("fs"));
     var path47 = __toESM2(require("path"));
     init_config();
-    var import_node_crypto9 = require("crypto");
+    var import_node_crypto10 = require("crypto");
     var import_session_host_core8 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
-    var digest = (value) => (0, import_node_crypto9.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+    var digest = (value) => (0, import_node_crypto10.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     var text = (v) => typeof v === "string" ? v.trim() : "";
     function freshCoordinators(state2) {
       const select = (e) => ({ sessionId: e.sessionId, meshId: e.meshId, workspace: e.workspace, cliType: e.cliType, startedAt: e.startedAt });
@@ -129089,7 +129424,7 @@ ${marker2}`,
     }
     var ACTOR_CONFIG_FILE = "cooperative-maintenance-actor.json";
     var used = /* @__PURE__ */ new Map();
-    var hash22 = (s2) => (0, import_node_crypto10.createHash)("sha256").update(s2).digest("hex");
+    var hash22 = (s2) => (0, import_node_crypto11.createHash)("sha256").update(s2).digest("hex");
     function privateFile(file) {
       const s2 = fs41.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.nlink !== 1 || s2.size > 256 * 1024 || s2.mode & 63 || process.getuid && s2.uid !== process.getuid() || fs41.realpathSync(file) !== file) throw new Error("maintenance_actor_private_pin_required");
@@ -129109,8 +129444,8 @@ ${marker2}`,
       if (key4.length !== 32 || hash22(key4) !== config.observationKey?.sha256) throw new Error("maintenance_actor_key_changed");
       if (request.schema !== 1 || request.operation !== operation || request.daemonId !== state2.daemonId || request.planDigest !== state2.planDigest || request.epoch !== state2.epoch || !/^[a-f0-9-]{36}$/.test(request.nonce) || !Number.isSafeInteger(request.sentAt) || Math.abs(Date.now() - request.sentAt) > 1e4 || !/^[a-f0-9]{64}$/.test(request.mac)) throw new Error("maintenance_actor_challenge_invalid");
       if ((request.body !== void 0 || request.bodyDigest !== void 0) && (request.bodyDigest !== hash22(JSON.stringify(request.body)) || JSON.stringify(request.body).length > 256 * 1024)) throw new Error("maintenance_collection_body_invalid");
-      const expected = (0, import_node_crypto10.createHmac)("sha256", key4).update(actorObservationChallengeBytes(request)).digest();
-      if (!(0, import_node_crypto10.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
+      const expected = (0, import_node_crypto11.createHmac)("sha256", key4).update(actorObservationChallengeBytes(request)).digest();
+      if (!(0, import_node_crypto11.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
       for (const [nonce, at] of used) if (Date.now() - at > 2e4) used.delete(nonce);
       const replayKey = `${root}:${request.nonce}`;
       if (used.has(replayKey) || used.size >= 4096) throw new Error("maintenance_actor_challenge_replayed");
@@ -129130,7 +129465,7 @@ ${marker2}`,
           entryPath: process.argv[1],
           observedAt: Date.now()
         };
-        return { success: true, reply, mac: (0, import_node_crypto10.createHmac)("sha256", key4).update(JSON.stringify(reply)).digest("hex") };
+        return { success: true, reply, mac: (0, import_node_crypto11.createHmac)("sha256", key4).update(JSON.stringify(reply)).digest("hex") };
       } };
     }
     async function authenticatedActorObservation(host, request) {
@@ -129140,8 +129475,8 @@ ${marker2}`,
     }
     var fs42 = __toESM2(require("fs"));
     var path49 = __toESM2(require("path"));
-    var import_node_crypto11 = require("crypto");
-    var sha4 = (x) => (0, import_node_crypto11.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
+    var import_node_crypto12 = require("crypto");
+    var sha4 = (x) => (0, import_node_crypto12.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
     function validateMcpIdentity(value) {
       if (!value || typeof value.birth !== "string" || !/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value.birth) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[a-f0-9-]{36}$/.test(value.bootNonce) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0 || !path49.isAbsolute(value.entryPath ?? "") || !path49.isAbsolute(value.nodePath ?? "") || ![value.entrySha256, value.nodeSha256].every((v) => /^[a-f0-9]{64}$/.test(v))) throw new Error("maintenance_mcp_identity_invalid");
       return { pid: value.pid, bootNonce: value.bootNonce, birth: value.birth, startedAt: value.startedAt, entryPath: value.entryPath, entrySha256: value.entrySha256, nodePath: value.nodePath, nodeSha256: value.nodeSha256 };
@@ -129223,7 +129558,7 @@ ${marker2}`,
       const membershipDigest = sha4(records), members = await Promise.all(records.map((identity2) => new Promise((resolve54) => {
         const name = `${root}:${key2(identity2)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
-        const nonce = (0, import_node_crypto11.randomUUID)(), timer = setTimeout(() => {
+        const nonce = (0, import_node_crypto12.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
           resolve54({ identity: identity2, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
@@ -129235,7 +129570,7 @@ ${marker2}`,
     init_cooperative_gate();
     var MAINTENANCE_DRAIN_CHANNELS = ["runnableQueue", "claims", "launches", "submits", "attempts", "corrections", "livenessHolds", "reportOutboxes", "progressOutboxes", "unreadableOutboxes", "temporaryOutboxes", "memoryOnlyOutboxes", "coordinatorNotices", "pendingNotifications", "adapterOutbound", "adapterSubmit", "turnEvents", "deferredLifecycle", "refineJobs"];
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
-    var digest2 = (v) => (0, import_node_crypto12.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
+    var digest2 = (v) => (0, import_node_crypto13.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
     function census(components, state2, root, nonce) {
       const identity2 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
@@ -129461,10 +129796,10 @@ ${marker2}`,
       const drain = await withMaintenanceObservation((state2) => collectTargetDrain(components, state2, auth.root, request.nonce));
       return auth.reply({ drain });
     }
-    var import_node_crypto13 = require("crypto");
+    var import_node_crypto14 = require("crypto");
     init_cooperative_gate();
     init_dist();
-    var sha5 = (b) => (0, import_node_crypto13.createHash)("sha256").update(b).digest("hex");
+    var sha5 = (b) => (0, import_node_crypto14.createHash)("sha256").update(b).digest("hex");
     var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     var fail = (s2) => {
       throw Error(s2);
@@ -129492,16 +129827,16 @@ ${marker2}`,
           daemonId: peer.daemonId,
           planDigest: s2.planDigest,
           epoch: s2.epoch,
-          nonce: (0, import_node_crypto13.randomUUID)(),
+          nonce: (0, import_node_crypto14.randomUUID)(),
           sentAt: Date.now(),
           configSha256: peerConfigSha,
           body: { action: "peer", fleetChallenge: b.fleetChallenge, expectedBoot: peer.bootNonce, roster: s2.roster, nodeRoster: s2.nodeRoster }
         };
         const challenge = { ...q, bodyDigest: sha5(JSON.stringify(q.body)) };
-        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto13.createHmac)("sha256", key4).update(actorObservationChallengeBytes(challenge)).digest("hex") });
+        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto14.createHmac)("sha256", key4).update(actorObservationChallengeBytes(challenge)).digest("hex") });
         if (sha5(fs44.readFileSync(pin.path)) !== pin.sha256 || sha5(fs44.readFileSync(cfg.observationKey.path)) !== cfg.observationKey.sha256 || sha5(fs44.readFileSync(cfg.actorConfigPath)) !== peerConfigSha) fail("maintenance_control_peer_config_changed");
         const r = answer?.reply;
-        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto13.timingSafeEqual)((0, import_node_crypto13.createHmac)("sha256", key4).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
+        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto14.timingSafeEqual)((0, import_node_crypto14.createHmac)("sha256", key4).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
         if (["verify-committed", "open", "verify-open"].includes(b.action) && (!r.commitment || r.commitment.epoch !== s2.epoch || r.commitment.bootNonce !== peer.bootNonce || r.commitment.decisionDigest !== b.decisionDigest || !equal(r.commitment.ready, b.ready))) fail("maintenance_control_peer_commitment_missing");
         if (!r.observation) fail("maintenance_control_peer_observation_missing");
         peerObservations.push(r.observation);
@@ -141918,7 +142253,7 @@ ${output}` : "";
     }
     var fs71 = __toESM2(require("fs"));
     var path77 = __toESM2(require("path"));
-    var import_node_crypto16 = require("crypto");
+    var import_node_crypto17 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -144565,7 +144900,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto16.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto17.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -144859,7 +145194,7 @@ ${output}` : "";
     init_outgoing_receipt();
     var import_node_fs7 = __toESM2(require("fs"));
     var import_node_path8 = __toESM2(require("path"));
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     init_logger();
     init_owned_lock();
     init_outgoing_receipt();
@@ -144881,7 +145216,7 @@ ${output}` : "";
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path8.default.join(this.directory, (0, import_node_crypto18.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path8.default.join(this.directory, (0, import_node_crypto19.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -144971,7 +145306,7 @@ ${output}` : "";
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto18.randomUUID)()}.tmp`;
+        const staging = `${file}.${(0, import_node_crypto19.randomUUID)()}.tmp`;
         const fd = import_node_fs7.default.openSync(staging, "wx", 384);
         try {
           try {
@@ -145001,8 +145336,8 @@ ${output}` : "";
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto18.randomUUID)(),
-            generation: (0, import_node_crypto18.randomUUID)(),
+            attemptId: (0, import_node_crypto19.randomUUID)(),
+            generation: (0, import_node_crypto19.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"
@@ -150773,7 +151108,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db) {
@@ -150781,7 +151116,7 @@ ${output}` : "";
     }
     function key3(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto222.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto23.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db, credential, claim) {
       schema2(db);
@@ -157082,7 +157417,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto31 = require("crypto");
+    var import_node_crypto322 = require("crypto");
     var import_node_fs16 = require("fs");
     var os36 = __toESM2(require("os"));
     var import_node_path20 = require("path");
@@ -157307,7 +157642,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const tmpPath = (0, import_node_path20.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto31.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto322.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -157709,7 +158044,17 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         return fail6("assistant_config_write_failed", `could not prepare the assistant MCP config: ${e?.message ?? e}`, { cliType, workspace });
       }
       const cliArgs = [];
-      const launchEnv = { ...mcp.privateHome?.env ?? {}, ...mcp.launchEnv ?? {} };
+      const { ensureMcpSessionCredential: ensureMcpSessionCredential2 } = await Promise.resolve().then(() => (init_mcp_command_ingress(), mcp_command_ingress_exports));
+      const { ADHDEV_MCP_SESSION_CREDENTIAL_ENV: ADHDEV_MCP_SESSION_CREDENTIAL_ENV22 } = await Promise.resolve().then(() => (init_standalone_mcp_auth(), standalone_mcp_auth_exports));
+      const assistantMcpCredential = ensureMcpSessionCredential2({
+        sessionId: assistantSessionKey,
+        isCoordinator: false
+      });
+      const launchEnv = {
+        ...mcp.privateHome?.env ?? {},
+        ...mcp.launchEnv ?? {},
+        [ADHDEV_MCP_SESSION_CREDENTIAL_ENV22]: assistantMcpCredential
+      };
       const { applyMeshCoordinatorSystemPromptInjection: applyMeshCoordinatorSystemPromptInjection2 } = await Promise.resolve().then(() => (init_mesh_coordinator(), mesh_coordinator_exports));
       const injection = applyMeshCoordinatorSystemPromptInjection2(prompt.text, provider?.meshCoordinator?.systemPromptInjection, { cliArgs, launchEnv, workspace, cliType });
       if (injection.error) return fail6(injection.errorCode ?? "assistant_prompt_failed", injection.error, { cliType, workspace });
@@ -164572,7 +164917,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs105 = __toESM2(require("fs"));
     var path96 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto322 = require("crypto");
+    var import_node_crypto33 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -164613,7 +164958,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto322.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto33.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -169028,7 +169373,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs104 = __toESM2(require("fs"));
-    var import_node_crypto33 = require("crypto");
+    var import_node_crypto34 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -169055,7 +169400,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto33.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto34.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -171636,7 +171981,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process18 = require("child_process");
-    var import_node_crypto34 = require("crypto");
+    var import_node_crypto35 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -171646,7 +171991,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto34.randomUUID)();
+      generation = (0, import_node_crypto35.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -171707,7 +172052,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto34.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto35.randomUUID)()}`;
         return new Promise((resolve54, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -171743,7 +172088,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto35 = require("crypto");
+    var import_node_crypto36 = require("crypto");
     init_dist();
     function record5(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -171874,7 +172219,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto35.randomUUID)(),
+          promptId: (0, import_node_crypto36.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -173519,7 +173864,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto36 = require("crypto");
+    var import_node_crypto37 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -173717,7 +174062,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto36.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto37.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -177356,6 +177701,8 @@ ${buttons.join("\n")}`;
       return template.map((part) => part.includes("{{model}}") ? part.split("{{model}}").join(mapped) : part);
     }
     init_track_identity();
+    init_standalone_mcp_auth();
+    init_mcp_command_ingress();
     async function startSession(host, cliType, workingDir, cliArgs, initialModel, options) {
       assertMaintenanceCommandIdentity({ settings: options?.settingsOverride });
       const plan = planSessionStart(host, cliType, workingDir, options);
@@ -177507,6 +177854,14 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         autoApproveModeId: typeof launchSettings?.autoApproveMode === "string" ? launchSettings.autoApproveMode : void 0
       });
       const instanceManager = host.deps.getInstanceManager();
+      const coordinatorMeshId = typeof launchSettings?.meshCoordinatorFor === "string" && launchSettings.meshCoordinatorFor.trim() ? launchSettings.meshCoordinatorFor.trim() : void 0;
+      const isWorkerLaunch = Boolean(launchSettings?.launchedByCoordinator);
+      const mcpSessionCredential = !isWorkerLaunch ? ensureMcpSessionCredential({
+        sessionId: key4,
+        ...coordinatorMeshId ? { meshId: coordinatorMeshId } : {},
+        isCoordinator: Boolean(coordinatorMeshId)
+      }) : void 0;
+      const effectiveExtraEnv = mcpSessionCredential ? { ...options?.extraEnv || {}, [ADHDEV_MCP_SESSION_CREDENTIAL_ENV2]: mcpSessionCredential } : options?.extraEnv;
       if (launchSettings.codexTransport === "app-server" && (!instanceManager || normalizedType !== "codex-cli" || sessionBinding.launchMode !== "new")) {
         throw new Error("Codex app-server transport requires a new managed Codex session; existing sessions cannot be migrated");
       }
@@ -177526,7 +177881,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           {
             providerSessionId: sessionBinding.providerSessionId,
             launchMode: sessionBinding.launchMode,
-            extraEnv: options?.extraEnv,
+            extraEnv: effectiveExtraEnv,
             resolvedTrustPlan: options?.resolvedTrustPlan,
             // PERMISSION-MODE-DUPLICATE: the mode's launchArgs are already in
             // resolvedCliArgs; the spec's own base args still need stripping.
@@ -177557,7 +177912,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           key4,
           sessionBinding.providerSessionId,
           false,
-          options?.extraEnv,
+          effectiveExtraEnv,
           autoApproveLaunch.removeArgs,
           options?.resolvedTrustPlan
         );
@@ -178864,6 +179219,18 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       const token = args.token == null ? null : verifyWorkerTaskToken(args.token);
       if (args.bind != null && !bind || args.token != null && !token) return false;
       return [bind, token].every((value) => !value || value.meshId === principal.meshId && typeof value.sessionId === "string" && sessionIdsEquivalent(value.sessionId, principal.sessionId));
+    }
+    function resolveLiveArtifactWorkerScope(credential, args) {
+      if (!matchesLiveArtifactWorkerCredential(credential, args)) return null;
+      const headerBind = verifyWorkerSessionBind(credential);
+      const headerToken = headerBind ? null : verifyWorkerTaskToken(credential);
+      const principal = headerBind ?? headerToken;
+      if (!principal?.sessionId) return null;
+      return {
+        sessionId: principal.sessionId,
+        ...typeof principal.meshId === "string" && principal.meshId.trim() ? { meshId: principal.meshId.trim() } : {},
+        isCoordinator: false
+      };
     }
     init_chat_history();
     init_async_batch();
@@ -190245,7 +190612,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto37 = require("crypto");
+    var import_node_crypto38 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -190254,7 +190621,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto37.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto38.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -190264,7 +190631,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto37.randomUUID)();
+          const id4 = (0, import_node_crypto38.randomUUID)();
           active.add(id4);
           try {
             return await run3();
@@ -196859,7 +197226,7 @@ async function callCoordinatorArtifactList(ctx, args = {}) {
   const limit = typeof args.limit === "number" && Number.isFinite(args.limit) && args.limit > 0 ? Math.trunc(args.limit) : void 0;
   const result = await ctx.transport.command("artifact_list", {
     sessionId: resolvedSessionId,
-    ...coordSessionId && resolvedSessionId === coordSessionId ? { callerSessionId: coordSessionId } : {},
+    ...coordSessionId ? { callerSessionId: coordSessionId } : {},
     meshId,
     ...requestedMissionId ? { missionId: requestedMissionId } : {},
     ...limit !== void 0 ? { limit } : {}
@@ -205245,6 +205612,7 @@ var LocalTransport = class {
   authHeader;
   authFile;
   workerCredential;
+  sessionCredential;
   /** Why the last ping() failed — `auth` when the daemon refused the credential. */
   lastPingFailure = null;
   constructor(opts = {}) {
@@ -205252,6 +205620,7 @@ var LocalTransport = class {
     this.authHeader = opts.password ? `Bearer ${opts.password}` : null;
     this.authFile = opts.authFile?.trim() || null;
     this.workerCredential = opts.workerCredential?.trim() || null;
+    this.sessionCredential = opts.sessionCredential?.trim() || process.env[import_daemon_core32.ADHDEV_MCP_SESSION_CREDENTIAL_ENV]?.trim() || null;
   }
   readInternalToken() {
     if (!this.authFile) return null;
@@ -205267,6 +205636,8 @@ var LocalTransport = class {
     const internalToken = this.readInternalToken();
     if (internalToken) h[import_daemon_core32.ADHDEV_INTERNAL_AUTH_HEADER] = internalToken;
     if (this.workerCredential) h[import_daemon_core32.ADHDEV_WORKER_CREDENTIAL_HEADER] = this.workerCredential;
+    const sessionCred = this.sessionCredential || process.env[import_daemon_core32.ADHDEV_MCP_SESSION_CREDENTIAL_ENV]?.trim() || null;
+    if (sessionCred) h[import_daemon_core32.ADHDEV_MCP_SESSION_CREDENTIAL_HEADER] = sessionCred;
     return h;
   }
   async getStatus() {
@@ -207565,9 +207936,11 @@ async function callAssistantTool(transport, tool, args, assistantSessionId) {
     return { text: JSON.stringify({ success: false, code: "assistant_execution_unavailable" }), isError: true };
   }
   const verb = ASSISTANT_TOOL_VERBS[tool];
+  const sessionCred = verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead ? process.env.ADHDEV_MCP_SESSION_CREDENTIAL?.trim() : void 0;
   const result = await transport.command(verb, {
     ...args,
-    ...assistantSessionId ? { [ASSISTANT_SESSION_ID_ARG]: assistantSessionId } : {}
+    ...assistantSessionId ? { [ASSISTANT_SESSION_ID_ARG]: assistantSessionId } : {},
+    ...sessionCred ? { mcpSessionCredential: sessionCred } : {}
   });
   const text = result && typeof result === "object" ? JSON.stringify(result) : String(result);
   return result?.success === true ? { text } : { text, isError: true };

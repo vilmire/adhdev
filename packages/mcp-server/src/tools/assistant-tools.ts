@@ -412,9 +412,14 @@ export async function callAssistantTool(
     return { text: JSON.stringify({ success: false, code: 'assistant_execution_unavailable' }), isError: true };
   }
   const verb = ASSISTANT_TOOL_VERBS[tool];
+  const sessionCred =
+    (verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead)
+      ? process.env.ADHDEV_MCP_SESSION_CREDENTIAL?.trim()
+      : undefined;
   const result: any = await transport.command(verb, {
     ...args,
     ...(assistantSessionId ? { [ASSISTANT_SESSION_ID_ARG]: assistantSessionId } : {}),
+    ...(sessionCred ? { mcpSessionCredential: sessionCred } : {}),
   });
   const text = result && typeof result === 'object' ? JSON.stringify(result) : String(result);
   return result?.success === true ? { text } : { text, isError: true };

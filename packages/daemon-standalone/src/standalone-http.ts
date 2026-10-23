@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import {
   ADHDEV_INTERNAL_AUTH_HEADER,
+  ADHDEV_MCP_SESSION_CREDENTIAL_HEADER,
   ADHDEV_WORKER_CREDENTIAL_HEADER,
   MESH_JOIN_HTTP_PATH,
   attachTrustedOwnerIngressProof,
@@ -22,6 +23,8 @@ import {
   issueTrustedOwnerIngressProof,
   isLiveWorkerMcpCredential,
   matchesLiveArtifactWorkerCredential,
+  resolveLiveArtifactWorkerScope,
+  verifyMcpSessionCredential,
   isWorkerMcpDaemonVerb,
   type StatusResponse,
   type TrustedOwnerIngressProof,
@@ -883,7 +886,10 @@ export class StandaloneHttpApi {
             return;
           }
           const commandPayload = (payload && typeof payload === 'object' ? { ...payload } : {}) as Record<string, unknown>;
-          if (internalScope === 'worker' && type === 'artifact_register') {
+          if (
+            internalScope === 'worker' &&
+            (type === 'artifact_register' || type === 'artifact_list' || type === 'artifact_read')
+          ) {
             const credential = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER) ?? '';
             const verify = this.deps.verifyArtifactWorkerCredential ?? matchesLiveArtifactWorkerCredential;
             let matches = false;
@@ -893,9 +899,22 @@ export class StandaloneHttpApi {
               res.end(JSON.stringify({ success: false, code: 'worker_scope_forbidden', error: 'Artifact arguments must retain the authenticated worker credential and principal.' }));
               return;
             }
-            attachAuthenticatedMcpCommand(commandPayload, type, () =>
-              this.resolveInternalAuthScope(req) === 'worker'
-              && verify(credential, commandPayload) === true,
+            const workerScope = resolveLiveArtifactWorkerScope(credential, commandPayload) ?? {
+              ...(typeof commandPayload.sessionId === 'string' && commandPayload.sessionId.trim()
+                ? { sessionId: commandPayload.sessionId.trim() }
+                : {}),
+              ...(typeof commandPayload.meshId === 'string' && commandPayload.meshId.trim()
+                ? { meshId: commandPayload.meshId.trim() }
+                : {}),
+              isCoordinator: false as const,
+            };
+            attachAuthenticatedMcpCommand(
+              commandPayload,
+              type,
+              () =>
+                this.resolveInternalAuthScope(req) === 'worker'
+                && verify(credential, commandPayload) === true,
+              workerScope,
             );
           }
           const ownerGuard = this.captureOwnerAuthGuard(req, url);
@@ -911,16 +930,28 @@ export class StandaloneHttpApi {
             attachTrustedOwnerIngressProof(commandPayload, ownerProof);
           }
           if (internalScope === 'coordinator') {
-            // This credential authenticates the internal command API, not a
-            // dashboard owner or a particular coordinator principal. Retain
-            // only this request's artifact operation/arguments and lifetime;
-            // the consumer still resolves registered session/workspace/mesh.
+            // The per-boot internal auth token authenticates loopback MCP
+            // transport reachability, while artifact commands require a
+            // session-bound MCP credential (`ADHDEV_MCP_SESSION_CREDENTIAL_HEADER`)
+            // minted for one specific session and its coordinator flag.
             const token = this.internalAuthToken;
             const epoch = this.authEpoch;
-            attachAuthenticatedMcpCommand(commandPayload, type, () =>
-              token !== null && this.internalAuthToken === token
-              && this.authEpoch === epoch
-              && this.resolveInternalAuthScope(req) === 'coordinator',
+            const sessionCredential =
+              singleHeader(req, ADHDEV_MCP_SESSION_CREDENTIAL_HEADER) ||
+              singleHeader(req, ADHDEV_INTERNAL_AUTH_HEADER) ||
+              (typeof commandPayload.mcpSessionCredential === 'string'
+                ? commandPayload.mcpSessionCredential.trim()
+                : '');
+            const boundScope = verifyMcpSessionCredential(sessionCredential);
+            attachAuthenticatedMcpCommand(
+              commandPayload,
+              type,
+              () =>
+                token !== null && this.internalAuthToken === token
+                && this.authEpoch === epoch
+                && this.resolveInternalAuthScope(req) === 'coordinator'
+                && verifyMcpSessionCredential(sessionCredential) !== null,
+              boundScope,
             );
           }
           const ownerVerified = isOwner

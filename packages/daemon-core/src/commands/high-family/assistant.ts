@@ -54,16 +54,29 @@ import {
     sessionRows,
     type ProjectRoutingView, type ProjectRow, type RemoteHostMachine, type SessionRow,
 } from '../../assistant/project-views.js';
-import { isLocalOwnerBindingRefusalCode } from '../../assistant/assistant-registry.js';
+import { getAssistantRegistry, isLocalOwnerBindingRefusalCode } from '../../assistant/assistant-registry.js';
 import { defaultDiscoverRoots, discoverRepos, explicitDiscoverRoots } from '../../assistant/discover-repos.js';
 import { normalizeRepoIdentity } from '../../config/mesh-config-store.js';
 import {
     ArtifactStore,
+    MAX_ARTIFACT_BYTES,
     MAX_ARTIFACT_MCP_PAGE_BYTES,
+    maxBase64EncodedBytes,
     reassembleBase64ArtifactChunks,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,
 } from '../../artifacts/index.js';
+import {
+    COMMAND_SOURCE_ARG,
+    hasRevokedTrustedOwnerIngress,
+    isTrustedOwnerIngress,
+    readRouterCommandIngress,
+} from '../command-args.js';
+import {
+    readAuthenticatedMcpCommand,
+    readAuthenticatedMcpScope,
+    verifyMcpSessionCredential,
+} from '../mcp-command-ingress.js';
 
 /** `assistant_projects` is also the dashboard's project list. */
 export const ASSISTANT_PROJECTS_SOURCES = ['ipc', 'standalone', 'p2p', 'ws'] as const;
@@ -80,9 +93,94 @@ function wrap(project: string, meshId: string, result: Record<string, unknown>):
     return { success: true, project, meshId, result };
 }
 
+function authorizeAssistantArtifactCaller(args: unknown, verb: string): CommandRouterResult | null {
+    const rawArgs = (args && typeof args === 'object' && !Array.isArray(args))
+        ? (args as Record<string, unknown>)
+        : {};
+    const routerIngress = readRouterCommandIngress(rawArgs);
+    if (routerIngress) {
+        if (routerIngress.source === 'standalone' || routerIngress.source === 'p2p' || routerIngress.source === 'ws') {
+            const expectedOwnerSource = routerIngress.source === 'standalone' ? 'standalone' : 'p2p';
+            if (isTrustedOwnerIngress(rawArgs, expectedOwnerSource)) {
+                return null;
+            }
+            return fail(
+                'COMMAND_SOURCE_REJECTED',
+                `${verb} requires an authenticated owner or bound assistant session`,
+            );
+        }
+        if (routerIngress.source !== 'ipc' || routerIngress.inProcess) {
+            return fail(
+                'COMMAND_SOURCE_REJECTED',
+                `${verb} requires an authenticated owner or bound assistant session`,
+            );
+        }
+    } else if (isTrustedOwnerIngress(rawArgs, 'standalone') || isTrustedOwnerIngress(rawArgs, 'p2p')) {
+        return null;
+    }
+
+    if (
+        routerIngress?.hasForgedProvenanceFields ||
+        routerIngress?.hasRevokedOwnerProof ||
+        hasRevokedTrustedOwnerIngress(rawArgs) ||
+        'ownerVerified' in rawArgs ||
+        '_ownerVerified' in rawArgs ||
+        'source' in rawArgs ||
+        COMMAND_SOURCE_ARG in rawArgs ||
+        rawArgs.bind !== undefined ||
+        rawArgs.token !== undefined
+    ) {
+        return fail(
+            'COMMAND_SOURCE_REJECTED',
+            `${verb} rejected forged provenance or worker credentials on assistant ingress`,
+        );
+    }
+
+    const boundSid = str(getAssistantRegistry().read()?.sessionId);
+    const callerSid = readAssistantSessionId(rawArgs);
+    if (!boundSid || !callerSid || callerSid !== boundSid) {
+        return fail(
+            'COMMAND_SOURCE_REJECTED',
+            `${verb} requires the bound assistant session`,
+        );
+    }
+
+    const mcpCmd = readAuthenticatedMcpCommand(rawArgs, verb);
+    if (mcpCmd.present) {
+        if (!mcpCmd.valid) {
+            return fail(
+                'COMMAND_SOURCE_REJECTED',
+                `${verb} MCP capability is invalid or revoked`,
+            );
+        }
+        const mcpScope = readAuthenticatedMcpScope(rawArgs, verb);
+        if (!mcpScope || mcpScope.isCoordinator || mcpScope.sessionId !== boundSid) {
+            return fail(
+                'COMMAND_SOURCE_REJECTED',
+                `${verb} MCP scope does not match the bound assistant session`,
+            );
+        }
+        return null;
+    }
+
+    const credScope = verifyMcpSessionCredential(rawArgs.mcpSessionCredential);
+    if (credScope && !credScope.isCoordinator && credScope.sessionId === boundSid) {
+        return null;
+    }
+
+    return fail(
+        'COMMAND_SOURCE_REJECTED',
+        `${verb} requires an authenticated owner or session-bound assistant capability`,
+    );
+}
+
 /** Gate + ports + boot-window handling shared by every verb. */
 function assistantVerb(verb: string, run: (ports: AssistantProjectPorts, args: any, ctx: HighFamilyContext) => Promise<CommandRouterResult>): HighFamilyHandler {
     return async (ctx, args) => {
+        if (verb === ASSISTANT_VERB.artifactList || verb === ASSISTANT_VERB.artifactRead) {
+            const authFailure = authorizeAssistantArtifactCaller(args, verb);
+            if (authFailure) return authFailure;
+        }
         const gate = assistantToolGate(verb, args, getAssistantServices());
         if (gate) return gate;
         try {
@@ -737,16 +835,33 @@ export async function localArtifactRead(
             if (!p2pRes || p2pRes.success === false) {
                 return { ok: false, code: str(p2pRes?.code) || 'artifact_origin_unreachable', error: str(p2pRes?.error) || 'Failed to read artifact from origin daemon.' };
             }
+            const isBase64Image = record.kind === 'image' || p2pRes.encoding === 'base64';
+            const transportMaxBytes = isBase64Image
+                ? maxBase64EncodedBytes(MAX_ARTIFACT_MCP_PAGE_BYTES)
+                : MAX_ARTIFACT_MCP_PAGE_BYTES;
+            if (
+                (typeof p2pRes.totalBytes === 'number' && p2pRes.totalBytes > MAX_ARTIFACT_BYTES) ||
+                (typeof p2pRes.pageBytes === 'number' && p2pRes.pageBytes > MAX_ARTIFACT_MCP_PAGE_BYTES)
+            ) {
+                return { ok: false, code: 'artifact_too_large', error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
+            }
             let rawContent = '';
             if (Array.isArray(p2pRes.chunks) && p2pRes.chunks.length > 0) {
-                const reassembled = reassembleBase64ArtifactChunks(p2pRes.chunks, MAX_ARTIFACT_MCP_PAGE_BYTES);
+                const reassembled = reassembleBase64ArtifactChunks(p2pRes.chunks, transportMaxBytes);
                 if (!reassembled.ok) return { ok: false, code: reassembled.code, error: reassembled.error };
                 rawContent = reassembled.content;
             } else if (typeof p2pRes.content === 'string') {
-                if (Buffer.byteLength(p2pRes.content, 'utf8') > MAX_ARTIFACT_MCP_PAGE_BYTES) {
+                if (Buffer.byteLength(p2pRes.content, 'utf8') > transportMaxBytes) {
                     return { ok: false, code: 'artifact_too_large', error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
                 }
                 rawContent = p2pRes.content;
+            }
+            let decodedByteLength = Buffer.byteLength(rawContent, 'utf8');
+            if (isBase64Image && rawContent.length > 0) {
+                decodedByteLength = Buffer.from(rawContent, 'base64').byteLength;
+                if (decodedByteLength > MAX_ARTIFACT_MCP_PAGE_BYTES || decodedByteLength > MAX_ARTIFACT_BYTES) {
+                    return { ok: false, code: 'artifact_too_large', error: `Artifact page exceeds ${MAX_ARTIFACT_MCP_PAGE_BYTES} bytes (artifact_too_large)` };
+                }
             }
             return {
                 ok: true,
@@ -757,7 +872,7 @@ export async function localArtifactRead(
                     content: wrapUntrustedArtifactContent(rawContent),
                     totalBytes: typeof p2pRes.totalBytes === 'number' ? p2pRes.totalBytes : record.sizeBytes,
                     offset: typeof p2pRes.offset === 'number' ? p2pRes.offset : rawOffset,
-                    pageBytes: typeof p2pRes.pageBytes === 'number' ? p2pRes.pageBytes : Buffer.byteLength(rawContent, 'utf8'),
+                    pageBytes: typeof p2pRes.pageBytes === 'number' ? p2pRes.pageBytes : decodedByteLength,
                     hasMore: Boolean(p2pRes.hasMore),
                     nextOffset: typeof p2pRes.nextOffset === 'number' ? p2pRes.nextOffset : null,
                     source: 'p2p_origin',

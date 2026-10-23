@@ -927,10 +927,17 @@ describe('Task A — Artifact Store & File Guard', () => {
             const secretPaths = [
                 '.env',
                 '.env.local',
+                '.envbackup.txt',
+                '.ENV_PRODUCTION.md',
                 'config/.env.production',
+                'config/.envrc-secret.txt',
                 'certs/server.pem',
+                'certs/ROOT_CA.PEM',
                 'keys/id_rsa',
                 'keys/id_rsa.pub',
+                'keys/id_rsa-backup.txt',
+                'keys/ID_RSA_OLD.md',
+                'keys/id_ed25519-backup.txt',
             ];
             for (const rel of secretPaths) {
                 const full = path.join(workspaceDir, rel);
@@ -1131,6 +1138,47 @@ describe('Task A — Artifact Store & File Guard', () => {
             expect(prunedCount).toBe(1);
             expect(store.get(expired.record.artifactId)).toBeNull();
             expect(store.get(fresh.record.artifactId)?.artifactId).toBe(fresh.record.artifactId);
+        });
+
+        it('Round 3 Finding 4: a forwarded record dated 90 days in the future is clamped to the host clock and deletes nothing else', () => {
+            fs.writeFileSync(path.join(workspaceDir, 'keep-local.md'), '# Keep Local\n');
+            const localRec = store.register({
+                sessionId: 'sess-host-keep',
+                meshId: 'mesh-r3-f4',
+                missionId: 'mission-r3-f4',
+                workspaceRoot: workspaceDir,
+                path: 'keep-local.md',
+            });
+            expect(store.get(localRec.record.artifactId)).not.toBeNull();
+
+            const hostBefore = Date.now();
+            const ninetyDaysFuture = hostBefore + 90 * 24 * 60 * 60 * 1000;
+            const forwarded = store.upsertForwardedArtifact({
+                artifactId: 'art_90da000000000001',
+                sessionId: 'sess-remote-worker',
+                taskId: 'task-r3-f4',
+                meshId: 'mesh-r3-f4',
+                missionId: 'mission-r3-f4',
+                producerRole: 'worker',
+                originDaemonId: 'daemon_remote_peer',
+                workspaceRoot: '/remote/workspace',
+                relPath: 'remote.md',
+                kind: 'markdown',
+                mime: 'text/markdown',
+                sizeBytes: 42,
+                sha256: 'a'.repeat(64),
+                title: 'Future Forwarded',
+                previewText: 'Future preview',
+                createdAt: ninetyDaysFuture,
+                updatedAt: ninetyDaysFuture,
+            });
+            const hostAfter = Date.now();
+
+            // Clamped to host clock (+ at most 60s skew), never 90 days in the future
+            expect(forwarded.record.createdAt).toBeLessThanOrEqual(hostAfter + 60_000);
+            expect(forwarded.record.updatedAt).toBeLessThanOrEqual(hostAfter + 60_000);
+            // Existing local record is untouched (nothing else deleted)
+            expect(store.get(localRec.record.artifactId)?.artifactId).toBe(localRec.record.artifactId);
         });
 
         it('enforces 200 per mission and 500 per mesh caps while allowing updates', () => {

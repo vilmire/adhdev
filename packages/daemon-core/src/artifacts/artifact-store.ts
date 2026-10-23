@@ -754,16 +754,25 @@ export class ArtifactStore {
         }
         if (previewText) assertNotSecretContent(Buffer.from(previewText, 'utf8'), kind);
         const now = Date.now();
-        const createdAt = typeof input.createdAt === 'number' && Number.isFinite(input.createdAt) ? Math.trunc(input.createdAt) : now;
-        const updatedAt = typeof input.updatedAt === 'number' && Number.isFinite(input.updatedAt) ? Math.trunc(input.updatedAt) : createdAt;
+        const maxClockSkewMs = 60_000;
+        const maxAllowedTimestamp = now + maxClockSkewMs;
+        const rawCreatedAt =
+            typeof input.createdAt === 'number' && Number.isFinite(input.createdAt) && input.createdAt > 0
+                ? Math.trunc(input.createdAt)
+                : now;
+        const createdAt = Math.min(rawCreatedAt, maxAllowedTimestamp);
+        const rawUpdatedAt =
+            typeof input.updatedAt === 'number' && Number.isFinite(input.updatedAt) && input.updatedAt > 0
+                ? Math.trunc(input.updatedAt)
+                : createdAt;
+        const updatedAt = Math.max(createdAt, Math.min(rawUpdatedAt, maxAllowedTimestamp));
         const taskId = typeof input.taskId === 'string' && input.taskId.trim() ? input.taskId.trim() : null;
         const meshId = typeof input.meshId === 'string' && input.meshId.trim() ? input.meshId.trim() : null;
         const missionId = typeof input.missionId === 'string' && input.missionId.trim() ? input.missionId.trim() : null;
         const producerRole = typeof input.producerRole === 'string' && input.producerRole.trim() ? input.producerRole.trim() : 'worker';
 
         return runInImmediateTransaction(this.db, () => {
-            const pruneNow = Math.max(now, createdAt, updatedAt);
-            if (pruneNow >= 100_000_000_000) this.pruneExpired(pruneNow, ARTIFACT_RETENTION_MS, 100_000_000_000);
+            if (now >= 100_000_000_000) this.pruneExpired(now, ARTIFACT_RETENTION_MS, 100_000_000_000);
             const existing = this.db
                 .prepare<SessionArtifactDbRow>(`SELECT * FROM session_artifacts WHERE session_id = ? AND rel_path = ?`)
                 .get(sessionId, relPath);

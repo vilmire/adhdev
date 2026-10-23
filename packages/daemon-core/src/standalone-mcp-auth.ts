@@ -44,6 +44,10 @@
 export const ADHDEV_INTERNAL_AUTH_HEADER = 'x-adhdev-internal-auth';
 /** Request header carrying a worker's session bind (or per-task token). */
 export const ADHDEV_WORKER_CREDENTIAL_HEADER = 'x-adhdev-worker-credential';
+/** Request header carrying a session-bound MCP credential for coordinator/assistant/CLI sessions. */
+export const ADHDEV_MCP_SESSION_CREDENTIAL_HEADER = 'x-adhdev-mcp-session-credential';
+/** Environment variable carrying the session-bound MCP credential for a launched MCP server. */
+export const ADHDEV_MCP_SESSION_CREDENTIAL_ENV = 'ADHDEV_MCP_SESSION_CREDENTIAL';
 /** mcp-server: path of the coordinator-scope token file (env twin of `--daemon-auth-file`). */
 export const ADHDEV_DAEMON_AUTH_FILE_ENV = 'ADHDEV_DAEMON_AUTH_FILE';
 /** mcp-server CLI flag naming the coordinator-scope token file. */

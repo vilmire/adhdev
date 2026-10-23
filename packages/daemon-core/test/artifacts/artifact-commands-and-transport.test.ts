@@ -2926,5 +2926,373 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
             expect(listRes.success).toBe(true);
             expect(JSON.stringify(listRes)).not.toContain('SENTINEL_FULL_BODY_NEVER_ON_STATUS_PATH_');
         });
+
+        it('Round 3 Findings 3, 4, 5, 6: enforces OD-4 on artifact_fetch_origin (roster-only denied), clamps 90-day future forwarded timestamps, returns zero record fields on resolveScopeOnly denial, and reads/fetches 256 KiB and 4 MiB remote PNG images', async () => {
+            const remoteDir = path.join(tempRoot, 'r3-remote-ws');
+            fs.mkdirSync(remoteDir, { recursive: true });
+            const remoteMeshStore = new MeshRuntimeStore(path.join(tempRoot, 'r3-remote-mesh.db'));
+            const remoteArtifactStore = new ArtifactStore(remoteMeshStore.db);
+            const remoteRegistry = new SessionRegistry();
+
+            const nowIso = new Date().toISOString();
+            const inlineMesh = {
+                id: 'mesh-r3-p2p',
+                meshHost: { hostDaemonId: 'daemon_host_r3' },
+                nodes: [
+                    { id: 'node-host', daemonId: 'daemon_host_r3', workspace: workspaceA },
+                    { id: 'node-remote-a', daemonId: 'daemon_remote_r3', workspace: remoteDir },
+                ],
+            };
+
+            sessionRegistry.register({
+                sessionId: 'sess-host-b',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            remoteRegistry.register({
+                sessionId: 'sess-remote-a',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: remoteDir,
+            });
+            remoteRegistry.register({
+                sessionId: 'sess-remote-b',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: remoteDir,
+            });
+
+            // Host session produces a mission-b artifact and a 256 KiB + 4 MiB PNG image
+            fs.writeFileSync(path.join(workspaceA, 'mission-b-secret.md'), '# Mission B Secret\nConfidential\n');
+            const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+            const png256k = Buffer.concat([pngHeader, Buffer.alloc(262_144 - pngHeader.length, 0x42)]);
+            const png4m = Buffer.concat([pngHeader, Buffer.alloc(4 * 1024 * 1024 - pngHeader.length, 0x43)]);
+            fs.writeFileSync(path.join(workspaceA, 'page-256k.png'), png256k);
+            fs.writeFileSync(path.join(workspaceA, 'full-4m.png'), png4m);
+
+            meshStore.insertQueueEntry({
+                id: 'task-host-b',
+                meshId: 'mesh-r3-p2p',
+                targetNodeId: 'node-host',
+                status: 'assigned',
+                assignedSessionId: 'sess-host-b',
+                message: 'Host mission-b producer',
+                workspace: workspaceA,
+                missionId: 'mission-b',
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            seedMeshAttempt({
+                attemptId: 'att-host-b',
+                taskId: 'task-host-b',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-host',
+                sessionId: 'sess-host-b',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const hostBindB = mintWorkerSessionBind({
+                sessionId: 'sess-host-b',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-host',
+                spawnedForTaskId: 'task-host-b',
+            });
+            const hostTokenB = mintWorkerTaskToken({
+                taskId: 'task-host-b',
+                attemptId: 'att-host-b',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-host',
+                sessionId: 'sess-host-b',
+            });
+
+            // Remote worker A is assigned to mission-a with empty inputArtifactIds: []
+            meshStore.insertQueueEntry({
+                id: 'task-remote-a',
+                meshId: 'mesh-r3-p2p',
+                targetNodeId: 'node-remote-a',
+                status: 'assigned',
+                assignedSessionId: 'sess-remote-a',
+                message: 'Remote mission-a worker',
+                workspace: remoteDir,
+                missionId: 'mission-a',
+                inputArtifactIds: [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            const seededRemoteA = seedMeshAttempt({
+                attemptId: 'att-remote-a',
+                taskId: 'task-remote-a',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-remote-a',
+                sessionId: 'sess-remote-a',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            meshStore.turnStore().upsertAttempt(
+                {
+                    ...seededRemoteA,
+                    ownerDaemonId: 'daemon_host_r3',
+                },
+                Date.now(),
+            );
+
+            const hostCtx: ArtifactCommandContext = {
+                ...ctx,
+                getMeshForCommand: async (id: string) =>
+                    id === 'mesh-r3-p2p' ? { mesh: inlineMesh, source: 'inline' } : null,
+                getCachedInlineMesh: (id: string) => (id === 'mesh-r3-p2p' ? inlineMesh : undefined),
+            };
+            deps.statusInstanceId = 'daemon_host_r3';
+
+            const missionBArt = await artifactHandlers.artifact_register(hostCtx, {
+                path: 'mission-b-secret.md',
+                title: 'Mission B Secret',
+                bind: hostBindB.bind,
+                token: hostTokenB.token,
+            });
+            expect(missionBArt.success).toBe(true);
+
+            const img256kArt = await artifactHandlers.artifact_register(hostCtx, {
+                path: 'page-256k.png',
+                title: '256 KiB PNG',
+                bind: hostBindB.bind,
+                token: hostTokenB.token,
+            });
+            expect(img256kArt.success).toBe(true);
+
+            const img4mArt = await artifactHandlers.artifact_register(hostCtx, {
+                path: 'full-4m.png',
+                title: '4 MiB PNG',
+                bind: hostBindB.bind,
+                token: hostTokenB.token,
+            });
+            expect(img4mArt.success).toBe(true);
+
+            // Remote worker B is in mission-b with inputArtifactIds: [img256kArt.artifactId, img4mArt.artifactId]
+            meshStore.insertQueueEntry({
+                id: 'task-remote-b',
+                meshId: 'mesh-r3-p2p',
+                targetNodeId: 'node-remote-a',
+                status: 'assigned',
+                assignedSessionId: 'sess-remote-b',
+                message: 'Remote mission-b image consumer',
+                workspace: remoteDir,
+                missionId: 'mission-b',
+                inputArtifactIds: [img256kArt.artifactId, img4mArt.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            const seededRemoteB = seedMeshAttempt({
+                attemptId: 'att-remote-b',
+                taskId: 'task-remote-b',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-remote-a',
+                sessionId: 'sess-remote-b',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            meshStore.turnStore().upsertAttempt(
+                {
+                    ...seededRemoteB,
+                    ownerDaemonId: 'daemon_host_r3',
+                },
+                Date.now(),
+            );
+
+            const remoteBindB = mintWorkerSessionBind({
+                sessionId: 'sess-remote-b',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-remote-a',
+                spawnedForTaskId: 'task-remote-b',
+            });
+            const remoteTokenB = mintWorkerTaskToken({
+                taskId: 'task-remote-b',
+                attemptId: 'att-remote-b',
+                meshId: 'mesh-r3-p2p',
+                nodeId: 'node-remote-a',
+                sessionId: 'sess-remote-b',
+            });
+
+            const remoteDeps: any = {
+                statusInstanceId: 'daemon_remote_r3',
+                sessionRegistry: remoteRegistry,
+                instanceManager: {
+                    getInstance: (sid: string) =>
+                        sid === 'sess-remote-a' || sid === 'sess-remote-b'
+                            ? {
+                                  providerType: 'claude-cli',
+                                  getState: () => ({
+                                      workspace: remoteDir,
+                                      status: 'working',
+                                      settings: {
+                                          meshNodeFor: 'mesh-r3-p2p',
+                                          meshNodeId: 'node-remote-a',
+                                          meshTaskId: sid === 'sess-remote-a' ? 'task-remote-a' : 'task-remote-b',
+                                          meshAttemptId: sid === 'sess-remote-a' ? 'att-remote-a' : 'att-remote-b',
+                                      },
+                                  }),
+                              }
+                            : undefined,
+                },
+                dispatchMeshCommand: async (
+                    targetDaemonId: string,
+                    command: string,
+                    payload: Record<string, unknown>,
+                ) => {
+                    expect(targetDaemonId).toBe('daemon_host_r3');
+                    const stamped = { ...payload, [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3' };
+                    if (command === 'artifact_index_forwarded') {
+                        return artifactHandlers.artifact_index_forwarded(hostCtx, stamped);
+                    }
+                    if (command === 'artifact_fetch_origin') {
+                        return artifactHandlers.artifact_fetch_origin(hostCtx, stamped);
+                    }
+                    throw new Error(`Unexpected mesh command: ${command}`);
+                },
+            };
+            setArtifactCommandRuntimeForDeps(remoteDeps, {
+                artifactStore: remoteArtifactStore,
+                meshRuntimeStore: remoteMeshStore,
+            });
+            const remoteCtx: ArtifactCommandContext = {
+                deps: remoteDeps,
+                getMeshForCommand: async (id: string) =>
+                    id === 'mesh-r3-p2p' ? { mesh: inlineMesh, source: 'inline' } : null,
+                getCachedInlineMesh: (id: string) => (id === 'mesh-r3-p2p' ? inlineMesh : undefined),
+            };
+
+            try {
+                // Finding 3: mission-a worker daemon with empty inputArtifactIds cannot fetch mission-b bytes via artifact_fetch_origin
+                const rosterOnlyFetch = await artifactHandlers.artifact_fetch_origin(
+                    hostCtx,
+                    {
+                        meshId: 'mesh-r3-p2p',
+                        artifactId: missionBArt.artifactId,
+                        mode: 'read',
+                        asChunks: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3',
+                    },
+                );
+                expect(rosterOnlyFetch.success).toBe(false);
+                expect(rosterOnlyFetch.code).toBe('artifact_access_denied');
+                expect(rosterOnlyFetch.chunks).toBeUndefined();
+                expect(rosterOnlyFetch.content).toBeUndefined();
+
+                const missionAFetchMissionB = await artifactHandlers.artifact_fetch_origin(
+                    hostCtx,
+                    {
+                        meshId: 'mesh-r3-p2p',
+                        artifactId: missionBArt.artifactId,
+                        requesterSessionId: 'sess-remote-a',
+                        requesterTaskId: 'task-remote-a',
+                        requesterAttemptId: 'att-remote-a',
+                        requesterRole: 'worker',
+                        mode: 'read',
+                        asChunks: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3',
+                    },
+                );
+                expect(missionAFetchMissionB.success).toBe(false);
+                expect(missionAFetchMissionB.code).toBe('artifact_access_denied');
+                expect(missionAFetchMissionB.chunks).toBeUndefined();
+                expect(missionAFetchMissionB.content).toBeUndefined();
+
+                // Finding 5: resolveScopeOnly with unauthorized artifactId returns access denial with NO record fields at all
+                const scopeLeakProbe = await artifactHandlers.artifact_index_forwarded(
+                    hostCtx,
+                    {
+                        meshId: 'mesh-r3-p2p',
+                        sessionId: 'sess-remote-a',
+                        taskId: 'task-remote-a',
+                        attemptId: 'att-remote-a',
+                        resolveScopeOnly: true,
+                        artifactId: missionBArt.artifactId,
+                        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3',
+                    },
+                );
+                expect(scopeLeakProbe.success).toBe(false);
+                expect(scopeLeakProbe.code).toBe('artifact_access_denied');
+                expect(scopeLeakProbe.requestedArtifact).toBeUndefined();
+                expect(scopeLeakProbe.inputArtifacts).toBeUndefined();
+                expect(scopeLeakProbe.relPath).toBeUndefined();
+                expect(scopeLeakProbe.title).toBeUndefined();
+                expect(scopeLeakProbe.sha256).toBeUndefined();
+                expect(scopeLeakProbe.sizeBytes).toBeUndefined();
+
+                // Finding 4: forwarded record dated 90 days in the future is clamped and deletes nothing else
+                const future90d = Date.now() + 90 * 24 * 60 * 60 * 1000;
+                const fwdFutureRes = await artifactHandlers.artifact_index_forwarded(
+                    hostCtx,
+                    {
+                        meshId: 'mesh-r3-p2p',
+                        sessionId: 'sess-remote-a',
+                        taskId: 'task-remote-a',
+                        attemptId: 'att-remote-a',
+                        artifact: {
+                            artifactId: 'art_f3f4f5f600000001',
+                            sessionId: 'sess-remote-a',
+                            taskId: 'task-remote-a',
+                            meshId: 'mesh-r3-p2p',
+                            missionId: 'mission-a',
+                            workspaceRoot: remoteDir,
+                            relPath: 'future.md',
+                            kind: 'markdown',
+                            mime: 'text/markdown',
+                            sizeBytes: 12,
+                            sha256: 'b'.repeat(64),
+                            title: 'Future 90d',
+                            previewText: 'Future',
+                            createdAt: future90d,
+                            updatedAt: future90d,
+                        },
+                        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r3',
+                    },
+                );
+                expect(fwdFutureRes.success).toBe(true);
+                expect(fwdFutureRes.artifact.createdAt).toBeLessThanOrEqual(Date.now() + 60_000);
+                expect(artifactStore.get(missionBArt.artifactId)).not.toBeNull();
+                expect(artifactStore.get(img256kArt.artifactId)).not.toBeNull();
+                expect(artifactStore.get(img4mArt.artifactId)).not.toBeNull();
+
+                // Finding 6: 262,144-byte (256 KiB) image reads remotely via OD-4 worker
+                const read256k = await artifactHandlers.artifact_read(remoteCtx, {
+                    artifactId: img256kArt.artifactId,
+                    bind: remoteBindB.bind,
+                    token: remoteTokenB.token,
+                });
+                expect(read256k.success).toBe(true);
+                expect(read256k.encoding).toBe('base64');
+                expect(read256k.pageBytes).toBe(262_144);
+                expect(read256k.content).toContain(png256k.toString('base64'));
+
+                // Finding 6: 4 MiB image fetches remotely
+                const fetch4m = await artifactHandlers.artifact_fetch(hostCtx, {
+                    artifactId: img4mArt.artifactId,
+                    sessionId: 'sess-host-b',
+                });
+                expect(fetch4m.success).toBe(true);
+                expect(fetch4m.sizeBytes).toBe(4 * 1024 * 1024);
+
+                // Also test remote origin fetch of the 4 MiB image via fetchArtifactFromOriginDaemon path
+                remoteArtifactStore.upsertForwardedArtifact({
+                    ...img4mArt.artifact,
+                    originDaemonId: 'daemon_host_r3',
+                });
+                const remoteFetch4m = await artifactHandlers.artifact_fetch(remoteCtx, {
+                    artifactId: img4mArt.artifactId,
+                    bind: remoteBindB.bind,
+                    token: remoteTokenB.token,
+                });
+                expect(remoteFetch4m.success).toBe(true);
+                expect(remoteFetch4m.encoding).toBe('base64');
+                expect(Buffer.from(remoteFetch4m.content, 'base64').byteLength).toBe(4 * 1024 * 1024);
+            } finally {
+                remoteMeshStore.close();
+            }
+        });
     });
 });

@@ -40,13 +40,13 @@ const MAX_TITLE_CHARS = 200;
 const WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
 const SECRET_BASENAME_PATTERNS: readonly RegExp[] = [
-    /^\.env(\..+)?$/i,
+    /^\.env/i,
     /\.pem$/i,
     /\.key$/i,
     /\.p12$/i,
     /\.pfx$/i,
     /\.kdbx$/i,
-    /^id_(rsa|ed25519|ecdsa|dsa)(\..+)?$/i,
+    /^id_(rsa|ed25519|ecdsa|dsa)/i,
     /^\.npmrc$/i,
     /^\.pypirc$/i,
     /^\.netrc$/i,

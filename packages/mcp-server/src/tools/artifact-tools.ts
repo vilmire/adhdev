@@ -330,9 +330,7 @@ export async function callCoordinatorArtifactList(
 
     const result = await ctx.transport.command('artifact_list', {
         sessionId: resolvedSessionId,
-        ...(coordSessionId && resolvedSessionId === coordSessionId
-            ? { callerSessionId: coordSessionId }
-            : {}),
+        ...(coordSessionId ? { callerSessionId: coordSessionId } : {}),
         meshId,
         ...(requestedMissionId ? { missionId: requestedMissionId } : {}),
         ...(limit !== undefined ? { limit } : {}),

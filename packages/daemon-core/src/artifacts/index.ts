@@ -17,6 +17,7 @@ export {
     ORIGIN_FETCH_CHUNK_BYTES,
     UNTRUSTED_ARTIFACT_CLOSE_TAG,
     UNTRUSTED_ARTIFACT_OPEN_TAG,
+    maxBase64EncodedBytes,
     reassembleBase64ArtifactChunks,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,

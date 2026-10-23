@@ -14,6 +14,7 @@ import {
     MAX_ARTIFACT_MCP_PAGE_BYTES,
     ORIGIN_FETCH_CHUNK_BYTES,
     type ArtifactStore,
+    maxBase64EncodedBytes,
     reassembleBase64ArtifactChunks,
     toChatAttachmentMeta,
     wrapUntrustedArtifactContent,
@@ -696,6 +697,13 @@ export async function fetchArtifactFromOriginDaemon(
                 meshId: record.meshId || authority.meshId || undefined,
                 artifactId: record.artifactId,
                 sessionId: record.sessionId,
+                requesterSessionId: authority.sessionId,
+                requesterRole: authority.isCoordinator ? 'coordinator' : authority.producerRole,
+                ...(authority.taskId ? { requesterTaskId: authority.taskId } : {}),
+                ...(authority.missionId ? { requesterMissionId: authority.missionId } : {}),
+                ...(authority.remoteClaim?.attemptId ? { requesterAttemptId: authority.remoteClaim.attemptId } : {}),
+                ...(authority.remoteClaim?.nodeId ? { requesterNodeId: authority.remoteClaim.nodeId } : {}),
+                ...(authority.remoteClaim?.generation !== undefined ? { requesterGeneration: authority.remoteClaim.generation } : {}),
                 mode: isReadCommand ? 'read' : 'fetch',
                 asChunks: true,
                 ...(args?.offset !== undefined ? { offset: args.offset } : {}),
@@ -724,10 +732,29 @@ export async function fetchArtifactFromOriginDaemon(
             error: String(originAns.error || 'Failed to fetch artifact from origin daemon'),
         };
     }
-    const maxBytes = isReadCommand ? MAX_ARTIFACT_MCP_PAGE_BYTES : MAX_ARTIFACT_BYTES;
+    const rawMaxBytes = isReadCommand ? MAX_ARTIFACT_MCP_PAGE_BYTES : MAX_ARTIFACT_BYTES;
+    const encoding =
+        typeof originAns.encoding === 'string'
+            ? originAns.encoding
+            : record.kind === 'image'
+              ? 'base64'
+              : 'utf8';
+    const isBase64Encoded = encoding === 'base64' || record.kind === 'image';
+    const transportMaxBytes = isBase64Encoded ? maxBase64EncodedBytes(rawMaxBytes) : rawMaxBytes;
+    if (
+        (typeof originAns.sizeBytes === 'number' && originAns.sizeBytes > MAX_ARTIFACT_BYTES) ||
+        (typeof originAns.totalBytes === 'number' && originAns.totalBytes > MAX_ARTIFACT_BYTES) ||
+        (isReadCommand && typeof originAns.pageBytes === 'number' && originAns.pageBytes > MAX_ARTIFACT_MCP_PAGE_BYTES)
+    ) {
+        return {
+            success: false,
+            code: 'artifact_too_large',
+            error: `Artifact content exceeds ${rawMaxBytes} bytes limit (artifact_too_large)`,
+        };
+    }
     let rawContent = '';
     if (Array.isArray(originAns.chunks) && originAns.chunks.length > 0) {
-        const reassembled = reassembleBase64ArtifactChunks(originAns.chunks, maxBytes);
+        const reassembled = reassembleBase64ArtifactChunks(originAns.chunks, transportMaxBytes);
         if (!reassembled.ok) {
             return {
                 success: false,
@@ -737,21 +764,26 @@ export async function fetchArtifactFromOriginDaemon(
         }
         rawContent = reassembled.content;
     } else if (typeof originAns.content === 'string') {
-        if (Buffer.byteLength(originAns.content, 'utf8') > maxBytes) {
+        if (Buffer.byteLength(originAns.content, 'utf8') > transportMaxBytes) {
             return {
                 success: false,
                 code: 'artifact_too_large',
-                error: `Artifact content exceeds ${maxBytes} bytes limit (artifact_too_large)`,
+                error: `Artifact content exceeds ${rawMaxBytes} bytes limit (artifact_too_large)`,
             };
         }
         rawContent = originAns.content;
     }
-    const encoding =
-        typeof originAns.encoding === 'string'
-            ? originAns.encoding
-            : record.kind === 'image'
-              ? 'base64'
-              : 'utf8';
+    let decodedByteLength = Buffer.byteLength(rawContent, 'utf8');
+    if (isBase64Encoded && rawContent.length > 0) {
+        decodedByteLength = Buffer.from(rawContent, 'base64').byteLength;
+        if (decodedByteLength > rawMaxBytes || decodedByteLength > MAX_ARTIFACT_BYTES) {
+            return {
+                success: false,
+                code: 'artifact_too_large',
+                error: `Decoded image artifact content (${decodedByteLength} bytes) exceeds ${rawMaxBytes} bytes limit (artifact_too_large)`,
+            };
+        }
+    }
     const sha256Changed = Boolean(originAns.sha256Changed);
     return {
         success: true,
@@ -770,7 +802,7 @@ export async function fetchArtifactFromOriginDaemon(
                   pageBytes:
                       typeof originAns.pageBytes === 'number'
                           ? originAns.pageBytes
-                          : Buffer.byteLength(rawContent, 'utf8'),
+                          : decodedByteLength,
                   hasMore: Boolean(originAns.hasMore),
                   nextOffset: typeof originAns.nextOffset === 'number' ? originAns.nextOffset : null,
               }
@@ -935,30 +967,38 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
             const reqArtifactId = trimString(args?.artifactId);
             if (reqArtifactId) {
                 const reqRec = store.get(reqArtifactId);
-                if (reqRec) {
-                    const reqMissionId = resolveRecMission(reqRec);
-                    const isAllowed =
-                        sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) ||
-                        (Boolean(missionId && reqMissionId && missionId === reqMissionId) &&
-                            (!reqRec.meshId || reqRec.meshId === meshId) &&
-                            allowedSet.has(reqArtifactId));
-                    requestedArtifact = {
-                        ...reqRec,
-                        ...(reqMissionId ? { missionId: reqMissionId } : {}),
-                        originDaemonId: reqRec.originDaemonId || selfDaemonId || null,
-                        ...(isAllowed ? {} : { previewText: null, workspaceRoot: '' }),
+                if (!reqRec) {
+                    return { success: false, code: 'artifact_not_found', error: `Artifact not found: ${reqArtifactId} (artifact_not_found)` };
+                }
+                const reqMissionId = resolveRecMission(reqRec);
+                const isAllowed =
+                    sessionIdsEquivalent(reqRec.sessionId, ownerIdentity.sessionId) ||
+                    (Boolean(missionId && reqMissionId && missionId === reqMissionId) &&
+                        (!reqRec.meshId || reqRec.meshId === meshId) &&
+                        allowedSet.has(reqArtifactId));
+                if (!isAllowed) {
+                    return {
+                        success: false,
+                        code: 'artifact_access_denied',
+                        error: `Worker session "${ownerIdentity.sessionId}" is not authorized to access artifact "${reqArtifactId}" (artifact_access_denied)`,
                     };
                 }
+                requestedArtifact = {
+                    ...reqRec,
+                    ...(reqMissionId ? { missionId: reqMissionId } : {}),
+                    originDaemonId: reqRec.originDaemonId || selfDaemonId || null,
+                };
             }
-            return {
-                success: true,
-                missionId,
-                inputArtifactIds,
-                inputArtifacts,
-                requestedArtifact,
-            };
+            return { success: true, missionId, inputArtifactIds, inputArtifacts, requestedArtifact };
         }
 
+        const hostNow = Date.now();
+        const maxForwardedTimestamp = hostNow + 60_000;
+        const rawCreated = Number(rawArtifact!.createdAt);
+        const clampedCreatedAt = Number.isFinite(rawCreated) && rawCreated > 0 ? Math.min(Math.trunc(rawCreated), maxForwardedTimestamp) : hostNow;
+        const rawUpdated = Number(rawArtifact!.updatedAt);
+        const clampedUpdatedAt =
+            Number.isFinite(rawUpdated) && rawUpdated > 0 ? Math.max(clampedCreatedAt, Math.min(Math.trunc(rawUpdated), maxForwardedTimestamp)) : clampedCreatedAt;
         const upserted = store.upsertForwardedArtifact({
             artifactId: trimString(rawArtifact!.artifactId),
             sessionId: ownerIdentity.sessionId,
@@ -975,8 +1015,8 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
             sha256: trimString(rawArtifact!.sha256),
             title: typeof rawArtifact!.title === 'string' ? rawArtifact!.title : null,
             previewText: typeof rawArtifact!.previewText === 'string' ? rawArtifact!.previewText : null,
-            createdAt: Number(rawArtifact!.createdAt) || Date.now(),
-            updatedAt: Number(rawArtifact!.updatedAt) || Date.now(),
+            createdAt: clampedCreatedAt,
+            updatedAt: clampedUpdatedAt,
         });
         return {
             success: true,
@@ -995,63 +1035,123 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
 export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => {
     const senderDaemonId = readMeshSender(args);
     if (!senderDaemonId) {
-        return {
-            success: false,
-            code: 'unauthenticated',
-            error: 'artifact_fetch_origin requires an authenticated mesh peer sender',
-        };
+        return { success: false, code: 'unauthenticated', error: 'artifact_fetch_origin requires an authenticated mesh peer sender' };
     }
     const artifactId = trimString(args?.artifactId) || trimString(args?.id);
     if (!artifactId) {
-        return {
-            success: false,
-            code: 'invalid_arguments',
-            error: 'artifactId is required',
-        };
+        return { success: false, code: 'invalid_arguments', error: 'artifactId is required' };
     }
     try {
         const store = getArtifactStore(ctx);
         const record = store.get(artifactId);
         if (!record) {
-            return {
-                success: false,
-                code: 'artifact_not_found',
-                error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)`,
-            };
+            return { success: false, code: 'artifact_not_found', error: `Artifact not found on origin daemon: ${artifactId} (artifact_not_found)` };
         }
         const reqMeshId = trimString(args?.meshId);
         if (reqMeshId && record.meshId && record.meshId !== reqMeshId) {
-            return {
-                success: false,
-                code: 'artifact_session_mismatch',
-                error: `Artifact "${artifactId}" does not belong to mesh "${reqMeshId}" (artifact_session_mismatch)`,
-            };
+            return { success: false, code: 'artifact_session_mismatch', error: `Artifact "${artifactId}" does not belong to mesh "${reqMeshId}" (artifact_session_mismatch)` };
         }
         const meshIdToVerify = record.meshId || reqMeshId;
-        if (meshIdToVerify) {
-            const cmdRes: any = await ctx.getMeshForCommand?.(meshIdToVerify, undefined, {
-                preferInline: true,
+        if (!meshIdToVerify) {
+            return { success: false, code: 'unauthenticated', error: `Artifact "${artifactId}" has no mesh binding for cross-daemon origin fetch (unauthenticated)` };
+        }
+        const cmdRes: any = await ctx.getMeshForCommand?.(meshIdToVerify, undefined, { preferInline: true });
+        const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
+        if (!meshObj) {
+            return { success: false, code: 'unauthenticated', error: `Mesh "${meshIdToVerify}" is not available to authorize origin fetch (unauthenticated)` };
+        }
+        const hostDaemonId = trimString(meshObj?.meshHost?.hostDaemonId) || trimString(meshObj?.hostDaemonId);
+        const nodes: any[] = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
+        const isKnownPeer =
+            (hostDaemonId && daemonIdsEquivalent(hostDaemonId, senderDaemonId)) ||
+            nodes.some((n: any) => {
+                const nd = readMeshNodeDaemonId(n) || trimString(n?.daemonId);
+                return Boolean(nd && daemonIdsEquivalent(nd, senderDaemonId));
             });
-            const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdToVerify);
-            if (meshObj) {
-                const hostDaemonId =
-                    trimString(meshObj?.meshHost?.hostDaemonId) || trimString(meshObj?.hostDaemonId);
-                const nodes: any[] = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
-                const isKnownPeer =
-                    (hostDaemonId && daemonIdsEquivalent(hostDaemonId, senderDaemonId)) ||
-                    nodes.some((n: any) => {
-                        const nd = readMeshNodeDaemonId(n) || trimString(n?.daemonId);
-                        return Boolean(nd && daemonIdsEquivalent(nd, senderDaemonId));
-                    });
-                if (!isKnownPeer) {
+        if (!isKnownPeer) {
+            return { success: false, code: 'unauthenticated', error: `Sender daemon "${senderDaemonId}" is not an authorized member of mesh "${meshIdToVerify}"` };
+        }
+        const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
+        const isSelfHost = Boolean(hostDaemonId && selfDaemonId && daemonIdsEquivalent(hostDaemonId, selfDaemonId));
+        const isSenderHost = Boolean(hostDaemonId && daemonIdsEquivalent(hostDaemonId, senderDaemonId));
+        const requesterRole = trimString(args?.requesterRole);
+        if (isSelfHost || !isSenderHost || requesterRole === 'worker') {
+            const requesterSessionId = trimString(args?.requesterSessionId);
+            if (!requesterSessionId) {
+                return { success: false, code: 'artifact_access_denied', error: 'artifact_fetch_origin requires an authorized requesting worker session (artifact_access_denied)' };
+            }
+            const requesterTaskId = trimString(args?.requesterTaskId) || undefined;
+            const requesterAttemptId = trimString(args?.requesterAttemptId) || undefined;
+            const requesterGeneration =
+                typeof args?.requesterGeneration === 'number' && Number.isSafeInteger(args.requesterGeneration) ? args.requesterGeneration : undefined;
+            const nodeDaemonId = (nodeId: string) => {
+                const node = nodes.find((n: any) => meshNodeIdMatches(n, nodeId) || trimString(n?.id) === nodeId || trimString(n?.nodeId) === nodeId);
+                return node ? readMeshNodeDaemonId(node) || trimString(node?.daemonId) : undefined;
+            };
+            const isSelfDaemon = selfDaemonId ? (d: string) => daemonIdsEquivalent(d, selfDaemonId) : undefined;
+            const resolvedWorker = resolveForwardedWorkerIdentity(
+                {
+                    meshId: meshIdToVerify,
+                    sessionId: requesterSessionId,
+                    ...(requesterTaskId ? { taskId: requesterTaskId } : {}),
+                    ...(requesterAttemptId ? { attemptId: requesterAttemptId } : {}),
+                    ...(requesterGeneration !== undefined ? { generation: requesterGeneration } : {}),
+                },
+                { senderDaemonId, nodeDaemonId },
+                Date.now(),
+                isSelfDaemon,
+            );
+            if ('refused' in resolvedWorker || !('live' in resolvedWorker)) {
+                return {
+                    success: false,
+                    code: 'artifact_access_denied',
+                    error: `Worker session "${requesterSessionId}" is not authorized to fetch artifact "${record.artifactId}" (artifact_access_denied)`,
+                };
+            }
+            const workerOwner = resolvedWorker.live;
+            const meshStore = getMeshRuntimeStore(ctx);
+            const queueEntry = meshStore.findQueueEntryById(meshIdToVerify, workerOwner.taskId) as Record<string, unknown> | null;
+            if (!queueEntry) {
+                return { success: false, code: 'artifact_access_denied', error: `Worker task "${workerOwner.taskId}" has no active queue assignment on host (artifact_access_denied)` };
+            }
+            const queueStatus = trimString(queueEntry.status);
+            if (queueStatus && queueStatus !== 'assigned') {
+                return { success: false, code: 'artifact_access_denied', error: `Worker task "${workerOwner.taskId}" is not in assigned state (artifact_access_denied)` };
+            }
+            const assignedSession = trimString(queueEntry.assignedSessionId);
+            if (assignedSession && !sessionIdsEquivalent(assignedSession, workerOwner.sessionId)) {
+                return { success: false, code: 'artifact_access_denied', error: `Worker task "${workerOwner.taskId}" is not assigned to "${workerOwner.sessionId}" (artifact_access_denied)` };
+            }
+            if (!sessionIdsEquivalent(record.sessionId, workerOwner.sessionId)) {
+                const queuePayload = (queueEntry.payload ?? {}) as Record<string, unknown>;
+                const workerMissionId = trimString(queueEntry.missionId) || trimString(queuePayload.missionId) || '';
+                const rawInputIds = Array.isArray(queueEntry.inputArtifactIds)
+                    ? queueEntry.inputArtifactIds
+                    : Array.isArray(queuePayload.inputArtifactIds)
+                      ? queuePayload.inputArtifactIds
+                      : [];
+                const allowedSet = new Set(rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0));
+                let recMissionId = trimString(record.missionId);
+                if (!recMissionId && record.taskId) {
+                    try {
+                        const pe = meshStore.findQueueEntryById(record.meshId || meshIdToVerify, record.taskId) as Record<string, unknown> | null;
+                        recMissionId = trimString(pe?.missionId) || trimString((pe?.payload as Record<string, unknown> | undefined)?.missionId);
+                    } catch {
+                        recMissionId = '';
+                    }
+                }
+                const sameMission = Boolean(workerMissionId && recMissionId && workerMissionId === recMissionId);
+                const sameMesh = !record.meshId || record.meshId === meshIdToVerify;
+                if (!sameMission || !sameMesh || !allowedSet.has(record.artifactId)) {
                     return {
                         success: false,
-                        code: 'unauthenticated',
-                        error: `Sender daemon "${senderDaemonId}" is not an authorized member of mesh "${meshIdToVerify}"`,
+                        code: 'artifact_access_denied',
+                        error: `Worker session "${workerOwner.sessionId}" is not authorized to fetch artifact "${record.artifactId}" outside its OD-4 task scope (artifact_access_denied)`,
                     };
                 }
             }
         }
+        const boundArtifactId = record.artifactId;
         const rawMode = trimString(args?.mode);
         const mode =
             rawMode === 'fetch'
@@ -1071,7 +1171,7 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
                       ? args.pageOffset
                       : undefined;
             const readLimit = typeof args?.limit === 'number' ? args.limit : undefined;
-            const readRes = store.readArtifactContent(artifactId, {
+            const readRes = store.readArtifactContent(boundArtifactId, {
                 sessionId: record.sessionId,
                 trustedWorkspaceRoot: record.workspaceRoot,
                 ...(readOffset !== undefined ? { offset: readOffset } : {}),
@@ -1102,7 +1202,7 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
                 attachment: toChatAttachmentMeta(record),
             };
         }
-        const fetched = store.fetchArtifactContent(artifactId, {
+        const fetched = store.fetchArtifactContent(boundArtifactId, {
             sessionId: record.sessionId,
             trustedWorkspaceRoot: record.workspaceRoot,
         });

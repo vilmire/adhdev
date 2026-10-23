@@ -3888,6 +3888,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 'assistant_artifact_list',
                 { project: 'alpha-sim' },
                 'standalone',
+                { ownerVerified: true },
             );
             expect(listRes).toMatchObject({
                 success: true,
@@ -3905,6 +3906,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 'assistant_artifact_read',
                 { project: 'alpha-sim', artifactId },
                 'standalone',
+                { ownerVerified: true },
             );
             expect(readRes).toMatchObject({
                 success: true,
@@ -3935,6 +3937,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 'assistant_artifact_list',
                 { project: 'alpha-sim' },
                 'standalone',
+                { ownerVerified: true },
             );
             expect(deniedList).toMatchObject({
                 success: false,
@@ -3945,6 +3948,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 'assistant_artifact_read',
                 { project: 'alpha-sim', artifactId },
                 'standalone',
+                { ownerVerified: true },
             );
             expect(deniedRead).toMatchObject({
                 success: false,
@@ -3975,6 +3979,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 'assistant_artifact_read',
                 { project: 'alpha-sim', artifactId },
                 'standalone',
+                { ownerVerified: true },
             );
             expect(reenabledRead).toMatchObject({
                 success: true,
@@ -4004,6 +4009,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                     'assistant_artifact_list',
                     { project: 'alpha-sim' },
                     'standalone',
+                    { ownerVerified: true },
                 );
                 expect(localDeniedList).toMatchObject({
                     success: false,
@@ -4013,6 +4019,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                     'assistant_artifact_read',
                     { project: 'alpha-sim', artifactId },
                     'standalone',
+                    { ownerVerified: true },
                 );
                 expect(localDeniedRead).toMatchObject({
                     success: false,
@@ -4982,6 +4989,133 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 code: 'send_failed',
             });
             expect(hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator')).toHaveLength(0);
+        });
+    });
+
+    it('Round 3 Findings 1 & 6: assistant_artifact_list/read refuse unauthenticated IPC or unverified standalone callers before touching project ports, allow bound assistant session with credential or verified owner, and read a 262144-byte remote image', async () => {
+        const { mkdirSync } = await import('fs');
+        const { ArtifactStore } = await import('../../src/artifacts/index.js');
+        const hostWorkspace = join(hostDir, 'r3-asst-ws');
+        mkdirSync(hostWorkspace, { recursive: true });
+        writeFileSync(join(hostWorkspace, 'secret.md'), '# Top Secret\nDo not leak\n', 'utf-8');
+        const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+        const png256k = Buffer.concat([pngHeader, Buffer.alloc(262_144 - pngHeader.length, 0x55)]);
+        writeFileSync(join(hostWorkspace, 'exact-256k.png'), png256k);
+
+        let regMdId = '';
+        let regPngId = '';
+        await withHostEnv(async () => {
+            const store = new ArtifactStore(MeshRuntimeStore.getInstance().db);
+            regMdId = store.register({
+                sessionId: 'sess-r3-host',
+                meshId: MESH_PREFEX_SIM,
+                workspaceRoot: hostWorkspace,
+                path: 'secret.md',
+                title: 'Secret Doc',
+                producerRole: 'coordinator',
+            }).record.artifactId;
+            regPngId = store.register({
+                sessionId: 'sess-r3-host',
+                meshId: MESH_PREFEX_SIM,
+                workspaceRoot: hostWorkspace,
+                path: 'exact-256k.png',
+                title: 'Exact 256 KiB Image',
+                producerRole: 'coordinator',
+                originDaemonId: 'daemon_origin_image_peer',
+            }).record.artifactId;
+        });
+
+        await withHostEnv(async () => {
+            const router = createRouter(HOST_A);
+            (router as any).deps.dispatchMeshCommand = async (_target: string, cmd: string) => {
+                expect(cmd).toBe('artifact_fetch_origin');
+                const b64 = png256k.toString('base64');
+                const chunkLen = 16 * 1024;
+                const chunks: string[] = [];
+                for (let off = 0; off < b64.length; off += chunkLen) {
+                    chunks.push(Buffer.from(b64.slice(off, off + chunkLen), 'utf8').toString('base64'));
+                }
+                return {
+                    success: true,
+                    encoding: 'base64',
+                    sizeBytes: 262_144,
+                    totalBytes: 262_144,
+                    offset: 0,
+                    pageBytes: 262_144,
+                    hasMore: false,
+                    nextOffset: null,
+                    chunks,
+                };
+            };
+            const { getAssistantRegistry } = await import('../../src/assistant/assistant-registry.js');
+            const { getMcpSessionCredentialForSession } = await import('../../src/commands/mcp-command-ingress.js');
+
+            // Bind assistant session 'asst-bound-r3'
+            getAssistantRegistry().bindSession({
+                sessionId: 'asst-bound-r3',
+                cliType: 'claude-cli',
+                workspace: hostDir,
+                at: Date.now(),
+            });
+            const boundCred = getMcpSessionCredentialForSession('asst-bound-r3')!;
+            expect(boundCred).toBeTruthy();
+
+            // 1. Unauthenticated IPC calls (no session, wrong session, or even matching assistantSessionId without capability) are REFUSED
+            for (const badArgs of [
+                { project: 'alpha-sim' },
+                { project: 'alpha-sim', assistantSessionId: 'foreign-sess' },
+                { project: 'alpha-sim', assistantSessionId: 'asst-bound-r3' },
+                { project: 'alpha-sim', assistantSessionId: 'asst-bound-r3', mcpSessionCredential: 'mcp_sess_forged' },
+            ]) {
+                const deniedList: any = await router.execute('assistant_artifact_list', badArgs, 'ipc');
+                expect(deniedList).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+                expect(deniedList.artifacts).toBeUndefined();
+
+                const deniedRead: any = await router.execute(
+                    'assistant_artifact_read',
+                    { ...badArgs, artifactId: regMdId },
+                    'ipc',
+                );
+                expect(deniedRead).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+                expect(deniedRead.content).toBeUndefined();
+            }
+
+            // 2. Unverified standalone call is REFUSED
+            const unverifiedStandalone: any = await router.execute(
+                'assistant_artifact_list',
+                { project: 'alpha-sim' },
+                'standalone',
+                { ownerVerified: false },
+            );
+            expect(unverifiedStandalone).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+
+            // 3. Bound assistant session WITH its minted session credential succeeds on IPC
+            const validAsstList: any = await router.execute(
+                'assistant_artifact_list',
+                {
+                    project: 'alpha-sim',
+                    assistantSessionId: 'asst-bound-r3',
+                    mcpSessionCredential: boundCred,
+                },
+                'ipc',
+            );
+            expect(validAsstList.success).toBe(true);
+            expect(validAsstList.artifacts.length).toBeGreaterThanOrEqual(2);
+
+            // 4. Finding 6: 262,144-byte remote image reads via assistant_artifact_read over P2P origin fetch
+            const validAsstImageRead: any = await router.execute(
+                'assistant_artifact_read',
+                {
+                    project: 'alpha-sim',
+                    artifactId: regPngId,
+                    assistantSessionId: 'asst-bound-r3',
+                    mcpSessionCredential: boundCred,
+                },
+                'ipc',
+            );
+            expect(validAsstImageRead.success).toBe(true);
+            expect(validAsstImageRead.pageBytes).toBe(262_144);
+            expect(validAsstImageRead.content).toContain(png256k.toString('base64'));
         });
     });
 });

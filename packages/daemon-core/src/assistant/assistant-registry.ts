@@ -35,6 +35,7 @@ import { getConfigDir } from '../config/config.js';
 import type { SessionLifecycleBus, Unsubscribe } from '../sessions/lifecycle-bus.js';
 import { resolveMemoryBudgets, type MemoryBudgets } from './memory/memory-store.js';
 import { writeFileAtomic600 } from './store-guards.js';
+import { ensureMcpSessionCredential, revokeMcpSessionCredential } from '../commands/mcp-command-ingress.js';
 
 export const ASSISTANT_REGISTRY_FILE = 'assistant.json';
 
@@ -399,6 +400,10 @@ export class AssistantRegistry {
         if (!sameSession) next.lastTurnState = { state: 'idle', at, sessionId: input.sessionId };
         if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
         else delete next.mcpConfigPath;
+        if (!sameSession && prev?.sessionId) {
+            revokeMcpSessionCredential(prev.sessionId);
+        }
+        ensureMcpSessionCredential({ sessionId: input.sessionId, isCoordinator: false });
         const entry = this.write(next);
         return { entry, previous: sameSession ? null : prev?.lastTurnState ?? null };
     }
@@ -476,6 +481,7 @@ export class AssistantRegistry {
         if (cause === 'daemon_shutdown') return false;
         const prev = this.read();
         if (!prev || !prev.sessionId || prev.sessionId !== sessionId) return false;
+        revokeMcpSessionCredential(sessionId);
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
         this.write(next);
@@ -491,6 +497,7 @@ export class AssistantRegistry {
         const prev = this.read();
         if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
         const cleared = prev.sessionId;
+        revokeMcpSessionCredential(cleared);
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
         this.write(next);

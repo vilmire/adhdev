@@ -495,10 +495,16 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       expect(await workerTokenPositive.json()).toMatchObject({ success: true, sessionId: 'worker-sa' });
 
       // The exact recovery regression: real standard helpers over authenticated HTTP.
+      const coordSessionCred = coreMod.getMcpSessionCredentialForSession('coord-sa')!;
+      expect(coordSessionCred).toBeTruthy();
+      const coordHeaders = {
+        [INTERNAL_HEADER]: INTERNAL,
+        [coreMod.ADHDEV_MCP_SESSION_CREDENTIAL_HEADER]: coordSessionCred,
+      };
       const artifactToolsSource = fileURLToPath(new URL('../../mcp-server/src/tools/artifact-tools.ts', import.meta.url));
       const standardTools = await import(/* @vite-ignore */ artifactToolsSource);
       const standardTransport = { command: async (type: string, payload: Record<string, unknown>) => {
-        const response = await postCmd(type, payload, { [INTERNAL_HEADER]: INTERNAL });
+        const response = await postCmd(type, payload, coordHeaders);
         expect(response.status).toBe(200);
         return response.json();
       }} as any;
@@ -512,6 +518,14 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         { path: 'doc.md', sessionId: 'foreign-sa', workspaceRoot: foreignDir, bind: 'forged' },
       ));
       expect(workerHelper).toMatchObject({ success: true, sessionId: 'worker-sa' });
+      const workerListHelper = JSON.parse(await standardTools.callWorkerArtifactList(
+        workerTransport, { bind: workerBind.bind, token: workerToken.token }, {},
+      ));
+      expect(workerListHelper).toMatchObject({ success: true, sessionId: 'worker-sa' });
+      const workerReadHelper = JSON.parse(await standardTools.callWorkerArtifactRead(
+        workerTransport, { bind: workerBind.bind, token: workerToken.token }, { artifact_id: workerArtId },
+      ));
+      expect(workerReadHelper).toMatchObject({ success: true, artifactId: workerArtId });
       const standardRegister = JSON.parse(await standardTools.callStandardArtifactRegister(
         standardTransport, { session_id: 'coord-sa', path: 'doc.md' },
       ));
@@ -528,9 +542,53 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       // Registered-session standard operations include the existing aliases,
       // but the internal MCP context does not grant owner-only fetch/history.
       for (const alias of ['artifact_register', 'session_artifact_register', 'artifact_list', 'session_artifact_list']) {
-        const response = await postCmd(alias, { sessionId: 'coord-sa', path: 'doc.md' }, { [INTERNAL_HEADER]: INTERNAL });
+        const response = await postCmd(alias, { sessionId: 'coord-sa', path: 'doc.md' }, coordHeaders);
         expect((await response.json() as any).success, alias).toBe(true);
       }
+
+      // Round 3 Finding 2:
+      // (a) Per-boot token alone (no session-bound credential) is refused even with a valid sessionId or mesh-only payload
+      for (const payload of [
+        { sessionId: 'coord-sa' },
+        { sessionId: 'foreign-sa' },
+        { meshId: 'mesh-sa' },
+      ]) {
+        const barePerBootRes = await postCmd('artifact_list', payload, { [INTERNAL_HEADER]: INTERNAL });
+        expect(await barePerBootRes.json()).toMatchObject({
+          success: false,
+          code: 'COMMAND_SOURCE_REJECTED',
+        });
+      }
+      // (b) Per-boot token + a non-coordinator session credential + a different payload sessionId or mesh-only payload is refused
+      const foreignSessionCred = coreMod.mintMcpSessionCredential({
+        sessionId: 'foreign-sa',
+        isCoordinator: false,
+      });
+      const crossSessionRes = await postCmd(
+        'artifact_list',
+        { sessionId: 'coord-sa' },
+        {
+          [INTERNAL_HEADER]: INTERNAL,
+          [coreMod.ADHDEV_MCP_SESSION_CREDENTIAL_HEADER]: foreignSessionCred,
+        },
+      );
+      expect(await crossSessionRes.json()).toMatchObject({
+        success: false,
+        code: 'COMMAND_SOURCE_REJECTED',
+      });
+      const meshOnlyEscalationRes = await postCmd(
+        'artifact_list',
+        { meshId: 'mesh-sa' },
+        {
+          [INTERNAL_HEADER]: INTERNAL,
+          [coreMod.ADHDEV_MCP_SESSION_CREDENTIAL_HEADER]: foreignSessionCred,
+        },
+      );
+      expect(await meshOnlyEscalationRes.json()).toMatchObject({
+        success: false,
+        code: 'COMMAND_SOURCE_REJECTED',
+      });
+
       for (const payload of [
         { sessionId: 'unregistered-sa' },
         { sessionId: 'coord-sa', callerSessionId: 'foreign-sa' },
@@ -539,7 +597,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         { sessionId: 'worker-sa', attemptId: 'att-sa-1' },
         { sessionId: 'worker-sa', nodeId: 'node-sa' },
       ]) {
-        const response = await postCmd('artifact_list', payload, { [INTERNAL_HEADER]: INTERNAL });
+        const response = await postCmd('artifact_list', payload, coordHeaders);
         expect((await response.json() as any).success).toBe(false);
       }
       // A real capability cannot be replayed with a different target, command,
@@ -563,11 +621,11 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         }
       }
 
-      // 2. Coordinator MCP loopback positive & negative controls via x-adhdev-internal-auth
+      // 2. Coordinator MCP loopback positive & negative controls via x-adhdev-internal-auth + session credential
       const coordListOk = await postCmd(
         'artifact_list',
         { sessionId: 'worker-sa', meshId: 'mesh-sa' },
-        { [INTERNAL_HEADER]: INTERNAL },
+        coordHeaders,
       );
       expect(coordListOk.status).toBe(200);
       expect(await coordListOk.json()).toMatchObject({ success: true });
@@ -585,7 +643,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       const coordListForeign = await postCmd(
         'artifact_list',
         { sessionId: 'foreign-sa', meshId: 'mesh-sa' },
-        { [INTERNAL_HEADER]: INTERNAL },
+        coordHeaders,
       );
       expect(await coordListForeign.json()).toMatchObject({
         success: false,
@@ -596,7 +654,7 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
         const coordFetch = await postCmd(
           fetchAlias,
           { sessionId: 'worker-sa', meshId: 'mesh-sa', artifactId: workerArtId },
-          { [INTERNAL_HEADER]: INTERNAL },
+          coordHeaders,
         );
         expect(await coordFetch.json()).toMatchObject({
           success: false,

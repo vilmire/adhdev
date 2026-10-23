@@ -41,6 +41,11 @@ export const MAX_ARTIFACTS_PER_MESH = 500;
 /** Maximum page size for MCP / assistant / follower artifact reads (256 KiB, OD-7). */
 export const MAX_ARTIFACT_MCP_PAGE_BYTES = 256 * 1024;
 
+/** Maximum base64-encoded UTF-8 byte budget for a given raw byte limit (`ceil(rawBytes / 3) * 4`). */
+export function maxBase64EncodedBytes(rawBytes: number): number {
+    return Math.ceil(Math.max(0, rawBytes) / 3) * 4;
+}
+
 /** Metadata retention horizon for session_artifacts (30 days, OD-7). */
 export const ARTIFACT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
