@@ -88,16 +88,11 @@ const COMPOSER_PROMPT_LINE_RE = /^[ \t]*[❯›>](?:\s|$)/;
 const MAX_OPEN_BLOCK_SPAN_LINES = 40;
 const MAX_CLOSED_BLOCK_LOOKAHEAD_LINES = 512;
 
-function findMatchingClosingFence(lines: string[], openIdx: number, ch: '`' | '~'): number {
-    const closeRe = new RegExp(`^${ch}{3,}\\s*$`);
-    const limit = Math.min(lines.length, openIdx + 1 + MAX_CLOSED_BLOCK_LOOKAHEAD_LINES);
-    for (let j = openIdx + 1; j < limit; j += 1) {
+function findMatchingClosingFence(lines: string[], openIdx: number, ch: '`' | '~', openLen = 3): number {
+    const closeRe = new RegExp(`^${ch}{${openLen},}\\s*$`);
+    for (let j = openIdx + 1; j < lines.length; j += 1) {
         const candidate = lines[j];
-        if (
-            TRUNCATED_OUTPUT_LINE_RE.test(candidate)
-            || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate)
-            || TOOL_HEADER_LINE_RE.test(candidate)
-        ) {
+        if (TRUNCATED_OUTPUT_LINE_RE.test(candidate)) {
             return -1;
         }
         if (closeRe.test(candidate.trim())) {
@@ -175,7 +170,9 @@ function findClosedDiffHunkEnd(lines: string[], openIdx: number): number {
  */
 export function stripToolAndCodeLines(raw: string): string {
     let inToolBlock = false;
+    let inAssistantProseBlock = false;
     let inFence: '`' | '~' | null = null;
+    let inFenceLen = 0;
     let fenceCloseIdx = -1;
     let fenceLines = 0;
     let inDiffHunk = false;
@@ -191,6 +188,7 @@ export function stripToolAndCodeLines(raw: string): string {
                 continue;
             }
             inFence = null;
+            inFenceLen = 0;
             fenceCloseIdx = -1;
             fenceLines = 0;
             continue;
@@ -205,28 +203,34 @@ export function stripToolAndCodeLines(raw: string): string {
         }
         if (TRUNCATED_OUTPUT_LINE_RE.test(line)) {
             inFence = null;
+            inFenceLen = 0;
             fenceCloseIdx = -1;
             fenceLines = 0;
             inDiffHunk = false;
             diffHunkCloseIdx = -1;
             diffHunkLines = 0;
             inToolBlock = false;
+            inAssistantProseBlock = false;
             continue;
         }
         const fenceMatch = trimmed.match(/^(```+|~~~+)/);
         if (fenceMatch) {
             const ch = fenceMatch[1][0] as '`' | '~';
+            const fenceLen = fenceMatch[1].length;
             if (inFence === null) {
                 inFence = ch;
-                fenceCloseIdx = findMatchingClosingFence(lines, i, ch);
+                inFenceLen = fenceLen;
+                fenceCloseIdx = findMatchingClosingFence(lines, i, ch, fenceLen);
                 fenceLines = 0;
                 inDiffHunk = false;
                 diffHunkCloseIdx = -1;
                 diffHunkLines = 0;
+                inAssistantProseBlock = false;
                 continue;
             }
-            if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed)) {
+            if (inFence === ch && fenceLen >= inFenceLen && new RegExp(`^${ch}{${inFenceLen},}\\s*$`).test(trimmed)) {
                 inFence = null;
+                inFenceLen = 0;
                 fenceCloseIdx = -1;
                 fenceLines = 0;
                 continue;
@@ -240,6 +244,7 @@ export function stripToolAndCodeLines(raw: string): string {
             fenceLines += 1;
             if (isStrongTurnBoundary || isComposerBoundary || fenceLines > MAX_OPEN_BLOCK_SPAN_LINES) {
                 inFence = null;
+                inFenceLen = 0;
                 fenceCloseIdx = -1;
                 fenceLines = 0;
             } else {
@@ -250,12 +255,14 @@ export function stripToolAndCodeLines(raw: string): string {
             inDiffHunk = false;
             diffHunkCloseIdx = -1;
             diffHunkLines = 0;
+            inAssistantProseBlock = false;
             continue;
         }
         if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed)) {
             inDiffHunk = true;
             diffHunkCloseIdx = findClosedDiffHunkEnd(lines, i);
             diffHunkLines = 0;
+            inAssistantProseBlock = false;
             continue;
         }
         if (inDiffHunk) {
@@ -278,19 +285,23 @@ export function stripToolAndCodeLines(raw: string): string {
         }
         if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
             inToolBlock = false;
+            inAssistantProseBlock = false;
             if (TOOL_HEADER_LINE_RE.test(line)) {
                 inToolBlock = true;
                 continue;
             }
             if (/^[ \t]*⏺(?:\s|$)/.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
+                inAssistantProseBlock = true;
                 continue;
             }
         }
         if (!trimmed) {
+            inAssistantProseBlock = false;
             continue;
         }
         if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed) || TOOL_HEADER_LINE_RE.test(line)) {
             inToolBlock = true;
+            inAssistantProseBlock = false;
             continue;
         }
         if (inToolBlock) {
@@ -298,6 +309,12 @@ export function stripToolAndCodeLines(raw: string): string {
                 continue;
             }
             inToolBlock = false;
+        }
+        if (inAssistantProseBlock) {
+            if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
+                continue;
+            }
+            inAssistantProseBlock = false;
         }
         if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed)) continue;
         if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed)) continue;

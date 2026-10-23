@@ -2299,6 +2299,89 @@ describe('Round 6 — NEW MEDIUM: ⏺-prefixed assistant prose is never classifi
     });
 });
 
+describe('Round 7 — LOW classifier findings: balanced fences with ⏺/✻, quadruple-backtick fences, >512-line fences, and wrapped ⏺ prose continuation lines', () => {
+    const t0 = 1_880_000_000_000;
+    const ctx = { cliType: 'claude-cli', sessionLabel: 'sess-r7-low', isCoordinator: false };
+
+    // 1. A balanced fence containing a quoted ⏺/✻ line must stay suppressed
+    const balancedFenceWithQuotedTurnBoundaries = [
+        '⏺ Here is an example of a captured Claude session transcript:',
+        '```text',
+        '⏺ Bash(curl https://example.com)',
+        '✻ Worked for 4s',
+        '⏺ API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+        '```',
+    ].join('\n');
+
+    // 2. A quadruple-backtick fence must not be closed by an inner ```
+    const quadrupleBacktickFenceWithInnerTripleFence = [
+        '⏺ Here is the markdown documentation with an embedded code block:',
+        '````markdown',
+        '```json',
+        '{"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+        '```',
+        'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+        '````',
+    ].join('\n');
+
+    // 3. A fence closed after more than 512 lines must stay suppressed
+    const fenceClosedAfterMoreThan512Lines = [
+        '⏺ Dumping the full 600-line fixture inside a fenced block:',
+        '```json',
+        ...Array.from({ length: 560 }, (_, i) => `  "line_${i + 1}": "fixture entry ${i + 1}",`),
+        '  "error_sample": "API Error: 401 {\\"type\\":\\"error\\",\\"error\\":{\\"type\\":\\"authentication_error\\",\\"message\\":\\"OAuth token has expired.\\"}} · Please run /login"',
+        '  API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+        '```',
+    ].join('\n');
+
+    // 4. Wrapped ⏺ prose continuation lines ("\n  Please run /login…", "\n  not signed in.") must not be detected
+    const wrappedProsePleaseRunLogin = [
+        '⏺ Before retrying the request in the other terminal,',
+        '  Please run /login to refresh the test fixture.',
+    ].join('\n');
+
+    const wrappedProseNotSignedIn = [
+        '⏺ The middleware redirects the browser whenever the current user is',
+        '  not signed in.',
+    ].join('\n');
+
+    const wrappedProseMultiLine = [
+        '⏺ In the auth handler, we check whether the token was revoked or the',
+        '  session expired before returning the login redirect when the user is',
+        '  not signed in.',
+    ].join('\n');
+
+    it.each([
+        ['balanced fence containing quoted ⏺/✻ and tool header lines', balancedFenceWithQuotedTurnBoundaries],
+        ['quadruple-backtick fence containing an inner ``` fence and quoted 401', quadrupleBacktickFenceWithInnerTripleFence],
+        ['balanced fence closed after >512 lines (560+ lines)', fenceClosedAfterMoreThan512Lines],
+        ['wrapped ⏺ prose continuation "\\n  Please run /login…"', wrappedProsePleaseRunLogin],
+        ['wrapped ⏺ prose continuation "\\n  not signed in."', wrappedProseNotSignedIn],
+        ['multi-line wrapped ⏺ prose continuation mentioning session expired and not signed in', wrappedProseMultiLine],
+    ])('suppresses %s across detectProviderFailure, detectAuthFailureOnlyReply, classifyAuthBillingOutput, and resolveLiveAuthSuspect', (_label, screen) => {
+        expect(detectProviderFailure(screen)).toBeNull();
+        expect(detectAuthFailureOnlyReply(screen)).toBeNull();
+        expect(classifyAuthBillingOutput('claude-cli', screen)).toBeNull();
+        expect(classifyAuthBillingOutput('codex-cli', screen)).toBeNull();
+
+        const state = createLiveAuthState();
+        state.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: '401 Unauthorized' },
+            suspectedAtMs: t0,
+        };
+        const res = resolveLiveAuthSuspect(state, ctx, {
+            midTurn: false,
+            now: t0 + 10_000,
+            quietMs: 6_000,
+            tail: screen,
+            readScreen: () => screen,
+        });
+        expect(res.advisory).toBeUndefined();
+        expect(res.latch).toBeUndefined();
+    });
+});
+
+
 
 
 

@@ -36,7 +36,7 @@
 import { LOG } from '../../logging/logger.js';
 import { type CliSpecV4, type FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
-import { evaluateConditionPreview } from './fsm-evaluator.js';
+import { evaluateConditionPreview, isStructuralOverrideTransition } from './fsm-evaluator.js';
 import { stripAnsi, stripToolAndCodeLines } from './provider-failure-classifier.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,
@@ -172,9 +172,17 @@ export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): bo
     const cleaned = stripToolAndCodeLines(stripped);
     if (!cleaned.trim()) return false;
 
-    // Explicit precedence: when a signing_in entry condition matches both the
-    // raw viewport and the tool/code/fence/diff-stripped viewport, signing_in
-    // wins over approval and the modal veto does not apply.
+    // Enforce the canonical state-classification precedence documented in
+    // fsm-evaluator.ts (isStructuralOverrideTransition): when an active modal,
+    // picker, choice, or busy entry transition matches the viewport, it outranks
+    // signing_in and never triggers the pre-send auth guard.
+    for (const t of spec.transitions) {
+        if (!t.when || !isStructuralOverrideTransition(t)) continue;
+        if (evaluateConditionPreview(t.when, spec.sections, stripped).result) {
+            return false;
+        }
+    }
+
     for (const t of spec.transitions) {
         if (t.to !== 'signing_in' || !t.when) continue;
         if (
@@ -488,6 +496,7 @@ export class SendSubmitEngine {
         this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
+        if (this.host.currentStateId === 'signing_in' && this.isPreSendAuthRequired()) return false;
         if (this.host.currentStatus() !== 'idle') return false;
         if (this.isPreSendAuthRequired()) return false;
         return true;
