@@ -124,6 +124,8 @@ export interface SessionHostClientOptions {
   endpoint?: SessionHostEndpoint;
   appName?: string;
   requestTimeoutMs?: number;
+  /** Join the shared client registry (default true). Disable for short-lived probes. */
+  registerAsShared?: boolean;
 }
 
 /**
@@ -206,7 +208,7 @@ export class SessionHostClient {
     if (typeof options.requestTimeoutMs === 'number' && options.requestTimeoutMs > 0) {
       this.requestTimeoutMs = options.requestTimeoutMs;
     }
-    activeClientRefs.add(new WeakRef(this));
+    if (options.registerAsShared !== false) activeClientRefs.add(new WeakRef(this));
   }
 
   static disconnectClients(endpoint?: SessionHostEndpoint, error?: Error): void {

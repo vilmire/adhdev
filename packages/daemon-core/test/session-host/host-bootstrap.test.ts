@@ -69,6 +69,22 @@ describe('bootSessionHost', () => {
         expect(reconcile).toHaveBeenCalledTimes(1)
     })
 
+    it('preserves known identity across a maintenance ensure with no observation', async () => {
+        let identity: string | undefined = 'before'
+        const handle = await bootSessionHost({
+            ensureReady: async () => ENDPOINT_A, getHostIdentity: () => identity,
+            clientId: 'maintenance-r3', managedBy: 'adhdev-cloud', createController: () => fakeController(),
+        })
+        const reconcile = vi.fn()
+        handle.bootConfig().onHostReplaced!(reconcile)
+        identity = undefined // retained-host maintenance returns before the ordinary probe
+        await handle.ensure()
+        expect(reconcile).not.toHaveBeenCalled()
+        identity = 'after'
+        await handle.ensure()
+        expect(reconcile).toHaveBeenCalledTimes(1)
+    })
+
     it('the PTY factory carries a STABLE client id (not per-pid), managedBy, and seeds launch meta', async () => {
         const handle = await bootSessionHost({
             ensureReady: async () => ENDPOINT_A,

@@ -103,13 +103,17 @@ function getMissingRequestTypes(
     return requiredRequestTypes.filter((requestType) => !supported.has(requestType));
 }
 
-// Evidence survives controller disconnects and ensure calls, but never crosses a
-// known PID change. Three consecutive connected-RPC timeouts within a minute
-// prove a wedge. A failed connect (including resource exhaustion) is not proof.
+// Three connected RPC timeouts must span >=30s and >=2 ensure invocations.
+// Keep evidence for 90s so ordinary retry cadence recovers a persistent wedge
+// within about two minutes, while a single 10s stall cannot trigger eviction.
 export const SESSION_HOST_PROBE_TIMEOUT_MS = 3_000;
-const UNRESPONSIVE_WINDOW_MS = 60_000;
+export const SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS = 30_000;
+const UNRESPONSIVE_WINDOW_MS = 90_000;
 const UNRESPONSIVE_TIMEOUT_COUNT = 3;
-const probeEvidence = new Map<string, { identity?: string; count: number; firstAt: number }>();
+const UNRESPONSIVE_INVOCATION_COUNT = 2;
+const probeEvidence = new Map<string, { identity?: string; count: number; firstAt: number; invocations: Set<number> }>();
+let probeInvocationSequence = 0;
+export function createSessionHostProbeInvocation(): number { return ++probeInvocationSequence; }
 const hostIdentities = new Map<string, string>();
 let spawnGeneration = 0;
 const endpointKey = (endpoint: SessionHostEndpoint): string => `${endpoint.kind}:${endpoint.path}`;
@@ -118,7 +122,7 @@ export function getObservedSessionHostIdentity(endpoint: SessionHostEndpoint): s
     return hostIdentities.get(endpointKey(endpoint));
 }
 
-export function recordSessionHostProbeFailure(endpoint: SessionHostEndpoint, error: unknown, identity?: string): boolean {
+export function recordSessionHostProbeFailure(endpoint: SessionHostEndpoint, error: unknown, identity?: string, invocation?: number): boolean {
     const key = endpointKey(endpoint);
     const timedOut = !isResourceExhaustionError(error) && error instanceof Error
         && /Session host request timed out.*get_host_diagnostics/.test(error.message);
@@ -130,10 +134,17 @@ export function recordSessionHostProbeFailure(endpoint: SessionHostEndpoint, err
     }
     const prior = probeEvidence.get(key);
     const evidence = prior && prior.identity === identity
-        ? { ...prior, count: prior.count + 1 }
-        : { identity, count: 1, firstAt: now };
+        ? prior
+        : { identity, count: 0, firstAt: now, invocations: new Set<number>() };
+    evidence.count++;
+    // Only two distinct calls are needed; keep evidence bounded during long wedges.
+    if (invocation !== undefined && evidence.invocations.size < UNRESPONSIVE_INVOCATION_COUNT) {
+        evidence.invocations.add(invocation);
+    }
     probeEvidence.set(key, evidence);
-    return evidence.count >= UNRESPONSIVE_TIMEOUT_COUNT;
+    return evidence.count >= UNRESPONSIVE_TIMEOUT_COUNT
+        && evidence.invocations.size >= UNRESPONSIVE_INVOCATION_COUNT
+        && now - evidence.firstAt >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS;
 }
 
 export function recordSessionHostProbeSuccess(endpoint: SessionHostEndpoint, diagnostics?: SessionHostDiagnostics): void {
@@ -145,17 +156,16 @@ export function recordSessionHostProbeSuccess(endpoint: SessionHostEndpoint, dia
 
 async function probeHost(
     endpoint: SessionHostEndpoint,
-    existing: SessionHostClient | null,
     requiredRequestTypes: readonly SessionHostRequestType[],
     timeoutMs: number,
     identity?: string,
+    invocation?: number,
 ): Promise<{ ok: true } | { ok: false; error: unknown; proven: boolean }> {
-    const usableExisting = existing && (typeof existing.isConnected !== 'function' || existing.isConnected()) ? existing : null;
-    const client = usableExisting || new SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs });
+    const client = new SessionHostClient({ endpoint, requestTimeoutMs: timeoutMs, registerAsShared: false });
     const deadline = Date.now() + timeoutMs;
-    let connected = Boolean(usableExisting);
+    let connected = false;
     try {
-        if (!connected) { await client.connect(timeoutMs); connected = true; }
+        await client.connect(timeoutMs); connected = true;
         // Always send an RPC, even without required capabilities: connect alone
         // cannot distinguish an accepting socket from a wedged userland host.
         const response = await client.request<SessionHostDiagnostics>({
@@ -170,16 +180,19 @@ async function probeHost(
         return { ok: true };
     } catch (error) {
         if (error instanceof SessionHostCompatibilityError) throw error;
-        const proven = recordSessionHostProbeFailure(endpoint, connected ? error : undefined, identity);
+        const proven = recordSessionHostProbeFailure(endpoint, connected ? error : undefined, identity, invocation);
         return { ok: false, error, proven };
     } finally {
-        if (!usableExisting) await client.close().catch(() => {});
+        await client.close().catch(() => {});
     }
 }
 
 export async function ensureSessionHostReady(options: {
     appName?: string;
+    /** Share one invocation with the managed-host preflight. */
+    probeInvocation?: number;
     endpoint?: SessionHostEndpoint;
+    /** Retained for callers; diagnostic probes always use an isolated client. */
     existingClient?: SessionHostClient | null;
     spawnHost: () => void;
     beforeSpawnHost?: (endpoint: SessionHostEndpoint) => Promise<void> | void;
@@ -199,9 +212,7 @@ export async function ensureSessionHostReady(options: {
     const deadline = Date.now() + timeoutMs;
     const remaining = () => Math.max(0, deadline - Date.now());
     const required = options.requiredRequestTypes || [];
-    const resolveClient = () => options.existingClient
-        ?? (SessionHostClient as { findConnectedClient?: (ep: SessionHostEndpoint) => SessionHostClient | null }).findConnectedClient?.(endpoint)
-        ?? null;
+    const invocation = options.probeInvocation ?? createSessionHostProbeInvocation();
     let lastError: unknown;
     let proven = false;
     const retries = Math.max(0, options.canConnectRetries ?? options.verifyRetries ?? 2);
@@ -211,8 +222,8 @@ export async function ensureSessionHostReady(options: {
             await new Promise(resolve => setTimeout(resolve, Math.min(remaining(), 250, delay * 2 ** (attempt - 1))));
             if (remaining() <= 0) break;
         }
-        const result = await probeHost(endpoint, resolveClient(), required,
-            Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()), options.existingHostIdentity?.());
+        const result = await probeHost(endpoint, required,
+            Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()), options.existingHostIdentity?.(), invocation);
         if (result.ok) return endpoint;
         lastError = result.error;
         proven = result.proven;
@@ -233,7 +244,7 @@ export async function ensureSessionHostReady(options: {
     probeEvidence.delete(endpointKey(endpoint));
     hostIdentities.set(endpointKey(endpoint), `spawn:${++spawnGeneration}`);
     while (remaining() > 0) {
-        const result = await probeHost(endpoint, null, required, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()));
+        const result = await probeHost(endpoint, required, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()));
         if (result.ok) {
             await options.onHostReplaced?.(endpoint);
             return endpoint;

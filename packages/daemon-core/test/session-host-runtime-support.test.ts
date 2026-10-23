@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -28,10 +28,11 @@ vi.mock('@adhdev/session-host-core', () => {
       if (next === 'fail') throw new Error('connect failed')
     })
     this.close = vi.fn(async () => {})
-    this.request = vi.fn(async (request: { type: string }) => {
+    this.request = vi.fn(async (request: { type: string }, options?: { timeoutMs: number }) => {
       if (request.type === 'get_host_diagnostics') {
         const next = mocks.state.diagnosticsResults.shift()
         if (next instanceof Error) throw next
+        if (typeof next === 'function') return next(request, options)
         return next ?? { success: true, result: { supportedRequestTypes: ['delete_session'] } }
       }
       return { success: true, result: [] }
@@ -65,6 +66,7 @@ import { listLocalCoordinatorSessions } from '../src/mesh/mesh-event-forwarding'
 import { pickCoordinator } from '../src/assistant/coordinator-lifecycle'
 
 describe('session host runtime support compatibility', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
   beforeEach(() => {
     mocks.state.connectResults = []
     mocks.state.diagnosticsResults = []
@@ -197,55 +199,46 @@ describe('session host runtime support compatibility', () => {
     expect(mocks.state.disconnectClientsCalls).toBe(0)
   })
 
-  it('reuses the existing controller connection without opening a new socket, and only replaces a live host after three existing-connection timeouts', async () => {
-    const beforeSpawnHost = vi.fn()
+  it('always uses a dedicated diagnostic client even with a connected controller', async () => {
+    const request = vi.fn()
+    mocks.state.existingClient = { isConnected: () => true, request }
     const spawnHost = vi.fn()
-    mocks.state.existingClient = {
-      isConnected: () => true,
-      request: vi.fn(async () => ({
-        success: true,
-        result: { supportedRequestTypes: ['delete_session'] },
-      })),
-    }
-
-    await expect(ensureSessionHostReady({
-      appName: 'adhdev-reuse-existing',
-      spawnHost,
-      isExistingHostAlive: () => true,
-      isExistingSocketPresent: () => true,
-      beforeSpawnHost,
-      requiredRequestTypes: ['delete_session'],
-    } as any)).resolves.toEqual({ kind: 'unix', path: '/tmp/adhdev-reuse-existing-session-host.sock' })
-
-    // No new SessionHostClient socket was created because the existing controller client was reused.
-    expect(mocks.state.clients).toHaveLength(0)
-    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    await ensureSessionHostReady({ appName: 'dedicated-probe-r3', spawnHost })
+    expect(mocks.state.clients).toHaveLength(1)
+    expect(mocks.state.clients[0].close).toHaveBeenCalledTimes(1)
+    expect(request).not.toHaveBeenCalled()
     expect(spawnHost).not.toHaveBeenCalled()
+  })
 
-    // Now simulate the existing controller connection timing out (proof of unresponsiveness)
-    mocks.state.existingClient = {
-      isConnected: () => true,
-      request: vi.fn(async () => {
-        throw new Error('Session host request timed out: get_host_diagnostics')
-      }),
-    }
-    mocks.state.connectResults = ['ok']
-    mocks.state.diagnosticsResults = [{ success: true, result: { supportedRequestTypes: ['delete_session'] } }]
+  it('does not replace a host that stalls once for 10 seconds', async () => {
+    vi.useFakeTimers()
+    const timeout = (_request: unknown, options: { timeoutMs: number }) => new Promise((_resolve, reject) => {
+      setTimeout(() => reject(new Error('Session host request timed out (get_host_diagnostics)')), options.timeoutMs)
+    })
+    mocks.state.diagnosticsResults = [timeout, timeout, timeout]
+    const spawnHost = vi.fn()
+    const options = { appName: 'ten-second-stall-r3', spawnHost,
+      isExistingHostAlive: () => true, isExistingSocketPresent: () => true, timeoutMs: 15_000 }
+    const outcome = ensureSessionHostReady(options).then(result => ({ result }), error => ({ error }))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(await outcome).toMatchObject({ error: { code: 'session_host_unavailable_transient' } })
+    await expect(ensureSessionHostReady(options)).resolves.toBeDefined()
+    expect(spawnHost).not.toHaveBeenCalled()
+  })
 
-    await expect(ensureSessionHostReady({
-      appName: 'adhdev-unresponsive-existing',
-      spawnHost,
-      isExistingHostAlive: () => true,
-      isExistingSocketPresent: () => true,
-      beforeSpawnHost,
-      canConnectRetries: 2,
-      canConnectRetryDelayMs: 5,
-      requiredRequestTypes: ['delete_session'],
-      timeoutMs: 50,
-    } as any)).resolves.toEqual({ kind: 'unix', path: '/tmp/adhdev-unresponsive-existing-session-host.sock' })
-
-    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
-    expect(spawnHost).toHaveBeenCalledTimes(1)
+  it('does not replace from one ensure invocation even when its timeouts span 30s', async () => {
+    vi.useFakeTimers()
+    const timeout = (_request: unknown, options: { timeoutMs: number }) => new Promise((_resolve, reject) => {
+      setTimeout(() => reject(new Error('Session host request timed out (get_host_diagnostics)')), options.timeoutMs)
+    })
+    mocks.state.diagnosticsResults = Array(12).fill(timeout)
+    const spawnHost = vi.fn()
+    const outcome = ensureSessionHostReady({ appName: 'one-long-call-r3', spawnHost,
+      isExistingHostAlive: () => true, isExistingSocketPresent: () => true, timeoutMs: 60_000,
+      canConnectRetries: 11, canConnectRetryDelayMs: 0 }).then(result => ({ result }), error => ({ error }))
+    await vi.advanceTimersByTimeAsync(60_001)
+    expect(await outcome).toMatchObject({ error: { code: 'session_host_unavailable_transient' } })
+    expect(spawnHost).not.toHaveBeenCalled()
   })
 
   it('replaces the host when connect fails while the existing host is dead', async () => {
@@ -278,11 +271,15 @@ describe('session host runtime support compatibility', () => {
       isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
       canConnectRetries: 0, timeoutMs: 100,
     }
+    const start = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start)
     for (let count = 0; count < 2; count++) {
+      now.mockReturnValue(start + count * 15_000)
       mocks.state.diagnosticsResults = [new Error('Session host request timed out after 10ms (get_host_diagnostics)')]
       await expect(ensureSessionHostReady(options)).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
       expect(spawnHost).not.toHaveBeenCalled()
     }
+    now.mockReturnValue(start + 30_000)
     mocks.state.diagnosticsResults = [new Error('Session host request timed out after 10ms (get_host_diagnostics)')]
     await expect(ensureSessionHostReady(options)).resolves.toBeDefined()
     expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
@@ -295,8 +292,8 @@ describe('session host runtime support compatibility', () => {
     const spawnHost = vi.fn()
     await expect(ensureSessionHostReady({ appName: 'dropped-controller-r2', existingClient: dropped as any,
       spawnHost, isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
-      canConnectRetryDelayMs: 1, timeoutMs: 100 })).resolves.toBeDefined()
-    expect(spawnHost).toHaveBeenCalledTimes(1)
+      canConnectRetryDelayMs: 1, timeoutMs: 100 })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
     expect(dropped.request).not.toHaveBeenCalled()
   })
 
@@ -305,8 +302,10 @@ describe('session host runtime support compatibility', () => {
     const timeout = new Error('Session host request timed out after 10ms (get_host_diagnostics)')
     const record = (runtimeSupport as any).recordSessionHostProbeFailure
     expect(record).toBeTypeOf('function')
-    record(endpoint, timeout, 'pid-42')
-    record(endpoint, timeout, 'pid-42')
+    const invocation = runtimeSupport.createSessionHostProbeInvocation()
+    record(endpoint, timeout, 'pid-42', invocation)
+    record(endpoint, timeout, 'pid-42', invocation)
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000)
     mocks.state.diagnosticsResults = [timeout]
     const spawnHost = vi.fn()
     await expect(ensureSessionHostReady({ endpoint, spawnHost, existingHostIdentity: () => 'pid-42',
@@ -335,33 +334,39 @@ describe('session host runtime support compatibility', () => {
     expect(spawnHost).not.toHaveBeenCalled()
   })
 
-  it('gives existing-client diagnostics an explicit timeout within the ensure budget', async () => {
+  it('gives dedicated diagnostics an explicit timeout within the ensure budget', async () => {
     const request = vi.fn(async () => ({ success: true, result: {} }))
     mocks.state.existingClient = { isConnected: () => true, request }
     await ensureSessionHostReady({ appName: 'probe-budget-r2', spawnHost: vi.fn(), timeoutMs: 25 })
-    expect(request.mock.calls[0][1]).toEqual({ timeoutMs: expect.any(Number) })
-    expect((request.mock.calls[0] as any)[1].timeoutMs).toBeLessThanOrEqual(25)
+    expect(mocks.state.clients[0].request.mock.calls[0][1]).toEqual({ timeoutMs: expect.any(Number) })
+    expect(mocks.state.clients[0].request.mock.calls[0][1].timeoutMs).toBeLessThanOrEqual(25)
+    expect(request).not.toHaveBeenCalled()
   })
 
   it.each(['success', 'connect failure', 'PID change', 'expired window'])('discards old timeout evidence after %s', async (reset) => {
     const endpoint = { kind: 'unix' as const, path: `/tmp/evidence-reset-r2-${reset}.sock` }
     const timeout = new Error('Session host request timed out after 10ms (get_host_diagnostics)')
     const record = runtimeSupport.recordSessionHostProbeFailure
-    record(endpoint, timeout, 'pid-1')
-    record(endpoint, timeout, 'pid-1')
+    const invocation = runtimeSupport.createSessionHostProbeInvocation()
+    record(endpoint, timeout, 'pid-1', invocation)
+    record(endpoint, timeout, 'pid-1', invocation)
     if (reset === 'success') runtimeSupport.recordSessionHostProbeSuccess(endpoint)
     if (reset === 'connect failure') record(endpoint, new Error('connect failed'), 'pid-1')
     const now = Date.now()
-    if (reset === 'expired window') vi.spyOn(Date, 'now').mockReturnValue(now + 60_001)
+    vi.spyOn(Date, 'now').mockReturnValue(now + (reset === 'expired window' ? 90_001 : 30_000))
     try {
-      expect(record(endpoint, timeout, reset === 'PID change' ? 'pid-2' : 'pid-1')).toBe(false)
+      expect(record(endpoint, timeout, reset === 'PID change' ? 'pid-2' : 'pid-1', runtimeSupport.createSessionHostProbeInvocation())).toBe(false)
     } finally { vi.restoreAllMocks() }
   })
 
   it('never replaces on ENFILE even after earlier connected timeout evidence reached the bound', async () => {
     const endpoint = { kind: 'unix' as const, path: '/tmp/prior-proof-enfile-r2.sock' }
     const timeout = new Error('Session host request timed out (get_host_diagnostics)')
-    for (let n = 0; n < 3; n++) runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout)
+    const invocation = runtimeSupport.createSessionHostProbeInvocation()
+    runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, undefined, invocation)
+    runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, undefined, invocation)
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000)
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, undefined, runtimeSupport.createSessionHostProbeInvocation())).toBe(true)
     mocks.state.connectResults = [Object.assign(new Error('ENFILE'), { code: 'ENFILE' })]
     const spawnHost = vi.fn()
     await expect(ensureSessionHostReady({ endpoint, spawnHost, canConnectRetries: 0,
@@ -377,7 +382,7 @@ describe('session host runtime support compatibility', () => {
       const request = vi.fn((_request, options) => new Promise((_resolve, reject) => {
         setTimeout(() => reject(new Error('Session host request timed out (get_host_diagnostics)')), options?.timeoutMs ?? 30_000)
       }))
-      mocks.state.existingClient = { isConnected: () => true, request }
+      mocks.state.diagnosticsResults = [request]
       const spawnHost = vi.fn()
       const result = ensureSessionHostReady({ appName: 'total-budget-r2', spawnHost,
         isExistingHostAlive: () => true, isExistingSocketPresent: () => true, timeoutMs: 80 })

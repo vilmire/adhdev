@@ -479,3 +479,21 @@ test('a per-request probe timeout overrides the 30s default on an existing conne
     assert.ok(Date.now() - started < 250)
   } finally { h.peer()?.destroy(); await h.cleanup() }
 })
+
+test('an isolated probe stays out of the shared client registry', async () => {
+  const h = await makeHarness()
+  const endpoint = { kind: 'unix' as const, path: h.sockPath }
+  const probe = new SessionHostClient({ endpoint, registerAsShared: false })
+  try {
+    await probe.connect()
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), null)
+    await h.client.connect()
+    assert.equal(SessionHostClient.findConnectedClient(endpoint), h.client)
+    SessionHostClient.disconnectClients(endpoint)
+    assert.equal(h.client.isConnected(), false)
+    assert.equal(probe.isConnected(), true)
+  } finally {
+    await probe.close()
+    await h.cleanup()
+  }
+})

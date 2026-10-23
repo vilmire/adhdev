@@ -88,10 +88,11 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
         const operation = opts.ensureReady()
             .then(async (endpoint) => {
                 const nextIdentity = identityOf(endpoint);
-                const changed = endpoint.kind !== current.kind || endpoint.path !== current.path
+                const sameEndpoint = endpoint.kind === current.kind && endpoint.path === current.path;
+                const changed = !sameEndpoint
                     || (identity !== undefined && nextIdentity !== undefined && identity !== nextIdentity);
                 current = endpoint;
-                identity = nextIdentity;
+                identity = nextIdentity ?? (sameEndpoint ? identity : undefined);
                 // Restore can itself use the PTY factory. Release the startup
                 // flight before listeners run so re-adoption can ensure again.
                 if (inFlight === operation) inFlight = null;
