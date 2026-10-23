@@ -34,7 +34,7 @@
 'use strict';
 
 import { LOG } from '../../logging/logger.js';
-import { stateById, type CliSpecV4, type FsmStatus } from './fsm-types.js';
+import { type CliSpecV4, type FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
 import { evaluateConditionPreview } from './fsm-evaluator.js';
 import { stripAnsi, stripToolAndCodeLines } from './provider-failure-classifier.js';
@@ -172,18 +172,9 @@ export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): bo
     const cleaned = stripToolAndCodeLines(stripped);
     if (!cleaned.trim()) return false;
 
-    for (const t of spec.transitions) {
-        if (!t.when || t.to === 'signing_in') continue;
-        const fromList = Array.isArray(t.from) ? t.from : [t.from];
-        if (!fromList.includes('idle') && !fromList.includes('starting')) continue;
-        const targetState = stateById(spec, t.to);
-        if (targetState?.modal) {
-            if (evaluateConditionPreview(t.when, spec.sections, stripped).result) {
-                return false;
-            }
-        }
-    }
-
+    // Explicit precedence: when a signing_in entry condition matches both the
+    // raw viewport and the tool/code/fence/diff-stripped viewport, signing_in
+    // wins over approval and the modal veto does not apply.
     for (const t of spec.transitions) {
         if (t.to !== 'signing_in' || !t.when) continue;
         if (
