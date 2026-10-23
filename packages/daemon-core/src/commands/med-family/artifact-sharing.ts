@@ -22,7 +22,7 @@ import {
     type ArtifactRecord,
 } from '../../artifacts/index.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
-import { verifyWorkerSessionBind } from '../../mesh/worker-mcp-isolation.js';
+import { verifyWorkerSessionBind, verifyWorkerTaskToken } from '../../mesh/worker-mcp-isolation.js';
 import {
     resolveForwardedWorkerIdentity,
     resolveRemoteWorkerIdentity,
@@ -39,14 +39,27 @@ import {
     type ResolvedSessionAuthority,
 } from './artifacts.js';
 import {
+    __resetOriginGrantStateForTest,
     authorizeWorkerOriginFetch,
+    getHostOriginGrantPublicKey,
     mintArtifactOriginFetchGrant,
+    resolveTrustedHostOriginGrantPublicKey,
     verifyActiveHostWorkerLedgerAttempt,
     verifyArtifactOriginFetchGrant,
+    verifyLocalWorkerQueueAndLedgerFence,
     type ArtifactOriginFetchGrant,
 } from './artifact-origin-grant.js';
 
-export { mintArtifactOriginFetchGrant, verifyActiveHostWorkerLedgerAttempt, verifyArtifactOriginFetchGrant, type ArtifactOriginFetchGrant };
+export {
+    __resetOriginGrantStateForTest,
+    getHostOriginGrantPublicKey,
+    mintArtifactOriginFetchGrant,
+    resolveTrustedHostOriginGrantPublicKey,
+    verifyActiveHostWorkerLedgerAttempt,
+    verifyArtifactOriginFetchGrant,
+    verifyLocalWorkerQueueAndLedgerFence,
+    type ArtifactOriginFetchGrant,
+};
 
 function trimString(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
@@ -350,14 +363,61 @@ export async function isSessionAuthorizedForMesh(
     return false;
 }
 
+export function readWorkerAssignmentStamp(
+    ctx: ArtifactCommandContext,
+    sessionId: string,
+): {
+    meshId: string;
+    ownerDaemonId: string;
+    taskId?: string;
+    attemptId?: string;
+    nodeId?: string;
+    generation?: number;
+} | null {
+    try {
+        const instMgr = ctx.deps?.instanceManager as any;
+        const inst = instMgr?.getInstance?.(sessionId) ?? instMgr?.get?.(sessionId);
+        const state = inst?.getState?.() ?? inst;
+        const settings = state?.settings && typeof state.settings === 'object' ? state.settings : undefined;
+        if (!settings) return null;
+        const meshId = trimString(settings.meshNodeFor);
+        const ownerDaemonId = trimString(settings.meshCoordinatorDaemonId);
+        const attemptRef = currentMeshAttemptRef(settings);
+        const attemptId =
+            attemptRef?.attemptId ||
+            trimString(settings.meshActiveAttemptId) ||
+            trimString(settings.meshAttemptId);
+        const generation =
+            attemptRef?.generation ??
+            (typeof settings.meshActiveAttemptGeneration === 'number' && Number.isSafeInteger(settings.meshActiveAttemptGeneration)
+                ? settings.meshActiveAttemptGeneration
+                : typeof settings.meshAttemptGeneration === 'number' && Number.isSafeInteger(settings.meshAttemptGeneration)
+                  ? settings.meshAttemptGeneration
+                  : undefined);
+        const taskId = trimString(settings.meshActiveTaskId) || trimString(settings.meshTaskId);
+        const nodeId = trimString(settings.meshNodeId) || trimString(settings.meshLastNodeId);
+        return {
+            meshId,
+            ownerDaemonId,
+            ...(taskId ? { taskId } : {}),
+            ...(attemptId ? { attemptId } : {}),
+            ...(generation !== undefined ? { generation } : {}),
+            ...(nodeId ? { nodeId } : {}),
+        };
+    } catch {
+        return null;
+    }
+}
+
 export async function resolveRemoteWorkerForArtifact(
     ctx: ArtifactCommandContext,
-    credential: { bind?: unknown; token?: unknown },
+    credential: { bind?: unknown; token?: unknown; taskId?: unknown; attemptId?: unknown },
 ) {
     const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
     if (!selfDaemonId) return null;
     const binding = verifyWorkerSessionBind(credential.bind);
-    const meshIdHint = binding?.meshId || '';
+    const directToken = verifyWorkerTaskToken(credential.token);
+    const meshIdHint = binding?.meshId || directToken?.meshId || '';
     let resolvedMeshRecord: any = null;
     if (meshIdHint) {
         try {
@@ -368,28 +428,9 @@ export async function resolveRemoteWorkerForArtifact(
         }
     }
     const readStamp = (sessionId: string): WorkerAssignmentStamp | null => {
-        try {
-            const instMgr = ctx.deps?.instanceManager as any;
-            const inst = instMgr?.getInstance?.(sessionId) ?? instMgr?.get?.(sessionId);
-            const state = inst?.getState?.() ?? inst;
-            const settings = state?.settings && typeof state.settings === 'object' ? state.settings : undefined;
-            if (!settings) return null;
-            const meshId = trimString(settings.meshNodeFor);
-            const ownerDaemonId = trimString(settings.meshCoordinatorDaemonId);
-            if (!meshId || !ownerDaemonId) return null;
-            const attemptRef = currentMeshAttemptRef(settings);
-            const taskId = trimString(settings.meshActiveTaskId);
-            const nodeId = trimString(settings.meshNodeId) || trimString(settings.meshLastNodeId);
-            return {
-                meshId,
-                ownerDaemonId,
-                ...(taskId ? { taskId } : {}),
-                ...(attemptRef ? { attemptId: attemptRef.attemptId, generation: attemptRef.generation } : {}),
-                ...(nodeId ? { nodeId } : {}),
-            };
-        } catch {
-            return null;
-        }
+        const raw = readWorkerAssignmentStamp(ctx, sessionId);
+        if (!raw || !raw.meshId || !raw.ownerDaemonId) return null;
+        return raw;
     };
     const resolveMeshHostOwner = (
         meshId: string,
@@ -419,10 +460,14 @@ export async function resolveRemoteWorkerForArtifact(
         const nodeDaemon = readMeshNodeDaemonId(matchedNode) || trimString(matchedNode?.daemonId);
         if (nodeDaemon && !daemonIdsEquivalent(nodeDaemon, selfDaemonId)) return null;
         const resolvedNodeId = trimString(matchedNode?.id) || trimString(matchedNode?.nodeId) || nodeId;
+        const raw = readWorkerAssignmentStamp(ctx, sessionId);
         return {
             meshId,
             ownerDaemonId: hostDaemonId,
-            ...(resolvedNodeId ? { nodeId: resolvedNodeId } : {}),
+            ...(raw?.taskId ? { taskId: raw.taskId } : {}),
+            ...(raw?.attemptId ? { attemptId: raw.attemptId } : {}),
+            ...(raw?.generation !== undefined ? { generation: raw.generation } : {}),
+            ...(resolvedNodeId ? { nodeId: resolvedNodeId } : raw?.nodeId ? { nodeId: raw.nodeId } : {}),
         };
     };
     return resolveRemoteWorkerIdentity(credential, {
@@ -457,15 +502,11 @@ export async function resolveRemoteWorkerTaskScopeFromHost(
         };
     }
     try {
-        const rawScope = await ctx.deps.dispatchMeshCommand(
-            hostDaemonId,
-            'artifact_index_forwarded',
-            {
-                ...remoteClaim,
-                resolveScopeOnly: true,
-                ...(requestedArtifactId ? { artifactId: requestedArtifactId } : {}),
-            },
-        );
+        const rawScope = await ctx.deps.dispatchMeshCommand(hostDaemonId, 'artifact_index_forwarded', {
+            ...remoteClaim,
+            resolveScopeOnly: true,
+            ...(requestedArtifactId ? { artifactId: requestedArtifactId } : {}),
+        });
         const scopeAns = unwrapMeshRelayResult(rawScope, {
             command: 'artifact_index_forwarded',
             peerDaemonId: hostDaemonId,
@@ -536,25 +577,17 @@ export async function authorizeCrossSessionArtifactAccess(
         const meshStore = getMeshRuntimeStore(ctx);
         const taskEntry =
             authority.meshId && authority.taskId
-                ? (meshStore.findQueueEntryById(authority.meshId, authority.taskId) as Record<
-                      string,
-                      unknown
-                  > | null)
+                ? (meshStore.findQueueEntryById(authority.meshId, authority.taskId) as Record<string, unknown> | null)
                 : null;
         const taskPayload = (taskEntry?.payload ?? {}) as Record<string, unknown>;
         const workerMissionId =
-            trimString(taskEntry?.missionId) ||
-            trimString(taskPayload.missionId) ||
-            authority.missionId ||
-            '';
+            trimString(taskEntry?.missionId) || trimString(taskPayload.missionId) || authority.missionId || '';
         const rawInputIds = Array.isArray(taskEntry?.inputArtifactIds)
             ? taskEntry.inputArtifactIds
             : Array.isArray(taskPayload.inputArtifactIds)
               ? taskPayload.inputArtifactIds
               : (authority.remoteInputArtifactIds ?? []);
-        const allowedIds = new Set(
-            rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0),
-        );
+        const allowedIds = new Set(rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0));
         let recordMissionId = trimString(record.missionId);
         if (!recordMissionId && record.taskId) {
             try {
@@ -569,9 +602,7 @@ export async function authorizeCrossSessionArtifactAccess(
                 recordMissionId = '';
             }
         }
-        const sameMission = Boolean(
-            workerMissionId && recordMissionId && workerMissionId === recordMissionId,
-        );
+        const sameMission = Boolean(workerMissionId && recordMissionId && workerMissionId === recordMissionId);
         const sameMesh = !record.meshId || !authority.meshId || record.meshId === authority.meshId;
         if (!sameMission || !sameMesh || !allowedIds.has(artifactId)) {
             return {
@@ -704,13 +735,29 @@ export async function fetchArtifactFromOriginDaemon(
         };
     }
     let originFetchGrant = authority.originFetchGrant as ArtifactOriginFetchGrant | undefined;
+    let effectiveAttemptId = trimString(authority.remoteClaim?.attemptId) || trimString(originFetchGrant?.requesterAttemptId);
     if (!originFetchGrant && authority.producerRole === 'worker' && authority.originDaemonId && authority.taskId) {
         const meshIdForGrant = record.meshId || authority.meshId || '';
         const latestAttempt = meshIdForGrant
             ? getMeshRuntimeStore(ctx).turnStore().findLatestAttemptForTask(meshIdForGrant, authority.taskId)
             : null;
-        const attemptIdForGrant = latestAttempt?.attemptId || authority.remoteClaim?.attemptId || '';
+        const attemptIdForGrant = effectiveAttemptId || latestAttempt?.attemptId || '';
+        effectiveAttemptId = attemptIdForGrant;
         if (meshIdForGrant && attemptIdForGrant) {
+            try {
+                const cmdRes: any = await ctx.getMeshForCommand?.(meshIdForGrant, undefined, { preferInline: true });
+                const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdForGrant);
+                if (meshObj && typeof meshObj === 'object') {
+                    if (!meshObj.meshHost || typeof meshObj.meshHost !== 'object') {
+                        meshObj.meshHost = { hostDaemonId: authority.originDaemonId };
+                    }
+                    if (!meshObj.meshHost.originGrantPublicKey) {
+                        meshObj.meshHost.originGrantPublicKey = getHostOriginGrantPublicKey(authority.originDaemonId);
+                    }
+                }
+            } catch {
+                // Best-effort attach on local mesh record.
+            }
             originFetchGrant = mintArtifactOriginFetchGrant({
                 meshId: meshIdForGrant,
                 hostDaemonId: authority.originDaemonId,
@@ -722,6 +769,7 @@ export async function fetchArtifactFromOriginDaemon(
             });
         }
     }
+    const requesterTaskId = authority.taskId || trimString(originFetchGrant?.requesterTaskId);
     let rawOrigin: unknown;
     try {
         rawOrigin = await ctx.deps.dispatchMeshCommand(
@@ -733,9 +781,9 @@ export async function fetchArtifactFromOriginDaemon(
                 sessionId: record.sessionId,
                 requesterSessionId: authority.sessionId,
                 requesterRole: authority.isCoordinator ? 'coordinator' : authority.producerRole,
-                ...(authority.taskId ? { requesterTaskId: authority.taskId } : {}),
+                ...(requesterTaskId ? { requesterTaskId } : {}),
                 ...(authority.missionId ? { requesterMissionId: authority.missionId } : {}),
-                ...(authority.remoteClaim?.attemptId ? { requesterAttemptId: authority.remoteClaim.attemptId } : {}),
+                ...(effectiveAttemptId ? { requesterAttemptId: effectiveAttemptId } : {}),
                 ...(authority.remoteClaim?.nodeId ? { requesterNodeId: authority.remoteClaim.nodeId } : {}),
                 ...(authority.remoteClaim?.generation !== undefined ? { requesterGeneration: authority.remoteClaim.generation } : {}),
                 ...(originFetchGrant ? { originFetchGrant } : {}),
@@ -877,24 +925,33 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
     }
 
     let nodes: any[] = [];
+    let meshObj: any = null;
     try {
         const meshRes: any = await ctx.getMeshForCommand?.(meshId, undefined, { preferInline: true });
-        const meshObj = meshRes?.mesh ?? meshRes ?? ctx.getCachedInlineMesh?.(meshId);
+        meshObj = meshRes?.mesh ?? meshRes ?? ctx.getCachedInlineMesh?.(meshId);
         nodes = Array.isArray(meshObj?.nodes) ? meshObj.nodes : [];
     } catch {
         nodes = [];
     }
     const nodeDaemonId = (nodeId: string) => {
         const node = nodes.find(
-            (n: any) =>
-                meshNodeIdMatches(n, nodeId) ||
-                trimString(n?.id) === nodeId ||
-                trimString(n?.nodeId) === nodeId,
+            (n: any) => meshNodeIdMatches(n, nodeId) || trimString(n?.id) === nodeId || trimString(n?.nodeId) === nodeId,
         );
         return node ? readMeshNodeDaemonId(node) || trimString(node?.daemonId) : undefined;
     };
 
     const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
+    if (selfDaemonId && meshObj && typeof meshObj === 'object') {
+        const existingHostId = trimString(meshObj?.meshHost?.hostDaemonId) || trimString(meshObj?.hostDaemonId);
+        if (!existingHostId || daemonIdsEquivalent(existingHostId, selfDaemonId)) {
+            if (!meshObj.meshHost || typeof meshObj.meshHost !== 'object') {
+                meshObj.meshHost = { hostDaemonId: selfDaemonId };
+            }
+            if (!meshObj.meshHost.originGrantPublicKey) {
+                meshObj.meshHost.originGrantPublicKey = getHostOriginGrantPublicKey(selfDaemonId);
+            }
+        }
+    }
     const isSelfDaemon = selfDaemonId ? (d: string) => daemonIdsEquivalent(d, selfDaemonId) : undefined;
     const resolved = resolveForwardedWorkerIdentity(
         {
@@ -909,19 +966,21 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
         isSelfDaemon,
     );
     if ('refused' in resolved) {
+        const refusalCode =
+            resolved.refused === 'attempt_mismatch' || resolved.refused === 'generation_mismatch'
+                ? 'stale_attempt'
+                : resolved.refused === 'task_mismatch'
+                  ? 'task_mismatch'
+                  : 'unauthenticated';
         return {
             success: false,
-            code: 'unauthenticated',
+            code: refusalCode,
             error: resolved.refused,
             detail: `${resolved.refused}: ${resolved.detail}`,
         };
     }
     if (!('live' in resolved)) {
-        return {
-            success: false,
-            code: 'stale_attempt',
-            error: 'Worker task attempt is no longer active (stale_attempt)',
-        };
+        return { success: false, code: 'stale_attempt', error: 'Worker task attempt is no longer active (stale_attempt)' };
     }
     const ownerIdentity = resolved.live;
 
@@ -936,10 +995,7 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
         if (!ledgerCheck.ok) {
             return { success: false, code: ledgerCheck.code, error: ledgerCheck.error };
         }
-        const queueEntry = meshStore.findQueueEntryById(meshId, ownerIdentity.taskId) as Record<
-            string,
-            unknown
-        > | null;
+        const queueEntry = meshStore.findQueueEntryById(meshId, ownerIdentity.taskId) as Record<string, unknown> | null;
         if (!queueEntry) {
             return {
                 success: false,
@@ -977,9 +1033,7 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
                 : Array.isArray(queuePayload.inputArtifactIds)
                   ? queuePayload.inputArtifactIds
                   : [];
-            const inputArtifactIds = rawInputIds
-                .map((id: unknown) => trimString(id))
-                .filter((id: string) => id.length > 0);
+            const inputArtifactIds = rawInputIds.map((id: unknown) => trimString(id)).filter((id: string) => id.length > 0);
             const resolveRecMission = (rec: ArtifactRecord): string => {
                 const direct = trimString(rec.missionId);
                 if (direct) return direct;
@@ -1148,6 +1202,7 @@ export const handleArtifactFetchOrigin: MedFamilyHandler = async (ctx, args) => 
                 senderDaemonId,
                 isSelfHost,
                 nodes,
+                meshObj,
                 getMeshStore: () => getMeshRuntimeStore(ctx),
             });
             if (denial) return denial;

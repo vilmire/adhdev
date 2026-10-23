@@ -1,4 +1,5 @@
 import { getDebugRuntimeConfig, isAlwaysOnTraceCategory, shouldCollectTraceCategory } from './debug-config.js'
+import { isCredentialKey, redactCredentialString } from './credential-redactor.js'
 
 export type DebugTraceLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -38,22 +39,26 @@ function summarizeString(value: string): string {
   return `[${value.length} chars]`
 }
 
-function sanitizeTraceValue(value: unknown, traceContent: boolean): unknown {
-  if (traceContent) {
-    if (Array.isArray(value)) return value.map((entry) => sanitizeTraceValue(entry, traceContent))
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, sanitizeTraceValue(nested, traceContent)]),
-      )
-    }
-    return value
+function sanitizeTraceValue(value: unknown, traceContent: boolean, keyHint = ''): unknown {
+  if (isCredentialKey(keyHint)) {
+    if (value === null || value === undefined) return value
+    if (typeof value === 'string') return value.trim() ? '[REDACTED:secret-field]' : value
+    return '[REDACTED:secret-field]'
   }
 
-  if (typeof value === 'string') return summarizeString(value)
-  if (Array.isArray(value)) return value.map((entry) => sanitizeTraceValue(entry, traceContent))
+  if (typeof value === 'string') {
+    if (!traceContent) return summarizeString(value)
+    return redactCredentialString(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeTraceValue(entry, traceContent, keyHint))
+  }
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, sanitizeTraceValue(nested, traceContent)]),
+      Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+        key,
+        sanitizeTraceValue(nested, traceContent, key),
+      ]),
     )
   }
   return value

@@ -25,6 +25,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { containsEncodedOrRawSecret } from '../logging/credential-redactor.js';
 import {
     ARTIFACT_EXTENSION_MAP,
     ARTIFACT_KINDS,
@@ -101,13 +102,11 @@ export function assertNotSecretContent(buffer: Buffer, _kind: ArtifactKind): voi
         return;
     }
     const text = buffer.toString('utf8');
-    for (const pattern of SECRET_CONTENT_PATTERNS) {
-        if (pattern.test(text)) {
-            throw new ArtifactGuardError(
-                'secret_file_refused',
-                'Artifact content matches a secret or token pattern and is refused (secret_file_refused)',
-            );
-        }
+    if (containsEncodedOrRawSecret(text, SECRET_CONTENT_PATTERNS)) {
+        throw new ArtifactGuardError(
+            'secret_file_refused',
+            'Artifact content matches a secret or token pattern and is refused (secret_file_refused)',
+        );
     }
 }
 

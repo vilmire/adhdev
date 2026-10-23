@@ -27,6 +27,7 @@ import { defineCommandSpecs, type CommandSource } from '../command-registry.js';
 import { unwrapMeshRelayResult } from '../mesh-relay-result.js';
 import { mintPeerSecret, putPeerSecret, removePeerSecret } from '../../mesh/transport/mesh-peer-secrets.js';
 import { MESH_HANDSHAKE_PROTOCOL_VERSION } from '../../mesh/transport/mesh-peer-handshake.js';
+import { getHostOriginGrantPublicKey } from './artifact-origin-grant.js';
 import { LOG } from '../../logging/logger.js';
 import { maskDaemonId } from '../../mesh/transport/mask-daemon-id.js';
 import {
@@ -282,13 +283,16 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             if ('skipped' in issued) {
                 LOG.warn('MeshPairing', `join accepted without a peer secret mesh=${hostMeshId} reason=${issued.skipped}`);
             }
+            const effectiveHostId = ctx.deps.statusInstanceId || meshHost.hostDaemonId || '';
+            const originGrantPublicKey = effectiveHostId ? getHostOriginGrantPublicKey(effectiveHostId) : undefined;
             return {
                 success: true,
                 code: 'mesh_host_join_accepted',
                 meshId: hostMeshId,
                 node: applied.node,
                 tokenId: applied.tokenId,
-                meshHost,
+                meshHost: originGrantPublicKey ? { ...meshHost, originGrantPublicKey } : meshHost,
+                ...(originGrantPublicKey ? { originGrantPublicKey } : {}),
                 ...('skipped' in issued
                     ? { peerSecretSkipped: issued.skipped }
                     : {
@@ -386,6 +390,8 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
             const pairedHostDaemonIdForSecret = readTrimmed(hostResult.hostDaemonId)
                 || readTrimmed(hostResult.meshHost?.hostDaemonId)
                 || readTrimmed(hostDaemonId);
+            const hostOriginGrantPublicKey = readTrimmed(hostResult.originGrantPublicKey)
+                || readTrimmed(hostResult.meshHost?.originGrantPublicKey);
             const peerSecret = readTrimmed(hostResult.peerSecret);
             const secretMeshId = readTrimmed(hostResult.meshId) || hostMeshId;
             let peerSecretStored = false;
@@ -400,6 +406,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                         role: 'member',
                         secret: peerSecret,
                         ...(meshHost.hostAddress ? { hostAddress: meshHost.hostAddress } : {}),
+                        ...(hostOriginGrantPublicKey ? { originGrantPublicKey: hostOriginGrantPublicKey } : {}),
                         createdAt: new Date().toISOString(),
                     });
                     peerSecretStored = true;
@@ -429,6 +436,7 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 hostNodeId: hostResult.meshHost?.hostNodeId,
                 // The host's id for this mesh (assistant remote relays address it).
                 ...(secretMeshId && secretMeshId !== meshId ? { hostMeshId: secretMeshId } : {}),
+                ...(hostOriginGrantPublicKey ? { originGrantPublicKey: hostOriginGrantPublicKey } : {}),
                 joinedAt: hostResult.meshHost?.pairing?.joinedAt,
             });
             if (joined) {
@@ -444,13 +452,13 @@ export const meshHostPairingHandlers: Record<string, MedFamilyHandler> = {
                 : hostDaemonId;
             if (pairedHostDaemonId) {
                 const { writeMeshHostRecord } = await import('../../mesh/mesh-host-memory.js');
-                writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing');
+                writeMeshHostRecord(meshId, pairedHostDaemonId, 'pairing', hostOriginGrantPublicKey || undefined);
                 // The host dispatches under ITS mesh id (the one the peer secret
                 // is keyed by), which differs from this member's local mesh id
                 // in the address + code flow. Record it too, so the sender gate
                 // is anchored by the pairing instead of trust-on-first-use.
                 if (secretMeshId && secretMeshId !== meshId) {
-                    writeMeshHostRecord(secretMeshId, pairedHostDaemonId, 'pairing');
+                    writeMeshHostRecord(secretMeshId, pairedHostDaemonId, 'pairing', hostOriginGrantPublicKey || undefined);
                 }
             }
             return {

@@ -149,4 +149,41 @@ describe('recordDebugTrace always-on (production, collectDebugTrace=false)', () 
     expect(getRecentDebugTrace({ category: 'fsm-transition', limit: 10 })).toHaveLength(1)
     expect(getRecentDebugTrace({ category: 'command', limit: 10 })).toHaveLength(0)
   })
+
+  it('Finding 4: redacts credential keys and mcp_sess_* bearer values (raw, base64, percent-encoded) even when traceContent is enabled', () => {
+    const liveCred = 'mcp_sess_99887766554433221100aabbccddeeff'
+    const b64Cred = Buffer.from(liveCred, 'utf8').toString('base64')
+    const pctCred = 'mcp%5Fsess%5F99887766554433221100aabbccddeeff'
+
+    for (const traceContent of [true, false]) {
+      resetDebugRuntimeConfig()
+      setDebugRuntimeConfig({
+        logLevel: 'debug',
+        collectDebugTrace: true,
+        traceContent,
+        traceBufferSize: 100,
+        traceCategories: [],
+      })
+      configureDebugTraceStore()
+
+      recordDebugTrace({
+        category: 'command',
+        stage: 'received',
+        level: 'info',
+        sessionId: 'sess_redact',
+        payload: {
+          mcpSessionCredential: liveCred,
+          _diagnostic: { value: liveCred, list: [liveCred] },
+          inlineText: `Using credential ${liveCred} and ${b64Cred} and ${pctCred}`,
+        },
+      })
+
+      const serialized = JSON.stringify(getRecentDebugTrace({ limit: 20 }))
+      expect(serialized).not.toContain(liveCred)
+      expect(serialized).not.toContain(b64Cred)
+      expect(serialized).not.toContain(pctCred)
+      expect(serialized).toContain('[REDACTED')
+      clearDebugTrace()
+    }
+  })
 })

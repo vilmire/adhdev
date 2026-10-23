@@ -41,6 +41,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { canonicalDaemonId } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
+import { recordAuthenticatedPeerOriginGrantPublicKey } from '../mesh-host-memory.js';
 import { maskDaemonId } from './mask-daemon-id.js';
 
 export const MESH_HANDSHAKE_PROTOCOL_VERSION = 1 as const;
@@ -61,6 +62,7 @@ export interface MeshHelloFrame {
     daemonId: string;
     /** 16 random bytes, base64. */
     nonce: string;
+    originGrantPublicKey?: string;
 }
 export interface MeshChallengeFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
@@ -69,6 +71,7 @@ export interface MeshChallengeFrame {
     proof: string;
     /** The responder's own daemon id — the initiator needs it before computing its proof. */
     daemonId: string;
+    originGrantPublicKey?: string;
 }
 export interface MeshProofFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
@@ -79,6 +82,7 @@ export interface MeshOkFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
     kind: 'mesh_ok';
     daemonId: string;
+    originGrantPublicKey?: string;
 }
 export interface MeshErrorFrame {
     v: typeof MESH_HANDSHAKE_PROTOCOL_VERSION;
@@ -89,7 +93,7 @@ export type MeshHandshakeFrame = MeshHelloFrame | MeshChallengeFrame | MeshProof
 
 export type HandshakeStep =
     | { status: 'pending' }
-    | { status: 'ok'; meshId: string; peerDaemonId: string }
+    | { status: 'ok'; meshId: string; peerDaemonId: string; peerOriginGrantPublicKey?: string }
     | { status: 'failed'; code: MeshHandshakeFailureCode };
 
 const PENDING: HandshakeStep = { status: 'pending' };
@@ -178,18 +182,37 @@ export function parseHandshakeFrame(raw: unknown): MeshHandshakeFrame | { error:
             if (!isNonEmptyString(obj.meshId) || !isNonEmptyString(obj.daemonId) || !isNonce(obj.nonce)) {
                 return { error: 'bad_frame' };
             }
-            return { v: 1, kind: 'mesh_hello', meshId: obj.meshId, daemonId: obj.daemonId, nonce: obj.nonce };
+            return {
+                v: 1,
+                kind: 'mesh_hello',
+                meshId: obj.meshId,
+                daemonId: obj.daemonId,
+                nonce: obj.nonce,
+                ...(isNonEmptyString(obj.originGrantPublicKey) ? { originGrantPublicKey: obj.originGrantPublicKey.trim() } : {}),
+            };
         case 'mesh_challenge':
             if (!isNonce(obj.nonce) || !isNonEmptyString(obj.proof) || !isNonEmptyString(obj.daemonId)) {
                 return { error: 'bad_frame' };
             }
-            return { v: 1, kind: 'mesh_challenge', nonce: obj.nonce, proof: obj.proof, daemonId: obj.daemonId };
+            return {
+                v: 1,
+                kind: 'mesh_challenge',
+                nonce: obj.nonce,
+                proof: obj.proof,
+                daemonId: obj.daemonId,
+                ...(isNonEmptyString(obj.originGrantPublicKey) ? { originGrantPublicKey: obj.originGrantPublicKey.trim() } : {}),
+            };
         case 'mesh_proof':
             if (!isNonEmptyString(obj.proof)) return { error: 'bad_frame' };
             return { v: 1, kind: 'mesh_proof', proof: obj.proof };
         case 'mesh_ok':
             if (!isNonEmptyString(obj.daemonId)) return { error: 'bad_frame' };
-            return { v: 1, kind: 'mesh_ok', daemonId: obj.daemonId };
+            return {
+                v: 1,
+                kind: 'mesh_ok',
+                daemonId: obj.daemonId,
+                ...(isNonEmptyString(obj.originGrantPublicKey) ? { originGrantPublicKey: obj.originGrantPublicKey.trim() } : {}),
+            };
         case 'mesh_error':
             if (typeof obj.code !== 'string' || !ERROR_CODES.has(obj.code)) return { error: 'bad_frame' };
             return { v: 1, kind: 'mesh_error', code: obj.code as MeshHandshakeErrorCode };
@@ -215,6 +238,7 @@ export interface HandshakeInitiatorOptions {
     /** When set, a challenge from any other daemon id fails with `bad_proof`. */
     serverDaemonIdExpected?: string;
     secret: string;
+    originGrantPublicKey?: string;
     send(frame: MeshHandshakeFrame): void;
 }
 
@@ -233,6 +257,7 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
     const clientNonce = mintHandshakeNonce();
     let serverNonce = '';
     let serverDaemonId = '';
+    let serverOriginGrantPublicKey: string | undefined;
 
     const fail = (code: MeshHandshakeFailureCode, notifyPeer: boolean): HandshakeStep => {
         state = 'done';
@@ -257,6 +282,7 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
                 meshId: opts.meshId,
                 daemonId: opts.daemonId,
                 nonce: clientNonce,
+                ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
             });
         },
         current: () => step,
@@ -283,6 +309,7 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
                 if (!proofsEqual(computeServerProof(inputs), parsed.proof)) return fail('bad_proof', true);
                 serverNonce = parsed.nonce;
                 serverDaemonId = parsed.daemonId;
+                serverOriginGrantPublicKey = parsed.originGrantPublicKey;
                 state = 'awaiting_ok';
                 opts.send({ v: MESH_HANDSHAKE_PROTOCOL_VERSION, kind: 'mesh_proof', proof: computeClientProof(inputs) });
                 return PENDING;
@@ -291,8 +318,17 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
             // awaiting_ok
             if (parsed.kind !== 'mesh_ok') return fail('bad_frame', true);
             if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail('bad_frame', true);
+            const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
+            if (peerPubKey) {
+                recordAuthenticatedPeerOriginGrantPublicKey(opts.meshId, canon(serverDaemonId), peerPubKey);
+            }
             state = 'done';
-            step = { status: 'ok', meshId: opts.meshId, peerDaemonId: canon(serverDaemonId) };
+            step = {
+                status: 'ok',
+                meshId: opts.meshId,
+                peerDaemonId: canon(serverDaemonId),
+                ...(peerPubKey ? { peerOriginGrantPublicKey: peerPubKey } : {}),
+            };
             return step;
         },
     };
@@ -305,6 +341,7 @@ export interface HandshakeResponderOptions {
     localDaemonId: string;
     /** Secret for (meshId, canonical peer id), or null when unknown. */
     resolveSecret(meshId: string, daemonId: string): string | null;
+    originGrantPublicKey?: string;
     send(frame: MeshHandshakeFrame): void;
 }
 
@@ -323,6 +360,7 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
     let expectedClientProof = '';
     let meshId = '';
     let peerDaemonId = '';
+    let clientOriginGrantPublicKey: string | undefined;
 
     const fail = (code: MeshHandshakeFailureCode, notifyPeer: boolean): HandshakeStep => {
         state = 'done';
@@ -368,6 +406,7 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
                 expectedClientProof = clientProof;
                 meshId = parsed.meshId;
                 peerDaemonId = canonicalPeer;
+                clientOriginGrantPublicKey = parsed.originGrantPublicKey;
                 state = 'awaiting_proof';
                 opts.send({
                     v: MESH_HANDSHAKE_PROTOCOL_VERSION,
@@ -375,6 +414,7 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
                     nonce: serverNonce,
                     proof: serverProof,
                     daemonId: opts.localDaemonId,
+                    ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
                 });
                 return PENDING;
             }
@@ -382,9 +422,22 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
             // awaiting_proof
             if (parsed.kind !== 'mesh_proof') return fail('bad_frame', true);
             if (!proofsEqual(expectedClientProof, parsed.proof)) return fail('bad_proof', true);
+            if (clientOriginGrantPublicKey) {
+                recordAuthenticatedPeerOriginGrantPublicKey(meshId, peerDaemonId, clientOriginGrantPublicKey);
+            }
             state = 'done';
-            step = { status: 'ok', meshId, peerDaemonId };
-            opts.send({ v: MESH_HANDSHAKE_PROTOCOL_VERSION, kind: 'mesh_ok', daemonId: opts.localDaemonId });
+            step = {
+                status: 'ok',
+                meshId,
+                peerDaemonId,
+                ...(clientOriginGrantPublicKey ? { peerOriginGrantPublicKey: clientOriginGrantPublicKey } : {}),
+            };
+            opts.send({
+                v: MESH_HANDSHAKE_PROTOCOL_VERSION,
+                kind: 'mesh_ok',
+                daemonId: opts.localDaemonId,
+                ...(opts.originGrantPublicKey ? { originGrantPublicKey: opts.originGrantPublicKey } : {}),
+            });
             return step;
         },
     };

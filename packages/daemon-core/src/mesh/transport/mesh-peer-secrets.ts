@@ -54,6 +54,8 @@ export interface PeerSecretRecord {
     secret: string;
     /** Member side only: `host:port` (or URL) the member dials to reach the host. */
     hostAddress?: string;
+    /** Peer's Ed25519 public key (SPKI DER base64url) for verifying cross-origin artifact fetch grants. */
+    originGrantPublicKey?: string;
     /** ISO timestamp of when the record was first stored locally. */
     createdAt: string;
 }
@@ -115,6 +117,7 @@ function isValidRecord(value: unknown): value is PeerSecretRecord {
     if (rec.role !== 'host' && rec.role !== 'member') return false;
     if (typeof rec.secret !== 'string' || rec.secret.length === 0) return false;
     if (rec.hostAddress !== undefined && typeof rec.hostAddress !== 'string') return false;
+    if (rec.originGrantPublicKey !== undefined && typeof rec.originGrantPublicKey !== 'string') return false;
     if (typeof rec.createdAt !== 'string' || rec.createdAt.trim() === '') return false;
     return true;
 }
@@ -129,6 +132,9 @@ function normalizeRecord(rec: PeerSecretRecord): PeerSecretRecord {
     };
     if (rec.hostAddress !== undefined && rec.hostAddress.trim() !== '') {
         out.hostAddress = rec.hostAddress.trim();
+    }
+    if (rec.originGrantPublicKey !== undefined && rec.originGrantPublicKey.trim() !== '') {
+        out.originGrantPublicKey = rec.originGrantPublicKey.trim();
     }
     return out;
 }

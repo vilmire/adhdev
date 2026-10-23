@@ -46,8 +46,8 @@ import {
 } from '../../artifacts/index.js';
 import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import {
-    findWorkerTaskTokenForSession,
     verifyWorkerSessionBind,
+    verifyWorkerTaskToken,
 } from '../../mesh/worker-mcp-isolation.js';
 import { classifyUnresolvedWorkerCredential, resolveWorkerIdentity } from '../../mesh/worker-report.js';
 import { type ForwardedWorkerReportClaim } from '../../mesh/worker-report-forwarded.js';
@@ -62,9 +62,11 @@ import {
     handleArtifactIndexForwarded,
     isSessionAuthorizedForMesh,
     listWorkerAuthorizedArtifacts,
+    readWorkerAssignmentStamp,
     resolveRegisteredSessionWorkspace,
     resolveRemoteWorkerForArtifact,
     resolveRemoteWorkerTaskScopeFromHost,
+    verifyLocalWorkerQueueAndLedgerFence,
 } from './artifact-sharing.js';
 
 export { handleArtifactFetchOrigin, handleArtifactIndexForwarded };
@@ -230,6 +232,45 @@ async function resolveCallerAuthority(
     const requestedArtifactId = trimString(args?.artifactId) || trimString(args?.id);
 
     if (hasWorkerCredential) {
+        const explicitTaskId = trimString(args?.taskId);
+        const explicitAttemptId = trimString(args?.attemptId);
+        const hasRawToken = typeof rawToken === 'string' && rawToken.trim().length > 0;
+        const directToken = hasRawToken ? verifyWorkerTaskToken(rawToken) : null;
+        if (hasRawToken && !directToken) {
+            const unresolved = classifyUnresolvedWorkerCredential({ token: rawToken, bind: rawBind });
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'unauthenticated',
+                    refusal: unresolved.refusal,
+                    error: unresolved.detail ?? 'Valid worker task token is required (unauthenticated)',
+                },
+            };
+        }
+        const tokenTaskId = trimString(directToken?.taskId);
+        const tokenAttemptId = trimString(directToken?.attemptId);
+        if (explicitTaskId && tokenTaskId && explicitTaskId !== tokenTaskId) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'task_mismatch',
+                    error: `Worker credential belongs to task "${tokenTaskId}", not "${explicitTaskId}" (task_mismatch)`,
+                },
+            };
+        }
+        if (explicitAttemptId && tokenAttemptId && explicitAttemptId !== tokenAttemptId) {
+            return {
+                ok: false,
+                result: {
+                    success: false,
+                    code: 'stale_attempt',
+                    error: `Worker credential attempt "${tokenAttemptId}" does not match requested attempt "${explicitAttemptId}" (stale_attempt)`,
+                },
+            };
+        }
+
         const meshStore = getMeshRuntimeStore(ctx);
         const identity = resolveWorkerIdentity(meshStore, rawBind, rawToken);
         let hasLocalWorkerRow = false;
@@ -246,7 +287,52 @@ async function resolveCallerAuthority(
         }
 
         if (!identity || !trimString(identity.sessionId) || !hasLocalWorkerRow) {
-            const remote = await resolveRemoteWorkerForArtifact(ctx, { bind: rawBind, token: rawToken });
+            const bindVerified =
+                typeof rawBind === 'string' && rawBind.trim().length > 0
+                    ? verifyWorkerSessionBind(rawBind)
+                    : null;
+            const candidateSessionId =
+                trimString(directToken?.sessionId) ||
+                trimString(bindVerified?.sessionId) ||
+                trimString(identity?.sessionId);
+            const liveStamp = candidateSessionId ? readWorkerAssignmentStamp(ctx, candidateSessionId) : null;
+            const liveStampTaskId = trimString(liveStamp?.taskId);
+            const liveStampAttemptId = trimString(liveStamp?.attemptId);
+            if (
+                liveStampTaskId &&
+                ((explicitTaskId && explicitTaskId !== liveStampTaskId) ||
+                    (tokenTaskId && tokenTaskId !== liveStampTaskId))
+            ) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'task_mismatch',
+                        error: `Worker credential task "${tokenTaskId || explicitTaskId}" does not match current session assignment "${liveStampTaskId}" (task_mismatch)`,
+                    },
+                };
+            }
+            if (
+                liveStampAttemptId &&
+                ((explicitAttemptId && explicitAttemptId !== liveStampAttemptId) ||
+                    (tokenAttemptId && tokenAttemptId !== liveStampAttemptId))
+            ) {
+                return {
+                    ok: false,
+                    result: {
+                        success: false,
+                        code: 'stale_attempt',
+                        error: `Worker credential attempt "${tokenAttemptId || explicitAttemptId}" is stale for current session assignment "${liveStampAttemptId}" (stale_attempt)`,
+                    },
+                };
+            }
+
+            const remote = await resolveRemoteWorkerForArtifact(ctx, {
+                bind: rawBind,
+                token: rawToken,
+                ...(explicitTaskId ? { taskId: explicitTaskId } : {}),
+                ...(explicitAttemptId ? { attemptId: explicitAttemptId } : {}),
+            });
             if (remote) {
                 const remoteSessionId = trimString(remote.sessionId);
                 if (
@@ -263,21 +349,40 @@ async function resolveCallerAuthority(
                         },
                     };
                 }
-                const explicitTaskId = trimString(args?.taskId);
-                if (explicitTaskId && remote.taskId && explicitTaskId !== remote.taskId) {
+                const remoteTaskId = trimString(remote.taskId);
+                const remoteAttemptId = trimString(remote.attemptId);
+                if (
+                    (explicitTaskId && remoteTaskId && explicitTaskId !== remoteTaskId) ||
+                    (tokenTaskId && remoteTaskId && tokenTaskId !== remoteTaskId)
+                ) {
                     return {
                         ok: false,
                         result: {
                             success: false,
                             code: 'task_mismatch',
-                            error: `Worker credential belongs to task "${remote.taskId}", not "${explicitTaskId}" (task_mismatch)`,
+                            error: `Worker credential belongs to task "${tokenTaskId || remoteTaskId}", not "${explicitTaskId || remoteTaskId}" (task_mismatch)`,
                         },
                     };
                 }
+                if (
+                    (explicitAttemptId && remoteAttemptId && explicitAttemptId !== remoteAttemptId) ||
+                    (tokenAttemptId && remoteAttemptId && tokenAttemptId !== remoteAttemptId)
+                ) {
+                    return {
+                        ok: false,
+                        result: {
+                            success: false,
+                            code: 'stale_attempt',
+                            error: `Worker credential attempt "${tokenAttemptId || explicitAttemptId}" does not match session attempt "${remoteAttemptId}" (stale_attempt)`,
+                        },
+                    };
+                }
+                const boundTaskId = tokenTaskId || explicitTaskId || remoteTaskId;
+                const boundAttemptId = tokenAttemptId || explicitAttemptId || remoteAttemptId;
                 const resolvedRemote = await resolveRegisteredSessionWorkspace(ctx, remoteSessionId, {
                     meshId: remote.meshId,
                     nodeId: remote.nodeId,
-                    taskId: remote.taskId,
+                    taskId: boundTaskId || undefined,
                     allowTrustedWorkerFallback: true,
                     allowStoredArtifactWorkspaceFallback: mode !== 'register',
                     artifactId: requestedArtifactId,
@@ -325,8 +430,8 @@ async function resolveCallerAuthority(
                 const remoteClaim: ForwardedWorkerReportClaim & { nodeId?: string } = {
                     meshId: remote.meshId,
                     sessionId: remoteSessionId,
-                    ...(remote.taskId ? { taskId: remote.taskId } : {}),
-                    ...(remote.attemptId ? { attemptId: remote.attemptId } : {}),
+                    ...(boundTaskId ? { taskId: boundTaskId } : {}),
+                    ...(boundAttemptId ? { attemptId: boundAttemptId } : {}),
                     ...(remote.nodeId ? { nodeId: remote.nodeId } : {}),
                     ...(remote.generation !== undefined ? { generation: remote.generation } : {}),
                 };
@@ -353,7 +458,7 @@ async function resolveCallerAuthority(
                     ok: true,
                     authority: {
                         sessionId: remoteSessionId,
-                        taskId: remote.taskId ?? null,
+                        taskId: boundTaskId || null,
                         meshId: remote.meshId,
                         missionId: hostScope?.missionId ?? null,
                         producerRole: 'worker',
@@ -407,7 +512,6 @@ async function resolveCallerAuthority(
             };
         }
 
-        const explicitTaskId = trimString(args?.taskId);
         if (explicitTaskId && explicitTaskId !== identity.taskId) {
             return {
                 ok: false,
@@ -418,304 +522,27 @@ async function resolveCallerAuthority(
                 },
             };
         }
-
-        let queueAssignedAttemptId = '';
-        let queueTaskAttemptId = '';
-        try {
-            const assigned = meshStore.findAssignedBySession(identity.meshId, workerSessionId) as Record<
-                string,
-                unknown
-            > | null;
-            if (assigned) {
-                const assignedId = trimString(assigned.id);
-                if (assignedId && assignedId !== identity.taskId) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'task_mismatch',
-                            error: `Worker session "${workerSessionId}" is assigned to task "${assignedId}", not "${identity.taskId}" (task_mismatch)`,
-                        },
-                    };
-                }
-                const assignedStatus = trimString(assigned.status);
-                if (assignedStatus && assignedStatus !== 'assigned') {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Task "${identity.taskId}" is no longer actively assigned (stale_attempt)`,
-                        },
-                    };
-                }
-                queueAssignedAttemptId =
-                    trimString(assigned.attemptId) ||
-                    trimString((assigned.payload as Record<string, unknown> | undefined)?.attemptId);
-                if (queueAssignedAttemptId && identity.attemptId && queueAssignedAttemptId !== identity.attemptId) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Worker credential attempt "${identity.attemptId}" does not match assigned attempt "${queueAssignedAttemptId}" (stale_attempt)`,
-                        },
-                    };
-                }
-            }
-
-            const taskEntry = meshStore.findQueueEntryById(identity.meshId, identity.taskId) as Record<
-                string,
-                unknown
-            > | null;
-            if (!taskEntry) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: `Worker task "${identity.taskId}" has no active queue assignment (unauthenticated)`,
-                    },
-                };
-            }
-
-            const taskStatus = trimString(taskEntry.status);
-            if (taskStatus !== 'assigned') {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Task "${identity.taskId}" is not in assigned state (status="${taskStatus || 'unknown'}") (stale_attempt)`,
-                    },
-                };
-            }
-            const taskAssignedSession = trimString(taskEntry.assignedSessionId);
-            if (!taskAssignedSession || !sessionIdsEquivalent(taskAssignedSession, workerSessionId)) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'artifact_session_mismatch',
-                        error: `Task "${identity.taskId}" is assigned to session "${taskAssignedSession}", not "${workerSessionId}" (artifact_session_mismatch)`,
-                    },
-                };
-            }
-            queueTaskAttemptId =
-                trimString(taskEntry.attemptId) ||
-                trimString((taskEntry.payload as Record<string, unknown> | undefined)?.attemptId);
-            if (queueTaskAttemptId && identity.attemptId && queueTaskAttemptId !== identity.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Worker credential attempt "${identity.attemptId}" is stale for task "${identity.taskId}" (current attempt "${queueTaskAttemptId}") (stale_attempt)`,
-                    },
-                };
-            }
-            if (
-                queueAssignedAttemptId &&
-                queueTaskAttemptId &&
-                queueAssignedAttemptId !== queueTaskAttemptId
-            ) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Queue attempt mismatch between assigned row ("${queueAssignedAttemptId}") and task row ("${queueTaskAttemptId}") (stale_attempt)`,
-                    },
-                };
-            }
-            if (!assigned || trimString(assigned.id) !== identity.taskId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: `Worker session "${workerSessionId}" has no active queue assignment for task "${identity.taskId}" (unauthenticated)`,
-                    },
-                };
-            }
-        } catch {
+        if (tokenAttemptId && identity.attemptId && tokenAttemptId !== identity.attemptId) {
             return {
                 ok: false,
                 result: {
                     success: false,
-                    code: 'unauthenticated',
-                    error: 'Authoritative queue assignment store is unavailable (unauthenticated)',
+                    code: 'stale_attempt',
+                    error: `Worker credential attempt "${tokenAttemptId}" does not match resolved attempt "${identity.attemptId}" (stale_attempt)`,
                 },
             };
         }
 
-        // Fence worker credentials against the authoritative turn attempt ledger (fail-closed).
-        try {
-            const turns = meshStore.turnStore?.();
-            if (!turns) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: 'Authoritative turn attempt ledger is unavailable (unauthenticated)',
-                    },
-                };
-            }
-
-            const latestAttempt = turns.findLatestAttemptForTask?.(identity.meshId, identity.taskId) ?? null;
-            if (latestAttempt) {
-                if (latestAttempt.terminal) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Latest attempt "${latestAttempt.attemptId}" for task "${identity.taskId}" is already terminal (stale_attempt)`,
-                        },
-                    };
-                }
-                if (
-                    !latestAttempt.sessionId ||
-                    !sessionIdsEquivalent(latestAttempt.sessionId, workerSessionId)
-                ) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'artifact_session_mismatch',
-                            error: `Latest attempt "${latestAttempt.attemptId}" belongs to session "${latestAttempt.sessionId ?? ''}", not "${workerSessionId}" (artifact_session_mismatch)`,
-                        },
-                    };
-                }
-            }
-
-            const credAttempt = identity.attemptId
-                ? (turns.getAttempt?.(identity.attemptId) ?? null)
-                : latestAttempt;
-
-            if (
-                !credAttempt ||
-                credAttempt.meshId !== identity.meshId ||
-                credAttempt.taskId !== identity.taskId
-            ) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'unauthenticated',
-                        error: `Worker credential has no active turn attempt in ledger for task "${identity.taskId}" (unauthenticated)`,
-                    },
-                };
-            }
-
-            if (credAttempt.terminal) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Worker credential attempt "${credAttempt.attemptId}" is terminal (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (!credAttempt.sessionId || !sessionIdsEquivalent(credAttempt.sessionId, workerSessionId)) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'artifact_session_mismatch',
-                        error: `Worker credential attempt "${credAttempt.attemptId}" belongs to session "${credAttempt.sessionId ?? ''}", not "${workerSessionId}" (artifact_session_mismatch)`,
-                    },
-                };
-            }
-
-            if (!latestAttempt || latestAttempt.attemptId !== credAttempt.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Worker credential attempt "${credAttempt.attemptId}" was superseded by attempt "${latestAttempt?.attemptId ?? 'none'}" (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (queueAssignedAttemptId && queueAssignedAttemptId !== latestAttempt.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Assigned queue attempt "${queueAssignedAttemptId}" does not match current ledger attempt "${latestAttempt.attemptId}" (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (queueTaskAttemptId && queueTaskAttemptId !== latestAttempt.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Task queue attempt "${queueTaskAttemptId}" does not match current ledger attempt "${latestAttempt.attemptId}" (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (latestAttempt.attemptNo > 0 && !identity.attemptId) {
-                return {
-                    ok: false,
-                    result: {
-                        success: false,
-                        code: 'stale_attempt',
-                        error: `Retry attempt "${latestAttempt.attemptId}" requires an attempt-scoped worker credential (stale_attempt)`,
-                    },
-                };
-            }
-
-            if (typeof rawBind === 'string' && rawBind.trim().length > 0 && latestAttempt.attemptNo > 0) {
-                const liveTok = findWorkerTaskTokenForSession(
-                    identity.meshId,
-                    identity.taskId,
-                    workerSessionId,
-                );
-                if (liveTok && liveTok.attemptId !== latestAttempt.attemptId) {
-                    return {
-                        ok: false,
-                        result: {
-                            success: false,
-                            code: 'stale_attempt',
-                            error: `Worker bind resolves to superseded attempt "${liveTok.attemptId ?? 'unscoped'}" instead of "${latestAttempt.attemptId}" (stale_attempt)`,
-                        },
-                    };
-                }
-                if (!liveTok) {
-                    const binding = verifyWorkerSessionBind(rawBind);
-                    const acceptedAtMs =
-                        typeof latestAttempt.acceptedAt === 'number' ? latestAttempt.acceptedAt : NaN;
-                    if (binding && Number.isFinite(acceptedAtMs) && binding.mintedAtMs < acceptedAtMs) {
-                        return {
-                            ok: false,
-                            result: {
-                                success: false,
-                                code: 'stale_attempt',
-                                error: `Worker bind was minted before retry attempt "${latestAttempt.attemptId}" without a fresh attempt token (stale_attempt)`,
-                            },
-                        };
-                    }
-                }
-            }
-        } catch {
-            return {
-                ok: false,
-                result: {
-                    success: false,
-                    code: 'unauthenticated',
-                    error: 'Failed to verify worker credential against turn attempt ledger (unauthenticated)',
-                },
-            };
+        const fenceRes = verifyLocalWorkerQueueAndLedgerFence({
+            meshStore,
+            identity,
+            workerSessionId,
+            explicitTaskId,
+            explicitAttemptId: explicitAttemptId || tokenAttemptId,
+            rawBind,
+        });
+        if (!fenceRes.ok) {
+            return fenceRes;
         }
 
         const resolved = await resolveRegisteredSessionWorkspace(ctx, workerSessionId, {
@@ -782,6 +609,7 @@ async function resolveCallerAuthority(
             workerMissionId = null;
         }
 
+        const boundLocalAttemptId = tokenAttemptId || explicitAttemptId || identity.attemptId || fenceRes.attemptId;
         return {
             ok: true,
             authority: {
@@ -799,7 +627,7 @@ async function resolveCallerAuthority(
                     meshId: identity.meshId,
                     sessionId: workerSessionId,
                     taskId: identity.taskId,
-                    ...(identity.attemptId ? { attemptId: identity.attemptId } : {}),
+                    ...(boundLocalAttemptId ? { attemptId: boundLocalAttemptId } : {}),
                     ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
                 },
             },
@@ -1040,6 +868,15 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
                 peerDaemonId: authority.hostDaemonId,
             });
             if (forwardAns.success !== true) {
+                if (!registered.isUpdate) {
+                    try {
+                        getMeshRuntimeStore(ctx)
+                            .db.prepare('DELETE FROM session_artifacts WHERE artifact_id = ?')
+                            .run(registered.record.artifactId);
+                    } catch {
+                        // Best-effort cleanup of unforwarded local artifact record.
+                    }
+                }
                 return {
                     success: false,
                     code: (typeof forwardAns.code === 'string' && forwardAns.code) || (typeof forwardAns.error === 'string' && forwardAns.error) || 'forward_failed',

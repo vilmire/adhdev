@@ -14,6 +14,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveConfigLogsDir } from '../config/config-dir.js';
 import type { CommandSource } from '../commands/command-registry.js';
+import {
+    containsCredentialValue,
+    isCredentialKey,
+    redactCredentialString,
+} from './credential-redactor.js';
 
 // ─── Config ──────────────────────────────────
 // Command history lives under the unified ADHDev home (~/.adhdev/logs/) next to
@@ -42,46 +47,37 @@ export interface CommandLogEntry {
 }
 
 // ─── Sensitive field masking ─────────────────
-const SENSITIVE_KEYS = new Set([
-    'token', 'bind', 'password', 'secret', 'apiKey', 'api_key',
-    'connectionToken', 'mcpSessionCredential', 'sessionCredential',
-    'credential', 'authorization', 'authToken', 'accessToken',
-    'originFetchGrant', 'content', 'message', 'text',
-]);
-
-const SENSITIVE_KEY_PATTERN = /(?:credential|token|secret|password|api[_-]?key|authorization|bearer|private[_-]?key|session[_-]?bind|fetch[_-]?grant)/i;
-
-const CREDENTIAL_TOKEN_VALUE_PATTERN = /\b(?:mcp_sess|adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{8,}\b/;
+const CONTENT_KEYS = new Set(['content', 'message', 'text']);
+const MAX_MASK_DEPTH = 8;
 
 function isSensitiveArgKey(key: string): boolean {
-    return SENSITIVE_KEYS.has(key) || SENSITIVE_KEY_PATTERN.test(key);
+    return CONTENT_KEYS.has(key) || isCredentialKey(key);
 }
 
-function isCredentialValueShape(value: unknown): value is string {
-    return typeof value === 'string' && CREDENTIAL_TOKEN_VALUE_PATTERN.test(value);
+function maskCommandLogValue(value: unknown, keyHint = '', depth = 0): unknown {
+    if (isSensitiveArgKey(keyHint) || containsCredentialValue(value)) {
+        return typeof value === 'string'
+            ? `[${value.length} chars]`
+            : '[masked]';
+    }
+    if (Array.isArray(value)) {
+        if (depth >= MAX_MASK_DEPTH) return '[MaxDepth]';
+        return value.map((item) => maskCommandLogValue(item, '', depth + 1));
+    }
+    if (typeof value === 'object' && value !== null) {
+        if (depth >= MAX_MASK_DEPTH) return '[MaxDepth]';
+        const nested: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+            nested[k] = maskCommandLogValue(v, k, depth + 1);
+        }
+        return nested;
+    }
+    return value;
 }
 
 export function maskCommandLogArgs(args: any): Record<string, unknown> | undefined {
-    if (!args || typeof args !== 'object') return undefined;
-    const masked: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(args)) {
-        if (isSensitiveArgKey(key) || isCredentialValueShape(value)) {
-            masked[key] = typeof value === 'string'
-                ? `[${value.length} chars]`
-                : '[masked]';
-        } else if (key.startsWith('_')) {
-            // internal fields: keep as-is (e.g. _interactionId, _targetSessionId)
-            masked[key] = value;
-        } else if (typeof value === 'object' && value !== null) {
-            // Don't recurse deeply — just note the type
-            masked[key] = Array.isArray(value)
-                ? `[Array(${value.length})]`
-                : `[Object]`;
-        } else {
-            masked[key] = value;
-        }
-    }
-    return masked;
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined;
+    return maskCommandLogValue(args, '', 0) as Record<string, unknown>;
 }
 
 function maskArgs(args: any): Record<string, unknown> | undefined {
@@ -182,7 +178,7 @@ export function logCommand(entry: CommandLogEntry): void {
             ...(entry.interactionId ? { interactionId: entry.interactionId } : {}),
             ...(entry.args ? { args: maskArgs(entry.args) } : {}),
             ...(entry.success !== undefined ? { ok: entry.success } : {}),
-            ...(entry.error ? { err: entry.error } : {}),
+            ...(entry.error ? { err: redactCredentialString(entry.error) } : {}),
             ...(entry.durationMs !== undefined ? { ms: entry.durationMs } : {}),
         });
         
@@ -210,7 +206,7 @@ export function getRecentCommands(count = 50): CommandLogEntry[] {
                     interactionId: parsed.interactionId,
                     args: parsed.args ? maskArgs(parsed.args) : undefined,
                     success: parsed.ok,
-                    error: parsed.err,
+                    error: typeof parsed.err === 'string' ? redactCredentialString(parsed.err) : parsed.err,
                     durationMs: parsed.ms,
                 };
             } catch {

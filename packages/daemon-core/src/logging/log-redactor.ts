@@ -44,10 +44,10 @@ const RULES: RedactionRule[] = [
         pattern: /\b(Bearer\s+)([A-Za-z0-9._\-+/=]{8,})/g,
         replace: (_m, prefix: string, token: string) => `${prefix}${maskKeepTail(token)}`,
     },
-    // ADHDev credential prefixes: API key (adk_), machine secret (adm_), provider key (adp_).
+    // ADHDev credential prefixes: API key (adk_), machine secret (adm_), provider key (adp_), MCP session credential (mcp_sess_), share/worker tokens (shr_, wtk_, wtt_, wsb_).
     {
         name: 'adhdev_prefixed_secret',
-        pattern: /\b(ad[kmp]_)([A-Za-z0-9]{6,})/g,
+        pattern: /\b(ad[kmp]_|mcp_sess_|shr_|wt[kt]_|wsb_)([A-Za-z0-9_-]{6,})/g,
         replace: (_m, prefix: string, token: string) => `${prefix}${maskKeepTail(prefix + token)}`,
     },
     // JWT: three base64url segments separated by dots, header starts with eyJ.

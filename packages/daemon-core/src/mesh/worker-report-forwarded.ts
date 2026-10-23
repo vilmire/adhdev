@@ -69,7 +69,7 @@ export interface RemoteWorkerIdentity {
  * authority: a stale stamp is refused there.
  */
 export function resolveRemoteWorkerIdentity(
-    credential: { bind?: unknown; token?: unknown },
+    credential: { bind?: unknown; token?: unknown; taskId?: unknown; attemptId?: unknown },
     deps: {
         readAssignmentStamp: (sessionId: string) => WorkerAssignmentStamp | null;
         isSelfDaemon: (daemonId: string) => boolean;
@@ -80,8 +80,11 @@ export function resolveRemoteWorkerIdentity(
         ) => WorkerAssignmentStamp | null;
     },
 ): RemoteWorkerIdentity | null {
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    const hasRawToken = trim(credential.token).length > 0;
     const binding = verifyWorkerSessionBind(credential.bind);
     const directToken = verifyWorkerTaskToken(credential.token);
+    if (hasRawToken && !directToken) return null;
     const sessionId = binding?.sessionId || (directToken?.sessionId ? directToken.sessionId.trim() : '');
     const expectedMeshId = binding?.meshId || (directToken?.meshId ? directToken.meshId.trim() : '');
     if (!sessionId || !expectedMeshId) return null;
@@ -99,7 +102,6 @@ export function resolveRemoteWorkerIdentity(
     } catch {
         stamp = null;
     }
-    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
     let fallbackStamp: WorkerAssignmentStamp | null = null;
     if ((!stamp || !trim(stamp.ownerDaemonId)) && deps.resolveMeshHostOwner) {
         try {
@@ -119,14 +121,41 @@ export function resolveRemoteWorkerIdentity(
     if (!meshId || !ownerDaemonId) return null;
     if (meshId !== expectedMeshId) return null;
     if (deps.isSelfDaemon(ownerDaemonId)) return null;
+    const reqTaskId = trim(credential.taskId);
+    const reqAttemptId = trim(credential.attemptId);
+    const tokenTaskId = trim(directToken?.taskId);
+    const tokenAttemptId = trim(directToken?.attemptId);
+    const stampTaskId = trim(effectiveStamp.taskId) || trim(stamp?.taskId);
+    const stampAttemptId = trim(effectiveStamp.attemptId) || trim(stamp?.attemptId);
+    if (
+        (reqTaskId && tokenTaskId && reqTaskId !== tokenTaskId) ||
+        (reqTaskId && stampTaskId && reqTaskId !== stampTaskId) ||
+        (tokenTaskId && stampTaskId && tokenTaskId !== stampTaskId)
+    ) {
+        return null;
+    }
+    if (
+        (reqAttemptId && tokenAttemptId && reqAttemptId !== tokenAttemptId) ||
+        (reqAttemptId && stampAttemptId && reqAttemptId !== stampAttemptId) ||
+        (tokenAttemptId && stampAttemptId && tokenAttemptId !== stampAttemptId)
+    ) {
+        return null;
+    }
     const taskId =
-        trim(effectiveStamp.taskId) ||
-        (!stamp ? trim(directToken?.taskId) || trim(binding?.spawnedForTaskId) : '');
+        tokenTaskId ||
+        reqTaskId ||
+        stampTaskId ||
+        (!stamp ? trim(binding?.spawnedForTaskId) : '');
     const attemptId =
-        trim(effectiveStamp.attemptId) ||
-        (!stamp ? trim(directToken?.attemptId) : '');
-    const nodeId = trim(effectiveStamp.nodeId) || binding?.nodeId || directToken?.nodeId;
-    const generation = Number.isInteger(effectiveStamp.generation) ? effectiveStamp.generation : undefined;
+        tokenAttemptId ||
+        reqAttemptId ||
+        stampAttemptId;
+    const nodeId = trim(effectiveStamp.nodeId) || trim(stamp?.nodeId) || binding?.nodeId || directToken?.nodeId;
+    const generation = Number.isInteger(effectiveStamp.generation)
+        ? effectiveStamp.generation
+        : Number.isInteger(stamp?.generation)
+          ? stamp?.generation
+          : undefined;
     return {
         meshId,
         sessionId,

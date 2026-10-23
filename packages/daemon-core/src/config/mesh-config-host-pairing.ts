@@ -442,7 +442,7 @@ export function markMeshHostPairingJoined(
 
 function markMeshHostPairingJoinedUnlocked(
     meshId: string,
-    opts: { hostDaemonId?: string; hostNodeId?: string; hostMeshId?: string; joinedAt?: string; token?: string; tokenId?: string },
+    opts: { hostDaemonId?: string; hostNodeId?: string; hostMeshId?: string; originGrantPublicKey?: string; joinedAt?: string; token?: string; tokenId?: string },
 ): { mesh: LocalMeshEntry; meshHost: RepoMeshHostMetadata } | undefined {
     const config = loadMeshConfig();
     const mesh = config.meshes.find(m => m.id === meshId);
@@ -456,6 +456,7 @@ function markMeshHostPairingJoinedUnlocked(
         ...(opts.hostDaemonId ? { hostDaemonId: opts.hostDaemonId } : {}),
         ...(opts.hostNodeId ? { hostNodeId: opts.hostNodeId } : {}),
         ...(opts.hostMeshId && opts.hostMeshId !== meshId ? { hostMeshId: opts.hostMeshId } : {}),
+        ...(opts.originGrantPublicKey?.trim() ? { originGrantPublicKey: opts.originGrantPublicKey.trim() } : {}),
         pairing: {
             ...(previous.pairing || {}),
             status: 'paired',
