@@ -12,6 +12,8 @@
  * index.ts for server/topic symbols are unaffected.
  */
 
+import type { IncomingMessage } from 'http';
+import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
@@ -202,6 +204,208 @@ function isStandaloneRequestAuthenticated(input: {
   return false;
 }
 
+const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+]);
+
+function normalizeHostCandidate(raw: string): string {
+  let host = raw.trim().toLowerCase();
+  if (!host) return '';
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.slice(1, -1);
+  }
+  const zoneIdx = host.indexOf('%');
+  if (zoneIdx !== -1) {
+    host = host.slice(0, zoneIdx);
+  }
+  if (host.startsWith('::ffff:')) {
+    host = host.slice(7);
+  }
+  if (host.endsWith('.')) {
+    host = host.slice(0, -1);
+  }
+  return host;
+}
+
+function parseHostHeaderHostname(rawHostHeader: string): string | null {
+  const trimmed = rawHostHeader.trim();
+  if (!trimmed || /[\s/@\\?#]/.test(trimmed)) return null;
+  try {
+    const parsed = new URL(`http://${trimmed}`);
+    if (
+      parsed.username !== ''
+      || parsed.password !== ''
+      || parsed.pathname !== '/'
+      || parsed.search !== ''
+      || parsed.hash !== ''
+    ) {
+      return null;
+    }
+    const normalized = normalizeHostCandidate(parsed.hostname);
+    return normalized || null;
+  } catch {
+    return null;
+  }
+}
+
+function isNonLoopbackSocketPeer(req: IncomingMessage): boolean {
+  const raw = typeof req.socket?.remoteAddress === 'string' ? req.socket.remoteAddress.trim() : '';
+  if (!raw) return false;
+  const normalized = normalizeHostCandidate(raw);
+  if (!normalized) return false;
+  return normalized !== '::1' && !normalized.startsWith('127.');
+}
+
+function collectAllowedStandaloneHosts(
+  listenHost: string,
+  req: IncomingMessage,
+  extraAllowedHosts?: Iterable<string>,
+): Set<string> {
+  const allowed = new Set<string>(LOOPBACK_HOSTNAMES);
+  const normalizedListen = normalizeHostCandidate(listenHost || '');
+  if (normalizedListen && !PUBLIC_ANY_ADDRESSES.has(normalizedListen)) {
+    allowed.add(normalizedListen);
+  }
+  const localAddr = typeof req.socket?.localAddress === 'string'
+    ? normalizeHostCandidate(req.socket.localAddress)
+    : '';
+  if (localAddr && !PUBLIC_ANY_ADDRESSES.has(localAddr)) {
+    allowed.add(localAddr);
+  }
+  try {
+    const nets = os.networkInterfaces();
+    for (const entries of Object.values(nets)) {
+      for (const net of entries || []) {
+        if (!net?.address) continue;
+        const addr = normalizeHostCandidate(net.address);
+        if (addr && !PUBLIC_ANY_ADDRESSES.has(addr)) {
+          allowed.add(addr);
+        }
+      }
+    }
+  } catch {
+    // ignore os.networkInterfaces errors in restricted sandboxes
+  }
+  try {
+    const machineHost = normalizeHostCandidate(os.hostname());
+    if (machineHost) {
+      allowed.add(machineHost);
+      if (machineHost.endsWith('.local')) {
+        const shortHost = machineHost.slice(0, -'.local'.length);
+        if (shortHost) allowed.add(shortHost);
+      } else if (!machineHost.includes('.')) {
+        allowed.add(`${machineHost}.local`);
+      }
+    }
+  } catch {
+    // ignore os.hostname errors
+  }
+  const configuredList: string[] = [];
+  const envAllowed = process.env.ADHDEV_STANDALONE_ALLOWED_HOSTS;
+  if (typeof envAllowed === 'string' && envAllowed.trim()) {
+    configuredList.push(...envAllowed.split(','));
+  }
+  if (extraAllowedHosts) {
+    for (const item of extraAllowedHosts) {
+      if (typeof item === 'string') configuredList.push(item);
+    }
+  }
+  for (const rawEntry of configuredList) {
+    const trimmed = rawEntry.trim();
+    if (!trimmed) continue;
+    const parsedEntry = parseHostHeaderHostname(trimmed.replace(/^https?:\/\//i, ''))
+      ?? normalizeHostCandidate(trimmed);
+    if (parsedEntry && !PUBLIC_ANY_ADDRESSES.has(parsedEntry)) {
+      allowed.add(parsedEntry);
+    }
+  }
+  return allowed;
+}
+
+/**
+ * Validate the HTTP / WS `Host` header against this daemon's allow-list to
+ * block DNS rebinding (`Host: rebind.example:3847` after DNS flips to
+ * `127.0.0.1`). Allowed hosts:
+ *   - `localhost`, `127.0.0.1`, `[::1]` (`::1`) — restricted to loopback
+ *     peers when bound to `0.0.0.0` / `::` so a LAN peer cannot spoof them
+ *   - the configured bind address (`listenHost`)
+ *   - this machine's own network interface addresses and hostname(s)
+ *   - any explicitly configured allowed hosts (`allowedHosts` /
+ *     `ADHDEV_STANDALONE_ALLOWED_HOSTS`)
+ */
+function isStandaloneHostAllowed(input: {
+  req: IncomingMessage;
+  listenHost: string;
+  allowedHosts?: Iterable<string>;
+}): boolean {
+  const { req, listenHost, allowedHosts } = input;
+  const rawHostHeader = req.headers.host;
+  if (rawHostHeader === undefined) {
+    // Synthetic in-process test mocks that omit an HTTP parser have neither
+    // `httpVersion` nor `Origin`; real HTTP/1.1 requests must carry `Host`.
+    return !req.httpVersion && req.headers.origin === undefined;
+  }
+  if (typeof rawHostHeader !== 'string') return false;
+  const requestHostname = parseHostHeaderHostname(rawHostHeader);
+  if (!requestHostname) return false;
+  const normalizedListen = normalizeHostCandidate(listenHost || '');
+  if (
+    LOOPBACK_HOSTNAMES.has(requestHostname)
+    && PUBLIC_ANY_ADDRESSES.has(normalizedListen)
+    && isNonLoopbackSocketPeer(req)
+  ) {
+    return false;
+  }
+  const allowed = collectAllowedStandaloneHosts(listenHost, req, allowedHosts);
+  return allowed.has(requestHostname);
+}
+
+/**
+ * Validate both `Host` (DNS rebinding guard) and `Origin` (cross-origin guard)
+ * for HTTP requests and WebSocket upgrades.
+ */
+function isStandaloneOriginAllowed(input: {
+  req: IncomingMessage;
+  listenHost: string;
+  allowedHosts?: Iterable<string>;
+}): boolean {
+  const { req, listenHost, allowedHosts } = input;
+  if (!isStandaloneHostAllowed({ req, listenHost, allowedHosts })) return false;
+  const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (!originHeader) return true;
+  try {
+    const origin = new URL(originHeader);
+    if (origin.protocol !== 'http:' && origin.protocol !== 'https:') return false;
+    const originHostname = normalizeHostCandidate(origin.hostname || '');
+    if (!originHostname) return false;
+    const normalizedListen = normalizeHostCandidate(listenHost || '');
+    const isLoopbackOrigin = LOOPBACK_HOSTNAMES.has(originHostname);
+    if (isLoopbackOrigin && PUBLIC_ANY_ADDRESSES.has(normalizedListen) && isNonLoopbackSocketPeer(req)) {
+      return false;
+    }
+    const rawHost = typeof req.headers.host === 'string' ? req.headers.host.trim() : '';
+    const parsedHost = rawHost ? new URL(`http://${rawHost}`) : null;
+    if (parsedHost && origin.host.toLowerCase() === parsedHost.host.toLowerCase()) {
+      return true;
+    }
+    const requestHostname = rawHost ? parseHostHeaderHostname(rawHost) : null;
+    // Vite dev server (3000) and our own served dashboard ports we know
+    // about. Only honor when the request is coming TO a loopback bind (never 0.0.0.0 / ::).
+    if (
+      isLoopbackOrigin
+      && (normalizedListen === '127.0.0.1' || normalizedListen === 'localhost' || normalizedListen === '::1')
+      && (!requestHostname || LOOPBACK_HOSTNAMES.has(requestHostname))
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export {
   STANDALONE_AUTH_SESSION_COOKIE,
   STANDALONE_PASSWORD_CONFIG_FILE,
@@ -226,5 +430,7 @@ export {
   buildClearedSessionCookie,
   StandaloneSessionStore,
   isStandaloneRequestAuthenticated,
+  isStandaloneHostAllowed,
+  isStandaloneOriginAllowed,
 };
 export type { StandalonePasswordConfig };

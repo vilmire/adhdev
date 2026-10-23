@@ -67,7 +67,7 @@ export interface RemoteFollowerAccessClaim {
     grantRevision: number;
     followedKey?: string;
     localBindingError?: {
-        code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'assistant_owner_binding_missing' | 'assistant_owner_binding_mismatch';
+        code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'local_owner_binding_unreadable' | 'assistant_owner_binding_missing' | 'assistant_owner_binding_mismatch';
         error: string;
     };
 }
@@ -151,7 +151,7 @@ export function describeFollowedRemoteHost(
     selfDaemonId: string,
     ownerBindingVerification:
         | { ok: true; receipt?: { bindingRevision: number }; binding?: { bindingRevision: number } }
-        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'assistant_owner_binding_missing' | 'assistant_owner_binding_mismatch'; error: string },
+        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'local_owner_binding_unreadable' | 'assistant_owner_binding_missing' | 'assistant_owner_binding_mismatch'; error: string },
     transport: MeshTransportPort,
 ): RemoteHostView {
     const rawHost = str(entry.hostDaemonId);

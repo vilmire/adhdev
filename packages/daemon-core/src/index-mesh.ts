@@ -176,7 +176,9 @@ export type { LastQuotaRankingRecord, ProviderQuotaRiskSnapshot } from './mesh/m
 // provider (the kimi 403). Both dispatch paths must consume the same judgement
 // module — see mesh-quota-routing.ts's fail-open contract, which the manual
 // path inherits verbatim.
-export { evaluateProviderQuotaGate, rankProvidersByQuotaGate } from './mesh/mesh-quota-routing.js';
+export { evaluateProviderQuotaGate, rankProvidersByQuotaGate, quotaAxesForTarget } from './mesh/mesh-quota-routing.js';
+export { quotaTargetsFromSlots } from './mesh/mesh-quota-ranking-records.js';
+export { readSessionModel } from './mesh/mesh-difficulty-floor.js';
 export { quotaRiskSnapshotForCandidates } from './mesh/mesh-quota-ranking-records.js';
 export type { ProviderQuotaGateBlock, ProviderQuotaGateRanking } from './mesh/mesh-quota-routing.js';
 

@@ -83,8 +83,11 @@ export type LaunchDefaultsWriteResult =
  * Unlike writeFileAtomic600, this writer fsyncs the file AND parent directory. */
 export class LaunchDefaultsStore {
     readonly path: string;
+    private readonly lockOptions: OwnedLockOptions;
     constructor(configDir: string, private readonly ports: LaunchValidationPorts,
-        private readonly lockOptions: OwnedLockOptions = {}) {
+        lockOptions: OwnedLockOptions = {}) {
+        // Cold path: probe peers so a reused pid after a crash/reboot is reclaimed.
+        this.lockOptions = { probePeerIdentity: true, ...lockOptions };
         this.path = join(resolve(configDir), 'launch-defaults.json');
     }
     read(): LaunchDefaultsRead {

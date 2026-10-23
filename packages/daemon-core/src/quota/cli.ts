@@ -101,6 +101,28 @@ function formatAgo(atMs: number): string {
     return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
 }
 
+/**
+ * Per-model-group windows for providers whose pools are quota-independent
+ * (Antigravity: Gemini vs Claude/GPT). The provider-level session/weekly are
+ * only the WORST pool, so printing them alone shows e.g. "7 day 100% used"
+ * while the Claude/GPT pool is healthy. Needs >= 2 groups; otherwise the
+ * caller keeps the plain axes.
+ */
+function groupedBucketWindows(quota: ProviderQuota): Array<{ group: string; session: QuotaWindow | null; weekly: QuotaWindow | null }> {
+    const byGroup = new Map<string, Array<{ usedPercent: number; windowMinutes: number; resetsAt?: number | null }>>();
+    for (const bucket of Array.isArray((quota as any).buckets) ? (quota as any).buckets : []) {
+        const group = typeof bucket?.group === 'string' && bucket.group ? bucket.group : undefined;
+        if (!group || !Number.isFinite(bucket.usedPercent) || !Number.isFinite(bucket.windowMinutes)) continue;
+        byGroup.set(group, [...(byGroup.get(group) ?? []), bucket]);
+    }
+    if (byGroup.size < 2) return [];
+    const pick = (list: Array<{ usedPercent: number; windowMinutes: number }>, minutes: number) => {
+        const hits = list.filter(b => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
+        return (hits.length ? hits.reduce((w, b) => (b.usedPercent > w.usedPercent ? b : w)) : null) as QuotaWindow | null;
+    };
+    return [...byGroup].map(([group, list]) => ({ group, session: pick(list, 300), weekly: pick(list, 10080) }));
+}
+
 /** Render one provider's quota block: "5 hour"/"7 day" bars + any error line. */
 export function printQuota(name: string, quota: ProviderQuota): void {
     console.log();
@@ -118,8 +140,16 @@ export function printQuota(name: string, quota: ProviderQuota): void {
     // "not reported" row it never had.
     if (quota.status === 'ok' || quota.session || quota.weekly || quota.monthly) {
         const cue = windowCue(quota);
-        console.log(formatWindow('5 hour', quota.session, cue));
-        console.log(formatWindow('7 day', quota.weekly, cue));
+        const groups = groupedBucketWindows(quota);
+        if (groups.length) {
+            for (const g of groups) {
+                console.log(formatWindow(`${g.group} 5 hour`, g.session, cue));
+                console.log(formatWindow(`${g.group} 7 day`, g.weekly, cue));
+            }
+        } else {
+            console.log(formatWindow('5 hour', quota.session, cue));
+            console.log(formatWindow('7 day', quota.weekly, cue));
+        }
         if (quota.monthly) console.log(formatWindow('30 day', quota.monthly, cue));
     }
     // Retained numbers are labelled with where they actually came from: the

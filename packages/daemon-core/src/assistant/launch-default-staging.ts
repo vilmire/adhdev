@@ -54,7 +54,7 @@ export class AssistantLaunchDefaultStaging {
         this.configDir = opts.configDir ?? getConfigDir();
         this.dir = join(this.configDir, 'assistant', 'staged');
         this.now = opts.now ?? (() => new Date());
-        this.lockOptions = opts.lock ?? {};
+        this.lockOptions = { probePeerIdentity: true, ...opts.lock };
     }
     private path(id: string): string { return join(this.dir, `${id}.json`); }
 

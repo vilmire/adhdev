@@ -23,6 +23,7 @@ import {
     isMeshCoordinatorSessionRecord,
     isUnmanagedSessionRecord,
     resolveSessionProviderType,
+    readSessionRecordModel,
 } from './mesh-session-helpers.js';
 import {
     validateMeshTaskModeRequest,
@@ -781,7 +782,7 @@ async function resolveDirectDispatchTarget(
     // it is checked as early as the provider is known, before the delivery
     // admission gate and before anything is sent.
     if (!req.allowQuotaExhausted) {
-        const quotaGate = checkDirectDispatchQuotaGate(node, resolved.providerType, ctx.mesh.policy?.quotaRouting ?? null);
+        const quotaGate = checkDirectDispatchQuotaGate(node, resolved.providerType, ctx.mesh.policy?.quotaRouting ?? null, readSessionRecordModel(explicitTargetSession));
         if (quotaGate) {
             return JSON.stringify(buildQuotaExhaustedDispatchFailure(node, resolved.providerType, sessionId, quotaGate));
         }

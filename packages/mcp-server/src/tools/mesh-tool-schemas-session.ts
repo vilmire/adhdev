@@ -1,3 +1,4 @@
+import { PUBLIC_PUBLISH_APPROVAL_SCHEMA } from './mesh-tool-schemas-refine-config.js';
 /**
  * MCP tool schemas — session and node domain (mesh-tools-session.ts /
  * mesh-tools-git.ts handlers): send a task, read chat / debug / terminal, send keys,
@@ -179,6 +180,7 @@ export const MESH_FAST_FORWARD_NODE_TOOL = {
             execute: { type: 'boolean', description: 'When true, apply the fast-forward/push if all safety gates pass. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview only. Defaults true unless execute=true; dry_run=true overrides execute. dry_run=false is NOT an execute trigger — it only declines to veto, so passing it alone is rejected with dry_run_false_requires_execute rather than silently previewing. Use execute=true to apply.' },
             update_submodules: { type: 'boolean', description: 'mode="merge" only: when true, if the root fast-forward changes gitlinks, run only git submodule update --init --recursive and verify submodules clean.' },
+            approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
             push_submodules: { type: 'boolean', description: 'mode="push" only: also ff-only push submodule HEADs to their origin main. Gated by mesh policy allowAutoPublishSubmoduleMainCommits — skipped unless that policy is enabled. Defaults false (root push only).' },
         },
         required: ['node_id'],

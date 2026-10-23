@@ -503,7 +503,7 @@ export function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, worksp
     if (mesh?.policy?.allowAutoPublishSubmoduleMainCommits === true) {
         process.stderr.write(
             `[adhdev-mesh] WARNING: allowAutoPublishSubmoduleMainCommits is ENABLED via mesh.policy. `
-            + `Refinery may push unreachable submodule commits to submodule origin/main without additional user approval.\n`,
+            + `Refinery may push only to proven-private submodule remotes without per-commit approval; public and unknown remotes require uniquely resolved approved_publish_shas.\n`,
         );
         return { enabled: true, source: 'mesh.policy.allowAutoPublishSubmoduleMainCommits' };
     }
@@ -511,7 +511,7 @@ export function resolveRefineryAutoPublishSubmoduleMainCommits(mesh: any, worksp
     if (loaded.config?.allowAutoPublishSubmoduleMainCommits === true) {
         process.stderr.write(
             `[adhdev-mesh] WARNING: allowAutoPublishSubmoduleMainCommits is ENABLED via ${loaded.path || loaded.source}. `
-            + `Refinery may push unreachable submodule commits to submodule origin/main without additional user approval.\n`,
+            + `Refinery may push only to proven-private submodule remotes without per-commit approval; public and unknown remotes require uniquely resolved approved_publish_shas.\n`,
         );
         return { enabled: true, source: loaded.path || loaded.source };
     }

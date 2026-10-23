@@ -19,7 +19,7 @@ import { getSessionHostSurfaceKind, partitionSessionHostRecords } from '../../se
 import type { LowFamilyContext, LowFamilyHandler } from './types.js';
 import { defineCommandSpecs } from '../command-registry.js';
 
-function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
+export function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor | null {
     if (!record || typeof record !== 'object') return null;
     const runtimeId = typeof record.sessionId === 'string' ? record.sessionId : '';
     const cliType = typeof record.providerType === 'string' ? record.providerType : '';
@@ -27,6 +27,9 @@ function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescriptor |
     if (!runtimeId || !cliType || !workspace) return null;
     return {
         runtimeId,
+        assistant: record.meta?.assistant === true ? true : undefined,
+        autoApproveMode: typeof record.meta?.autoApproveMode === 'string' ? record.meta.autoApproveMode : undefined,
+        managedBy: typeof record.meta?.managedBy === 'string' ? record.meta.managedBy : undefined,
         runtimeKey: typeof record.runtimeKey === 'string' ? record.runtimeKey : undefined,
         displayName: typeof record.displayName === 'string' ? record.displayName : undefined,
         workspaceLabel: typeof record.workspaceLabel === 'string' ? record.workspaceLabel : undefined,

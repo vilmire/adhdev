@@ -134,6 +134,9 @@ export async function reprobeWorkerStatus(
  * runner can append it to `mesh.<id>.handoff`; it never enters evidence.
  */
 export interface TranscriptObservation {
+    /** A validated prefix is displayable, but cannot establish terminality. */
+    stale?: boolean;
+    unavailableReason?: string;
     /** Provider's own status verdict (lowercased); '' = not reported. */
     providerObservedStatus: string;
     /** A parked approval/question modal with real buttons. */
@@ -264,6 +267,14 @@ export function probeEvidence(attempt: TurnAttempt, read: TurnProbeRead, ctx: Pr
     }
 
     if (t && status === 'idle') {
+        if (t.stale || t.unavailableReason === 'native_history_loading') {
+            // Reuse the ledger's live-pending admission veto, including cold reads
+            // without a final. Never act on a retained native marker or quiet tail.
+            return [{ ...base, eventId: eventId('transcript_pending'), kind: 'transcript_final',
+                selfAttributing: false, nativeRead: t.nativeRead,
+                live: { modal: t.activeModal, adapterPending: true, trailingTool: t.trailingActivity > 0 },
+            }, liveness('alive')];
+        }
         if (t.nativeMarker?.outcome === 'failed') return [{ ...base, eventId: eventId('native_failure'),
             kind: 'turn_end', strength: 'genuine', nativeOutcome: 'failed', nativeMarker: t.nativeMarker, providerFailure: t.nativeFailure ?? 'provider_error',
             live: { modal: t.activeModal, adapterPending: false, trailingTool: false } }];

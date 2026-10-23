@@ -78,6 +78,36 @@ describe('read_chat provider_native_final_assistant reconciliation — mid-turn 
     __resetProviderSessionPinsForTest()
   })
 
+  it.each([{ stale: true }, { unavailableReason: 'native_history_loading' }])(
+    'carries native read freshness into the production read_chat payload: %j', async metadata => {
+      const providerSessionId = 'native-deferred-session'
+      mocks.readProviderChatHistory.mockReturnValue({
+        messages: [{ role: 'assistant', content: 'Done: implemented.', receivedAt: 2000 }],
+        source: 'provider-native', providerSessionId, nativeHistoryCoverage: 'full',
+        workspace: '/tmp/adhdev-project', ...metadata,
+      })
+      const adapter = {
+        cliType: 'antigravity-cli', workingDir: '/tmp/adhdev-project',
+        getStatus: () => ({ status: 'idle', providerSessionId, messages: [] }),
+        getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
+        getRuntimeMetadata: () => ({ providerSessionId, spawnedAtMs: 1000 }),
+        getPartialResponse: () => '', isProcessing: () => false, isReady: () => true,
+        updateRuntimeMeta: vi.fn(),
+      }
+      const result = await handleReadChat({
+        ...createHelpers(), getCliAdapter: () => adapter,
+        currentSession: { sessionId: 'runtime-deferred', providerSessionId,
+          providerType: 'antigravity-cli', transport: 'pty', workspace: '/tmp/adhdev-project' },
+        ctx: { instanceManager: { getInstance: () => null }, sessionRegistry: { get: () => ({
+          sessionId: 'runtime-deferred', providerSessionId, providerType: 'antigravity-cli',
+          transport: 'pty', spawnedAtMs: 1000, workspace: '/tmp/adhdev-project',
+        }) } },
+      } as any, { agentType: 'antigravity-cli', targetSessionId: 'runtime-deferred',
+        historySessionId: providerSessionId, providerSessionId, tailLimit: 20 })
+      expect(result, JSON.stringify(result)).toMatchObject({ success: true, ...metadata })
+    },
+  )
+
   it('does NOT reconcile to idle when the live PTY tail shows tool activity after the interim native bubble (write-lag race)', async () => {
     const runtimeSessionId = 'runtime-claude-midturn-writelag'
     const providerSessionId = 'claude-session-1'

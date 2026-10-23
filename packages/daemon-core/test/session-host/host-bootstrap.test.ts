@@ -31,6 +31,60 @@ describe('bootSessionHost', () => {
         expect(controller.stop).toHaveBeenCalledTimes(1);
     });
 
+    it('notifies only for an actual host change, through controller and PTY ensure paths', async () => {
+        let identity = 'host-1'
+        let respawn!: () => Promise<unknown>
+        const handle = await bootSessionHost({
+            ensureReady: async () => ENDPOINT_A,
+            getHostIdentity: () => identity,
+            clientId: 'daemon_r2', managedBy: 'adhdev-cloud',
+            createController: (_endpoint, _event, cb) => { respawn = cb; return fakeController(); },
+        } as any)
+        const reconcile = vi.fn(async () => { await handle.ensure() })
+        handle.bootConfig().onHostReplaced!(reconcile)
+        await respawn()
+        expect(reconcile).not.toHaveBeenCalled()
+        identity = 'host-2'
+        const factory = handle.ptyFactory({ runtimeId: 'r2', providerType: 'p', workspace: '/tmp' }) as any
+        await factory.options.ensureReady()
+        expect(reconcile).toHaveBeenCalledTimes(1)
+        await respawn()
+        expect(reconcile).toHaveBeenCalledTimes(1)
+        identity = 'host-3'
+        await respawn()
+        expect(reconcile).toHaveBeenCalledTimes(2)
+    })
+
+    it('reconciles a PTY replacement even when the endpoint path is unchanged', async () => {
+        let identity = 'before'
+        const handle = await bootSessionHost({
+            ensureReady: async () => ENDPOINT_A, getHostIdentity: () => identity,
+            clientId: 'daemon_r2_pty', managedBy: 'adhdev-cloud', createController: () => fakeController(),
+        })
+        const reconcile = vi.fn()
+        handle.bootConfig().onHostReplaced!(reconcile)
+        identity = 'after'
+        const factory = handle.ptyFactory({ runtimeId: 'r-pty', providerType: 'p', workspace: '/tmp' }) as any
+        await factory.options.ensureReady()
+        expect(reconcile).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves known identity across a maintenance ensure with no observation', async () => {
+        let identity: string | undefined = 'before'
+        const handle = await bootSessionHost({
+            ensureReady: async () => ENDPOINT_A, getHostIdentity: () => identity,
+            clientId: 'maintenance-r3', managedBy: 'adhdev-cloud', createController: () => fakeController(),
+        })
+        const reconcile = vi.fn()
+        handle.bootConfig().onHostReplaced!(reconcile)
+        identity = undefined // retained-host maintenance returns before the ordinary probe
+        await handle.ensure()
+        expect(reconcile).not.toHaveBeenCalled()
+        identity = 'after'
+        await handle.ensure()
+        expect(reconcile).toHaveBeenCalledTimes(1)
+    })
+
     it('the PTY factory carries a STABLE client id (not per-pid), managedBy, and seeds launch meta', async () => {
         const handle = await bootSessionHost({
             ensureReady: async () => ENDPOINT_A,

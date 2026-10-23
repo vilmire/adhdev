@@ -310,7 +310,7 @@ export function remoteFailure(
     ports?: AssistantProjectPorts,
     followedRemote?: FollowedRemoteProjectEntry,
 ): CommandRouterResult {
-    if (followedRemote && out.kind === 'refused' && (out.code === 'host_revoked' || out.code === 'remote_access_denied')) {
+    if (followedRemote && out.kind === 'refused' && out.code === 'host_revoked') {
         ports?.markFollowedRemoteRevoked?.(followedRemote.key, out.code);
         ports?.relay.closeThread?.(where.meshId, { suppressPending: true });
     }

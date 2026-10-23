@@ -78,6 +78,7 @@ import { applyNote, noteTextRefusal, parseNoteOp, projectPortsFor } from './assi
 import { normalizeAssistantRemoteAccessBinding } from '../../config/mesh-config.js';
 import {
     MeshConfigStrictLockError,
+    loadMeshConfigStrict,
     readMeshConfigFromDisk,
     saveMeshConfigDurable,
     withStrictMeshConfigWriteLock,
@@ -242,6 +243,26 @@ function hasExplicitFollowerClaim(args: Record<string, unknown>): boolean {
     return record(args.followerAccess) !== undefined || typeof args.bindingRevision === 'number' || typeof args.grantRevision === 'number';
 }
 
+function readHostMeshStrict(
+    ports: AssistantProjectPorts,
+    meshId: string,
+): { ok: true; mesh: LocalMeshEntry | undefined } | { ok: false; result: CommandRouterResult } {
+    try {
+        const disk = loadMeshConfigStrict().meshes.find((m) => m.id === meshId);
+        if (disk) return { ok: true, mesh: disk };
+        return { ok: true, mesh: ports.listMeshes().find((m) => m.id === meshId) };
+    } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+            ok: false,
+            result: fail(
+                'host_unavailable_transient',
+                `host_unavailable_transient: host could not read mesh config for ${meshId} (${msg}); retry`,
+            ),
+        };
+    }
+}
+
 function verifyFollowerAcl(
     ports: AssistantProjectPorts,
     mesh: LocalMeshEntry | undefined,
@@ -250,6 +271,11 @@ function verifyFollowerAcl(
     op: string,
     args: Record<string, unknown>,
 ): { ok: true; acl: AssistantRemoteAccessBinding } | { ok: false; result: CommandRouterResult } {
+    if (!mesh) {
+        const strictRead = readHostMeshStrict(ports, meshId);
+        if (!strictRead.ok) return strictRead;
+        mesh = strictRead.mesh;
+    }
     if (!mesh) return { ok: false, result: fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`) };
     if (!ports.isHostedHere(mesh)) return { ok: false, result: fail('project_not_hosted_here', `this daemon does not host mesh ${meshId}`) };
     const self = ports.selfDaemonId();
@@ -416,8 +442,9 @@ async function followerProjectSend(
     const deadSessionIds = new Set<string>();
 
     const admitted = await withMeshRemoteAccessMutex(meshId, async () => {
-        const freshMesh = ports.listMeshes().find((m) => m.id === meshId);
-        const verified = verifyFollowerAcl(ports, freshMesh, meshId, sender, 'send', args);
+        const freshRead = readHostMeshStrict(ports, meshId);
+        if (!freshRead.ok) return { ok: false as const, result: freshRead.result };
+        const verified = verifyFollowerAcl(ports, freshRead.mesh, meshId, sender, 'send', args);
         if (!verified.ok) return { ok: false as const, result: verified.result };
         const acl = verified.acl;
         const now = Date.now();
@@ -433,10 +460,6 @@ async function followerProjectSend(
     let launched = false;
     let pickedCoordinatorLiveness: CoordinatorLiveness = 'live';
 
-    // Verify picked coordinator runtime liveness against real session-host runtime evidence before trusting it.
-    // Only confirmed 'dead' evidence may trigger the cold-wake fallback; 'unknown' keeps the existing coordinator.
-    // Note: a stalled session-host probe is bounded by SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS (1.5s), adding at most
-    // ~1.5s latency to the send while running outside withMeshRemoteAccessMutex so owner control calls never block.
     if (live) {
         pickedCoordinatorLiveness = await classifyCoordinatorRuntimeLivenessForFollower(ports, live);
         if (pickedCoordinatorLiveness === 'dead') {
@@ -453,8 +476,9 @@ async function followerProjectSend(
             });
         }
         return withMeshRemoteAccessMutex(meshId, async () => {
-            const latestMesh = ports.listMeshes().find((m) => m.id === meshId);
-            const recheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, 'send', args);
+            const latestRead = readHostMeshStrict(ports, meshId);
+            if (!latestRead.ok) return latestRead.result;
+            const recheck = verifyFollowerAcl(ports, latestRead.mesh, meshId, sender, 'send', args);
             if (!recheck.ok) return recheck.result;
             return {
                 success: true,
@@ -468,11 +492,7 @@ async function followerProjectSend(
     }
 
     const auditCtx = (atMs: number = Date.now(), reservation?: FollowerWakeReservation | null): WakeAuditContext => ({
-        acl,
-        meshId,
-        clientId,
-        senderDaemonId: canonSender,
-        now: atMs,
+        acl, meshId, clientId, senderDaemonId: canonSender, now: atMs,
         ...(reservation?.wakeId ? { wakeId: reservation.wakeId } : {}),
         ...(reservation ? { wakeAtMs: reservation.atMs } : {}),
     });
@@ -486,7 +506,9 @@ async function followerProjectSend(
 
         const preLaunch = await withMeshRemoteAccessMutex(meshId, async () => {
             const preNow = Date.now();
-            const diskOrPortMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
+            const strictRead = readHostMeshStrict(ports, meshId);
+            if (!strictRead.ok) return { ok: false as const, result: strictRead.result };
+            const diskOrPortMesh = strictRead.mesh;
             const wakeCheck = verifyFollowerAcl(ports, diskOrPortMesh, meshId, sender, 'send', args);
             if (!wakeCheck.ok) {
                 const reason = str((wakeCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
@@ -536,7 +558,14 @@ async function followerProjectSend(
                 beforeLaunch: async () =>
                     withMeshRemoteAccessMutex(meshId, () => {
                         const checkNow = Date.now();
-                        const latestMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
+                        const strictRead = readHostMeshStrict(ports, meshId);
+                        if (!strictRead.ok) {
+                            if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
+                            preLaunchDeniedResult = strictRead.result;
+                            const reason = str((strictRead.result as Record<string, unknown>).code) || 'host_unavailable_transient';
+                            return { success: false, code: reason, error: str((strictRead.result as Record<string, unknown>).error) || reason };
+                        }
+                        const latestMesh = strictRead.mesh;
                         const wakeCheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, 'send', args);
                         if (!wakeCheck.ok) {
                             if (reservation && !reservation.settled) settleFollowerWakeReservation(reservation, checkNow, { charge: false });
@@ -623,7 +652,9 @@ async function followerProjectSend(
             if (coord.launched) {
                 recordFollowerWakeAuditEvent(auditCtx(postLaunchNow, reservation), { sessionId: coord.sessionId, verdict: 'recorded', rule: 'cold_wake_launched', status: 'launched', stage: 'launch' });
             }
-            const postWakeMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
+            const strictPostRead = readHostMeshStrict(ports, meshId);
+            if (!strictPostRead.ok) return { ok: false as const, result: strictPostRead.result };
+            const postWakeMesh = strictPostRead.mesh;
             const postWakeCheck = verifyFollowerAcl(ports, postWakeMesh, meshId, sender, 'send', args);
             if (!postWakeCheck.ok) {
                 const reason = str((postWakeCheck.result as Record<string, unknown>).code) || 'remote_access_denied';
@@ -677,7 +708,9 @@ async function followerProjectSend(
     const attemptSendToCoordinator = async (target: AssistantCoordinatorView, isLaunched: boolean) => {
         const preSend = await withMeshRemoteAccessMutex(meshId, async () => {
             const checkNow = Date.now();
-            const latestMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
+            const strictRead = readHostMeshStrict(ports, meshId);
+            if (!strictRead.ok) return { ok: false as const, result: strictRead.result };
+            const latestMesh = strictRead.mesh;
             const recheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, 'send', args);
             if (!recheck.ok) {
                 if (isLaunched) {
@@ -758,7 +791,9 @@ async function run(
     sender: string,
     ctx?: HighFamilyContext,
 ): Promise<CommandRouterResult> {
-    const mesh = ports.listMeshes().find((m) => m.id === meshId)!;
+    const meshRead = readHostMeshStrict(ports, meshId);
+    if (!meshRead.ok) return meshRead.result;
+    const mesh = meshRead.mesh!;
     switch (op) {
         case 'status': {
             const status = await localProjectStatus(ports, mesh);
@@ -819,7 +854,9 @@ const assistantRemoteProject: HighFamilyHandler = async (ctx: HighFamilyContext,
     if (!(ASSISTANT_REMOTE_OPS as readonly string[]).includes(op)) return fail('invalid_args', `op must be one of ${ASSISTANT_REMOTE_OPS.join(', ')}`);
     try {
         const ports = await projectPortsFor(ctx);
-        const mesh = ports.listMeshes().find((m) => m.id === meshId);
+        const meshRead = readHostMeshStrict(ports, meshId);
+        if (!meshRead.ok) return meshRead.result;
+        const mesh = meshRead.mesh;
         if (!mesh) return fail('project_not_found', `mesh ${meshId} is not in this daemon's project inventory`);
         const sender = readMeshSender(args);
         const self = ports.selfDaemonId();

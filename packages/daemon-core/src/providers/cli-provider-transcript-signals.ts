@@ -16,7 +16,7 @@ import { MISSING_ASSISTANT_TRANSCRIPT_GROWTH_QUIET_MS } from './cli-provider-ins
 import type { CliProviderInstance } from './cli-provider-instance.js';
 
 /** The CliProviderInstance members these functions read or call (compiler-checked; no cast). */
-export type TranscriptSignalHost = Pick<CliProviderInstance, 'adapter' | 'busyEpoch' | 'completionHasFinalAssistantMessage' | 'lastEmittedCompletion' | 'lastExternalCompletionProbe' | 'lastFinalSummaryProvenance' | 'lastNativeTurnTerminalMarkers' | 'lastTranscriptSignalSnapshot' | 'meshTaskInjectedAt' | 'nativeTurnTerminalMarker' | 'provider' | 'readExternalCompletionMessages' | 'transcriptSignalSource' | 'type'>;
+export type TranscriptSignalHost = Pick<CliProviderInstance, 'adapter' | 'busyEpoch' | 'completionHasFinalAssistantMessage' | 'lastEmittedCompletion' | 'lastExternalCompletionProbe' | 'lastFinalSummaryProvenance' | 'lastNativeTurnTerminalMarkers' | 'lastTranscriptSignalSnapshot' | 'meshTaskInjectedAt' | 'nativeHistoryReadPending' | 'nativeTurnTerminalMarker' | 'provider' | 'readExternalCompletionMessages' | 'transcriptSignalSource' | 'type'>;
 
 /**
  * The spawned CLI's env overrides. The native-history executor expands
@@ -102,7 +102,7 @@ export function publishTranscriptSignalObservation(host: TranscriptSignalHost, m
  * only at the stall threshold (≥180s of PTY stasis) or during an armed
  * completion-debounce retry, never on the routine 5s tick.
  */
-export function probeNativeTranscriptSignals(host: TranscriptSignalHost): { snapshot: SignalSnapshot | null; messages: unknown[] | null } | null {
+export function probeNativeTranscriptSignals(host: TranscriptSignalHost): { snapshot: SignalSnapshot | null; messages: unknown[] | null; pending?: boolean } | null {
     if (resolveTranscriptAuthorityProfile(host.provider).class !== 'native-source') return null;
     // readExternalCompletionMessages resolves this session's OWN native-source
     // conversation (providerSessionId / persisted pin / floor claim) and, as a
@@ -115,7 +115,7 @@ export function probeNativeTranscriptSignals(host: TranscriptSignalHost): { snap
     } catch {
         return { snapshot: null, messages: null }; // best-effort: fail-open
     }
-    return { snapshot: host.lastTranscriptSignalSnapshot, messages };
+    return { snapshot: host.lastTranscriptSignalSnapshot, messages, ...(host.nativeHistoryReadPending ? { pending: true } : {}) };
 }
 
 /**

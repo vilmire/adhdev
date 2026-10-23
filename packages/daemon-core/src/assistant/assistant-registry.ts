@@ -1,3 +1,4 @@
+import { readHostedBindingOwner, resolveHostedBindingOwner, sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 /**
  * Assistant registry — `<configDir>/assistant.json`, one entry per daemon
  * (design 2026-10-07-assistant-layer.md §4.5, §4.3 restart note, §4.6).
@@ -19,7 +20,7 @@
  */
 
 import { existsSync, readFileSync, renameSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import {
     ASSISTANT_ACCOUNT_SLOT,
     canonicalDaemonId,
@@ -74,6 +75,7 @@ export interface AssistantRegistryEntry {
     cliType: string;
     workspace: string;
     mcpConfigPath?: string;
+    hostOwner?: HostedBindingOwner;
     /** User aliases → meshId (§4.2). */
     aliases: Record<string, string>;
     /** First launch, epoch ms. */
@@ -125,6 +127,7 @@ export interface BindAssistantSessionInput {
     cliType: string;
     workspace: string;
     mcpConfigPath?: string;
+    hostOwner?: HostedBindingOwner;
     at: number;
 }
 
@@ -279,6 +282,7 @@ export function normalizeAssistantRegistryEntry(raw: unknown): AssistantRegistry
     const ownerBinding = normalizeAssistantOwnerBinding(r.ownerBinding);
     const followedRemoteProjects = normalizeFollowedRemoteProjects(r.followedRemoteProjects);
     return {
+        ...(isStr(r.sessionId) && readHostedBindingOwner(r.hostOwner) ? { hostOwner: readHostedBindingOwner(r.hostOwner) } : {}),
         sessionId: isStr(r.sessionId) ? r.sessionId : null,
         cliType: r.cliType,
         workspace: r.workspace,
@@ -332,37 +336,65 @@ export function findAssistantRestoreRecord<T extends { runtimeId?: unknown }>(
 export class AssistantRegistry {
     readonly path: string;
     private cache: AssistantRegistryEntry | null | undefined;
+    private lastReadError: NodeJS.ErrnoException | null = null;
 
     constructor(opts: AssistantRegistryOptions = {}) {
         this.path = join(opts.configDir ?? getConfigDir(), ASSISTANT_REGISTRY_FILE);
     }
 
+    private cloneCached(): AssistantRegistryEntry | null {
+        if (!this.cache) return null;
+        return {
+            ...this.cache,
+            aliases: { ...this.cache.aliases },
+            ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}),
+            ...(this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {}),
+            ...(this.cache.followedRemoteProjects
+                ? {
+                    followedRemoteProjects: Object.fromEntries(
+                        Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }]),
+                    ),
+                }
+                : {}),
+        };
+    }
+
     /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
     read(): AssistantRegistryEntry | null {
         if (this.cache !== undefined) {
-            if (!this.cache) return null;
-            return {
-                ...this.cache,
-                aliases: { ...this.cache.aliases },
-                ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}),
-                ...(this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {}),
-                ...(this.cache.followedRemoteProjects
-                    ? {
-                        followedRemoteProjects: Object.fromEntries(
-                            Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }]),
-                        ),
-                    }
-                    : {}),
-            };
+            return this.cloneCached();
         }
-        this.cache = this.load();
-        return this.read();
+        const outcome = this.load();
+        if (outcome.kind === 'ok') {
+            this.lastReadError = null;
+            this.cache = outcome.entry;
+            return this.cloneCached();
+        }
+        if (outcome.kind === 'unreadable') {
+            this.lastReadError = outcome.error;
+            // Transient read failure (ENFILE/EMFILE/EIO…): do not cache null.
+            return null;
+        }
+        this.lastReadError = null;
+        this.cache = null;
+        return null;
     }
 
-    /** Drop the in-memory copy (a person edited the file). */
+    /** Drop the in-memory copy (a person edited the file), keeping the previous cache on a transient read error. */
     reload(): AssistantRegistryEntry | null {
-        this.cache = undefined;
-        return this.read();
+        const outcome = this.load();
+        if (outcome.kind === 'ok') {
+            this.lastReadError = null;
+            this.cache = outcome.entry;
+            return this.cloneCached();
+        }
+        if (outcome.kind === 'unreadable') {
+            this.lastReadError = outcome.error;
+            return this.cache ? this.cloneCached() : null;
+        }
+        this.lastReadError = null;
+        this.cache = null;
+        return null;
     }
 
     memoryBudgets(): MemoryBudgets {
@@ -378,6 +410,9 @@ export class AssistantRegistry {
      */
     bindSession(input: BindAssistantSessionInput): { entry: AssistantRegistryEntry; previous: AssistantTurnState | null } {
         const prev = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         const preLaunchBudget = prev ? undefined : this.loadMemoryBudget();
         const sameSession = !!prev && prev.sessionId === input.sessionId;
         const at = isNum(input.at) ? input.at : Date.now();
@@ -396,6 +431,7 @@ export class AssistantRegistry {
             sessionId: input.sessionId,
             cliType: input.cliType,
             workspace: input.workspace,
+            hostOwner: input.hostOwner ?? (sameSession ? prev?.hostOwner : undefined),
         };
         if (!sameSession) next.lastTurnState = { state: 'idle', at, sessionId: input.sessionId };
         if (input.mcpConfigPath) next.mcpConfigPath = input.mcpConfigPath;
@@ -411,6 +447,9 @@ export class AssistantRegistry {
     /** Owner settings. Unknown busy modes are refused rather than coerced. */
     updateSettings(patch: AssistantSettingsPatch): AssistantRegistryEntry | null {
         const prev = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         if (!prev) return null;
         if (patch.busyInputMode !== undefined && !BUSY_INPUT_MODES.includes(patch.busyInputMode)) {
             throw new Error(`invalid busyInputMode: ${String(patch.busyInputMode)}`);
@@ -484,22 +523,27 @@ export class AssistantRegistry {
         revokeMcpSessionCredential(sessionId);
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
+        delete next.hostOwner;
         this.write(next);
         return true;
     }
 
     /**
      * After the boot-time restore: clear a binding whose runtime is not among
-     * the live hosted runtimes. Callers MUST pass the full restore set.
+     * the live hosted runtimes. Callers MUST pass a successful full inventory
+     * and its verified host owner. Foreign or unknown ownership defers pruning.
      * Returns the cleared sessionId, or null.
      */
-    pruneAfterRestore(liveRuntimeIds: ReadonlySet<string>): string | null {
-        const prev = this.read();
+    pruneAfterRestore(liveRuntimeIds: ReadonlySet<string>, owner?: HostedBindingOwner): string | null {
+        const prev = this.reload();
+        if (!prev?.sessionId || !sameHostedBindingOwner(
+            resolveHostedBindingOwner(prev.sessionId, prev.hostOwner, owner, liveRuntimeIds, dirname(this.path)), owner)) return null;
         if (!prev?.sessionId || liveRuntimeIds.has(prev.sessionId)) return null;
         const cleared = prev.sessionId;
         revokeMcpSessionCredential(cleared);
         const next: AssistantRegistryEntry = { ...prev, sessionId: null };
         delete next.mcpConfigPath;
+        delete next.hostOwner;
         this.write(next);
         return cleared;
     }
@@ -523,7 +567,7 @@ export class AssistantRegistry {
         selfDaemonId: string,
     ):
         | { ok: true; receipt: AssistantOwnerBindingReceipt; binding: AssistantOwnerBindingReceipt }
-        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch'; error: string } {
+        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'local_owner_binding_unreadable'; error: string } {
         const canonicalSelf = canonicalDaemonId(selfDaemonId);
         if (!canonicalSelf) {
             return {
@@ -534,6 +578,14 @@ export class AssistantRegistry {
         }
         const binding = this.ownerBinding();
         if (!binding) {
+            if (this.lastReadError) {
+                const errCode = this.lastReadError.code ?? 'EUNREADABLE';
+                return {
+                    ok: false,
+                    code: 'local_owner_binding_unreadable',
+                    error: `Local assistant owner binding receipt could not be read (${errCode}: ${this.lastReadError.message}); retry once transient read pressure clears.`,
+                };
+            }
             return {
                 ok: false,
                 code: 'local_owner_binding_missing',
@@ -653,7 +705,11 @@ export class AssistantRegistry {
     ): FollowedRemoteProjectEntry {
         const canonicalHost = canonicalDaemonId(input.hostDaemonId) ?? input.hostDaemonId;
         const key = input.key || followedRemoteProjectKey(canonicalHost, input.meshId);
-        const existing = this.read()?.followedRemoteProjects?.[key];
+        const current = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
+        const existing = current?.followedRemoteProjects?.[key];
         const nowIso = new Date().toISOString();
         const normalized = normalizeFollowedRemoteProjectEntry({
             ...existing,
@@ -681,6 +737,9 @@ export class AssistantRegistry {
         patch: Partial<FollowedRemoteProjectEntry>,
     ): FollowedRemoteProjectEntry | null {
         const base = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         const existing = base?.followedRemoteProjects?.[key];
         if (!base || !existing) return null;
         const merged = normalizeFollowedRemoteProjectEntry({
@@ -702,6 +761,9 @@ export class AssistantRegistry {
 
     removeFollowedRemoteProject(key: string): boolean {
         const base = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         if (!base?.followedRemoteProjects?.[key]) return false;
         const nextMap = { ...base.followedRemoteProjects };
         delete nextMap[key];
@@ -714,6 +776,9 @@ export class AssistantRegistry {
 
     private ensureBaseEntry(at: number): AssistantRegistryEntry {
         const prev = this.read();
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         if (prev) return prev;
         const preLaunchBudget = this.loadMemoryBudget();
         return {
@@ -732,12 +797,36 @@ export class AssistantRegistry {
         };
     }
 
-    private load(): AssistantRegistryEntry | null {
-        if (!existsSync(this.path)) return null;
+    private unreadableError(): Error & { code: 'local_owner_binding_unreadable'; cause?: unknown } {
+        const errCode = this.lastReadError?.code ?? 'EUNREADABLE';
+        const msg = this.lastReadError?.message ?? 'unreadable';
+        const err = new Error(
+            `local_owner_binding_unreadable: Local assistant registry could not be read (${errCode}: ${msg}); refusing to overwrite ${this.path}.`,
+        ) as Error & { code: 'local_owner_binding_unreadable'; cause?: unknown };
+        err.code = 'local_owner_binding_unreadable';
+        if (this.lastReadError) err.cause = this.lastReadError;
+        return err;
+    }
+
+    private load():
+        | { kind: 'ok'; entry: AssistantRegistryEntry }
+        | { kind: 'missing' }
+        | { kind: 'corrupt' }
+        | { kind: 'unreadable'; error: NodeJS.ErrnoException } {
+        let raw: string;
         try {
-            return normalizeAssistantRegistryEntry(JSON.parse(readFileSync(this.path, 'utf-8')));
+            raw = readFileSync(this.path, 'utf-8');
+        } catch (e) {
+            const err = e as NodeJS.ErrnoException;
+            if (err?.code === 'ENOENT') return { kind: 'missing' };
+            return { kind: 'unreadable', error: err };
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            const entry = normalizeAssistantRegistryEntry(parsed);
+            return entry ? { kind: 'ok', entry } : { kind: 'corrupt' };
         } catch {
-            return null;
+            return { kind: 'corrupt' };
         }
     }
 
@@ -754,20 +843,30 @@ export class AssistantRegistry {
     }
 
     private write(entry: AssistantRegistryEntry): AssistantRegistryEntry {
+        if (!this.cache && this.lastReadError !== null) {
+            throw this.unreadableError();
+        }
         this.keepCorruptAside();
         writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}\n`);
+        this.lastReadError = null;
         this.cache = entry;
         return this.read()!;
     }
 
-    /** A file that exists but does not parse is renamed, not overwritten silently. */
+    /** A file that exists and can be read, but does not parse, is renamed rather than overwritten silently. */
     private keepCorruptAside(): void {
-        if (!existsSync(this.path)) return;
+        let raw: string;
         try {
-            const parsed = JSON.parse(readFileSync(this.path, 'utf-8'));
+            raw = readFileSync(this.path, 'utf-8');
+        } catch {
+            // Missing (ENOENT) or unreadable (ENFILE/EMFILE/EIO…): never rename a file we could not read.
+            return;
+        }
+        try {
+            const parsed = JSON.parse(raw);
             if (normalizeAssistantRegistryEntry(parsed)) return;
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && normalizeBudget((parsed as Record<string, unknown>).memoryBudget)) return;
-        } catch { /* corrupt → fall through */ }
+        } catch { /* corrupt JSON → fall through */ }
         try {
             renameSync(this.path, `${this.path}.corrupt-${Date.now()}`);
         } catch { /* best effort; the write below still proceeds */ }

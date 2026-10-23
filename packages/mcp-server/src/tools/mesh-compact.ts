@@ -119,6 +119,22 @@ export function annotateQuotaSnapshotFreshness(quota: any, now: number = Date.no
     return out;
 }
 
+/** "gemini 7d 100% 5h — | claude-gpt 7d 44% 5h 0%" for >= 2 tagged groups, else undefined. */
+function summarizeBucketGroups(buckets: any[]): string | undefined {
+    const byGroup = new Map<string, any[]>();
+    for (const b of buckets) {
+        const group = typeof b?.group === 'string' && b.group ? b.group : undefined;
+        if (!group || !Number.isFinite(b.windowMinutes)) continue;
+        byGroup.set(group, [...(byGroup.get(group) ?? []), b]);
+    }
+    if (byGroup.size < 2) return undefined;
+    const worst = (list: any[], minutes: number): string => {
+        const hits = list.filter(b => Math.abs(b.windowMinutes - minutes) <= minutes * 0.1);
+        return hits.length ? `${Math.round(Math.max(...hits.map(b => b.usedPercent)))}%` : '—';
+    };
+    return [...byGroup].map(([group, list]) => `${group} 7d ${worst(list, 10080)} 5h ${worst(list, 300)}`).join(' | ');
+}
+
 /**
  * Fold a node's reported quota bundle into a terse per-provider marker.
  *
@@ -202,10 +218,15 @@ export function summarizeNodeQuota(quota: any, now: number = Date.now()): Record
         const age = formatQuotaSnapshotAge(snapshot, now);
         const stale = isQuotaSnapshotStale(snapshot, now);
         let line = `7d ${weekly ?? '—'} · 5h ${session ?? '—'} · ${age}${stale ? ' stale' : ''}`;
+        // Independent model-group pools (antigravity: gemini vs claude-gpt): the
+        // blended 7d/5h above is only the WORST pool, which reads as 100% used
+        // while the other pool is healthy. Show each group's own numbers.
+        const groupSegments = summarizeBucketGroups(buckets);
+        if (groupSegments) line = `${groupSegments} · ${age}${stale ? ' stale' : ''}`;
         // A buckets-only provider would otherwise render "7d — · 5h —", which
         // reads as "measured nothing". Name the axis the numbers came from:
         // `pool` is the worst pool's used%, the same headline routing gates on.
-        if (weekly === undefined && session === undefined && worstBucket !== undefined) {
+        if (!groupSegments && weekly === undefined && session === undefined && worstBucket !== undefined) {
             line = `pool ${worstBucket} (${buckets.length}) · ${age}${stale ? ' stale' : ''}`;
         } else if (weekly === undefined && session === undefined && monthly !== undefined) {
             // Same reasoning for a monthly-only provider: label the axis the

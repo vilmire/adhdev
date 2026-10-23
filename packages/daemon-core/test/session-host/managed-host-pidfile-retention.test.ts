@@ -9,6 +9,7 @@ const cp = vi.hoisted(() => ({
 }))
 vi.mock('child_process', () => cp)
 
+import { sessionHostInstanceArg } from '../../src/commands/process-lifecycle'
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
 
 /**
@@ -105,8 +106,9 @@ describe('managed session-host pidfile retention after a failed stop', () => {
     const pidFile = stage(appName, 21002)
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
     mockLiveness(true)
-    // taskkill returns cleanly, yet the process is still there afterwards.
-    cp.execFileSync.mockImplementation(() => '')
+    // Matching argv proves ownership; taskkill succeeds but the PID survives.
+    cp.execFileSync.mockImplementation((file: string) => file === 'taskkill' ? ''
+      : `node /opt/adhdev/vendor/session-host-daemon/index.js serve ${sessionHostInstanceArg(process.env.ADHDEV_CONFIG_DIR!)}`)
 
     const host = createManagedSessionHost({
       appName,
@@ -115,7 +117,7 @@ describe('managed session-host pidfile retention after a failed stop', () => {
       identifiesPid: () => true,
     })
 
-    host.stopManagedSessionHostProcess()
+    expect(host.stopManagedSessionHostProcess()).toBe(true)
     expect(fs.existsSync(pidFile)).toBe(true)
   })
 

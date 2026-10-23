@@ -9,6 +9,7 @@ const cp = vi.hoisted(() => ({
 }))
 vi.mock('child_process', () => cp)
 
+import { sessionHostInstanceArg } from '../../src/commands/process-lifecycle'
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
 
 const tempRoots: string[] = []
@@ -59,14 +60,14 @@ describe('managed session-host prefix guard', () => {
         if (cmd.includes('Win32_Process')) {
           // The real entry resolves inside the current package tree; report a
           // stale prefix path instead.
-          return `node "C:\\Users\\dev\\.adhdev\\npm-installs\\version-old\\node_modules\\adhdev\\vendor\\session-host-daemon\\index.js"`
+          return `node "C:\\Users\\dev\\.adhdev\\npm-installs\\version-old\\node_modules\\adhdev\\vendor\\session-host-daemon\\index.js" serve ${sessionHostInstanceArg(process.env.ADHDEV_CONFIG_DIR!)}`
         }
       }
       if (file === 'taskkill') return ''
       return ''
     })
 
-    const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
+    const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
     try {
       await host.ensureReady()
     } catch {
@@ -92,7 +93,7 @@ describe('managed session-host prefix guard', () => {
     fs.writeFileSync(pidFile, String(currentPid), 'utf8')
 
     // Discover the current entry path that resolveEntry will use.
-    const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
+    const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
     const currentEntry = host.resolveEntry()
 
     // Record spawn/taskkill ordering across both mocks. The guard runs before the
@@ -107,7 +108,7 @@ describe('managed session-host prefix guard', () => {
       if (file === 'powershell.exe') {
         const cmd = String(args[args.length - 1] || '')
         if (cmd.includes('Win32_Process')) {
-          return `node "${currentEntry}"`
+          return `node "${currentEntry}" serve ${sessionHostInstanceArg(process.env.ADHDEV_CONFIG_DIR!)}`
         }
       }
       if (file === 'taskkill') {
@@ -133,14 +134,8 @@ describe('managed session-host prefix guard', () => {
     process.env.HOME = originalHome
   })
 
-  /**
-   * D1 regression: when the command-line probe cannot answer (AV/EDR blocking
-   * powershell.exe, execution policy, timeout — both the Get-CimInstance and
-   * wmic probes throw), `getRunningSessionHostScriptPath` returns null. The old
-   * guard short-circuited on `runningPath &&` and skipped entirely, treating
-   * "cannot verify" as "healthy". That let a stale-prefix host survive and take
-   * create_session down with `Failed to load native module: conpty.node`.
-   */
+  // An unreadable command line cannot establish which instance owns the PID.
+  // A pidfile alone must never authorize killing a stable or preview host.
   describe('unverifiable host command line', () => {
     function stageUnverifiablePid(appName: string, pid: number, homeDir: string): void {
       const pidFile = path.join(homeDir, '.adhdev', `${appName}-session-host.pid`)
@@ -164,7 +159,7 @@ describe('managed session-host prefix guard', () => {
       })
     }
 
-    it('stops the host when its command line cannot be read (fails safe, not silently skipped)', async () => {
+    it('preserves the host when its command line cannot prove instance ownership', async () => {
       const homeDir = makeTempHome()
       const originalHome = process.env.HOME
       process.env.HOME = homeDir
@@ -180,20 +175,15 @@ describe('managed session-host prefix guard', () => {
       })
       mockProbeFailure((e) => events.push(e))
 
-      const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
+      const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
       try {
         await host.ensureReady()
       } catch {
         // No real session-host daemon exists; only the guard behavior matters.
       }
 
-      // The guard must have killed the unverifiable pid BEFORE the first spawn.
-      const firstSpawn = events.indexOf('spawn')
-      const firstTaskkill = events.indexOf('taskkill')
-      expect(firstTaskkill).toBeGreaterThan(-1)
-      expect(firstTaskkill).toBeLessThan(firstSpawn)
-      const taskkillCalls = cp.execFileSync.mock.calls.filter((c: any[]) => c[0] === 'taskkill')
-      expect(taskkillCalls.some((c: any[]) => c[1].includes(String(unverifiablePid)))).toBe(true)
+      expect(events).not.toContain('taskkill')
+      expect(cp.execFileSync.mock.calls.filter((c: any[]) => c[0] === 'taskkill')).toEqual([])
       process.env.HOME = originalHome
     })
 
@@ -207,17 +197,15 @@ describe('managed session-host prefix guard', () => {
       stageUnverifiablePid(appName, unverifiablePid, homeDir)
 
       mockProbeFailure()
-      const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
+      const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
 
-      // First pass: the guard stops the unverifiable host once.
+      // Every pass must preserve an unverifiable host.
       try { await host.ensureReady() } catch { /* no real daemon */ }
       const afterFirst = cp.execFileSync.mock.calls
         .filter((c: any[]) => c[0] === 'taskkill' && c[1].includes(String(unverifiablePid))).length
-      expect(afterFirst).toBeGreaterThan(0)
+      expect(afterFirst).toBe(0)
 
-      // Re-stage the SAME pid and run the guard again. Because the pid was
-      // already stopped once for being unverifiable, the guard must leave it
-      // alone — otherwise every ensureReady would kill and respawn forever.
+      // Re-stage the same PID; another ensure call supplies no new identity proof.
       stageUnverifiablePid(appName, unverifiablePid, homeDir)
       const callsBeforeSecond = cp.execFileSync.mock.calls.length
       try { await host.ensureReady() } catch { /* no real daemon */ }
@@ -225,16 +213,14 @@ describe('managed session-host prefix guard', () => {
       const guardKillsInSecondPass = cp.execFileSync.mock.calls
         .slice(callsBeforeSecond)
         .filter((c: any[]) => c[0] === 'taskkill' && c[1].includes(String(unverifiablePid)))
-      // The retry path inside ensureReady may still stop the host after a failed
-      // connect, but the *guard* (which runs before the first spawn of the pass)
-      // must not have fired again. Assert via the spawn ordering.
+      // Neither the prefix guard nor readiness retry can signal an unproven PID.
       const spawnsInSecondPass = cp.spawn.mock.calls.length
       expect(spawnsInSecondPass).toBeGreaterThan(0)
       expect(guardKillsInSecondPass.length).toBeLessThanOrEqual(afterFirst)
       process.env.HOME = originalHome
     })
 
-    it('still stops a host whose command line proves a different prefix, even after an unverifiable stop', async () => {
+    it('stops a different prefix only when argv proves this instance', async () => {
       const homeDir = makeTempHome()
       const originalHome = process.env.HOME
       process.env.HOME = homeDir
@@ -243,8 +229,7 @@ describe('managed session-host prefix guard', () => {
       const stalePid = 14724
       stageUnverifiablePid(appName, stalePid, homeDir)
 
-      // Probe now succeeds and reports a stale prefix: conclusive evidence is
-      // never rate-limited by the unverifiable-stop bookkeeping.
+      // A matching instance identity and stale prefix allow recovery.
       const events: string[] = []
       cp.spawn.mockImplementation(() => {
         events.push('spawn')
@@ -254,7 +239,7 @@ describe('managed session-host prefix guard', () => {
         if (file === 'powershell.exe') {
           const cmd = String(args[args.length - 1] || '')
           if (cmd.includes('Win32_Process')) {
-            return `node "C:\\Users\\dev\\.adhdev\\npm-installs\\version-old\\node_modules\\adhdev\\vendor\\session-host-daemon\\index.js"`
+            return `node "C:\\Users\\dev\\.adhdev\\npm-installs\\version-old\\node_modules\\adhdev\\vendor\\session-host-daemon\\index.js" serve ${sessionHostInstanceArg(process.env.ADHDEV_CONFIG_DIR!)}`
           }
         }
         if (file === 'taskkill') {
@@ -264,7 +249,7 @@ describe('managed session-host prefix guard', () => {
         return ''
       })
 
-      const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
+      const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
       try { await host.ensureReady() } catch { /* no real daemon */ }
 
       const firstSpawn = events.indexOf('spawn')
@@ -275,7 +260,7 @@ describe('managed session-host prefix guard', () => {
     })
   })
 
-  it('stops a live unresponsive session-host PID before spawning a replacement on POSIX (preventing split-brain)', async () => {
+  it('preserves a live PID when no connected RPC proves it unresponsive before the deadline', async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
     const homeDir = makeTempHome()
     const originalHome = process.env.HOME
@@ -287,7 +272,7 @@ describe('managed session-host prefix guard', () => {
     fs.mkdirSync(path.dirname(pidFile), { recursive: true })
     fs.writeFileSync(pidFile, String(wedgedPid), 'utf8')
 
-    const host = createManagedSessionHost({ appName, requiredRequestTypes: ['delete_session'], timeoutMs: 120 })
+    const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 120 })
     const currentEntry = host.resolveEntry()
 
     const events: string[] = []
@@ -330,8 +315,7 @@ describe('managed session-host prefix guard', () => {
     expect(events).not.toContain('spawn-while-old-alive')
     const firstKill = events.findIndex((e) => e.startsWith('kill:'))
     const firstSpawn = events.indexOf('spawn')
-    expect(firstKill).toBeGreaterThan(-1)
-    expect(firstSpawn).toBeGreaterThan(-1)
-    expect(firstKill).toBeLessThan(firstSpawn)
+    expect(firstKill).toBe(-1)
+    expect(firstSpawn).toBe(-1)
   })
 })

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -19,6 +20,10 @@ import { createRequire } from 'module'
 // package subpath) because daemon-core's `exports` map is closed and publishes
 // no './config/instance-context' entry — see startup-restore-policy.test.ts.
 import { resetProcessInstanceContextForTests } from '../../daemon-core/src/config/instance-context.js'
+
+// Keep the fixture independent of daemon-core's logger until pinTempInstance runs.
+const sessionHostInstanceArg = (configDir: string) =>
+  `--instance-config-key=${createHash('sha256').update(path.resolve(configDir)).digest('hex')}`
 
 const require = createRequire(path.join(process.cwd(), 'test/session-host-stop.test.ts'))
 const childProcessModule = require('child_process') as typeof import('child_process')
@@ -115,7 +120,7 @@ function mockProcessKill(
       if (file === 'ps' || file === '/bin/ps' || file === 'powershell.exe') {
         const pidArg = Number.parseInt(String(args.at(-1) ?? ''), 10)
         if ([4242, 5151, 6161, 7171].includes(pidArg) || file === 'powershell.exe') {
-          return '/usr/bin/node /opt/adhdev/vendor/session-host-daemon/index.js\n'
+          return `/usr/bin/node /opt/adhdev/vendor/session-host-daemon/index.js serve ${sessionHostInstanceArg(process.env.ADHDEV_CONFIG_DIR!)}\n`
         }
       }
       return ''
@@ -324,3 +329,29 @@ test('L3: stopSessionHost does not send SIGTERM when the process command line ca
   )
   assert.equal(fs.existsSync(pidFile), true, 'pidfile must be retained when process is alive and unverifiable')
 })
+
+for (const owner of ['stable', 'preview', 'legacy'] as const) {
+  test(`preview standalone stop refuses ${owner} PID without matching instance argv`, async (t) => {
+    const homeDir = makeTempHome()
+    pinTempInstance(t, homeDir)
+    const previewConfig = path.join(homeDir, '.adhdev-preview')
+    process.env.ADHDEV_CONFIG_DIR = previewConfig
+    resetProcessInstanceContextForTests()
+    fs.mkdirSync(previewConfig, { recursive: true })
+    fs.writeFileSync(path.join(previewConfig, 'adhdev-standalone-test-session-host.pid'), '4242')
+    const host = await importSessionHostModule()
+    const signals: KillCall[] = []
+    t.mock.method(process, 'kill', ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (signal === 0) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+      signals.push([pid, signal])
+      return true
+    }) as typeof process.kill)
+    const key = owner === 'legacy' ? '' : sessionHostInstanceArg(owner === 'preview' ? previewConfig : path.join(homeDir, '.adhdev'))
+    t.mock.method(childProcessModule, 'execFileSync', ((file: string) => {
+      if (file === 'ps' || file === 'powershell.exe') return `node /opt/adhdev/vendor/session-host-daemon/index.js serve ${key}`
+      return ''
+    }) as typeof childProcessModule.execFileSync)
+    assert.equal(host.stopSessionHost(), owner === 'preview')
+    assert.deepEqual(signals, owner === 'preview' ? [[4242, 'SIGTERM']] : [])
+  })
+}

@@ -714,14 +714,37 @@ describe('captureOwnerAuthGuard — bearer token + password auth coexistence and
       // a native MCP IPC caller (or an authenticated owner).
       http.internalAuthToken = null;
       http.configureAuth(null);
+      // The artifact READ verbs are the one deliberate exception on a no-auth
+      // daemon (standalone-artifact-read-noauth.vitest.ts): the open dashboard
+      // reads them like every other read endpoint. Writes and everything else
+      // stay refused.
+      const noAuthReadAliases = ['artifact_list', 'session_artifact_list', 'artifact_fetch', 'artifact_read', 'session_artifact_fetch'];
       for (const alias of [...allAliases, 'get_command_history']) {
         const response = await postCmd(alias, { sessionId: 'worker-sa', path: 'doc.md', artifactId: workerArtId });
         expect(response.status).toBe(200);
-        const denied = await response.json() as any;
-        expect(denied).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
-        expect(denied.content).toBeUndefined();
-        expect(denied.artifacts).toBeUndefined();
-        expect(denied.history).toBeUndefined();
+        const body = await response.json() as any;
+        if (noAuthReadAliases.includes(alias)) {
+          expect(body.success, `no-auth owner read ${alias}`).toBe(true);
+          continue;
+        }
+        expect(body).toMatchObject({ success: false, code: 'COMMAND_SOURCE_REJECTED' });
+        expect(body.content).toBeUndefined();
+        expect(body.artifacts).toBeUndefined();
+        expect(body.history).toBeUndefined();
+      }
+      // On a no-auth daemon, an invalid, rotated, or expired MCP credential
+      // header must still return 401 and never fall back to the anonymous
+      // standalone owner read grant.
+      for (const alias of noAuthReadAliases) {
+        for (const badHeaders of [
+          { [INTERNAL_HEADER]: INTERNAL },
+          { [INTERNAL_HEADER]: '' },
+          { [WORKER_HEADER]: 'wsb_expired_or_rotated' },
+          { [WORKER_HEADER]: '' },
+        ] as Array<Record<string, string>>) {
+          const denied = await postCmd(alias, { sessionId: 'worker-sa', artifactId: workerArtId }, badHeaders);
+          expect(denied.status, `no-auth bad MCP header ${alias}`).toBe(401);
+        }
       }
       // Rotate the actual authenticated token after HTTP admission, retaining
       // a live same-session bind and a fresh current token. The old header may
