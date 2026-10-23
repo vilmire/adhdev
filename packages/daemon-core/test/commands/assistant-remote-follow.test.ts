@@ -5939,9 +5939,6 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 });
 
                 // Install a fault on the quota-owned audit bound write after receipt UPDATE runs.
-                store.db.exec(`CREATE TABLE IF NOT EXISTS assistant_follower_wake_audit_bounds (
-                    event_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, value TEXT NOT NULL
-                )`);
                 store.db.exec(
                     "CREATE TEMP TRIGGER fail_audit_bound_insert BEFORE INSERT ON assistant_follower_wake_audit_bounds BEGIN SELECT RAISE(ABORT, 'injected audit bound failure'); END;",
                 );

@@ -237,6 +237,12 @@ export function ensureAssistantRelaySchema(db: MeshRuntimeStore['db']): void {
         CREATE TABLE IF NOT EXISTS assistant_relay_receipts (
             receipt_key TEXT PRIMARY KEY, value TEXT NOT NULL, at_ms INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'legacy'
         );
+        -- Quota-owned bounds for immutable ledger audits; independent of relay receipt retention.
+        CREATE TABLE IF NOT EXISTS assistant_follower_wake_audit_bounds (
+            event_id TEXT PRIMARY KEY, at_ms INTEGER NOT NULL, value TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_assistant_follower_wake_audit_bounds_age
+            ON assistant_follower_wake_audit_bounds(at_ms);
         -- Delivery manifests are content-free and never backfilled from captured
         -- reports: old captures do not prove what survived the rendered cap.
         CREATE TABLE IF NOT EXISTS assistant_relay_coverage (

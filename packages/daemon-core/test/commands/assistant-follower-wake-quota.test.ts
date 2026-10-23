@@ -41,6 +41,13 @@ function seedReceipt(at: number, wakeId = 'wake', receiptKey = 'receipt'): void 
     db().prepare('INSERT INTO assistant_relay_receipts (receipt_key, value, at_ms, kind) VALUES (?, ?, ?, ?)')
         .run(receiptKey, JSON.stringify({ meshId, sender, wakeId, atMs: at, status: 'charged' }), at, 'follower_wake_quota');
 }
+function seedBound(eventId: string, at: number, value?: string): void {
+    db().prepare('INSERT INTO assistant_follower_wake_audit_bounds (event_id, at_ms, value) VALUES (?, ?, ?)')
+        .run(eventId, at, value ?? JSON.stringify({
+            targetKind: 'audit', targetId: eventId, wakeId: eventId,
+            originalAtMs: at, originalRowAtMs: at, firstNormalizedAtMs: at, conflict: false,
+        }));
+}
 function charge(at: number): void {
     const slot = reserveFollowerWakeSlot(meshId, sender, at);
     expect(slot.ok).toBe(true);
@@ -126,6 +133,58 @@ describe('follower-wake quota-owned audit bounds', () => {
         charge(day8);
         charge(day8 + 61_000);
         expect(reserveFollowerWakeSlot(meshId, sender, day8 + 122_000)).toMatchObject({ ok: false, reason: 'window_limit' });
+    });
+    it.each(['same-event', 'unrelated-event'])('keeps two raw audit charges with corrupt %s provenance across restart', (target) => {
+        seedAudit('recent-1', t0 - 122_000);
+        seedAudit('recent-2', t0 - 61_000);
+        seedAudit('unrelated', t0 - 30 * 60_000);
+        // An expired bound must not suppress a still-current raw event when its JSON is corrupt.
+        seedBound(target === 'same-event' ? 'recent-1' : 'unrelated', t0 - 30 * 60_000, '{');
+        const before = snapshot();
+        rebuildFollowerWakeRateLimitFromStore(t0);
+        expect(reserveFollowerWakeSlot(meshId, sender, t0)).toMatchObject({ ok: false, reason: 'window_limit' });
+        expect(snapshot()).toEqual(before);
+        restart(t0);
+        expect(reserveFollowerWakeSlot(meshId, sender, t0)).toMatchObject({ ok: false, reason: 'window_limit' });
+        expect(snapshot()).toEqual(before);
+    });
+    it('repairs corrupt future provenance atomically so subsequent restarts do not renew the clamp', () => {
+        seedAudit('future', future);
+        seedAudit('recent', t0 - 61_000);
+        seedBound('future', t0 - 30 * 60_000, '{');
+        const before = snapshot();
+        rebuildFollowerWakeRateLimitFromStore(t0);
+        expect(reserveFollowerWakeSlot(meshId, sender, t0)).toMatchObject({ ok: false, reason: 'cooldown' });
+        const repaired = bounds();
+        restart(t0 + 61_000);
+        expect(bounds()).toEqual(repaired);
+        expect(reserveFollowerWakeSlot(meshId, sender, t0 + 61_000)).toMatchObject({ ok: false, reason: 'window_limit' });
+        restart(t0 + 16 * 60_000);
+        charge(t0 + 16 * 60_000);
+        expect(snapshot()).toEqual(before);
+    });
+    it('prunes at most 128 expired or orphaned bounds per hydration, preserving active, margin and still-future source bounds', () => {
+        const old = t0 - 30 * 60_000;
+        seedAudit('expired', old);
+        seedBound('expired', old);
+        seedAudit('active', t0 - 61_000);
+        seedBound('active', t0 - 61_000);
+        seedAudit('margin', t0 - 15 * 60_000 - 30_000);
+        seedBound('margin', t0 - 15 * 60_000 - 30_000);
+        seedAudit('future', future);
+        seedBound('future', old);
+        seedBound('orphan-active', t0 - 61_000);
+        for (let i = 0; i < 140; i++) seedBound(`orphan-${i}`, old);
+        const before = snapshot();
+        expect(bounds()).toHaveLength(145);
+        rebuildFollowerWakeRateLimitFromStore(t0);
+        expect(bounds()).toHaveLength(17);
+        expect(db().prepare('SELECT event_id FROM assistant_follower_wake_audit_bounds WHERE event_id = ?').get('expired')).toBeUndefined();
+        restart(t0);
+        expect((bounds() as Array<{ event_id: string }>).map((row) => row.event_id)).toEqual(['active', 'future', 'margin', 'orphan-active']);
+        charge(t0);
+        expect(reserveFollowerWakeSlot(meshId, sender, t0 + 61_000)).toMatchObject({ ok: false, reason: 'window_limit' });
+        expect(snapshot()).toEqual(before);
     });
     it.each(['receipt_update', 'audit_bound_insert', 'norm_insert'])('rolls back all normalization writes atomically on %s failure', (fault) => {
         seedReceipt(future);
