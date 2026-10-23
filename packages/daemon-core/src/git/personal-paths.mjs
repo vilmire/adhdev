@@ -127,3 +127,14 @@ export function currentUserNames() {
   for (const v of [process.env.HOME, process.env.USERPROFILE]) if (v) add(basename(v.replace(/[\\/]+$/, '')));
   return names;
 }
+
+/** Private literals and account/fleet inputs share one scanner in every caller. */
+export function findLeaksWithPatterns(text, patterns, extraNames = currentUserNames(), runtimeHosts) {
+  const leaks = findLeaks(text, new Set([...extraNames, ...patterns.ownerNames]), runtimeHosts, patterns.knownHosts);
+  for (const [index, line] of text.split('\n').entries()) {
+    for (const literal of patterns.blockedText || []) {
+      if (line.toLowerCase().includes(literal.toLowerCase())) leaks.push({ line: index + 1, match: literal, name: literal });
+    }
+  }
+  return leaks;
+}

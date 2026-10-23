@@ -99,7 +99,7 @@ export async function meshReadNodeLogs(
 
 export async function meshFastForwardNode(
     ctx: MeshContext,
-    args: { node_id: string; mode?: 'merge' | 'push'; branch?: string; execute?: boolean; dry_run?: boolean; update_submodules?: boolean; push_submodules?: boolean },
+    args: { node_id: string; mode?: 'merge' | 'push'; branch?: string; execute?: boolean; dry_run?: boolean; update_submodules?: boolean; push_submodules?: boolean; approved_publish_shas?: string[] | Record<string, string[]> },
 ): Promise<string> {
     await refreshMeshFromDaemon(ctx);
     const node = await findNodeWithRefresh(ctx, args.node_id);
@@ -153,6 +153,7 @@ export async function meshFastForwardNode(
             dryRun,
             updateSubmodules: args.update_submodules === true,
             pushSubmodules: args.push_submodules === true,
+            approvedPublishShas: args.approved_publish_shas,
             submoduleIgnorePaths: submoduleIgnorePaths.length > 0 ? submoduleIgnorePaths : undefined,
         });
         return JSON.stringify(unwrapCommandPayload(result), null, 2);

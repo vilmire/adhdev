@@ -44,6 +44,7 @@ function createRemoteBackedRepo(root: string) {
   git(seed, ['push', '-q', '-u', 'origin', 'main'])
   git(root, ['clone', '-q', origin, work])
   configureUser(work)
+  git(work, ['config', 'remote.origin.adhdev-private', 'true'])
   return { origin, seed, work }
 }
 
@@ -503,8 +504,12 @@ describe('P2 submodule push visibility enforcement', () => {
       git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'add', child.origin, 'oss'])
       configureUser(sub)
       if (visibility === 'private') git(sub, ['config', 'remote.origin.adhdev-private', 'true'])
-      if (visibility === 'known-public') classification = vi.spyOn(publicGuard, 'pushDestinations').mockResolvedValue({ urls: [child.origin], isPublic: true })
-      else if (visibility === 'throwing') classification = vi.spyOn(publicGuard, 'pushDestinations').mockRejectedValue(new Error('unreadable destination'))
+      const classify = publicGuard.pushDestinations
+      if (visibility === 'known-public' || visibility === 'throwing') classification = vi.spyOn(publicGuard, 'pushDestinations').mockImplementation(async (repo, remote) => {
+        if (repo === work) return classify(repo, remote)
+        if (visibility === 'throwing') throw new Error('unreadable destination')
+        return { urls: [child.origin], isPublic: true }
+      })
       const before = git(child.origin, ['rev-parse', 'main'])
       commitFile(sub, 'LOCAL.md', 'submodule change\n', 'submodule change')
       const tip = git(sub, ['rev-parse', 'HEAD'])
@@ -525,4 +530,48 @@ describe('P2 submodule push visibility enforcement', () => {
       rmSync(root, { recursive: true, force: true })
     }
   }, 60000)
+})
+
+it('round4 P1-C: workspace public push refuses without exact approval, then scans approved commits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'adhdev-ff-public-'))
+  try {
+    const { origin, work } = createRemoteBackedRepo(root)
+    git(work, ['config', 'remote.origin.adhdev-private', 'false'])
+    const before = git(origin, ['rev-parse', 'main'])
+    commitFile(work, 'new.txt', 'clean\n', 'new change')
+    const tip = git(work, ['rev-parse', 'HEAD'])
+    const denied = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true })
+    expect(denied.success).toBe(false)
+    expect(denied.operationError).toContain('publish_approval_required')
+    expect(git(origin, ['rev-parse', 'main'])).toBe(before)
+    mkdirSync(join(work, '.adhdev'), { recursive: true })
+    writeFileSync(join(work, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }))
+    git(work, ['add', '.adhdev'])
+    git(work, ['commit', '-q', '-m', 'configure patterns'])
+    const cfg = git(work, ['rev-parse', 'HEAD'])
+    const scanned = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: [tip, cfg] })
+    expect(scanned.success).toBe(false)
+    expect(scanned.operationError).toContain('identity')
+    expect(git(origin, ['rev-parse', 'main'])).toBe(before)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('round4 P1-C: exact mapped approval permits a clean public workspace push and extra SHAs refuse', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'adhdev-ff-approved-'))
+  try {
+    const { origin, work } = createRemoteBackedRepo(root)
+    git(work, ['config', 'remote.origin.adhdev-private', 'false'])
+    git(work, ['config', 'user.name', 'vilmire'])
+    git(work, ['config', 'user.email', 'vilmire@users.noreply.github.com'])
+    mkdirSync(join(root, '.adhdev'), { recursive: true })
+    writeFileSync(join(root, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }))
+    commitFile(work, 'new.txt', 'clean\n', 'clean public change')
+    const tip = git(work, ['rev-parse', 'HEAD'])
+    const extra = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: [tip, 'abcdef0'] })
+    expect(extra.success).toBe(false)
+    expect(extra.operationError).toContain('publish_approval_required')
+    const approved = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: { root: [tip] } })
+    expect(approved.success, approved.operationError).toBe(true)
+    expect(git(origin, ['rev-parse', 'main'])).toBe(tip)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

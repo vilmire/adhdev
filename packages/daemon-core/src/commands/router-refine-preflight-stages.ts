@@ -163,7 +163,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
                 autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
                 worktreeRoot: node.workspace,
-                approvedPublishShas: Array.isArray(ctx.args?.approvedPublishShas) ? ctx.args.approvedPublishShas.filter((v: unknown): v is string => typeof v === 'string') : undefined,
+                approvedPublishShas: ctx.args?.approvedPublishShas,
             });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,

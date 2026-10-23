@@ -27,24 +27,61 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { devNull } from 'node:os';
-import { findLeaks, currentUserNames } from './personal-paths.mjs';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { findLeaks, findLeaksWithPatterns, currentUserNames } from './personal-paths.mjs';
 
 export const REQUIRED_NAME = 'vilmire';
 export const REQUIRED_EMAIL = 'vilmire@users.noreply.github.com';
 
-const ZERO = /^0+$/;
-const KNOWN_PUBLIC_RE = /[:/]vilmire\/adhdev(?:-providers)?(?:\.git)?\/?$/i;
+// Supplied by private repo config; never embed owner/fleet patterns in OSS.
+export function loadPublicPushPatterns(repo) {
+  let dir = resolve(repo);
+  while (true) {
+    try {
+      const patterns = JSON.parse(readFileSync(resolve(dir, '.adhdev/public-push-patterns.json'), 'utf8'));
+      if (!['ownerNames', 'knownHosts'].every(key => Array.isArray(patterns[key]) && patterns[key].length && patterns[key].every(v => typeof v === 'string' && v.trim()))) throw new Error('invalid pattern lists');
+      if (patterns.blockedText !== undefined && (!Array.isArray(patterns.blockedText) || !patterns.blockedText.every(v => typeof v === 'string' && v.trim()))) throw new Error('invalid literal patterns');
+      return patterns;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw new Error(`public push pattern config unavailable: ${error.message}`);
+    }
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error('public push pattern config unavailable; refusing public publish');
+    dir = parent;
+  }
+}
 
-// Only the known private GitHub repository is trusted by URL. Host aliases and
-// local/file URLs need explicit remote.<name>.adhdev-private=true configuration.
-function isKnownPrivateUrl(value) {
-  const url = String(value || '').trim();
-  if (/^git@github\.com:vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(url)) return true;
+const ZERO = /^0+$/;
+const KNOWN_PUBLIC_PATHS = new Set(['vilmire/adhdev', 'vilmire/adhdev-providers', 'vilmire/homebrew-adhdev']);
+
+// All transports use the same canonical path and authority. Invalid input never
+// supplies private evidence, even when a local private marker is present.
+export function parseRemoteUrl(value) {
   try {
-    const parsed = new URL(url);
-    return ['https:', 'ssh:'].includes(parsed.protocol) && parsed.hostname === 'github.com'
-      && !parsed.search && !parsed.hash && /^\/vilmire\/adhdev-cloud(?:\.git)?\/?$/i.test(parsed.pathname);
-  } catch { return false; }
+    let input = String(value || '').trim();
+    if (!input || /[\x00-\x20\\]/.test(input)) return null;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(input)) {
+      const scp = /^(?:[^@/:]+@)?([^/:]+):(.+)$/.exec(input);
+      input = scp ? `ssh://${scp[1]}/${scp[2]}` : `file:///${input.replace(/^\/+/, '')}`;
+    }
+    const url = new URL(input);
+    if (!['https:', 'http:', 'ssh:', 'git:', 'file:'].includes(url.protocol)) return null;
+    const parts = [];
+    for (const part of decodeURIComponent(url.pathname).split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') parts.pop(); else parts.push(part);
+    }
+    const path = parts.join('/').replace(/\.git$/i, '').toLowerCase();
+    if (!path) return null;
+    return { protocol: url.protocol, host: url.hostname.toLowerCase(), port: url.port || ({ 'https:': '443', 'http:': '80', 'ssh:': '22', 'git:': '9418' }[url.protocol] || ''), path };
+  } catch { return null; }
+}
+
+function isKnownPrivateUrl(value) {
+  const url = parseRemoteUrl(value);
+  return !!url && url.host === 'github.com' && url.path === 'vilmire/adhdev-cloud'
+    && ((url.protocol === 'https:' && url.port === '443') || (url.protocol === 'ssh:' && url.port === '22'));
 }
 
 /** Public means not proven private; URL-only classification has no local override. */
@@ -52,15 +89,20 @@ export function isPublicRemoteUrl(url) {
   return !isKnownPrivateUrl(url);
 }
 
-const GIT_ENV = { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull, GIT_TERMINAL_PROMPT: '0' };
+const REPO_LOCATION_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX', 'GIT_CEILING_DIRECTORIES'];
+function gitEnv(extra = {}) {
+  const env = { ...process.env, ...extra, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull, GIT_TERMINAL_PROMPT: '0' };
+  for (const key of REPO_LOCATION_VARS) delete env[key];
+  return env;
+}
 
 // `env` adds to the replacement/graft isolation; `onStdout` streams decoded text
 // instead of buffering the whole output (the resolved value is then '').
 function runGit(cwd, args, { input, env, onStdout } = {}) {
   return new Promise((resolve, reject) => {
     // Read the real object graph, irrespective of local replacement refs/grafts.
-    const child = spawn('git', ['--no-replace-objects', ...args], {
-      cwd, env: { ...process.env, ...GIT_ENV, ...env },
+    const child = spawn('git', ['--no-replace-objects', '-C', cwd, ...args], {
+      cwd, env: gitEnv(env),
       timeout: args[0] === 'ls-remote' ? 30_000 : undefined,
       windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
@@ -85,6 +127,19 @@ function runGit(cwd, args, { input, env, onStdout } = {}) {
 }
 const tryGit = async (cwd, args) => { try { return (await runGit(cwd, args)).trim(); } catch { return null; } };
 
+/** Anchor private config in the superproject, never a public submodule override. */
+export async function loadPublicPushPatternsForRepo(cwd) {
+  let repo = resolve(cwd);
+  const seen = new Set();
+  while (!seen.has(repo)) {
+    seen.add(repo);
+    const parent = await tryGit(repo, ['rev-parse', '--show-superproject-working-tree']);
+    if (!parent) return loadPublicPushPatterns(repo);
+    repo = resolve(parent);
+  }
+  throw new Error('cyclic superproject config lookup; refusing public publish');
+}
+
 /** All configured and rewritten push destinations; an unreadable config throws. */
 export async function pushDestinations(cwd, remoteName = 'origin') {
   // get-url --all applies insteadOf/pushInsteadOf and Git's pushurl/url fallback.
@@ -94,18 +149,42 @@ export async function pushDestinations(cwd, remoteName = 'origin') {
   if (!urls.length) throw new Error(`no push destinations for ${remoteName}`);
   const all = [...urls, ...configured.trim().split('\n')];
   const explicitlyPrivate = await tryGit(cwd, ['config', '--local', '--bool', '--get', `remote.${remoteName}.adhdev-private`]) === 'true';
-  return { urls, isPublic: all.some(url => KNOWN_PUBLIC_RE.test(url)) || (!explicitlyPrivate && all.some(isPublicRemoteUrl)) };
+  return { urls, isPublic: all.some(url => { const parsed = parseRemoteUrl(url); return !parsed || KNOWN_PUBLIC_PATHS.has(parsed.path); }) || (!explicitlyPrivate && all.some(isPublicRemoteUrl)) };
 }
 
-// Noninteractive ssh: insert our option before existing options, since ssh uses
-// the first value. Keep the executable (including a quoted path) and its arguments.
+// Parse a command into argv, then quote each argument for Git's command runner.
+// Shell expansion/operators are refused; no configured command is interpolated.
+function commandWords(command) {
+  const words = [];
+  let word = '', quote = '', active = false;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote === "'") { if (c === "'") quote = ''; else word += c; active = true; continue; }
+    if (c === "'" && !quote) { quote = c; active = true; continue; }
+    if (c === '"') { quote = quote ? '' : c; active = true; continue; }
+    if (c === '\\') { if (++i >= command.length) throw new Error('invalid ssh escape'); word += command[i]; active = true; continue; }
+    if (/[`$;|&<>\n\r]/.test(c)) throw new Error('unsupported ssh shell expression');
+    if (/\s/.test(c) && !quote) { if (active) words.push(word); word = ''; active = false; }
+    else { word += c; active = true; }
+  }
+  if (quote) throw new Error('unterminated ssh quote');
+  if (active) words.push(word);
+  return words;
+}
 async function networkEnv(cwd) {
   const env = { GIT_ASKPASS: 'false', SSH_ASKPASS: 'false', SSH_ASKPASS_REQUIRE: 'never', GCM_INTERACTIVE: 'never' };
+  const command = process.env.GIT_SSH_COMMAND || await tryGit(cwd, ['config', '--get', 'core.sshCommand']);
+  const words = command ? commandWords(command) : [process.env.GIT_SSH || 'ssh'];
+  if (words[0] === 'env') words.shift();
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] || '')) {
+    const assignment = words.shift();
+    const split = assignment.indexOf('=');
+    env[assignment.slice(0, split)] = assignment.slice(split + 1);
+  }
+  if (!words[0]) throw new Error('missing ssh executable');
+  words.splice(1, 0, '-o', 'BatchMode=yes');
   const quote = s => "'" + s.replaceAll("'", "'\\''") + "'";
-  const ssh = process.env.GIT_SSH_COMMAND || await tryGit(cwd, ['config', '--get', 'core.sshCommand']) || (process.env.GIT_SSH ? quote(process.env.GIT_SSH) : 'ssh');
-  const executable = /^(?:"[^"\n]+"|'[^'\n]+'|[^\s'";|&<>]+)(?=\s|$)/.exec(ssh);
-  if (!executable) throw new Error('cannot make configured ssh command noninteractive');
-  env.GIT_SSH_COMMAND = `${executable[0]} -o BatchMode=yes${ssh.slice(executable[0].length)}`;
+  env.GIT_SSH_COMMAND = words.map(quote).join(' ');
   return env;
 }
 
@@ -342,7 +421,7 @@ async function patchViolations(cwd, shas, scan) {
 // One long-lived `cat-file --batch` for the whole tag walk: one process for any
 // chain depth instead of two spawns per level. Requests are strictly sequential.
 function openBatchReader(cwd) {
-  const child = spawn('git', ['--no-replace-objects', 'cat-file', '--batch'], { cwd, env: { ...process.env, ...GIT_ENV }, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  const child = spawn('git', ['--no-replace-objects', '-C', cwd, 'cat-file', '--batch'], { cwd, env: gitEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
   let buf = Buffer.alloc(0);
   let waiter = null;
   let dead = null;
@@ -409,12 +488,12 @@ async function tagViolations(reader, objectSha, scan, scanRef) {
  * @param entries [{ localRef, localSha, remoteRef, remoteSha }]
  * @returns {Promise<{ violations: object[], checked: number }>}
  */
-export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames() } = {}) {
-  const names = currentUserNames();
-  const scan = findLeaksFn || ((t) => findLeaks(t, names));
+export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns } = {}) {
+  const names = new Set([...currentUserNames(), ...ownerNames, ...(patterns?.ownerNames || [])]);
+  const scan = findLeaksFn || ((t) => patterns ? findLeaksWithPatterns(t, patterns, names) : findLeaks(t, names));
   // Ref names have no public repository-owner context: owner account tokens
   // there are identifying, even without a home-directory prefix.
-  const refOwners = new Set([REQUIRED_NAME, ...ownerNames]);
+  const refOwners = new Set([REQUIRED_NAME, ...names]);
   const scanRef = (name) => {
     const hits = scanText(scan, `/${name}`);
     for (const owner of refOwners) {
@@ -461,8 +540,9 @@ export const BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMA
  * Refinery/auto-publish entry point: throws (message = full report) unless
  * `commit` may be published to the public oss remote. Fail-closed: scan errors throw.
  */
-export async function assertPublishableToPublicOss(cwd, commit, { remoteName = 'origin', remoteUrl, remoteRef = 'refs/heads/main' } = {}) {
-  const { violations, checked } = await checkPush([{ localRef: commit, localSha: commit, remoteRef, remoteSha: '0'.repeat(40) }], { cwd, remoteName, remoteUrl });
+export async function assertPublishableToPublicOss(cwd, commit, { remoteName = 'origin', remoteUrl, remoteRef = 'refs/heads/main', patterns } = {}) {
+  patterns ||= await loadPublicPushPatternsForRepo(cwd);
+  const { violations, checked } = await checkPush([{ localRef: commit, localSha: commit, remoteRef, remoteSha: '0'.repeat(40) }], { cwd, remoteName, remoteUrl, patterns });
   if (violations.length) {
     throw new Error(`public-oss push guard BLOCKED ${violations.length} violation(s) in ${checked} commit(s):\n${violations.slice(0, 20).map(formatViolation).join('\n')}\n${BLOCKED_HINT}`);
   }

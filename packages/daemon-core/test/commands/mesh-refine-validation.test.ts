@@ -1800,6 +1800,11 @@ describe('P1-5 root public publishing', () => {
     try {
       withConfigDir(root)
       initGitRepo(repo)
+      mkdirSync(join(repo, '.adhdev'), { recursive: true })
+      writeFileSync(join(repo, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }))
+      execFileSync('git', ['add', '.adhdev'], { cwd: repo })
+      execFileSync('git', ['commit', '-qm', 'configure patterns'], { cwd: repo })
+      execFileSync('git', ['push', 'origin', 'main'], { cwd: repo })
       execFileSync('git', ['config', '--unset', 'remote.origin.adhdev-private'], { cwd: repo })
       const remoteBefore = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repo, encoding: 'utf8' }).trim()
       execFileSync('git', ['config', 'user.name', 'vilmire'], { cwd: repo })

@@ -138,3 +138,12 @@ test('approved_publish_shas is forwarded as approvedPublishShas by both refine t
     assert.deepEqual(calls.find(c => c.command === 'refine_mesh_node')!.args.approvedPublishShas, ['abc1234']);
     assert.deepEqual(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args.approvedPublishShas, ['abc1234']);
 });
+
+test('round4 P2-B: per-repo approval maps survive both MCP refine calls', async () => {
+    const { ctx, calls } = makeCtx();
+    const approvals = { oss: ['abcdef0'], 'adhdev-providers': ['1234567'], root: ['7654321'] };
+    await meshRefineNode(ctx, { node_id: 'node_wt_remote', execute: true, approved_publish_shas: approvals });
+    await meshRefineBatch(ctx, { execute: true, approved_publish_shas: approvals });
+    assert.deepEqual(calls.find(c => c.command === 'refine_mesh_node')!.args.approvedPublishShas, approvals);
+    assert.deepEqual(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args.approvedPublishShas, approvals);
+});

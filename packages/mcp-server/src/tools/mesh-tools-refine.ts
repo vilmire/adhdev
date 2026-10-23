@@ -1,3 +1,9 @@
+type PublicPublishApprovals = string[] | Record<string, string[]>;
+function normalizePublishApprovals(value: PublicPublishApprovals | undefined): PublicPublishApprovals | undefined {
+    if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, shas]) => [key, Array.isArray(shas) ? shas.filter(v => typeof v === 'string') : []]));
+    return undefined;
+}
 // Mesh tool implementations — refine domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
 // modules that define them; mesh-tools.ts is the tool barrel.
@@ -217,7 +223,7 @@ export async function meshWriteMeshJsonConfig(
 
 export async function meshRefineNode(
     ctx: MeshContext,
-    args: { node_id: string; execute?: boolean; dry_run?: boolean; approved_publish_shas?: string[] },
+    args: { node_id: string; execute?: boolean; dry_run?: boolean; approved_publish_shas?: PublicPublishApprovals },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
@@ -264,7 +270,7 @@ export async function meshRefineNode(
         nodeId: args.node_id,
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
-        ...(Array.isArray(args.approved_publish_shas) ? { approvedPublishShas: args.approved_publish_shas.filter((v): v is string => typeof v === 'string') } : {}),
+        ...(args.approved_publish_shas ? { approvedPublishShas: normalizePublishApprovals(args.approved_publish_shas) } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,
@@ -284,7 +290,7 @@ export async function meshRefineNode(
 
 export async function meshRefineBatch(
     ctx: MeshContext,
-    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean; approved_publish_shas?: string[] } = {},
+    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean; approved_publish_shas?: PublicPublishApprovals } = {},
 ): Promise<string> {
     // Refresh so auto-collection and explicit node IDs resolve against the latest
     // mesh membership (siblings may have been created/removed in this MCP session).
@@ -326,7 +332,7 @@ export async function meshRefineBatch(
         ...(nodeIds ? { nodeIds } : {}),
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
-        ...(Array.isArray(args.approved_publish_shas) ? { approvedPublishShas: args.approved_publish_shas.filter((v): v is string => typeof v === 'string') } : {}),
+        ...(args.approved_publish_shas ? { approvedPublishShas: normalizePublishApprovals(args.approved_publish_shas) } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,

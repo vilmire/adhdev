@@ -1,3 +1,4 @@
+import { assertRefineryPublishApproved, type PublicPublishApprovals } from '../mesh/mesh-refine-gitlink-utils.js';
 import * as path from 'node:path';
 
 import { getGitDiffSummary, getGitFileDiff } from './git-diff.js';
@@ -115,7 +116,7 @@ export interface GitCommandServices {
   stashPop?: (params: { workspace: string; stashRef?: string }) => Promise<void>;
   checkoutFiles?: (params: { workspace: string; paths: string[] }) => Promise<{ checkedOut: string[] }>;
   getRemoteUrl?: (params: { workspace: string; remote?: string }) => Promise<{ remoteUrl: string; remote: string }>;
-  push?: (params: { workspace: string; remote?: string; branch?: string; setUpstream?: boolean }) => Promise<GitPushResult>;
+  push?: (params: { workspace: string; remote?: string; branch?: string; setUpstream?: boolean; approvedPublishShas?: PublicPublishApprovals }) => Promise<GitPushResult>;
   /**
    * Best-effort, non-blocking source of this daemon's detected provider CLI
    * versions (keyed by provider id) + its build version, folded onto the git_status
@@ -235,8 +236,8 @@ export function createDefaultGitCommandServices(
     stashPop: async ({ workspace, stashRef }) => gitStashPop(workspace, stashRef),
     checkoutFiles: async ({ workspace, paths }) => gitCheckoutFiles(workspace, paths),
     getRemoteUrl: async ({ workspace, remote = 'origin' }) => gitGetRemoteUrl(workspace, remote),
-    push: async ({ workspace, remote = 'origin', branch, setUpstream = false }) =>
-      gitPush(workspace, remote, branch, setUpstream),
+    push: async ({ workspace, remote = 'origin', branch, setUpstream = false, approvedPublishShas }) =>
+      gitPush(workspace, remote, branch, setUpstream, approvedPublishShas),
     ...(overrides?.getReporterProviderVersions
       ? { getReporterProviderVersions: overrides.getReporterProviderVersions }
       : {}),
@@ -538,7 +539,7 @@ export async function handleGitCommand(
       if (branch !== undefined && !/^[a-zA-Z0-9/_.\-]+$/.test(branch)) {
         return failure('invalid_args', 'branch must contain only alphanumeric characters, slashes, dots, hyphens, and underscores');
       }
-      const pushResult = await runService(() => services.push!({ workspace, remote, branch, setUpstream }));
+      const pushResult = await runService(() => services.push!({ workspace, remote, branch, setUpstream, approvedPublishShas: args?.approvedPublishShas }));
       return 'success' in pushResult ? pushResult : { success: true, push: pushResult };
     }
 
@@ -734,6 +735,7 @@ async function gitPush(
   remote: string,
   branch: string | undefined,
   setUpstream: boolean,
+  approvedPublishShas?: PublicPublishApprovals,
 ): Promise<GitPushResult> {
   const lastCheckedAt = Date.now();
   const repo = await resolveGitRepository(workspace);
@@ -749,12 +751,17 @@ async function gitPush(
     }
   }
 
+  const commit = (await runGit(repo, ['--no-replace-objects', 'rev-parse', '--verify', `${resolvedBranch}^{commit}`], { cwd: repoRoot })).stdout.trim();
+  const destinationBranch = resolvedBranch.replace(/^refs\/heads\//, '');
+  await assertRefineryPublishApproved(repoRoot, commit, destinationBranch, approvedPublishShas, remote);
+  const refspec = `${commit}:refs/heads/${destinationBranch}`;
   const pushArgs = ['push'];
   if (setUpstream) pushArgs.push('--set-upstream');
-  pushArgs.push(remote, resolvedBranch);
+  pushArgs.push(remote, refspec);
 
   let output = '';
   let newBranch = false;
+  let installUpstream = setUpstream;
   try {
     const result = await runGit(repo, pushArgs, { cwd: repoRoot });
     output = (result.stdout + result.stderr).trim();
@@ -763,13 +770,20 @@ async function gitPush(
     const errOutput = (err?.stdout ?? '') + (err?.stderr ?? '');
     // --set-upstream hint: retry with --set-upstream automatically
     if (!setUpstream && /no upstream branch|set-upstream/i.test(errOutput)) {
-      const retryArgs = ['push', '--set-upstream', remote, resolvedBranch];
+      installUpstream = true;
+      const retryArgs = ['push', '--set-upstream', remote, refspec];
       const retryResult = await runGit(repo, retryArgs, { cwd: repoRoot });
       output = (retryResult.stdout + retryResult.stderr).trim();
       newBranch = /\[new branch\]/i.test(output);
     } else {
       throw new GitCommandError('git_command_failed', errOutput || err?.message || 'git push failed');
     }
+  }
+
+  if (installUpstream) {
+    // The frozen SHA refspec has no local branch for push -u to configure.
+    await runGit(repo, ['config', `branch.${destinationBranch}.remote`, remote], { cwd: repoRoot });
+    await runGit(repo, ['config', `branch.${destinationBranch}.merge`, `refs/heads/${destinationBranch}`], { cwd: repoRoot });
   }
 
   return {

@@ -1,10 +1,16 @@
+import { devNull } from 'node:os';
+import { gitChildEnv } from '../git/git-locale.js';
+import { assertRefineryPublishApproved, type PublicPublishApprovals } from './mesh-refine-gitlink-utils.js';
 import type { GitRepoStatus, GitSubmoduleStatus } from '../git/git-types.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { GitCommandError, runGit } from '../git/git-executor.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 import { pushDestinations } from '../git/public-push-guard.mjs';
 
+const realGitEnv = () => ({ ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull });
+
 export interface MeshFastForwardNodeArgs {
+  approvedPublishShas?: PublicPublishApprovals;
   nodeId?: string;
   meshId?: string;
   workspace: string;
@@ -377,7 +383,9 @@ async function pushMeshNode(
 
   // Execute the root ff-only push.
   try {
-    await runGit(workspace, ['push', target.remote, refspec], { timeoutMs: args.timeoutMs ?? 30_000 });
+    const commit = (await runGit(workspace, ['--no-replace-objects', 'rev-parse', 'HEAD'], { env: realGitEnv() })).stdout.trim();
+    await assertRefineryPublishApproved(workspace, commit, target.remoteBranch, args.approvedPublishShas, target.remote);
+    await runGit(workspace, ['push', target.remote, `${commit}:refs/heads/${target.remoteBranch}`], { timeoutMs: args.timeoutMs ?? 30_000 });
   } catch (error) {
     const result: MeshFastForwardResult = {
       ...block(base, 'push_ff_only_failed', ['push_ff_only_failed']),
@@ -545,7 +553,7 @@ async function resolveSubmodulePushes(
     }
     let alreadyReachable = false;
     try {
-      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, remoteRef], { timeoutMs: timeoutMs ?? 15_000 });
+      await runGit(repoPath, ['--no-replace-objects', 'merge-base', '--is-ancestor', submodule.commit, remoteRef], { env: realGitEnv(), timeoutMs: timeoutMs ?? 15_000 });
       alreadyReachable = true;
     } catch { /* not yet on origin/<branch> — candidate for push */ }
     if (alreadyReachable) {
@@ -554,7 +562,7 @@ async function resolveSubmodulePushes(
     }
     // Strict ff-only: origin/<branch> must be an ancestor of the commit we publish.
     try {
-      await runGit(repoPath, ['merge-base', '--is-ancestor', remoteRef, submodule.commit], { timeoutMs: timeoutMs ?? 15_000 });
+      await runGit(repoPath, ['--no-replace-objects', 'merge-base', '--is-ancestor', remoteRef, submodule.commit], { env: realGitEnv(), timeoutMs: timeoutMs ?? 15_000 });
     } catch (error) {
       results.push({ ...base, pushed: false, skipped: false, code: 'submodule_non_fast_forward', error: formatGitError(error) });
       continue;
@@ -576,7 +584,7 @@ async function resolveSubmodulePushes(
       await runGit(repoPath, ['push', 'origin', refspec], { timeoutMs: timeoutMs ?? 30_000 });
       // Verify reachability after the push.
       await runGit(repoPath, ['-c', 'protocol.file.allow=always', 'fetch', 'origin', fetchRefspec], { timeoutMs: timeoutMs ?? 30_000 });
-      await runGit(repoPath, ['merge-base', '--is-ancestor', submodule.commit, remoteRef], { timeoutMs: timeoutMs ?? 15_000 });
+      await runGit(repoPath, ['--no-replace-objects', 'merge-base', '--is-ancestor', submodule.commit, remoteRef], { env: realGitEnv(), timeoutMs: timeoutMs ?? 15_000 });
       results.push({ ...base, pushed: true, skipped: false, code: 'submodule_pushed', refspec });
     } catch (error) {
       results.push({ ...base, pushed: false, skipped: false, code: 'submodule_push_failed', refspec, error: formatGitError(error) });
