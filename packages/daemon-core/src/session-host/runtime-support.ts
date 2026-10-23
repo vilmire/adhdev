@@ -264,11 +264,11 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
             type: 'list_sessions',
             payload: {},
         });
-        if (!response.success || !response.result) {
-            throw new Error(`Session host list_sessions failed: ${response.error || 'missing result'}`);
+        if (!response.success || !Array.isArray(response.result)) {
+            throw new Error(`session_host_inventory_unavailable: ${response.error || 'missing list_sessions result'}`);
         }
         return response.result
-            .filter((record) => record.category === 'cli' && ['running', 'interrupted'].includes(record.lifecycle))
+            .filter((record) => record.category === 'cli' && !record.termination && ['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle))
             .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
             .map((record) => ({
                 runtimeId: record.sessionId,
@@ -281,6 +281,8 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                 workspace: record.workspace,
                 cliArgs: Array.isArray(record.meta?.cliArgs) ? (record.meta.cliArgs as string[]) : [],
                 providerSessionId: typeof record.meta?.providerSessionId === 'string' ? String(record.meta.providerSessionId) : undefined,
+                assistant: record.meta?.assistant === true ? true : undefined,
+                startedAtMs: record.startedAt,
                 managedBy: typeof record.meta?.managedBy === 'string' ? String(record.meta.managedBy) : undefined,
                 // Session-level mesh membership (rc.20 rebound relay envelope) —
                 // surfaced so restoreHostedSessions can re-apply it to the rebuilt

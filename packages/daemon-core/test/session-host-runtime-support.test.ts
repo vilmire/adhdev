@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
       close?: ReturnType<typeof vi.fn>
     },
     disconnectClientsCalls: 0,
+    inventoryResults: [] as unknown[],
     clients: [] as Array<{
       connect: ReturnType<typeof vi.fn>
       close: ReturnType<typeof vi.fn>
@@ -35,7 +36,7 @@ vi.mock('@adhdev/session-host-core', () => {
         if (typeof next === 'function') return next(request, options)
         return next ?? { success: true, result: { supportedRequestTypes: ['delete_session'] } }
       }
-      return { success: true, result: [] }
+      return mocks.state.inventoryResults.shift() ?? { success: true, result: [] }
     })
     mocks.state.clients.push(this)
   })
@@ -74,6 +75,7 @@ describe('session host runtime support compatibility', () => {
     mocks.state.disconnectClientsCalls = 0
     mocks.state.clients = []
     unregisterMeshCoordinator('cli-claude-ghost7008')
+    mocks.state.inventoryResults = []
   })
 
   it('rejects a reachable older host when diagnostics do not advertise delete_session support', async () => {
@@ -500,3 +502,24 @@ describe('session host runtime support compatibility', () => {
     expect(sessionRegistry.get(ghostId)).toBeUndefined()
   })
 })
+
+
+describe('assistant runtime provenance inventory', () => {
+  it('projects positive meta.assistant and launch provenance, while ignoring ordinary sessions', async () => {
+    const launchRecord = { launchedBy: 'assistant' };
+    mocks.state.inventoryResults = [{ success: true, result: [
+      { sessionId: 'assistant', providerType: 'sample-cli', category: 'cli', lifecycle: 'running',
+        workspace: '/assistant', startedAt: 42, meta: { assistant: true, launchRecord } },
+      { sessionId: 'ordinary', providerType: 'sample-cli', category: 'cli', lifecycle: 'running',
+        workspace: '/assistant', meta: { assistant: 'true' } },
+    ] }];
+    const records = await listHostedCliRuntimes({ kind: 'unix', path: '/tmp/test.sock' });
+    expect(records[0]).toMatchObject({ runtimeId: 'assistant', assistant: true, launchRecord, startedAtMs: 42 });
+    expect(records[1].assistant).toBeUndefined();
+  });
+
+  it('rejects unsuccessful inventories instead of presenting an authoritative empty set', async () => {
+    mocks.state.inventoryResults = [{ success: false, error: 'host unavailable' }];
+    await expect(listHostedCliRuntimes({ kind: 'unix', path: '/tmp/test.sock' })).rejects.toThrow('session_host_inventory_unavailable');
+  });
+});

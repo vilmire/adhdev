@@ -87,9 +87,13 @@ describe('AssistantRegistry', () => {
     it('prunes a dead binding only against the full live set', () => {
         const r = reg();
         bind(r);
-        expect(r.pruneAfterRestore(new Set(['rt_1', 'rt_x']))).toBeNull();
+        const owner = { endpoint: 'unix:/tmp/preview.sock', managedBy: 'adhdev-cloud', clientId: 'daemon_test' };
+        r.bindSession({ sessionId: 'rt_1', cliType: 'claude-cli', workspace: '/assistant', at: 1, hostOwner: owner });
+        expect(r.pruneAfterRestore(new Set(['rt_1', 'rt_x']), owner)).toBeNull();
         expect(r.read()!.sessionId).toBe('rt_1');
-        expect(r.pruneAfterRestore(new Set(['rt_x']))).toBe('rt_1');
+        expect(r.pruneAfterRestore(new Set(['rt_x']))).toBeNull();
+        expect(r.pruneAfterRestore(new Set(['rt_x']), { ...owner, endpoint: 'unix:/tmp/standalone.sock' })).toBeNull();
+        expect(r.pruneAfterRestore(new Set(['rt_x']), owner)).toBe('rt_1');
         expect(r.read()!.sessionId).toBeNull();
     });
 

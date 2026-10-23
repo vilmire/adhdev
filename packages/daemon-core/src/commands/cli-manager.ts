@@ -1,3 +1,4 @@
+import type { HostedBindingOwner } from '../session-host/binding-owner.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
@@ -62,6 +63,7 @@ export interface CliManagerDeps {
     createPtyTransportFactory?: (params: CliTransportFactoryParams) => PtyTransportFactory | null;
     listHostedCliRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
     hostedRuntimeManagerTag?: string;
+    getHostedBindingOwner?: () => HostedBindingOwner;
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
 }
 
@@ -96,6 +98,8 @@ export interface HostedCliRuntimeDescriptor {
     cliArgs?: string[];
     providerSessionId?: string;
     managedBy?: string;
+    /** Positive role mark persisted in session-host meta; never inferred from workspace/title. */
+    assistant?: boolean;
     /**
      * Real spawn time (ms epoch) of the underlying session-host runtime — a PAST
      * timestamp recorded when the runtime first started. Threaded through so an
@@ -156,6 +160,12 @@ const AUTO_CLEAN_DELAY_MS = 5_000;
 // ─── DaemonCliManager ────────────────────────────
 
 export class DaemonCliManager {
+    /** Set at boot before command admission, and around every restore attempt. */
+    hostedRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
+    private hostedFullRestoreOperation?: Promise<number>;
+    private hostedRestoreQueue: Promise<unknown> = Promise.resolve();
+    private hostedFullRestoreState: 'pending' | 'ready' | 'failed' = 'ready';
+    private hostedPartialRestoreCount = 0;
     readonly adapters = new Map<string, CliAdapter>();
     readonly roleRestartInputs = new Map<string, { cliArgs?: string[]; initialModel?: string; options: CliStartOptions }>();
     deps: CliManagerDeps;
@@ -583,7 +593,31 @@ export class DaemonCliManager {
         this.roleRestartInputs.clear();
     }
     observeHeldHostedSessions(challenge: string) { return observeHeldHostedSessions(this, challenge); }
-    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[]): Promise<number> { return restoreHostedSessions(this, records); }
+    restoreHostedSessions(records?: HostedCliRuntimeDescriptor[], signal?: AbortSignal): Promise<number> {
+        const full = records === undefined;
+        if (full && this.hostedFullRestoreOperation) return this.hostedFullRestoreOperation;
+        if (full || (this.hostedRestoreState === 'pending' && !this.hostedFullRestoreOperation && !this.hostedPartialRestoreCount)) {
+            this.hostedFullRestoreState = 'pending';
+        }
+        if (!full) this.hostedPartialRestoreCount++;
+        this.hostedRestoreState = 'pending';
+        // Serialize attachment work without letting a partial inventory satisfy a full restore.
+        const operation = this.hostedRestoreQueue.then(() => restoreHostedSessions(this, records, signal)).then(count => {
+            if (full) this.hostedFullRestoreState = 'ready';
+            return count;
+        }, error => {
+            if (full) this.hostedFullRestoreState = 'failed';
+            throw error;
+        }).finally(() => {
+            if (full) this.hostedFullRestoreOperation = undefined;
+            else this.hostedPartialRestoreCount--;
+            this.hostedRestoreState = this.hostedPartialRestoreCount || this.hostedFullRestoreState === 'pending'
+                ? 'pending' : this.hostedFullRestoreState;
+        });
+        this.hostedRestoreQueue = operation.catch(() => {});
+        if (full) this.hostedFullRestoreOperation = operation;
+        return operation;
+    }
 
     /**
      * Reconcile daemon-tracked CLI sessions after a session-host replacement.

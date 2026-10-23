@@ -14,97 +14,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { runStatusTransitionTick, type StatusTransitionHost } from '../../../src/providers/completion/status-transition.js';
-import type { ProviderModule } from '../../../src/providers/contracts.js';
+import { runStatusTransitionTick } from '../../../src/providers/completion/status-transition.js';
+import { projectServerStatusEvent } from '../../../src/status/status-event.js';
 import type { InteractivePrompt } from '../../../src/providers/types/interactive-prompt.js';
 
-const PROVIDER: ProviderModule = {
-    type: 'claude-cli',
-    name: 'Claude Code',
-    category: 'cli',
-} as ProviderModule;
-
-const SAMPLE_PROMPT: InteractivePrompt = {
-    promptId: 'q1',
-    origin: 'cli',
-    providerType: 'claude-cli',
-    createdAt: 0,
-    questions: [{
-        questionId: 'q1',
-        question: 'Pick as many as apply',
-        multiSelect: true,
-        options: [{ label: 'Alpha' }, { label: 'Beta' }],
-    }],
-};
-
-function makeHost(opts: {
-    rawStatus: string;
-    activeInteractivePrompt: InteractivePrompt | null;
-    activeModalKind: 'picker' | 'approval' | null;
-}): { host: StatusTransitionHost & Record<string, unknown>; pushed: unknown[] } {
-    const pushed: unknown[] = [];
-    const host: StatusTransitionHost & Record<string, unknown> = {
-        type: 'claude-cli',
-        instanceId: 'inst-1',
-        workingDir: '/work/adhdev',
-        provider: PROVIDER,
-        adapter: {
-            getStatus: () => ({
-                status: opts.rawStatus,
-                activeInteractivePrompt: opts.activeInteractivePrompt,
-                activeModal: opts.activeModalKind
-                    ? { kind: opts.activeModalKind, message: 'Pick as many as apply', buttons: ['Alpha', 'Beta'] }
-                    : null,
-            }),
-            getPartialResponse: () => '',
-            getScriptParsedStatus: () => null,
-        },
-        monitor: { check: () => [] } as any,
-        providerSessionId: undefined,
-
-        lastStatus: 'busy',
-        generatingStartedAt: 1,
-        generatingDebounceTimer: null,
-        generatingDebouncePending: null,
-        completedDebounceTimer: null,
-        completedDebouncePending: null,
-        busyEpoch: 0,
-        autoApproveBusy: false,
-        suppressIdleHistoryReplay: false,
-        lastApprovalEventFingerprint: '',
-        lastInteractivePromptEventKey: '',
-        startupGraceCollapseAt: null,
-        agentReadyEmitted: true,
-        errorMessage: undefined,
-        errorReason: undefined,
-        lastCompletionSummary: null,
-
-        stabilizeFlappingApprovalStatus: (adapterStatus: any) => adapterStatus,
-        promoteProviderSessionId: () => {},
-        maybeAutoApproveStatus: () => false,
-        hasAdapterPendingResponse: () => true,
-        fsmTraceOn: () => false,
-        recordFsmTransitionTrace: () => {},
-        completionTraceOn: () => false,
-        recordCompletionGateTrace: () => {},
-        pushEvent: (event: unknown) => { pushed.push(event); },
-        appendRuntimeSystemMessage: () => {},
-        completingTurnTaskId: () => undefined,
-        isAutonomousMeshSession: () => false,
-        isMeshWorkerSession: () => false,
-        meshTraceCtx: () => ({}),
-        completionFinalAssistantEvidence: () => ({ source: 'unavailable', messages: [] }) as any,
-        completionHasFinalAssistantMessage: () => false,
-        hasEmittedGenuineCompletionForCurrentEpoch: () => false,
-        emitGeneratingCompleted: () => {},
-        markCurrentTurnStartupGraceCollapseSatisfied: () => {},
-        maybeSynthesizeStartupGraceCollapse: () => false,
-        scheduleCompletedDebounceFlush: () => {},
-        emitAgentReadyOnce: () => {},
-        applyProviderResponse: () => {},
-    };
-    return { host, pushed };
-}
+import { makeHost, SAMPLE_PROMPT } from './status-transition-picker-host-fixture.js';
 
 describe('runStatusTransitionTick — question-picker vs approval classification', () => {
     it('interactivePrompt=null + rawStatus=waiting_approval + activeModalKind=picker → stays waiting_approval (parse-failure fallback, the bug)', () => {
@@ -146,5 +60,28 @@ describe('runStatusTransitionTick — question-picker vs approval classification
 
         expect(host.lastStatus).toBe('waiting_approval');
         expect(pushed.some((e: any) => e.event === 'agent:waiting_approval')).toBe(true);
+    });
+
+    // CLAUDE.md "Push notification exception": the waiting_choice event is what the
+    // server push reads. Drive the real event path and pin what leaves the daemon.
+    it('waiting_choice push projection: first question + its option labels only; NOT bounded daemon-side (reported, policy unchanged)', () => {
+        const long = 'Q'.repeat(400);
+        const prompt: InteractivePrompt = {
+            ...SAMPLE_PROMPT,
+            questions: [
+                { questionId: 'a', header: 'Scope', question: long, multiSelect: false, options: Array.from({ length: 12 }, (_, i) => ({ label: `opt-${i}` })) },
+                { questionId: 'b', question: 'SECOND-QUESTION-TEXT', multiSelect: false, options: [{ label: 'SECOND-OPTION' }] },
+            ],
+        };
+        const { host, pushed } = makeHost({ rawStatus: 'waiting_approval', activeInteractivePrompt: prompt, activeModalKind: 'picker' });
+        runStatusTransitionTick(host);
+        const ev = pushed.find((e: any) => e.event === 'agent:waiting_choice') as Record<string, unknown>;
+        expect(ev.modalMessage).toBe(`Scope: ${long}`);
+        expect((ev.modalButtons as string[]).length).toBe(12);
+        const wire = projectServerStatusEvent(ev) as Record<string, unknown>;
+        expect(wire.modalMessage).toBe(`Scope: ${long}`); // untruncated here; the 80-char cut is server-side
+        expect(wire.modalButtons).toEqual(ev.modalButtons);
+        expect(JSON.stringify(wire)).not.toMatch(/SECOND-/);
+        expect(wire).not.toHaveProperty('interactivePrompt');
     });
 });

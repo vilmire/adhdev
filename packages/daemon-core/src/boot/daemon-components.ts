@@ -41,6 +41,7 @@ export interface SessionHostBoot {
     listHostedRuntimes?: () => Promise<HostedCliRuntimeDescriptor[]>;
     verifiedRetainedEndpoint?: () => Promise<import('@adhdev/session-host-core').SessionHostEndpoint>;
     managedByTag?: string;
+    getBindingOwner?: () => import('../session-host/binding-owner.js').HostedBindingOwner;
     control?: SessionHostControlPlane | null;
     onHostReplaced?: (listener: () => Promise<void> | void) => void;
 }

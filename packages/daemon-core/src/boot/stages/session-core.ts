@@ -77,6 +77,7 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
     const cliManager = new DaemonCliManager({
         getP2p: () => outputFanout,
         verifiedRetainedEndpoint: cfg.sessionHost.verifiedRetainedEndpoint,
+        getHostedBindingOwner: cfg.sessionHost.getBindingOwner,
         getInstanceManager: () => instanceManager,
         getSessionRegistry: () => sessionRegistry,
         ...(cfg.sessionHost.createPtyTransportFactory ? { createPtyTransportFactory: cfg.sessionHost.createPtyTransportFactory } : {}),
@@ -84,6 +85,8 @@ export async function bootSessionCore(s2: ProvidersStage): Promise<SessionCoreSt
         ...(cfg.sessionHost.managedByTag ? { hostedRuntimeManagerTag: cfg.sessionHost.managedByTag } : {}),
     }, providerLoader);
     cfg.sessionHost.onHostReplaced?.(() => cliManager.reconcileHostedSessionsAfterHostReplace().then(() => undefined));
+
+    if (cfg.restoreHostedSessions) cliManager.hostedRestoreState = 'pending';
 
     const agentStreamManager = new DaemonAgentStreamManager(
         LOG.forComponent('AgentStream').asLogFn(),
