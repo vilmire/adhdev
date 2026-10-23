@@ -123,6 +123,7 @@ export const fastForwardHandlers: Record<string, MedFamilyHandler> = {
                 submoduleIgnorePaths,
                 mode: args?.mode === 'push' ? 'push' : 'merge',
                 pushSubmodules: args?.pushSubmodules === true,
+                approvedPublishShas: args?.approvedPublishShas,
                 allowAutoPublishSubmoduleMainCommits,
             }) as Promise<unknown>);
             return result as CommandRouterResult;

@@ -114,17 +114,23 @@ describe('Refinery git call sites are timeout- and env-bounded', () => {
         const callSites = src.match(/execFileSync\(GIT,[\s\S]*?\n?\s*\}\)/g) ?? [];
         // Guards against the regex silently matching nothing after a refactor.
         expect(callSites.length).toBeGreaterThanOrEqual(8);
+        expect(callSites).toHaveLength((src.match(/execFileSync\(/g) ?? []).length);
         expect(callSites.filter(site => !/timeout:/.test(site))).toEqual([]);
-        expect(callSites.filter(site => !/gitChildEnv\(\)/.test(site))).toEqual([]);
+        // realGitEnv preserves gitChildEnv's repo-location/locale sanitization
+        // and additionally disables replacement objects and grafts.
+        expect(src).toMatch(/const realGitEnv = \(\) => \(\{ \.\.\.gitChildEnv\(\), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull \}\);/);
+        expect(callSites.filter(site => !/env: (?:gitChildEnv|realGitEnv)\(\)/.test(site))).toEqual([]);
     });
 
     it('the gitlink-utils network fetch strategies use the NETWORK bound, not the local one', () => {
         const src = sourceOf('mesh-refine-gitlink-utils.ts');
         // The `protocol.file.allow=always` fetch loop in ensureSubmoduleCommitLocal:
         // it accepts any transport, so it must carry the 30s network bound.
-        const fetchSite = src.match(/execFileSync\(GIT, \['-c', 'protocol\.file\.allow=always'[\s\S]*?\n\s*\}\)/)?.[0] ?? '';
-        expect(fetchSite).not.toBe('');
-        expect(fetchSite).toMatch(/timeout: GIT_NETWORK_TIMEOUT_MS/);
+        const callSites = src.match(/execFileSync\(GIT,[\s\S]*?\n?\s*\}\)/g) ?? [];
+        // Inspect the full call, independent of Git's global-option prefix.
+        const fetchSites = callSites.filter(site => /'protocol\.file\.allow=always'|'fetch'/.test(site));
+        expect(fetchSites.length).toBeGreaterThanOrEqual(1);
+        expect(fetchSites.filter(site => !/timeout: GIT_NETWORK_TIMEOUT_MS/.test(site))).toEqual([]);
         // Both bounds live beside gitChildEnv() so this module and router-refine.ts
         // share one value and one rationale rather than minting parallel constants.
         const locale = readFileSync(

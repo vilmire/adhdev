@@ -1,3 +1,4 @@
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 import { describe, expect, it, vi } from 'vitest';
 import { DaemonCommandHandler } from '../../src/commands/handler.js';
 import {
@@ -216,3 +217,46 @@ describe('git command skeleton', () => {
     expect(getStatus).toHaveBeenCalledWith({ workspace });
   });
 });
+
+it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval and scans approved %s history in-process', async (identity) => {
+  const { execFileSync } = await import('node:child_process');
+  const { mkdtempSync, writeFileSync, mkdirSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { createDefaultGitCommandServices } = await import('../../src/git/git-commands.js');
+  const root = mkdtempSync(join(tmpdir(), 'git-push-public-'));
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  try {
+    git('init', '-q', '-b', 'main');
+    git('init', '-q', '--bare', '-b', 'main', join(root, 'origin.git'));
+    git('--git-dir=' + join(root, 'origin.git'), 'config', 'remote.origin.url', 'https://github.com/vilmire/adhdev-cloud.git');
+    git('remote', 'add', 'mirror', join(root, 'origin.git'));
+    bindPushDestination(root, join(root, 'origin.git'), 'oss', 'mirror');
+    git('config', 'user.name', identity === 'valid' ? 'vilmire' : 'Other'); git('config', 'user.email', identity === 'valid' ? 'vilmire@users.noreply.github.com' : 'other@example.com');
+    mkdirSync(join(root, '.adhdev'));
+    writeFileSync(join(root, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }));
+    writeFileSync(join(root, 'file.txt'), 'clean\n');
+    git('add', 'file.txt'); git('commit', '-qm', 'initial');
+    const sha = git('rev-parse', 'HEAD');
+    const services = createDefaultGitCommandServices();
+    const denied: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror' }, services);
+    expect(denied.success).toBe(false);
+    expect(denied.error).toContain('publish_approval_required');
+    const extra: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror', approvedPublishShas: [sha, 'abcdef0'] }, services);
+    expect(extra.success).toBe(false);
+    expect(extra.error).toContain('publish_approval_required');
+    const scanned: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror', approvedPublishShas: { oss: [sha] }, setUpstream: true }, services);
+    if (identity === 'foreign') {
+      expect(scanned.success).toBe(false);
+      expect(scanned.error).toContain('identity');
+      expect(() => git('--git-dir=' + join(root, 'origin.git'), 'rev-parse', '--verify', 'main')).toThrow();
+    } else {
+      expect(scanned.success, scanned.error).toBe(true);
+      expect(git('--git-dir=' + join(root, 'origin.git'), 'rev-parse', '--verify', 'main')).toBe(sha);
+      expect(git('config', 'branch.main.remote')).toBe('mirror');
+      expect(git('config', 'branch.main.merge')).toBe('refs/heads/main');
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+useSyntheticPublicPushPatterns()
