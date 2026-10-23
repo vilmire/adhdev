@@ -161,6 +161,7 @@ export interface ResolvedSessionAuthority {
     readonly remoteInputArtifactIds?: readonly string[];
     readonly remoteInputArtifacts?: readonly ArtifactRecord[];
     readonly remoteRequestedArtifact?: ArtifactRecord | null;
+    readonly originFetchGrant?: unknown;
 }
 
 async function resolveCallerAuthority(
@@ -335,6 +336,7 @@ async function resolveCallerAuthority(
                           inputArtifactIds: readonly string[];
                           inputArtifacts: readonly ArtifactRecord[];
                           requestedArtifact: ArtifactRecord | null;
+                          originFetchGrant?: unknown;
                       }
                     | undefined;
                 if (mode === 'list' || mode === 'fetch') {
@@ -368,6 +370,7 @@ async function resolveCallerAuthority(
                                   remoteInputArtifactIds: hostScope.inputArtifactIds,
                                   remoteInputArtifacts: hostScope.inputArtifacts,
                                   remoteRequestedArtifact: hostScope.requestedArtifact,
+                                  ...(hostScope.originFetchGrant ? { originFetchGrant: hostScope.originFetchGrant } : {}),
                               }
                             : {}),
                     },
@@ -792,6 +795,13 @@ async function resolveCallerAuthority(
                 providerType: resolved.providerType,
                 status: resolved.status,
                 title: resolved.title,
+                remoteClaim: {
+                    meshId: identity.meshId,
+                    sessionId: workerSessionId,
+                    taskId: identity.taskId,
+                    ...(identity.attemptId ? { attemptId: identity.attemptId } : {}),
+                    ...(identity.nodeId ? { nodeId: identity.nodeId } : {}),
+                },
             },
         };
     }

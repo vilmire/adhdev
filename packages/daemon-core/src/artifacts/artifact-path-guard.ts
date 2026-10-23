@@ -63,8 +63,11 @@ const SECRET_CONTENT_PATTERNS: readonly RegExp[] = [
     /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
     /\bAIza[0-9A-Za-z_-]{35}\b/,
     /\b(?:adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{12,}\b/,
+    /\bmcp_sess_[A-Za-z0-9_-]{8,}\b/,
+    /\bADHDEV_MCP_SESSION_CREDENTIAL\b/,
+    /\bmcpSessionCredential\s*["']?\s*[:=]\s*["']?(?!\[)[A-Za-z0-9/+._-]{8,}/i,
     /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
-    /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET))\s*[:=]\s*['"]?[A-Za-z0-9/+._-]{16,}['"]?/i,
+    /\b(?:[A-Z0-9_]*?(?:API_KEY|SECRET_KEY|ACCESS_TOKEN|AUTH_TOKEN|PRIVATE_KEY|CLIENT_SECRET|SESSION_CREDENTIAL))\s*[:=]\s*['"]?[A-Za-z0-9/+._-]{16,}['"]?/i,
 ];
 
 /**
@@ -505,6 +508,13 @@ function verifyAncestorAndTargetContainment(
         );
     }
 
+    if (targetLstat.nlink > 1) {
+        throw new ArtifactGuardError(
+            'path_outside_workspace',
+            `Hard-linked regular files (nlink=${targetLstat.nlink}) are refused for "${lexicalRel}" (path_outside_workspace)`,
+        );
+    }
+
     if (targetLstat.size > MAX_ARTIFACT_BYTES) {
         throw new ArtifactGuardError(
             'artifact_too_large',
@@ -613,6 +623,12 @@ export function readVerifiedArtifactFile(
                 'Opened descriptor is not a regular file (not_a_regular_file)',
             );
         }
+        if (fdStat.nlink > 1) {
+            throw new ArtifactGuardError(
+                'path_outside_workspace',
+                `Opened descriptor has multiple hard links (nlink=${fdStat.nlink}) (path_outside_workspace)`,
+            );
+        }
         if (fdStat.dev !== targetLstat.dev || fdStat.ino !== targetLstat.ino) {
             throw new ArtifactGuardError(
                 'path_outside_workspace',
@@ -656,6 +672,12 @@ export function readVerifiedArtifactFile(
                 'Descriptor ceased to be a regular file after read (not_a_regular_file)',
             );
         }
+        if (postFdStat.nlink > 1) {
+            throw new ArtifactGuardError(
+                'path_outside_workspace',
+                `Descriptor acquired additional hard links during read (nlink=${postFdStat.nlink}) (path_outside_workspace)`,
+            );
+        }
         if (postFdStat.size > MAX_ARTIFACT_BYTES) {
             throw new ArtifactGuardError(
                 'artifact_too_large',
@@ -689,6 +711,7 @@ export function readVerifiedArtifactFile(
             !isStrictSubpath(realWorkspaceRoot, postRealTarget) ||
             postTargetLstat.isSymbolicLink() ||
             !postTargetLstat.isFile() ||
+            postTargetLstat.nlink > 1 ||
             postTargetLstat.dev !== fdStat.dev ||
             postTargetLstat.ino !== fdStat.ino
         ) {

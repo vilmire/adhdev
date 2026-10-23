@@ -985,6 +985,14 @@ describe('Task A — Artifact Store & File Guard', () => {
                     file: 'notes/secret-in-image.png',
                     content: '\x89PNG\r\n\x1a\n-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n',
                 },
+                {
+                    file: 'notes/mcp-session-token.log',
+                    content: '2026-10-23 INFO bearer mcp_sess_liveSecretBearerToken9876543210\n',
+                },
+                {
+                    file: 'notes/env-dump.txt',
+                    content: 'NODE_ENV=production\nADHDEV_MCP_SESSION_CREDENTIAL=custom_value_here\n',
+                },
             ];
 
             for (const item of secretPayloads) {
@@ -1072,6 +1080,72 @@ describe('Task A — Artifact Store & File Guard', () => {
             expect(inner).not.toMatch(/<\s*\/?\s*untrusted_artifact_content\b/i);
             expect(inner).toContain('<\\/untrusted_artifact_content>');
             expect(inner).toContain('<\\untrusted_artifact_content>');
+        });
+
+        it('Round 4 Finding 3: refuses hard-linked files (nlink > 1) at both register and read, including on opened fd (fstat TOCTOU)', () => {
+            const outsideDir = path.join(tempRoot, 'outside-hardlink');
+            fs.mkdirSync(outsideDir, { recursive: true });
+            const outsideEnv = path.join(outsideDir, '.env.local');
+            fs.writeFileSync(outsideEnv, 'SAFE_LOOKING_TEXT=1\n', 'utf8');
+
+            // 1. Outside .env.local hard-linked as workspace/innocent.txt -> refused at register
+            const innocentPath = path.join(workspaceDir, 'innocent.txt');
+            fs.linkSync(outsideEnv, innocentPath);
+            expect(fs.statSync(innocentPath).nlink).toBeGreaterThan(1);
+
+            expectArtifactError(
+                () =>
+                    store.register({
+                        sessionId: 'sess-hardlink',
+                        workspaceRoot: workspaceDir,
+                        path: 'innocent.txt',
+                    }),
+                'path_outside_workspace' as ArtifactErrorCode,
+            );
+
+            // 2. Register a normal 1-link file, then hard-link it before read/fetch -> refused at read and fetch
+            const legitPath = path.join(workspaceDir, 'legit-single.txt');
+            fs.writeFileSync(legitPath, 'normal single-link content\n', 'utf8');
+            const reg = store.register({
+                sessionId: 'sess-hardlink',
+                workspaceRoot: workspaceDir,
+                path: 'legit-single.txt',
+            });
+            expect(store.readArtifactContent(reg.record.artifactId).content).toBe('normal single-link content\n');
+
+            const aliasLink = path.join(outsideDir, 'alias-link.txt');
+            fs.linkSync(legitPath, aliasLink);
+            expect(fs.statSync(legitPath).nlink).toBeGreaterThan(1);
+
+            expectArtifactError(
+                () => store.readArtifactContent(reg.record.artifactId),
+                'path_outside_workspace' as ArtifactErrorCode,
+            );
+            expectArtifactError(
+                () => store.fetchArtifactContent(reg.record.artifactId),
+                'path_outside_workspace' as ArtifactErrorCode,
+            );
+            fs.unlinkSync(aliasLink);
+
+            // 3. TOCTOU: file has nlink === 1 during pre-open lstat, then acquires a 2nd hard link right before openSync (caught by fstatSync(fd))
+            const racePath = path.join(workspaceDir, 'race-hardlink.txt');
+            fs.writeFileSync(racePath, 'race content\n', 'utf8');
+            const raceAlias = path.join(outsideDir, 'race-alias.txt');
+            expectArtifactError(
+                () =>
+                    store.register({
+                        sessionId: 'sess-hardlink',
+                        workspaceRoot: workspaceDir,
+                        path: 'race-hardlink.txt',
+                        _testHooks: {
+                            beforeOpen: () => {
+                                fs.linkSync(racePath, raceAlias);
+                            },
+                        },
+                    }),
+                'path_outside_workspace' as ArtifactErrorCode,
+            );
+            fs.unlinkSync(raceAlias);
         });
     });
 

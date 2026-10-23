@@ -3294,5 +3294,579 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 remoteMeshStore.close();
             }
         });
+
+        it('Round 4 Finding 1: completed/terminal ledger attempt or superseded attempt while queue row stays assigned is denied across fetch_origin, index_forwarded, and resolveScopeOnly', async () => {
+            const remoteDir = path.join(tempRoot, 'r4-f1-remote-ws');
+            fs.mkdirSync(remoteDir, { recursive: true });
+            fs.writeFileSync(path.join(workspaceA, 'host-target.md'), '# Host Target\nFor active worker only.\n');
+
+            sessionRegistry.register({
+                sessionId: 'sess-host-prod-r4',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            const hostTarget = artifactStore.register({
+                sessionId: 'sess-host-prod-r4',
+                meshId: 'mesh-r4-f1',
+                missionId: 'mission-r4-f1',
+                originDaemonId: 'daemon_host_r4',
+                workspaceRoot: workspaceA,
+                path: 'host-target.md',
+                title: 'Host Target',
+            }).record;
+
+            const inlineMesh = {
+                id: 'mesh-r4-f1',
+                meshHost: { hostDaemonId: 'daemon_host_r4' },
+                nodes: [
+                    { id: 'node-host-r4', daemonId: 'daemon_host_r4', workspace: workspaceA },
+                    { id: 'node-remote-r4', daemonId: 'daemon_remote_r4', workspace: remoteDir },
+                ],
+            };
+            const nowIso = new Date().toISOString();
+            const nowMs = Date.now();
+
+            // Queue row stays 'assigned', while ledger attempt 'att-r4-term' is ALREADY completed/terminal!
+            meshStore.insertQueueEntry({
+                id: 'task-r4-term',
+                meshId: 'mesh-r4-f1',
+                targetNodeId: 'node-remote-r4',
+                assignedNodeId: 'node-remote-r4',
+                status: 'assigned',
+                assignedSessionId: 'sess-remote-term',
+                attemptId: 'att-r4-term',
+                message: 'Terminal attempt with assigned queue row',
+                workspace: remoteDir,
+                missionId: 'mission-r4-f1',
+                inputArtifactIds: [hostTarget.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+
+            const termAttempt = seedMeshAttempt({
+                attemptId: 'att-r4-term',
+                taskId: 'task-r4-term',
+                meshId: 'mesh-r4-f1',
+                nodeId: 'node-remote-r4',
+                sessionId: 'sess-remote-term',
+                attemptNo: 0,
+                stage: 'completed',
+                terminal: true,
+                terminalOutcome: 'completed',
+                terminalAt: nowMs - 1000,
+            });
+            meshStore.turnStore().upsertAttempt(
+                {
+                    ...termAttempt,
+                    ownerDaemonId: 'daemon_host_r4',
+                },
+                nowMs,
+            );
+
+            const hostCtx: ArtifactCommandContext = {
+                ...ctx,
+                getMeshForCommand: async (id: string) =>
+                    id === 'mesh-r4-f1' ? { mesh: inlineMesh, source: 'inline' } : null,
+                getCachedInlineMesh: (id: string) => (id === 'mesh-r4-f1' ? inlineMesh : undefined),
+            };
+            deps.statusInstanceId = 'daemon_host_r4';
+
+            // 1. resolveScopeOnly with completed ledger attempt + assigned queue row -> DENIED
+            const scopeDenied = await artifactHandlers.artifact_index_forwarded(hostCtx, {
+                meshId: 'mesh-r4-f1',
+                sessionId: 'sess-remote-term',
+                taskId: 'task-r4-term',
+                attemptId: 'att-r4-term',
+                resolveScopeOnly: true,
+                artifactId: hostTarget.artifactId,
+                [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r4',
+            });
+            expect(scopeDenied.success).toBe(false);
+            expect(scopeDenied.requestedArtifact).toBeUndefined();
+            expect(scopeDenied.inputArtifacts).toBeUndefined();
+
+            // 2. index_forwarded (forwarding new artifact metadata) with completed ledger attempt + assigned queue row -> DENIED
+            const indexDenied = await artifactHandlers.artifact_index_forwarded(hostCtx, {
+                meshId: 'mesh-r4-f1',
+                sessionId: 'sess-remote-term',
+                taskId: 'task-r4-term',
+                attemptId: 'att-r4-term',
+                artifact: {
+                    artifactId: 'art_r4f1000000000001',
+                    sessionId: 'sess-remote-term',
+                    taskId: 'task-r4-term',
+                    meshId: 'mesh-r4-f1',
+                    missionId: 'mission-r4-f1',
+                    workspaceRoot: remoteDir,
+                    relPath: 'late.md',
+                    kind: 'markdown',
+                    mime: 'text/markdown',
+                    sizeBytes: 10,
+                    sha256: 'c'.repeat(64),
+                    title: 'Late Artifact',
+                    previewText: 'Late',
+                    createdAt: nowMs,
+                    updatedAt: nowMs,
+                },
+                [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r4',
+            });
+            expect(indexDenied.success).toBe(false);
+            expect(artifactStore.get('art_r4f1000000000001')).toBeNull();
+
+            // 3. fetch_origin with completed ledger attempt + assigned queue row -> DENIED
+            const fetchDenied = await artifactHandlers.artifact_fetch_origin(hostCtx, {
+                meshId: 'mesh-r4-f1',
+                artifactId: hostTarget.artifactId,
+                requesterSessionId: 'sess-remote-term',
+                requesterTaskId: 'task-r4-term',
+                requesterAttemptId: 'att-r4-term',
+                requesterRole: 'worker',
+                mode: 'read',
+                asChunks: true,
+                [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r4',
+            });
+            expect(fetchDenied.success).toBe(false);
+            expect(fetchDenied.chunks).toBeUndefined();
+            expect(fetchDenied.content).toBeUndefined();
+
+            // 4. Superseded attempt (queue row points to att-r4-old while latest active attempt in ledger is att-r4-new) -> DENIED
+            meshStore.insertQueueEntry({
+                id: 'task-r4-superseded',
+                meshId: 'mesh-r4-f1',
+                targetNodeId: 'node-remote-r4',
+                assignedNodeId: 'node-remote-r4',
+                status: 'assigned',
+                assignedSessionId: 'sess-remote-superseded',
+                attemptId: 'att-r4-old',
+                message: 'Superseded attempt test',
+                workspace: remoteDir,
+                missionId: 'mission-r4-f1',
+                inputArtifactIds: [hostTarget.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            const oldAtt = seedMeshAttempt({
+                attemptId: 'att-r4-old',
+                taskId: 'task-r4-superseded',
+                meshId: 'mesh-r4-f1',
+                nodeId: 'node-remote-r4',
+                sessionId: 'sess-remote-superseded',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            const newAtt = seedMeshAttempt({
+                attemptId: 'att-r4-new',
+                taskId: 'task-r4-superseded',
+                meshId: 'mesh-r4-f1',
+                nodeId: 'node-remote-r4',
+                sessionId: 'sess-remote-superseded-retry',
+                attemptNo: 1,
+                stage: 'generating',
+            });
+            meshStore.turnStore().upsertAttempt({ ...oldAtt, ownerDaemonId: 'daemon_host_r4' }, nowMs - 2000);
+            meshStore.turnStore().upsertAttempt({ ...newAtt, ownerDaemonId: 'daemon_host_r4' }, nowMs);
+
+            const supersededFetch = await artifactHandlers.artifact_fetch_origin(hostCtx, {
+                meshId: 'mesh-r4-f1',
+                artifactId: hostTarget.artifactId,
+                requesterSessionId: 'sess-remote-superseded',
+                requesterTaskId: 'task-r4-superseded',
+                requesterAttemptId: 'att-r4-old',
+                requesterRole: 'worker',
+                mode: 'read',
+                asChunks: true,
+                [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_remote_r4',
+            });
+            expect(supersededFetch.success).toBe(false);
+            expect(supersededFetch.chunks).toBeUndefined();
+        });
+
+        it('Round 4 Finding 2: real CommandRouter masks mcpSessionCredential in getRecentCommands and command log file, and artifact_register refuses env/log dumps containing mcp_sess_* or ADHDEV_MCP_SESSION_CREDENTIAL', async () => {
+            const { getAssistantRegistry } = await import('../../src/assistant/assistant-registry.js');
+            const { getMcpSessionCredentialForSession } = await import('../../src/commands/mcp-command-ingress.js');
+            const { getRecentCommands, getCommandLogPath } = await import('../../src/logging/command-log.js');
+
+            const prevConfigDir = process.env.ADHDEV_CONFIG_DIR;
+            const logConfigDir = path.join(tempRoot, 'r4-f2-config');
+            fs.mkdirSync(logConfigDir, { recursive: true });
+            process.env.ADHDEV_CONFIG_DIR = logConfigDir;
+
+            try {
+                getAssistantRegistry().bindSession({
+                    sessionId: 'asst-r4-f2',
+                    cliType: 'claude-cli',
+                    workspace: workspaceA,
+                    at: Date.now(),
+                });
+                const liveCred = getMcpSessionCredentialForSession('asst-r4-f2')!;
+                expect(liveCred).toMatch(/^mcp_sess_/);
+
+                const router = new DaemonCommandRouter(deps);
+                await router.execute(
+                    'assistant_artifact_list',
+                    {
+                        project: 'nonexistent-proj',
+                        assistantSessionId: 'asst-r4-f2',
+                        mcpSessionCredential: liveCred,
+                    },
+                    'ipc',
+                );
+
+                const recent = getRecentCommands(20);
+                const matching = recent.filter((e) => e.cmd === 'assistant_artifact_list');
+                expect(matching.length).toBeGreaterThanOrEqual(1);
+                expect(JSON.stringify(recent)).not.toContain(liveCred);
+                const logContent = fs.readFileSync(getCommandLogPath(), 'utf8');
+                expect(logContent).not.toContain(liveCred);
+
+                // Attempting to register the command log or an env dump containing the token or env var name is refused
+                sessionRegistry.register({
+                    sessionId: 'sess-r4-f2',
+                    parentSessionId: null,
+                    providerType: 'claude-cli',
+                    transport: 'pty',
+                    workspace: workspaceA,
+                });
+                fs.writeFileSync(path.join(workspaceA, 'leaked-env.txt'), `ADHDEV_MCP_SESSION_CREDENTIAL=${liveCred}\n`, 'utf8');
+                fs.writeFileSync(path.join(workspaceA, 'leaked-log.log'), `{"cmd":"assistant_artifact_list","args":{"mcpSessionCredential":"${liveCred}"}}\n`, 'utf8');
+
+                const regEnv = await artifactHandlers.artifact_register(ctx, {
+                    sessionId: 'sess-r4-f2',
+                    path: 'leaked-env.txt',
+                });
+                expect(regEnv.success).toBe(false);
+                expect(regEnv.code).toBe('secret_file_refused');
+
+                const regLog = await artifactHandlers.artifact_register(ctx, {
+                    sessionId: 'sess-r4-f2',
+                    path: 'leaked-log.log',
+                });
+                expect(regLog.success).toBe(false);
+                expect(regLog.code).toBe('secret_file_refused');
+            } finally {
+                if (prevConfigDir === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+                else process.env.ADHDEV_CONFIG_DIR = prevConfigDir;
+            }
+        });
+
+        it('Round 4 Finding 5: two-store test where host authorizes and a separate origin holding the artifact (but no queue/ledger) serves, while missing, forged, tampered, or expired grants are denied', async () => {
+            const originDir = path.join(tempRoot, 'r4-f5-origin-ws');
+            const workerDir = path.join(tempRoot, 'r4-f5-worker-ws');
+            fs.mkdirSync(originDir, { recursive: true });
+            fs.mkdirSync(workerDir, { recursive: true });
+            fs.writeFileSync(path.join(originDir, 'origin-spec.md'), '# Origin Spec\nServed from origin daemon with zero queue rows.\n');
+
+            // Store 1 (Origin daemon): holds ONLY the artifact record + file on disk; ZERO queue rows and ZERO turn attempts!
+            const originMeshStore = new MeshRuntimeStore(path.join(tempRoot, 'r4-f5-origin-mesh.db'));
+            const originArtifactStore = new ArtifactStore(originMeshStore.db);
+            const originRegistry = new SessionRegistry();
+            originRegistry.register({
+                sessionId: 'sess-origin-producer',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: originDir,
+            });
+            const originDoc = originArtifactStore.register({
+                sessionId: 'sess-origin-producer',
+                meshId: 'mesh-r4-f5',
+                missionId: 'mission-r4-f5',
+                originDaemonId: 'daemon_origin_f5',
+                workspaceRoot: originDir,
+                path: 'origin-spec.md',
+                title: 'Origin Spec',
+            }).record;
+            expect(originMeshStore.findAssignedBySession('mesh-r4-f5', 'sess-worker-f5')).toBeNull();
+
+            // Store 2 (Host daemon): holds the authoritative queue + turn attempt ledger + forwarded artifact index
+            artifactStore.upsertForwardedArtifact(originDoc);
+            const nowIso = new Date().toISOString();
+            const nowMs = Date.now();
+            meshStore.insertQueueEntry({
+                id: 'task-worker-f5',
+                meshId: 'mesh-r4-f5',
+                targetNodeId: 'node-worker-f5',
+                assignedNodeId: 'node-worker-f5',
+                status: 'assigned',
+                assignedSessionId: 'sess-worker-f5',
+                attemptId: 'att-worker-f5',
+                message: 'Consume origin artifact',
+                workspace: workerDir,
+                missionId: 'mission-r4-f5',
+                inputArtifactIds: [originDoc.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            const workerAttempt = seedMeshAttempt({
+                attemptId: 'att-worker-f5',
+                taskId: 'task-worker-f5',
+                meshId: 'mesh-r4-f5',
+                nodeId: 'node-worker-f5',
+                sessionId: 'sess-worker-f5',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            meshStore.turnStore().upsertAttempt(
+                {
+                    ...workerAttempt,
+                    ownerDaemonId: 'daemon_host_f5',
+                },
+                nowMs,
+            );
+
+            // Also a host-local worker on daemon_host_f5 consuming originDoc from daemon_origin_f5
+            sessionRegistry.register({
+                sessionId: 'sess-host-worker-f5',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workspaceA,
+            });
+            meshStore.insertQueueEntry({
+                id: 'task-host-worker-f5',
+                meshId: 'mesh-r4-f5',
+                targetNodeId: 'node-host-f5',
+                assignedNodeId: 'node-host-f5',
+                status: 'assigned',
+                assignedSessionId: 'sess-host-worker-f5',
+                attemptId: 'att-host-worker-f5',
+                message: 'Host worker consuming origin artifact',
+                workspace: workspaceA,
+                missionId: 'mission-r4-f5',
+                inputArtifactIds: [originDoc.artifactId],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            } as any);
+            const hostWorkerAttempt = seedMeshAttempt({
+                attemptId: 'att-host-worker-f5',
+                taskId: 'task-host-worker-f5',
+                meshId: 'mesh-r4-f5',
+                nodeId: 'node-host-f5',
+                sessionId: 'sess-host-worker-f5',
+                attemptNo: 0,
+                stage: 'generating',
+            });
+            meshStore.turnStore().upsertAttempt(
+                {
+                    ...hostWorkerAttempt,
+                    ownerDaemonId: 'daemon_host_f5',
+                },
+                nowMs,
+            );
+            const hostWorkerBind = mintWorkerSessionBind({
+                sessionId: 'sess-host-worker-f5',
+                meshId: 'mesh-r4-f5',
+                nodeId: 'node-host-f5',
+                spawnedForTaskId: 'task-host-worker-f5',
+            });
+            const hostWorkerToken = mintWorkerTaskToken({
+                taskId: 'task-host-worker-f5',
+                attemptId: 'att-host-worker-f5',
+                meshId: 'mesh-r4-f5',
+                nodeId: 'node-host-f5',
+                sessionId: 'sess-host-worker-f5',
+            });
+
+            const inlineMesh = {
+                id: 'mesh-r4-f5',
+                meshHost: { hostDaemonId: 'daemon_host_f5' },
+                nodes: [
+                    { id: 'node-host-f5', daemonId: 'daemon_host_f5', workspace: workspaceA },
+                    { id: 'node-origin-f5', daemonId: 'daemon_origin_f5', workspace: originDir },
+                    { id: 'node-worker-f5', daemonId: 'daemon_worker_f5', workspace: workerDir, activeSessionId: 'sess-worker-f5' },
+                ],
+            };
+
+            const originDeps: any = {
+                statusInstanceId: 'daemon_origin_f5',
+                sessionRegistry: originRegistry,
+            };
+            setArtifactCommandRuntimeForDeps(originDeps, {
+                artifactStore: originArtifactStore,
+                meshRuntimeStore: originMeshStore,
+            });
+            const originCtx: ArtifactCommandContext = {
+                deps: originDeps,
+                getMeshForCommand: async (id: string) => (id === 'mesh-r4-f5' ? { mesh: inlineMesh, source: 'inline' } : null),
+                getCachedInlineMesh: (id: string) => (id === 'mesh-r4-f5' ? inlineMesh : undefined),
+            };
+
+            deps.statusInstanceId = 'daemon_host_f5';
+            deps.dispatchMeshCommand = async (targetDaemonId: string, command: string, payload: Record<string, unknown>) => {
+                expect(targetDaemonId).toBe('daemon_origin_f5');
+                expect(command).toBe('artifact_fetch_origin');
+                return artifactHandlers.artifact_fetch_origin(originCtx, {
+                    ...payload,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_host_f5',
+                });
+            };
+            const hostCtx: ArtifactCommandContext = {
+                ...ctx,
+                getMeshForCommand: async (id: string) => (id === 'mesh-r4-f5' ? { mesh: inlineMesh, source: 'inline' } : null),
+                getCachedInlineMesh: (id: string) => (id === 'mesh-r4-f5' ? inlineMesh : undefined),
+            };
+
+            const workerMeshStore = new MeshRuntimeStore(path.join(tempRoot, 'r4-f5-worker-mesh.db'));
+            const workerArtifactStore = new ArtifactStore(workerMeshStore.db);
+            const workerRegistry = new SessionRegistry();
+            workerRegistry.register({
+                sessionId: 'sess-worker-f5',
+                parentSessionId: null,
+                providerType: 'claude-cli',
+                transport: 'pty',
+                workspace: workerDir,
+            });
+            const workerBind = mintWorkerSessionBind({
+                sessionId: 'sess-worker-f5',
+                meshId: 'mesh-r4-f5',
+                nodeId: 'node-worker-f5',
+                spawnedForTaskId: 'task-worker-f5',
+            });
+            const workerToken = mintWorkerTaskToken({
+                taskId: 'task-worker-f5',
+                attemptId: 'att-worker-f5',
+                meshId: 'mesh-r4-f5',
+                nodeId: 'node-worker-f5',
+                sessionId: 'sess-worker-f5',
+            });
+            const workerDeps: any = {
+                statusInstanceId: 'daemon_worker_f5',
+                sessionRegistry: workerRegistry,
+                instanceManager: {
+                    getInstance: (sid: string) =>
+                        sid === 'sess-worker-f5'
+                            ? {
+                                  providerType: 'claude-cli',
+                                  getState: () => ({
+                                      workspace: workerDir,
+                                      status: 'working',
+                                      settings: {
+                                          meshNodeFor: 'mesh-r4-f5',
+                                          meshCoordinatorDaemonId: 'daemon_host_f5',
+                                          meshNodeId: 'node-worker-f5',
+                                          meshActiveTaskId: 'task-worker-f5',
+                                          meshAttemptId: 'att-worker-f5',
+                                      },
+                                  }),
+                              }
+                            : undefined,
+                },
+                dispatchMeshCommand: async (targetDaemonId: string, command: string, payload: Record<string, unknown>) => {
+                    const stamped = { ...payload, [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_worker_f5' };
+                    if (targetDaemonId === 'daemon_host_f5' && command === 'artifact_index_forwarded') {
+                        return artifactHandlers.artifact_index_forwarded(hostCtx, stamped);
+                    }
+                    if (targetDaemonId === 'daemon_origin_f5' && command === 'artifact_fetch_origin') {
+                        return artifactHandlers.artifact_fetch_origin(originCtx, stamped);
+                    }
+                    throw new Error(`Unexpected dispatch: ${targetDaemonId} ${command}`);
+                },
+            };
+            setArtifactCommandRuntimeForDeps(workerDeps, {
+                artifactStore: workerArtifactStore,
+                meshRuntimeStore: workerMeshStore,
+            });
+            const workerCtx: ArtifactCommandContext = {
+                deps: workerDeps,
+                getMeshForCommand: async (id: string) => (id === 'mesh-r4-f5' ? { mesh: inlineMesh, source: 'inline' } : null),
+                getCachedInlineMesh: (id: string) => (id === 'mesh-r4-f5' ? inlineMesh : undefined),
+            };
+
+            try {
+                // 1. Legitimate remote worker read of artifact on another origin (host authorizes via grant, origin with empty queue serves)
+                const remoteWorkerRead = await artifactHandlers.artifact_read(workerCtx, {
+                    artifactId: originDoc.artifactId,
+                    bind: workerBind.bind,
+                    token: workerToken.token,
+                });
+                expect(remoteWorkerRead.success).toBe(true);
+                expect(remoteWorkerRead.content).toContain('# Origin Spec\nServed from origin daemon with zero queue rows.');
+
+                // 2. Legitimate host-local worker read of artifact on another origin
+                const hostWorkerRead = await artifactHandlers.artifact_read(hostCtx, {
+                    artifactId: originDoc.artifactId,
+                    bind: hostWorkerBind.bind,
+                    token: hostWorkerToken.token,
+                });
+                expect(hostWorkerRead.success).toBe(true);
+                expect(hostWorkerRead.content).toContain('# Origin Spec\nServed from origin daemon with zero queue rows.');
+
+                // 3. Negative: direct fetch on origin without grant is denied (never falls back to roster-only access)
+                const noGrantRes = await artifactHandlers.artifact_fetch_origin(originCtx, {
+                    meshId: 'mesh-r4-f5',
+                    artifactId: originDoc.artifactId,
+                    requesterSessionId: 'sess-worker-f5',
+                    requesterTaskId: 'task-worker-f5',
+                    requesterAttemptId: 'att-worker-f5',
+                    requesterRole: 'worker',
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_worker_f5',
+                });
+                expect(noGrantRes.success).toBe(false);
+                expect(noGrantRes.code).toBe('artifact_access_denied');
+                expect(noGrantRes.chunks).toBeUndefined();
+
+                // Obtain a real grant from the host via resolveScopeOnly
+                const hostScope = await artifactHandlers.artifact_index_forwarded(hostCtx, {
+                    meshId: 'mesh-r4-f5',
+                    sessionId: 'sess-worker-f5',
+                    taskId: 'task-worker-f5',
+                    attemptId: 'att-worker-f5',
+                    resolveScopeOnly: true,
+                    artifactId: originDoc.artifactId,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_worker_f5',
+                });
+                expect(hostScope.success).toBe(true);
+                expect(hostScope.originFetchGrant).toBeDefined();
+
+                // 4. Negative: forged signature on grant is denied
+                const forgedSigRes = await artifactHandlers.artifact_fetch_origin(originCtx, {
+                    meshId: 'mesh-r4-f5',
+                    artifactId: originDoc.artifactId,
+                    requesterSessionId: 'sess-worker-f5',
+                    requesterTaskId: 'task-worker-f5',
+                    requesterAttemptId: 'att-worker-f5',
+                    requesterRole: 'worker',
+                    originFetchGrant: {
+                        ...(hostScope.originFetchGrant as any),
+                        signature: '0'.repeat(64),
+                    },
+                    mode: 'read',
+                    asChunks: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_worker_f5',
+                });
+                expect(forgedSigRes.success).toBe(false);
+                expect(forgedSigRes.code).toBe('artifact_access_denied');
+                expect(forgedSigRes.chunks).toBeUndefined();
+
+                // 5. Negative: expired grant is denied
+                const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(nowMs + 10 * 60_000);
+                try {
+                    const expiredGrantRes = await artifactHandlers.artifact_fetch_origin(originCtx, {
+                        meshId: 'mesh-r4-f5',
+                        artifactId: originDoc.artifactId,
+                        requesterSessionId: 'sess-worker-f5',
+                        requesterTaskId: 'task-worker-f5',
+                        requesterAttemptId: 'att-worker-f5',
+                        requesterRole: 'worker',
+                        originFetchGrant: hostScope.originFetchGrant,
+                        mode: 'read',
+                        asChunks: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: 'daemon_worker_f5',
+                    });
+                    expect(expiredGrantRes.success).toBe(false);
+                    expect(expiredGrantRes.code).toBe('artifact_access_denied');
+                    expect(expiredGrantRes.chunks).toBeUndefined();
+                } finally {
+                    nowSpy.mockRestore();
+                }
+            } finally {
+                originMeshStore.close();
+                workerMeshStore.close();
+            }
+        });
     });
 });

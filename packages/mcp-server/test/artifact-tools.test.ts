@@ -261,6 +261,7 @@ test('coordinator artifact_list resolves authorized session/mesh scope and rejec
   assert.equal(listCalls2.length, 2);
   assert.deepEqual(listCalls2[1].payload, {
     sessionId: 'sess_worker_2',
+    callerSessionId: 'sess_coord_main',
     meshId: 'mesh_alpha',
     limit: 20,
   });

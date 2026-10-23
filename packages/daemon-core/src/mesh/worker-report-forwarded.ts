@@ -244,27 +244,35 @@ export function resolveForwardedWorkerIdentity(
         const rowNodeId = row.assignedNodeId || row.targetNodeId;
         const nodeRefusal = senderOwnsNode(rowNodeId);
         if (nodeRefusal) return nodeRefusal;
+        let latestAttempt: ReturnType<ReturnType<MeshRuntimeStore['turnStore']>['findLatestAttemptForTask']> | null = null;
+        try { latestAttempt = store.turnStore().findLatestAttemptForTask(claim.meshId, row.id) ?? null; } catch { latestAttempt = null; }
         let attemptId = row.attemptId;
         if (!attemptId) {
-            try { attemptId = store.turnStore().findLatestAttemptForTask(claim.meshId, row.id)?.attemptId; } catch { attemptId = undefined; }
+            attemptId = latestAttempt?.attemptId;
         }
         if (claim.attemptId && claim.attemptId !== attemptId) {
             return refuse('attempt_mismatch', `task ${row.id}'s attempt on the owner is ${attemptId ?? '(none)'}, not ${claim.attemptId}`);
         }
-        const attempt = attemptId ? store.turnStore().getAttempt(attemptId) : null;
+        if (latestAttempt && attemptId && latestAttempt.attemptId !== attemptId) {
+            return refuse('attempt_mismatch', `task ${row.id}'s latest attempt on the owner is ${latestAttempt.attemptId}, not ${attemptId}`);
+        }
+        const attempt = attemptId ? store.turnStore().getAttempt(attemptId) : latestAttempt;
         if (claim.generation !== undefined && claim.generation !== attempt?.generation) return refuse('generation_mismatch', 'the claimed generation is no longer current');
         if (attempt && (attempt.sessionId !== claim.sessionId || (isSelfDaemon && !isSelfDaemon(attempt.ownerDaemonId)))) return refuse('attempt_mismatch', 'the attempt is not owned here for this session');
-        const token = findWorkerTaskTokenForSession(claim.meshId, row.id, claim.sessionId);
-        return {
-            live: {
-                token: token?.token ?? '',
-                meshId: claim.meshId,
-                taskId: row.id,
-                ...(attemptId ? { attemptId } : {}),
-                sessionId: claim.sessionId,
-                nodeId: rowNodeId!,
-            },
-        };
+        if (latestAttempt && (latestAttempt.sessionId !== claim.sessionId || (isSelfDaemon && !isSelfDaemon(latestAttempt.ownerDaemonId)))) return refuse('attempt_mismatch', 'the latest attempt is not owned here for this session');
+        if (!attempt?.terminal && !latestAttempt?.terminal) {
+            const token = findWorkerTaskTokenForSession(claim.meshId, row.id, claim.sessionId);
+            return {
+                live: {
+                    token: token?.token ?? '',
+                    meshId: claim.meshId,
+                    taskId: row.id,
+                    ...(attemptId ? { attemptId } : {}),
+                    sessionId: claim.sessionId,
+                    nodeId: rowNodeId!,
+                },
+            };
+        }
     }
 
     const attempt = resolveRecentlyTerminalAttempt(claim.meshId, claim.sessionId, nowMs, isSelfDaemon);

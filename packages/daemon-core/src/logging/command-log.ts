@@ -44,22 +44,36 @@ export interface CommandLogEntry {
 // ─── Sensitive field masking ─────────────────
 const SENSITIVE_KEYS = new Set([
     'token', 'bind', 'password', 'secret', 'apiKey', 'api_key',
-    'connectionToken', 'content', 'message', 'text',
+    'connectionToken', 'mcpSessionCredential', 'sessionCredential',
+    'credential', 'authorization', 'authToken', 'accessToken',
+    'originFetchGrant', 'content', 'message', 'text',
 ]);
 
-function maskArgs(args: any): Record<string, unknown> | undefined {
+const SENSITIVE_KEY_PATTERN = /(?:credential|token|secret|password|api[_-]?key|authorization|bearer|private[_-]?key|session[_-]?bind|fetch[_-]?grant)/i;
+
+const CREDENTIAL_TOKEN_VALUE_PATTERN = /\b(?:mcp_sess|adk|adm|shr|wtk|wtt|wsb)_[A-Za-z0-9_-]{8,}\b/;
+
+function isSensitiveArgKey(key: string): boolean {
+    return SENSITIVE_KEYS.has(key) || SENSITIVE_KEY_PATTERN.test(key);
+}
+
+function isCredentialValueShape(value: unknown): value is string {
+    return typeof value === 'string' && CREDENTIAL_TOKEN_VALUE_PATTERN.test(value);
+}
+
+export function maskCommandLogArgs(args: any): Record<string, unknown> | undefined {
     if (!args || typeof args !== 'object') return undefined;
     const masked: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(args)) {
-        if (SENSITIVE_KEYS.has(key)) {
+        if (isSensitiveArgKey(key) || isCredentialValueShape(value)) {
             masked[key] = typeof value === 'string'
                 ? `[${value.length} chars]`
                 : '[masked]';
         } else if (key.startsWith('_')) {
- // internal fields: keep as-is (e.g. targetSessionId)
+            // internal fields: keep as-is (e.g. _interactionId, _targetSessionId)
             masked[key] = value;
         } else if (typeof value === 'object' && value !== null) {
- // Don't recurse deeply — just note the type
+            // Don't recurse deeply — just note the type
             masked[key] = Array.isArray(value)
                 ? `[Array(${value.length})]`
                 : `[Object]`;
@@ -68,6 +82,10 @@ function maskArgs(args: any): Record<string, unknown> | undefined {
         }
     }
     return masked;
+}
+
+function maskArgs(args: any): Record<string, unknown> | undefined {
+    return maskCommandLogArgs(args);
 }
 
 // ─── File management ─────────────────────────
@@ -190,7 +208,7 @@ export function getRecentCommands(count = 50): CommandLogEntry[] {
                     source: parsed.src,
                     peerId: parsed.peer,
                     interactionId: parsed.interactionId,
-                    args: parsed.args,
+                    args: parsed.args ? maskArgs(parsed.args) : undefined,
                     success: parsed.ok,
                     error: parsed.err,
                     durationMs: parsed.ms,
