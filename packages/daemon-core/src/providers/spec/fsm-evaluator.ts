@@ -318,6 +318,42 @@ function evalCond(
     return { kind: 'all', result: false, detail: 'unknown condition' };
 }
 
+/**
+ * Canonical state-classification precedence (single source of truth shared by
+ * evaluateFsm and SendSubmitEngine.isAnchoredSignInViewport):
+ *
+ *   1. Active structural modals / choice prompts (`trust`, `consent_banner`,
+ *      `approval`, `picker`, `choice`) — identified by modal question/header
+ *      anchors, non-login radio/numbered cursor rows, and modal footers.
+ *   2. Active streaming / generation (`busy`) — identified by live spinners,
+ *      background-task markers, and non-login generating footers.
+ *   3. Active sign-in frame (`signing_in`) — identified by a login header in
+ *      the active bottom UI frame when no modal, picker, choice, busy, or
+ *      ready-composer chrome is active.
+ *   4. Settled ready composer (`idle`) / startup grace.
+ *
+ * Non-timeout transitions into ranks 1–2 (`STATES_OUTRANKING_SIGN_IN`) take
+ * precedence over `signing_in`, and `signing_in` takes precedence over `idle`.
+ */
+export const STATES_OUTRANKING_SIGN_IN: ReadonlySet<string> = new Set([
+    'trust',
+    'consent_banner',
+    'approval',
+    'picker',
+    'choice',
+    'busy',
+]);
+
+function fromIncludes(from: string | string[], stateId: string): boolean {
+    return Array.isArray(from) ? from.includes(stateId) : from === stateId;
+}
+
+export function isStructuralOverrideTransition(t: { from: string | string[]; to: string; label?: string }): boolean {
+    return STATES_OUTRANKING_SIGN_IN.has(t.to)
+        && !(t.label ?? '').includes('timeout')
+        && (fromIncludes(t.from, 'starting') || fromIncludes(t.from, 'idle'));
+}
+
 function fromLabel(t: FsmTransition): string {
     const from = Array.isArray(t.from) ? t.from.join('|') : t.from;
     return t.label ?? `${from}→${t.to}`;
@@ -392,23 +428,25 @@ export function evaluateFsm(
         if (fires && !fired) fired = te;
     }
 
-    // Explicit precedence: when a signing_in entry condition matches the
-    // viewport, signing_in wins over approval (excluding elapsed-timeout
-    // escalations such as signing_in→approval-timeout).
-    if (
-        fired
-        && fired.to === 'approval'
-        && (currentStateId === 'starting' || currentStateId === 'signing_in' || currentStateId === 'idle')
-        && !fired.label.includes('timeout')
-    ) {
-        const signInMatches = spec.transitions.some(
-            t => t.to === 'signing_in'
-                && t.when
-                && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], 'signing_in-precedence', signalSnapshot, absence).result,
+    // Enforce canonical state-classification precedence (see
+    // STATES_OUTRANKING_SIGN_IN above): active structural modal/picker/choice
+    // and busy transitions outrank signing_in even ifsigning_in has a higher
+    // numeric priority than idle/startup-grace.
+    if (fired && fired.to === 'signing_in') {
+        const structuralOverride = transitions.find(
+            (te, idx) => te.fires && isStructuralOverrideTransition(outgoing[idx]),
         );
-        if (signInMatches) {
-            const outgoingSignIn = transitions.find(te => te.to === 'signing_in' && te.fires);
-            fired = outgoingSignIn ?? null;
+        if (structuralOverride) {
+            fired = structuralOverride;
+        } else if (
+            currentStateId === 'busy'
+            && spec.transitions.some(
+                t => isStructuralOverrideTransition(t)
+                    && t.when
+                    && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], 'busy-hold-precedence', signalSnapshot, absence).result,
+            )
+        ) {
+            fired = null;
         }
     }
 

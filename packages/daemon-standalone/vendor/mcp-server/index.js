@@ -94890,8 +94890,10 @@ ${detail.join("\n")}` : stripped;
     });
     var fsm_evaluator_exports = {};
     __export2(fsm_evaluator_exports, {
+      STATES_OUTRANKING_SIGN_IN: () => STATES_OUTRANKING_SIGN_IN,
       evaluateConditionPreview: () => evaluateConditionPreview,
       evaluateFsm: () => evaluateFsm,
+      isStructuralOverrideTransition: () => isStructuralOverrideTransition,
       stableRegionKey: () => stableRegionKey
     });
     function stableRegionKey(cond) {
@@ -95041,6 +95043,12 @@ ${detail.join("\n")}` : stripped;
       }
       return { kind: "all", result: false, detail: "unknown condition" };
     }
+    function fromIncludes(from, stateId) {
+      return Array.isArray(from) ? from.includes(stateId) : from === stateId;
+    }
+    function isStructuralOverrideTransition(t) {
+      return STATES_OUTRANKING_SIGN_IN.has(t.to) && !(t.label ?? "").includes("timeout") && (fromIncludes(t.from, "starting") || fromIncludes(t.from, "idle"));
+    }
     function fromLabel(t) {
       const from = Array.isArray(t.from) ? t.from.join("|") : t.from;
       return t.label ?? `${from}\u2192${t.to}`;
@@ -95088,13 +95096,16 @@ ${detail.join("\n")}` : stripped;
         transitions.push(te);
         if (fires && !fired) fired = te;
       }
-      if (fired && fired.to === "approval" && (currentStateId === "starting" || currentStateId === "signing_in" || currentStateId === "idle") && !fired.label.includes("timeout")) {
-        const signInMatches = spec.transitions.some(
-          (t) => t.to === "signing_in" && t.when && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], "signing_in-precedence", signalSnapshot, absence).result
+      if (fired && fired.to === "signing_in") {
+        const structuralOverride = transitions.find(
+          (te, idx) => te.fires && isStructuralOverrideTransition(outgoing[idx])
         );
-        if (signInMatches) {
-          const outgoingSignIn = transitions.find((te) => te.to === "signing_in" && te.fires);
-          fired = outgoingSignIn ?? null;
+        if (structuralOverride) {
+          fired = structuralOverride;
+        } else if (currentStateId === "busy" && spec.transitions.some(
+          (t) => isStructuralOverrideTransition(t) && t.when && evalCond(t.when, sections, cleanScreen, cursor, prevLines, clock, [], "busy-hold-precedence", signalSnapshot, absence).result
+        )) {
+          fired = null;
         }
       }
       if (fired && !stateById(spec, fired.to)) {
@@ -95111,6 +95122,7 @@ ${detail.join("\n")}` : stripped;
       return evalCond(cond, resolved, cleanScreen, cursor, void 0, clock, [], "preview");
     }
     var WHOLE_SCREEN;
+    var STATES_OUTRANKING_SIGN_IN;
     var init_fsm_evaluator = __esm2({
       "src/providers/spec/fsm-evaluator.ts"() {
         "use strict";
@@ -95118,6 +95130,14 @@ ${detail.join("\n")}` : stripped;
         init_fsm_types();
         init_signal_envelope();
         WHOLE_SCREEN = -1;
+        STATES_OUTRANKING_SIGN_IN = /* @__PURE__ */ new Set([
+          "trust",
+          "consent_banner",
+          "approval",
+          "picker",
+          "choice",
+          "busy"
+        ]);
       }
     });
     var mesh_refine_executor_liveness_exports = {};
@@ -162841,12 +162861,11 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var COMPOSER_PROMPT_LINE_RE = /^[ \t]*[❯›>](?:\s|$)/;
     var MAX_OPEN_BLOCK_SPAN_LINES = 40;
     var MAX_CLOSED_BLOCK_LOOKAHEAD_LINES = 512;
-    function findMatchingClosingFence(lines, openIdx, ch) {
-      const closeRe = new RegExp(`^${ch}{3,}\\s*$`);
-      const limit = Math.min(lines.length, openIdx + 1 + MAX_CLOSED_BLOCK_LOOKAHEAD_LINES);
-      for (let j = openIdx + 1; j < limit; j += 1) {
+    function findMatchingClosingFence(lines, openIdx, ch, openLen = 3) {
+      const closeRe = new RegExp(`^${ch}{${openLen},}\\s*$`);
+      for (let j = openIdx + 1; j < lines.length; j += 1) {
         const candidate = lines[j];
-        if (TRUNCATED_OUTPUT_LINE_RE.test(candidate) || STRONG_TURN_BOUNDARY_LINE_RE.test(candidate) || TOOL_HEADER_LINE_RE.test(candidate)) {
+        if (TRUNCATED_OUTPUT_LINE_RE.test(candidate)) {
           return -1;
         }
         if (closeRe.test(candidate.trim())) {
@@ -162905,7 +162924,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     }
     function stripToolAndCodeLines(raw) {
       let inToolBlock = false;
+      let inAssistantProseBlock = false;
       let inFence = null;
+      let inFenceLen = 0;
       let fenceCloseIdx = -1;
       let fenceLines = 0;
       let inDiffHunk = false;
@@ -162921,6 +162942,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             continue;
           }
           inFence = null;
+          inFenceLen = 0;
           fenceCloseIdx = -1;
           fenceLines = 0;
           continue;
@@ -162935,28 +162957,34 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         if (TRUNCATED_OUTPUT_LINE_RE.test(line)) {
           inFence = null;
+          inFenceLen = 0;
           fenceCloseIdx = -1;
           fenceLines = 0;
           inDiffHunk = false;
           diffHunkCloseIdx = -1;
           diffHunkLines = 0;
           inToolBlock = false;
+          inAssistantProseBlock = false;
           continue;
         }
         const fenceMatch = trimmed2.match(/^(```+|~~~+)/);
         if (fenceMatch) {
           const ch = fenceMatch[1][0];
+          const fenceLen = fenceMatch[1].length;
           if (inFence === null) {
             inFence = ch;
-            fenceCloseIdx = findMatchingClosingFence(lines, i, ch);
+            inFenceLen = fenceLen;
+            fenceCloseIdx = findMatchingClosingFence(lines, i, ch, fenceLen);
             fenceLines = 0;
             inDiffHunk = false;
             diffHunkCloseIdx = -1;
             diffHunkLines = 0;
+            inAssistantProseBlock = false;
             continue;
           }
-          if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed2)) {
+          if (inFence === ch && fenceLen >= inFenceLen && new RegExp(`^${ch}{${inFenceLen},}\\s*$`).test(trimmed2)) {
             inFence = null;
+            inFenceLen = 0;
             fenceCloseIdx = -1;
             fenceLines = 0;
             continue;
@@ -162968,6 +162996,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           fenceLines += 1;
           if (isStrongTurnBoundary || isComposerBoundary || fenceLines > MAX_OPEN_BLOCK_SPAN_LINES) {
             inFence = null;
+            inFenceLen = 0;
             fenceCloseIdx = -1;
             fenceLines = 0;
           } else {
@@ -162978,12 +163007,14 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           inDiffHunk = false;
           diffHunkCloseIdx = -1;
           diffHunkLines = 0;
+          inAssistantProseBlock = false;
           continue;
         }
         if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed2)) {
           inDiffHunk = true;
           diffHunkCloseIdx = findClosedDiffHunkEnd(lines, i);
           diffHunkLines = 0;
+          inAssistantProseBlock = false;
           continue;
         }
         if (inDiffHunk) {
@@ -163004,19 +163035,23 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
           inToolBlock = false;
+          inAssistantProseBlock = false;
           if (TOOL_HEADER_LINE_RE.test(line)) {
             inToolBlock = true;
             continue;
           }
           if (/^[ \t]*⏺(?:\s|$)/.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
+            inAssistantProseBlock = true;
             continue;
           }
         }
         if (!trimmed2) {
+          inAssistantProseBlock = false;
           continue;
         }
         if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed2) || TOOL_HEADER_LINE_RE.test(line)) {
           inToolBlock = true;
+          inAssistantProseBlock = false;
           continue;
         }
         if (inToolBlock) {
@@ -163024,6 +163059,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             continue;
           }
           inToolBlock = false;
+        }
+        if (inAssistantProseBlock) {
+          if (/^[ \t]{2,}/.test(line) && !CLEAR_PROVIDER_CHROME_RE.test(line) && !CLAUDE_ERROR_ENVELOPE_LINE_RE.test(line)) {
+            continue;
+          }
+          inAssistantProseBlock = false;
         }
         if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
         if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
@@ -163294,6 +163335,12 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       const cleaned = stripToolAndCodeLines(stripped);
       if (!cleaned.trim()) return false;
       for (const t of spec.transitions) {
+        if (!t.when || !isStructuralOverrideTransition(t)) continue;
+        if (evaluateConditionPreview(t.when, spec.sections, stripped).result) {
+          return false;
+        }
+      }
+      for (const t of spec.transitions) {
         if (t.to !== "signing_in" || !t.when) continue;
         if (evaluateConditionPreview(t.when, spec.sections, stripped).result && evaluateConditionPreview(t.when, spec.sections, cleaned).result) {
           return true;
@@ -163538,6 +163585,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         this.lastPreSendAuthBlocked = false;
         if (!this.host.readySeenOnce) return false;
         if (this.isSendInFlight()) return false;
+        if (this.host.currentStateId === "signing_in" && this.isPreSendAuthRequired()) return false;
         if (this.host.currentStatus() !== "idle") return false;
         if (this.isPreSendAuthRequired()) return false;
         return true;
