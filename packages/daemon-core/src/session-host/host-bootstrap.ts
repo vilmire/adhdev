@@ -1,3 +1,4 @@
+import { resolveSessionHostAppName } from './app-name.js';
 import { maintenanceHeld } from '../maintenance/cooperative-gate.js';
 /**
  * bootSessionHost — one session-host bring-up for both hosts
@@ -23,7 +24,7 @@ import { SessionHostPtyTransportFactory } from '../cli-adapters/session-host-tra
 import type { PtyTransportFactory } from '../cli-adapters/pty-transport.js';
 import type { CliTransportFactoryParams, HostedCliRuntimeDescriptor } from '../commands/cli-manager.js';
 import type { SessionHostBoot } from '../boot/daemon-components.js';
-import { listHostedCliRuntimes } from './runtime-support.js';
+import { getObservedSessionHostIdentity, listHostedCliRuntimes } from './runtime-support.js';
 import { SessionHostController } from './session-host-controller.js';
 
 export type SessionHostManagedBy = 'adhdev-cloud' | 'adhdev-standalone';
@@ -33,6 +34,8 @@ export interface SessionHostBootOptions {
     ensureReady(): Promise<SessionHostEndpoint>;
     /** Session-host app name the runtimes are created under (cloud: `resolveSessionHostAppName()`). */
     appName?: string;
+    /** Host instance identity observed by ensureReady; defaults to diagnostics hostStartedAt. */
+    getHostIdentity?(endpoint: SessionHostEndpoint): string | undefined;
     /** Stable write-owner client id = the daemon's status instance id (`daemon_<mid>` / `standalone_<mid>`). */
     clientId: string;
     /** `meta.managedBy` stamp; also the restore filter tag. */
@@ -67,13 +70,38 @@ export interface SessionHostHandle {
 
 export async function bootSessionHost(opts: SessionHostBootOptions): Promise<SessionHostHandle> {
     let current = await opts.ensureReady();
+    const identityOf = opts.getHostIdentity ?? getObservedSessionHostIdentity;
+    let identity = identityOf(current);
+    const replacedListeners = new Set<() => Promise<void> | void>();
+    const notifyHostReplaced = async (): Promise<void> => {
+        if (maintenanceHeld()) return;
+        for (const listener of replacedListeners) {
+            try {
+                await listener();
+            } catch { /* best-effort */ }
+        }
+    };
     // Single-flight: the PTY factory and the controller's dead-host respawn can both
     // land here at once, and two concurrent ensureReady calls would spawn two hosts.
     let inFlight: Promise<SessionHostEndpoint> | null = null;
     const ensure = (): Promise<SessionHostEndpoint> => {
-        inFlight ??= opts.ensureReady()
-            .then((endpoint) => { current = endpoint; return endpoint; })
-            .finally(() => { inFlight = null; });
+        if (inFlight) return inFlight;
+        const operation = opts.ensureReady()
+            .then(async (endpoint) => {
+                const nextIdentity = identityOf(endpoint);
+                const sameEndpoint = endpoint.kind === current.kind && endpoint.path === current.path;
+                const changed = !sameEndpoint
+                    || (identity !== undefined && nextIdentity !== undefined && identity !== nextIdentity);
+                current = endpoint;
+                identity = nextIdentity ?? (sameEndpoint ? identity : undefined);
+                // Restore can itself use the PTY factory. Release the startup
+                // flight before listeners run so re-adoption can ensure again.
+                if (inFlight === operation) inFlight = null;
+                if (changed) await notifyHostReplaced();
+                return endpoint;
+            })
+            .finally(() => { if (inFlight === operation) inFlight = null; });
+        inFlight = operation;
         return inFlight;
     };
     const onEvent = (event: SessionHostEvent) => { if (!maintenanceHeld()) opts.onHostEvent?.(event); };
@@ -114,7 +142,11 @@ export async function bootSessionHost(opts: SessionHostBootOptions): Promise<Ses
             listHostedRuntimes,
             verifiedRetainedEndpoint: ensure,
             managedByTag: opts.managedBy,
+            getBindingOwner: () => ({ namespace: opts.appName ?? resolveSessionHostAppName({ standalone: opts.managedBy === 'adhdev-standalone' }), endpoint: `${current.kind}:${current.path}`, managedBy: opts.managedBy, clientId: opts.clientId }),
             control,
+            onHostReplaced: (listener) => {
+                replacedListeners.add(listener);
+            },
         }),
         stop: () => control.stop(),
     };

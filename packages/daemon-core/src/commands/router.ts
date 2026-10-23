@@ -1008,12 +1008,10 @@ export class DaemonCommandRouter {
             getLocalMesh: async (meshId) => (await this.getMeshForCommand(meshId, undefined, { preferInline: true }))?.mesh ?? null,
             // Disk-only meshes.json lookup for host-authoritative follower ACL evaluation.
             getDiskMesh: async (meshId) => {
-                try {
-                    const { getMesh } = await import('../config/mesh-config.js');
-                    return getMesh(meshId) ?? null;
-                } catch {
-                    return null;
-                }
+                // Missing (ENOENT) → null; an unreadable file THROWS so the follower gate can tell
+                // "could not read" from "no such mesh" (never a roster denial).
+                const { loadMeshConfigStrict } = await import('../config/mesh-config-store.js');
+                return loadMeshConfigStrict().meshes.find((m) => m.id === meshId) ?? null;
             },
             listLocalMeshes: async () => {
                 this.syncInlineMeshPoliciesFromDisk();

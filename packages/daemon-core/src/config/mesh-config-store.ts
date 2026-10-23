@@ -190,6 +190,38 @@ export function readMeshConfigFromDisk(): LocalMeshConfig | null {
     }
 }
 
+/** meshes.json exists but could not be read/parsed (ENFILE, EMFILE, EIO, torn write…) — NOT "no such mesh". */
+export class MeshConfigUnreadableError extends Error {
+    readonly code: string;
+    constructor(cause: unknown) {
+        const code = (cause as NodeJS.ErrnoException | undefined)?.code ?? 'EUNREADABLE';
+        super(`meshes.json unreadable (${code}): ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'MeshConfigUnreadableError';
+        this.code = String(code);
+    }
+}
+
+/**
+ * Like {@link loadMeshConfig} but a read FAILURE is distinguishable from absence:
+ * only ENOENT yields an empty config; every other failure throws
+ * {@link MeshConfigUnreadableError}. For security/roster decisions, where "could
+ * not read" must never be conflated with "mesh missing" (host-pressure ENFILE
+ * once turned into a persisted follower revocation). Migrates in memory only.
+ */
+export function loadMeshConfigStrict(): LocalMeshConfig {
+    let raw: unknown;
+    try {
+        raw = JSON.parse(readFileSync(getMeshConfigPath(), 'utf-8'));
+    } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { meshes: [] };
+        throw new MeshConfigUnreadableError(e);
+    }
+    if (!raw || !Array.isArray((raw as LocalMeshConfig).meshes)) throw new MeshConfigUnreadableError(new Error('unexpected meshes.json shape'));
+    const config = raw as LocalMeshConfig;
+    migrateLoadedMeshConfig(config);
+    return config;
+}
+
 /** Cheap change signal for meshes.json; null when the file is absent/unreadable. */
 export function statMeshConfigFile(): { mtimeMs: number; size: number } | null {
     try {

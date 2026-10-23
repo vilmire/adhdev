@@ -11,6 +11,7 @@ import {
     buildP2pRelayFailurePayload,
     type ProviderQuotaGateBlock,
     evaluateProviderQuotaGate,
+    quotaAxesForTarget,
     providerPinsFromRequiredTags,
     filterProvidersByRequiredTags,
     classifySessionBusyWithTask,
@@ -20,7 +21,7 @@ import type { MeshNodeFactsProviderQuota } from '@adhdev/mesh-shared';
 import { type MeshTaskInput } from './mesh-tool-shared.js';
 import { supportsMeshRelay, type MeshRelayTransport } from '../transports/mode.js';
 import { readNodeProviderPriority, classifyRemoteDelegateRelaySafety, chooseDispatchableSession } from './mesh-tools-internal-core.js';
-import { resolveSessionProviderType, readSessionRecordId, unwrapCommandPayload } from './mesh-session-helpers.js';
+import { resolveSessionProviderType, readSessionRecordId, readSessionRecordModel, unwrapCommandPayload } from './mesh-session-helpers.js';
 import { readNodeRuntime } from './mesh-held-node-state.js';
 import { readString } from '@adhdev/mesh-shared';
 
@@ -173,12 +174,17 @@ export function checkDirectDispatchQuotaGate(
     node: LocalMeshNodeEntry,
     providerType: string,
     quotaRoutingPolicy: unknown,
+    /** The target session's live model: lets an Antigravity session be judged by
+     *  its own model-group pool instead of the blended provider headline. */
+    model?: string | null,
 ): { block: ProviderQuotaGateBlock; resetsAt: number | null } | null {
     if (!providerType) return null;
-    const block = evaluateProviderQuotaGate(node, providerType, (quotaRoutingPolicy as never) ?? null);
+    const target = model ? { model } : undefined;
+    const block = evaluateProviderQuotaGate(node, providerType, (quotaRoutingPolicy as never) ?? null, undefined, undefined, target);
     if (!block) return null;
     const quota = (node as any)?.nodeFacts?.quota?.[providerType] as MeshNodeFactsProviderQuota | undefined;
-    const window = block.window === 'session' ? quota?.session : block.window === 'weekly' ? quota?.weekly : null;
+    const axes = quota ? quotaAxesForTarget(providerType, quota, target) : undefined;
+    const window = block.window === 'session' ? axes?.session : block.window === 'weekly' ? axes?.weekly : null;
     const resetsAt = typeof window?.resetsAt === 'number' && Number.isFinite(window.resetsAt) ? window.resetsAt : null;
     return { block, resetsAt };
 }
@@ -349,10 +355,10 @@ async function resolveRemoteDispatchSession(
     args: RemoteDispatchTargetArgs,
     provider: RemoteDispatchProvider,
     coordinatorDaemonId: string,
-): Promise<{ sessionId: string } | DispatchFailure> {
+): Promise<{ sessionId: string; model?: string } | DispatchFailure> {
     const sessionId = args.session_id?.trim() || '';
     if (sessionId && args.verifiedSession) {
-        return checkExplicitRemoteSession(ctx, node, sessionId, args.verifiedSession, provider, coordinatorDaemonId) ?? { sessionId };
+        return checkExplicitRemoteSession(ctx, node, sessionId, args.verifiedSession, provider, coordinatorDaemonId) ?? { sessionId, model: readSessionRecordModel(args.verifiedSession) };
     }
     try {
         // ★PROVIDER-PIN-BYPASS — chooseDispatchableSession treats an EMPTY
@@ -386,7 +392,7 @@ async function resolveRemoteDispatchSession(
                     nextAction: `Launch a fresh session with mesh_launch_session(node_id: '${node.id}'${resolvedProviderType ? `, type: '${resolvedProviderType}'` : ''}) or retry without session_id so Repo Mesh can target a live delegate session.`,
                 };
             }
-            return checkExplicitRemoteSession(ctx, node, sessionId, explicitSession, provider, coordinatorDaemonId) ?? { sessionId };
+            return checkExplicitRemoteSession(ctx, node, sessionId, explicitSession, provider, coordinatorDaemonId) ?? { sessionId, model: readSessionRecordModel(explicitSession) };
         }
         // QUOTA GATE (sessionless auto-pick): mirror the claim path's candidate
         // filtering — never auto-pick an idle session whose provider is
@@ -403,12 +409,12 @@ async function resolveRemoteDispatchSession(
         const candidates = args.allowQuotaExhausted ? sessions : sessions.filter((session: any) => {
             const sessionProviderType = resolveSessionProviderType(session);
             if (!sessionProviderType) return true;
-            return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+            return !checkDirectDispatchQuotaGate(node, sessionProviderType, ctx.mesh.policy?.quotaRouting ?? null, readSessionRecordModel(session));
         });
         const targetSession = chooseDispatchableSession(candidates, sessionProviderFilter, ctx.mesh.id, node.id, coordinatorDaemonId);
         if (targetSession?.id || targetSession?.sessionId) {
             if (!provider.resolvedProviderType) provider.resolvedProviderType = provider.adoptSessionProviderType(targetSession);
-            return { sessionId: targetSession.id || targetSession.sessionId };
+            return { sessionId: targetSession.id || targetSession.sessionId, model: readSessionRecordModel(targetSession) };
         }
         return { sessionId: '' };
     } catch (e: any) {
@@ -501,7 +507,7 @@ export async function resolveRemoteDispatchTarget(
     if ('success' in provider) return provider;
     const session = await resolveRemoteDispatchSession(ctx, node, args, provider, dispatchCoordinatorDaemonId);
     if ('success' in session) return session;
-    const { sessionId } = session;
+    const { sessionId, model: sessionModel } = session;
     const { providerPins, resolvedProviderType } = provider;
 
     // agent_command requires agentType — fail if we cannot determine provider type
@@ -525,7 +531,7 @@ export async function resolveRemoteDispatchTarget(
     // case) and the sessionless-fallback-to-priority-list route, where no session
     // filtering ran at all.
     if (!args.allowQuotaExhausted) {
-        const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null);
+        const quotaGate = checkDirectDispatchQuotaGate(node, resolvedProviderType, ctx.mesh.policy?.quotaRouting ?? null, sessionModel);
         if (quotaGate) {
             return buildQuotaExhaustedDispatchFailure(node, resolvedProviderType, sessionId || undefined, quotaGate) as DispatchFailure;
         }

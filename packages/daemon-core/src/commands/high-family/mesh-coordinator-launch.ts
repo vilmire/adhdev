@@ -671,6 +671,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                         if (cliCmdSessionId) {
                             const cliCmdInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
                             registerMeshCoordinator({
+                                hostOwner: ctx.deps.cliManager?.deps?.getHostedBindingOwner?.(),
                                 meshId,
                                 sessionId: cliCmdSessionId,
                                 workspace,
@@ -951,6 +952,7 @@ export const meshCoordinatorLaunchHandlers: Record<string, HighFamilyHandler> = 
                     if (launchSessionId) {
                         const autoImportInjectionDecl = providerMeta?.meshCoordinator?.systemPromptInjection;
                         registerMeshCoordinator({
+                                hostOwner: ctx.deps.cliManager?.deps?.getHostedBindingOwner?.(),
                             meshId,
                             sessionId: launchSessionId,
                             workspace,

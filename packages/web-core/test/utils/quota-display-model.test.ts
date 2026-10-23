@@ -74,7 +74,7 @@ describe('buildQuotaDisplayModel — representative snapshots', () => {
     expect(buildQuotaDisplayModel(q({ provider: 'cursor-cli' }))).toMatchObject({ kind: 'okNoWindows', message: null })
   })
 
-  it('antigravity multi-pool buckets REPLACE the collapsed axes; compact chip stays the worst-of-pools 5h', () => {
+  it('antigravity multi-pool buckets REPLACE the collapsed axes; compact chip is the worst per-pool chip, naming its pool', () => {
     const model = buildQuotaDisplayModel(q({
       provider: 'antigravity-cli',
       session: { usedPercent: 44.5, windowMinutes: 300, resetsAt: null },
@@ -96,9 +96,10 @@ describe('buildQuotaDisplayModel — representative snapshots', () => {
       'Gemini 7d 9.0% used',
     ])
     expect(model.chips.every(c => c.hint === 'bucket')).toBe(true)
-    // …but the one-chip surface wants the worst-of-pools HEADLINE, not one
-    // arbitrary pool, so the compact chip is built from the collapsed axes.
-    expect(model.compactChip).toMatchObject({ hint: 'session', label: '5h 44.5% used' })
+    // …and the one-chip surface must not show the blended worst-of-pools axis
+    // as if it described every model (a 0%-left Gemini pool read as the whole
+    // provider): it is the worst per-pool chip, which names its pool.
+    expect(model.compactChip).toMatchObject({ hint: 'bucket', label: 'Gemini 5h 44.5% used' })
   })
 
   it('opencode usage shape → usage kind with the tokens/cost label, info tone', () => {

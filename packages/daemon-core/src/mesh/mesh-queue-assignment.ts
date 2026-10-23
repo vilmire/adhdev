@@ -536,7 +536,14 @@ export function tryAssignQueueTask(
 
     // QUOTA GATE (claim path) + PIN OVERRIDE: see mesh-queue-claim-gate.ts. Returns
     // true when the claim must be refused — the task stays pending.
-    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: routingDecision?.selectedSlot?.model, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
+    // agent:ready / idle-drain / reconcile claims carry no routing decision, so
+    // judge the claiming session by its LIVE model — otherwise an Antigravity
+    // session is gated on the blended provider headline instead of its own pool.
+    let gateModel: string | undefined = routingDecision?.selectedSlot?.model;
+    if (!gateModel) {
+        try { gateModel = readSessionModel(components.instanceManager?.getInstance?.(sessionId)?.getState?.()); } catch { /* best-effort */ }
+    }
+    if (evaluateQuotaClaimGateForAssignment({ meshId, nodeId, sessionId, providerType, model: gateModel, trigger, node, mesh, providerLoader: components.providerLoader, quotaClaimTrace })) {
         return false;
     }
     if (isClaimGatedByWorktreeBootstrap(components, meshId, nodeId, sessionId, node)) return false;

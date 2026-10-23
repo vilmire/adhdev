@@ -39,7 +39,7 @@ import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-regis
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_CAPTURE_PROBE_MS, RELAY_MAX_AUTO_PAGES, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
-    RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
+    RELAY_STALL_AFTER_MS, buildApprovalSignal, extractAttentionDetail, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
     buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
     type RestartContext,
@@ -191,7 +191,8 @@ export class AssistantRelay {
     /** Durable read and notification acknowledgements, scoped to the recipient. */
     private readonly gaps: RelayGapTracker;
     private readonly deliveryPolicy: RelayDeliveryPolicy;
-    private readonly modalOpen = new Set<string>();
+    /** sessionId -> whether the episode's signal already carried the question (structured prompt or approval modal). */
+    private readonly modalOpen = new Map<string, { level: 'bare' | 'detailed'; sources: Set<'modal' | 'prompt'> }>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
     /** Exact attempt reports returned by the authorized evidence reader. The
@@ -525,7 +526,7 @@ export class AssistantRelay {
         const meshId = this.meshOf(e);
         if (!meshId) return;
         if (e.kind === 'turn') this.onCoordinatorTurn(meshId, e);
-        else if (e.kind === 'modal' || e.kind === 'prompt') this.onCoordinatorAttention(meshId, e.sessionId, e.kind === 'modal' ? e.modal : e.prompt);
+        else if (e.kind === 'modal' || e.kind === 'prompt') this.onCoordinatorAttention(meshId, e.sessionId, e.kind, e.kind === 'modal' ? e.modal : e.prompt);
         else if (e.kind === 'terminated') this.onCoordinatorTerminated(meshId, e.sessionId, e.cause);
     }
 
@@ -584,7 +585,7 @@ export class AssistantRelay {
         this.remote.set(meshId, snap);
         if (snap.open) this.markWorking(meshId, this.clock.now());
         else this.working.delete(meshId);
-        this.onCoordinatorAttention(meshId, `remote:${meshId}`, snap.modal ? true : null);
+        this.onCoordinatorAttention(meshId, `remote:${meshId}`, 'modal', snap.modal ? true : null);
     }
 
     /**
@@ -892,15 +893,26 @@ export class AssistantRelay {
         return { attemptId, coordinatorSessionId: sessionId, replies };
     }
 
-    private onCoordinatorAttention(meshId: string, sessionId: string, value: unknown): void {
+    private onCoordinatorAttention(meshId: string, sessionId: string, source: 'modal' | 'prompt', value: unknown): void {
+        const ep = this.modalOpen.get(sessionId);
         if (value === null || value === undefined) {
-            this.modalOpen.delete(sessionId);
+            // The episode ends only when BOTH the modal and the prompt are cleared; one
+            // clearing while the other is still open must not re-arm the notice.
+            if (ep) {
+                ep.sources.delete(source);
+                if (!ep.sources.size) this.modalOpen.delete(sessionId);
+            }
             return;
         }
-        if (this.modalOpen.has(sessionId) || !this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
-        this.modalOpen.add(sessionId);
+        if (ep) ep.sources.add(source);
+        if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
+        const detail = extractAttentionDetail(value);
+        // One line per episode; a later event of the same episode (modal then
+        // prompt) only adds a line when the first carried no question text.
+        if (ep?.level === 'detailed' || (ep?.level === 'bare' && !detail)) return;
+        this.modalOpen.set(sessionId, { level: detail ? 'detailed' : 'bare', sources: ep?.sources ?? new Set([source]) });
         const slug = this.ports.projectSlug(meshId);
-        if (slug !== null) this.pushLine('relay', buildApprovalSignal(slug), meshId);
+        if (slug !== null) this.pushLine('relay', buildApprovalSignal(slug, detail), meshId);
     }
 
     private onCoordinatorTerminated(meshId: string, sessionId: string, cause: string): void {

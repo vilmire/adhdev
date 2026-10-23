@@ -155,6 +155,10 @@ export interface QuotaWindow {
 /** A provider-specific named bucket (e.g. one per model). */
 export interface QuotaBucket extends QuotaWindow {
     name: string;
+    /** Quota pool the bucket belongs to, when the provider shares limits per
+     *  model group (antigravity-cli: 'gemini' vs 'claude-gpt'). Routing gates
+     *  a slot by ITS pool's buckets, never by a blend of all pools. */
+    group?: string;
 }
 
 /** See `QuotaMetadata.collectorScope`. */
