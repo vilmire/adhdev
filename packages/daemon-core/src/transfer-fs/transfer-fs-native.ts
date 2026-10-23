@@ -58,8 +58,15 @@ export interface RootCapabilitiesProbe {
   volumeFlags: number;
   supports128BitFileId: boolean;
   supportsDirFullFsync: boolean;
+  supportsAtomicNoReplace: boolean;
   caseSensitiveDir: boolean;
 }
+
+export type TransferFsTestFaultMode =
+  | 'swap_src_before_rename'
+  | 'replace_dst_after_rename'
+  | 'hardlink_after_rename'
+  | 'atomic_rename_errno';
 
 interface RawTransferFsAddon {
   getBindingInfo(): TransferFsBindingInfo;
@@ -89,6 +96,7 @@ interface RawTransferFsAddon {
   getIdentity(handle: number): NativeHandleIdentity;
   probeRoot(rootPath: string): RootCapabilitiesProbe;
   close(handle: number): boolean;
+  configureTestFaultInjection(mode: TransferFsTestFaultMode | null, auxOrErrno?: string): boolean;
 }
 
 function resolveNativeRootDirs(): string[] {
@@ -172,7 +180,13 @@ function classifyNativeError(op: string, err: unknown): TransferFsError {
   const msg = String(nativeErr?.message ?? err);
 
   let reason: TransferFsErrorCode = 'IO_ERROR';
-  if (code === 'ELOOP' || /WIN_1920\b/.test(msg)) {
+  if (code === 'ATOMIC_NOREPLACE_UNSUPPORTED' || /WIN_(?:1|50|120)\b/.test(msg)) {
+    reason = 'ATOMIC_NOREPLACE_UNSUPPORTED';
+  } else if (code === 'PUBLISHED_HARDLINK_DETECTED') {
+    reason = 'PUBLISHED_HARDLINK_DETECTED';
+  } else if (code === 'POST_RENAME_QUARANTINED') {
+    reason = 'POST_RENAME_QUARANTINED';
+  } else if (code === 'ELOOP' || /WIN_1920\b/.test(msg)) {
     reason = 'SYMLINK_OR_REPARSE_REJECTED';
   } else if (code === 'EEXIST' || /WIN_(?:80|183)\b/.test(msg)) {
     reason = 'TARGET_EXISTS';
@@ -276,6 +290,17 @@ export function renameExcl(
   }
 }
 
+/**
+ * Atomically rename `(srcDirHandle, srcName)` to `(targetDirHandle, newName)` without overwriting
+ * any existing target entry.
+ *
+ * Source pinning note (F3):
+ * - On Windows, opens the source with `DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES` (no `FILE_READ_DATA` needed).
+ * - On Linux, pins the source inode via `openat(..., O_PATH | O_NOFOLLOW)` (no read permission needed).
+ * - On macOS/BSD, pins directory sources via `O_SEARCH | O_DIRECTORY | O_NOFOLLOW` where supported, and
+ *   regular-file sources via `O_RDONLY | O_NOFOLLOW` (with `O_EVTONLY` fallback on macOS). Callers that want
+ *   to rename without reopening by name should prefer `renameExcl(srcHandle, targetDirHandle, newName)`.
+ */
 export function renameAtExcl(
   srcDirHandle: number,
   srcName: string,
@@ -352,12 +377,31 @@ export function getIdentity(handle: number): NativeHandleIdentity {
   }
 }
 
-export function probeRoot(rootPath: string): RootCapabilitiesProbe {
+export function probeRoot(
+  rootPath: string,
+  options?: { requireAtomicNoReplace?: boolean },
+): RootCapabilitiesProbe {
+  let probe: RootCapabilitiesProbe;
   try {
-    return loadRawBinding().probeRoot(rootPath);
+    probe = loadRawBinding().probeRoot(rootPath);
   } catch (err) {
     throw classifyNativeError('probeRoot', err);
   }
+  if (options?.requireAtomicNoReplace && !probe.supportsAtomicNoReplace) {
+    throw new TransferFsError(
+      'ATOMIC_NOREPLACE_UNSUPPORTED',
+      `probeRoot: Root "${rootPath}" on filesystem "${probe.filesystem}" does not support atomic no-replace rename`,
+      'ATOMIC_NOREPLACE_UNSUPPORTED',
+    );
+  }
+  return probe;
+}
+
+export function configureTestFaultInjection(
+  mode: TransferFsTestFaultMode | null,
+  auxOrErrno?: string,
+): boolean {
+  return loadRawBinding().configureTestFaultInjection(mode, auxOrErrno);
 }
 
 export function close(handle: number): boolean {
@@ -485,6 +529,7 @@ export function writeNewFileAtomic(
   let stageHandle: number | null = null;
   let stageCreated = false;
   let published = false;
+  let stageConsumedOrQuarantined = false;
 
   try {
     stageHandle = createExcl(chain.parentHandle, stageName, { allowProtectedMetadata: true });
@@ -496,7 +541,18 @@ export function writeNewFileAtomic(
     fullFsync(stageHandle);
 
     const identity = getIdentity(stageHandle);
-    renameExcl(stageHandle, chain.parentHandle, chain.leafName);
+    try {
+      renameExcl(stageHandle, chain.parentHandle, chain.leafName);
+    } catch (renErr) {
+      const tfErr = renErr as TransferFsError;
+      if (
+        tfErr?.reason === 'POST_RENAME_QUARANTINED' ||
+        tfErr?.reason === 'PUBLISHED_HARDLINK_DETECTED'
+      ) {
+        stageConsumedOrQuarantined = true;
+      }
+      throw renErr;
+    }
     published = true;
 
     close(stageHandle);
@@ -520,7 +576,7 @@ export function writeNewFileAtomic(
         /* ignore */
       }
     }
-    if (stageCreated && !published) {
+    if (stageCreated && !published && !stageConsumedOrQuarantined) {
       try {
         unlinkAt(chain.parentHandle, stageName, false, { allowProtectedMetadata: true });
       } catch {

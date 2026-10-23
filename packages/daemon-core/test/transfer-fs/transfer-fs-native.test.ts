@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   TransferFsError,
   close,
+  configureTestFaultInjection,
   createExcl,
   fullFsync,
   getBindingInfo,
@@ -53,6 +54,11 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
 
   afterEach(() => {
     try {
+      configureTestFaultInjection(null);
+    } catch {
+      /* ignore */
+    }
+    try {
       fs.rmSync(tmpBase, { recursive: true, force: true });
     } catch {
       /* best effort cleanup */
@@ -89,6 +95,7 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
     const probe = probeRoot(rootDir);
     expect(probe.supports128BitFileId).toBe(true);
     expect(probe.supportsDirFullFsync).toBe(true);
+    expect(probe.supportsAtomicNoReplace).toBe(true);
     if (IS_WIN) {
       expect(probe.filesystem).toBe('NTFS');
     }
@@ -676,9 +683,13 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
           publishedExcl++;
         } catch (err) {
           expect(err).toBeInstanceOf(TransferFsError);
-          expect(['SYMLINK_OR_REPARSE_REJECTED', 'IO_ERROR', 'TARGET_EXISTS']).toContain(
-            (err as TransferFsError).reason,
-          );
+          expect([
+            'SYMLINK_OR_REPARSE_REJECTED',
+            'POST_RENAME_QUARANTINED',
+            'PUBLISHED_HARDLINK_DETECTED',
+            'IO_ERROR',
+            'TARGET_EXISTS',
+          ]).toContain((err as TransferFsError).reason);
           rejectedExcl++;
         } finally {
           if (stageH !== null) {
@@ -705,9 +716,14 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
           publishedAtExcl++;
         } catch (err) {
           expect(err).toBeInstanceOf(TransferFsError);
-          expect(['SYMLINK_OR_REPARSE_REJECTED', 'HARDLINK_REJECTED', 'IO_ERROR', 'TARGET_EXISTS']).toContain(
-            (err as TransferFsError).reason,
-          );
+          expect([
+            'SYMLINK_OR_REPARSE_REJECTED',
+            'POST_RENAME_QUARANTINED',
+            'PUBLISHED_HARDLINK_DETECTED',
+            'HARDLINK_REJECTED',
+            'IO_ERROR',
+            'TARGET_EXISTS',
+          ]).toContain((err as TransferFsError).reason);
           rejectedAtExcl++;
         } finally {
           if (atH !== null) {
@@ -764,4 +780,214 @@ describe('Phase 1: transfer-fs native handle-relative / atomic no-replace helper
     expect(publishedExcl + rejectedExcl).toBe(rounds);
     expect(publishedAtExcl + rejectedAtExcl).toBe(rounds);
   }, 30_000);
+
+  it.skipIf(IS_WIN)(
+    'quarantines substituted files, third-party dst replacements, and non-empty directories without deleting user data (F1)',
+    () => {
+      const rootH = openRoot(rootDir);
+      try {
+        // (a) Substituted legitimate regular file before renameat2/renameatx_np must be quarantined, never unlinked
+        const legitFileA = path.join(rootDir, 'legit-f1a.txt');
+        fs.writeFileSync(legitFileA, 'USER_PRECIOUS_DATA_F1A');
+        const legitInoA = fs.lstatSync(legitFileA).ino;
+
+        const stageHA = createExcl(rootH, '.stage-f1a.tmp', { allowProtectedMetadata: true });
+        try {
+          writeHandle(stageHA, Buffer.from('STAGE_A'));
+          fullFsync(stageHA);
+          configureTestFaultInjection('swap_src_before_rename', 'legit-f1a.txt');
+          expect(() => renameExcl(stageHA, rootH, 'published-f1a.txt')).toThrowError(
+            expect.objectContaining({
+              reason: 'POST_RENAME_QUARANTINED',
+              code: 'POST_RENAME_QUARANTINED',
+            }),
+          );
+        } finally {
+          close(stageHA);
+        }
+
+        expect(fs.existsSync(path.join(rootDir, 'published-f1a.txt'))).toBe(false);
+        const quarantinedFilesA = fs
+          .readdirSync(rootDir)
+          .filter((name) => name.startsWith('.adhdev-quarantine-'));
+        expect(quarantinedFilesA.length).toBe(1);
+        const qPathA = path.join(rootDir, quarantinedFilesA[0]!);
+        expect(fs.lstatSync(qPathA).ino).toBe(legitInoA);
+        expect(fs.readFileSync(qPathA, 'utf8')).toBe('USER_PRECIOUS_DATA_F1A');
+        fs.unlinkSync(qPathA);
+
+        // (b) Third-party replacement at dst between rename and post-check fstatat must be quarantined, never unlinked
+        const thirdPartyB = path.join(rootDir, 'third-party-f1b.txt');
+        fs.writeFileSync(thirdPartyB, 'THIRD_PARTY_DATA_F1B');
+        const thirdPartyInoB = fs.lstatSync(thirdPartyB).ino;
+
+        const stageHB = createExcl(rootH, '.stage-f1b.tmp', { allowProtectedMetadata: true });
+        writeHandle(stageHB, Buffer.from('STAGE_B'));
+        fullFsync(stageHB);
+        close(stageHB);
+
+        configureTestFaultInjection('replace_dst_after_rename', 'third-party-f1b.txt');
+        expect(() =>
+          renameAtExcl(rootH, '.stage-f1b.tmp', rootH, 'published-f1b.txt', {
+            allowProtectedMetadata: true,
+          }),
+        ).toThrowError(
+          expect.objectContaining({
+            reason: 'POST_RENAME_QUARANTINED',
+            code: 'POST_RENAME_QUARANTINED',
+          }),
+        );
+
+        expect(fs.existsSync(path.join(rootDir, 'published-f1b.txt'))).toBe(false);
+        const quarantinedFilesB = fs
+          .readdirSync(rootDir)
+          .filter((name) => name.startsWith('.adhdev-quarantine-'));
+        expect(quarantinedFilesB.length).toBe(1);
+        const qPathB = path.join(rootDir, quarantinedFilesB[0]!);
+        expect(fs.lstatSync(qPathB).ino).toBe(thirdPartyInoB);
+        expect(fs.readFileSync(qPathB, 'utf8')).toBe('THIRD_PARTY_DATA_F1B');
+        fs.unlinkSync(qPathB);
+
+        // (c) Substituted non-empty directory must not stay published at dst and must be quarantined intact
+        const substDirC = path.join(rootDir, 'subst-nonempty-dir');
+        fs.mkdirSync(substDirC);
+        fs.writeFileSync(path.join(substDirC, 'nested.txt'), 'NONEMPTY_DIR_CHILD');
+        const substDirInoC = fs.lstatSync(substDirC).ino;
+
+        const stageDirHC = mkdirExcl(rootH, '.stage-dir-f1c', { allowProtectedMetadata: true });
+        try {
+          configureTestFaultInjection('swap_src_before_rename', 'subst-nonempty-dir');
+          expect(() => renameExcl(stageDirHC, rootH, 'published-dir-f1c')).toThrowError(
+            expect.objectContaining({
+              reason: 'POST_RENAME_QUARANTINED',
+              code: 'POST_RENAME_QUARANTINED',
+            }),
+          );
+        } finally {
+          close(stageDirHC);
+        }
+
+        expect(fs.existsSync(path.join(rootDir, 'published-dir-f1c'))).toBe(false);
+        const quarantinedDirsC = fs
+          .readdirSync(rootDir)
+          .filter((name) => name.startsWith('.adhdev-quarantine-'));
+        expect(quarantinedDirsC.length).toBe(1);
+        const qDirC = path.join(rootDir, quarantinedDirsC[0]!);
+        expect(fs.lstatSync(qDirC).isDirectory()).toBe(true);
+        expect(fs.lstatSync(qDirC).ino).toBe(substDirInoC);
+        expect(fs.readFileSync(path.join(qDirC, 'nested.txt'), 'utf8')).toBe('NONEMPTY_DIR_CHILD');
+
+        // (F3) renameAtExcl pins directory sources with O_SEARCH / O_PATH without requiring read permission on the directory
+        const searchOnlyDir = path.join(rootDir, 'search-only-dir');
+        fs.mkdirSync(searchOnlyDir, 0o700);
+        fs.writeFileSync(path.join(searchOnlyDir, 'marker.txt'), 'PINNED_BY_O_SEARCH');
+        fs.chmodSync(searchOnlyDir, 0o100);
+        try {
+          expect(renameAtExcl(rootH, 'search-only-dir', rootH, 'renamed-search-only-dir')).toBe(
+            true,
+          );
+        } finally {
+          const finalSearchDir = fs.existsSync(path.join(rootDir, 'renamed-search-only-dir'))
+            ? path.join(rootDir, 'renamed-search-only-dir')
+            : searchOnlyDir;
+          fs.chmodSync(finalSearchDir, 0o700);
+        }
+        expect(
+          fs.readFileSync(path.join(rootDir, 'renamed-search-only-dir', 'marker.txt'), 'utf8'),
+        ).toBe('PINNED_BY_O_SEARCH');
+      } finally {
+        close(rootH);
+      }
+    },
+  );
+
+  it.skipIf(IS_WIN)(
+    'returns PUBLISHED_HARDLINK_DETECTED and quarantines when a hardlink is added in the rename window (F2)',
+    () => {
+      const rootH = openRoot(rootDir);
+      try {
+        const stageH = createExcl(rootH, '.stage-f2.tmp', { allowProtectedMetadata: true });
+        try {
+          writeHandle(stageH, Buffer.from('STAGE_F2_PAYLOAD'));
+          fullFsync(stageH);
+
+          configureTestFaultInjection('hardlink_after_rename', 'attacker-hardlink-f2.txt');
+          expect(() => renameExcl(stageH, rootH, 'published-f2.txt')).toThrowError(
+            expect.objectContaining({
+              reason: 'PUBLISHED_HARDLINK_DETECTED',
+              code: 'PUBLISHED_HARDLINK_DETECTED',
+            }),
+          );
+        } finally {
+          close(stageH);
+        }
+
+        // Must not stay published at dst, and both links preserve the payload without silent ELOOP
+        expect(fs.existsSync(path.join(rootDir, 'published-f2.txt'))).toBe(false);
+        const quarantined = fs
+          .readdirSync(rootDir)
+          .filter((name) => name.startsWith('.adhdev-quarantine-'));
+        expect(quarantined.length).toBe(1);
+        expect(fs.readFileSync(path.join(rootDir, quarantined[0]!), 'utf8')).toBe('STAGE_F2_PAYLOAD');
+        expect(fs.readFileSync(path.join(rootDir, 'attacker-hardlink-f2.txt'), 'utf8')).toBe(
+          'STAGE_F2_PAYLOAD',
+        );
+      } finally {
+        close(rootH);
+      }
+    },
+  );
+
+  it('maps ENOSYS, ENOTSUP, EOPNOTSUPP, and renameat2/renameatx_np EINVAL to ATOMIC_NOREPLACE_UNSUPPORTED and reports supportsAtomicNoReplace in probeRoot (F4)', () => {
+    const liveProbe = probeRoot(rootDir, { requireAtomicNoReplace: true });
+    expect(liveProbe.supportsAtomicNoReplace).toBe(true);
+
+    const rootH = openRoot(rootDir);
+    try {
+      for (const errName of ['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EINVAL']) {
+        const stageName = `.stage-f4-${errName.toLowerCase()}.tmp`;
+        const stageH = createExcl(rootH, stageName, { allowProtectedMetadata: true });
+        try {
+          writeHandle(stageH, Buffer.from(`PAYLOAD_${errName}`));
+          fullFsync(stageH);
+
+          configureTestFaultInjection('atomic_rename_errno', errName);
+          expect(() => renameExcl(stageH, rootH, `dst-excl-${errName}.txt`)).toThrowError(
+            expect.objectContaining({
+              reason: 'ATOMIC_NOREPLACE_UNSUPPORTED',
+              code: 'ATOMIC_NOREPLACE_UNSUPPORTED',
+            }),
+          );
+        } finally {
+          close(stageH);
+        }
+
+        configureTestFaultInjection('atomic_rename_errno', errName);
+        expect(() =>
+          renameAtExcl(rootH, stageName, rootH, `dst-at-${errName}.txt`, {
+            allowProtectedMetadata: true,
+          }),
+        ).toThrowError(
+          expect.objectContaining({
+            reason: 'ATOMIC_NOREPLACE_UNSUPPORTED',
+            code: 'ATOMIC_NOREPLACE_UNSUPPORTED',
+          }),
+        );
+
+        configureTestFaultInjection('atomic_rename_errno', errName);
+        const unsupportedProbe = probeRoot(rootDir);
+        expect(unsupportedProbe.supportsAtomicNoReplace).toBe(false);
+
+        configureTestFaultInjection('atomic_rename_errno', errName);
+        expect(() => probeRoot(rootDir, { requireAtomicNoReplace: true })).toThrowError(
+          expect.objectContaining({
+            reason: 'ATOMIC_NOREPLACE_UNSUPPORTED',
+            code: 'ATOMIC_NOREPLACE_UNSUPPORTED',
+          }),
+        );
+      }
+    } finally {
+      close(rootH);
+    }
+  });
 });

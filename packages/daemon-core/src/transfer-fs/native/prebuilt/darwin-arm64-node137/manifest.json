@@ -3,7 +3,7 @@
   "platform": "darwin",
   "arch": "arm64",
   "apiLevel": 1,
-  "sourceDigest": "73786344f3a758e27965becfe1c64a727491746e6c844aea98b78beb2f2ad79f",
+  "sourceDigest": "8ac9faf8f36f36773567265a44324cd83efb3f60472f3171a74995baaf383cfb",
   "napiVersion": 8,
   "builtWithNode": "v26.7.0",
   "release": true,
@@ -13,8 +13,8 @@
   },
   "files": {
     "transfer_fs_node.node": {
-      "sha256": "9601aa7c15cdad1377515a06e6021ef3b42de16558ce7a1b0f89398f085bd240",
-      "size": 70968
+      "sha256": "c1fc83d3af593c36cd49f1efe98642919891324d79878f25074723af02dd606b",
+      "size": 71304
     }
   }
 }

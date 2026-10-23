@@ -2,6 +2,9 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
 
 #include <node_api.h>
 #include <stdbool.h>
@@ -134,6 +137,7 @@ static void ensure_ntdll(void) {
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <stdio.h>
+#include <sys/attr.h>
 #include <sys/mount.h>
 #include <sys/param.h>
 #ifndef RENAME_EXCL
@@ -144,6 +148,9 @@ static void ensure_ntdll(void) {
 #include <sys/syscall.h>
 #ifndef RENAME_NOREPLACE
 #define RENAME_NOREPLACE (1U << 0)
+#endif
+#ifndef O_PATH
+#define O_PATH 010000000
 #endif
 #endif
 #endif
@@ -181,6 +188,22 @@ static pthread_mutex_t g_slot_lock = PTHREAD_MUTEX_INITIALIZER;
 #define LOCK_SLOTS() pthread_mutex_lock(&g_slot_lock)
 #define UNLOCK_SLOTS() pthread_mutex_unlock(&g_slot_lock)
 #endif
+
+typedef enum {
+  TEST_FI_NONE = 0,
+  TEST_FI_SWAP_SRC_BEFORE_RENAME = 1,
+  TEST_FI_REPLACE_DST_AFTER_RENAME = 2,
+  TEST_FI_HARDLINK_AFTER_RENAME = 3,
+  TEST_FI_ATOMIC_RENAME_ERRNO = 4
+} test_fi_mode_t;
+
+typedef struct {
+  test_fi_mode_t mode;
+  int injected_errno;
+  char aux_name[256];
+} test_fi_config_t;
+
+static test_fi_config_t g_test_fi = {TEST_FI_NONE, 0, {0}};
 
 static int64_t make_token(int slot, uint32_t gen) {
   return ((int64_t)gen << 16) | (int64_t)(slot & 0xFFFF);
@@ -475,6 +498,10 @@ static const char *win_err_to_posix_code(DWORD err) {
       return "EBADF";
     case ERROR_NOT_SAME_DEVICE:
       return "EXDEV";
+    case ERROR_NOT_SUPPORTED:
+    case ERROR_CALL_NOT_IMPLEMENTED:
+    case ERROR_INVALID_FUNCTION:
+      return "ATOMIC_NOREPLACE_UNSUPPORTED";
     default:
       return "EIO";
   }
@@ -488,6 +515,14 @@ static napi_value throw_win_error(napi_env env, const char *op, DWORD err) {
   return NULL;
 }
 #else
+static bool posix_is_atomic_noreplace_unsupported_errno(int err) {
+  if (err == ENOSYS || err == ENOTSUP) return true;
+#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
+  if (err == EOPNOTSUPP) return true;
+#endif
+  return false;
+}
+
 static const char *errno_to_code(int err) {
   switch (err) {
     case EEXIST: return "EEXIST";
@@ -505,18 +540,17 @@ static const char *errno_to_code(int err) {
     case EBADF: return "EBADF";
     case EMLINK: return "EMLINK";
     case EXDEV: return "EXDEV";
+    case ENOSYS: return "ATOMIC_NOREPLACE_UNSUPPORTED";
+    case ENOTSUP: return "ATOMIC_NOREPLACE_UNSUPPORTED";
+#if defined(EOPNOTSUPP) && EOPNOTSUPP != ENOTSUP
+    case EOPNOTSUPP: return "ATOMIC_NOREPLACE_UNSUPPORTED";
+#endif
     default: return "EIO";
   }
 }
 
 static napi_value throw_posix_error(napi_env env, const char *op, int err) {
   const char *code = errno_to_code(err);
-  if (err == EINVAL && strcmp(op, "openRoot") != 0 && strcmp(op, "probeRoot") != 0) {
-    /* Segment syntax is already validated before any kernel *at() syscall;
-     * a kernel EINVAL (e.g. APFS renameatx_np on a concurrently-moved parent)
-     * is a filesystem/VFS error, not a path-traversal error. */
-    code = "EIO";
-  }
   char msg[192];
   snprintf(msg, sizeof(msg), "%s failed (%s / errno=%d: %s)", op, code, err, strerror(err));
   napi_throw_error(env, code, msg);
@@ -819,6 +853,12 @@ static bool win_rename_handle_excl(
     *out_err = ERROR_INVALID_NAME;
     return false;
   }
+  if (g_test_fi.mode == TEST_FI_ATOMIC_RENAME_ERRNO) {
+    DWORD sim_err = (DWORD)g_test_fi.injected_errno;
+    g_test_fi.mode = TEST_FI_NONE;
+    *out_err = sim_err ? sim_err : ERROR_NOT_SUPPORTED;
+    return false;
+  }
   /* Case-insensitive existence guard (blocks case collisions even on WSL case-sensitive dirs) */
   if (win_case_insensitive_target_exists(target_dir_h, wnew, wnew_len)) {
     *out_err = ERROR_ALREADY_EXISTS;
@@ -989,6 +1029,12 @@ static int posix_atomic_rename_noreplace(
     const char *src_name,
     int dst_dir_fd,
     const char *dst_name) {
+  if (g_test_fi.mode == TEST_FI_ATOMIC_RENAME_ERRNO) {
+    int sim_err = g_test_fi.injected_errno;
+    g_test_fi.mode = TEST_FI_NONE;
+    errno = sim_err;
+    return -1;
+  }
 #if defined(__APPLE__)
   return renameatx_np(src_dir_fd, src_name, dst_dir_fd, dst_name, RENAME_EXCL);
 #elif defined(__linux__)
@@ -1010,21 +1056,155 @@ static int posix_atomic_rename_noreplace(
 #endif
 }
 
+typedef enum {
+  POSIX_RENAME_OK = 0,
+  POSIX_RENAME_ERRNO = -1,
+  POSIX_RENAME_QUARANTINED = -2,
+  POSIX_RENAME_PUBLISHED_HARDLINK = -3,
+  POSIX_RENAME_ATOMIC_UNSUPPORTED = -4
+} posix_rename_status_t;
+
+static uint32_t g_quarantine_seq = 0;
+
+/*
+ * Atomically move an unexpected or post-check-rejected entry out of
+ * `(dst_dir_fd, dst_name)` into `quarantine_dir_fd` (the staging/source
+ * directory on the same filesystem) under a unique `.adhdev-quarantine-*`
+ * name using `posix_atomic_rename_noreplace`.
+ *
+ * Never calls `unlinkat`: user files, third-party files, and non-empty
+ * directories are preserved intact inside `quarantine_dir_fd`.
+ */
+static bool posix_quarantine_entry(
+    int dst_dir_fd,
+    const char *dst_name,
+    int quarantine_dir_fd,
+    uint64_t unexpected_ino,
+    char *out_qname,
+    size_t out_qname_cap) {
+  if (out_qname && out_qname_cap > 0) {
+    out_qname[0] = '\0';
+  }
+  pid_t pid = getpid();
+  for (uint32_t attempt = 0; attempt < 64; attempt++) {
+    uint32_t seq = __atomic_fetch_add(&g_quarantine_seq, 1, __ATOMIC_RELAXED);
+    char qname[256];
+    int n = snprintf(
+        qname,
+        sizeof(qname),
+        ".adhdev-quarantine-%d-%llx-%u-%u",
+        (int)pid,
+        (unsigned long long)unexpected_ino,
+        (unsigned int)seq,
+        (unsigned int)attempt);
+    if (n <= 0 || (size_t)n >= sizeof(qname)) {
+      return false;
+    }
+    if (posix_atomic_rename_noreplace(dst_dir_fd, dst_name, quarantine_dir_fd, qname) == 0) {
+      if (out_qname && out_qname_cap > 0) {
+        strncpy(out_qname, qname, out_qname_cap - 1);
+        out_qname[out_qname_cap - 1] = '\0';
+      }
+      return true;
+    }
+    if (errno != EEXIST) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/*
+ * Open a file descriptor to pin `(dir_fd, name)` across `renameAtExcl`
+ * without following symlinks:
+ * - On Linux, uses `O_PATH | O_NOFOLLOW` so read permission on the source file
+ *   or directory is NOT required (falls back to `O_RDONLY` only if `O_PATH` is
+ *   rejected by an older kernel).
+ * - On macOS/BSD, uses `O_SEARCH | O_DIRECTORY | O_NOFOLLOW` for directories
+ *   where available so directory search (`x`) permission suffices without read
+ *   (`r`) permission; for regular files on non-`O_PATH` platforms, uses
+ *   `O_RDONLY | O_NOFOLLOW` (with `O_EVTONLY` fallback on macOS) and requires
+ *   read permission on the source file.
+ */
+static int posix_open_pin_fd(int dir_fd, const char *name, mode_t lstat_mode) {
+  int cloexec = 0;
+#ifdef O_CLOEXEC
+  cloexec |= O_CLOEXEC;
+#endif
+#if defined(__linux__) && defined(O_PATH)
+  int path_fd = openat(dir_fd, name, O_PATH | O_NOFOLLOW | cloexec);
+  if (path_fd >= 0 || (errno != EINVAL && errno != ENOSYS && errno != EOPNOTSUPP)) {
+    return path_fd;
+  }
+#endif
+#if defined(O_SEARCH)
+  if (S_ISDIR(lstat_mode)) {
+    int search_fd = openat(dir_fd, name, O_SEARCH | O_DIRECTORY | O_NOFOLLOW | cloexec);
+    if (search_fd >= 0) {
+      return search_fd;
+    }
+  }
+#else
+  (void)lstat_mode;
+#endif
+  int rd_flags = O_RDONLY | O_NOFOLLOW | cloexec;
+#ifdef O_NONBLOCK
+  rd_flags |= O_NONBLOCK;
+#endif
+  int rd_fd = openat(dir_fd, name, rd_flags);
+#if defined(__APPLE__) && defined(O_EVTONLY)
+  if (rd_fd < 0 && errno == EACCES) {
+    int saved_rd_errno = errno;
+    int evt_flags = O_EVTONLY | O_NOFOLLOW | cloexec;
+#ifdef O_NONBLOCK
+    evt_flags |= O_NONBLOCK;
+#endif
+    rd_fd = openat(dir_fd, name, evt_flags);
+    if (rd_fd < 0) {
+      errno = saved_rd_errno;
+    }
+  }
+#endif
+  return rd_fd;
+}
+
 /*
  * Verified atomic no-replace rename on POSIX:
  * 1. Runs the case-insensitive target scan BEFORE checking the source entry so
  *    directory iteration cannot widen the pre-check -> rename window.
  * 2. Requires an open file descriptor `src_fd` pinning `(expected_dev, expected_ino)`
  *    so the kernel cannot recycle `expected_ino` while the rename is in flight.
- * 3. Performs a tight `fstatat(AT_SYMLINK_NOFOLLOW)` pre-check followed immediately
- *    by `renameatx_np(..., RENAME_EXCL)` / `renameat2(..., RENAME_NOREPLACE)`.
- * 4. Performs a post-rename `fstatat` + `fstat(src_fd)` verification on `(dst_dir_fd, dst_name)`:
- *    because step 3 used atomic no-replace and succeeded, `(dst_dir_fd, dst_name)` did not
- *    exist prior to step 3. If a concurrent attacker substituted `src_name` in the window
- *    between step 2 and step 3, step 4 detects the inode/link mismatch, unlinks the
- *    substituted entry from `(dst_dir_fd, dst_name)`, and fails closed with `ELOOP`.
+ * 3. Performs a tight `fstatat(AT_SYMLINK_NOFOLLOW)` + `fstat(src_fd)` pre-check
+ *    followed immediately by `renameatx_np(..., RENAME_EXCL)` /
+ *    `renameat2(..., RENAME_NOREPLACE)`.
+ * 4. Performs a post-rename `fstatat` + `fstat(src_fd)` verification on
+ *    `(dst_dir_fd, dst_name)`:
+ *    - (F1) If `(dst_dir_fd, dst_name)` does not match `(expected_dev, expected_ino)`
+ *      or the expected file type, it is NEVER unlinked/deleted; instead it is
+ *      atomically renamed (no-replace) into `src_dir_fd` under a unique
+ *      `.adhdev-quarantine-*` name (which works for regular files, symlinks, and
+ *      non-empty directories alike) and fails closed with `POST_RENAME_QUARANTINED`.
+ *    - (F2) If `(dst_dir_fd, dst_name)` matches `(expected_dev, expected_ino)` and
+ *      file type, but `st_nlink != 1` on a regular file (a hardlink was added in the
+ *      rename window), it is quarantined into `src_dir_fd` under `.adhdev-quarantine-*`
+ *      and fails closed with `PUBLISHED_HARDLINK_DETECTED` (never plain `ELOOP`).
+ *
+ * Residual POSIX window documentation:
+ * Unlike Windows `NtSetInformationFile(FileRenameInformationEx)` which renames an
+ * open `HANDLE` directly, POSIX `renameat2`/`renameatx_np` operates on directory
+ * entries by name. Two micro-windows exist when an adversary has concurrent write
+ * access to `src_dir_fd` or `dst_dir_fd`:
+ * - Window A (between pre-check `fstatat` and `posix_atomic_rename_noreplace`):
+ *   if `src_name` is swapped before the kernel rename, the substituted entry is
+ *   briefly visible at `(dst_dir_fd, dst_name)` until step 4 immediately moves it
+ *   into `.adhdev-quarantine-*` inside `src_dir_fd`.
+ * - Window B (between `posix_atomic_rename_noreplace` and step 4's `fstatat` /
+ *   quarantine rename): if a third party replaces `(dst_dir_fd, dst_name)` before
+ *   step 4 finishes, step 4 moves that entry intact into `.adhdev-quarantine-*`
+ *   inside `src_dir_fd`. Because `unlinkat` is never used, no user or third-party
+ *   data is ever deleted in either window.
  */
-static int posix_rename_verified_excl(
+static posix_rename_status_t posix_rename_verified_excl(
     int src_fd,
     int src_dir_fd,
     const char *src_name,
@@ -1032,70 +1212,188 @@ static int posix_rename_verified_excl(
     const char *dst_name,
     uint64_t expected_dev,
     uint64_t expected_ino,
-    bool expected_is_dir) {
+    bool expected_is_dir,
+    char *out_qname,
+    size_t out_qname_cap) {
+  if (out_qname && out_qname_cap > 0) {
+    out_qname[0] = '\0';
+  }
   if (posix_case_insensitive_target_exists(dst_dir_fd, dst_name)) {
     errno = EEXIST;
-    return -1;
+    return POSIX_RENAME_ERRNO;
   }
 
   struct stat st_pre;
   if (fstatat(src_dir_fd, src_name, &st_pre, AT_SYMLINK_NOFOLLOW) != 0) {
     errno = normalize_posix_at_errno(src_dir_fd, src_name, errno);
-    return -1;
+    return POSIX_RENAME_ERRNO;
   }
   if (S_ISLNK(st_pre.st_mode) ||
       (uint64_t)st_pre.st_dev != expected_dev ||
       (uint64_t)st_pre.st_ino != expected_ino ||
-      (expected_is_dir ? !S_ISDIR(st_pre.st_mode) : (!S_ISREG(st_pre.st_mode) || st_pre.st_nlink != 1))) {
+      (expected_is_dir ? !S_ISDIR(st_pre.st_mode) : !S_ISREG(st_pre.st_mode))) {
     errno = ELOOP;
-    return -1;
+    return POSIX_RENAME_ERRNO;
+  }
+  if (!expected_is_dir && st_pre.st_nlink != 1) {
+    errno = EMLINK;
+    return POSIX_RENAME_ERRNO;
   }
 
   if (src_fd >= 0) {
     struct stat st_fd;
     if (fstat(src_fd, &st_fd) != 0) {
-      return -1;
+      return POSIX_RENAME_ERRNO;
     }
     if ((uint64_t)st_fd.st_dev != expected_dev ||
         (uint64_t)st_fd.st_ino != expected_ino ||
         S_ISLNK(st_fd.st_mode) ||
-        (expected_is_dir ? !S_ISDIR(st_fd.st_mode) : (!S_ISREG(st_fd.st_mode) || st_fd.st_nlink != 1))) {
+        (expected_is_dir ? !S_ISDIR(st_fd.st_mode) : !S_ISREG(st_fd.st_mode))) {
       errno = ELOOP;
-      return -1;
+      return POSIX_RENAME_ERRNO;
     }
+    if (!expected_is_dir && st_fd.st_nlink != 1) {
+      errno = EMLINK;
+      return POSIX_RENAME_ERRNO;
+    }
+  }
+
+  bool fi_displaced = false;
+  if (g_test_fi.mode == TEST_FI_SWAP_SRC_BEFORE_RENAME) {
+    char aux[256];
+    strncpy(aux, g_test_fi.aux_name, sizeof(aux) - 1);
+    aux[sizeof(aux) - 1] = '\0';
+    g_test_fi.mode = TEST_FI_NONE;
+    if (renameat(src_dir_fd, src_name, src_dir_fd, ".adhdev-fi-displaced") == 0) {
+      fi_displaced = true;
+    }
+    renameat(src_dir_fd, aux, src_dir_fd, src_name);
   }
 
   if (posix_atomic_rename_noreplace(src_dir_fd, src_name, dst_dir_fd, dst_name) != 0) {
-    return -1;
+    int ren_err = errno;
+    if (fi_displaced) {
+      unlinkat(src_dir_fd, ".adhdev-fi-displaced", expected_is_dir ? AT_REMOVEDIR : 0);
+    }
+    if (posix_is_atomic_noreplace_unsupported_errno(ren_err) || ren_err == EINVAL) {
+      errno = ren_err;
+      return POSIX_RENAME_ATOMIC_UNSUPPORTED;
+    }
+    errno = ren_err;
+    return POSIX_RENAME_ERRNO;
+  }
+
+  if (g_test_fi.mode == TEST_FI_REPLACE_DST_AFTER_RENAME) {
+    char aux[256];
+    strncpy(aux, g_test_fi.aux_name, sizeof(aux) - 1);
+    aux[sizeof(aux) - 1] = '\0';
+    g_test_fi.mode = TEST_FI_NONE;
+    if (renameat(dst_dir_fd, dst_name, src_dir_fd, ".adhdev-fi-displaced") == 0) {
+      fi_displaced = true;
+    }
+    renameat(src_dir_fd, aux, dst_dir_fd, dst_name);
+  } else if (g_test_fi.mode == TEST_FI_HARDLINK_AFTER_RENAME) {
+    char aux[256];
+    strncpy(aux, g_test_fi.aux_name, sizeof(aux) - 1);
+    aux[sizeof(aux) - 1] = '\0';
+    g_test_fi.mode = TEST_FI_NONE;
+    linkat(dst_dir_fd, dst_name, src_dir_fd, aux, 0);
   }
 
   struct stat st_post;
-  bool post_ok = (fstatat(dst_dir_fd, dst_name, &st_post, AT_SYMLINK_NOFOLLOW) == 0) &&
-                 !S_ISLNK(st_post.st_mode) &&
-                 (uint64_t)st_post.st_dev == expected_dev &&
-                 (uint64_t)st_post.st_ino == expected_ino &&
-                 (expected_is_dir ? S_ISDIR(st_post.st_mode) : (S_ISREG(st_post.st_mode) && st_post.st_nlink == 1));
-  if (post_ok && src_fd >= 0) {
-    struct stat st_fd_post;
+  int post_stat_rc = fstatat(dst_dir_fd, dst_name, &st_post, AT_SYMLINK_NOFOLLOW);
+  if (fi_displaced) {
+    unlinkat(src_dir_fd, ".adhdev-fi-displaced", expected_is_dir ? AT_REMOVEDIR : 0);
+  }
+  bool identity_ok = (post_stat_rc == 0) &&
+                     !S_ISLNK(st_post.st_mode) &&
+                     (uint64_t)st_post.st_dev == expected_dev &&
+                     (uint64_t)st_post.st_ino == expected_ino &&
+                     (expected_is_dir ? S_ISDIR(st_post.st_mode) : S_ISREG(st_post.st_mode));
+  struct stat st_fd_post;
+  memset(&st_fd_post, 0, sizeof(st_fd_post));
+  if (identity_ok && src_fd >= 0) {
     if (fstat(src_fd, &st_fd_post) != 0 ||
         (uint64_t)st_fd_post.st_dev != expected_dev ||
         (uint64_t)st_fd_post.st_ino != expected_ino ||
-        (!expected_is_dir && st_fd_post.st_nlink != 1)) {
-      post_ok = false;
+        S_ISLNK(st_fd_post.st_mode) ||
+        (expected_is_dir ? !S_ISDIR(st_fd_post.st_mode) : !S_ISREG(st_fd_post.st_mode))) {
+      identity_ok = false;
     }
   }
-  if (!post_ok) {
-    struct stat st_cleanup;
-    if (fstatat(dst_dir_fd, dst_name, &st_cleanup, AT_SYMLINK_NOFOLLOW) == 0 &&
-        ((uint64_t)st_cleanup.st_dev != expected_dev ||
-         (uint64_t)st_cleanup.st_ino != expected_ino ||
-         S_ISLNK(st_cleanup.st_mode))) {
-      unlinkat(dst_dir_fd, dst_name, S_ISDIR(st_cleanup.st_mode) ? AT_REMOVEDIR : 0);
-    }
+
+  if (!identity_ok) {
+    uint64_t q_ino = (post_stat_rc == 0) ? (uint64_t)st_post.st_ino : expected_ino;
+    posix_quarantine_entry(dst_dir_fd, dst_name, src_dir_fd, q_ino, out_qname, out_qname_cap);
     errno = ELOOP;
-    return -1;
+    return POSIX_RENAME_QUARANTINED;
   }
-  return 0;
+
+  if (!expected_is_dir &&
+      (st_post.st_nlink != 1 || (src_fd >= 0 && st_fd_post.st_nlink != 1))) {
+    posix_quarantine_entry(dst_dir_fd, dst_name, src_dir_fd, expected_ino, out_qname, out_qname_cap);
+    errno = EMLINK;
+    return POSIX_RENAME_PUBLISHED_HARDLINK;
+  }
+
+  return POSIX_RENAME_OK;
+}
+
+static napi_value throw_posix_rename_status(
+    napi_env env,
+    const char *op,
+    posix_rename_status_t status,
+    int err,
+    const char *qname) {
+  char msg[320];
+  if (status == POSIX_RENAME_QUARANTINED) {
+    if (qname && qname[0] != '\0') {
+      snprintf(
+          msg,
+          sizeof(msg),
+          "%s failed (POST_RENAME_QUARANTINED: unexpected destination entry quarantined as %s)",
+          op,
+          qname);
+    } else {
+      snprintf(
+          msg,
+          sizeof(msg),
+          "%s failed (POST_RENAME_QUARANTINED: post-rename identity mismatch)",
+          op);
+    }
+    napi_throw_error(env, "POST_RENAME_QUARANTINED", msg);
+    return NULL;
+  }
+  if (status == POSIX_RENAME_PUBLISHED_HARDLINK) {
+    if (qname && qname[0] != '\0') {
+      snprintf(
+          msg,
+          sizeof(msg),
+          "%s failed (PUBLISHED_HARDLINK_DETECTED: post-rename st_nlink != 1; quarantined as %s)",
+          op,
+          qname);
+    } else {
+      snprintf(
+          msg,
+          sizeof(msg),
+          "%s failed (PUBLISHED_HARDLINK_DETECTED: post-rename st_nlink != 1)",
+          op);
+    }
+    napi_throw_error(env, "PUBLISHED_HARDLINK_DETECTED", msg);
+    return NULL;
+  }
+  if (status == POSIX_RENAME_ATOMIC_UNSUPPORTED) {
+    snprintf(
+        msg,
+        sizeof(msg),
+        "%s failed (ATOMIC_NOREPLACE_UNSUPPORTED / errno=%d: %s)",
+        op,
+        err,
+        strerror(err));
+    napi_throw_error(env, "ATOMIC_NOREPLACE_UNSUPPORTED", msg);
+    return NULL;
+  }
+  return throw_posix_error(env, op, err);
 }
 #endif
 
@@ -1634,16 +1932,29 @@ static napi_value fn_renameExcl(napi_env env, napi_callback_info info) {
   uint64_t expected_ino = s_src->ino;
   UNLOCK_SLOTS();
 
-  if (posix_rename_verified_excl(
-          src_fd,
-          parent_fd,
-          src_name,
-          dst_fd,
-          utf8_new,
-          expected_dev,
-          expected_ino,
-          expected_is_dir) != 0) {
-    return throw_posix_error(env, "renameExcl", errno);
+  char qname[256] = {0};
+  posix_rename_status_t rstat = posix_rename_verified_excl(
+      src_fd,
+      parent_fd,
+      src_name,
+      dst_fd,
+      utf8_new,
+      expected_dev,
+      expected_ino,
+      expected_is_dir,
+      qname,
+      sizeof(qname));
+  int saved_err = errno;
+  if (rstat != POSIX_RENAME_OK) {
+    if (rstat == POSIX_RENAME_PUBLISHED_HARDLINK && qname[0] != '\0') {
+      LOCK_SLOTS();
+      if (g_slots[src_slot].active && g_slots[src_slot].generation == src_gen) {
+        strncpy(g_slots[src_slot].name, qname, sizeof(g_slots[src_slot].name) - 1);
+        g_slots[src_slot].name[sizeof(g_slots[src_slot].name) - 1] = '\0';
+      }
+      UNLOCK_SLOTS();
+    }
+    return throw_posix_rename_status(env, "renameExcl", rstat, saved_err, qname);
   }
   LOCK_SLOTS();
   if (g_slots[src_slot].active && g_slots[src_slot].generation == src_gen) {
@@ -1761,14 +2072,7 @@ static napi_value fn_renameAtExcl(napi_env env, napi_callback_info info) {
     napi_throw_error(env, "ELOOP", "renameAtExcl refuses to rename symbolic links");
     return NULL;
   }
-  int open_flags = O_RDONLY | O_NOFOLLOW;
-#ifdef O_NONBLOCK
-  open_flags |= O_NONBLOCK;
-#endif
-#ifdef O_CLOEXEC
-  open_flags |= O_CLOEXEC;
-#endif
-  int tmp_fd = openat(src_dir_fd, utf8_src, open_flags);
+  int tmp_fd = posix_open_pin_fd(src_dir_fd, utf8_src, st_lstat.st_mode);
   if (tmp_fd < 0) {
     return throw_posix_error(env, "renameAtExcl(openSrc)", normalize_posix_at_errno(src_dir_fd, utf8_src, errno));
   }
@@ -1787,7 +2091,8 @@ static napi_value fn_renameAtExcl(napi_env env, napi_callback_info info) {
     napi_throw_error(env, "EMLINK", "renameAtExcl refuses to rename hardlinked files");
     return NULL;
   }
-  int rc = posix_rename_verified_excl(
+  char qname[256] = {0};
+  posix_rename_status_t rstat = posix_rename_verified_excl(
       tmp_fd,
       src_dir_fd,
       utf8_src,
@@ -1795,11 +2100,13 @@ static napi_value fn_renameAtExcl(napi_env env, napi_callback_info info) {
       utf8_new,
       (uint64_t)st_fd.st_dev,
       (uint64_t)st_fd.st_ino,
-      S_ISDIR(st_fd.st_mode));
+      S_ISDIR(st_fd.st_mode),
+      qname,
+      sizeof(qname));
   int saved_err = errno;
   close(tmp_fd);
-  if (rc != 0) {
-    return throw_posix_error(env, "renameAtExcl", saved_err);
+  if (rstat != POSIX_RENAME_OK) {
+    return throw_posix_rename_status(env, "renameAtExcl", rstat, saved_err, qname);
   }
   napi_value ok;
   napi_get_boolean(env, true, &ok);
@@ -2325,7 +2632,84 @@ static napi_value fn_getIdentity(napi_env env, napi_callback_info info) {
 #endif
 }
 
-/* probeRoot(rootPath) -> { filesystem, volumeFlags, supports128BitFileId, supportsDirFullFsync, caseSensitiveDir } */
+#ifndef _WIN32
+static bool posix_probe_atomic_noreplace(int root_fd, const char *fs_name, uint64_t f_type) {
+  if (g_test_fi.mode == TEST_FI_ATOMIC_RENAME_ERRNO) {
+    int sim_err = g_test_fi.injected_errno;
+    g_test_fi.mode = TEST_FI_NONE;
+    if (posix_is_atomic_noreplace_unsupported_errno(sim_err) || sim_err == EINVAL) {
+      return false;
+    }
+  }
+#if defined(__APPLE__)
+  (void)f_type;
+  if (strcasecmp(fs_name, "nfs") == 0 ||
+      strcasecmp(fs_name, "smbfs") == 0 ||
+      strcasecmp(fs_name, "exfat") == 0 ||
+      strcasecmp(fs_name, "msdos") == 0 ||
+      strcasecmp(fs_name, "webdav") == 0 ||
+      strcasecmp(fs_name, "afpfs") == 0) {
+    return false;
+  }
+  struct {
+    uint32_t length;
+    vol_capabilities_attr_t caps;
+  } vcb;
+  struct attrlist al;
+  memset(&al, 0, sizeof(al));
+  memset(&vcb, 0, sizeof(vcb));
+  al.bitmapcount = ATTR_BIT_MAP_COUNT;
+  al.volattr = ATTR_VOL_INFO | ATTR_VOL_CAPABILITIES;
+  if (fgetattrlist(root_fd, &al, &vcb, sizeof(vcb), 0) == 0 &&
+      (vcb.caps.valid[VOL_CAPABILITIES_INTERFACES] & VOL_CAP_INT_RENAME_EXCL) != 0) {
+    if ((vcb.caps.capabilities[VOL_CAPABILITIES_INTERFACES] & VOL_CAP_INT_RENAME_EXCL) == 0) {
+      return false;
+    }
+  }
+  if (renameatx_np(root_fd, ".adhdev-probe-nonexistent", root_fd, ".adhdev-probe-nonexistent", RENAME_EXCL) != 0) {
+    int err = errno;
+    if (posix_is_atomic_noreplace_unsupported_errno(err) || err == EINVAL) {
+      return false;
+    }
+  }
+  return true;
+#elif defined(__linux__)
+  (void)fs_name;
+  /* Reject filesystems known not to provide atomic RENAME_NOREPLACE:
+   * NFS (0x6969), MSDOS/FAT (0x4d44), SMB/CIFS/SMB2 (0x517b, 0xff534d42, 0xfe534d42),
+   * exFAT (0x2011bab0), FUSE (0x65735546). */
+  if (f_type == 0x6969ULL ||
+      f_type == 0x4d44ULL ||
+      f_type == 0x517bULL ||
+      f_type == 0xff534d42ULL ||
+      f_type == 0xfe534d42ULL ||
+      f_type == 0x2011bab0ULL ||
+      f_type == 0x65735546ULL) {
+    return false;
+  }
+  if (syscall(
+          SYS_renameat2,
+          root_fd,
+          ".adhdev-probe-nonexistent",
+          root_fd,
+          ".adhdev-probe-nonexistent",
+          RENAME_NOREPLACE) != 0) {
+    int err = errno;
+    if (posix_is_atomic_noreplace_unsupported_errno(err) || err == EINVAL) {
+      return false;
+    }
+  }
+  return true;
+#else
+  (void)root_fd;
+  (void)fs_name;
+  (void)f_type;
+  return false;
+#endif
+}
+#endif
+
+/* probeRoot(rootPath) -> { filesystem, volumeFlags, supports128BitFileId, supportsDirFullFsync, supportsAtomicNoReplace, caseSensitiveDir } */
 static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
   size_t argc = 1;
   napi_value argv[1];
@@ -2364,6 +2748,12 @@ static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
   FILE_ID_INFO id_info = {0};
   bool has_128_id = GetFileInformationByHandleEx(h, FileIdInfo, &id_info, sizeof(id_info)) != 0;
   bool dir_fsync = FlushFileBuffers(h) != 0;
+  bool atomic_noreplace = (pNtSetInformationFile != NULL) &&
+                          (_stricmp(fs_name, "NTFS") == 0 || _stricmp(fs_name, "ReFS") == 0);
+  if (g_test_fi.mode == TEST_FI_ATOMIC_RENAME_ERRNO) {
+    g_test_fi.mode = TEST_FI_NONE;
+    atomic_noreplace = false;
+  }
 
   bool case_sensitive_dir = false;
   if (pNtQueryInformationFile) {
@@ -2386,6 +2776,8 @@ static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
   napi_set_named_property(env, obj, "supports128BitFileId", v);
   napi_get_boolean(env, dir_fsync, &v);
   napi_set_named_property(env, obj, "supportsDirFullFsync", v);
+  napi_get_boolean(env, atomic_noreplace, &v);
+  napi_set_named_property(env, obj, "supportsAtomicNoReplace", v);
   napi_get_boolean(env, case_sensitive_dir, &v);
   napi_set_named_property(env, obj, "caseSensitiveDir", v);
   return obj;
@@ -2397,6 +2789,7 @@ static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
   }
   char fs_name[64] = "posix";
   uint32_t vol_flags = 0;
+  uint64_t f_type = 0;
 #if defined(__APPLE__)
   struct statfs sfs;
   if (fstatfs(fd, &sfs) == 0) {
@@ -2406,10 +2799,12 @@ static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
 #elif defined(__linux__)
   struct statfs sfs;
   if (fstatfs(fd, &sfs) == 0) {
+    f_type = (uint64_t)sfs.f_type;
     snprintf(fs_name, sizeof(fs_name), "linux-0x%lx", (unsigned long)sfs.f_type);
     vol_flags = (uint32_t)sfs.f_flags;
   }
 #endif
+  bool atomic_noreplace = posix_probe_atomic_noreplace(fd, fs_name, f_type);
   bool dir_fsync = (fsync(fd) == 0);
   close(fd);
 
@@ -2423,6 +2818,8 @@ static napi_value fn_probeRoot(napi_env env, napi_callback_info info) {
   napi_set_named_property(env, obj, "supports128BitFileId", v);
   napi_get_boolean(env, dir_fsync, &v);
   napi_set_named_property(env, obj, "supportsDirFullFsync", v);
+  napi_get_boolean(env, atomic_noreplace, &v);
+  napi_set_named_property(env, obj, "supportsAtomicNoReplace", v);
   napi_get_boolean(env, false, &v);
   napi_set_named_property(env, obj, "caseSensitiveDir", v);
   return obj;
@@ -2479,6 +2876,84 @@ static napi_value fn_close(napi_env env, napi_callback_info info) {
 #endif
 }
 
+/* configureTestFaultInjection(modeOrNull[, auxOrErrno]) -> boolean */
+static napi_value fn_configureTestFaultInjection(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+  if (argc < 1) {
+    g_test_fi.mode = TEST_FI_NONE;
+    g_test_fi.injected_errno = 0;
+    g_test_fi.aux_name[0] = '\0';
+    napi_value ok;
+    napi_get_boolean(env, true, &ok);
+    return ok;
+  }
+  napi_valuetype t0;
+  napi_typeof(env, argv[0], &t0);
+  if (t0 == napi_null || t0 == napi_undefined) {
+    g_test_fi.mode = TEST_FI_NONE;
+    g_test_fi.injected_errno = 0;
+    g_test_fi.aux_name[0] = '\0';
+    napi_value ok;
+    napi_get_boolean(env, true, &ok);
+    return ok;
+  }
+  char mode_str[128] = {0};
+  if (!get_utf8_arg(env, argv[0], mode_str, sizeof(mode_str), NULL)) {
+    napi_throw_error(env, "EINVAL", "Invalid fault injection mode");
+    return NULL;
+  }
+  g_test_fi.injected_errno = 0;
+  g_test_fi.aux_name[0] = '\0';
+  if (strcmp(mode_str, "swap_src_before_rename") == 0) {
+    if (argc < 2 || !get_utf8_arg(env, argv[1], g_test_fi.aux_name, sizeof(g_test_fi.aux_name), NULL)) {
+      napi_throw_error(env, "EINVAL", "swap_src_before_rename requires auxName");
+      return NULL;
+    }
+    g_test_fi.mode = TEST_FI_SWAP_SRC_BEFORE_RENAME;
+  } else if (strcmp(mode_str, "replace_dst_after_rename") == 0) {
+    if (argc < 2 || !get_utf8_arg(env, argv[1], g_test_fi.aux_name, sizeof(g_test_fi.aux_name), NULL)) {
+      napi_throw_error(env, "EINVAL", "replace_dst_after_rename requires auxName");
+      return NULL;
+    }
+    g_test_fi.mode = TEST_FI_REPLACE_DST_AFTER_RENAME;
+  } else if (strcmp(mode_str, "hardlink_after_rename") == 0) {
+    if (argc < 2 || !get_utf8_arg(env, argv[1], g_test_fi.aux_name, sizeof(g_test_fi.aux_name), NULL)) {
+      napi_throw_error(env, "EINVAL", "hardlink_after_rename requires auxName");
+      return NULL;
+    }
+    g_test_fi.mode = TEST_FI_HARDLINK_AFTER_RENAME;
+  } else if (strcmp(mode_str, "atomic_rename_errno") == 0) {
+    char err_name[64] = {0};
+    if (argc < 2 || !get_utf8_arg(env, argv[1], err_name, sizeof(err_name), NULL)) {
+      napi_throw_error(env, "EINVAL", "atomic_rename_errno requires errno name");
+      return NULL;
+    }
+#ifdef _WIN32
+    if (strcmp(err_name, "ENOSYS") == 0) g_test_fi.injected_errno = (int)ERROR_CALL_NOT_IMPLEMENTED;
+    else if (strcmp(err_name, "ENOTSUP") == 0 || strcmp(err_name, "EOPNOTSUPP") == 0) g_test_fi.injected_errno = (int)ERROR_NOT_SUPPORTED;
+    else if (strcmp(err_name, "EINVAL") == 0) g_test_fi.injected_errno = (int)ERROR_INVALID_FUNCTION;
+    else g_test_fi.injected_errno = (int)ERROR_NOT_SUPPORTED;
+#else
+    if (strcmp(err_name, "ENOSYS") == 0) g_test_fi.injected_errno = ENOSYS;
+    else if (strcmp(err_name, "ENOTSUP") == 0) g_test_fi.injected_errno = ENOTSUP;
+#ifdef EOPNOTSUPP
+    else if (strcmp(err_name, "EOPNOTSUPP") == 0) g_test_fi.injected_errno = EOPNOTSUPP;
+#endif
+    else if (strcmp(err_name, "EINVAL") == 0) g_test_fi.injected_errno = EINVAL;
+    else g_test_fi.injected_errno = ENOTSUP;
+#endif
+    g_test_fi.mode = TEST_FI_ATOMIC_RENAME_ERRNO;
+  } else {
+    napi_throw_error(env, "EINVAL", "Unknown fault injection mode");
+    return NULL;
+  }
+  napi_value ok;
+  napi_get_boolean(env, true, &ok);
+  return ok;
+}
+
 #define EXPORT_FN(name, fn)                                           \
   do {                                                                \
     napi_value f;                                                     \
@@ -2502,5 +2977,6 @@ NAPI_MODULE_INIT() {
   EXPORT_FN("getIdentity", fn_getIdentity);
   EXPORT_FN("probeRoot", fn_probeRoot);
   EXPORT_FN("close", fn_close);
+  EXPORT_FN("configureTestFaultInjection", fn_configureTestFaultInjection);
   return exports;
 }

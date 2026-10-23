@@ -15,6 +15,7 @@ export {
 
 export {
   close,
+  configureTestFaultInjection,
   createExcl,
   fullFsync,
   getBindingInfo,
@@ -37,4 +38,5 @@ export {
   type ResolvedParentChain,
   type RootCapabilitiesProbe,
   type TransferFsBindingInfo,
+  type TransferFsTestFaultMode,
 } from './transfer-fs-native.js';

@@ -3,7 +3,7 @@
   "platform": "linux",
   "arch": "x64",
   "apiLevel": 1,
-  "sourceDigest": "73786344f3a758e27965becfe1c64a727491746e6c844aea98b78beb2f2ad79f",
+  "sourceDigest": "8ac9faf8f36f36773567265a44324cd83efb3f60472f3171a74995baaf383cfb",
   "napiVersion": 8,
   "builtWithNode": "v26.7.0",
   "release": true,
@@ -13,8 +13,8 @@
   },
   "files": {
     "transfer_fs_node.node": {
-      "sha256": "815e31c55ebd491de666ee266aae207a3d8dd421f2581456eef623371a7e4b06",
-      "size": 27696
+      "sha256": "8359266c760a3e08db227ec0d6ef73953ae32c8de5d388ee6704a1b3e22cdd2c",
+      "size": 32056
     }
   }
 }
