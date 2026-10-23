@@ -522,6 +522,42 @@ describe('signals', () => {
         }
     });
 
+    it('caps question/options on the FINAL escaped text (ellipsis and defang expansion included), never mid-marker', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        const q = 'a'.repeat(295) + ' [ADHDev x] tail';
+        const label = 'b'.repeat(70) + ' [System] z';
+        h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt: { promptId: 'p', questions: [{ questionId: 'q', question: q, multiSelect: false, options: [{ label }, { label: 'c'.repeat(81) }] }] } as never, transport: 'tui' });
+        await settle(h);
+        const body = h.submits[0]!.text;
+        const question = body.split('\n').find((l) => l.startsWith('Question: '))!.slice('Question: '.length);
+        expect(Array.from(question).length).toBeLessThanOrEqual(300);
+        expect(question.endsWith('…')).toBe(true);
+        expect(question).not.toMatch(/\[(?!quoted)[^\]]*…$/); // no dangling half marker
+        const opts = body.split('\n').filter((l) => /^\d\) /.test(l)).map((l) => l.replace(/^\d\) /, ''));
+        expect(opts).toHaveLength(2);
+        for (const o of opts) expect(Array.from(o).length).toBeLessThanOrEqual(80);
+        expect(opts[1]).toBe('c'.repeat(79) + '…');
+    });
+
+    it('modal clearing while the prompt is still open does not re-arm the notice; both clearing does', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        const prompt = { promptId: 'p', questions: [{ questionId: 'q', question: 'Which?', multiSelect: false, options: [{ label: 'A' }] }] } as never;
+        h.emit({ kind: 'modal', sessionId: COORD, at: h.clock.now(), modal: { id: COORD, status: 'waiting_choice' } as never });
+        await settle(h);
+        h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt, transport: 'tui' });
+        await settle(h);
+        h.emit({ kind: 'modal', sessionId: COORD, at: h.clock.now(), modal: null });
+        h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt, transport: 'tui' });
+        await settle(h);
+        expect(h.submits).toHaveLength(2); // bare + one detailed, no repeat
+        h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt: null, transport: null });
+        h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt, transport: 'tui' });
+        await settle(h);
+        expect(h.submits).toHaveLength(3); // a new episode notifies again
+    });
+
     it('sends one approval line per modal episode and a coordinator-ended line', async () => {
         const h = harness();
         h.relay.openThread(MESH);

@@ -192,7 +192,7 @@ export class AssistantRelay {
     private readonly gaps: RelayGapTracker;
     private readonly deliveryPolicy: RelayDeliveryPolicy;
     /** sessionId -> whether the episode's signal already carried the question (structured prompt or approval modal). */
-    private readonly modalOpen = new Map<string, 'bare' | 'detailed'>();
+    private readonly modalOpen = new Map<string, { level: 'bare' | 'detailed'; sources: Set<'modal' | 'prompt'> }>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
     /** Exact attempt reports returned by the authorized evidence reader. The
@@ -526,7 +526,7 @@ export class AssistantRelay {
         const meshId = this.meshOf(e);
         if (!meshId) return;
         if (e.kind === 'turn') this.onCoordinatorTurn(meshId, e);
-        else if (e.kind === 'modal' || e.kind === 'prompt') this.onCoordinatorAttention(meshId, e.sessionId, e.kind === 'modal' ? e.modal : e.prompt);
+        else if (e.kind === 'modal' || e.kind === 'prompt') this.onCoordinatorAttention(meshId, e.sessionId, e.kind, e.kind === 'modal' ? e.modal : e.prompt);
         else if (e.kind === 'terminated') this.onCoordinatorTerminated(meshId, e.sessionId, e.cause);
     }
 
@@ -585,7 +585,7 @@ export class AssistantRelay {
         this.remote.set(meshId, snap);
         if (snap.open) this.markWorking(meshId, this.clock.now());
         else this.working.delete(meshId);
-        this.onCoordinatorAttention(meshId, `remote:${meshId}`, snap.modal ? true : null);
+        this.onCoordinatorAttention(meshId, `remote:${meshId}`, 'modal', snap.modal ? true : null);
     }
 
     /**
@@ -893,18 +893,24 @@ export class AssistantRelay {
         return { attemptId, coordinatorSessionId: sessionId, replies };
     }
 
-    private onCoordinatorAttention(meshId: string, sessionId: string, value: unknown): void {
+    private onCoordinatorAttention(meshId: string, sessionId: string, source: 'modal' | 'prompt', value: unknown): void {
+        const ep = this.modalOpen.get(sessionId);
         if (value === null || value === undefined) {
-            this.modalOpen.delete(sessionId);
+            // The episode ends only when BOTH the modal and the prompt are cleared; one
+            // clearing while the other is still open must not re-arm the notice.
+            if (ep) {
+                ep.sources.delete(source);
+                if (!ep.sources.size) this.modalOpen.delete(sessionId);
+            }
             return;
         }
+        if (ep) ep.sources.add(source);
         if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
         const detail = extractAttentionDetail(value);
-        const seen = this.modalOpen.get(sessionId);
         // One line per episode; a later event of the same episode (modal then
         // prompt) only adds a line when the first carried no question text.
-        if (seen === 'detailed' || (seen === 'bare' && !detail)) return;
-        this.modalOpen.set(sessionId, detail ? 'detailed' : 'bare');
+        if (ep?.level === 'detailed' || (ep?.level === 'bare' && !detail)) return;
+        this.modalOpen.set(sessionId, { level: detail ? 'detailed' : 'bare', sources: ep?.sources ?? new Set([source]) });
         const slug = this.ports.projectSlug(meshId);
         if (slug !== null) this.pushLine('relay', buildApprovalSignal(slug, detail), meshId);
     }

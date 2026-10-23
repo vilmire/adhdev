@@ -182,10 +182,16 @@ const ATTENTION_OPTIONS_MAX = 8;
 function oneLine(text: unknown, max: number): string {
     // eslint-disable-next-line no-control-regex
     const flat = String(text ?? '').replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim();
-    const points = Array.from(flat);
     // Agent-authored: neutralise header markers anywhere in the line, not just at its start.
-    return defangRelayBody(points.length > max ? `${points.slice(0, max).join('')}…` : flat)
-        .replace(/\[(\s*)(project)\b/gi, '[$1quoted $2');
+    // Escape FIRST, then cap the final string, so the stated limit holds after expansion.
+    const safe = defangRelayBody(flat).replace(/\[(\s*)(project)\b/gi, '[$1quoted $2');
+    const points = Array.from(safe);
+    if (points.length <= max) return safe;
+    let cut = points.slice(0, max - 1).join('');
+    // Do not leave half of an escaped marker ("[quoted Sys", "[/relay (quo") at the cut.
+    const open = cut.lastIndexOf('[');
+    if (open >= 0 && cut.indexOf(']', open) < 0 && Array.from(cut.slice(open)).length <= 20) cut = cut.slice(0, open).trimEnd();
+    return `${cut}…`;
 }
 
 /**

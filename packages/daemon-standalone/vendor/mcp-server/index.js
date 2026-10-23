@@ -66224,7 +66224,7 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
 - A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised \u2014 make it self-contained: outcome, current state, what is still pending, and any question you need answered.
 - A question, status check or read-only lookup is answered directly from \`mesh_*\` reads \u2014 do not enqueue tasks for it. When a request says not to enqueue or not to edit, obey it.
 - Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it \u2014 do not ask for that approval in chat text.
-- **Never ask the user a question through an interactive picker or modal** (\`AskUserQuestion\` or any single/multi-choice tool). It blocks your whole turn and the assistant cannot see the question or relay an answer. Put the question in your final message as plain text \u2014 the question, numbered options, and your recommendation \u2014 and END the turn so the assistant can relay it and return the answer. Keep working on anything that does not depend on the answer.`;
+- **Never open an interactive picker to ask the user a clarification or decision** (\`AskUserQuestion\` or any single/multi-choice tool). Permission approvals are different: they stay on the Inbox/approval flow above. A picker blocks your whole turn and the assistant cannot see the question or relay an answer. Put the question in your final message as plain text \u2014 the question, numbered options, and your recommendation \u2014 and END the turn so the assistant can relay it and return the answer. Keep working on anything that does not depend on the answer.`;
       }
     });
     function eventStatus(event, fallback) {
@@ -104757,8 +104757,13 @@ ${b.text}`).join("\n\n");
     }
     function oneLine2(text4, max) {
       const flat = String(text4 ?? "").replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim();
-      const points = Array.from(flat);
-      return defangRelayBody(points.length > max ? `${points.slice(0, max).join("")}\u2026` : flat).replace(/\[(\s*)(project)\b/gi, "[$1quoted $2");
+      const safe = defangRelayBody(flat).replace(/\[(\s*)(project)\b/gi, "[$1quoted $2");
+      const points = Array.from(safe);
+      if (points.length <= max) return safe;
+      let cut = points.slice(0, max - 1).join("");
+      const open = cut.lastIndexOf("[");
+      if (open >= 0 && cut.indexOf("]", open) < 0 && Array.from(cut.slice(open)).length <= 20) cut = cut.slice(0, open).trimEnd();
+      return `${cut}\u2026`;
     }
     function extractAttentionDetail(value) {
       if (!value || typeof value !== "object") return null;
@@ -106432,7 +106437,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             const meshId = this.meshOf(e);
             if (!meshId) return;
             if (e.kind === "turn") this.onCoordinatorTurn(meshId, e);
-            else if (e.kind === "modal" || e.kind === "prompt") this.onCoordinatorAttention(meshId, e.sessionId, e.kind === "modal" ? e.modal : e.prompt);
+            else if (e.kind === "modal" || e.kind === "prompt") this.onCoordinatorAttention(meshId, e.sessionId, e.kind, e.kind === "modal" ? e.modal : e.prompt);
             else if (e.kind === "terminated") this.onCoordinatorTerminated(meshId, e.sessionId, e.cause);
           }
           meshOf(e) {
@@ -106485,7 +106490,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             this.remote.set(meshId, snap);
             if (snap.open) this.markWorking(meshId, this.clock.now());
             else this.working.delete(meshId);
-            this.onCoordinatorAttention(meshId, `remote:${meshId}`, snap.modal ? true : null);
+            this.onCoordinatorAttention(meshId, `remote:${meshId}`, "modal", snap.modal ? true : null);
           }
           /**
            * A coordinator turn the HOST's ledger committed. Same batching, dedupe and
@@ -106753,16 +106758,20 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             if (offset !== points.length) return null;
             return { attemptId, coordinatorSessionId: sessionId, replies };
           }
-          onCoordinatorAttention(meshId, sessionId, value) {
+          onCoordinatorAttention(meshId, sessionId, source2, value) {
+            const ep = this.modalOpen.get(sessionId);
             if (value === null || value === void 0) {
-              this.modalOpen.delete(sessionId);
+              if (ep) {
+                ep.sources.delete(source2);
+                if (!ep.sources.size) this.modalOpen.delete(sessionId);
+              }
               return;
             }
+            if (ep) ep.sources.add(source2);
             if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
             const detail = extractAttentionDetail(value);
-            const seen2 = this.modalOpen.get(sessionId);
-            if (seen2 === "detailed" || seen2 === "bare" && !detail) return;
-            this.modalOpen.set(sessionId, detail ? "detailed" : "bare");
+            if (ep?.level === "detailed" || ep?.level === "bare" && !detail) return;
+            this.modalOpen.set(sessionId, { level: detail ? "detailed" : "bare", sources: ep?.sources ?? /* @__PURE__ */ new Set([source2]) });
             const slug = this.ports.projectSlug(meshId);
             if (slug !== null) this.pushLine("relay", buildApprovalSignal(slug, detail), meshId);
           }
