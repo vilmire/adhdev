@@ -197,6 +197,23 @@ describe('buildCloudStatusReportPayload — server WS content boundary', () => {
  * The full `launch` record, the thinking level, and any label / free text stay
  * on P2P.
  */
+describe('buildCloudStatusReportPayload — picker question text stays off the server', () => {
+    it('a waiting_choice session with a live picker adds no question/option text to the payload', () => {
+        const picker = { promptId: 'p1', questions: [{ questionId: 'q1', question: 'PICKER-QUESTION-TEXT?', options: [{ label: 'PICKER-OPTION-LABEL' }] }] };
+        const withPicker = sessionWithContent({
+            status: 'waiting_choice',
+            activeInteractivePrompt: picker,
+            activeModal: { message: 'PICKER-QUESTION-TEXT?', buttons: ['PICKER-OPTION-LABEL'] },
+        });
+        const payload = buildCloudStatusReportPayload([withPicker], undefined, 1);
+        const wire = JSON.stringify(payload);
+        expect(wire).not.toContain('PICKER-QUESTION-TEXT');
+        expect(wire).not.toContain('PICKER-OPTION-LABEL');
+        const [bare] = buildCloudStatusReportPayload([sessionWithContent({ status: 'waiting_choice' })], undefined, 1).sessions;
+        expect(Object.keys(payload.sessions[0]!).sort()).toEqual(Object.keys(bare!).sort());
+    });
+});
+
 describe('buildCloudStatusReportPayload — launch provenance (Phase E)', () => {
     const launch = {
         sessionId: 'sess-1',

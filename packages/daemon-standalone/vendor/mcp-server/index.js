@@ -66223,7 +66223,8 @@ When the user asks to set up / onboard (or re-init) this repo for Repo Mesh, fol
 
 - A message may come from the user's assistant relaying the user's request (origin \`assistant\`). Your final message of the turn is relayed back and summarised \u2014 make it self-contained: outcome, current state, what is still pending, and any question you need answered.
 - A question, status check or read-only lookup is answered directly from \`mesh_*\` reads \u2014 do not enqueue tasks for it. When a request says not to enqueue or not to edit, obey it.
-- Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it \u2014 do not ask for that approval in chat text.`;
+- Approvals reach the user through the dashboard Inbox. When an approval modal is the mechanism, rely on it \u2014 do not ask for that approval in chat text.
+- **Never ask the user a question through an interactive picker or modal** (\`AskUserQuestion\` or any single/multi-choice tool). It blocks your whole turn and the assistant cannot see the question or relay an answer. Put the question in your final message as plain text \u2014 the question, numbered options, and your recommendation \u2014 and END the turn so the assistant can relay it and return the answer. Keep working on anything that does not depend on the answer.`;
       }
     });
     function eventStatus(event, fallback) {
@@ -81171,9 +81172,9 @@ Check mesh_task_history / git, then use mesh_requeue_task with this task_id and 
       };
     }
     function summarizeMessage(message) {
-      const oneLine2 = message.replace(/\s+/g, " ").trim();
-      const title = oneLine2.length > 96 ? `${oneLine2.slice(0, 93)}...` : oneLine2;
-      return { title: title || "(untitled task)", summary: oneLine2 };
+      const oneLine3 = message.replace(/\s+/g, " ").trim();
+      const title = oneLine3.length > 96 ? `${oneLine3.slice(0, 93)}...` : oneLine3;
+      return { title: title || "(untitled task)", summary: oneLine3 };
     }
     function elapsedSince(value, now) {
       const started = value ? new Date(value).getTime() : Number.NaN;
@@ -104695,6 +104696,7 @@ ${b.text}`).join("\n\n");
       codePoints: () => codePoints,
       compactRelayBody: () => compactRelayBody,
       defangRelayBody: () => defangRelayBody,
+      extractAttentionDetail: () => extractAttentionDetail,
       relayMessageId: () => relayMessageId,
       safeSlug: () => safeSlug,
       shouldAddRestartNote: () => shouldAddRestartNote
@@ -104753,8 +104755,31 @@ ${b.text}`).join("\n\n");
       const s2 = safeSlug(slug);
       return `[project ${s2}] ${count} earlier turn${count === 1 ? "" : "s"} older than 24 h were not relayed \u2014 use project_read ${s2} if they matter.`;
     }
-    function buildApprovalSignal(slug) {
-      return `[project ${safeSlug(slug)}] waiting for an approval or a choice \u2014 the user can answer it in the Inbox.`;
+    function oneLine2(text4, max) {
+      const flat = String(text4 ?? "").replace(/[\u0000-\u001F\u007F]+/g, " ").replace(/\s+/g, " ").trim();
+      const points = Array.from(flat);
+      return defangRelayBody(points.length > max ? `${points.slice(0, max).join("")}\u2026` : flat);
+    }
+    function extractAttentionDetail(value) {
+      if (!value || typeof value !== "object") return null;
+      const v = value;
+      const questions = Array.isArray(v.questions) ? v.questions : null;
+      if (questions?.length) {
+        const q = questions[0];
+        const options2 = (Array.isArray(q.options) ? q.options : []).map((o) => oneLine2(typeof o === "string" ? o : o?.label, ATTENTION_OPTION_MAX)).filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
+        const question2 = oneLine2(q.question ?? q.header, ATTENTION_QUESTION_MAX);
+        return question2 || options2.length ? { question: question2, options: options2 } : null;
+      }
+      const modal = v.activeModal && typeof v.activeModal === "object" ? v.activeModal : v;
+      const options = (Array.isArray(modal.buttons) ? modal.buttons : []).map((b) => oneLine2(b, ATTENTION_OPTION_MAX)).filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
+      const question = oneLine2(modal.message ?? v.title, ATTENTION_QUESTION_MAX);
+      return question || options.length ? { question, options } : null;
+    }
+    function buildApprovalSignal(slug, detail) {
+      const head = `[project ${safeSlug(slug)}] waiting for an approval or a choice`;
+      if (!detail) return `${head} \u2014 the user can answer it in the Inbox.`;
+      const opts = detail.options.length ? ` Options: ${detail.options.map((o, i) => `${i + 1}) ${o}`).join(" ")}.` : "";
+      return `${head}: "${detail.question || "(no question text)"}"${opts} Ask the user, and tell them they can also answer it in the Inbox.`;
     }
     function buildCoordinatorEndedSignal(slug, cause) {
       const why = String(cause).replace(/[^a-z_]/gi, "") || "unknown";
@@ -104824,6 +104849,9 @@ ${b.text}`).join("\n\n");
     var RELAY_CLOSE;
     var RELAY_MESSAGE_ID_PREFIX;
     var cps;
+    var ATTENTION_QUESTION_MAX;
+    var ATTENTION_OPTION_MAX;
+    var ATTENTION_OPTIONS_MAX;
     var UNREACHABLE_REASON_TEXT;
     var DAEMON_INPUT_PREFIX;
     var PREVIOUS_SESSION_MAX_MESSAGES;
@@ -104854,6 +104882,9 @@ ${b.text}`).join("\n\n");
         RELAY_CLOSE = "[/relay]";
         RELAY_MESSAGE_ID_PREFIX = "relay:";
         cps = (s2) => Array.from(s2).length;
+        ATTENTION_QUESTION_MAX = 300;
+        ATTENTION_OPTION_MAX = 80;
+        ATTENTION_OPTIONS_MAX = 8;
         UNREACHABLE_REASON_TEXT = {
           host_unknown: "this machine does not know which machine hosts it",
           no_mesh_transport: "this machine has no connection path to other machines",
@@ -106081,7 +106112,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           /** Durable read and notification acknowledgements, scoped to the recipient. */
           gaps;
           deliveryPolicy;
-          modalOpen = /* @__PURE__ */ new Set();
+          /** sessionId -> whether the episode's signal already carried question text. */
+          modalOpen = /* @__PURE__ */ new Map();
           /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
           remote = /* @__PURE__ */ new Map();
           /** Exact attempt reports returned by the authorized evidence reader. The
@@ -106719,10 +106751,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               this.modalOpen.delete(sessionId);
               return;
             }
-            if (this.modalOpen.has(sessionId) || !this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
-            this.modalOpen.add(sessionId);
+            if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
+            const detail = extractAttentionDetail(value);
+            const seen2 = this.modalOpen.get(sessionId);
+            if (seen2 === true || seen2 === false && !detail) return;
+            this.modalOpen.set(sessionId, !!detail);
             const slug = this.ports.projectSlug(meshId);
-            if (slug !== null) this.pushLine("relay", buildApprovalSignal(slug), meshId);
+            if (slug !== null) this.pushLine("relay", buildApprovalSignal(slug, detail), meshId);
           }
           onCoordinatorTerminated(meshId, sessionId, cause) {
             this.modalOpen.delete(sessionId);
@@ -173071,11 +173106,11 @@ ${buttons.join("\n")}`;
       );
     }
     function formatAutoApprovalLogLine(host, modalMessage, buttonLabel, buttons) {
-      const oneLine2 = (value, max) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+      const oneLine3 = (value, max) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
       const settings2 = host.settings || {};
       const task = typeof settings2.meshActiveTaskId === "string" && settings2.meshActiveTaskId ? settings2.meshActiveTaskId : "-";
       const mesh = typeof settings2.meshNodeFor === "string" && settings2.meshNodeFor ? settings2.meshNodeFor : "-";
-      return `[${host.type}] auto-approved (one-time) session=${host.instanceId} mesh=${mesh} task=${task} button=${JSON.stringify(oneLine2(buttonLabel, 120))} offered=${JSON.stringify(buttons.map((button) => oneLine2(button, 120)))} asked=${JSON.stringify(oneLine2(modalMessage, 300))}`;
+      return `[${host.type}] auto-approved (one-time) session=${host.instanceId} mesh=${mesh} task=${task} button=${JSON.stringify(oneLine3(buttonLabel, 120))} offered=${JSON.stringify(buttons.map((button) => oneLine3(button, 120)))} asked=${JSON.stringify(oneLine3(modalMessage, 300))}`;
     }
     function logAutoApproval(host, modalMessage, buttonLabel, buttons) {
       LOG.info("CLI", formatAutoApprovalLogLine(host, modalMessage, buttonLabel, buttons));

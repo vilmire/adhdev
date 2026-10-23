@@ -168,8 +168,51 @@ export function buildFoldedBacklogLine(slug: string, count: number): string {
     return `[project ${s}] ${count} earlier turn${count === 1 ? '' : 's'} older than 24 h were not relayed — use project_read ${s} if they matter.`;
 }
 
-export function buildApprovalSignal(slug: string): string {
-    return `[project ${safeSlug(slug)}] waiting for an approval or a choice — the user can answer it in the Inbox.`;
+/** What a parked approval/choice modal asks — bounded plain text, never authority. */
+export interface AttentionDetail {
+    question: string;
+    options: readonly string[];
+}
+
+const ATTENTION_QUESTION_MAX = 300;
+const ATTENTION_OPTION_MAX = 80;
+const ATTENTION_OPTIONS_MAX = 8;
+
+function oneLine(text: unknown, max: number): string {
+    // eslint-disable-next-line no-control-regex
+    const flat = String(text ?? '').replace(/[\u0000-\u001F\u007F]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const points = Array.from(flat);
+    return defangRelayBody(points.length > max ? `${points.slice(0, max).join('')}…` : flat);
+}
+
+/**
+ * Pull the question and option labels out of a `modal` (approval modal) or
+ * `prompt` (AskUserQuestion-shaped picker) lifecycle payload. Null when the
+ * payload carries no readable text.
+ */
+export function extractAttentionDetail(value: unknown): AttentionDetail | null {
+    if (!value || typeof value !== 'object') return null;
+    const v = value as Record<string, unknown>;
+    const questions = Array.isArray(v.questions) ? v.questions as Record<string, unknown>[] : null;
+    if (questions?.length) {
+        const q = questions[0]!;
+        const options = (Array.isArray(q.options) ? q.options : [])
+            .map((o) => oneLine(typeof o === 'string' ? o : (o as { label?: unknown } | null)?.label, ATTENTION_OPTION_MAX))
+            .filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
+        const question = oneLine(q.question ?? q.header, ATTENTION_QUESTION_MAX);
+        return question || options.length ? { question, options } : null;
+    }
+    const modal = (v.activeModal && typeof v.activeModal === 'object' ? v.activeModal : v) as Record<string, unknown>;
+    const options = (Array.isArray(modal.buttons) ? modal.buttons : []).map((b) => oneLine(b, ATTENTION_OPTION_MAX)).filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
+    const question = oneLine(modal.message ?? v.title, ATTENTION_QUESTION_MAX);
+    return question || options.length ? { question, options } : null;
+}
+
+export function buildApprovalSignal(slug: string, detail?: AttentionDetail | null): string {
+    const head = `[project ${safeSlug(slug)}] waiting for an approval or a choice`;
+    if (!detail) return `${head} — the user can answer it in the Inbox.`;
+    const opts = detail.options.length ? ` Options: ${detail.options.map((o, i) => `${i + 1}) ${o}`).join(' ')}.` : '';
+    return `${head}: "${detail.question || '(no question text)'}"${opts} Ask the user, and tell them they can also answer it in the Inbox.`;
 }
 
 export function buildCoordinatorEndedSignal(slug: string, cause: string): string {

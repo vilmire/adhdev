@@ -39,7 +39,7 @@ import { busyInputModeToSendPolicy, type BusyInputMode } from './assistant-regis
 import { countTerminalSubmits, TERMINAL_SUBMITS_PER_WRITE_CAP } from './assistant-human-input.js';
 import {
     RELAY_BACKLOG_FOLD_AFTER_MS, RELAY_BODY_MAX_CHARS, RELAY_DELIVERY_MAX_CHARS, RELAY_IDLE_CLOSE_GRACE_MS, RELAY_MAX_WAIT_MS, RELAY_NATIVE_RETRY_MS, RELAY_NATIVE_WAIT_MS, RELAY_CAPTURE_PROBE_MS, RELAY_MAX_AUTO_PAGES, RELAY_PROGRESS_AFTER_MS, RELAY_QUIET_MS,
-    RELAY_STALL_AFTER_MS, buildApprovalSignal, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
+    RELAY_STALL_AFTER_MS, buildApprovalSignal, extractAttentionDetail, buildCoordinatorEndedSignal, buildFoldedBacklogLine, buildProgressSignal,
     buildMissedReportsLine, buildRelayEnvelope, buildRestartNote, buildStallSignal, buildUnreachableRelay, codePoints, relayMessageId,
     shouldAddRestartNote,
     type RestartContext,
@@ -191,7 +191,8 @@ export class AssistantRelay {
     /** Durable read and notification acknowledgements, scoped to the recipient. */
     private readonly gaps: RelayGapTracker;
     private readonly deliveryPolicy: RelayDeliveryPolicy;
-    private readonly modalOpen = new Set<string>();
+    /** sessionId -> whether the episode's signal already carried question text. */
+    private readonly modalOpen = new Map<string, boolean>();
     /** Remote-hosted projects: the host's last poll answer (work counts, status line). */
     private readonly remote = new Map<string, RemoteProjectSnapshot>();
     /** Exact attempt reports returned by the authorized evidence reader. The
@@ -897,10 +898,15 @@ export class AssistantRelay {
             this.modalOpen.delete(sessionId);
             return;
         }
-        if (this.modalOpen.has(sessionId) || !this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
-        this.modalOpen.add(sessionId);
+        if (!this.ports.hasAssistant() || !this.ports.store.isThreadOpen(meshId)) return;
+        const detail = extractAttentionDetail(value);
+        const seen = this.modalOpen.get(sessionId);
+        // One line per episode; a later event of the same episode (modal then
+        // prompt) only adds a line when the first carried no question text.
+        if (seen === true || (seen === false && !detail)) return;
+        this.modalOpen.set(sessionId, !!detail);
         const slug = this.ports.projectSlug(meshId);
-        if (slug !== null) this.pushLine('relay', buildApprovalSignal(slug), meshId);
+        if (slug !== null) this.pushLine('relay', buildApprovalSignal(slug, detail), meshId);
     }
 
     private onCoordinatorTerminated(meshId: string, sessionId: string, cause: string): void {
