@@ -329,37 +329,65 @@ export function findAssistantRestoreRecord<T extends { runtimeId?: unknown }>(
 export class AssistantRegistry {
     readonly path: string;
     private cache: AssistantRegistryEntry | null | undefined;
+    private lastReadError: NodeJS.ErrnoException | null = null;
 
     constructor(opts: AssistantRegistryOptions = {}) {
         this.path = join(opts.configDir ?? getConfigDir(), ASSISTANT_REGISTRY_FILE);
     }
 
+    private cloneCached(): AssistantRegistryEntry | null {
+        if (!this.cache) return null;
+        return {
+            ...this.cache,
+            aliases: { ...this.cache.aliases },
+            ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}),
+            ...(this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {}),
+            ...(this.cache.followedRemoteProjects
+                ? {
+                    followedRemoteProjects: Object.fromEntries(
+                        Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }]),
+                    ),
+                }
+                : {}),
+        };
+    }
+
     /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
     read(): AssistantRegistryEntry | null {
         if (this.cache !== undefined) {
-            if (!this.cache) return null;
-            return {
-                ...this.cache,
-                aliases: { ...this.cache.aliases },
-                ...(this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {}),
-                ...(this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {}),
-                ...(this.cache.followedRemoteProjects
-                    ? {
-                        followedRemoteProjects: Object.fromEntries(
-                            Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }]),
-                        ),
-                    }
-                    : {}),
-            };
+            return this.cloneCached();
         }
-        this.cache = this.load();
-        return this.read();
+        const outcome = this.load();
+        if (outcome.kind === 'ok') {
+            this.lastReadError = null;
+            this.cache = outcome.entry;
+            return this.cloneCached();
+        }
+        if (outcome.kind === 'unreadable') {
+            this.lastReadError = outcome.error;
+            // Transient read failure (ENFILE/EMFILE/EIO…): do not cache null.
+            return null;
+        }
+        this.lastReadError = null;
+        this.cache = null;
+        return null;
     }
 
-    /** Drop the in-memory copy (a person edited the file). */
+    /** Drop the in-memory copy (a person edited the file), keeping the previous cache on a transient read error. */
     reload(): AssistantRegistryEntry | null {
-        this.cache = undefined;
-        return this.read();
+        const outcome = this.load();
+        if (outcome.kind === 'ok') {
+            this.lastReadError = null;
+            this.cache = outcome.entry;
+            return this.cloneCached();
+        }
+        if (outcome.kind === 'unreadable') {
+            this.lastReadError = outcome.error;
+            return this.cache ? this.cloneCached() : null;
+        }
+        this.lastReadError = null;
+        this.cache = null;
+        return null;
     }
 
     memoryBudgets(): MemoryBudgets {
@@ -514,7 +542,7 @@ export class AssistantRegistry {
         selfDaemonId: string,
     ):
         | { ok: true; receipt: AssistantOwnerBindingReceipt; binding: AssistantOwnerBindingReceipt }
-        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch'; error: string } {
+        | { ok: false; code: 'local_owner_binding_missing' | 'local_owner_binding_mismatch' | 'local_owner_binding_unreadable'; error: string } {
         const canonicalSelf = canonicalDaemonId(selfDaemonId);
         if (!canonicalSelf) {
             return {
@@ -525,6 +553,14 @@ export class AssistantRegistry {
         }
         const binding = this.ownerBinding();
         if (!binding) {
+            if (this.lastReadError) {
+                const errCode = this.lastReadError.code ?? 'EUNREADABLE';
+                return {
+                    ok: false,
+                    code: 'local_owner_binding_unreadable',
+                    error: `Local assistant owner binding receipt could not be read (${errCode}: ${this.lastReadError.message}); retry once transient read pressure clears.`,
+                };
+            }
             return {
                 ok: false,
                 code: 'local_owner_binding_missing',
@@ -723,12 +759,25 @@ export class AssistantRegistry {
         };
     }
 
-    private load(): AssistantRegistryEntry | null {
-        if (!existsSync(this.path)) return null;
+    private load():
+        | { kind: 'ok'; entry: AssistantRegistryEntry }
+        | { kind: 'missing' }
+        | { kind: 'corrupt' }
+        | { kind: 'unreadable'; error: NodeJS.ErrnoException } {
+        let raw: string;
         try {
-            return normalizeAssistantRegistryEntry(JSON.parse(readFileSync(this.path, 'utf-8')));
+            raw = readFileSync(this.path, 'utf-8');
+        } catch (e) {
+            const err = e as NodeJS.ErrnoException;
+            if (err?.code === 'ENOENT') return { kind: 'missing' };
+            return { kind: 'unreadable', error: err };
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            const entry = normalizeAssistantRegistryEntry(parsed);
+            return entry ? { kind: 'ok', entry } : { kind: 'corrupt' };
         } catch {
-            return null;
+            return { kind: 'corrupt' };
         }
     }
 
@@ -747,18 +796,25 @@ export class AssistantRegistry {
     private write(entry: AssistantRegistryEntry): AssistantRegistryEntry {
         this.keepCorruptAside();
         writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}\n`);
+        this.lastReadError = null;
         this.cache = entry;
         return this.read()!;
     }
 
-    /** A file that exists but does not parse is renamed, not overwritten silently. */
+    /** A file that exists and can be read, but does not parse, is renamed rather than overwritten silently. */
     private keepCorruptAside(): void {
-        if (!existsSync(this.path)) return;
+        let raw: string;
         try {
-            const parsed = JSON.parse(readFileSync(this.path, 'utf-8'));
+            raw = readFileSync(this.path, 'utf-8');
+        } catch {
+            // Missing (ENOENT) or unreadable (ENFILE/EMFILE/EIO…): never rename a file we could not read.
+            return;
+        }
+        try {
+            const parsed = JSON.parse(raw);
             if (normalizeAssistantRegistryEntry(parsed)) return;
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && normalizeBudget((parsed as Record<string, unknown>).memoryBudget)) return;
-        } catch { /* corrupt → fall through */ }
+        } catch { /* corrupt JSON → fall through */ }
         try {
             renameSync(this.path, `${this.path}.corrupt-${Date.now()}`);
         } catch { /* best effort; the write below still proceeds */ }

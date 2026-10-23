@@ -385,8 +385,8 @@ export function wireAssistantRuntime(
             ...(t.lastCursor !== undefined ? { lastCursor: t.lastCursor } : {}),
             ...(t.coordinatorSessionId !== undefined ? { coordinatorSessionId: t.coordinatorSessionId } : {}),
         })),
-        remoteTarget: (meshId) => {
-            const ports = projectPorts;
+        remoteTarget: async (meshId) => {
+            const ports = projectPorts ?? await loadProjectPorts();
             if (!ports) return null;
             const mesh = ports.listMeshes().find((m) => m.id === meshId);
             if (mesh) {
@@ -399,16 +399,30 @@ export function wireAssistantRuntime(
             return ports.followedRemoteHost(followed);
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
-        staleRevoked: () => {
-            const ports = projectPorts;
+        staleRevoked: async () => {
+            const ports = projectPorts ?? await loadProjectPorts();
             if (!ports?.followedRemoteHost) return [];
             return (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects())
                 .filter((e) => e.state === 'revoked' && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode))
-                .map((e) => ({ meshId: e.meshId, target: ports.followedRemoteHost!(e) }));
+                .map((e) => ({ key: e.key, meshId: e.meshId, target: ports.followedRemoteHost!(e) }));
         },
-        onAccessRecovered: (meshId) => {
-            const stale = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'revoked' && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode));
-            if (stale) registry.updateFollowedRemoteProject(stale.key, { state: 'followed', revokedAt: undefined, revokedReason: undefined, lastErrorCode: undefined });
+        onAccessRecovered: (key) => {
+            const stale = registry.getFollowedRemoteProject(key)
+                ?? registry.listFollowedRemoteProjects().find((e) => e.key === key);
+            if (!stale || stale.state !== 'revoked' || !isSelfHealableRevocationReason(stale.revokedReason ?? stale.lastErrorCode)) {
+                return;
+            }
+            const cur = stale.lastCursor ?? null;
+            const sid = stale.coordinatorSessionId ?? null;
+            registry.updateFollowedRemoteProject(stale.key, {
+                state: 'followed',
+                revokedAt: undefined,
+                revokedReason: undefined,
+                lastErrorCode: undefined,
+            });
+            relay.openThread(stale.meshId);
+            store.setThreadCursor?.(stale.meshId, cur, sid, { reset: true });
+            remotePoller.noteSent(stale.meshId, cur, sid, { reset: true });
         },
         onAccessRefused: (meshId, code) => {
             const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');

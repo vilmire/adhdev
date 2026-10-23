@@ -2,26 +2,31 @@
  * Host-side: a meshes.json READ FAILURE (ENFILE/EMFILE/EIO) must never read as
  * "mesh missing" / "not on roster" for a follower (the 2026-10-22 false revocation).
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { evaluateMeshSender, MESH_SENDER_DAEMON_ID_ARG, type MeshSenderGateDeps } from '../../src/commands/mesh-sender.js';
+import { DaemonCommandRouter } from '../../src/commands/router.js';
 import { ASSISTANT_ACCOUNT_SLOT } from '@adhdev/mesh-shared';
 import { ASSISTANT_REMOTE_PROJECT_COMMAND } from '../../src/assistant/assistant-remote-host.js';
-import { loadMeshConfigStrict, MeshConfigUnreadableError } from '../../src/config/mesh-config-store.js';
+import { setAssistantProjectPortsForTests, type AssistantProjectPorts } from '../../src/assistant/assistant-project-ports.js';
+import { loadMeshConfig, loadMeshConfigStrict, MeshConfigUnreadableError, saveMeshConfig } from '../../src/config/mesh-config-store.js';
 
 const SELF = 'daemon_mach_host0001';
 const FOLLOWER = 'daemon_mach_follow0001';
 const MESH = 'mesh_follow_1';
 
-const aclMesh = () => ({
+const aclMesh = (status: 'active' | 'revoked' = 'active', grantRevision = 1) => ({
     id: MESH,
+    name: 'Follow1',
+    repoIdentity: 'github.com/acme/follow1',
     meshHost: { role: 'host', hostDaemonId: SELF },
-    nodes: [{ id: 'n1', workspace: '/w', daemonId: SELF }],
+    nodes: [{ id: 'n1', workspace: '/w', daemonId: SELF, role: 'host' }],
     assistantRemoteAccess: {
-        status: 'active', hostDaemonId: SELF, activeDaemonId: FOLLOWER, meshId: MESH,
-        grantRevision: 1, bindingRevision: 1, allowedOps: ['poll'], accountSlot: ASSISTANT_ACCOUNT_SLOT, grantedAt: 1,
+        status, hostDaemonId: SELF, activeDaemonId: FOLLOWER, meshId: MESH,
+        grantRevision, bindingRevision: 1, allowedOps: ['poll', 'send', 'status', 'read', 'report'], accountSlot: ASSISTANT_ACCOUNT_SLOT, grantedAt: 1,
+        ...(status === 'revoked' ? { revokedAt: 2 } : {}),
     },
 });
 
@@ -54,18 +59,171 @@ describe('follower ACL under disk read pressure', () => {
         });
     }
 
-    it('falls back to the in-memory mesh when it carries the ACL', async () => {
-        const v = await evaluateMeshSender('roster', args, deps({
+    it('never consults unsynchronized in-memory fallback when disk read fails (Scenario A: stale revoked cache, Scenario B: stale active cache)', async () => {
+        // Scenario A: after revoke then re-grant on disk, inlineMeshCache still says revoked.
+        // Under ENFILE, must return host_unavailable_transient — NEVER host_revoked.
+        const vRevokedCache = await evaluateMeshSender('roster', { ...args, grantRevision: 2 }, deps({
             getDiskMesh: async () => { throw enfile(); },
-            getLocalMesh: async () => aclMesh(),
+            getLocalMesh: async () => aclMesh('revoked', 1),
         }), ASSISTANT_REMOTE_PROJECT_COMMAND);
-        expect(v, JSON.stringify(v)).toMatchObject({ ok: true });
+        expect(vRevokedCache.ok).toBe(false);
+        if (!vRevokedCache.ok) {
+            expect(vRevokedCache.refusal).toBe('host_unavailable_transient');
+            expect(vRevokedCache.detail).not.toContain('host_revoked');
+        }
+
+        // Scenario B: after grant then revoke on disk, inlineMeshCache still says active.
+        // Under ENFILE, must return host_unavailable_transient — NEVER admit the revoked follower.
+        const vActiveCache = await evaluateMeshSender('roster', args, deps({
+            getDiskMesh: async () => { throw enfile(); },
+            getLocalMesh: async () => aclMesh('active', 1),
+        }), ASSISTANT_REMOTE_PROJECT_COMMAND);
+        expect(vActiveCache.ok).toBe(false);
+        if (!vActiveCache.ok) {
+            expect(vActiveCache.refusal).toBe('host_unavailable_transient');
+        }
     });
 
     it('a genuinely absent mesh still follows the old (non-transient) path', async () => {
         const v = await evaluateMeshSender('roster', args, deps({ getDiskMesh: async () => null }), ASSISTANT_REMOTE_PROJECT_COMMAND);
         expect(v.ok).toBe(false);
         if (!v.ok) expect(v.refusal).toBe('mesh_sender_not_on_roster');
+    });
+});
+
+describe('end-to-end router follower ACL with stale inlineMeshCache + ENFILE', () => {
+    let dir = '';
+    let prev: string | undefined;
+    beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), 'router-enfile-'));
+        prev = process.env.ADHDEV_CONFIG_DIR;
+        process.env.ADHDEV_CONFIG_DIR = dir;
+        setAssistantProjectPortsForTests(() => ({
+            selfDaemonId: () => SELF,
+            listMeshes: () => loadMeshConfig().meshes,
+            isHostedHere: () => true,
+            aliases: () => ({}),
+            coordinators: () => [{ sessionId: 'coord-1', idle: true, modalParked: false, managedByAssistant: true }],
+            lastCoordinatorSessionId: () => 'coord-1',
+            queueCounts: () => ({ pending: 0, assigned: 0, failed: 0 }),
+            activeMissionCount: () => 0,
+            pendingApprovals: () => 0,
+            relay: {},
+            execute: vi.fn(async () => ({ success: true, queued: true })) as any,
+            remoteHost: () => { throw new Error('unused'); },
+            callHost: () => { throw new Error('unused'); },
+            coordinatorTurns: () => ({ open: false, committed: [] }),
+            meshStatusLine: () => '[Mesh] idle',
+        }) as unknown as AssistantProjectPorts);
+    });
+    afterEach(() => {
+        vi.restoreAllMocks();
+        setAssistantProjectPortsForTests(null);
+        if (prev === undefined) delete process.env.ADHDEV_CONFIG_DIR;
+        else process.env.ADHDEV_CONFIG_DIR = prev;
+        rmSync(dir, { recursive: true, force: true });
+    });
+
+    function makeRouter(): DaemonCommandRouter {
+        return new DaemonCommandRouter({
+            commandHandler: { handleSpec: vi.fn(async () => ({ success: true })), rejectUnknown: vi.fn(async (cmd: string) => ({ success: false, error: `Unknown command: ${cmd}` })) } as any,
+            cliManager: {} as any,
+            cdpManagers: new Map(),
+            providerLoader: {} as any,
+            instanceManager: { collectAllStates: () => [], listInstanceIds: () => [], getInstance: () => null } as any,
+            detectedIdes: { value: [] },
+            sessionRegistry: { get: () => undefined } as any,
+            statusInstanceId: SELF,
+        } as any);
+    }
+
+    it('Scenario A & B: router with stale inlineMeshCache under ENFILE returns host_unavailable_transient (never host_revoked or admitted)', async () => {
+        const router = makeRouter();
+        // Disk has re-granted (grantRevision=2, active), but inlineMeshCache still has revoked (grantRevision=1).
+        saveMeshConfig({ meshes: [aclMesh('active', 2) as any] });
+        router.inlineMeshCache.set(MESH, aclMesh('revoked', 1));
+
+        // Simulate ENFILE by replacing meshes.json with a directory (causes EISDIR on readFileSync)
+        rmSync(join(dir, 'meshes.json'), { force: true });
+        mkdirSync(join(dir, 'meshes.json'));
+
+        const resA: any = await router.execute(
+            ASSISTANT_REMOTE_PROJECT_COMMAND,
+            { _meshDirectDispatch: true, [MESH_SENDER_DAEMON_ID_ARG]: FOLLOWER, meshId: MESH, op: 'poll', bindingRevision: 1, grantRevision: 2 },
+            'mesh',
+        );
+        expect(resA.success).toBe(false);
+        expect(resA.code).toBe('host_unavailable_transient');
+        expect(String(resA.detail ?? resA.error)).not.toContain('host_revoked');
+
+        // Scenario B: inlineMeshCache still says active (grantRevision=1), while disk is unreadable under ENFILE.
+        router.inlineMeshCache.set(MESH, aclMesh('active', 1));
+        const resB: any = await router.execute(
+            ASSISTANT_REMOTE_PROJECT_COMMAND,
+            { _meshDirectDispatch: true, [MESH_SENDER_DAEMON_ID_ARG]: FOLLOWER, meshId: MESH, op: 'poll', bindingRevision: 1, grantRevision: 1 },
+            'mesh',
+        );
+        expect(resB.success).toBe(false);
+        expect(resB.code).toBe('host_unavailable_transient');
+    });
+
+    it('Finding 4: post-gate ENFILE in assistantRemoteProject and followerProjectSend returns host_unavailable_transient (never project_not_found)', async () => {
+        const router = makeRouter();
+        const meshPath = join(dir, 'meshes.json');
+        saveMeshConfig({ meshes: [aclMesh('active', 1) as any] });
+
+        let chmodOnPortsInit = true;
+        let chmodOnCoordinators = false;
+        setAssistantProjectPortsForTests(() => {
+            if (chmodOnPortsInit) chmodSync(meshPath, 0o000);
+            return {
+                selfDaemonId: () => SELF,
+                listMeshes: () => loadMeshConfig().meshes,
+                isHostedHere: () => true,
+                aliases: () => ({}),
+                coordinators: () => {
+                    if (chmodOnCoordinators) chmodSync(meshPath, 0o000);
+                    return [{ sessionId: 'coord-1', idle: true, modalParked: false, managedByAssistant: true }];
+                },
+                lastCoordinatorSessionId: () => 'coord-1',
+                queueCounts: () => ({ pending: 0, assigned: 0, failed: 0 }),
+                activeMissionCount: () => 0,
+                pendingApprovals: () => 0,
+                relay: {},
+                execute: vi.fn(async () => ({ success: true, queued: true })) as any,
+                remoteHost: () => { throw new Error('unused'); },
+                callHost: () => { throw new Error('unused'); },
+                coordinatorTurns: () => ({ open: false, committed: [] }),
+                meshStatusLine: () => '[Mesh] idle',
+            } as unknown as AssistantProjectPorts;
+        });
+
+        try {
+            // 1. Gate read succeeds (0600); projectPortsFor flips meshes.json to 0000 before assistantRemoteProject reads it.
+            const pollRes: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_COMMAND,
+                { _meshDirectDispatch: true, [MESH_SENDER_DAEMON_ID_ARG]: FOLLOWER, meshId: MESH, op: 'poll', bindingRevision: 1, grantRevision: 1 },
+                'mesh',
+            );
+            expect(pollRes.success).toBe(false);
+            expect(pollRes.code).toBe('host_unavailable_transient');
+
+            // 2. Gate read + assistantRemoteProject + initial followerProjectSend read succeed (0600);
+            // coordinators() flips meshes.json to 0000 right before followerProjectSend's pre-enqueue re-check.
+            chmodSync(meshPath, 0o600);
+            chmodOnPortsInit = false;
+            chmodOnCoordinators = true;
+
+            const sendRes: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_COMMAND,
+                { _meshDirectDispatch: true, [MESH_SENDER_DAEMON_ID_ARG]: FOLLOWER, meshId: MESH, op: 'send', text: 'hello', clientId: 'c-1', bindingRevision: 1, grantRevision: 1 },
+                'mesh',
+            );
+            expect(sendRes.success).toBe(false);
+            expect(sendRes.code).toBe('host_unavailable_transient');
+        } finally {
+            try { chmodSync(meshPath, 0o600); } catch { /* ignore */ }
+        }
     });
 });
 

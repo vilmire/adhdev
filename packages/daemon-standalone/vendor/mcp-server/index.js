@@ -91085,32 +91085,58 @@ ${result.stderr}`, result.code);
         AssistantRegistry = class {
           path;
           cache;
+          lastReadError = null;
           constructor(opts = {}) {
             this.path = (0, import_path22.join)(opts.configDir ?? getConfigDir2(), ASSISTANT_REGISTRY_FILE);
+          }
+          cloneCached() {
+            if (!this.cache) return null;
+            return {
+              ...this.cache,
+              aliases: { ...this.cache.aliases },
+              ...this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {},
+              ...this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {},
+              ...this.cache.followedRemoteProjects ? {
+                followedRemoteProjects: Object.fromEntries(
+                  Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }])
+                )
+              } : {}
+            };
           }
           /** The entry, or null when the assistant was never launched. Corrupt → null (the file is kept aside on the next write). */
           read() {
             if (this.cache !== void 0) {
-              if (!this.cache) return null;
-              return {
-                ...this.cache,
-                aliases: { ...this.cache.aliases },
-                ...this.cache.reviewAts ? { reviewAts: [...this.cache.reviewAts] } : {},
-                ...this.cache.ownerBinding ? { ownerBinding: { ...this.cache.ownerBinding } } : {},
-                ...this.cache.followedRemoteProjects ? {
-                  followedRemoteProjects: Object.fromEntries(
-                    Object.entries(this.cache.followedRemoteProjects).map(([k, v]) => [k, { ...v }])
-                  )
-                } : {}
-              };
+              return this.cloneCached();
             }
-            this.cache = this.load();
-            return this.read();
+            const outcome = this.load();
+            if (outcome.kind === "ok") {
+              this.lastReadError = null;
+              this.cache = outcome.entry;
+              return this.cloneCached();
+            }
+            if (outcome.kind === "unreadable") {
+              this.lastReadError = outcome.error;
+              return null;
+            }
+            this.lastReadError = null;
+            this.cache = null;
+            return null;
           }
-          /** Drop the in-memory copy (a person edited the file). */
+          /** Drop the in-memory copy (a person edited the file), keeping the previous cache on a transient read error. */
           reload() {
-            this.cache = void 0;
-            return this.read();
+            const outcome = this.load();
+            if (outcome.kind === "ok") {
+              this.lastReadError = null;
+              this.cache = outcome.entry;
+              return this.cloneCached();
+            }
+            if (outcome.kind === "unreadable") {
+              this.lastReadError = outcome.error;
+              return this.cache ? this.cloneCached() : null;
+            }
+            this.lastReadError = null;
+            this.cache = null;
+            return null;
           }
           memoryBudgets() {
             return resolveMemoryBudgets(this.read()?.memoryBudget ?? this.loadMemoryBudget());
@@ -91259,6 +91285,14 @@ ${result.stderr}`, result.code);
             }
             const binding = this.ownerBinding();
             if (!binding) {
+              if (this.lastReadError) {
+                const errCode = this.lastReadError.code ?? "EUNREADABLE";
+                return {
+                  ok: false,
+                  code: "local_owner_binding_unreadable",
+                  error: `Local assistant owner binding receipt could not be read (${errCode}: ${this.lastReadError.message}); retry once transient read pressure clears.`
+                };
+              }
               return {
                 ok: false,
                 code: "local_owner_binding_missing",
@@ -91427,11 +91461,20 @@ ${result.stderr}`, result.code);
             };
           }
           load() {
-            if (!(0, import_fs29.existsSync)(this.path)) return null;
+            let raw;
             try {
-              return normalizeAssistantRegistryEntry(JSON.parse((0, import_fs29.readFileSync)(this.path, "utf-8")));
+              raw = (0, import_fs29.readFileSync)(this.path, "utf-8");
+            } catch (e) {
+              const err = e;
+              if (err?.code === "ENOENT") return { kind: "missing" };
+              return { kind: "unreadable", error: err };
+            }
+            try {
+              const parsed = JSON.parse(raw);
+              const entry = normalizeAssistantRegistryEntry(parsed);
+              return entry ? { kind: "ok", entry } : { kind: "corrupt" };
             } catch {
-              return null;
+              return { kind: "corrupt" };
             }
           }
           loadMemoryBudget() {
@@ -91447,14 +91490,20 @@ ${result.stderr}`, result.code);
             this.keepCorruptAside();
             writeFileAtomic600(this.path, `${JSON.stringify(entry, null, 2)}
 `);
+            this.lastReadError = null;
             this.cache = entry;
             return this.read();
           }
-          /** A file that exists but does not parse is renamed, not overwritten silently. */
+          /** A file that exists and can be read, but does not parse, is renamed rather than overwritten silently. */
           keepCorruptAside() {
-            if (!(0, import_fs29.existsSync)(this.path)) return;
+            let raw;
             try {
-              const parsed = JSON.parse((0, import_fs29.readFileSync)(this.path, "utf-8"));
+              raw = (0, import_fs29.readFileSync)(this.path, "utf-8");
+            } catch {
+              return;
+            }
+            try {
+              const parsed = JSON.parse(raw);
               if (normalizeAssistantRegistryEntry(parsed)) return;
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && normalizeBudget(parsed.memoryBudget)) return;
             } catch {
@@ -107290,6 +107339,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var init_assistant_remote_relay = __esm2({
       "src/assistant/assistant-remote-relay.ts"() {
         "use strict";
+        init_dist();
         REMOTE_POLL_MS = 1e4;
         POLL_BACKOFF_MS = 6e4;
         UNREACHABLE_AFTER_FAILURES = 3;
@@ -107345,7 +107395,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               const { meshId, lastSendAt } = thread;
               let target = null;
               try {
-                target = this.ports.remoteTarget(meshId);
+                target = await this.ports.remoteTarget(meshId);
               } catch {
                 target = null;
               }
@@ -107368,14 +107418,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           async healStaleRevoked(now) {
             let stale = [];
             try {
-              stale = this.ports.staleRevoked?.() ?? [];
+              stale = await this.ports.staleRevoked?.() ?? [];
             } catch {
               stale = [];
             }
-            const live = new Set(stale.map((s2) => s2.meshId));
+            const keyOf = (s2) => str11(s2.key) || str11(s2.target.followerAccess?.followedKey) || (s2.target.hostDaemonId ? followedRemoteProjectKey(s2.target.hostDaemonId, s2.meshId) : s2.meshId);
+            const live = new Set(stale.map(keyOf));
             for (const k of [...this.healAt.keys()]) if (!live.has(k)) this.healAt.delete(k);
-            for (const { meshId, target } of stale) {
-              if ((this.healAt.get(meshId) ?? 0) > now || !target.reachable) continue;
+            for (const entry of stale) {
+              const key4 = keyOf(entry);
+              const { target } = entry;
+              if ((this.healAt.get(key4) ?? 0) > now || !target.reachable) continue;
               let out;
               try {
                 out = await this.ports.poll(target, { cursorOnly: true });
@@ -107383,10 +107436,10 @@ ${supplement}`] : [], ...blocks].join("\n\n");
                 continue;
               }
               if (out.ok) {
-                this.healAt.delete(meshId);
-                this.ports.onAccessRecovered?.(meshId);
+                this.healAt.delete(key4);
+                this.ports.onAccessRecovered?.(key4);
               } else {
-                this.healAt.set(meshId, this.now() + POLL_BACKOFF_MS);
+                this.healAt.set(key4, this.now() + POLL_BACKOFF_MS);
               }
             }
           }
@@ -107726,8 +107779,8 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           ...t.lastCursor !== void 0 ? { lastCursor: t.lastCursor } : {},
           ...t.coordinatorSessionId !== void 0 ? { coordinatorSessionId: t.coordinatorSessionId } : {}
         })),
-        remoteTarget: (meshId) => {
-          const ports = projectPorts;
+        remoteTarget: async (meshId) => {
+          const ports = projectPorts ?? await loadProjectPorts();
           if (!ports) return null;
           const mesh = ports.listMeshes().find((m) => m.id === meshId);
           if (mesh) {
@@ -107739,14 +107792,27 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           return ports.followedRemoteHost(followed);
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, "poll", args),
-        staleRevoked: () => {
-          const ports = projectPorts;
+        staleRevoked: async () => {
+          const ports = projectPorts ?? await loadProjectPorts();
           if (!ports?.followedRemoteHost) return [];
-          return (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).filter((e) => e.state === "revoked" && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode)).map((e) => ({ meshId: e.meshId, target: ports.followedRemoteHost(e) }));
+          return (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects()).filter((e) => e.state === "revoked" && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode)).map((e) => ({ key: e.key, meshId: e.meshId, target: ports.followedRemoteHost(e) }));
         },
-        onAccessRecovered: (meshId) => {
-          const stale = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "revoked" && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode));
-          if (stale) registry.updateFollowedRemoteProject(stale.key, { state: "followed", revokedAt: void 0, revokedReason: void 0, lastErrorCode: void 0 });
+        onAccessRecovered: (key4) => {
+          const stale = registry.getFollowedRemoteProject(key4) ?? registry.listFollowedRemoteProjects().find((e) => e.key === key4);
+          if (!stale || stale.state !== "revoked" || !isSelfHealableRevocationReason(stale.revokedReason ?? stale.lastErrorCode)) {
+            return;
+          }
+          const cur = stale.lastCursor ?? null;
+          const sid = stale.coordinatorSessionId ?? null;
+          registry.updateFollowedRemoteProject(stale.key, {
+            state: "followed",
+            revokedAt: void 0,
+            revokedReason: void 0,
+            lastErrorCode: void 0
+          });
+          relay.openThread(stale.meshId);
+          store2.setThreadCursor?.(stale.meshId, cur, sid, { reset: true });
+          remotePoller.noteSent(stale.meshId, cur, sid, { reset: true });
         },
         onAccessRefused: (meshId, code) => {
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
@@ -116993,17 +117059,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       try {
         diskMesh = deps.getDiskMesh ? await deps.getDiskMesh(meshId) : await deps.getLocalMesh(meshId);
       } catch (e) {
-        let local;
-        try {
-          local = await deps.getLocalMesh(meshId);
-        } catch {
-          local = void 0;
-        }
-        if (record3(local)?.assistantRemoteAccess !== void 0) {
-          diskMesh = local;
-        } else {
-          return refuse2(sender, "host_unavailable_transient", `host_unavailable_transient: host could not read mesh config for ${meshId} (${e instanceof Error ? e.message : String(e)}); retry`);
-        }
+        return refuse2(sender, "host_unavailable_transient", `host_unavailable_transient: host could not read mesh config for ${meshId} (${e instanceof Error ? e.message : String(e)}); retry`);
       }
       const meshRec = record3(diskMesh);
       if (!meshRec) return null;
@@ -153898,7 +153954,28 @@ ${ptyResult.output.slice(-2e3)}`);
     function hasExplicitFollowerClaim(args) {
       return record4(args.followerAccess) !== void 0 || typeof args.bindingRevision === "number" || typeof args.grantRevision === "number";
     }
+    function readHostMeshStrict(ports, meshId) {
+      try {
+        const disk = loadMeshConfigStrict().meshes.find((m) => m.id === meshId);
+        if (disk) return { ok: true, mesh: disk };
+        return { ok: true, mesh: ports.listMeshes().find((m) => m.id === meshId) };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          ok: false,
+          result: fail5(
+            "host_unavailable_transient",
+            `host_unavailable_transient: host could not read mesh config for ${meshId} (${msg}); retry`
+          )
+        };
+      }
+    }
     function verifyFollowerAcl(ports, mesh, meshId, sender, op, args) {
+      if (!mesh) {
+        const strictRead = readHostMeshStrict(ports, meshId);
+        if (!strictRead.ok) return strictRead;
+        mesh = strictRead.mesh;
+      }
       if (!mesh) {
         return { ok: false, result: fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`) };
       }
@@ -153957,8 +154034,9 @@ ${ptyResult.output.slice(-2e3)}`);
       if (!clientId || clientId.length > 200) return fail5("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str14(args.expectedCoordinatorSessionId);
       return withMeshRemoteAccessMutex(meshId, async () => {
-        const freshMesh = ports.listMeshes().find((m) => m.id === meshId);
-        const verified = verifyFollowerAcl(ports, freshMesh, meshId, sender, "send", args);
+        const freshRead = readHostMeshStrict(ports, meshId);
+        if (!freshRead.ok) return freshRead.result;
+        const verified = verifyFollowerAcl(ports, freshRead.mesh, meshId, sender, "send", args);
         if (!verified.ok) return verified.result;
         const { acl } = verified;
         const live = pickCoordinator(ports.coordinators(meshId));
@@ -153999,8 +154077,9 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const cursor = prior?.cursor ?? (ports.coordinatorTurns(live.sessionId, 1).committed[0]?.attemptId ?? null);
         const messageId = prior?.messageId ?? `assistant_follower:${acl.hostDaemonId}:${meshId}:${acl.accountSlot}:${acl.activeDaemonId}:b${acl.bindingRevision}:g${acl.grantRevision}:${live.sessionId}:${bodyHash.slice(0, 16)}:${clientId}`;
-        const latestMesh = ports.listMeshes().find((m) => m.id === meshId);
-        const recheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args);
+        const latestRead = readHostMeshStrict(ports, meshId);
+        if (!latestRead.ok) return latestRead.result;
+        const recheck = verifyFollowerAcl(ports, latestRead.mesh, meshId, sender, "send", args);
         if (!recheck.ok) return recheck.result;
         if (prior) {
           return {
@@ -154054,7 +154133,9 @@ ${ptyResult.output.slice(-2e3)}`);
       });
     }
     async function run2(ports, op, meshId, args, isFollower, sender) {
-      const mesh = ports.listMeshes().find((m) => m.id === meshId);
+      const meshRead = readHostMeshStrict(ports, meshId);
+      if (!meshRead.ok) return meshRead.result;
+      const mesh = meshRead.mesh;
       switch (op) {
         case "status": {
           const status = await localProjectStatus(ports, mesh);
@@ -154107,7 +154188,9 @@ ${ptyResult.output.slice(-2e3)}`);
       if (!ASSISTANT_REMOTE_OPS.includes(op)) return fail5("invalid_args", `op must be one of ${ASSISTANT_REMOTE_OPS.join(", ")}`);
       try {
         const ports = await projectPortsFor(ctx);
-        const mesh = ports.listMeshes().find((m) => m.id === meshId);
+        const meshRead = readHostMeshStrict(ports, meshId);
+        if (!meshRead.ok) return meshRead.result;
+        const mesh = meshRead.mesh;
         if (!mesh) return fail5("project_not_found", `mesh ${meshId} is not in this daemon's project inventory`);
         const sender = readMeshSender(args);
         const self = ports.selfDaemonId();

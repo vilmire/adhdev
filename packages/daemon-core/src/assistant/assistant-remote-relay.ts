@@ -32,7 +32,7 @@
  * cadence (a commit made meanwhile is relayed then).
  */
 
-import type { TurnOutcome } from '@adhdev/mesh-shared';
+import { followedRemoteProjectKey, type TurnOutcome } from '@adhdev/mesh-shared';
 import type { AssistantRelay, MeshWorkCounts } from './assistant-relay.js';
 import type { RemoteCallOutcome, RemoteHostView } from './assistant-remote-host.js';
 
@@ -51,12 +51,12 @@ export interface RemoteRelayPollerPorts {
         coordinatorSessionId?: string | null;
     }>;
     /** The host of a remote-hosted mesh; null when this daemon hosts it (or it is gone). */
-    remoteTarget(meshId: string): RemoteHostView | null;
+    remoteTarget(meshId: string): Promise<RemoteHostView | null> | RemoteHostView | null;
     poll(target: RemoteHostView, args: { afterAttemptId?: string; cursorOnly?: boolean }): Promise<RemoteCallOutcome>;
     /** Follows persisted `revoked` for a non-explicit reason: probed each pass, restored on the first successful poll. */
-    staleRevoked?(): Array<{ meshId: string; target: RemoteHostView }>;
-    /** A stale-revoked follow answered a poll: restore it to `followed`. */
-    onAccessRecovered?(meshId: string): void;
+    staleRevoked?(): Promise<Array<{ key?: string; meshId: string; target: RemoteHostView }>> | Array<{ key?: string; meshId: string; target: RemoteHostView }>;
+    /** A stale-revoked follow answered a poll: restore it to `followed` (keyed by canonical `hostDaemonId::meshId`). */
+    onAccessRecovered?(key: string): void;
     /** A non-revoking refusal (remote_access_denied, revision mismatch, …): record lastError, keep polling. */
     onAccessRefused?(meshId: string, code: string, error: string): void;
     relay: Pick<AssistantRelay, 'onRemoteCommitted' | 'observeRemote' | 'remoteUnreachable'> & {
@@ -180,7 +180,7 @@ export class AssistantRemoteRelayPoller {
         for (const thread of threads) {
             const { meshId, lastSendAt } = thread;
             let target: RemoteHostView | null = null;
-            try { target = this.ports.remoteTarget(meshId); } catch { target = null; }
+            try { target = await this.ports.remoteTarget(meshId); } catch { target = null; }
             if (!target) continue;
             const st = this.state.get(meshId) ?? {
                 cursor: thread.lastCursor ?? null,
@@ -200,19 +200,25 @@ export class AssistantRemoteRelayPoller {
 
     /** Self-heal: a follow revoked by a non-explicit refusal is restored once the host answers a cursor-only poll. */
     private async healStaleRevoked(now: number): Promise<void> {
-        let stale: Array<{ meshId: string; target: RemoteHostView }> = [];
-        try { stale = this.ports.staleRevoked?.() ?? []; } catch { stale = []; }
-        const live = new Set(stale.map((s) => s.meshId));
+        let stale: Array<{ key?: string; meshId: string; target: RemoteHostView }> = [];
+        try { stale = (await this.ports.staleRevoked?.()) ?? []; } catch { stale = []; }
+        const keyOf = (s: { key?: string; meshId: string; target: RemoteHostView }): string =>
+            str(s.key)
+            || str(s.target.followerAccess?.followedKey)
+            || (s.target.hostDaemonId ? followedRemoteProjectKey(s.target.hostDaemonId, s.meshId) : s.meshId);
+        const live = new Set(stale.map(keyOf));
         for (const k of [...this.healAt.keys()]) if (!live.has(k)) this.healAt.delete(k);
-        for (const { meshId, target } of stale) {
-            if ((this.healAt.get(meshId) ?? 0) > now || !target.reachable) continue;
+        for (const entry of stale) {
+            const key = keyOf(entry);
+            const { target } = entry;
+            if ((this.healAt.get(key) ?? 0) > now || !target.reachable) continue;
             let out: RemoteCallOutcome;
             try { out = await this.ports.poll(target, { cursorOnly: true }); } catch { continue; }
             if (out.ok) {
-                this.healAt.delete(meshId);
-                this.ports.onAccessRecovered?.(meshId);
+                this.healAt.delete(key);
+                this.ports.onAccessRecovered?.(key);
             } else {
-                this.healAt.set(meshId, this.now() + POLL_BACKOFF_MS);
+                this.healAt.set(key, this.now() + POLL_BACKOFF_MS);
             }
         }
     }

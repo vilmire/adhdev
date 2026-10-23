@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import {
     matchesAssistantRestore,
     subscribeAssistantRegistry,
 } from '../../src/assistant/assistant-registry.js';
+import { REVOCATION_REFUSAL_CODES } from '../../src/assistant/assistant-remote-relay.js';
 import { createSessionLifecycleBus } from '../../src/sessions/lifecycle-bus.js';
 
 /**
@@ -121,6 +122,56 @@ describe('AssistantRegistry', () => {
         expect(e.busyInputMode).toBe('queue');
         expect(e.aliases).toEqual({ a: 'm' });
         expect(e.sessionId).toBeNull();
+    });
+
+    it('distinguishes unreadable from missing or corrupt: keeps previous cache, returns transient error on cold read, and never revokes or corrupt-asides', () => {
+        const SELF = 'daemon_mach_follower01';
+        const r = reg();
+        bind(r);
+        r.reconcileOwnerBinding(SELF);
+        r.upsertFollowedRemoteProject({
+            hostDaemonId: 'daemon_mach_host01',
+            meshId: 'mesh_1',
+            name: 'Proj1',
+            slug: 'proj1',
+            sanitizedRepoIdentity: null,
+            bindingRevision: 1,
+            grantRevision: 1,
+            state: 'followed',
+        });
+
+        // Make assistant.json transiently unreadable (simulates ENFILE/EMFILE/EACCES on readFileSync while file exists)
+        chmodSync(file(), 0o000);
+        try {
+            // 1. reload() on a warm registry keeps the previous cache and never returns null or local_owner_binding_missing
+            const reloaded = r.reload();
+            expect(reloaded).not.toBeNull();
+            expect(reloaded?.ownerBinding?.daemonId).toBe(SELF);
+            const warmCheck = r.verifyLocalOwnerBinding(SELF);
+            expect(warmCheck.ok).toBe(true);
+
+            // 2. A write during an unreadable assistant.json must NEVER rename the valid file to .corrupt-*
+            r.updateSettings({ reviewTurn: false });
+            expect(readdirSync(dir).filter((f) => f.startsWith('assistant.json.corrupt-'))).toEqual([]);
+
+            // 3. On a cold registry (no prior cache), unreadable file returns transient local_owner_binding_unreadable (never local_owner_binding_missing) and does not cache null
+            chmodSync(file(), 0o000);
+            const cold = reg();
+            expect(cold.read()).toBeNull();
+            const coldCheck = cold.verifyLocalOwnerBinding(SELF);
+            expect(coldCheck.ok).toBe(false);
+            if (!coldCheck.ok) {
+                expect(coldCheck.code).toBe('local_owner_binding_unreadable');
+                expect(REVOCATION_REFUSAL_CODES.has(coldCheck.code)).toBe(false);
+            }
+
+            // Once read pressure clears, the same cold registry reads from disk without needing a restart
+            chmodSync(file(), 0o600);
+            const recoveredCheck = cold.verifyLocalOwnerBinding(SELF);
+            expect(recoveredCheck.ok).toBe(true);
+        } finally {
+            try { chmodSync(file(), 0o600); } catch { /* ignore */ }
+        }
     });
 });
 

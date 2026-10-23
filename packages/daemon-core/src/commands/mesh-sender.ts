@@ -364,15 +364,9 @@ async function checkFollowerAccess(
         diskMesh = deps.getDiskMesh ? await deps.getDiskMesh(meshId) : await deps.getLocalMesh(meshId);
     } catch (e) {
         // getDiskMesh throws only when meshes.json EXISTS but could not be read (ENFILE/EMFILE/EIO/torn
-        // write). That is not "mesh missing": use the in-memory view if it carries the ACL, else a
-        // retryable refusal — never fall through to a roster denial the follower would persist as a revocation.
-        let local: unknown;
-        try { local = await deps.getLocalMesh(meshId); } catch { local = undefined; }
-        if (record(local)?.assistantRemoteAccess !== undefined) {
-            diskMesh = local;
-        } else {
-            return refuse(sender, 'host_unavailable_transient', `host_unavailable_transient: host could not read mesh config for ${meshId} (${e instanceof Error ? e.message : String(e)}); retry`);
-        }
+        // write). That is not "mesh missing": fail closed with a retryable refusal — never authorize or
+        // emit host_revoked from an unsynchronized in-memory cache and never fall through to a roster denial.
+        return refuse(sender, 'host_unavailable_transient', `host_unavailable_transient: host could not read mesh config for ${meshId} (${e instanceof Error ? e.message : String(e)}); retry`);
     }
     const meshRec = record(diskMesh);
     if (!meshRec) return null;
