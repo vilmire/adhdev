@@ -81,6 +81,14 @@ export interface CoordinatorTurns {
 
 export type CoordinatorLiveness = 'live' | 'dead' | 'unknown';
 
+/**
+ * Maximum wait for `sessionHostControl.listSessions()` during coordinator
+ * liveness verification. A stalled session-host IPC probe adds at most ~1.5s
+ * latency to a follower send before timing out to `'unknown'` (which preserves
+ * the existing coordinator without triggering a cold wake) and runs outside
+ * `withMeshRemoteAccessMutex` so owner grant/revoke/set_policy calls are never
+ * delayed.
+ */
 export const SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 1_500;
 
 export interface AssistantProjectPorts {
