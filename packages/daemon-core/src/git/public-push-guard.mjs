@@ -100,14 +100,13 @@ async function destinationCommits(cwd, remoteName, remoteUrl) {
   return destination ? await advertisedCommits(cwd, destination) : [];
 }
 
+// One `cat-file --batch-check` instead of a spawn per sha: a destination with
+// thousands of refs (refs/pull/*) must not make the hook take minutes.
 async function locallyReadableCommits(cwd, shas) {
-  const commits = [];
-  for (const sha of shas) {
-    if (!sha || ZERO.test(sha)) continue;
-    const commit = await tryGit(cwd, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]);
-    if (commit) commits.push(commit);
-  }
-  return commits;
+  const wanted = [...shas].filter((sha) => sha && !ZERO.test(sha));
+  if (!wanted.length) return [];
+  const out = await runGit(cwd, ['cat-file', '--batch-check=%(objectname) %(objecttype)'], { input: wanted.map((sha) => `${sha}^{commit}`).join('\n') + '\n' });
+  return out.split('\n').map((line) => /^([0-9a-f]{40,64}) commit$/.exec(line)?.[1]).filter(Boolean);
 }
 
 /** Commits introduced by one pushed ref. Throws when the ref is not a commit. */
@@ -157,6 +156,26 @@ async function messageViolations(cwd, shas, scan) {
   const out = [];
   for (const rec of await readCommits(cwd, shas)) {
     for (const l of scanText(scan, rec.message)) out.push({ kind: 'path', sha: rec.sha, file: '(commit message)', line: l.line, detail: l.name || l.match });
+  }
+  out.push(...await headerViolations(cwd, shas, scan));
+  return out;
+}
+
+// `%B` hides everything git does not treat as the message: custom headers,
+// `mergetag` (an embedded tag object) and `gpgsig` are all published with the
+// commit. `rev-list --header` prints the raw buffer, one NUL-terminated record per commit.
+async function headerViolations(cwd, shas, scan) {
+  if (!shas.length) return [];
+  const raw = await runGit(cwd, ['rev-list', '--header', '--no-walk=unsorted', '--stdin'], { input: shas.join('\n') + '\n' });
+  const out = [];
+  for (const record of raw.split('\0')) {
+    const nl = record.indexOf('\n');
+    if (nl === -1) continue;
+    const sha = record.slice(0, nl).trim();
+    const body = record.slice(nl + 1);
+    const sep = body.indexOf('\n\n');
+    const header = sep === -1 ? body : body.slice(0, sep);
+    for (const l of scanText(scan, header)) out.push({ kind: 'path', sha, file: '(commit header)', line: l.line, detail: l.name || l.match });
   }
   return out;
 }
