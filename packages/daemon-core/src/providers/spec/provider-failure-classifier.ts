@@ -93,20 +93,13 @@ export function stripToolAndCodeLines(raw: string): string {
     const out: string[] = [];
     for (const line of raw.split('\n')) {
         const trimmed = line.trim();
-        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
-            inToolBlock = false;
-            inFence = null;
-            inDiffHunk = false;
-            if (TOOL_HEADER_LINE_RE.test(line)) {
-                inToolBlock = true;
-                continue;
-            }
-        }
         const fenceMatch = trimmed.match(/^(```+|~~~+)/);
         if (fenceMatch) {
             const ch = fenceMatch[1][0] as '`' | '~';
             if (inFence === null) {
                 inFence = ch;
+                inDiffHunk = false;
+                inToolBlock = false;
                 continue;
             }
             if (inFence === ch && new RegExp(`^${ch}{3,}\\s*$`).test(trimmed)) {
@@ -123,19 +116,27 @@ export function stripToolAndCodeLines(raw: string): string {
         }
         if (/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.test(trimmed)) {
             inDiffHunk = true;
+            inToolBlock = false;
             continue;
         }
         if (inDiffHunk) {
             if (!trimmed) continue;
-            if (!/^[ \t]*[⏺✻✢✳✶✽✷✸✹❯›●✗✖⚠!]/.test(line) && /^(?:[ +-]|\\ No newline)/.test(line)) {
+            if (/^(?:[ +-]|\\ No newline)/.test(line)) {
                 continue;
             }
             inDiffHunk = false;
         }
+        if (CLEAR_PROVIDER_CHROME_RE.test(line)) {
+            inToolBlock = false;
+            if (TOOL_HEADER_LINE_RE.test(line)) {
+                inToolBlock = true;
+                continue;
+            }
+        }
         if (!trimmed) {
             continue;
         }
-        if (/^[⎿└├]/.test(trimmed) || TOOL_HEADER_LINE_RE.test(line)) {
+        if (/^(?:⎿|[└├](?:─(?!─))?\s)/.test(trimmed) || TOOL_HEADER_LINE_RE.test(line)) {
             inToolBlock = true;
             continue;
         }
@@ -147,7 +148,7 @@ export function stripToolAndCodeLines(raw: string): string {
         }
         if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed)) continue;
         if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed)) continue;
-        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw)\s+\S|(?:if|else\s+if|expect|it|test|describe|assert)\s*(?:\(|\.[a-z]+\s*\())/.test(trimmed)) continue;
         out.push(line);
     }
     return out.join('\n');

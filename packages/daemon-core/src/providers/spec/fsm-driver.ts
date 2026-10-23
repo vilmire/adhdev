@@ -694,7 +694,7 @@ export class FsmDriver implements ISpecDriver {
 
         // Marker-only bound: once released, evaluate with the marker blanked.
         const markerScan = this.bgMarker.enabled
-            ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines))
+            ? this.bgMarker.observe(currentLines, resolveSections(this.spec.sections ?? {}, currentLines, currentLines.length - screen.split('\n').length))
             : null;
         const prevForEval = this.prevScreenLines;
         const ev = this.evalFsmNow(this.bgMarker.frame(guard, markerScan), screen, cursor, now);
@@ -775,11 +775,11 @@ export class FsmDriver implements ISpecDriver {
         if (wake !== null) this.bgMarkerTimer = setTimeout(() => { this.bgMarkerTimer = null; this.reevaluate(); }, wake);
     }
 
-    private commitTransition(fired: TransitionEval, now: number, ev: FsmEvaluation): void {
+    private commitTransition(fired: TransitionEval, now: number, ev?: FsmEvaluation): void {
         const from = this.currentStateId;
         // Capture the full pre-transition evaluation BEFORE we mutate state, so
         // the snapshot records why this transition fired from `from`.
-        this.pushFsmSnapshot(from, fired, now, ev);
+        if (ev) this.pushFsmSnapshot(from, fired, now, ev);
         this.currentStateId = fired.to;
         this.stateEnteredAt = now;
         // A new state gets a fresh modal-parse-miss verdict: leaving and
@@ -789,40 +789,17 @@ export class FsmDriver implements ISpecDriver {
         // activity; reset so stable_ms in the new state measures from entry.
         this.regionLastChangedAt.clear();
         this.stableVerdictCache.clear();
-        this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, {
-            reason: 'transition',
-            via: `${from}→${fired.to}`,
-            matchedRules: summarizeTransition(fired),
-        });
+        this.pushHistory(fired.to, stateById(this.spec, fired.to)?.label ?? fired.to, { reason: 'transition', via: `${from}→${fired.to}`, matchedRules: ev ? summarizeTransition(fired) : [fired.label] });
         LOG.info('FsmDriver', `[${this.specTag()}] ${from} → ${fired.to} (${fired.label})`);
         const statusOf = (id: string) => { const st = stateById(this.spec, id); return st ? statusForState(st) : 'idle'; };
         this.redrawNudge.onTransition(statusOf(from), statusOf(fired.to), fired.label);
     }
 
-    /** Transition to `signing_in` when the pre-send screen guard detects an
-     *  active anchored login screen on a session the FSM still considered idle. */
+    /** Transition to `signing_in` when the pre-send screen guard detects an active anchored login screen while idle. */
     private enterPreSendSigningIn(): void {
-        const target = stateById(this.spec, 'signing_in');
-        if (!target || this.currentStateId === 'signing_in') return;
-        const now = Date.now();
-        const from = this.currentStateId;
-        this.currentStateId = 'signing_in';
-        this.stateEnteredAt = now;
-        this.lastModalParseMissKey = null;
-        this.regionLastChangedAt.clear();
-        this.stableVerdictCache.clear();
-        this.pushHistory('signing_in', target.label ?? 'signing_in', {
-            reason: 'transition',
-            via: `${from}→signing_in`,
-            matchedRules: ['pre_send_auth_guard'],
-        });
-        LOG.info('FsmDriver', `[${this.specTag()}] ${from} → signing_in (pre_send_auth_guard)`);
-        const statusOf = (id: string) => { const st = stateById(this.spec, id); return st ? statusForState(st) : 'idle'; };
-        this.redrawNudge.onTransition(statusOf(from), statusOf('signing_in'), 'pre_send_auth_guard');
-        this.emitStateChanged(true);
-        this.scheduleWakeForState();
-        this.focusPrimer.scheduleStallWatchdog();
-        this.redrawNudge.schedule();
+        if (!stateById(this.spec, 'signing_in') || this.currentStateId === 'signing_in') return;
+        this.commitTransition({ to: 'signing_in', label: 'pre_send_auth_guard', eligible: true, holdSatisfied: true, holdRemainingMs: 0, condResult: true, fires: true, priority: 0 }, Date.now());
+        if (!this.tornDown && this.adapter.hasActivePty()) { this.reevaluate(true); this.armPostTransitionReevaluate(); } else this.emitStateChanged(true);
     }
 
     /** Snapshot the full FSM evaluation that produced a transition into the

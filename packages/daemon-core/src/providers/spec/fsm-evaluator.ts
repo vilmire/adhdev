@@ -230,8 +230,11 @@ function evalCond(
         const children = cond.any.map(c =>
             evalCond(c, sections, fullScreen, cursor, prevLines, clock, legacyTrace, stateId, signalSnapshot, absence));
         const result = children.some(c => c.result);
-        // remaining = the soonest child that could flip true
-        const pending = children.filter(c => !c.result).map(c => c.remainingMs ?? Infinity);
+        // remaining = the soonest child that could flip true on a timer.
+        // Non-timer branches (regex, not, or all-of-regex) report 0/undefined
+        // when false and cannot flip without a screen change, so treat <= 0 as
+        // Infinity here to avoid shadowing a sibling elapsed_ms / stable_ms arm.
+        const pending = children.filter(c => !c.result).map(c => (c.remainingMs && c.remainingMs > 0) ? c.remainingMs : Infinity);
         const remainingMs = result ? 0 : (pending.length ? Math.min(...pending) : 0);
         return { kind: 'any', result, detail: `any(${children.length})`, remainingMs: Number.isFinite(remainingMs) ? remainingMs : 0, children };
     }
@@ -343,7 +346,7 @@ export function evaluateFsm(
     const absence = viewportStartRow && viewportStartRow > 0
         ? { viewportScreen: lines.slice(viewportStartRow).join('\n'), inNot: false }
         : undefined;
-    const sections = resolveSections(spec.sections ?? {}, lines);
+    const sections = resolveSections(spec.sections ?? {}, lines, viewportStartRow ?? 0);
 
     const outgoing = outgoingTransitions(spec, currentStateId);
     const transitions: TransitionEval[] = [];
