@@ -3523,18 +3523,10 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
     });
 
     it('23d. [Finding 4 MEDIUM] ghost coordinator is excluded by listLocalCoordinatorSessions and a dead/missing coordinator runtime on send_chat falls back to cold wake once', async () => {
-        // Part 1: listLocalCoordinatorSessions excludes disconnected, stopped, and error instances
+        // Part 1: listLocalCoordinatorSessions keeps parse_error overlay on a live PTY and excludes terminal instances
         const fakeComponents: any = {
             instanceManager: {
                 getByCategory: () => [
-                    {
-                        getState: () => ({
-                            instanceId: 'coord-disconnected',
-                            connected: false,
-                            status: 'idle',
-                            settings: { meshCoordinatorFor: MESH_PREFEX_SIM },
-                        }),
-                    },
                     {
                         getState: () => ({
                             instanceId: 'coord-stopped',
@@ -3544,10 +3536,12 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                         }),
                     },
                     {
+                        getDrainStatus: () => 'idle',
                         getState: () => ({
-                            instanceId: 'coord-error',
+                            instanceId: 'coord-parse-error',
                             connected: true,
                             status: 'error',
+                            errorReason: 'parse_error',
                             settings: { meshCoordinatorFor: MESH_PREFEX_SIM },
                         }),
                     },
@@ -3557,6 +3551,15 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                             instanceId: 'coord-drain-stopped',
                             connected: true,
                             status: 'idle',
+                            settings: { meshCoordinatorFor: MESH_PREFEX_SIM },
+                        }),
+                    },
+                    {
+                        getState: () => ({
+                            instanceId: 'coord-runtime-terminated',
+                            connected: true,
+                            status: 'idle',
+                            runtime: { lifecycle: 'terminated' },
                             settings: { meshCoordinatorFor: MESH_PREFEX_SIM },
                         }),
                     },
@@ -3572,7 +3575,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             },
         };
         const listed = listLocalCoordinatorSessions(fakeComponents, MESH_PREFEX_SIM);
-        expect(listed.map((s) => s.sessionId)).toEqual(['coord-live-ok']);
+        expect(listed.map((s) => s.sessionId)).toEqual(['coord-parse-error', 'coord-live-ok']);
 
         // Part 2: In followerProjectSend, if send_chat to the picked coordinator fails because the runtime is missing or dead,
         // treat the coordinator as absent and go through the wake path once.
@@ -3979,6 +3982,516 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             });
         } finally {
             rmSync(artifactWorkspace, { recursive: true, force: true });
+        }
+    });
+
+    it('23f. [Re-review Finding 1 HIGH] live PTY coordinator with parse_error overlay is picked with no cold wake, while confirmed terminal runtimes are excluded', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        const cliInstances = [
+            {
+                disposed: false,
+                adapter: {
+                    isAlive: () => true,
+                    getStatus: (opts?: { allowParse?: boolean }) => ({ status: opts?.allowParse === false ? 'idle' : 'error' }),
+                    getRuntimeMetadata: () => ({ runtimeId: 'coord-live-parse-err', lifecycle: 'running', surfaceKind: 'live_runtime' }),
+                },
+                getDrainStatus: () => 'idle',
+                isModalParked: () => false,
+                getState: () => ({
+                    instanceId: 'coord-live-parse-err',
+                    connected: true,
+                    status: 'error',
+                    errorReason: 'parse_error',
+                    settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: true },
+                    runtime: { runtimeId: 'coord-live-parse-err', lifecycle: 'running', surfaceKind: 'live_runtime' },
+                }),
+            },
+            {
+                disposed: true,
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-disposed',
+                    connected: true,
+                    status: 'idle',
+                    settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: true },
+                }),
+            },
+            {
+                adapter: {
+                    isAlive: () => true,
+                    getStatus: (opts?: { allowParse?: boolean }) => ({ status: opts?.allowParse === false ? 'error' : 'error' }),
+                },
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-raw-error',
+                    connected: true,
+                    status: 'error',
+                    settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: true },
+                }),
+            },
+        ];
+
+        hostExecute.mockClear();
+        hostExecute.mockImplementation(async (cmd: string, args: any) => {
+            if (cmd === 'send_chat') {
+                return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+            }
+            if (cmd === 'launch_mesh_coordinator') {
+                return { success: true, sessionId: 'coord-duplicate-should-not-launch' };
+            }
+            return { success: true };
+        });
+
+        await withHostEnv(async () => {
+            setAssistantProjectPortsForTests(() => {
+                const defaultPorts = createDefaultProjectPorts({
+                    components: () => ({
+                        instanceManager: {
+                            getByCategory: () => cliInstances,
+                            getInstance: (id: string) => cliInstances.find((i) => i.getState().instanceId === id) ?? null,
+                        },
+                    }) as any,
+                    selfDaemonId: HOST_A,
+                    execute: hostExecute as any,
+                });
+                return {
+                    ...defaultPorts,
+                    listMeshes: () => loadMeshConfig().meshes,
+                    isHostedHere: (m: LocalMeshEntry) => m.id === MESH_PREFEX_SIM,
+                    coordinatorTurns: () => ({ open: false, committed: [] }),
+                };
+            });
+
+            const res: any = await createRouter(HOST_A).execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Hello live coordinator with parse_error overlay',
+                    clientId: 're-f1-parse-error-live-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            );
+            expect(res).toMatchObject({
+                success: true,
+                result: {
+                    status: 'queued',
+                    launched: false,
+                    coordinatorSessionId: 'coord-live-parse-err',
+                },
+            });
+        });
+
+        const launchCalls = hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator');
+        expect(launchCalls).toHaveLength(0);
+        const sendCalls = hostExecute.mock.calls.filter((c) => c[0] === 'send_chat');
+        expect(sendCalls).toHaveLength(1);
+        expect(sendCalls[0]![1].targetSessionId).toBe('coord-live-parse-err');
+    });
+
+    it('23g. [Re-review Finding 2 MEDIUM] ghost session-host coordinator is verified against real session-host runtime evidence before send_chat and falls through to a single cold wake', async () => {
+        // 1. SpecCliAdapter.getRuntimeMetadata() exposes real session-host transport metadata instead of only a static stub
+        const { SpecCliAdapter } = await import('../../src/providers/spec/cli-adapter.js');
+        const fakeSpecAdapter = Object.create(SpecCliAdapter.prototype);
+        fakeSpecAdapter.spec = { id: 'claude-cli', name: 'Claude Code' };
+        fakeSpecAdapter.spawnedAtMs = 12345;
+        fakeSpecAdapter.spawnedEnv = { FOO: 'bar' };
+        fakeSpecAdapter.providerSessionId = 'prov-sess-1';
+        fakeSpecAdapter.driver = {
+            getRuntimeMetadata: () => ({
+                runtimeId: 'coord-session-host-1',
+                runtimeKey: 'claude-cli-alpha',
+                displayName: 'Claude Code @ alpha',
+                lifecycle: 'running',
+                surfaceKind: 'live_runtime',
+            }),
+        };
+        expect(fakeSpecAdapter.getRuntimeMetadata()).toMatchObject({
+            runtimeId: 'coord-session-host-1',
+            runtimeKey: 'claude-cli-alpha',
+            displayName: 'Claude Code @ alpha',
+            lifecycle: 'running',
+            surfaceKind: 'live_runtime',
+            spawnedAtMs: 12345,
+            providerSessionId: 'prov-sess-1',
+        });
+
+        // 2. A ghost session-host coordinator (whose send_chat would return success:true if called, and whose runtime metadata is a stub or non-live session-host record)
+        // is detected before send_chat, skipped without calling send_chat on the ghost, and replaced via a single cold wake.
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        hostCoordinators[MESH_PREFEX_SIM] = [
+            { sessionId: 'coord-ghost-stub', idle: true, modalParked: false, managedByAssistant: false },
+        ];
+        // Ghost session in hostLiveSessions has only the static SpecCliAdapter stub (no live_runtime surfaceKind / lifecycle)
+        hostLiveSessions = [
+            {
+                instanceId: 'coord-ghost-stub',
+                type: 'claude-cli',
+                status: 'idle',
+                workspace: '/workspace/alpha-sim',
+                settings: { meshCoordinatorFor: MESH_PREFEX_SIM },
+                runtime: {
+                    runtimeId: 'claude-cli',
+                    runtimeKey: 'claude-cli',
+                    displayName: 'Claude Code',
+                    lifecycle: null,
+                    surfaceKind: undefined,
+                },
+            },
+        ];
+
+        hostExecute.mockClear();
+        hostExecute.mockImplementation(async (cmd: string, args: any) => {
+            if (cmd === 'send_chat' && args.targetSessionId === 'coord-ghost-stub') {
+                // Simulates SpecCliAdapter.sendMessage returning success:true without awaiting SessionHostRuntimeTransport.write
+                return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+            }
+            if (cmd === 'launch_mesh_coordinator') {
+                hostCoordinators[MESH_PREFEX_SIM] = [
+                    { sessionId: 'coord-fresh-live', idle: true, modalParked: false, managedByAssistant: true },
+                ];
+                hostLiveSessions = [
+                    {
+                        instanceId: 'coord-fresh-live',
+                        type: 'claude-cli',
+                        status: 'idle',
+                        workspace: '/workspace/alpha-sim',
+                        settings: { meshCoordinatorFor: MESH_PREFEX_SIM, managedByAssistant: true },
+                        runtime: {
+                            runtimeId: 'coord-fresh-live',
+                            runtimeKey: 'claude-cli-alpha',
+                            displayName: 'Claude Code',
+                            lifecycle: 'running',
+                            surfaceKind: 'live_runtime',
+                        },
+                    },
+                ];
+                return { success: true, sessionId: 'coord-fresh-live' };
+            }
+            if (cmd === 'send_chat' && args.targetSessionId === 'coord-fresh-live') {
+                return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+            }
+            return { success: true };
+        });
+
+        const wakeRes: any = await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Do not swallow on ghost session-host coordinator',
+                    clientId: 're-f2-ghost-session-host-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            ),
+        );
+
+        expect(wakeRes).toMatchObject({
+            success: true,
+            result: {
+                status: 'queued',
+                launched: true,
+                coordinatorSessionId: 'coord-fresh-live',
+            },
+        });
+        const launchCalls = hostExecute.mock.calls.filter((c) => c[0] === 'launch_mesh_coordinator');
+        expect(launchCalls).toHaveLength(1);
+        const sendCalls = hostExecute.mock.calls.filter((c) => c[0] === 'send_chat');
+        // Ghost coordinator must NOT receive send_chat; only the freshly launched live coordinator receives it!
+        expect(sendCalls).toHaveLength(1);
+        expect(sendCalls[0]![1].targetSessionId).toBe('coord-fresh-live');
+    });
+
+    it('23h. [Re-review Finding 3 MEDIUM] withMeshRemoteAccessMutex is released during ensureCoordinator and send_chat so concurrent owner revoke commits immediately and aborts delivery with post_launch_denied', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        hostCoordinators[MESH_PREFEX_SIM] = [];
+        const events: string[] = [];
+        let releaseLaunch!: () => void;
+        const launchGate = new Promise<void>((resolve) => {
+            releaseLaunch = resolve;
+        });
+        let notifyLaunchStarted!: () => void;
+        const launchStarted = new Promise<void>((resolve) => {
+            notifyLaunchStarted = resolve;
+        });
+
+        hostExecute.mockClear();
+        hostExecute.mockImplementation(async (cmd: string, args: any) => {
+            if (cmd === 'launch_mesh_coordinator') {
+                events.push('launch_started');
+                notifyLaunchStarted();
+                await launchGate;
+                events.push('launch_finished');
+                hostCoordinators[MESH_PREFEX_SIM] = [
+                    { sessionId: 'coord-f3-concurrent', idle: true, modalParked: false, managedByAssistant: true },
+                ];
+                return { success: true, sessionId: 'coord-f3-concurrent' };
+            }
+            if (cmd === 'send_chat') {
+                events.push('send_chat_called');
+                return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+            }
+            return { success: true };
+        });
+
+        const sendRes: any = await withHostEnv(async () => {
+            const router = createRouter(HOST_A);
+            const sendPromise = router.execute(
+                'assistant_remote_project',
+                {
+                    meshId: MESH_PREFEX_SIM,
+                    op: 'send',
+                    text: 'Wake while owner revokes concurrently',
+                    clientId: 're-f3-concurrent-revoke-1',
+                    followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                    _meshDirectDispatch: true,
+                    [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                },
+                'mesh',
+            );
+
+            await launchStarted;
+
+            // Owner calls revoke WHILE launch_mesh_coordinator is still in flight.
+            // Must NOT be blocked behind withMeshRemoteAccessMutex!
+            const revokeRes: any = await router.execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'revoke', meshId: MESH_PREFEX_SIM },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(revokeRes).toMatchObject({ success: true, action: 'revoke' });
+            events.push('revoke_committed');
+
+            releaseLaunch();
+            return await sendPromise;
+        });
+
+        expect(events).toEqual(['launch_started', 'revoke_committed', 'launch_finished']);
+        expect(sendRes).toMatchObject({
+            success: false,
+            code: 'host_revoked',
+        });
+
+        const sendCalls = hostExecute.mock.calls.filter((c) => c[0] === 'send_chat');
+        expect(sendCalls).toHaveLength(0);
+
+        await withHostEnv(async () => {
+            const rows = MeshRuntimeStore.getInstance().db
+                .prepare("SELECT * FROM turn_events WHERE mesh_id = ? AND kind = 'assistant_follower_coordinator_wake' AND session_id = 'coord-f3-concurrent' ORDER BY rowid ASC")
+                .all(MESH_PREFEX_SIM) as any[];
+            expect(rows.some((r) => r.verdict === 'rejected' && r.rule === 'post_launch_denied')).toBe(true);
+        });
+    });
+
+    it('23i. [Re-review Finding 4 LOW] backward clock step clamping, no quota charge when coord.launched===false, and post-launch cooldown timestamp', async () => {
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        let currentNow = Date.parse('2026-10-20T05:00:00Z');
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentNow);
+        try {
+            // 1. When ensureCoordinator reuses an existing coordinator (coord.ok && coord.launched === false), quota is NOT charged.
+            // Simulate a coordinator appearing right as ensureCoordinator runs (so initial pickCoordinator sees [], then ensureCoordinator's coordinators() sees the live one).
+            let callsToCoordinators = 0;
+            await withHostEnv(async () => {
+                setAssistantProjectPortsForTests((ctx) => {
+                    const defaultPorts = createDefaultProjectPorts({
+                        ...ctx,
+                        selfDaemonId: HOST_A,
+                        execute: hostExecute as any,
+                    });
+                    return {
+                        ...defaultPorts,
+                        selfDaemonId: () => HOST_A,
+                        listMeshes: () => loadMeshConfig().meshes,
+                        isHostedHere: (m: LocalMeshEntry) => m.id === MESH_PREFEX_SIM,
+                        aliases: () => ({}),
+                        coordinators: () => {
+                            callsToCoordinators += 1;
+                            if (callsToCoordinators === 1) return [];
+                            return [{ sessionId: 'coord-reused-concurrently', idle: true, modalParked: false, managedByAssistant: true }];
+                        },
+                        lastCoordinatorSessionId: () => 'coord-reused-concurrently',
+                        queueCounts: () => ({ pending: 0, assigned: 0, failed: 0 }),
+                        activeMissionCount: () => 0,
+                        pendingApprovals: () => 0,
+                        relay: {},
+                        execute: hostExecute as any,
+                        remoteHost: () => { throw new Error('not used'); },
+                        callHost: () => { throw new Error('not used'); },
+                        coordinatorTurns: () => ({ open: false, committed: [] }),
+                        meshStatusLine: () => '[Mesh] idle',
+                        liveSessionStates: () => [],
+                        routePreview: async () => null,
+                    } as unknown as AssistantProjectPorts;
+                });
+
+                hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                    if (cmd === 'send_chat') {
+                        return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                    }
+                    return { success: true };
+                });
+
+                const reusedRes: any = await createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Reused existing coordinator without cold launch',
+                        clientId: 're-f4-reused-no-quota-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                );
+                expect(reusedRes).toMatchObject({
+                    success: true,
+                    result: { launched: false, coordinatorSessionId: 'coord-reused-concurrently' },
+                });
+            });
+
+            // Immediately at the same timestamp (currentNow), a real cold wake MUST NOT be rate-limited because launched===false did not consume quota!
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLiveSessions = [];
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    // 2. Advance clock by 20s during launch to verify cooldown timestamp is taken AFTER launch completes!
+                    currentNow += 20_000;
+                    hostCoordinators[MESH_PREFEX_SIM] = [{ sessionId: 'coord-f4-woken-1', idle: true, modalParked: false, managedByAssistant: true }];
+                    return { success: true, sessionId: 'coord-f4-woken-1' };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            const coldWake1: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Cold wake 1 taking 20s to launch',
+                        clientId: 're-f4-cold-wake-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(coldWake1).toMatchObject({
+                success: true,
+                result: { launched: true, coordinatorSessionId: 'coord-f4-woken-1' },
+            });
+
+            // Launch completed at t0 + 20_000. At t0 + 65_000 (45s after launch completion, though 65s after pre-launch), cooldown MUST still be active!
+            currentNow += 45_000;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            const stillInPostLaunchCooldown: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Should still be in post-launch 60s cooldown',
+                        clientId: 're-f4-post-launch-cooldown-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(stillInPostLaunchCooldown).toMatchObject({
+                success: false,
+                code: 'wake_rate_limited',
+            });
+
+            // 3. Backward clock step: step host clock backward by 5 minutes, rebuild from store, then advance 61s.
+            // Because timestamps from store/memory are clamped to t <= now, the follower is NOT locked out for 5m + 60s!
+            currentNow -= 300_000;
+            clearFollowerWakeRateLimitForTest();
+            MeshRuntimeStore.resetForTests();
+            await withHostEnv(async () => {
+                const { rebuildFollowerWakeRateLimitFromStore } = await import('../../src/commands/high-family/assistant-remote.js');
+                rebuildFollowerWakeRateLimitFromStore(currentNow);
+            });
+            currentNow += 61_000;
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'launch_mesh_coordinator') {
+                    hostCoordinators[MESH_PREFEX_SIM] = [{ sessionId: 'coord-f4-after-clock-step', idle: true, modalParked: false, managedByAssistant: true }];
+                    return { success: true, sessionId: 'coord-f4-after-clock-step' };
+                }
+                if (cmd === 'send_chat') {
+                    return { success: true, queued: true, targetSessionId: args.targetSessionId, messageId: args.messageId };
+                }
+                return { success: true };
+            });
+
+            const afterClockSkewWake: any = await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    'assistant_remote_project',
+                    {
+                        meshId: MESH_PREFEX_SIM,
+                        op: 'send',
+                        text: 'Wake after backward clock step + 61s',
+                        clientId: 're-f4-clock-skew-wake-1',
+                        followerAccess: { accountSlot: 'personal', bindingRevision: 1, grantRevision: 1 },
+                        _meshDirectDispatch: true,
+                        [MESH_SENDER_DAEMON_ID_ARG]: ASSISTANT_B,
+                    },
+                    'mesh',
+                ),
+            );
+            expect(afterClockSkewWake).toMatchObject({
+                success: true,
+                result: { launched: true, coordinatorSessionId: 'coord-f4-after-clock-step' },
+            });
+        } finally {
+            nowSpy.mockRestore();
         }
     });
 });

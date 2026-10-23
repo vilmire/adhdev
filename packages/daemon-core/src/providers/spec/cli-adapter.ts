@@ -883,10 +883,12 @@ export class SpecCliAdapter implements CliAdapter {
         };
     }
     getRuntimeMetadata(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata & Record<string, unknown> {
+        const transportMeta = this.driver?.getRuntimeMetadata?.() ?? null;
         return {
-            runtimeId: this.spec.id,
-            runtimeKey: this.spec.id,
-            displayName: this.spec.name,
+            ...(transportMeta ?? {}),
+            runtimeId: transportMeta?.runtimeId || this.spec.id,
+            runtimeKey: transportMeta?.runtimeKey || this.spec.id,
+            displayName: transportMeta?.displayName || this.spec.name,
             spawnedAtMs: this.spawnedAtMs,
             spawnedEnv: this.spawnedEnv,
             ...(this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}),

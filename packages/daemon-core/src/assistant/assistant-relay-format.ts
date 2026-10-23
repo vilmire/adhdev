@@ -75,7 +75,8 @@ export function defangRelayBody(text: string): string {
         .replace(/\[\s*\/\s*relay\s*\]/gi, '[/relay (quoted)]')
         .replace(/\[\s*\/\s*UNTRUSTED_RELAY_NOTICE\s*\]/gi, '[/UNTRUSTED_RELAY_NOTICE (quoted)]')
         .replace(/\[(\s*)(ADHDev|UNTRUSTED_RELAY_NOTICE|Assistant\s+relay)\b/gi, '[$1quoted $2')
-        .replace(/^\[(\s*)project\b/gim, '[$1quoted project');
+        .replace(/\[(\s*)(project)\b/gi, '[$1quoted $2')
+        .replace(/\[(\s*)(System)\b/gi, '[$1quoted $2');
 }
 
 /** Cap at `max` code points; the cut points the assistant at project_read. */

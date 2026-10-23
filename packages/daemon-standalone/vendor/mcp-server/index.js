@@ -24185,19 +24185,21 @@ var require_dist3 = __commonJS({
     function machineCoreFromDaemonId(id222) {
       const trimmed2 = readString2(id222);
       if (!trimmed2) return void 0;
+      const lower = trimmed2.toLowerCase();
       for (const prefix of DAEMON_ID_PREFIXES) {
-        if (trimmed2.startsWith(prefix)) {
+        if (lower.startsWith(prefix)) {
           const core2 = trimmed2.slice(prefix.length).trim();
-          return core2 || void 0;
+          if (!core2) return void 0;
+          return /^mach_/i.test(core2) ? `mach_${core2.slice(5)}` : core2;
         }
       }
-      return trimmed2;
+      return /^mach_/i.test(trimmed2) ? `mach_${trimmed2.slice(5)}` : trimmed2;
     }
     function canonicalDaemonId2(id222) {
       const core2 = machineCoreFromDaemonId(id222);
       if (!core2) return void 0;
-      if (!core2.startsWith("mach_")) return core2;
-      return `daemon_${core2}`;
+      if (!/^mach_/i.test(core2)) return core2;
+      return `daemon_mach_${core2.slice(5)}`;
     }
     function daemonIdsEquivalent4(a, b) {
       const coreA = machineCoreFromDaemonId(a);
@@ -85822,10 +85824,11 @@ ${cleanBody}`;
         if (readText(settings2.meshCoordinatorFor) !== meshId) continue;
         const sessionId = readText(state2?.instanceId);
         if (!sessionId) continue;
-        if (state2?.connected === false) continue;
         const rawStatus = readText(state2?.status).toLowerCase();
         const drainStatus = typeof inst.getDrainStatus === "function" ? readText(inst.getDrainStatus()).toLowerCase() : "";
-        if (rawStatus === "stopped" || rawStatus === "error" || drainStatus === "stopped" || drainStatus === "error") continue;
+        const terminal = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
+        const runtimeLifecycle = readText(state2?.runtime?.lifecycle).toLowerCase();
+        if (terminal.has(rawStatus) || terminal.has(drainStatus) || terminal.has(runtimeLifecycle) || components.sessionRegistry?.wasInstanceTerminated?.(sessionId)) continue;
         out.push({ sessionId, idle: coordinatorIsIdle(inst), modalParked: coordinatorIsModalParked(inst) });
       }
       return out;
@@ -106443,6 +106446,112 @@ ${asText(streams.stderr)}
         }, { sources: ["ipc", "standalone"] });
       }
     });
+    function readText2(v) {
+      return typeof v === "string" ? v.trim() : "";
+    }
+    function hasSessionHostRuntimeEvidence(runtime) {
+      if (!runtime || typeof runtime !== "object") return false;
+      const rec5 = runtime;
+      return rec5.surfaceKind != null || rec5.lifecycle != null || rec5.termination != null;
+    }
+    function isLiveSessionHostRuntimeMetadata(runtime) {
+      if (!runtime || typeof runtime !== "object") return false;
+      const rec5 = runtime;
+      const lifecycle = readText2(rec5.lifecycle).toLowerCase();
+      if (TERMINAL_RUNTIME_LIFECYCLES.has(lifecycle)) return false;
+      if ((0, import_session_host_core10.isTerminalRecord)(rec5)) return false;
+      return (0, import_session_host_core10.isSessionHostLiveRuntime)(rec5);
+    }
+    function isConfirmedTerminalCoordinator(candidate, sessionRegistry) {
+      if (!candidate || typeof candidate !== "object") return true;
+      const inst = candidate;
+      if (inst.disposed === true || inst.terminal === true) return true;
+      const state2 = typeof inst.getState === "function" ? inst.getState() : inst;
+      if (state2?.connected === false || inst.connected === false) return true;
+      const sessionId = readText2(state2?.instanceId ?? inst.sessionId);
+      if (sessionId && sessionRegistry?.wasInstanceTerminated?.(sessionId)) return true;
+      const rawStatus = readText2(state2?.status ?? inst.status).toLowerCase();
+      const drainStatus = typeof inst.getDrainStatus === "function" ? readText2(inst.getDrainStatus()).toLowerCase() : "";
+      if (TERMINAL_STATUSES2.has(rawStatus) || TERMINAL_STATUSES2.has(drainStatus)) return true;
+      const adapter = inst.adapter ?? (typeof inst.getAdapter === "function" ? inst.getAdapter() : void 0);
+      if (inst.adapterAlive === false || typeof adapter?.isAlive === "function" && adapter.isAlive() === false) {
+        return true;
+      }
+      const rawAdapterStatus = readText2(
+        inst.rawAdapterStatus ?? adapter?.getStatus?.({ allowParse: false })?.status
+      ).toLowerCase();
+      if (TERMINAL_RAW_ADAPTER_STATUSES.has(rawAdapterStatus)) {
+        return true;
+      }
+      const stateRuntime = state2?.runtime ?? inst.runtime;
+      if (hasSessionHostRuntimeEvidence(stateRuntime) && !isLiveSessionHostRuntimeMetadata(stateRuntime)) {
+        return true;
+      }
+      const adapterRuntime = typeof adapter?.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : void 0;
+      if (hasSessionHostRuntimeEvidence(adapterRuntime) && !isLiveSessionHostRuntimeMetadata(adapterRuntime)) {
+        return true;
+      }
+      return false;
+    }
+    function pickCoordinator(views) {
+      const liveViews = views.filter((v) => !isConfirmedTerminalCoordinator(v));
+      if (liveViews.length === 0) return null;
+      const rank = (v) => (v.managedByAssistant ? 2 : 0) + (v.idle ? 1 : 0);
+      return [...liveViews].sort((a, b) => rank(b) - rank(a) || (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
+    }
+    function withMeshLock(meshId, fn) {
+      const prior = meshLocks.get(meshId) ?? Promise.resolve();
+      const next = prior.then(fn, fn);
+      const settled = next.catch(() => void 0);
+      meshLocks.set(meshId, settled);
+      void settled.then(() => {
+        if (meshLocks.get(meshId) === settled) meshLocks.delete(meshId);
+      });
+      return next;
+    }
+    function ensureCoordinator(meshId, ports) {
+      return withMeshLock(meshId, async () => {
+        const live = pickCoordinator(ports.coordinators(meshId));
+        if (live) return { ok: true, sessionId: live.sessionId, launched: false, managedByAssistant: live.managedByAssistant };
+        const launched = await ports.launch({
+          meshId,
+          extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT,
+          managedByAssistant: true
+        });
+        const sessionId = typeof launched?.sessionId === "string" ? launched.sessionId : "";
+        if (!launched?.success || !sessionId) {
+          const code = typeof launched?.code === "string" && launched.code ? launched.code : "coordinator_launch_failed";
+          const error = typeof launched?.error === "string" && launched.error ? launched.error : code;
+          const detail = {};
+          for (const [k, v] of Object.entries(launched ?? {})) {
+            if (k !== "success" && k !== "code" && k !== "error") detail[k] = v;
+          }
+          return { ok: false, code, error, detail };
+        }
+        try {
+          await ports.hide(sessionId);
+        } catch {
+        }
+        return { ok: true, sessionId, launched: true, managedByAssistant: true };
+      });
+    }
+    var import_session_host_core10;
+    var ASSISTANT_COORDINATOR_EXTRA_PROMPT;
+    var TERMINAL_STATUSES2;
+    var TERMINAL_RAW_ADAPTER_STATUSES;
+    var TERMINAL_RUNTIME_LIFECYCLES;
+    var meshLocks;
+    var init_coordinator_lifecycle = __esm2({
+      "src/assistant/coordinator-lifecycle.ts"() {
+        "use strict";
+        import_session_host_core10 = require_dist();
+        ASSISTANT_COORDINATOR_EXTRA_PROMPT = "";
+        TERMINAL_STATUSES2 = /* @__PURE__ */ new Set(["exited", "stopped", "terminated"]);
+        TERMINAL_RAW_ADAPTER_STATUSES = /* @__PURE__ */ new Set(["exited", "stopped", "terminated", "error"]);
+        TERMINAL_RUNTIME_LIFECYCLES = /* @__PURE__ */ new Set(["exited", "stopped", "terminated", "failed"]);
+        meshLocks = /* @__PURE__ */ new Map();
+      }
+    });
     function str7(v) {
       return typeof v === "string" ? v.trim() : "";
     }
@@ -107563,7 +107672,7 @@ ${asText(streams.stderr)}
       await preloadAssistantProjectReaders();
       return createDefaultProjectPorts(ctx);
     }
-    function readText2(v) {
+    function readText3(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function cliInstances(ctx) {
@@ -107580,20 +107689,64 @@ ${asText(streams.stderr)}
         isHostedHere: (mesh) => svc.isMeshHostedHere ? svc.isMeshHostedHere(mesh) : lazy.hostedMeshes(ctx.components(), [mesh]).length > 0,
         aliases: () => lazy.assistantAliases(),
         coordinators: (meshId) => {
+          const components = ctx.components();
           const started = new Map(lazy.listCoordinatorsForMesh(meshId).map((e) => [e.sessionId, e.startedAt]));
           const settingsOf = /* @__PURE__ */ new Map();
+          const terminalIds = /* @__PURE__ */ new Set();
           for (const inst of cliInstances(ctx)) {
             const state2 = inst.getState?.();
-            const id4 = readText2(state2?.instanceId);
-            if (id4 && state2?.settings && typeof state2.settings === "object") settingsOf.set(id4, state2.settings);
+            const id4 = readText3(state2?.instanceId);
+            if (!id4) continue;
+            if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) {
+              terminalIds.add(id4);
+              continue;
+            }
+            if (state2?.settings && typeof state2.settings === "object") settingsOf.set(id4, state2.settings);
           }
-          return lazy.listLocalCoordinatorSessions(ctx.components(), meshId).map((v) => ({
+          return lazy.listLocalCoordinatorSessions(components, meshId).filter((v) => !terminalIds.has(v.sessionId)).map((v) => ({
             sessionId: v.sessionId,
             idle: v.idle,
             modalParked: v.modalParked,
             managedByAssistant: settingsOf.get(v.sessionId)?.managedByAssistant === true,
             ...started.has(v.sessionId) ? { startedAt: started.get(v.sessionId) } : {}
           }));
+        },
+        isCoordinatorLive: async (sessionId) => {
+          const id4 = readText3(sessionId);
+          if (!id4) return false;
+          let components;
+          try {
+            components = ctx.components();
+          } catch {
+            return true;
+          }
+          if (!components) return true;
+          if (components.sessionRegistry?.wasInstanceTerminated?.(id4)) return false;
+          const byCat = typeof components.instanceManager?.getByCategory === "function" ? components.instanceManager.getByCategory("cli") : [];
+          const allInstances = Array.isArray(byCat) ? byCat : [];
+          const inst = components.instanceManager?.getInstance?.(id4) ?? allInstances.find((i) => readText3(i?.getState?.()?.instanceId) === id4);
+          if (inst) {
+            if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) return false;
+            const state2 = inst.getState?.();
+            const adapter = inst.adapter ?? (typeof inst.getAdapter === "function" ? inst.getAdapter() : void 0);
+            const runtimeMeta = (typeof adapter?.getRuntimeMetadata === "function" ? adapter.getRuntimeMetadata() : void 0) ?? state2?.runtime;
+            if (runtimeMeta && typeof runtimeMeta === "object" && !isLiveSessionHostRuntimeMetadata(runtimeMeta)) {
+              return false;
+            }
+          }
+          const listSessions5 = components.router?.deps?.sessionHostControl?.listSessions ?? components.sessionHost?.control?.listSessions;
+          if (typeof listSessions5 === "function") {
+            try {
+              const records = await listSessions5();
+              if (Array.isArray(records)) {
+                const record6 = records.find((r) => readText3(r?.sessionId) === id4);
+                if (!record6 || !isLiveSessionHostRuntimeMetadata(record6)) return false;
+              }
+            } catch {
+              return false;
+            }
+          }
+          return true;
         },
         lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
         queueCounts: (meshId) => {
@@ -107616,8 +107769,8 @@ ${asText(streams.stderr)}
           for (const inst of cliInstances(ctx)) {
             const state2 = inst.getState?.();
             const settings2 = state2?.settings ?? {};
-            if (readText2(settings2.meshCoordinatorFor) !== meshId && readText2(settings2.meshNodeFor) !== meshId) continue;
-            if (APPROVAL_STATUSES.has(readText2(state2?.status).toLowerCase())) n++;
+            if (readText3(settings2.meshCoordinatorFor) !== meshId && readText3(settings2.meshNodeFor) !== meshId) continue;
+            if (APPROVAL_STATUSES.has(readText3(state2?.status).toLowerCase())) n++;
           }
           return n;
         },
@@ -107635,7 +107788,7 @@ ${asText(streams.stderr)}
           lazy.assistantRegistry().updateFollowedRemoteProject(key4, patch);
         },
         markFollowedRemoteRevoked: (key4, reason) => {
-          const code = readText2(reason) || "host_revoked";
+          const code = readText3(reason) || "host_revoked";
           lazy.assistantRegistry().updateFollowedRemoteProject(key4, {
             state: "revoked",
             revokedAt: Date.now(),
@@ -107727,6 +107880,7 @@ ${asText(streams.stderr)}
         "use strict";
         init_node_facts();
         init_dist();
+        init_coordinator_lifecycle();
         init_assistant_services();
         init_assistant_remote_host();
         init_member_meshes();
@@ -108847,7 +109001,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (/^test-repo$/i.test(id4) || /^scratch\//i.test(id4) || /^local:/i.test(id4)) return true;
       return /^(?:\/private)?\/tmp\//.test(id4) || /^\/var\/folders\//.test(id4) || /^[A-Za-z]:[\\/].*[\\/](?:Temp|tmp)[\\/]/i.test(id4);
     }
-    function readText3(v) {
+    function readText4(v) {
       return typeof v === "string" ? v.trim() : "";
     }
     function shortId2(id4) {
@@ -108855,9 +109009,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function meshHostLabel(mesh, selfDaemonId) {
       const host = resolveMeshHostStatus(mesh, { localDaemonId: selfDaemonId });
-      const hostId = readText3(host.hostDaemonId);
-      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText3(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
-      return readText3(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
+      const hostId = readText4(host.hostDaemonId);
+      const node = (mesh.nodes ?? []).find((n) => hostId && daemonIdsEquivalent4(readText4(n.daemonId), hostId) || !!host.hostNodeId && n.id === host.hostNodeId);
+      return readText4(node?.machineNickname) || (hostId ? shortId2(canonicalDaemonId2(hostId) ?? hostId) : "unknown host");
     }
     function coordinatorState(views) {
       if (views.length === 0) return "none";
@@ -108876,23 +109030,23 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       };
       for (const mesh of meshes) {
         for (const node of mesh.nodes ?? []) {
-          const raw = readText3(node.daemonId);
+          const raw = readText4(node.daemonId);
           const { key: key4, self } = keyOf(raw);
           if (!key4) continue;
           const f = facts.get(key4) ?? { daemonId: raw || null, nick: "", os: "", build: "", self };
-          f.nick ||= readText3(node.machineNickname);
-          f.os ||= readText3(node.reportedPlatform);
-          f.build ||= readText3(node.reportedDaemonBuildVersion);
+          f.nick ||= readText4(node.machineNickname);
+          f.os ||= readText4(node.reportedPlatform);
+          f.build ||= readText4(node.reportedDaemonBuildVersion);
           facts.set(key4, f);
         }
       }
       for (const host of remoteHosts) {
-        const raw = readText3(host.daemonId);
+        const raw = readText4(host.daemonId);
         if (!raw) continue;
         const { key: key4, self } = keyOf(raw);
         if (!key4 || self) continue;
         const f = facts.get(key4) ?? { daemonId: raw, nick: "", os: "", build: "", self: false };
-        const label2 = readText3(host.label);
+        const label2 = readText4(host.label);
         if (!f.nick && label2 && label2 !== "unknown host") f.nick = label2;
         facts.set(key4, f);
       }
@@ -108911,7 +109065,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     function firstText(sources, pick) {
       for (const x of sources) {
         for (const v of pick(x)) {
-          const t = readText3(v);
+          const t = readText4(v);
           if (t) return t;
         }
       }
@@ -108922,9 +109076,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (nick) return nick;
       for (const x of sources) {
         const machine = rec2(x?.machine);
-        const ids = new Set([readText3(machine?.daemonId), readText3(machine?.machineId), readText3(x?.daemonId), readText3(x?.machineId)].filter(Boolean));
+        const ids = new Set([readText4(machine?.daemonId), readText4(machine?.machineId), readText4(x?.daemonId), readText4(x?.machineId)].filter(Boolean));
         for (const v of [machine?.displayName, machine?.machineName, x?.machineName]) {
-          const t = readText3(v);
+          const t = readText4(v);
           if (t && !ids.has(t)) return t;
         }
       }
@@ -108934,7 +109088,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       for (const list2 of [x?.capabilities, x?.capabilityTags]) {
         if (!Array.isArray(list2)) continue;
         for (const tag of list2) {
-          const m = /^os=(.+)$/.exec(readText3(tag));
+          const m = /^os=(.+)$/.exec(readText4(tag));
           if (m && m[1].trim()) return m[1].trim();
         }
       }
@@ -108950,11 +109104,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const nodes = statusNodes.length > 0 ? statusNodes : memberNodes;
       const memberById = /* @__PURE__ */ new Map();
       for (const m of memberNodes) {
-        const id4 = readText3(m?.id) || readText3(m?.nodeId);
+        const id4 = readText4(m?.id) || readText4(m?.nodeId);
         if (id4 && !memberById.has(id4)) memberById.set(id4, m);
       }
       const machines = nodes.map((n) => {
-        const id4 = readText3(n?.id) || readText3(n?.nodeId);
+        const id4 = readText4(n?.id) || readText4(n?.nodeId);
         const local = rec2(routes[id4])?.route === "local";
         const sources = [n, memberById.get(id4)].filter(Boolean);
         return {
@@ -108962,16 +109116,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           label: nodeMachineLabel(sources) || null,
           os: nodePlatform(sources) || null,
           build: firstText(sources, (x) => [x?.reportedDaemonBuildVersion, x?.daemonBuildVersion, rec2(rec2(x?.nodeFacts)?.daemonBuild)?.version]) || null,
-          online: local || readText3(n?.machineStatus) === "online",
-          ...readText3(n?.worktreeBranch) ? { branch: readText3(n.worktreeBranch) } : {}
+          online: local || readText4(n?.machineStatus) === "online",
+          ...readText4(n?.worktreeBranch) ? { branch: readText4(n.worktreeBranch) } : {}
         };
       });
       const missionList = Array.isArray(rec2(rec2(view.missions)?.list)?.missions) ? rec2(rec2(view.missions).list).missions : [];
-      const activeMissions = missionList.filter((m) => readText3(m?.status) === "active" || readText3(m?.status) === "paused").map((m) => ({ id: readText3(m?.id), title: readText3(m?.title), status: readText3(m?.status) }));
+      const activeMissions = missionList.filter((m) => readText4(m?.status) === "active" || readText4(m?.status) === "paused").map((m) => ({ id: readText4(m?.id), title: readText4(m?.title), status: readText4(m?.status) }));
       const now = extras.now ?? Date.now();
-      const staleMissions = missionList.filter((m) => readText3(m?.status) === "active").map((m) => {
-        const last = Date.parse(readText3(rec2(m?.tasks)?.lastActivityAt) || readText3(m?.updatedAt) || readText3(m?.createdAt));
-        return { id: readText3(m?.id), title: readText3(m?.title), last };
+      const staleMissions = missionList.filter((m) => readText4(m?.status) === "active").map((m) => {
+        const last = Date.parse(readText4(rec2(m?.tasks)?.lastActivityAt) || readText4(m?.updatedAt) || readText4(m?.createdAt));
+        return { id: readText4(m?.id), title: readText4(m?.title), last };
       }).filter((m) => Number.isFinite(m.last) && now - m.last > STALE_MISSION_AFTER_MS).sort((a, b) => a.last - b.last).map((m) => ({ id: m.id, title: m.title, idleDays: Math.floor((now - m.last) / 864e5) }));
       const activeWork = rec2(rec2(view.activeWork)?.activeWork);
       const heldTasks = (Array.isArray(activeWork?.activeWork) ? activeWork.activeWork : []).filter((task) => task.status === "pending" && task.hold);
@@ -108999,26 +109153,26 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function routingSlot(v) {
       const r = rec2(v);
-      const providerType = readText3(r?.providerType);
+      const providerType = readText4(r?.providerType);
       if (!providerType) return null;
-      const model = readText3(r?.model);
+      const model = readText4(r?.model);
       return { providerType, ...model ? { model } : {} };
     }
     function axisOf(v) {
-      const t = readText3(v);
+      const t = readText4(v);
       return t === "weekly" || t === "session" ? t : void 0;
     }
     function quotaRow(v) {
       const r = rec2(v);
-      const providerType = readText3(r?.providerType);
+      const providerType = readText4(r?.providerType);
       if (!providerType) return null;
       const bonus = rec2(r?.bonus) ?? {};
       const gate = rec2(r?.gate) ?? {};
       const ranking = rec2(r?.ranking);
-      const snapshotStatus = readText3(bonus.snapshotStatus);
-      const failureKind = readText3(bonus.failureKind);
-      const zeroReason = readText3(bonus.zeroReason);
-      const gateReason = readText3(gate.reason);
+      const snapshotStatus = readText4(bonus.snapshotStatus);
+      const failureKind = readText4(bonus.failureKind);
+      const zeroReason = readText4(bonus.zeroReason);
+      const gateReason = readText4(gate.reason);
       const remainingPercent2 = routingNum(ranking?.remainingPercent);
       const axis2 = axisOf(ranking?.axis);
       return {
@@ -109026,7 +109180,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...snapshotStatus ? { snapshotStatus } : {},
         ...failureKind ? { failureKind } : {},
         ...zeroReason ? { zeroReason } : {},
-        gateOutcome: readText3(gate.outcome) || "unknown",
+        gateOutcome: readText4(gate.outcome) || "unknown",
         ...gateReason ? { gateReason } : {},
         bonusValue: routingNum(bonus.value) ?? 0,
         ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
@@ -109035,16 +109189,16 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function routingNodeRow(v, labelOf) {
       const r = rec2(v);
-      const nodeId = readText3(r?.nodeId);
+      const nodeId = readText4(r?.nodeId);
       if (!nodeId) return null;
       const stages = rec2(r?.stages) ?? {};
       const floor = rec2(stages.difficultyFloor) ?? {};
       const quotaStage = rec2(stages.quota) ?? {};
       const winner = rec2(r?.predictedWinner);
-      const winnerProvider = readText3(winner?.providerType);
-      const winnerModel = readText3(winner?.model);
-      const reason = readText3(r?.reason);
-      const displaced = readText3(quotaStage.displacedFitnessWinner);
+      const winnerProvider = readText4(winner?.providerType);
+      const winnerModel = readText4(winner?.model);
+      const reason = readText4(r?.reason);
+      const displaced = readText4(quotaStage.displacedFitnessWinner);
       return {
         nodeId,
         machineName: labelOf(nodeId),
@@ -109053,7 +109207,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         admitted: (Array.isArray(floor.admittedSlots) ? floor.admittedSlots : []).map(routingSlot).filter((s2) => !!s2),
         excluded: (Array.isArray(floor.excludedSlots) ? floor.excludedSlots : []).map((e) => {
           const s2 = routingSlot(e);
-          const er = readText3(rec2(e)?.reason);
+          const er = readText4(rec2(e)?.reason);
           return s2 && er ? { ...s2, reason: er } : null;
         }).filter((e) => !!e),
         quota: (Array.isArray(r?.quotaDiagnostics) ? r.quotaDiagnostics : []).map(quotaRow).filter((q) => !!q),
@@ -109065,11 +109219,11 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       const p = rec2(preview) ?? {};
       const labelOf = (nodeId) => machineLabels.get(nodeId) ?? null;
       const winner = rec2(p.predictedWinner);
-      const winnerNode = readText3(winner?.nodeId);
-      const winnerProvider = readText3(winner?.providerType);
-      const winnerModel = readText3(winner?.model);
+      const winnerNode = readText4(winner?.nodeId);
+      const winnerProvider = readText4(winner?.providerType);
+      const winnerModel = readText4(winner?.model);
       return {
-        strategy: readText3(p.schedulingStrategy) || "unknown",
+        strategy: readText4(p.schedulingStrategy) || "unknown",
         difficulty,
         predictedWinner: winnerNode && winnerProvider ? { nodeId: winnerNode, providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         perNode: (Array.isArray(p.nodes) ? p.nodes : []).map((n) => routingNodeRow(n, labelOf)).filter((n) => !!n)
@@ -109081,43 +109235,43 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function sessionRows(states, opts = {}) {
       const now = opts.now ?? Date.now();
-      const want = readText3(opts.meshId);
+      const want = readText4(opts.meshId);
       const out = [];
       for (const raw of states) {
         const state2 = rec2(raw);
         if (!state2) continue;
-        const sessionId = readText3(state2.instanceId);
+        const sessionId = readText4(state2.instanceId);
         if (!sessionId) continue;
         const settings2 = rec2(state2.settings) ?? {};
         const launch = rec2(state2.launch);
-        const meshId = readText3(settings2.meshNodeFor) || readText3(settings2.meshCoordinatorFor);
+        const meshId = readText4(settings2.meshNodeFor) || readText4(settings2.meshCoordinatorFor);
         if (want && meshId && meshId !== want) continue;
         const launchedAt = typeof launch?.launchedAt === "number" && Number.isFinite(launch.launchedAt) ? launch.launchedAt : null;
         out.push({
           sessionId,
-          provider: readText3(state2.type) || readText3(settings2.providerType),
-          status: readText3(state2.status),
+          provider: readText4(state2.type) || readText4(settings2.providerType),
+          status: readText4(state2.status),
           meshId: meshId || null,
-          nodeId: readText3(settings2.meshNodeId) || null,
+          nodeId: readText4(settings2.meshNodeId) || null,
           ageMs: launchedAt === null ? null : Math.max(0, now - launchedAt),
           messageCount: countVisibleBubbles(state2.activeChat),
-          workspace: readText3(state2.workspace) || null,
-          isCoordinator: !!readText3(settings2.meshCoordinatorFor),
+          workspace: readText4(state2.workspace) || null,
+          isCoordinator: !!readText4(settings2.meshCoordinatorFor),
           assistant: settings2.assistant === true,
-          spawnedForTaskId: readText3(settings2.autoLaunchedForQueueTaskId) || null,
-          launchedBy: readText3(launch?.launchedBy) || null
+          spawnedForTaskId: readText4(settings2.autoLaunchedForQueueTaskId) || null,
+          launchedBy: readText4(launch?.launchedBy) || null
         });
       }
       return out.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
     }
     function followerRoutingQuotaRow(v) {
       const r = rec2(v);
-      const providerType = readText3(r?.providerType);
+      const providerType = readText4(r?.providerType);
       if (!providerType) return null;
-      const snapshotStatus = readText3(r?.snapshotStatus);
-      const failureKind = readText3(r?.failureKind);
-      const zeroReason = readText3(r?.zeroReason);
-      const gateReason = readText3(r?.gateReason);
+      const snapshotStatus = readText4(r?.snapshotStatus);
+      const failureKind = readText4(r?.failureKind);
+      const zeroReason = readText4(r?.zeroReason);
+      const gateReason = readText4(r?.gateReason);
       const remainingPercent2 = routingNum(r?.remainingPercent);
       const axis2 = axisOf(r?.axis);
       return {
@@ -109125,7 +109279,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...snapshotStatus ? { snapshotStatus } : {},
         ...failureKind ? { failureKind } : {},
         ...zeroReason ? { zeroReason } : {},
-        gateOutcome: readText3(r?.gateOutcome) || "unknown",
+        gateOutcome: readText4(r?.gateOutcome) || "unknown",
         ...gateReason ? { gateReason } : {},
         bonusValue: routingNum(r?.bonusValue) ?? 0,
         ...remainingPercent2 !== void 0 ? { remainingPercent: remainingPercent2 } : {},
@@ -109134,22 +109288,22 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     function followerRoutingNodeRow(v) {
       const r = rec2(v);
-      const nodeId = readText3(r?.nodeId);
+      const nodeId = readText4(r?.nodeId);
       if (!nodeId) return null;
       const winner = rec2(r?.predictedWinner);
-      const winnerProvider = readText3(winner?.providerType);
-      const winnerModel = readText3(winner?.model);
-      const reason = readText3(r?.reason);
-      const displaced = readText3(r?.displacedFitnessWinner);
+      const winnerProvider = readText4(winner?.providerType);
+      const winnerModel = readText4(winner?.model);
+      const reason = readText4(r?.reason);
+      const displaced = readText4(r?.displacedFitnessWinner);
       return {
         nodeId,
-        machineName: readText3(r?.machineName) || null,
+        machineName: readText4(r?.machineName) || null,
         predictedWinner: winnerProvider ? { providerType: winnerProvider, ...winnerModel ? { model: winnerModel } : {}, fitnessScore: routingNum(winner?.fitnessScore) ?? 0 } : null,
         ...reason ? { reason } : {},
         admitted: (Array.isArray(r?.admitted) ? r.admitted : []).map(routingSlot).filter((s2) => !!s2),
         excluded: (Array.isArray(r?.excluded) ? r.excluded : []).map((e) => {
           const s2 = routingSlot(e);
-          const er = readText3(rec2(e)?.reason);
+          const er = readText4(rec2(e)?.reason);
           return s2 && er ? { providerType: s2.providerType, ...s2.model ? { model: s2.model } : {}, reason: er } : null;
         }).filter((e) => !!e),
         quota: (Array.isArray(r?.quota) ? r.quota : []).map(followerRoutingQuotaRow).filter((q) => !!q),
@@ -109158,17 +109312,17 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       };
     }
     function followerStatusView(raw, mesh) {
-      const rawRepo = readText3(mesh.repoRemoteUrl) || readText3(mesh.repoIdentity) || readText3(raw.repo);
+      const rawRepo = readText4(mesh.repoRemoteUrl) || readText4(mesh.repoIdentity) || readText4(raw.repo);
       const machines = (Array.isArray(raw.machines) ? raw.machines : []).map((item) => {
         const m = rec2(item);
-        const node = readText3(m?.node);
+        const node = readText4(m?.node);
         if (!node) return null;
-        const branch = readText3(m?.branch);
+        const branch = readText4(m?.branch);
         return {
           node,
-          label: readText3(m?.label) || null,
-          os: readText3(m?.os) || null,
-          build: readText3(m?.build) || null,
+          label: readText4(m?.label) || null,
+          os: readText4(m?.os) || null,
+          build: readText4(m?.build) || null,
           online: m?.online === true,
           ...branch ? { branch } : {}
         };
@@ -109181,12 +109335,12 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       } : null;
       const heldTasks = (Array.isArray(raw.heldTasks) ? raw.heldTasks : []).map((item) => {
         const t = rec2(item);
-        const taskId = readText3(t?.taskId);
+        const taskId = readText4(t?.taskId);
         if (!taskId) return null;
         return {
           taskId,
-          title: readText3(t?.title),
-          hold: readText3(t?.hold) || null
+          title: readText4(t?.title),
+          hold: readText4(t?.hold) || null
         };
       }).filter((t) => t !== null);
       const heldReasonsRaw = rec2(raw.heldReasons);
@@ -109198,62 +109352,62 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       }
       const activeMissions = (Array.isArray(raw.activeMissions) ? raw.activeMissions : []).map((item) => {
         const m = rec2(item);
-        const id4 = readText3(m?.id);
+        const id4 = readText4(m?.id);
         if (!id4) return null;
         return {
           id: id4,
-          title: readText3(m?.title),
-          status: readText3(m?.status)
+          title: readText4(m?.title),
+          status: readText4(m?.status)
         };
       }).filter((m) => m !== null);
       const staleMissions = (Array.isArray(raw.staleMissions) ? raw.staleMissions : []).map((item) => {
         const m = rec2(item);
-        const id4 = readText3(m?.id);
+        const id4 = readText4(m?.id);
         if (!id4) return null;
         return {
           id: id4,
-          title: readText3(m?.title),
+          title: readText4(m?.title),
           idleDays: typeof m?.idleDays === "number" && Number.isFinite(m.idleDays) ? m.idleDays : 0
         };
       }).filter((m) => m !== null);
       const sessions = (Array.isArray(raw.sessions) ? raw.sessions : []).map((item) => {
         const s2 = rec2(item);
         if (!s2) return null;
-        const sessionId = readText3(s2.sessionId);
-        const sessionMeshId = readText3(s2.meshId);
+        const sessionId = readText4(s2.sessionId);
+        const sessionMeshId = readText4(s2.meshId);
         if (!sessionId || sessionMeshId !== mesh.id || s2.assistant === true) return null;
         return {
           sessionId,
-          provider: readText3(s2.provider),
-          status: readText3(s2.status),
+          provider: readText4(s2.provider),
+          status: readText4(s2.status),
           meshId: mesh.id,
-          nodeId: readText3(s2.nodeId) || null,
+          nodeId: readText4(s2.nodeId) || null,
           ageMs: typeof s2.ageMs === "number" && Number.isFinite(s2.ageMs) ? s2.ageMs : null,
           messageCount: typeof s2.messageCount === "number" && Number.isFinite(s2.messageCount) ? s2.messageCount : 0,
           workspace: null,
           isCoordinator: s2.isCoordinator === true,
           assistant: false,
-          spawnedForTaskId: readText3(s2.spawnedForTaskId) || null,
-          launchedBy: readText3(s2.launchedBy) || null
+          spawnedForTaskId: readText4(s2.spawnedForTaskId) || null,
+          launchedBy: readText4(s2.launchedBy) || null
         };
       }).filter((s2) => s2 !== null);
       const rawRouting = rec2(raw.routing);
       const routing = rawRouting ? {
-        strategy: readText3(rawRouting.strategy) || "unknown",
-        difficulty: readText3(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
-        predictedWinner: rec2(rawRouting.predictedWinner) && readText3(rec2(rawRouting.predictedWinner).nodeId) && readText3(rec2(rawRouting.predictedWinner).providerType) ? {
-          nodeId: readText3(rec2(rawRouting.predictedWinner).nodeId),
-          providerType: readText3(rec2(rawRouting.predictedWinner).providerType),
-          ...readText3(rec2(rawRouting.predictedWinner).model) ? { model: readText3(rec2(rawRouting.predictedWinner).model) } : {},
+        strategy: readText4(rawRouting.strategy) || "unknown",
+        difficulty: readText4(rawRouting.difficulty) || PROJECT_STATUS_ROUTING_DIFFICULTY,
+        predictedWinner: rec2(rawRouting.predictedWinner) && readText4(rec2(rawRouting.predictedWinner).nodeId) && readText4(rec2(rawRouting.predictedWinner).providerType) ? {
+          nodeId: readText4(rec2(rawRouting.predictedWinner).nodeId),
+          providerType: readText4(rec2(rawRouting.predictedWinner).providerType),
+          ...readText4(rec2(rawRouting.predictedWinner).model) ? { model: readText4(rec2(rawRouting.predictedWinner).model) } : {},
           fitnessScore: routingNum(rec2(rawRouting.predictedWinner).fitnessScore) ?? 0
         } : null,
         perNode: (Array.isArray(rawRouting.perNode) ? rawRouting.perNode : []).map(followerRoutingNodeRow).filter((n) => !!n),
-        ...readText3(rawRouting.error) ? { error: readText3(rawRouting.error) } : {}
+        ...readText4(rawRouting.error) ? { error: readText4(rawRouting.error) } : {}
       } : null;
-      const coord = readText3(raw.coordinator);
+      const coord = readText4(raw.coordinator);
       const coordinator = coord === "idle" || coord === "working" || coord === "waiting" ? coord : "none";
       return {
-        name: readText3(raw.name) || readText3(mesh.name),
+        name: readText4(raw.name) || readText4(mesh.name),
         repo: sanitizeRemoteRepoIdentity(rawRepo),
         machines,
         machinesOnline: machines.filter((m) => m.online).length,
@@ -109270,20 +109424,20 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         ...staleMissions.length > 0 ? { staleMissions } : {},
         ...routing ? { routing } : {},
         sessions,
-        ...readText3(raw.statusError) ? { statusError: "mesh_status_view failed" } : {}
+        ...readText4(raw.statusError) ? { statusError: "mesh_status_view failed" } : {}
       };
     }
     function messageText(m) {
       const c = m?.content;
       if (typeof c === "string") return c;
-      if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : readText3(p?.text) ? p.text : "").join("");
+      if (Array.isArray(c)) return c.map((p) => typeof p === "string" ? p : readText4(p?.text) ? p.text : "").join("");
       return typeof m?.text === "string" ? m.text : "";
     }
     function isVisible(m) {
       if (!m || typeof m !== "object") return false;
-      const role = readText3(m.role).toLowerCase();
+      const role = readText4(m.role).toLowerCase();
       if (role !== "user" && role !== "assistant" && role !== "agent") return false;
-      const kind = readText3(m.kind ?? m.type ?? m.messageKind).toLowerCase();
+      const kind = readText4(m.kind ?? m.type ?? m.messageKind).toLowerCase();
       if (["tool", "tool_call", "tool_result", "terminal", "internal", "control", "debug", "status"].includes(kind)) return false;
       const meta = m.meta ?? m.metadata;
       return !(meta?.internal === true || meta?.debug === true || meta?.control === true || meta?.userVisible === false);
@@ -109295,14 +109449,14 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         const text4 = messageText(m);
         const truncated = text4.length > maxChars;
         const time = m.timestamp ?? m.receivedAt ?? m.createdAt;
-        const at = typeof time === "number" ? new Date(time).toISOString() : readText3(time) || void 0;
+        const at = typeof time === "number" ? new Date(time).toISOString() : readText4(time) || void 0;
         return {
           messageId: reportMessageId(m),
           totalChars: text4.length,
           complete: !truncated && m.bubbleState !== "streaming" && m.isStreaming !== true && m.meta?.streaming !== true,
           nextOffset: truncated ? maxChars : null,
-          role: readText3(m.role).toLowerCase() === "user" ? "user" : "assistant",
-          kind: readText3(m.kind ?? m.messageKind) || "standard",
+          role: readText4(m.role).toLowerCase() === "user" ? "user" : "assistant",
+          kind: readText4(m.kind ?? m.messageKind) || "standard",
           text: truncated ? `${text4.slice(0, maxChars)}\u2026` : text4,
           ...truncated ? { truncated: true } : {},
           ...at ? { at } : {}
@@ -111209,56 +111363,6 @@ ${b.text}`).join("\n\n");
         freshness = (at, now) => at === null ? "unknown" : at > now || now - at > INVENTORY_STALE_MS ? "stale" : "current";
       }
     });
-    function pickCoordinator(views) {
-      if (views.length === 0) return null;
-      const rank = (v) => (v.managedByAssistant ? 2 : 0) + (v.idle ? 1 : 0);
-      return [...views].sort((a, b) => rank(b) - rank(a) || (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
-    }
-    function withMeshLock(meshId, fn) {
-      const prior = meshLocks.get(meshId) ?? Promise.resolve();
-      const next = prior.then(fn, fn);
-      const settled = next.catch(() => void 0);
-      meshLocks.set(meshId, settled);
-      void settled.then(() => {
-        if (meshLocks.get(meshId) === settled) meshLocks.delete(meshId);
-      });
-      return next;
-    }
-    function ensureCoordinator(meshId, ports) {
-      return withMeshLock(meshId, async () => {
-        const live = pickCoordinator(ports.coordinators(meshId));
-        if (live) return { ok: true, sessionId: live.sessionId, launched: false, managedByAssistant: live.managedByAssistant };
-        const launched = await ports.launch({
-          meshId,
-          extraSystemPrompt: ASSISTANT_COORDINATOR_EXTRA_PROMPT,
-          managedByAssistant: true
-        });
-        const sessionId = typeof launched?.sessionId === "string" ? launched.sessionId : "";
-        if (!launched?.success || !sessionId) {
-          const code = typeof launched?.code === "string" && launched.code ? launched.code : "coordinator_launch_failed";
-          const error = typeof launched?.error === "string" && launched.error ? launched.error : code;
-          const detail = {};
-          for (const [k, v] of Object.entries(launched ?? {})) {
-            if (k !== "success" && k !== "code" && k !== "error") detail[k] = v;
-          }
-          return { ok: false, code, error, detail };
-        }
-        try {
-          await ports.hide(sessionId);
-        } catch {
-        }
-        return { ok: true, sessionId, launched: true, managedByAssistant: true };
-      });
-    }
-    var ASSISTANT_COORDINATOR_EXTRA_PROMPT;
-    var meshLocks;
-    var init_coordinator_lifecycle = __esm2({
-      "src/assistant/coordinator-lifecycle.ts"() {
-        "use strict";
-        ASSISTANT_COORDINATOR_EXTRA_PROMPT = "";
-        meshLocks = /* @__PURE__ */ new Map();
-      }
-    });
     var assistant_relay_format_exports = {};
     __export2(assistant_relay_format_exports, {
       RELAY_BACKLOG_FOLD_AFTER_MS: () => RELAY_BACKLOG_FOLD_AFTER_MS,
@@ -111306,7 +111410,7 @@ ${b.text}`).join("\n\n");
       return s2 || "project";
     }
     function defangRelayBody(text4) {
-      return text4.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[\s*\/\s*UNTRUSTED_RELAY_NOTICE\s*\]/gi, "[/UNTRUSTED_RELAY_NOTICE (quoted)]").replace(/\[(\s*)(ADHDev|UNTRUSTED_RELAY_NOTICE|Assistant\s+relay)\b/gi, "[$1quoted $2").replace(/^\[(\s*)project\b/gim, "[$1quoted project");
+      return text4.replace(/\[\s*\/\s*relay\s*\]/gi, "[/relay (quoted)]").replace(/\[\s*\/\s*UNTRUSTED_RELAY_NOTICE\s*\]/gi, "[/UNTRUSTED_RELAY_NOTICE (quoted)]").replace(/\[(\s*)(ADHDev|UNTRUSTED_RELAY_NOTICE|Assistant\s+relay)\b/gi, "[$1quoted $2").replace(/\[(\s*)(project)\b/gi, "[$1quoted $2").replace(/\[(\s*)(System)\b/gi, "[$1quoted $2");
     }
     function compactRelayBody(text4, max = RELAY_BODY_MAX_CHARS, preserveWhitespace = false) {
       const normalized = String(text4 ?? "").replace(/\r\n?/g, "\n");
@@ -114265,15 +114369,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         const store2 = MeshRuntimeStore.getInstance();
         const rebuilt = /* @__PURE__ */ new Map();
         const pushWakeTimestamp = (meshId, sender, atMs) => {
-          if (!meshId || !sender || !Number.isFinite(atMs) || atMs <= cutoff) return;
+          if (!meshId || !sender || !Number.isFinite(atMs)) return;
+          const clamped = Math.min(atMs, now);
+          if (clamped <= cutoff) return;
           const key4 = followerWakeKey(meshId, sender);
           let list2 = rebuilt.get(key4);
           if (!list2) {
             list2 = [];
             rebuilt.set(key4, list2);
           }
-          if (!list2.includes(atMs)) {
-            list2.push(atMs);
+          if (!list2.includes(clamped)) {
+            list2.push(clamped);
           }
         };
         try {
@@ -114310,9 +114416,18 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         } catch {
         }
         for (const [key4, storeTimes] of rebuilt) {
-          const existing = (followerWakeTimestamps.get(key4) ?? []).filter((t) => t > cutoff);
-          for (const t of storeTimes) {
-            if (!existing.includes(t)) existing.push(t);
+          const existing = [];
+          for (const rawT of followerWakeTimestamps.get(key4) ?? []) {
+            const t = Math.min(rawT, now);
+            if (t > cutoff && !existing.includes(t)) {
+              existing.push(t);
+            }
+          }
+          for (const rawT of storeTimes) {
+            const t = Math.min(rawT, now);
+            if (t > cutoff && !existing.includes(t)) {
+              existing.push(t);
+            }
           }
           existing.sort((a, b) => a - b);
           if (existing.length > 0) {
@@ -114336,7 +114451,14 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       ensureFollowerWakeRateLimitHydrated(now);
       const key4 = followerWakeKey(meshId, sender);
       const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
-      const recent = (followerWakeTimestamps.get(key4) ?? []).filter((t) => t > cutoff).sort((a, b) => a - b);
+      const recent = [];
+      for (const rawT of followerWakeTimestamps.get(key4) ?? []) {
+        const t = Math.min(rawT, now);
+        if (t > cutoff && !recent.includes(t)) {
+          recent.push(t);
+        }
+      }
+      recent.sort((a, b) => a - b);
       if (recent.length > 0) {
         followerWakeTimestamps.set(key4, recent);
       } else {
@@ -114365,11 +114487,17 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const trimmedMeshId = meshId.trim();
       const key4 = followerWakeKey(trimmedMeshId, canonSender);
       const cutoff = now - FOLLOWER_WAKE_WINDOW_MS;
-      const recent = (followerWakeTimestamps.get(key4) ?? []).filter((t) => t > cutoff);
+      const recent = [];
+      for (const rawT of followerWakeTimestamps.get(key4) ?? []) {
+        const t = Math.min(rawT, now);
+        if (t > cutoff && !recent.includes(t)) {
+          recent.push(t);
+        }
+      }
       if (!recent.includes(now)) {
         recent.push(now);
-        recent.sort((a, b) => a - b);
       }
+      recent.sort((a, b) => a - b);
       followerWakeTimestamps.set(key4, recent);
       try {
         const db = MeshRuntimeStore.getInstance().db;
@@ -114558,7 +114686,30 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         return true;
       }
       const err = str12(sent.error).toLowerCase();
-      return err.includes("cli instance not found") || err.includes("no live session") || err.includes("session has ended") || err.includes("session not found") || err.includes("instance not found") || err.includes("not running") || err.includes("process exited");
+      return err.includes("cli instance not found") || err.includes("no live session") || err.includes("session has ended") || err.includes("session not found") || err.includes("instance not found") || err.includes("not running") || err.includes("process exited") || err.includes("runtime not found for session") || err.includes("unknown session");
+    }
+    async function isCoordinatorRuntimeLiveForFollower(ports, target) {
+      if (isConfirmedTerminalCoordinator(target)) return false;
+      const targetRec = target;
+      if (targetRec.runtime !== void 0 && !isLiveSessionHostRuntimeMetadata(targetRec.runtime)) {
+        return false;
+      }
+      const liveStates = ports.liveSessionStates?.() ?? [];
+      for (const s2 of liveStates) {
+        if (!s2 || typeof s2 !== "object") continue;
+        const sRec = s2;
+        const sid = typeof sRec.instanceId === "string" ? sRec.instanceId : typeof sRec.sessionId === "string" ? sRec.sessionId : "";
+        if (sid !== target.sessionId) continue;
+        if (isConfirmedTerminalCoordinator(s2)) return false;
+        if (sRec.runtime !== void 0 && !isLiveSessionHostRuntimeMetadata(sRec.runtime)) {
+          return false;
+        }
+      }
+      if (typeof ports.isCoordinatorLive === "function") {
+        const live = await ports.isCoordinatorLive(target.sessionId);
+        if (!live) return false;
+      }
+      return true;
     }
     function verifyRemoteFollowerBindingForWake(ports, mesh, meshId, sender, args) {
       if (!mesh || !ports.isHostedHere(mesh)) {
@@ -114682,30 +114833,43 @@ ${defangRelayBody(text4)}`;
       const clientId = str12(args.clientId);
       if (!clientId || clientId.length > 200) return fail5("invalid_args", "clientId required (at most 200 characters)");
       const expectedCoordinatorSessionId = str12(args.expectedCoordinatorSessionId);
-      return withMeshRemoteAccessMutex(meshId, async () => {
+      const bodyHash = (0, import_crypto36.createHash)("sha256").update(text4, "utf8").digest("hex");
+      const canonSender = canonicalDaemonId2(sender) ?? sender;
+      const deadSessionIds = /* @__PURE__ */ new Set();
+      const admitted2 = await withMeshRemoteAccessMutex(meshId, async () => {
         const freshMesh = ports.listMeshes().find((m) => m.id === meshId);
         const verified = verifyFollowerAcl(ports, freshMesh, meshId, sender, "send", args);
-        if (!verified.ok) return verified.result;
-        let { acl } = verified;
+        if (!verified.ok) return { ok: false, result: verified.result };
+        const acl2 = verified.acl;
         const now = Date.now();
-        const canonSender = canonicalDaemonId2(sender) ?? sender;
-        const bodyHash = (0, import_crypto36.createHash)("sha256").update(text4, "utf8").digest("hex");
-        const idempotencyKey = `${acl.hostDaemonId}::${meshId}::${acl.accountSlot}::${acl.activeDaemonId}::b${acl.bindingRevision}::g${acl.grantRevision}::${clientId}`;
-        const prior = readFollowerSendReceipt(idempotencyKey, now);
-        const deadSessionIds = /* @__PURE__ */ new Set();
-        let live = pickCoordinator(ports.coordinators(meshId));
-        let launched = false;
-        if (prior) {
-          if (prior.bodyHash !== bodyHash) {
-            return fail5("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
-          }
-          if (!live || prior.coordinatorSessionId !== live.sessionId) {
-            return fail5(
-              "coordinator_replaced",
-              "The coordinator session changed since the original send; refusing to replay to a replacement session.",
-              { originalCoordinatorSessionId: prior.coordinatorSessionId, currentCoordinatorSessionId: live?.sessionId ?? null }
-            );
-          }
+        const idempotencyKey2 = `${acl2.hostDaemonId}::${meshId}::${acl2.accountSlot}::${acl2.activeDaemonId}::b${acl2.bindingRevision}::g${acl2.grantRevision}::${clientId}`;
+        const prior2 = readFollowerSendReceipt(idempotencyKey2, now);
+        const live2 = pickCoordinator(ports.coordinators(meshId));
+        return { ok: true, acl: acl2, now, idempotencyKey: idempotencyKey2, prior: prior2, live: live2 };
+      });
+      if (!admitted2.ok) return admitted2.result;
+      let { acl, live } = admitted2;
+      const { idempotencyKey, prior } = admitted2;
+      let launched = false;
+      if (live) {
+        const runtimeLive = await isCoordinatorRuntimeLiveForFollower(ports, live);
+        if (!runtimeLive) {
+          deadSessionIds.add(live.sessionId);
+          live = null;
+        }
+      }
+      if (prior) {
+        if (prior.bodyHash !== bodyHash) {
+          return fail5("idempotency_body_mismatch", "Retry with the same clientId carried a different message body.");
+        }
+        if (!live || prior.coordinatorSessionId !== live.sessionId) {
+          return fail5(
+            "coordinator_replaced",
+            "The coordinator session changed since the original send; refusing to replay to a replacement session.",
+            { originalCoordinatorSessionId: prior.coordinatorSessionId, currentCoordinatorSessionId: live?.sessionId ?? null }
+          );
+        }
+        return withMeshRemoteAccessMutex(meshId, async () => {
           const latestMesh = ports.listMeshes().find((m) => m.id === meshId);
           const recheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args);
           if (!recheck.ok) return recheck.result;
@@ -114720,26 +114884,35 @@ ${defangRelayBody(text4)}`;
               cursor: prior.cursor
             }
           };
-        }
-        const auditCtx = () => ({ acl, meshId, clientId, senderDaemonId: canonSender, now });
-        const wakeFollowerCoordinator = async () => {
+        });
+      }
+      const auditCtx = (atMs = Date.now()) => ({
+        acl,
+        meshId,
+        clientId,
+        senderDaemonId: canonSender,
+        now: atMs
+      });
+      const wakeFollowerCoordinator = async () => {
+        const preLaunch = await withMeshRemoteAccessMutex(meshId, async () => {
+          const preNow = Date.now();
           const diskOrPortMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
           const wakeCheck = verifyFollowerAcl(ports, diskOrPortMesh, meshId, sender, "send", args);
           if (!wakeCheck.ok) {
             const reason = str12(wakeCheck.result.code) || "remote_access_denied";
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
+            recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
             return { ok: false, result: wakeCheck.result };
           }
           acl = wakeCheck.acl;
           const bindingCheck = verifyRemoteFollowerBindingForWake(ports, diskOrPortMesh, meshId, sender, args);
           if (!bindingCheck.ok) {
             const reason = str12(bindingCheck.result.code) || "remote_access_denied";
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
+            recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason });
             return { ok: false, result: bindingCheck.result };
           }
           acl = bindingCheck.acl;
           if (acl.allowCoordinatorLaunch === false) {
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
+            recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_disabled" });
             return {
               ok: false,
               result: fail5(
@@ -114749,9 +114922,9 @@ ${defangRelayBody(text4)}`;
               )
             };
           }
-          const rateCheck = checkFollowerWakeRateLimit(meshId, sender, now);
+          const rateCheck = checkFollowerWakeRateLimit(meshId, sender, preNow);
           if (!rateCheck.ok) {
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
+            recordFollowerWakeAuditEvent(auditCtx(preNow), { sessionId: "none", verdict: "rejected", rule: "pre_launch_denied", status: "denied", stage: "pre_launch", reason: "wake_rate_limited" });
             return {
               ok: false,
               result: fail5(
@@ -114761,44 +114934,51 @@ ${defangRelayBody(text4)}`;
               )
             };
           }
-          const coord = await ensureCoordinator(meshId, {
-            coordinators: (id4) => ports.coordinators(id4).filter((c) => !deadSessionIds.has(c.sessionId)),
-            launch: (input) => ports.execute("launch_mesh_coordinator", {
-              meshId: input.meshId,
-              extraSystemPrompt: "",
-              managedByAssistant: true
-            }),
-            hide: coordinatorPorts(ports).hide
-          });
-          recordFollowerWake(meshId, sender, now);
+          return { ok: true };
+        });
+        if (!preLaunch.ok) return preLaunch;
+        const coord = await ensureCoordinator(meshId, {
+          coordinators: (id4) => ports.coordinators(id4).filter((c) => !deadSessionIds.has(c.sessionId)),
+          launch: (input) => ports.execute("launch_mesh_coordinator", {
+            meshId: input.meshId,
+            extraSystemPrompt: "",
+            managedByAssistant: true
+          }),
+          hide: coordinatorPorts(ports).hide
+        });
+        const postLaunchNow = Date.now();
+        return withMeshRemoteAccessMutex(meshId, async () => {
+          if (!coord.ok || coord.launched) {
+            recordFollowerWake(meshId, sender, postLaunchNow);
+          }
           if (!coord.ok) {
             const failReason = str12(coord.code) || "launch_failed";
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
+            recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: "none", verdict: "rejected", rule: "launch_failed", status: "failed", stage: "launch", reason: failReason });
             return {
               ok: false,
               result: fail5("launch_failed", coord.error || "Failed to launch coordinator on host.", { ...coord.detail, launchCode: coord.code })
             };
           }
           if (coord.launched) {
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: coord.sessionId, verdict: "recorded", rule: "cold_wake_launched", status: "launched", stage: "launch" });
+            recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: "recorded", rule: "cold_wake_launched", status: "launched", stage: "launch" });
           }
           const postWakeMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
           const postWakeCheck = verifyFollowerAcl(ports, postWakeMesh, meshId, sender, "send", args);
           if (!postWakeCheck.ok) {
             const reason = str12(postWakeCheck.result.code) || "remote_access_denied";
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
+            recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             return { ok: false, result: postWakeCheck.result };
           }
           acl = postWakeCheck.acl;
           const postBindingCheck = verifyRemoteFollowerBindingForWake(ports, postWakeMesh, meshId, sender, args);
           if (!postBindingCheck.ok) {
             const reason = str12(postBindingCheck.result.code) || "remote_access_denied";
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
+            recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             return { ok: false, result: postBindingCheck.result };
           }
           acl = postBindingCheck.acl;
           if (acl.allowCoordinatorLaunch === false) {
-            recordFollowerWakeAuditEvent(auditCtx(), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
+            recordFollowerWakeAuditEvent(auditCtx(postLaunchNow), { sessionId: coord.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
             return {
               ok: false,
               result: fail5("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
@@ -114810,88 +114990,113 @@ ${defangRelayBody(text4)}`;
             live: { sessionId: coord.sessionId, idle: true, modalParked: false, managedByAssistant: coord.managedByAssistant },
             acl
           };
-        };
-        if (live) {
-          if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
-            return fail5(
-              "coordinator_replaced",
-              "The live coordinator session on the host does not match expectedCoordinatorSessionId.",
-              { expectedCoordinatorSessionId, currentCoordinatorSessionId: live.sessionId }
-            );
-          }
-        } else {
-          const woken = await wakeFollowerCoordinator();
-          if (!woken.ok) return woken.result;
-          live = woken.live;
-          launched = woken.launched;
-          acl = woken.acl;
+        });
+      };
+      if (live) {
+        if (expectedCoordinatorSessionId && live.sessionId !== expectedCoordinatorSessionId) {
+          return fail5(
+            "coordinator_replaced",
+            "The live coordinator session on the host does not match expectedCoordinatorSessionId.",
+            { expectedCoordinatorSessionId, currentCoordinatorSessionId: live.sessionId }
+          );
         }
-        const attemptSendToCoordinator = async (target, isLaunched) => {
-          const cursor2 = ports.coordinatorTurns(target.sessionId, 1).committed[0]?.attemptId ?? null;
-          const messageId2 = `assistant_follower:${acl.hostDaemonId}:${meshId}:${acl.accountSlot}:${acl.activeDaemonId}:b${acl.bindingRevision}:g${acl.grantRevision}:${target.sessionId}:${bodyHash.slice(0, 16)}:${clientId}`;
+      } else {
+        const woken = await wakeFollowerCoordinator();
+        if (!woken.ok) return woken.result;
+        live = woken.live;
+        launched = woken.launched;
+        acl = woken.acl;
+      }
+      const attemptSendToCoordinator = async (target, isLaunched) => {
+        const preSend = await withMeshRemoteAccessMutex(meshId, async () => {
+          const checkNow = Date.now();
           const latestMesh = readMeshConfigFromDisk()?.meshes.find((m) => m.id === meshId) ?? ports.listMeshes().find((m) => m.id === meshId);
           const recheck = verifyFollowerAcl(ports, latestMesh, meshId, sender, "send", args);
           if (!recheck.ok) {
             if (isLaunched) {
               const reason = str12(recheck.result.code) || "remote_access_denied";
-              recordFollowerWakeAuditEvent(auditCtx(), { sessionId: target.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
+              recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
             }
             return { ok: false, result: recheck.result };
           }
           acl = recheck.acl;
-          const deliveredText = isLaunched ? frameFollowerWakeRelayText(text4) : text4;
-          const sent2 = await ports.execute("send_chat", {
-            targetSessionId: target.sessionId,
-            text: deliveredText,
-            origin: "assistant",
-            policy: { mode: "queue" },
-            messageId: messageId2
-          });
-          return { ok: true, sent: sent2, cursor: cursor2, messageId: messageId2 };
-        };
-        let sendAttempt = await attemptSendToCoordinator(live, launched);
+          if (isLaunched) {
+            const bindingCheck = verifyRemoteFollowerBindingForWake(ports, latestMesh, meshId, sender, args);
+            if (!bindingCheck.ok) {
+              const reason = str12(bindingCheck.result.code) || "remote_access_denied";
+              recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason });
+              return { ok: false, result: bindingCheck.result };
+            }
+            acl = bindingCheck.acl;
+            if (acl.allowCoordinatorLaunch === false) {
+              recordFollowerWakeAuditEvent(auditCtx(checkNow), { sessionId: target.sessionId, verdict: "rejected", rule: "post_launch_denied", status: "denied", stage: "post_launch", reason: "wake_disabled" });
+              return {
+                ok: false,
+                result: fail5("wake_disabled", "Remote follower coordinator wake was disabled on the host during coordinator launch.")
+              };
+            }
+          }
+          const cursor3 = ports.coordinatorTurns(target.sessionId, 1).committed[0]?.attemptId ?? null;
+          const messageId3 = `assistant_follower:${acl.hostDaemonId}:${meshId}:${acl.accountSlot}:${acl.activeDaemonId}:b${acl.bindingRevision}:g${acl.grantRevision}:${target.sessionId}:${bodyHash.slice(0, 16)}:${clientId}`;
+          return { ok: true, cursor: cursor3, messageId: messageId3 };
+        });
+        if (!preSend.ok) return preSend;
+        const { cursor: cursor2, messageId: messageId2 } = preSend;
+        const deliveredText = isLaunched ? frameFollowerWakeRelayText(text4) : text4;
+        const sent2 = await ports.execute("send_chat", {
+          targetSessionId: target.sessionId,
+          text: deliveredText,
+          origin: "assistant",
+          policy: { mode: "queue" },
+          messageId: messageId2
+        });
+        return { ok: true, sent: sent2, cursor: cursor2, messageId: messageId2 };
+      };
+      let sendAttempt = await attemptSendToCoordinator(live, launched);
+      if (!sendAttempt.ok) return sendAttempt.result;
+      if (!sendAttempt.sent.success && !launched && isMissingOrDeadCoordinatorRuntime(sendAttempt.sent)) {
+        deadSessionIds.add(live.sessionId);
+        const woken = await wakeFollowerCoordinator();
+        if (!woken.ok) return woken.result;
+        live = woken.live;
+        launched = woken.launched;
+        acl = woken.acl;
+        sendAttempt = await attemptSendToCoordinator(live, launched);
         if (!sendAttempt.ok) return sendAttempt.result;
-        if (!sendAttempt.sent.success && !launched && isMissingOrDeadCoordinatorRuntime(sendAttempt.sent)) {
-          deadSessionIds.add(live.sessionId);
-          const woken = await wakeFollowerCoordinator();
-          if (!woken.ok) return woken.result;
-          live = woken.live;
-          launched = woken.launched;
-          acl = woken.acl;
-          sendAttempt = await attemptSendToCoordinator(live, launched);
-          if (!sendAttempt.ok) return sendAttempt.result;
-        }
-        const { sent, cursor, messageId } = sendAttempt;
-        if (!sent.success) {
-          return fail5(
-            str12(sent.reason) || str12(sent.code) || "send_failed",
-            str12(sent.error) || "send_failed",
-            { launched, coordinatorSessionId: live.sessionId, messageId }
-          );
-        }
-        const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
+      }
+      const { sent, cursor, messageId } = sendAttempt;
+      if (!sent.success) {
+        return fail5(
+          str12(sent.reason) || str12(sent.code) || "send_failed",
+          str12(sent.error) || "send_failed",
+          { launched, coordinatorSessionId: live.sessionId, messageId }
+        );
+      }
+      const status = sent.deduplicated === true ? "duplicate" : sent.queued === true ? "queued" : "accepted";
+      const receiptAt = Date.now();
+      await withMeshRemoteAccessMutex(meshId, () => {
         recordFollowerSendReceipt(idempotencyKey, {
           coordinatorSessionId: live.sessionId,
           bodyHash,
           messageId,
           cursor,
-          recordedAt: now,
+          recordedAt: receiptAt,
           ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: str12(sent.deliveryNote) } : {}
-        }, now);
-        return {
-          success: true,
-          result: {
-            status,
-            ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {},
-            launched,
-            coordinatorSessionId: live.sessionId,
-            messageId,
-            cursor,
-            bindingRevision: acl.bindingRevision,
-            grantRevision: acl.grantRevision
-          }
-        };
+        }, receiptAt);
       });
+      return {
+        success: true,
+        result: {
+          status,
+          ...sent.receiptUnverified ? { receiptUnverified: true, deliveryNote: sent.deliveryNote } : {},
+          launched,
+          coordinatorSessionId: live.sessionId,
+          messageId,
+          cursor,
+          bindingRevision: acl.bindingRevision,
+          grantRevision: acl.grantRevision
+        }
+      };
     }
     async function run2(ports, op, meshId, args, isFollower, sender, ctx) {
       const mesh = ports.listMeshes().find((m) => m.id === meshId);
@@ -118794,7 +118999,7 @@ ${tail}` : ""
       requireNodePty = loader2 ?? (() => require("node-pty"));
     }
     var os37;
-    var import_session_host_core10;
+    var import_session_host_core11;
     var cachedPty;
     var requireNodePty;
     var NodePtyRuntimeTransport;
@@ -118804,7 +119009,7 @@ ${tail}` : ""
         "use strict";
         init_cooperative_gate();
         os37 = __toESM2(require("os"));
-        import_session_host_core10 = require_dist();
+        import_session_host_core11 = require_dist();
         init_logger();
         init_spawn_env();
         init_resolve_executable();
@@ -118852,7 +119057,7 @@ ${tail}` : ""
               }
             }
             assertMaintenanceAdmission();
-            const handle = withMaintenanceEffect(() => (0, import_session_host_core10.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
+            const handle = withMaintenanceEffect(() => (0, import_session_host_core11.spawnCliChild)(() => pty.spawn(resolveWin32Executable(command), args, {
               name: "xterm-256color",
               cols: options.cols,
               rows: options.rows,
@@ -163948,7 +164153,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var os422 = __toESM2(require("os"));
     var path95 = __toESM2(require("path"));
     init_terminal_screen();
-    var import_session_host_core11 = require_dist();
+    var import_session_host_core12 = require_dist();
     init_logger();
     var MAX_PTY_EVENTS = 300;
     var EVENT_CONTENT_CAP = 240;
@@ -163969,8 +164174,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       constructor(opts, handlers) {
         this.opts = opts;
         this.handlers = handlers;
-        this.cols = opts.cols ?? import_session_host_core11.DEFAULT_SESSION_HOST_COLS;
-        this.rows = opts.rows ?? import_session_host_core11.DEFAULT_SESSION_HOST_ROWS;
+        this.cols = opts.cols ?? import_session_host_core12.DEFAULT_SESSION_HOST_COLS;
+        this.rows = opts.rows ?? import_session_host_core12.DEFAULT_SESSION_HOST_ROWS;
         this.screenDebounceMs = opts.screenChangeDebounceMs ?? 80;
         this.tickIntervalMs = opts.tickIntervalMs ?? 0;
         if (opts.transportFactory) this.factory = opts.transportFactory;
@@ -164106,6 +164311,10 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       updateMeta(meta, replace = false) {
         if (!this.pty || typeof this.pty.updateMeta !== "function") return;
         this.pty.updateMeta(meta, replace);
+      }
+      getMetadata() {
+        if (!this.pty || typeof this.pty.getMetadata !== "function") return null;
+        return this.pty.getMetadata() ?? null;
       }
       /** Debug-only: most-recent PTY input/output/resize/cursor events, oldest
        *  first. Pure observation — never consulted by the FSM. */
@@ -165422,7 +165631,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
       state2.lastDismissedSnapshot = screenSnapshot;
     }
     init_logger();
-    var import_session_host_core12 = require_dist();
+    var import_session_host_core13 = require_dist();
     var fs101 = __toESM2(require("fs"));
     var path94 = __toESM2(require("path"));
     var fs97 = __toESM2(require("fs"));
@@ -165839,8 +166048,8 @@ trust_level = "trusted"
       }
     }
     function buildSpecAdapterOpts(spec, opts) {
-      const cols = opts.cols ?? import_session_host_core12.DEFAULT_SESSION_HOST_COLS;
-      const rows = opts.rows ?? import_session_host_core12.DEFAULT_SESSION_HOST_ROWS;
+      const cols = opts.cols ?? import_session_host_core13.DEFAULT_SESSION_HOST_COLS;
+      const rows = opts.rows ?? import_session_host_core13.DEFAULT_SESSION_HOST_ROWS;
       const specSpawnArgs = stripRemovedSpawnArgs(
         spec.spawn_args ?? [],
         opts.removeSpawnArgs ?? []
@@ -166582,6 +166791,9 @@ trust_level = "trusted"
        *  update, not user input. */
       updateMeta(meta, replace = false) {
         this.adapter.updateMeta(meta, replace);
+      }
+      getRuntimeMetadata() {
+        return this.adapter.getMetadata();
       }
       /**
        * TX-FSM Stage 0 (shadow): receive the daemon-normalized signal
@@ -170492,10 +170704,12 @@ ${text4}` : text4;
         };
       }
       getRuntimeMetadata() {
+        const transportMeta = this.driver?.getRuntimeMetadata?.() ?? null;
         return {
-          runtimeId: this.spec.id,
-          runtimeKey: this.spec.id,
-          displayName: this.spec.name,
+          ...transportMeta ?? {},
+          runtimeId: transportMeta?.runtimeId || this.spec.id,
+          runtimeKey: transportMeta?.runtimeKey || this.spec.id,
+          displayName: transportMeta?.displayName || this.spec.name,
           spawnedAtMs: this.spawnedAtMs,
           spawnedEnv: this.spawnedEnv,
           ...this.providerSessionId ? { providerSessionId: this.providerSessionId } : {}
@@ -179657,6 +179871,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       setTranscriptTopicRelease(release2) {
         this.transcriptTopicRelease = release2;
       }
+      // Bounded terminal evidence for stale provider projections after PTY exit.
+      terminatedInstances = /* @__PURE__ */ new Set();
+      wasInstanceTerminated(instanceKey) {
+        return this.terminatedInstances.has(instanceKey);
+      }
       bySessionId = /* @__PURE__ */ new Map();
       byManagerKey = /* @__PURE__ */ new Map();
       byInstanceKey = /* @__PURE__ */ new Map();
@@ -179668,6 +179887,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
        * `terminated`.
        */
       register(target, origin = inferLegacyOrigin(target), observationOnly = false) {
+        if (target.instanceKey) this.terminatedInstances.delete(target.instanceKey);
         const prior = this.bySessionId.get(target.sessionId);
         const priorProviderSessionId = prior?.providerSessionId;
         this.detach(target.sessionId, !observationOnly);
@@ -179822,6 +180042,12 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         const target = this.detach(sessionId);
         if (!target) return false;
         if (target.maintenanceObservation) return true;
+        if (target.instanceKey && !this.byInstanceKey.has(target.instanceKey)) {
+          this.terminatedInstances.add(target.instanceKey);
+          if (this.terminatedInstances.size > 4096) {
+            this.terminatedInstances.delete(this.terminatedInstances.values().next().value);
+          }
+        }
         this.bus?.emit({
           kind: "terminated",
           sessionId,
@@ -183108,7 +183334,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     };
     init_pty_transport();
     init_cooperative_gate();
-    var import_session_host_core13 = require_dist();
+    var import_session_host_core14 = require_dist();
     init_logger();
     init_resolve_executable();
     function shouldResumeAttachedSession(record6) {
@@ -183121,7 +183347,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var SessionHostRuntimeTransport = class {
       constructor(options) {
         this.options = options;
-        this.client = new import_session_host_core13.SessionHostClient({
+        this.client = new import_session_host_core14.SessionHostClient({
           endpoint: options.endpoint,
           appName: options.appName
         });
@@ -183650,7 +183876,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       return typeof error === "string" && /^(?:Runtime not found for session|Unknown session):/.test(error);
     }
     var import_crypto39 = require("crypto");
-    var import_session_host_core14 = require_dist();
+    var import_session_host_core15 = require_dist();
     var BASE_KEY_SEQUENCES = {
       enter: "\r",
       escape: "\x1B",
@@ -183748,7 +183974,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (!sessionId) throw new Error("sessionId is required");
         const mode = options.mode || "read";
         const clientId = options.clientId || `raw-terminal-${process.pid}-${(0, import_crypto39.randomUUID)().slice(0, 8)}`;
-        const client = options.client || new import_session_host_core14.SessionHostClient({ endpoint: options.endpoint });
+        const client = options.client || new import_session_host_core15.SessionHostClient({ endpoint: options.endpoint });
         await client.connect();
         const attachResponse = await client.request({
           type: "attach_session",
@@ -183842,7 +184068,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         await attachment.close();
       }
     }
-    var import_session_host_core15 = require_dist();
+    var import_session_host_core16 = require_dist();
     init_runtime_defaults();
     var STARTUP_TIMEOUT_MS = DEFAULT_SESSION_HOST_READY_TIMEOUT_MS;
     var STARTUP_POLL_MS = 200;
@@ -183880,7 +184106,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       }
     }
     async function canConnect(endpoint, requiredRequestTypes = []) {
-      const client = new import_session_host_core15.SessionHostClient({ endpoint });
+      const client = new import_session_host_core16.SessionHostClient({ endpoint });
       try {
         await client.connect();
         await assertRequiredRequestTypes(client, requiredRequestTypes);
@@ -183902,7 +184128,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       throw new Error(`Session host did not become ready within ${timeoutMs}ms`);
     }
     async function ensureSessionHostReady(options) {
-      const endpoint = options.endpoint || (0, import_session_host_core15.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
+      const endpoint = options.endpoint || (0, import_session_host_core16.getDefaultSessionHostEndpoint)(options.appName || resolveSessionHostAppName());
       const requiredRequestTypes = options.requiredRequestTypes || [];
       if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
       if (options.isExistingHostAlive?.()) {
@@ -183915,14 +184141,14 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (await canConnect(endpoint, requiredRequestTypes)) return endpoint;
         }
       }
-      import_session_host_core15.SessionHostClient.disconnectClients?.(endpoint);
+      import_session_host_core16.SessionHostClient.disconnectClients?.(endpoint);
       await options.beforeSpawnHost?.(endpoint);
       options.spawnHost();
       await waitForReady(endpoint, options.timeoutMs, requiredRequestTypes);
       return endpoint;
     }
     async function listHostedCliRuntimes(endpoint) {
-      const client = new import_session_host_core15.SessionHostClient({ endpoint });
+      const client = new import_session_host_core16.SessionHostClient({ endpoint });
       try {
         const response = await client.request({
           type: "list_sessions",
@@ -183967,7 +184193,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
     var fs113 = __toESM2(require("fs"));
     var os46 = __toESM2(require("os"));
     var path105 = __toESM2(require("path"));
-    var import_session_host_core16 = require_dist();
+    var import_session_host_core17 = require_dist();
     init_logger();
     init_disk_space_preflight();
     init_runtime_defaults();
@@ -183977,9 +184203,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const isManagedPid = options.isManagedPid ?? (() => true);
       let unverifiedStopPid = null;
       const instance = () => getProcessInstanceContext();
-      const getEndpoint = () => (0, import_session_host_core16.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
+      const getEndpoint = () => (0, import_session_host_core17.getDefaultSessionHostEndpoint)(appName, { ipcKey: instance().ipcKey });
       function buildEnv(baseEnv) {
-        const env2 = (0, import_session_host_core16.sanitizeSpawnEnv)(baseEnv);
+        const env2 = (0, import_session_host_core17.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
         return env2;
@@ -184155,7 +184381,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch {
           return;
         }
-        const client = new import_session_host_core16.SessionHostClient({ endpoint: getEndpoint() });
+        const client = new import_session_host_core17.SessionHostClient({ endpoint: getEndpoint() });
         let reported;
         try {
           await client.connect();
@@ -184191,7 +184417,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           const birth = String(hiddenExecFileSync("/bin/ps", ["-o", "lstart=", "-p", String(h.pid)], { encoding: "utf8", timeout: 5e3 })).trim();
           const ownerText = String(hiddenExecFileSync(process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof", ["-t", endpoint.path], { encoding: "utf8", timeout: 5e3 })).trim();
           if (!/^\d+$/.test(ownerText)) throw new Error("maintenance_retained_socket_owner_unknown");
-          const client = new import_session_host_core16.SessionHostClient({ endpoint });
+          const client = new import_session_host_core17.SessionHostClient({ endpoint });
           try {
             await client.connect();
             const reply = await client.request({ type: "get_host_diagnostics", payload: { includeSessions: false } });
@@ -184264,7 +184490,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           return existingPid !== null && existingPid !== process.pid && isPidAlive(existingPid);
         };
         const disconnectEndpointClients = (endpoint) => {
-          import_session_host_core16.SessionHostClient.disconnectClients?.(endpoint);
+          import_session_host_core17.SessionHostClient.disconnectClients?.(endpoint);
         };
         const evictGraceMs = options.evictGraceMs ?? 4e3;
         const canPositivelyEscalateSigkill = (pid) => {
@@ -191984,13 +192210,13 @@ ${notice.notice}${supersededHint}`;
     init_cooperative_gate();
     init_cooperative_gate();
     init_logger();
-    var import_session_host_core17 = require_dist();
+    var import_session_host_core18 = require_dist();
     var SessionHostController = class _SessionHostController {
       constructor(endpoint, onEvent, respawn) {
         this.onEvent = onEvent;
         this.respawn = respawn;
-        this.client = new import_session_host_core17.SessionHostClient({ endpoint });
-        this.plane = (0, import_session_host_core17.createSessionHostControlPlane)({
+        this.client = new import_session_host_core18.SessionHostClient({ endpoint });
+        this.plane = (0, import_session_host_core18.createSessionHostControlPlane)({
           request: (type2, payload) => this.request({ type: type2, payload })
         });
       }

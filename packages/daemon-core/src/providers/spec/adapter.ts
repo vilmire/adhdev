@@ -263,6 +263,11 @@ export class TerminalAdapter {
         this.pty.updateMeta(meta, replace);
     }
 
+    getMetadata(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata | null {
+        if (!this.pty || typeof this.pty.getMetadata !== 'function') return null;
+        return this.pty.getMetadata() ?? null;
+    }
+
     /** Debug-only: most-recent PTY input/output/resize/cursor events, oldest
      *  first. Pure observation — never consulted by the FSM. */
     getEventTimeline(limit = MAX_PTY_EVENTS): SpecPtyEvent[] {
