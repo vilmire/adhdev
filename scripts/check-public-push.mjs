@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Release entry point: the same in-process identity/history guard as Refinery.
-// Standalone public clones require ADHDEV_PRIVATE_ROOT to supply private patterns.
+// External private roots require ADHDEV_PRIVATE_ROOT and an out-of-band
+// ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 pin of their committed pattern blob.
 import { resolve } from 'node:path';
 import { checkPush, loadPublicPushPatternsForRepo, formatViolation } from '../packages/daemon-core/src/git/public-push-guard.mjs';
 

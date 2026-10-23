@@ -1,6 +1,6 @@
 export function loadPublicPushPatternsForRepo(repo: string, privateRoot?: string): Promise<PublicPushPatterns>;
 export interface PublicPushPatterns { ownerNames: string[]; knownHosts: string[]; blockedText: string[] }
-export function loadPublicPushPatterns(repo: string): PublicPushPatterns;
+export function loadPublicPushPatterns(repo: string, options?: { forRepo?: string; expectedDigest?: string }): PublicPushPatterns;
 export function parseRemoteUrl(url: string): { protocol: string; host: string; port: string; path: string } | null;
 export const REQUIRED_NAME: string;
 export const REQUIRED_EMAIL: string;
@@ -19,3 +19,5 @@ export function createDiffTreeParser(scan: (t: string) => Array<{ line: number; 
 export function publicPushPendingCommits(cwd: string, commit: string, remoteRef: string, urls: string[]): Promise<string[]>;
 
 export function publicPushRepoKey(cwd: string, remoteName?: string): Promise<string>;
+
+export function publicPushRepoKeys(cwd: string, remoteName?: string): Promise<Array<{ url: string; repoKey: string }>>;

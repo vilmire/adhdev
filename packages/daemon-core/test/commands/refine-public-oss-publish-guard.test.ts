@@ -1,4 +1,4 @@
-import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -72,6 +72,7 @@ function fixture(opts: { originSubpath: string; id: typeof GOOD; content: string
   git(base, ['add', 'sub'], GOOD)
   git(base, ['commit', '-q', '-m', 'gitlink -> local only'], GOOD)
   const mergedTree = git(base, ['rev-parse', 'HEAD^{tree}'], GOOD)
+  bindPushDestination(sub, origin, opts.originSubpath.endsWith('adhdev-providers') ? 'adhdev-providers' : 'oss')
   const originMain = () => execFileSync('git', ['rev-list', 'main'], { cwd: origin, encoding: 'utf-8' }).split('\n').filter(Boolean)
   return { base, sub, origin, mergedTree, localOnly, originMain }
 }
@@ -137,6 +138,7 @@ describe('round 3 destination proof and push URL regressions', () => {
       git(f.base, ['clone', '-q', '--bare', f.origin, publicOrigin])
       const alias = 'fixture-public:repo'
       if (rewrite === 'url') {
+        git(f.sub, ['config', '--unset-all', 'remote.origin.pushurl'])
         git(f.sub, ['config', '--add', 'remote.origin.url', publicOrigin])
       } else {
         git(f.sub, ['config', '--add', 'remote.origin.pushurl', f.origin])
@@ -153,7 +155,7 @@ describe('round 3 destination proof and push URL regressions', () => {
       const before = f.originMain()
       const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
       expect(gate.status).toBe('failed')
-      expect(gate.unreachable[0].error).toContain('public-oss push guard BLOCKED')
+      expect(gate.unreachable[0].error).toMatch(/public-oss push guard BLOCKED|unknown push destination/)
       expect(f.originMain()).toEqual(before)
       expect(git(publicOrigin, ['rev-parse', 'main'])).toBe(before[0])
     })
@@ -273,7 +275,7 @@ describe('review approval regressions', () => {
     const mirror = join(f.base, '..', 'mirror.git')
     git(f.sub, ['clone', '-q', '--bare', f.sub, mirror])
     git(f.sub, ['remote', 'set-url', 'origin', mirror])
-    git(f.sub, ['config', 'remote.origin.pushurl', f.origin])
+    bindPushDestination(f.sub, f.origin, 'oss')
     git(f.sub, ['fetch', 'origin', 'main:refs/remotes/origin/main'])
     const tip = store(f.sub, rawCommit(f.sub, [f.localOnly], 'second'))
     const request = await evaluatePublicPublishApproval(f.sub, tip, 'main', [tip])
@@ -284,8 +286,9 @@ describe('review approval regressions', () => {
     const mirror = join(f.base, '..', 'mirror.git')
     git(f.sub, ['clone', '-q', '--bare', f.sub, mirror])
     git(f.sub, ['remote', 'set-url', 'origin', mirror])
-    git(f.sub, ['config', '--add', 'remote.origin.pushurl', mirror])
-    git(f.sub, ['config', '--add', 'remote.origin.pushurl', f.origin])
+    bindPushDestination(f.sub, mirror, 'oss')
+    const secondUrl = bindPushDestination(f.sub, f.origin, 'oss', 'second', 'ssh://git@github.com/vilmire/adhdev.git')
+    git(f.sub, ['config', '--add', 'remote.origin.pushurl', secondUrl])
     git(f.sub, ['fetch', 'origin', 'main:refs/remotes/origin/main'])
     const tip = store(f.sub, rawCommit(f.sub, [f.localOnly], 'second'))
     expect((await evaluatePublicPublishApproval(f.sub, tip, 'main', [tip]))?.unapproved).toContain(f.localOnly)
@@ -293,12 +296,13 @@ describe('review approval regressions', () => {
   })
   it('P1-3: an unreadable push destination refuses even a complete approval', async () => {
     const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'clean\n' })
-    git(f.sub, ['config', 'remote.origin.pushurl', join(f.base, 'missing')])
+    bindPushDestination(f.sub, join(f.base, 'missing'), 'oss')
     expect(await evaluatePublicPublishApproval(f.sub, f.localOnly, 'main', [f.localOnly])).toBeDefined()
   })
   it('P1-4: unknown local destinations need approval; providers also runs the identity guard', async () => {
     const unknown = fixture({ originSubpath: 'unknown/repo', id: GOOD, content: 'clean\n' })
     git(unknown.sub, ['config', '--unset', 'remote.origin.adhdev-private'])
+    git(unknown.sub, ['config', '--unset-all', 'remote.origin.pushurl'])
     expect((await runMeshRefineSubmoduleReachabilityGate(unknown.base, unknown.mergedTree, AUTO_PUBLISH_ON)).entries[0].autoPublishAttempted).toBe(false)
     const providers = fixture({ originSubpath: 'vilmire/adhdev-providers', id: BAD, content: 'clean\n' })
     const gate = await runMeshRefineSubmoduleReachabilityGate(providers.base, providers.mergedTree, approved(providers))
@@ -316,16 +320,22 @@ it('P1-5: the shared root publication assertion still runs the identity guard af
 
 it('round4 P2-A: missing private pattern config refuses an approved public publish', async () => {
   const f = fixture({ originSubpath: 'public', id: GOOD, content: 'clean\n' })
-  const previous = process.env.ADHDEV_PRIVATE_ROOT
+  const privateRoot = process.env.ADHDEV_PRIVATE_ROOT!
+  const policy = join(privateRoot, '.adhdev/public-push-patterns.json')
+  const { readFileSync } = await import('node:fs')
+  const saved = readFileSync(policy)
   try {
-    git(f.base, ['remote', 'add', 'origin', 'https://github.com/vilmire/adhdev-cloud.git'])
-    process.env.ADHDEV_PRIVATE_ROOT = f.base
-    rmSync(join(f.base, '.adhdev/public-push-patterns.json'))
+    git(privateRoot, ['rm', '-q', '.adhdev/public-push-patterns.json'], GOOD)
+    git(privateRoot, ['commit', '-qm', 'Remove synthetic policy'], GOOD)
     const request = await evaluatePublicPublishApproval(f.sub, f.localOnly, 'main', [f.localOnly])
     expect(request).toBeDefined()
     expect(request?.commits.some(c => c.guardScan === 'error')).toBe(true)
-  } finally { process.env.ADHDEV_PRIVATE_ROOT = previous }
-
+  } finally {
+    mkdirSync(join(privateRoot, '.adhdev'), { recursive: true })
+    writeFileSync(policy, saved)
+    git(privateRoot, ['add', '.adhdev'], GOOD)
+    git(privateRoot, ['commit', '-qm', 'Restore synthetic policy'], GOOD)
+  }
 })
 
 it('round4 P2-A: configured fleet patterns reach the in-process scanner', async () => {
@@ -349,6 +359,7 @@ it('round4 P2-B: per-repo approvals permit two public repos; a flat array refuse
   git(f.base, ['submodule', 'add', '-q', other.origin, 'second'], GOOD)
   const second = join(f.base, 'second')
   git(second, ['config', 'remote.origin.adhdev-private', 'false'])
+  bindPushDestination(second, other.origin, 'adhdev-providers')
   git(second, ['fetch', other.sub, other.localOnly])
   git(second, ['checkout', '--detach', other.localOnly])
   git(f.base, ['add', 'second'], GOOD)
@@ -357,7 +368,7 @@ it('round4 P2-B: per-repo approvals permit two public repos; a flat array refuse
   const flat = await runMeshRefineSubmoduleReachabilityGate(f.base, tree, { ...AUTO_PUBLISH_ON, approvedPublishShas: [f.localOnly] })
   expect(flat.status).toBe('failed')
   expect(f.originMain()).not.toContain(f.localOnly)
-  const mapped = await runMeshRefineSubmoduleReachabilityGate(f.base, tree, { ...AUTO_PUBLISH_ON, approvedPublishShas: { sub: [f.localOnly], second: [other.localOnly] } })
+  const mapped = await runMeshRefineSubmoduleReachabilityGate(f.base, tree, { ...AUTO_PUBLISH_ON, approvedPublishShas: { oss: [f.localOnly], 'adhdev-providers': [other.localOnly] } })
   expect(mapped.status).toBe('passed')
   expect(f.originMain()).toContain(f.localOnly)
   expect(other.originMain()).toContain(other.localOnly)

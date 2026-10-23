@@ -31034,18 +31034,26 @@ ${renderWorkerProtocolFooter2(input)}`;
         A = "(?![A-Za-z0-9])";
       }
     });
-    function loadPublicPushPatterns(repo) {
+    function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 } = {}) {
       try {
-        const git4 = (args) => (0, import_node_child_process22.execFileSync)("git", ["--no-replace-objects", "-C", repo, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] }).replace(/\n$/, "");
-        const root = git4(["rev-parse", "--show-toplevel"]);
-        const urls = git4(["remote", "get-url", "--push", "--all", "origin"]).split("\n");
-        const configured = git4(["config", "--get-all", "remote.origin.url"]).split("\n");
+        const git4 = (args) => (0, import_node_child_process22.execFileSync)("git", ["--no-replace-objects", "-C", repo, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] });
+        const root = (0, import_node_fs3.realpathSync)(git4(["rev-parse", "--show-toplevel"]).replace(/\n$/, ""));
+        const target = (0, import_node_fs3.realpathSync)(forRepo);
+        const location = (0, import_node_path4.relative)(root, target);
+        const containsTarget = !(0, import_node_path4.isAbsolute)(location) && location !== ".." && !location.startsWith("../") && !location.startsWith("..\\");
+        const urls = git4(["remote", "get-url", "--push", "--all", "origin"]).replace(/\n$/, "").split("\n");
+        const configured = git4(["config", "--get-all", "remote.origin.url"]).replace(/\n$/, "").split("\n");
         if (![...urls, ...configured].every(isKnownPrivateUrl)) throw new Error();
-        const patterns = JSON.parse((0, import_node_fs3.readFileSync)((0, import_node_path4.resolve)(root, ".adhdev/public-push-patterns.json"), "utf8"));
+        const entry = git4(["ls-tree", "HEAD", "--", ".adhdev/public-push-patterns.json"]);
+        if (!/^100(?:644|755) blob [0-9a-f]{40,64}\t\.adhdev\/public-push-patterns\.json\n$/.test(entry)) throw new Error();
+        const blob = git4(["show", "HEAD:.adhdev/public-push-patterns.json"]);
+        if (!containsTarget && !expectedDigest) throw new Error();
+        if (expectedDigest !== void 0 && (!/^[0-9a-f]{64}$/.test(expectedDigest) || (0, import_node_crypto22.createHash)("sha256").update(blob).digest("hex") !== expectedDigest)) throw new Error();
+        const patterns = JSON.parse(blob);
         if (!["ownerNames", "knownHosts", "blockedText"].every((key4) => Array.isArray(patterns[key4]) && patterns[key4].length && patterns[key4].every((v) => typeof v === "string" && v.trim()))) throw new Error();
         return patterns;
       } catch {
-        throw new Error("public push pattern config unavailable or invalid at private root; refusing public publish");
+        throw new Error("public push pattern config unavailable, uncommitted, unpinned or invalid at private root; refusing public publish");
       }
     }
     function parseRemoteDetails(value) {
@@ -31059,7 +31067,7 @@ ${renderWorkerProtocolFooter2(input)}`;
         const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(input)?.[1] || "";
         const decoded = decodeURIComponent(rawPath);
         if (/[\x00-\x20\\~]/.test(decoded)) return null;
-        const privateEligible = !/[?#]/.test(input) && !/%2f|%5c/i.test(rawPath) && !/(?:\.git){2,}(?:\/|$)/i.test(decoded) && !/(?:^|\/)\.git(?:\/|$)/i.test(decoded);
+        const privateEligible = !decoded.split("/").some((part) => part === "." || part === "..") && !/[?#]/.test(input) && !/%2f|%5c/i.test(rawPath) && !/(?:\.git){2,}(?:\/|$)/i.test(decoded) && !/(?:^|\/)\.git(?:\/|$)/i.test(decoded);
         const url = new URL(input);
         if (!["https:", "http:", "ssh:", "git:", "file:"].includes(url.protocol)) return null;
         const parts = [];
@@ -31074,12 +31082,6 @@ ${renderWorkerProtocolFooter2(input)}`;
       } catch {
         return null;
       }
-    }
-    function parseRemoteUrl(value) {
-      const parsed = parseRemoteDetails(value);
-      if (!parsed) return null;
-      const { privateEligible, ...identity2 } = parsed;
-      return identity2;
     }
     function isKnownPrivateUrl(value) {
       const url = parseRemoteDetails(value);
@@ -31140,54 +31142,29 @@ ${renderWorkerProtocolFooter2(input)}`;
       });
     }
     async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT) {
-      if (privateRoot) return loadPublicPushPatterns(privateRoot);
+      if (privateRoot) return loadPublicPushPatterns(privateRoot, { forRepo: cwd });
       let repo = (await runGit2(cwd, ["rev-parse", "--show-toplevel"])).trim();
       const seen2 = /* @__PURE__ */ new Set();
       while (!seen2.has(repo)) {
         seen2.add(repo);
         const parent = (await runGit2(repo, ["rev-parse", "--show-superproject-working-tree"])).trim();
-        if (!parent) return loadPublicPushPatterns(repo);
+        if (!parent) return loadPublicPushPatterns(repo, { forRepo: cwd });
         repo = (0, import_node_path4.resolve)(parent);
       }
       throw new Error("cyclic superproject config lookup; refusing public publish");
     }
-    async function publicPushRepoKey(cwd, remoteName = "origin") {
-      const keys = /* @__PURE__ */ new Set();
+    async function publicPushRepoKeys(cwd, remoteName = "origin") {
       const { urls } = await pushDestinations(cwd, remoteName);
-      const seen2 = /* @__PURE__ */ new Set();
-      const collect = async (repo, values, depth = 0) => {
-        if (depth > 16) throw new Error("public publish repository identity chain too deep");
-        for (const value of values) {
-          const parsed = parseRemoteUrl(value);
-          if (parsed?.host === "github.com" && REPO_KEYS.has(parsed.path)) {
-            keys.add(REPO_KEYS.get(parsed.path));
-            continue;
-          }
-          let local;
-          try {
-            if (value.startsWith("file://")) local = (0, import_node_url.fileURLToPath)(value);
-            else if (!/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(value)) local = (0, import_node_path4.resolve)(repo, value);
-          } catch {
-          }
-          if (!local || seen2.has(local)) continue;
-          seen2.add(local);
-          const origin2 = await tryGit(local, ["remote", "get-url", "--all", "origin"]);
-          if (origin2) await collect(local, origin2.split("\n"), depth + 1);
-        }
-      };
-      const origin = await tryGit(cwd, ["remote", "get-url", "--all", "origin"]);
-      await collect(cwd, [...urls, ...origin ? origin.split("\n") : []]);
-      if (keys.size > 1) throw new Error("public publish repository key mismatch between origin and push destination");
-      if (keys.size) return [...keys][0];
-      const root = (await runGit2(cwd, ["rev-parse", "--show-toplevel"])).trim();
-      const parent = (await runGit2(root, ["rev-parse", "--show-superproject-working-tree"])).trim();
-      if (parent) {
-        const key4 = (0, import_node_path4.relative)(parent, root).split("\\").join("/");
-        if (key4 !== "root") return key4;
-      }
-      throw new Error("public publish repository identity unavailable; refusing root approval fallback");
+      return urls.map((url) => {
+        const parsed = parseRemoteDetails(url);
+        const defaultPort = { "https:": "443", "http:": "80", "ssh:": "22", "git:": "9418" }[parsed?.protocol];
+        const repoKey = parsed?.privateEligible && parsed.host === "github.com" && parsed.port === defaultPort && REPO_KEYS.get(parsed.path);
+        if (!repoKey) throw new Error("publish_approval_required: unknown push destination repository identity; configure a named remote with an exact canonical GitHub push URL");
+        return { url, repoKey };
+      });
     }
     async function pushDestinations(cwd, remoteName = "origin") {
+      if (/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(remoteName)) throw new Error("Raw URL push remotes are not supported for approval; configure a named Git remote and retry");
       const urls = (await runGit2(cwd, ["remote", "get-url", "--push", "--all", remoteName])).replace(/\n$/, "").split("\n");
       const pushurls = await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.pushurl`]).catch(() => null);
       const configured = pushurls || await runGit2(cwd, ["config", "--get-all", `remote.${remoteName}.url`]);
@@ -31616,7 +31593,7 @@ ${BLOCKED_HINT}`);
       return { checked };
     }
     var import_node_child_process22;
-    var import_node_url;
+    var import_node_crypto22;
     var import_node_string_decoder;
     var import_node_os22;
     var import_node_fs3;
@@ -31633,7 +31610,7 @@ ${BLOCKED_HINT}`);
       "src/git/public-push-guard.mjs"() {
         "use strict";
         import_node_child_process22 = require("child_process");
-        import_node_url = require("url");
+        import_node_crypto22 = require("crypto");
         import_node_string_decoder = require("string_decoder");
         import_node_os22 = require("os");
         import_node_fs3 = require("fs");
@@ -31651,7 +31628,7 @@ ${BLOCKED_HINT}`);
             return null;
           }
         };
-        SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?$/;
+        SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?\r?$/;
         BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMAIL}> (author AND committer). Personal paths in ANY pushed commit block the push even if a later commit removes them \u2014 rewrite the unpushed history (git rebase -i / filter-branch) and push again.`;
       }
     });
@@ -32616,7 +32593,7 @@ ${BLOCKED_HINT}`);
       for (const relative20 of staleInputs ?? []) {
         const filePath2 = (0, import_path5.join)(workspace, relative20);
         try {
-          digest4[relative20] = (0, import_node_crypto22.createHash)("sha256").update((0, import_fs5.readFileSync)(filePath2)).digest("hex");
+          digest4[relative20] = (0, import_node_crypto32.createHash)("sha256").update((0, import_fs5.readFileSync)(filePath2)).digest("hex");
         } catch {
           digest4[relative20] = "absent";
         }
@@ -32783,7 +32760,7 @@ ${BLOCKED_HINT}`);
     var import_fs5;
     var import_path5;
     var import_node_child_process3;
-    var import_node_crypto22;
+    var import_node_crypto32;
     var import_node_util2;
     var WORKTREE_BOOTSTRAP_STALE_RUNNING_MS;
     var SUBMODULE_DEFAULT_BRANCH_FALLBACK;
@@ -32800,7 +32777,7 @@ ${BLOCKED_HINT}`);
         import_fs5 = require("fs");
         import_path5 = require("path");
         import_node_child_process3 = require("child_process");
-        import_node_crypto22 = require("crypto");
+        import_node_crypto32 = require("crypto");
         import_node_util2 = require("util");
         init_config_text();
         init_resolve_executable();
@@ -33117,13 +33094,37 @@ ${tail}`;
       const value = approvals?.[repoKey];
       return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : void 0;
     }
-    async function evaluatePublicPublishApproval(submodulePath, commit2, branch, approvedShas, remoteName = "origin", patternRepo = submodulePath) {
-      let destinations;
-      try {
-        destinations = await pushDestinations(submodulePath, remoteName);
-      } catch {
+    async function evaluatePublicPublishApproval(submodulePath, commit2, branch, approvedShas, remoteName = "origin", patternRepo = submodulePath, publicRepoCount = 1) {
+      const destinations = await pushDestinations(submodulePath, remoteName);
+      const keyed = await publicPushRepoKeys(submodulePath, remoteName);
+      if (!destinations.isPublic) return void 0;
+      const groups = /* @__PURE__ */ new Map();
+      for (const { url, repoKey } of keyed) groups.set(repoKey, [...groups.get(repoKey) || [], url]);
+      const requests = [];
+      for (const [key4, urls] of groups) {
+        const request = await evaluatePublicPublishApprovalForDestinations(
+          submodulePath,
+          commit2,
+          branch,
+          approvalsForRepo(approvedShas, key4, Math.max(publicRepoCount, groups.size)),
+          remoteName,
+          patternRepo,
+          { urls, isPublic: true }
+        );
+        if (request) requests.push(request);
       }
-      if (destinations && !destinations.isPublic) return void 0;
+      if (!requests.length) return void 0;
+      return {
+        remoteUrls: requests.flatMap((request) => request.remoteUrls),
+        remoteRef: `refs/heads/${branch}`,
+        commits: requests.flatMap((request) => request.commits),
+        unapproved: [...new Set(requests.flatMap((request) => request.unapproved))],
+        extraApproved: [...new Set(requests.flatMap((request) => request.extraApproved))],
+        invalidApproved: [...new Set(requests.flatMap((request) => request.invalidApproved || []))],
+        ...requests.some((request) => request.error) ? { error: requests.map((request) => request.error).filter(Boolean).join("; ") } : {}
+      };
+    }
+    async function evaluatePublicPublishApprovalForDestinations(submodulePath, commit2, branch, approvedShas, remoteName, patternRepo, destinations) {
       const { execFile: execFile11 } = await import("child_process");
       const run3 = async (args, input) => {
         let child;
@@ -33214,9 +33215,9 @@ ${tail}`;
       return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved, invalidApproved, ...evidenceError || scanError ? { error: evidenceError || scanError } : {} };
     }
     async function assertRefineryPublishApproved(repo, commit2, branch, approvedShas, remoteName = "origin", repoKey, publicRepoCount = 1) {
-      const actualRepoKey = await publicPushRepoKey(repo, remoteName);
-      if (repoKey !== void 0 && repoKey !== actualRepoKey) throw new Error("public publish repository key mismatch");
-      const request = await evaluatePublicPublishApproval(repo, commit2, branch, approvalsForRepo(approvedShas, actualRepoKey, publicRepoCount), remoteName);
+      const keys = await publicPushRepoKeys(repo, remoteName);
+      if (repoKey !== void 0 && keys.some((destination) => repoKey !== destination.repoKey)) throw new Error("public publish repository key mismatch");
+      const request = await evaluatePublicPublishApproval(repo, commit2, branch, approvedShas, remoteName, repo, publicRepoCount);
       if (request) throw new PublicPublishApprovalRequired(request);
       const destinations = await pushDestinations(repo, remoteName);
       if (destinations.isPublic) {
@@ -33320,7 +33321,8 @@ ${tail}`;
           const entry = {
             path: gitlink.path,
             commit: gitlink.commit,
-            reachable: false
+            reachable: false,
+            ...options.allowAutoPublishSubmoduleMainCommits === true ? { autoPublishAllowed: true, autoPublishAttempted: false } : {}
           };
           let submoduleDefaultBranch = "main";
           try {
@@ -33412,7 +33414,7 @@ ${tail}`;
                   entry.publishRequired = true;
                   const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
                   entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
-                  const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, approvalsForRepo(options.approvedPublishShas, await publicPushRepoKey(submodulePath), publicRepoCount), "origin", repoRoot) : void 0;
+                  const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, options.approvedPublishShas, "origin", repoRoot, publicRepoCount) : void 0;
                   if (publishApproval) {
                     entry.autoPublishAllowed = true;
                     entry.autoPublishAttempted = false;
@@ -33549,7 +33551,7 @@ ${tail}`;
     }
     function accountLineageFromStableIdentity(provider, authority, issuer, subject) {
       if (typeof issuer !== "string" || !issuer.trim() || typeof subject !== "string" || !subject.trim()) return UNKNOWN_ACCOUNT_LINEAGE;
-      const key4 = (0, import_node_crypto32.createHash)("sha256").update(JSON.stringify([
+      const key4 = (0, import_node_crypto42.createHash)("sha256").update(JSON.stringify([
         "adhdev-quota-account-v1",
         provider,
         authority,
@@ -33603,12 +33605,12 @@ ${tail}`;
       if (before.kind === "unknown" && after.kind === "unknown") return quota;
       return unconfirmedQuotaReading(quota, after);
     }
-    var import_node_crypto32;
+    var import_node_crypto42;
     var UNKNOWN_ACCOUNT_LINEAGE;
     var init_account_lineage = __esm2({
       "src/quota/account-lineage.ts"() {
         "use strict";
-        import_node_crypto32 = require("crypto");
+        import_node_crypto42 = require("crypto");
         UNKNOWN_ACCOUNT_LINEAGE = Object.freeze({ version: 1, kind: "unknown" });
       }
     });
@@ -46071,16 +46073,16 @@ ${pattern}
       }
     });
     function sha256Hex(input) {
-      return (0, import_node_crypto42.createHash)("sha256").update(input).digest("hex");
+      return (0, import_node_crypto52.createHash)("sha256").update(input).digest("hex");
     }
     function shortHash(input, length = 16) {
       return sha256Hex(input).slice(0, length);
     }
-    var import_node_crypto42;
+    var import_node_crypto52;
     var init_hash = __esm2({
       "src/system/hash.ts"() {
         "use strict";
-        import_node_crypto42 = require("crypto");
+        import_node_crypto52 = require("crypto");
       }
     });
     function privateDirectory(home, relative20 = "") {
@@ -63171,7 +63173,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return JSON.stringify(value) ?? "null";
     }
     function bridgeDigest(envelope) {
-      return (0, import_node_crypto52.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
+      return (0, import_node_crypto6.createHash)("sha256").update(stableBridgeJson(envelope)).digest("hex");
     }
     function ensureBridgeSchema(db) {
       db.exec(`CREATE TABLE IF NOT EXISTS worker_bridge_policy (mesh_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL);
@@ -63229,7 +63231,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         openAttempts: attempts.filter((a) => a.terminal_outcome === null).length,
         correctionOrLivenessHolds: holds.length,
         pendingDeliveries: pending.n,
-        ledgerDigest: (0, import_node_crypto52.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
+        ledgerDigest: (0, import_node_crypto6.createHash)("sha256").update(stableBridgeJson({ attempts, holds })).digest("hex")
       };
     }
     function findBridgeMemberDelivery(db, senderId, deliveryId) {
@@ -63261,7 +63263,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       }
     }
     async function queryBridgePeer(dispatch2, peerId, meshId, policy, deliveryClaim) {
-      const nonce = (0, import_node_crypto52.randomUUID)();
+      const nonce = (0, import_node_crypto6.randomUUID)();
       const reply = unwrapMeshRelayResult(await dispatch2(peerId, BRIDGE_CAPABILITY_COMMAND, { meshId, nonce, ...deliveryClaim ? { deliveryClaim } : {} }), { command: BRIDGE_CAPABILITY_COMMAND, peerDaemonId: peerId });
       const valid = reply.success === true && reply.protocol === BRIDGE_PROTOCOL && reply.meshId === meshId && reply.nonce === nonce && reply.rolloutId === policy.rolloutId && typeof reply.daemonId === "string" && daemonIdsEquivalent4(reply.daemonId, peerId) && admitted(policy, reply);
       return valid ? reply : null;
@@ -63341,7 +63343,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const pending = db.prepare("SELECT envelope_json FROM worker_bridge_delivery WHERE side='member' AND state!='receipted' AND (reason IS NULL OR reason!='delivery_time_expired')").all();
       for (const item of pending) await sendBridgeDelivery(db, JSON.parse(item.envelope_json), dispatch2);
     }
-    var import_node_crypto52;
+    var import_node_crypto6;
     var BRIDGE_CAPABILITY_COMMAND;
     var BRIDGE_DELIVERY_COMMAND;
     var BRIDGE_MAX_AGE_MS;
@@ -63352,7 +63354,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       "src/mesh/worker-bridge.ts"() {
         "use strict";
         init_worker_bridge_transaction();
-        import_node_crypto52 = require("crypto");
+        import_node_crypto6 = require("crypto");
         init_dist();
         init_mesh_runtime_store();
         init_build_info();
@@ -71475,7 +71477,7 @@ ${upstream}`;
           if (e.code !== "EEXIST") throw e;
         }
         syncDir2();
-        const tmp = path322.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto6.randomUUID)()}.tmp`), fd = fs222.openSync(tmp, "wx", 384);
+        const tmp = path322.join(configDir, `${MAINTENANCE_FILE}.${(0, import_node_crypto7.randomUUID)()}.tmp`), fd = fs222.openSync(tmp, "wx", 384);
         try {
           fs222.writeFileSync(fd, JSON.stringify(state2));
           fs222.fsyncSync(fd);
@@ -71497,12 +71499,12 @@ ${upstream}`;
       const h = s2.retainedHost;
       if (facts.pid !== h.pid || facts.socketOwnerPid !== h.pid || facts.birth !== h.birth || facts.entryPath !== h.entryPath || facts.nodePath !== h.nodePath || facts.hostEntryPath !== h.entryPath || facts.hostStartedAt !== h.hostStartedAt || facts.endpoint !== h.endpoint) throw new Error("maintenance_retained_host_identity_changed");
       for (const f of h.files) {
-        if (fs222.realpathSync(f.path) !== f.path || !fs222.statSync(f.path).isFile() || (0, import_node_crypto6.createHash)("sha256").update(fs222.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
+        if (fs222.realpathSync(f.path) !== f.path || !fs222.statSync(f.path).isFile() || (0, import_node_crypto7.createHash)("sha256").update(fs222.readFileSync(f.path)).digest("hex") !== f.sha256) throw new Error("maintenance_retained_dependency_changed");
       }
     }
     var fs222;
     var path322;
-    var import_node_crypto6;
+    var import_node_crypto7;
     var import_node_async_hooks;
     var MAINTENANCE_BOOT_NONCE;
     var MAINTENANCE_FILE;
@@ -71518,18 +71520,18 @@ ${upstream}`;
         "use strict";
         fs222 = __toESM2(require("fs"));
         path322 = __toESM2(require("path"));
-        import_node_crypto6 = require("crypto");
+        import_node_crypto7 = require("crypto");
         import_node_async_hooks = require("async_hooks");
         init_dist();
         init_config();
         init_load_better_sqlite3();
-        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto6.randomUUID)();
+        MAINTENANCE_BOOT_NONCE = (0, import_node_crypto7.randomUUID)();
         MAINTENANCE_FILE = "cooperative-maintenance.json";
         marker = "cooperative-maintenance.enrolled";
         seen = /* @__PURE__ */ new Set();
         context = new import_node_async_hooks.AsyncLocalStorage();
         activeAdmissions = 0;
-        sha2 = (s2) => (0, import_node_crypto6.createHash)("sha256").update(s2).digest("hex");
+        sha2 = (s2) => (0, import_node_crypto7.createHash)("sha256").update(s2).digest("hex");
         hash2 = (s2) => typeof s2 === "string" && /^[a-f0-9]{64}$/.test(s2);
         id3 = (s2) => typeof s2 === "string" && !!s2 && s2.trim() === s2;
       }
@@ -91513,7 +91515,7 @@ ${result.stderr}`, result.code);
           if (!reclaim2(lock, alive, now, options.maxAgeMs)) return held();
           continue;
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto17.randomBytes)(16).toString("hex"), acquiredAt: now() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto18.randomBytes)(16).toString("hex"), acquiredAt: now() };
         try {
           (0, import_node_fs7.writeFileSync)((0, import_node_path9.join)(lock, OWNER_FILE), JSON.stringify(owner), { flag: "wx", mode: 384 });
         } catch {
@@ -91537,7 +91539,7 @@ ${result.stderr}`, result.code);
     }
     var import_node_fs7;
     var import_node_path9;
-    var import_node_crypto17;
+    var import_node_crypto18;
     var OWNERLESS_STALE_MS;
     var OWNER_FILE;
     var init_owned_lock = __esm2({
@@ -91545,7 +91547,7 @@ ${result.stderr}`, result.code);
         "use strict";
         import_node_fs7 = require("fs");
         import_node_path9 = require("path");
-        import_node_crypto17 = require("crypto");
+        import_node_crypto18 = require("crypto");
         OWNERLESS_STALE_MS = 6e4;
         OWNER_FILE = "owner.json";
       }
@@ -93987,7 +93989,7 @@ ${body}`;
     });
     var import_node_fs10;
     var import_node_path12;
-    var import_node_crypto19;
+    var import_node_crypto20;
     var ID;
     var MAX_AGE;
     var AssistantDriverStaging;
@@ -93996,7 +93998,7 @@ ${body}`;
         "use strict";
         import_node_fs10 = require("fs");
         import_node_path12 = require("path");
-        import_node_crypto19 = require("crypto");
+        import_node_crypto20 = require("crypto");
         init_config();
         init_store_guards();
         init_activation_store();
@@ -94020,7 +94022,7 @@ ${body}`;
             this.expire();
             const existing = this.list().find((r) => r.type === module22.type && r.treeDigest === digest4);
             if (existing) return existing.id;
-            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto19.randomBytes)(8).toString("hex")}`;
+            const id4 = `driver-activation-${this.now().getTime()}-${(0, import_node_crypto20.randomBytes)(8).toString("hex")}`;
             const rec5 = {
               kind: "driver_activation",
               id: id4,
@@ -94271,7 +94273,7 @@ ${body}`;
     }
     var import_node_fs11;
     var import_node_path13;
-    var import_node_crypto20;
+    var import_node_crypto21;
     var entryKeys;
     var origins;
     var integer;
@@ -94281,7 +94283,7 @@ ${body}`;
         "use strict";
         import_node_fs11 = require("fs");
         import_node_path13 = require("path");
-        import_node_crypto20 = require("crypto");
+        import_node_crypto21 = require("crypto");
         init_owned_lock();
         init_validate();
         entryKeys = ["provider", "model", "thinkingLevel", "revision", "setBy", "setAt"];
@@ -94366,7 +94368,7 @@ ${body}`;
             }
           }
           persist(document, previous, warnings, lowersToolLock) {
-            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto20.randomUUID)()}`;
+            const temp = `${this.path}.tmp-${process.pid}-${(0, import_node_crypto21.randomUUID)()}`;
             let committed = false;
             try {
               const fd = (0, import_node_fs11.openSync)(temp, "wx", 384);
@@ -94505,7 +94507,7 @@ ${body}`;
       });
     }
     function digest3(value) {
-      return (0, import_node_crypto21.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+      return (0, import_node_crypto222.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     }
     function syncDir(dir) {
       if (process.platform === "win32") return;
@@ -94518,7 +94520,7 @@ ${body}`;
     }
     var import_node_fs12;
     var import_node_path14;
-    var import_node_crypto21;
+    var import_node_crypto222;
     var ID2;
     var proposalKeys;
     var text2;
@@ -94529,7 +94531,7 @@ ${body}`;
         "use strict";
         import_node_fs12 = require("fs");
         import_node_path14 = require("path");
-        import_node_crypto21 = require("crypto");
+        import_node_crypto222 = require("crypto");
         init_config();
         init_launch_defaults();
         init_owned_lock();
@@ -94561,7 +94563,7 @@ ${body}`;
             const body = {
               version: 1,
               createdAt: this.now().toISOString(),
-              generation: (0, import_node_crypto21.randomBytes)(16).toString("hex"),
+              generation: (0, import_node_crypto222.randomBytes)(16).toString("hex"),
               documentRevision,
               ...proposal
             };
@@ -94572,7 +94574,7 @@ ${body}`;
             syncDir(this.configDir);
             (0, import_node_fs12.mkdirSync)(this.dir, { recursive: true, mode: 448 });
             syncDir(assistantDir);
-            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto21.randomBytes)(8).toString("hex")}`;
+            const tmp = `${this.path(id4)}.tmp-${(0, import_node_crypto222.randomBytes)(8).toString("hex")}`;
             try {
               const fd = (0, import_node_fs12.openSync)(tmp, "wx", 384);
               try {
@@ -100136,7 +100138,7 @@ ${asText(streams.stderr)}
         import_ajv_formats2 = __toESM2(require_dist2());
       }
     });
-    var import_node_crypto23;
+    var import_node_crypto24;
     var import_node_os6;
     var import_node_path19;
     var refused;
@@ -100145,7 +100147,7 @@ ${asText(streams.stderr)}
     var init_driver_service = __esm2({
       "src/drivers/driver-service.ts"() {
         "use strict";
-        import_node_crypto23 = require("crypto");
+        import_node_crypto24 = require("crypto");
         import_node_os6 = require("os");
         import_node_path19 = require("path");
         init_managed_mcp_process();
@@ -100350,7 +100352,7 @@ ${asText(streams.stderr)}
               this.instances.set(input.type, instance);
             }
             const record6 = {
-              invocationId: (0, import_node_crypto23.randomUUID)(),
+              invocationId: (0, import_node_crypto24.randomUUID)(),
               driverType: input.type,
               action: input.action,
               activationDigest: installed.treeDigest,
@@ -100422,7 +100424,7 @@ ${asText(streams.stderr)}
         };
       }
     });
-    var import_node_crypto24;
+    var import_node_crypto25;
     var import_node_fs16;
     var import_node_path20;
     var ID3;
@@ -100431,7 +100433,7 @@ ${asText(streams.stderr)}
     var init_staged_action = __esm2({
       "src/drivers/staged-action.ts"() {
         "use strict";
-        import_node_crypto24 = require("crypto");
+        import_node_crypto25 = require("crypto");
         import_node_fs16 = require("fs");
         import_node_path20 = require("path");
         init_config();
@@ -100451,7 +100453,7 @@ ${asText(streams.stderr)}
             const record6 = {
               ...structuredClone(input),
               kind: "driver_action_request",
-              id: `driver-action-${(0, import_node_crypto24.randomUUID)()}`,
+              id: `driver-action-${(0, import_node_crypto25.randomUUID)()}`,
               requesterTaskId: input.requester.taskId,
               createdAt: this.now(),
               expiresAt: this.now() + DRIVER_ACTION_TTL_MS,
@@ -100520,7 +100522,7 @@ ${asText(streams.stderr)}
       };
       walk("");
       if (!files.length) throw new Error("Empty driver tree");
-      const hash3 = (0, import_node_crypto25.createHash)("sha256");
+      const hash3 = (0, import_node_crypto26.createHash)("sha256");
       for (const rel of files.sort()) {
         const bytes = (0, import_node_fs17.readFileSync)((0, import_node_path21.join)(dir, rel));
         hash3.update(`driver/${(0, import_node_path21.basename)(dir)}/${rel}\0${bytes.length}\0`).update(bytes);
@@ -100543,13 +100545,13 @@ ${asText(streams.stderr)}
       if (!validateDriverProviderManifest(module22).ok || module22.type !== type2 || digest4 !== computeDriverTreeDigest(dir)) return null;
       return { module: { ...module22, _sourceTrust: meta._sourceTrust }, treeDigest: digest4 };
     }
-    var import_node_crypto25;
+    var import_node_crypto26;
     var import_node_fs17;
     var import_node_path21;
     var init_installed_driver = __esm2({
       "src/drivers/installed-driver.ts"() {
         "use strict";
-        import_node_crypto25 = require("crypto");
+        import_node_crypto26 = require("crypto");
         import_node_fs17 = require("fs");
         import_node_path21 = require("path");
         init_manifest();
@@ -104357,7 +104359,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         if (e.code !== "EEXIST") throw e;
       }
       if ((await (0, import_promises10.lstat)(root)).isSymbolicLink() || await (0, import_promises10.realpath)(root) !== (0, import_node_path22.resolve)(root)) throw new AttachFailure("PATH_CONFLICT", "checkout", "The managed remote-projects directory must be a real directory.");
-      const key4 = (0, import_node_crypto26.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
+      const key4 = (0, import_node_crypto27.createHash)("sha256").update(`${meshId}\0${identity2}`).digest("hex").slice(0, 24);
       return (0, import_node_path22.join)(root, key4);
     }
     async function verifyCheckout(workspace, identity2) {
@@ -104426,7 +104428,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         throw busy();
       }
       const ownerPath = (0, import_node_path22.join)(guard2, "owner");
-      const self = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+      const self = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
       try {
         await (0, import_promises10.writeFile)(ownerPath, JSON.stringify(self), { flag: "wx" });
       } catch (e) {
@@ -104452,7 +104454,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           if (current4.nonce !== old.nonce || current4.pid !== old.pid) throw recovery();
           await (0, import_promises10.rm)(lockPath);
         }
-        const owner = { pid: process.pid, nonce: (0, import_node_crypto26.randomUUID)() };
+        const owner = { pid: process.pid, nonce: (0, import_node_crypto27.randomUUID)() };
         await (0, import_promises10.writeFile)(lockPath, JSON.stringify(owner), { flag: "wx" });
         return owner;
       });
@@ -104574,7 +104576,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
     }
     var import_node_child_process16;
     var import_node_util9;
-    var import_node_crypto26;
+    var import_node_crypto27;
     var import_promises10;
     var import_node_path22;
     var exec5;
@@ -104593,7 +104595,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
         "use strict";
         import_node_child_process16 = require("child_process");
         import_node_util9 = require("util");
-        import_node_crypto26 = require("crypto");
+        import_node_crypto27 = require("crypto");
         import_promises10 = require("fs/promises");
         import_node_path22 = require("path");
         init_config();
@@ -104638,13 +104640,13 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
       if (!daemonIdsEquivalent4(str9(grant.target), selfId) || !daemonIdsEquivalent4(str9(grant.host), hostId) || grant.meshId !== meshId || grant.identity !== identity2) return false;
       const now = Date.now();
       if (typeof grant.exp !== "number" || !Number.isFinite(grant.exp) || grant.exp <= now || grant.exp > now + 6e5 || !/^[0-9a-f]{64}$/.test(str9(grant.sig))) return false;
-      const key4 = (0, import_node_crypto27.createHash)("sha256").update(secret).digest("hex");
-      const expected = (0, import_node_crypto27.createHmac)("sha256", key4).update(`${grant.target}
+      const key4 = (0, import_node_crypto28.createHash)("sha256").update(secret).digest("hex");
+      const expected = (0, import_node_crypto28.createHmac)("sha256", key4).update(`${grant.target}
 ${grant.host}
 ${grant.meshId}
 ${grant.identity}
 ${grant.exp}`).digest("hex");
-      return (0, import_node_crypto27.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
+      return (0, import_node_crypto28.timingSafeEqual)(Buffer.from(grant.sig, "hex"), Buffer.from(expected, "hex"));
     }
     function authorizeHost(ctx, args, identity2) {
       const hostId = str9(args?.hostDaemonId);
@@ -104673,7 +104675,7 @@ ${grant.exp}`).digest("hex");
       if (origin?.identity !== remote.identity) throw new AttachFailure("REMOTE_IDENTITY_MISMATCH", "registration", "Registered project identity must match the source checkout origin.");
       return { mesh, remote, self, hostSynthesized: host.hostSynthesized === true };
     }
-    var import_node_crypto27;
+    var import_node_crypto28;
     var str9;
     var fail3;
     var attachRemoteProject;
@@ -104682,7 +104684,7 @@ ${grant.exp}`).digest("hex");
     var init_remote_project_attach = __esm2({
       "src/commands/high-family/remote-project-attach.ts"() {
         "use strict";
-        import_node_crypto27 = require("crypto");
+        import_node_crypto28 = require("crypto");
         init_dist();
         init_config();
         init_mesh_config();
@@ -104914,7 +104916,7 @@ ${b.text}`).join("\n\n");
       if (typeof reference !== "string") return false;
       try {
         const parts = JSON.parse(reference);
-        const digest4 = (0, import_node_crypto28.createHash)("sha256").update(body).digest("hex");
+        const digest4 = (0, import_node_crypto29.createHash)("sha256").update(body).digest("hex");
         return Array.isArray(parts) && parts.length === 8 && parts[0] === ATTEMPT_EVIDENCE_VERSION && Number.isSafeInteger(parts[1]) && parts[1] >= 0 && (generation === void 0 || parts[1] === generation) && Number.isSafeInteger(parts[2]) && Number.isFinite(new Date(parts[2]).getTime()) && [parts[3], parts[5]].every((v) => typeof v === "string" && v.length > 0 && v.length <= 512) && [parts[4], parts[6]].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v)) && parts[7] === ADAPTER_FINAL_REF + digest4;
       } catch {
         return false;
@@ -104951,7 +104953,7 @@ ${b.text}`).join("\n\n");
         bubbles.push({ at, chars, text: text4 });
       }
       if (offset !== points.length || renderNativeReplies(bubbles) !== body) return null;
-      const digest4 = (0, import_node_crypto28.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
+      const digest4 = (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(bubbles)).digest("hex");
       return ref2[7] === VERIFIED_WINDOW_REF + digest4 ? bubbles : null;
     }
     function verifiedNativeRead(read2, sessionId) {
@@ -105145,7 +105147,7 @@ ${b.text}`).join("\n\n");
         payload = originalPayload;
         evidence = originalEvidence;
       }
-      const hash3 = (text4) => (0, import_node_crypto28.createHash)("sha256").update(text4).digest("hex");
+      const hash3 = (text4) => (0, import_node_crypto29.createHash)("sha256").update(text4).digest("hex");
       const stable = [
         ATTEMPT_EVIDENCE_VERSION,
         attempt.generation,
@@ -105222,7 +105224,7 @@ ${b.text}`).join("\n\n");
       if (anchorOutside) return { body: null, source: "unavailable", reason: "native_reference_outside_attempt" };
       return { body: null, source: "unavailable", reason: "original_native_bubble_unavailable" };
     }
-    var import_node_crypto28;
+    var import_node_crypto29;
     var rec4;
     var ATTEMPT_EVIDENCE_VERSION;
     var VERIFIED_WINDOW_REF;
@@ -105233,7 +105235,7 @@ ${b.text}`).join("\n\n");
     var init_attempt_report_recovery = __esm2({
       "src/assistant/attempt-report-recovery.ts"() {
         "use strict";
-        import_node_crypto28 = require("crypto");
+        import_node_crypto29 = require("crypto");
         init_assistant_relay_sqlite_store();
         init_assistant_relay_store();
         init_logger();
@@ -106606,15 +106608,15 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       const target = { project, coordinatorSessionId: last.sessionId, messageId: last.messageId, offset: 0 };
       return `[ADHDev relay gap] ${replies.length} coordinator ${replies.length === 1 ? "reply was" : "replies were"} not relayed in full (${klass}); latest at ${new Date(last.messageAt).toISOString().slice(11, 19)} UTC. Read the available message with project_read ${JSON.stringify(target)}.`;
     }
-    var import_node_crypto29;
+    var import_node_crypto30;
     var receiptKey;
     var gapGroup;
     var RelayGapTracker;
     var init_relay_gap_tracker = __esm2({
       "src/assistant/relay-gap-tracker.ts"() {
         "use strict";
-        import_node_crypto29 = require("crypto");
-        receiptKey = (...parts) => (0, import_node_crypto29.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
+        import_node_crypto30 = require("crypto");
+        receiptKey = (...parts) => (0, import_node_crypto30.createHash)("sha256").update(JSON.stringify(parts)).digest("hex");
         gapGroup = (reply) => receiptKey(
           "gap",
           reply.sessionId,
@@ -106800,7 +106802,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         };
       }
     });
-    var import_node_crypto30;
+    var import_node_crypto31;
     var ASSISTANT_RELAY_BUS_KINDS;
     var PENDING_HUMAN_MAX_AGE_MS;
     var COVERAGE_TTL_MS;
@@ -106816,7 +106818,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_relay_delivery_policy();
         init_relay_gap_tracker();
         init_report_continuation();
-        import_node_crypto30 = require("crypto");
+        import_node_crypto31 = require("crypto");
         init_logger();
         init_assistant_native_window();
         init_dist();
@@ -106828,7 +106830,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         PENDING_HUMAN_MAX_AGE_MS = 5 * 6e4;
         COVERAGE_TTL_MS = RELAY_COVERAGE_TTL_MS;
         COVERAGE_MAX_ENTRIES = RELAY_COVERAGE_MAX_REPLIES;
-        replyHash = (text4) => (0, import_node_crypto30.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
+        replyHash = (text4) => (0, import_node_crypto31.createHash)("sha256").update(text4.replace(/\r\n?/g, "\n").trim()).digest("hex");
         coverageKey = (sessionId, attemptId, at, text4) => JSON.stringify([sessionId, attemptId, at, replyHash(text4)]);
         realClock = {
           now: () => Date.now(),
@@ -114453,6 +114455,9 @@ ${tail}` : ""
           const remote = typeof args?.remote === "string" && args.remote.trim() ? args.remote.trim() : "origin";
           const branch = typeof args?.branch === "string" && args.branch.trim() ? args.branch.trim() : void 0;
           const setUpstream = Boolean(args?.setUpstream);
+          if (/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(remote)) {
+            return failure("invalid_args", "Raw URL push remotes are not supported for approval; configure a named Git remote and retry");
+          }
           if (!/^[a-zA-Z0-9_.\-]+$/.test(remote)) {
             return failure("invalid_args", "remote must contain only alphanumeric characters, dots, hyphens, and underscores");
           }
@@ -116431,7 +116436,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         logMeshCommandEvent(event, fields);
       }
     };
-    var import_node_crypto7 = require("crypto");
+    var import_node_crypto8 = require("crypto");
     var import_ws2 = __toESM2(require_ws());
     init_dist();
     init_logger();
@@ -116803,7 +116808,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
         this.pingIntervalMs = options.pingIntervalMs ?? WS_MESH_PING_INTERVAL_MS;
         this.maxMissedPongs = options.maxMissedPongs ?? WS_MESH_MAX_MISSED_PONGS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
-        this.idNonce = `${this.idNonce}_${(0, import_node_crypto7.randomBytes)(3).toString("hex")}`;
+        this.idNonce = `${this.idNonce}_${(0, import_node_crypto8.randomBytes)(3).toString("hex")}`;
       }
       // ─── Public API ─────────────────────────────────────────────────────────────
       /** Register the inbound-command handler. It returns a result or throws. */
@@ -117572,7 +117577,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     var import_node_child_process10 = require("child_process");
     var fs44 = __toESM2(require("fs"));
     var path50 = __toESM2(require("path"));
-    var import_node_crypto12 = require("crypto");
+    var import_node_crypto13 = require("crypto");
     init_dist();
     init_mesh_queue_trigger();
     init_mesh_queue_autolaunch();
@@ -118606,11 +118611,11 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
     init_install();
     var fs33 = __toESM2(require("fs"));
     var path39 = __toESM2(require("path"));
-    var import_node_crypto8 = require("crypto");
+    var import_node_crypto9 = require("crypto");
     var import_node_child_process9 = require("child_process");
     init_config();
     init_cooperative_gate();
-    var sha3 = (v) => (0, import_node_crypto8.createHash)("sha256").update(v).digest("hex");
+    var sha3 = (v) => (0, import_node_crypto9.createHash)("sha256").update(v).digest("hex");
     function lifecycleProcessIdentity() {
       const nodePath = fs33.realpathSync(process.execPath), entryPath = fs33.realpathSync(process.argv[1]);
       const birth = (0, import_node_child_process9.execFileSync)("/bin/ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", timeout: 3e3, windowsHide: true, env: { LC_ALL: "C" } }).trim().replace(/\s+/g, " ");
@@ -118656,7 +118661,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return r;
     }
     function durable(file, r) {
-      const temp = file + "." + (0, import_node_crypto8.randomUUID)() + ".tmp", fd = fs33.openSync(temp, "wx", 384);
+      const temp = file + "." + (0, import_node_crypto9.randomUUID)() + ".tmp", fd = fs33.openSync(temp, "wx", 384);
       try {
         fs33.writeFileSync(fd, JSON.stringify(r));
         fs33.fsyncSync(fd);
@@ -118679,7 +118684,7 @@ The pin is NOT cleared automatically: a pin often encodes required context conti
       return out;
     }
     function beginLifecycleSource(kind, fields, root = getConfigDir2()) {
-      const dir = ensureDirectory(root), operationId = (0, import_node_crypto8.randomUUID)();
+      const dir = ensureDirectory(root), operationId = (0, import_node_crypto9.randomUUID)();
       const r = { schema: 1, operationId, kind, owner: lifecycleProcessIdentity(), state: "intent", revision: 1, updatedAt: Date.now(), ...omitBlankLifecycleFields(fields) };
       durable(path39.join(dir, operationId + ".json"), r);
       return operationId;
@@ -121659,18 +121664,18 @@ ${marker2}`,
     }, { meshSender: "authenticated_peer" });
     var fs42 = __toESM2(require("fs"));
     var path48 = __toESM2(require("path"));
-    var import_node_crypto10 = require("crypto");
+    var import_node_crypto11 = require("crypto");
     init_config();
     init_cooperative_gate();
     var fs41 = __toESM2(require("fs"));
     var path47 = __toESM2(require("path"));
     init_config();
-    var import_node_crypto9 = require("crypto");
+    var import_node_crypto10 = require("crypto");
     var import_session_host_core8 = require_dist();
     init_dist();
     init_cooperative_gate();
     init_coordinator_registry();
-    var digest = (value) => (0, import_node_crypto9.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
+    var digest = (value) => (0, import_node_crypto10.createHash)("sha256").update(JSON.stringify(value)).digest("hex");
     var text = (v) => typeof v === "string" ? v.trim() : "";
     function freshCoordinators(state2) {
       const select = (e) => ({ sessionId: e.sessionId, meshId: e.meshId, workspace: e.workspace, cliType: e.cliType, startedAt: e.startedAt });
@@ -121884,7 +121889,7 @@ ${marker2}`,
     }
     var ACTOR_CONFIG_FILE = "cooperative-maintenance-actor.json";
     var used = /* @__PURE__ */ new Map();
-    var hash22 = (s2) => (0, import_node_crypto10.createHash)("sha256").update(s2).digest("hex");
+    var hash22 = (s2) => (0, import_node_crypto11.createHash)("sha256").update(s2).digest("hex");
     function privateFile(file) {
       const s2 = fs42.lstatSync(file);
       if (!s2.isFile() || s2.isSymbolicLink() || s2.nlink !== 1 || s2.size > 256 * 1024 || s2.mode & 63 || process.getuid && s2.uid !== process.getuid() || fs42.realpathSync(file) !== file) throw new Error("maintenance_actor_private_pin_required");
@@ -121904,8 +121909,8 @@ ${marker2}`,
       if (key4.length !== 32 || hash22(key4) !== config.observationKey?.sha256) throw new Error("maintenance_actor_key_changed");
       if (request.schema !== 1 || request.operation !== operation || request.daemonId !== state2.daemonId || request.planDigest !== state2.planDigest || request.epoch !== state2.epoch || !/^[a-f0-9-]{36}$/.test(request.nonce) || !Number.isSafeInteger(request.sentAt) || Math.abs(Date.now() - request.sentAt) > 1e4 || !/^[a-f0-9]{64}$/.test(request.mac)) throw new Error("maintenance_actor_challenge_invalid");
       if ((request.body !== void 0 || request.bodyDigest !== void 0) && (request.bodyDigest !== hash22(JSON.stringify(request.body)) || JSON.stringify(request.body).length > 256 * 1024)) throw new Error("maintenance_collection_body_invalid");
-      const expected = (0, import_node_crypto10.createHmac)("sha256", key4).update(actorObservationChallengeBytes(request)).digest();
-      if (!(0, import_node_crypto10.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
+      const expected = (0, import_node_crypto11.createHmac)("sha256", key4).update(actorObservationChallengeBytes(request)).digest();
+      if (!(0, import_node_crypto11.timingSafeEqual)(expected, Buffer.from(request.mac, "hex"))) throw new Error("maintenance_actor_authentication_required");
       for (const [nonce, at] of used) if (Date.now() - at > 2e4) used.delete(nonce);
       const replayKey = `${root}:${request.nonce}`;
       if (used.has(replayKey) || used.size >= 4096) throw new Error("maintenance_actor_challenge_replayed");
@@ -121925,7 +121930,7 @@ ${marker2}`,
           entryPath: process.argv[1],
           observedAt: Date.now()
         };
-        return { success: true, reply, mac: (0, import_node_crypto10.createHmac)("sha256", key4).update(JSON.stringify(reply)).digest("hex") };
+        return { success: true, reply, mac: (0, import_node_crypto11.createHmac)("sha256", key4).update(JSON.stringify(reply)).digest("hex") };
       } };
     }
     async function authenticatedActorObservation(host, request) {
@@ -121935,8 +121940,8 @@ ${marker2}`,
     }
     var fs43 = __toESM2(require("fs"));
     var path49 = __toESM2(require("path"));
-    var import_node_crypto11 = require("crypto");
-    var sha4 = (x) => (0, import_node_crypto11.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
+    var import_node_crypto12 = require("crypto");
+    var sha4 = (x) => (0, import_node_crypto12.createHash)("sha256").update(JSON.stringify(x)).digest("hex");
     function validateMcpIdentity(value) {
       if (!value || typeof value.birth !== "string" || !/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value.birth) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || !/^[a-f0-9-]{36}$/.test(value.bootNonce) || !Number.isSafeInteger(value.startedAt) || value.startedAt <= 0 || !path49.isAbsolute(value.entryPath ?? "") || !path49.isAbsolute(value.nodePath ?? "") || ![value.entrySha256, value.nodeSha256].every((v) => /^[a-f0-9]{64}$/.test(v))) throw new Error("maintenance_mcp_identity_invalid");
       return { pid: value.pid, bootNonce: value.bootNonce, birth: value.birth, startedAt: value.startedAt, entryPath: value.entryPath, entrySha256: value.entrySha256, nodePath: value.nodePath, nodeSha256: value.nodeSha256 };
@@ -122018,7 +122023,7 @@ ${marker2}`,
       const membershipDigest = sha4(records), members = await Promise.all(records.map((identity2) => new Promise((resolve55) => {
         const name = `${root}:${key2(identity2)}`;
         if (waiting.has(name)) throw new Error("maintenance_mcp_collection_in_flight");
-        const nonce = (0, import_node_crypto11.randomUUID)(), timer = setTimeout(() => {
+        const nonce = (0, import_node_crypto12.randomUUID)(), timer = setTimeout(() => {
           waiting.delete(name);
           resolve55({ identity: identity2, observed: false, reason: "mcp_incarnation_unreachable", challenge: nonce });
         }, deadlineMs);
@@ -122030,7 +122035,7 @@ ${marker2}`,
     init_cooperative_gate();
     var MAINTENANCE_DRAIN_CHANNELS = ["runnableQueue", "claims", "launches", "submits", "attempts", "corrections", "livenessHolds", "reportOutboxes", "progressOutboxes", "unreadableOutboxes", "temporaryOutboxes", "memoryOnlyOutboxes", "coordinatorNotices", "pendingNotifications", "adapterOutbound", "adapterSubmit", "turnEvents", "deferredLifecycle", "refineJobs"];
     var MAINTENANCE_BLACKOUT_SOURCES = ["queue", "autoLaunch", "direct", "sessionInput", "nativeOwnerInput", "deferredLifecycle", "reconnect", "newMembership"];
-    var digest2 = (v) => (0, import_node_crypto12.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
+    var digest2 = (v) => (0, import_node_crypto13.createHash)("sha256").update(JSON.stringify(v)).digest("hex");
     function census(components, state2, root, nonce) {
       const identity2 = { daemonId: state2.daemonId, pid: process.pid, bootNonce: MAINTENANCE_BOOT_NONCE, planDigest: state2.planDigest, epoch: state2.epoch, nonce };
       const channels = {};
@@ -122256,10 +122261,10 @@ ${marker2}`,
       const drain = await withMaintenanceObservation((state2) => collectTargetDrain(components, state2, auth.root, request.nonce));
       return auth.reply({ drain });
     }
-    var import_node_crypto13 = require("crypto");
+    var import_node_crypto14 = require("crypto");
     init_cooperative_gate();
     init_dist();
-    var sha5 = (b) => (0, import_node_crypto13.createHash)("sha256").update(b).digest("hex");
+    var sha5 = (b) => (0, import_node_crypto14.createHash)("sha256").update(b).digest("hex");
     var equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     var fail = (s2) => {
       throw Error(s2);
@@ -122287,16 +122292,16 @@ ${marker2}`,
           daemonId: peer.daemonId,
           planDigest: s2.planDigest,
           epoch: s2.epoch,
-          nonce: (0, import_node_crypto13.randomUUID)(),
+          nonce: (0, import_node_crypto14.randomUUID)(),
           sentAt: Date.now(),
           configSha256: peerConfigSha,
           body: { action: "peer", fleetChallenge: b.fleetChallenge, expectedBoot: peer.bootNonce, roster: s2.roster, nodeRoster: s2.nodeRoster }
         };
         const challenge = { ...q, bodyDigest: sha5(JSON.stringify(q.body)) };
-        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto13.createHmac)("sha256", key4).update(actorObservationChallengeBytes(challenge)).digest("hex") });
+        const answer = await components.dispatchMeshCommand(peer.daemonId, "cooperative_maintenance_actor_control", { ...challenge, mac: (0, import_node_crypto14.createHmac)("sha256", key4).update(actorObservationChallengeBytes(challenge)).digest("hex") });
         if (sha5(fs45.readFileSync(pin.path)) !== pin.sha256 || sha5(fs45.readFileSync(cfg.observationKey.path)) !== cfg.observationKey.sha256 || sha5(fs45.readFileSync(cfg.actorConfigPath)) !== peerConfigSha) fail("maintenance_control_peer_config_changed");
         const r = answer?.reply;
-        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto13.timingSafeEqual)((0, import_node_crypto13.createHmac)("sha256", key4).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
+        if (!answer?.success || !r || r.nonce !== q.nonce || r.daemonId !== peer.daemonId || r.planDigest !== s2.planDigest || r.epoch !== s2.epoch || r.bootNonce !== peer.bootNonce || r.build?.artifactSha256 !== peer.artifactSha256 || !Number.isFinite(r.observedAt) || r.observedAt < q.sentAt || Date.now() - r.observedAt > 1e4 || !equal(r.roster, s2.roster) || !equal(r.nodeRoster, s2.nodeRoster) || !/^[a-f0-9]{64}$/.test(answer.mac ?? "") || !(0, import_node_crypto14.timingSafeEqual)((0, import_node_crypto14.createHmac)("sha256", key4).update(JSON.stringify(r)).digest(), Buffer.from(answer.mac, "hex"))) fail("maintenance_control_peer_continuity_changed");
         if (["verify-committed", "open", "verify-open"].includes(b.action) && (!r.commitment || r.commitment.epoch !== s2.epoch || r.commitment.bootNonce !== peer.bootNonce || r.commitment.decisionDigest !== b.decisionDigest || !equal(r.commitment.ready, b.ready))) fail("maintenance_control_peer_commitment_missing");
         if (!r.observation) fail("maintenance_control_peer_observation_missing");
         peerObservations.push(r.observation);
@@ -134741,7 +134746,7 @@ ${output}` : "";
     }
     var fs72 = __toESM2(require("fs"));
     var path77 = __toESM2(require("path"));
-    var import_node_crypto16 = require("crypto");
+    var import_node_crypto17 = require("crypto");
     init_config();
     init_logger();
     init_debug_trace();
@@ -135726,7 +135731,7 @@ ${output}` : "";
       };
     }
     var fs71 = __toESM2(require("fs"));
-    var import_node_crypto15 = require("crypto");
+    var import_node_crypto16 = require("crypto");
     init_logger();
     var import_crypto24 = require("crypto");
     var BASE_62_DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -136810,10 +136815,10 @@ ${output}` : "";
       if (a.ord !== b.ord) return a.ord < b.ord ? -1 : 1;
       return a.messageId < b.messageId ? -1 : a.messageId > b.messageId ? 1 : 0;
     }
-    var import_node_crypto14 = require("crypto");
+    var import_node_crypto15 = require("crypto");
     init_dist2();
     function sha1(text4) {
-      return (0, import_node_crypto14.createHash)("sha1").update(text4).digest("base64");
+      return (0, import_node_crypto15.createHash)("sha1").update(text4).digest("base64");
     }
     function headChangeKey(head, text4) {
       const fields = {
@@ -137687,7 +137692,7 @@ ${output}` : "";
       return env2.ADHDEV_TRANSCRIPT_TRIPWIRE === "throw" || env2.NODE_ENV === "development";
     }
     function newProducerEpoch() {
-      return (0, import_node_crypto15.randomUUID)().replace(/-/g, "").slice(0, 12);
+      return (0, import_node_crypto16.randomUUID)().replace(/-/g, "").slice(0, 12);
     }
     var TranscriptProjectionService = class {
       deps;
@@ -139912,7 +139917,7 @@ ${output}` : "";
     function createChatDebugBundleId(targetSessionId) {
       const timestamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[-:.]/g, "").replace("T", "T").replace("Z", "Z");
       const sessionSegment = safeBundleIdSegment(targetSessionId, "unknown-session");
-      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto16.randomUUID)().slice(0, 8)}`;
+      return `chat-debug-${timestamp2}-${sessionSegment}-${(0, import_node_crypto17.randomUUID)().slice(0, 8)}`;
     }
     function buildChatDebugBundleSummary(bundle) {
       const target = bundle.target && typeof bundle.target === "object" ? bundle.target : {};
@@ -140204,7 +140209,7 @@ ${output}` : "";
     }
     var import_node_fs8 = __toESM2(require("fs"));
     var import_node_path10 = __toESM2(require("path"));
-    var import_node_crypto18 = require("crypto");
+    var import_node_crypto19 = require("crypto");
     init_logger();
     init_owned_lock();
     var OutgoingReceiptStore = class {
@@ -140225,7 +140230,7 @@ ${output}` : "";
       }
       records = /* @__PURE__ */ new Map();
       filename(id4) {
-        return import_node_path10.default.join(this.directory, (0, import_node_crypto18.createHash)("sha256").update(id4).digest("hex") + ".json");
+        return import_node_path10.default.join(this.directory, (0, import_node_crypto19.createHash)("sha256").update(id4).digest("hex") + ".json");
       }
       syncDirectory() {
         if (!this.directory || process.platform === "win32") return;
@@ -140315,7 +140320,7 @@ ${output}` : "";
           return;
         }
         const file = this.filename(receipt.messageId);
-        const staging = `${file}.${(0, import_node_crypto18.randomUUID)()}.tmp`;
+        const staging = `${file}.${(0, import_node_crypto19.randomUUID)()}.tmp`;
         const fd = import_node_fs8.default.openSync(staging, "wx", 384);
         try {
           try {
@@ -140345,8 +140350,8 @@ ${output}` : "";
             messageId,
             sessionId,
             inputDigest,
-            attemptId: (0, import_node_crypto18.randomUUID)(),
-            generation: (0, import_node_crypto18.randomUUID)(),
+            attemptId: (0, import_node_crypto19.randomUUID)(),
+            generation: (0, import_node_crypto19.randomUUID)(),
             state: unverified ? "uncertain" : "accepted",
             revision: 1,
             proof: unverified ? "none" : "acceptance"
@@ -146110,7 +146115,7 @@ ${output}` : "";
     var meshNodeLogsSpecs = defineCommandSpecs("low", meshNodeLogsHandlers, {
       get_mesh_node_logs: { meshSender: "any_member_mesh" }
     }, { meshSender: "authenticated_peer" });
-    var import_node_crypto222 = require("crypto");
+    var import_node_crypto23 = require("crypto");
     init_worker_report_idempotency();
     init_worker_bridge();
     function schema2(db) {
@@ -146118,7 +146123,7 @@ ${output}` : "";
     }
     function key3(credential) {
       const value = credential.bind ?? credential.token;
-      return typeof value === "string" && value ? (0, import_node_crypto222.createHash)("sha256").update(value).digest("hex") : "";
+      return typeof value === "string" && value ? (0, import_node_crypto23.createHash)("sha256").update(value).digest("hex") : "";
     }
     function rememberPreparedDelivery(db, credential, claim) {
       schema2(db);
@@ -149317,7 +149322,7 @@ ${output}` : "";
             normalizeRepoMeshDeclarativeConfig: normalizeRepoMeshDeclarativeConfig2,
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
-          const { existsSync: existsSync120, readFileSync: readFileSync110, mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
+          const { existsSync: existsSync120, readFileSync: readFileSync109, mkdirSync: mkdirSync60, writeFileSync: writeFileSync50 } = await import("fs");
           const { dirname: dirname54, join: join136 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -149328,7 +149333,7 @@ ${output}` : "";
             const candidate = join136(workspace, relative20);
             if (!existsSync120(candidate)) continue;
             try {
-              const text4 = readFileSync110(candidate, "utf-8");
+              const text4 = readFileSync109(candidate, "utf-8");
               const parsed = /\.json$/i.test(candidate) ? JSON.parse(text4) : yaml3.load(text4);
               if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
                 baseDoc = parsed;
@@ -151002,7 +151007,7 @@ ${ptyResult.output.slice(-2e3)}`);
               workspace
             };
           }
-          const { existsSync: existsSync120, readFileSync: readFileSync110, writeFileSync: writeFileSync50, mkdirSync: mkdirSync60 } = await import("fs");
+          const { existsSync: existsSync120, readFileSync: readFileSync109, writeFileSync: writeFileSync50, mkdirSync: mkdirSync60 } = await import("fs");
           const { dirname: dirname54 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
@@ -151042,7 +151047,7 @@ ${ptyResult.output.slice(-2e3)}`);
             let existingMcpConfigText = "";
             if (hadExistingMcpConfig) {
               try {
-                existingMcpConfigText = readFileSync110(mcpConfigPath, "utf-8");
+                existingMcpConfigText = readFileSync109(mcpConfigPath, "utf-8");
                 const parsedExistingMcpConfig = parseMeshCoordinatorMcpConfig(existingMcpConfigText, configFormat);
                 existingMcpConfig = { ...existingMcpConfig, ...parsedExistingMcpConfig };
               } catch (error) {
@@ -155155,7 +155160,7 @@ ${ptyResult.output.slice(-2e3)}`);
     init_assistant();
     init_mesh_coordinator();
     init_worker_private_home();
-    var import_node_crypto31 = require("crypto");
+    var import_node_crypto322 = require("crypto");
     var import_node_fs18 = require("fs");
     var os37 = __toESM2(require("os"));
     var import_node_path23 = require("path");
@@ -155380,7 +155385,7 @@ ${ptyResult.output.slice(-2e3)}`);
         }
         const tmpPath = (0, import_node_path23.join)(
           realParent,
-          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto31.randomUUID)().slice(0, 8)}`
+          `.${fileName}.tmp-${process.pid}-${Date.now()}-${(0, import_node_crypto322.randomUUID)().slice(0, 8)}`
         );
         let tmpFd = null;
         let renamed2 = false;
@@ -162643,7 +162648,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
     var fs105 = __toESM2(require("fs"));
     var path96 = __toESM2(require("path"));
     init_dist();
-    var import_node_crypto322 = require("crypto");
+    var import_node_crypto33 = require("crypto");
     var ProviderApprovalLifecycle = class {
       current = null;
       signature = null;
@@ -162684,7 +162689,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
             type: setup ? "provider_setup" : "tool_permission",
             evidence: "live",
             lifecycle: "pending",
-            modalKey: `modal:${(0, import_node_crypto322.randomUUID)()}`,
+            modalKey: `modal:${(0, import_node_crypto33.randomUUID)()}`,
             createdAt: at,
             resolvedAt: null,
             // Extracted titles can be button lines or private prompt text. The Inbox
@@ -167092,7 +167097,7 @@ ${text4}` : text4;
       return messages;
     }
     var fs104 = __toESM2(require("fs"));
-    var import_node_crypto33 = require("crypto");
+    var import_node_crypto34 = require("crypto");
     init_provider_cli_shared();
     init_logger();
     var TERMINAL_SNAPSHOT_DEFAULT_MAX_BYTES = 32 * 1024;
@@ -167119,7 +167124,7 @@ ${text4}` : text4;
       } catch {
       }
       const truncation = truncateToByteTailByLine(rawViewport, cap);
-      const hash3 = (0, import_node_crypto33.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
+      const hash3 = (0, import_node_crypto34.createHash)("sha256").update(rawViewport, "utf8").digest("hex").slice(0, 16);
       return {
         text: truncation.text,
         cursor: { col: cursor.col, row: cursor.row },
@@ -169698,7 +169703,7 @@ ${text4}` : text4;
     init_logger();
     init_track_identity();
     var import_node_child_process20 = require("child_process");
-    var import_node_crypto34 = require("crypto");
+    var import_node_crypto35 = require("crypto");
     init_resolve_executable();
     var CodexStdioTransport = class {
       constructor(options) {
@@ -169708,7 +169713,7 @@ ${text4}` : text4;
       pending = /* @__PURE__ */ new Map();
       buffer = "";
       closed = true;
-      generation = (0, import_node_crypto34.randomUUID)();
+      generation = (0, import_node_crypto35.randomUUID)();
       start() {
         if (this.child) throw new Error("Codex runtime already started");
         this.closed = false;
@@ -169769,7 +169774,7 @@ ${text4}` : text4;
         this.child.stdin.write(JSON.stringify(message) + "\n");
       }
       request(method, params) {
-        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto34.randomUUID)()}`;
+        const id4 = `adhdev:${this.generation}:${(0, import_node_crypto35.randomUUID)()}`;
         return new Promise((resolve55, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id4);
@@ -169805,7 +169810,7 @@ ${text4}` : text4;
         this.options.onExit(error, reason);
       }
     };
-    var import_node_crypto35 = require("crypto");
+    var import_node_crypto36 = require("crypto");
     init_dist();
     function record5(value) {
       return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -169936,7 +169941,7 @@ ${text4}` : text4;
       }
       prompt(binding, questions, blocking = binding.transport === "codex_rpc") {
         return {
-          promptId: (0, import_node_crypto35.randomUUID)(),
+          promptId: (0, import_node_crypto36.randomUUID)(),
           origin: "cli",
           providerType: "codex-cli",
           createdAt: Date.now(),
@@ -171581,7 +171586,7 @@ ${buttons.join("\n")}`;
       const fromSnapshot = extractFinalSummaryFromMessagesAfter(pending.resolvedFinalMessages, pending.turnStartedAt);
       return fromSnapshot || void 0;
     }
-    var import_node_crypto36 = require("crypto");
+    var import_node_crypto37 = require("crypto");
     init_logger();
     function normalizeProviderSessionId(provider, providerSessionId) {
       const normalizedId = typeof providerSessionId === "string" ? providerSessionId.trim() : "";
@@ -171779,7 +171784,7 @@ ${buttons.join("\n")}`;
                 modal: "approval",
                 // Legacy adapters have no modal identity; persist only a digest of
                 // their live fingerprint, never prompt text or button labels.
-                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto36.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
+                modalKey: adapterStatus?.providerApproval?.modalKey ?? `modal-digest:${(0, import_node_crypto37.createHash)("sha256").update(approvalFingerprint).digest("hex")}`,
                 clockUnknown: adapterStatus?.providerApproval?.createdAt === null,
                 providerSetup: adapterStatus?.providerApproval?.type === "provider_setup" && adapterStatus.providerApproval.evidence === "live"
               });
@@ -188285,7 +188290,7 @@ ${notice.notice}${supersededHint}`;
         }
       };
     }
-    var import_node_crypto37 = require("crypto");
+    var import_node_crypto38 = require("crypto");
     init_cooperative_gate();
     function createNoticeSubmitInventory(ledger) {
       const db = ledger.store.db, active = /* @__PURE__ */ new Set();
@@ -188294,7 +188299,7 @@ ${notice.notice}${supersededHint}`;
   session_id TEXT NOT NULL,daemon_id TEXT NOT NULL,pid INTEGER NOT NULL,boot_nonce TEXT NOT NULL,
   state TEXT NOT NULL,outcome TEXT,revision INTEGER NOT NULL,updated_at INTEGER NOT NULL)`);
       function begin(entry, sessionId) {
-        const operationId = (0, import_node_crypto37.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
+        const operationId = (0, import_node_crypto38.randomUUID)(), messageId = `notify:${entry.meshId}:${entry.writer}:${entry.seq}`;
         db.prepare("INSERT INTO turn_notice_submit_metadata VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(operationId, messageId, entry.meshId, entry.writer, entry.seq, sessionId, ledger.selfDaemonId, process.pid, MAINTENANCE_BOOT_NONCE, "intent", null, 1, Date.now());
         const update = (state2, outcome) => {
           db.prepare("UPDATE turn_notice_submit_metadata SET state=?,outcome=COALESCE(?,outcome),revision=revision+1,updated_at=? WHERE operation_id=? AND state!='submitted'").run(state2, outcome ?? null, Date.now(), operationId);
@@ -188304,7 +188309,7 @@ ${notice.notice}${supersededHint}`;
       return {
         begin,
         async handling(run3) {
-          const id4 = (0, import_node_crypto37.randomUUID)();
+          const id4 = (0, import_node_crypto38.randomUUID)();
           active.add(id4);
           try {
             return await run3();

@@ -25,32 +25,40 @@
 //   - `diff --git a/<path> b/<path>` lines are scanned: file NAMES leak too.
 
 import { spawn, execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { devNull } from 'node:os';
-import { readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { findLeaks, findLeaksWithPatterns, currentUserNames } from './personal-paths.mjs';
 
 export const REQUIRED_NAME = 'vilmire';
 export const REQUIRED_EMAIL = 'vilmire@users.noreply.github.com';
 
 // Supplied by private repo config; never embed owner/fleet patterns in OSS.
-export function loadPublicPushPatterns(repo) {
-  // This is an explicit private root, never a directory-search starting point.
-  // Git root and destination checks also reject public linked worktrees.
+export function loadPublicPushPatterns(repo, { forRepo = repo, expectedDigest = process.env.ADHDEV_PUBLIC_PUSH_PATTERNS_SHA256 } = {}) {
   try {
-    const git = args => execFileSync('git', ['--no-replace-objects', '-C', repo, ...args], { encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] }).replace(/\n$/, '');
-    const root = git(['rev-parse', '--show-toplevel']);
-    const urls = git(['remote', 'get-url', '--push', '--all', 'origin']).split('\n');
-    const configured = git(['config', '--get-all', 'remote.origin.url']).split('\n');
+    const git = args => execFileSync('git', ['--no-replace-objects', '-C', repo, ...args], { encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] });
+    const root = realpathSync(git(['rev-parse', '--show-toplevel']).replace(/\n$/, ''));
+    const target = realpathSync(forRepo);
+    const location = relative(root, target);
+    const containsTarget = !isAbsolute(location) && location !== '..' && !location.startsWith('../') && !location.startsWith('..\\');
+    const urls = git(['remote', 'get-url', '--push', '--all', 'origin']).replace(/\n$/, '').split('\n');
+    const configured = git(['config', '--get-all', 'remote.origin.url']).replace(/\n$/, '').split('\n');
     if (![...urls, ...configured].every(isKnownPrivateUrl)) throw new Error();
-    const patterns = JSON.parse(readFileSync(resolve(root, '.adhdev/public-push-patterns.json'), 'utf8'));
+    const entry = git(['ls-tree', 'HEAD', '--', '.adhdev/public-push-patterns.json']);
+    if (!/^100(?:644|755) blob [0-9a-f]{40,64}\t\.adhdev\/public-push-patterns\.json\n$/.test(entry)) throw new Error();
+    // Read committed policy, isolated from replacements, grafts and working-tree
+    // edits. An external root additionally requires an out-of-band content pin.
+    const blob = git(['show', 'HEAD:.adhdev/public-push-patterns.json']);
+    if (!containsTarget && !expectedDigest) throw new Error();
+    if (expectedDigest !== undefined && (!/^[0-9a-f]{64}$/.test(expectedDigest) || createHash('sha256').update(blob).digest('hex') !== expectedDigest)) throw new Error();
+    const patterns = JSON.parse(blob);
     if (!['ownerNames', 'knownHosts', 'blockedText'].every(key => Array.isArray(patterns[key]) && patterns[key].length && patterns[key].every(v => typeof v === 'string' && v.trim()))) throw new Error();
     return patterns;
   } catch {
-    // JSON parse errors can contain private literals; never relay their text.
-    throw new Error('public push pattern config unavailable or invalid at private root; refusing public publish');
+    // Neither Git/JSON errors nor policy contents may be relayed to logs.
+    throw new Error('public push pattern config unavailable, uncommitted, unpinned or invalid at private root; refusing public publish');
   }
 }
 
@@ -72,7 +80,7 @@ function parseRemoteDetails(value) {
     const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(input)?.[1] || '';
     const decoded = decodeURIComponent(rawPath);
     if (/[\x00-\x20\\~]/.test(decoded)) return null;
-    const privateEligible = !/[?#]/.test(input) && !/%2f|%5c/i.test(rawPath) && !/(?:\.git){2,}(?:\/|$)/i.test(decoded) && !/(?:^|\/)\.git(?:\/|$)/i.test(decoded);
+    const privateEligible = !decoded.split('/').some(part => part === '.' || part === '..') && !/[?#]/.test(input) && !/%2f|%5c/i.test(rawPath) && !/(?:\.git){2,}(?:\/|$)/i.test(decoded) && !/(?:^|\/)\.git(?:\/|$)/i.test(decoded);
     const url = new URL(input);
     if (!['https:', 'http:', 'ssh:', 'git:', 'file:'].includes(url.protocol)) return null;
     const parts = [];
@@ -144,61 +152,42 @@ const tryGit = async (cwd, args) => { try { return (await runGit(cwd, args)).tri
 
 /** Anchor private config in the superproject, never a public submodule override. */
 export async function loadPublicPushPatternsForRepo(cwd, privateRoot = process.env.ADHDEV_PRIVATE_ROOT) {
-  if (privateRoot) return loadPublicPushPatterns(privateRoot);
+  if (privateRoot) return loadPublicPushPatterns(privateRoot, { forRepo: cwd });
   let repo = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
   const seen = new Set();
   while (!seen.has(repo)) {
     seen.add(repo);
     const parent = (await runGit(repo, ['rev-parse', '--show-superproject-working-tree'])).trim();
-    if (!parent) return loadPublicPushPatterns(repo);
+    if (!parent) return loadPublicPushPatterns(repo, { forRepo: cwd });
     repo = resolve(parent);
   }
   throw new Error('cyclic superproject config lookup; refusing public publish');
 }
 
-/** Repository identity is evidence from origin AND the actual push destination.
- * A different known repository may never consume this repository's approval.
+/** Approval identity comes ONLY from every effective push destination.
+ * Non-exact hosts (including GitHub redirects), local mirrors and unknown paths
+ * are public but supply no approval key. Never borrow origin/checkout metadata.
  */
-export async function publicPushRepoKey(cwd, remoteName = 'origin') {
-  const keys = new Set();
+export async function publicPushRepoKeys(cwd, remoteName = 'origin') {
   const { urls } = await pushDestinations(cwd, remoteName);
-  const seen = new Set();
-  const collect = async (repo, values, depth = 0) => {
-    if (depth > 16) throw new Error('public publish repository identity chain too deep');
-    for (const value of values) {
-      const parsed = parseRemoteUrl(value);
-      if (parsed?.host === 'github.com' && REPO_KEYS.has(parsed.path)) {
-        keys.add(REPO_KEYS.get(parsed.path));
-        continue;
-      }
-      // A local mirror is public, but its own origin can establish WHICH repo
-      // needs approval. Follow metadata only; never fetch or execute a transport.
-      let local;
-      try {
-        if (value.startsWith('file://')) local = fileURLToPath(value);
-        else if (!/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(value)) local = resolve(repo, value);
-      } catch { /* invalid local path is not identity evidence */ }
-      if (!local || seen.has(local)) continue;
-      seen.add(local);
-      const origin = await tryGit(local, ['remote', 'get-url', '--all', 'origin']);
-      if (origin) await collect(local, origin.split('\n'), depth + 1);
-    }
-  };
-  const origin = await tryGit(cwd, ['remote', 'get-url', '--all', 'origin']);
-  await collect(cwd, [...urls, ...(origin ? origin.split('\n') : [])]);
-  if (keys.size > 1) throw new Error('public publish repository key mismatch between origin and push destination');
-  if (keys.size) return [...keys][0];
-  const root = (await runGit(cwd, ['rev-parse', '--show-toplevel'])).trim();
-  const parent = (await runGit(root, ['rev-parse', '--show-superproject-working-tree'])).trim();
-  if (parent) {
-    const key = relative(parent, root).split('\\').join('/');
-    if (key !== 'root') return key; // reserve root for a proven root repository
-  }
-  throw new Error('public publish repository identity unavailable; refusing root approval fallback');
+  return urls.map(url => {
+    const parsed = parseRemoteDetails(url);
+    const defaultPort = { 'https:': '443', 'http:': '80', 'ssh:': '22', 'git:': '9418' }[parsed?.protocol];
+    const repoKey = parsed?.privateEligible && parsed.host === 'github.com' && parsed.port === defaultPort && REPO_KEYS.get(parsed.path);
+    if (!repoKey) throw new Error('publish_approval_required: unknown push destination repository identity; configure a named remote with an exact canonical GitHub push URL');
+    return { url, repoKey };
+  });
+}
+
+export async function publicPushRepoKey(cwd, remoteName = 'origin') {
+  const keys = new Set((await publicPushRepoKeys(cwd, remoteName)).map(destination => destination.repoKey));
+  if (keys.size !== 1) throw new Error('publish_approval_required: multiple push destination repository keys require per-repository approvals');
+  return [...keys][0];
 }
 
 /** All configured and rewritten push destinations; an unreadable config throws. */
 export async function pushDestinations(cwd, remoteName = 'origin') {
+  if (/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(remoteName)) throw new Error('Raw URL push remotes are not supported for approval; configure a named Git remote and retry');
   // get-url --all applies insteadOf/pushInsteadOf and Git's pushurl/url fallback.
   const urls = (await runGit(cwd, ['remote', 'get-url', '--push', '--all', remoteName])).replace(/\n$/, '').split('\n');
   const pushurls = await runGit(cwd, ['config', '--get-all', `remote.${remoteName}.pushurl`]).catch(() => null);
@@ -400,7 +389,7 @@ async function headerViolations(cwd, shas, scan) {
   return out;
 }
 
-const SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?$/;
+const SHA_LINE = /^([0-9a-f]{40,64})(?: \(from [0-9a-f]{40,64}\))?\r?$/;
 
 /**
  * Incremental parser for `diff-tree -p` output: feed text chunks as they arrive,

@@ -533,6 +533,9 @@ export async function handleGitCommand(
       const remote = typeof args?.remote === 'string' && args.remote.trim() ? args.remote.trim() : 'origin';
       const branch = typeof args?.branch === 'string' && args.branch.trim() ? args.branch.trim() : undefined;
       const setUpstream = Boolean(args?.setUpstream);
+      if (/^[a-z][a-z0-9+.-]*:\/\/|^(?:[^@/:]+@)?[^/:]+:/i.test(remote)) {
+        return failure('invalid_args', 'Raw URL push remotes are not supported for approval; configure a named Git remote and retry');
+      }
       if (!/^[a-zA-Z0-9_.\-]+$/.test(remote)) {
         return failure('invalid_args', 'remote must contain only alphanumeric characters, dots, hyphens, and underscores');
       }

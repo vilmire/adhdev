@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { handleGitCommand, createDefaultGitCommandServices } from '../../src/git/git-commands'
 import { fastForwardMeshNode } from '../../src/mesh/mesh-fast-forward'
 import { assertRefineryPublishApproved, runMeshRefineSubmoduleReachabilityGate } from '../../src/mesh/mesh-refine-gitlink-utils'
-import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 useSyntheticPublicPushPatterns()
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 function fixture(key: string) {
@@ -22,10 +22,11 @@ function fixture(key: string) {
   const sha = git(work, 'rev-parse', 'HEAD'); const before = git(remote, 'rev-parse', 'main')
   mkdirSync(join(work, '.adhdev')); writeFileSync(join(work, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'], blockedText: ['forged-token'] }))
   writeFileSync(join(work, '.git/info/exclude'), '.adhdev/\n')
+  if (key !== 'root' && repoName) bindPushDestination(work, remote, key)
   return { tmp, work, remote, sha, before }
 }
 for (const key of ['root', 'oss', 'adhdev-providers', 'homebrew-adhdev']) describe(`round5 P2-3 ${key} approval identity`, () => {
-  for (const command of ['git_push', 'fast_forward']) it(`${command} rejects every other repository's key then accepts only its own`, async () => {
+  for (const command of ['git_push', 'fast_forward']) it(`${command} rejects every other repository's key then accepts only its known destination key`, async () => {
     const f = fixture(key)
     try {
       for (const wrong of ['root', 'oss', 'adhdev-providers', 'homebrew-adhdev'].filter(k => k !== key)) {
@@ -39,8 +40,8 @@ for (const key of ['root', 'oss', 'adhdev-providers', 'homebrew-adhdev']) descri
       const result: any = command === 'git_push'
         ? await handleGitCommand('git_push', { workspace: f.work, approvedPublishShas: { [key]: [f.sha] } }, createDefaultGitCommandServices())
         : await fastForwardMeshNode({ workspace: f.work, execute: true, mode: 'push', approvedPublishShas: { [key]: [f.sha] } })
-      expect(result.success, result.error || result.operationError).toBe(true)
-      expect(git(f.remote, 'rev-parse', 'main')).toBe(f.sha)
+      expect(result.success, result.error || result.operationError).toBe(key !== 'root')
+      expect(git(f.remote, 'rev-parse', 'main')).toBe(key === 'root' ? f.before : f.sha)
     } finally { rmSync(f.tmp, { recursive: true, force: true }) }
   }, 60000)
 })
@@ -51,6 +52,8 @@ it('round5 P2-3 explicit key mismatch and canonical origin identity refuse cross
     git(f.work, 'remote', 'add', 'mirror', f.remote)
     git(f.work, 'remote', 'set-url', 'origin', 'https://github.com/vilmire/adhdev.git')
     await expect(assertRefineryPublishApproved(f.work, f.sha, 'main', { root: [f.sha] }, 'mirror')).rejects.toThrow()
+    await expect(assertRefineryPublishApproved(f.work, f.sha, 'main', { oss: [f.sha] }, 'mirror')).rejects.toThrow(/destination/)
+    bindPushDestination(f.work, f.remote, 'oss', 'mirror')
     await expect(assertRefineryPublishApproved(f.work, f.sha, 'main', { oss: [f.sha] }, 'mirror')).resolves.toBeUndefined()
   } finally { rmSync(f.tmp, { recursive: true, force: true }) }
 })
@@ -68,12 +71,13 @@ it('round5 P2-3 zero-pending root is not counted and unreadable root evidence fa
   } finally { rmSync(f.tmp, { recursive: true, force: true }) }
 })
 
-it('round5 P2-3 a renamed local clone follows its public origin identity', async () => {
+it('round5 P2-3 a renamed local clone cannot borrow its origin identity', async () => {
   const f = fixture('renamed-public-checkout')
   try {
     git(f.remote, 'config', 'remote.origin.url', 'https://github.com/vilmire/adhdev.git')
     await expect(assertRefineryPublishApproved(f.work, f.sha, 'main', { root: [f.sha] })).rejects.toThrow()
-    await expect(assertRefineryPublishApproved(f.work, f.sha, 'main', { oss: [f.sha] })).resolves.toBeUndefined()
+    await expect(assertRefineryPublishApproved(f.work, f.sha, 'main', { oss: [f.sha] })).rejects.toThrow(/destination/)
+    expect(git(f.remote, 'rev-parse', 'main')).toBe(f.before)
   } finally { rmSync(f.tmp, { recursive: true, force: true }) }
 })
 it('round5 P2-3 an unidentified standalone repo never defaults to the root approval key', async () => {

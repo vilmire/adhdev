@@ -460,7 +460,7 @@ fi
 HEAD_SHA=$(git rev-parse HEAD)
 
 echo "  ⬆ Pushing branch ($PUSH_BRANCH) before the tag..."
-node scripts/check-public-push.mjs --repo . --ref "HEAD:origin/$PUSH_BRANCH"
+node scripts/check-public-push.mjs --repo . --ref "HEAD"
 if ! git push origin "HEAD:refs/heads/$PUSH_BRANCH"; then
     echo ""
     echo "❌ Branch push FAILED — aborting before the tag is pushed."

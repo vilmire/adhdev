@@ -1,4 +1,4 @@
-import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
@@ -119,6 +119,7 @@ function initGitRepo(repo: string) {
   execFileSync('git', ['remote', 'add', 'origin', originBare], { cwd: repo })
   execFileSync('git', ['config', 'remote.origin.adhdev-private', 'true'], { cwd: repo })
   execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo })
+  bindPushDestination(repo, originBare, 'oss')
 }
 
 function initSubmoduleOrigin(repo: string) {

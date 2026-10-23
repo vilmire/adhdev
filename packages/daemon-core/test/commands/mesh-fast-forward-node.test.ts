@@ -1,4 +1,4 @@
-import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
@@ -46,6 +46,7 @@ function createRemoteBackedRepo(root: string) {
   git(seed, ['push', '-q', '-u', 'origin', 'main'])
   git(root, ['clone', '-q', origin, work])
   configureUser(work)
+  bindPushDestination(work, origin, 'oss')
   git(work, ['config', 'remote.origin.adhdev-private', 'true'])
   return { origin, seed, work }
 }
@@ -173,7 +174,7 @@ describe('fast_forward_mesh_node', () => {
         mode: 'push',
         execute: true,
         nodeId: 'node-push',
-        approvedPublishShas: { root: [localHead] },
+        approvedPublishShas: { oss: [localHead] },
       })
 
       expect(result).toMatchObject({ success: true, allowed: true, willRun: true, executed: true, code: 'push_applied', mode: 'push' })
@@ -518,7 +519,7 @@ describe('P2 submodule push visibility enforcement', () => {
       git(work, ['add', '.'])
       git(work, ['commit', '-qm', 'root gitlink'])
       const rootPending = git(work, ['rev-list', 'origin/main..HEAD']).split('\n').filter(Boolean)
-      const result = await fastForwardMeshNode({ workspace: work, approvedPublishShas: { root: rootPending }, execute: true, mode: 'push', pushSubmodules: true, allowAutoPublishSubmoduleMainCommits: true })
+      const result = await fastForwardMeshNode({ workspace: work, approvedPublishShas: { oss: rootPending }, execute: true, mode: 'push', pushSubmodules: true, allowAutoPublishSubmoduleMainCommits: true })
       const entry = result.submodulePushes?.[0]
       expect(entry).toBeDefined()
       expect(entry).toMatchObject({ pushed: false, skipped: true, code: 'submodule_public_publish_requires_approval' })
@@ -570,7 +571,7 @@ it('round4 P1-C: exact mapped approval permits a clean public workspace push and
     const extra = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: [tip, 'abcdef0'] })
     expect(extra.success).toBe(false)
     expect(extra.operationError).toContain('publish_approval_required')
-    const approved = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: { root: [tip] } })
+    const approved = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: { oss: [tip] } })
     expect(approved.success, approved.operationError).toBe(true)
     expect(git(origin, ['rev-parse', 'main'])).toBe(tip)
   } finally { rmSync(root, { recursive: true, force: true }) }

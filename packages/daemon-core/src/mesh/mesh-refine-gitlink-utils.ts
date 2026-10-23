@@ -19,7 +19,7 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations, publicPushRepoKey, publicPushPendingCommits, loadPublicPushPatternsForRepo } from '../git/public-push-guard.mjs';
+import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations, publicPushRepoKeys, publicPushPendingCommits, loadPublicPushPatternsForRepo } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
@@ -760,14 +760,37 @@ export async function evaluatePublicPublishApproval(
     submodulePath: string,
     commit: string,
     branch: string,
-    approvedShas: readonly string[] | undefined,
+    approvedShas: PublicPublishApprovals | undefined,
     remoteName = 'origin',
     patternRepo = submodulePath,
+    publicRepoCount = 1,
 ): Promise<MeshRefinePublishApprovalRequest | undefined> {
-    let destinations: Awaited<ReturnType<typeof pushDestinations>> | undefined;
-    try { destinations = await pushDestinations(submodulePath, remoteName); } catch { /* unknown URLs: treat as public */ }
-    if (destinations && !destinations.isPublic) return undefined;
+    const destinations = await pushDestinations(submodulePath, remoteName);
+    const keyed = await publicPushRepoKeys(submodulePath, remoteName);
+    if (!destinations.isPublic) return undefined;
+    const groups = new Map<string, string[]>();
+    for (const { url, repoKey } of keyed) groups.set(repoKey, [...(groups.get(repoKey) || []), url]);
+    const requests: MeshRefinePublishApprovalRequest[] = [];
+    for (const [key, urls] of groups) {
+        const request = await evaluatePublicPublishApprovalForDestinations(submodulePath, commit, branch,
+            approvalsForRepo(approvedShas, key, Math.max(publicRepoCount, groups.size)), remoteName, patternRepo, { urls, isPublic: true });
+        if (request) requests.push(request);
+    }
+    if (!requests.length) return undefined;
+    return {
+        remoteUrls: requests.flatMap(request => request.remoteUrls), remoteRef: `refs/heads/${branch}`,
+        commits: requests.flatMap(request => request.commits),
+        unapproved: [...new Set(requests.flatMap(request => request.unapproved))],
+        extraApproved: [...new Set(requests.flatMap(request => request.extraApproved))],
+        invalidApproved: [...new Set(requests.flatMap(request => request.invalidApproved || []))],
+        ...(requests.some(request => request.error) ? { error: requests.map(request => request.error).filter(Boolean).join('; ') } : {}),
+    };
+}
 
+async function evaluatePublicPublishApprovalForDestinations(
+    submodulePath: string, commit: string, branch: string, approvedShas: readonly string[] | undefined,
+    remoteName: string, patternRepo: string, destinations: Awaited<ReturnType<typeof pushDestinations>>,
+): Promise<MeshRefinePublishApprovalRequest | undefined> {
     const { execFile } = await import('node:child_process');
     const run = async (args: string[], input?: string): Promise<string> => {
         let child: ReturnType<typeof execFile>;
@@ -852,9 +875,9 @@ export class PublicPublishApprovalRequired extends Error {
 }
 
 export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: PublicPublishApprovals, remoteName = 'origin', repoKey?: string, publicRepoCount = 1): Promise<void> {
-    const actualRepoKey = await publicPushRepoKey(repo, remoteName);
-    if (repoKey !== undefined && repoKey !== actualRepoKey) throw new Error('public publish repository key mismatch');
-    const request = await evaluatePublicPublishApproval(repo, commit, branch, approvalsForRepo(approvedShas, actualRepoKey, publicRepoCount), remoteName);
+    const keys = await publicPushRepoKeys(repo, remoteName);
+    if (repoKey !== undefined && keys.some(destination => repoKey !== destination.repoKey)) throw new Error('public publish repository key mismatch');
+    const request = await evaluatePublicPublishApproval(repo, commit, branch, approvedShas, remoteName, repo, publicRepoCount);
     if (request) throw new PublicPublishApprovalRequired(request);
     const destinations = await pushDestinations(repo, remoteName);
     if (destinations.isPublic) {
@@ -1000,6 +1023,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                 path: gitlink.path,
                 commit: gitlink.commit,
                 reachable: false,
+                ...(options.allowAutoPublishSubmoduleMainCommits === true ? { autoPublishAllowed: true, autoPublishAttempted: false } : {}),
             };
             // Resolved lazily once the submodule checkout/remote are confirmed; defaults
             // to 'main' so error messages emitted before resolution stay byte-identical
@@ -1120,7 +1144,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                             const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
                             entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
                             const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true
-                                ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, approvalsForRepo(options.approvedPublishShas, await publicPushRepoKey(submodulePath), publicRepoCount), 'origin', repoRoot)
+                                ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, options.approvedPublishShas, 'origin', repoRoot, publicRepoCount)
                                 : undefined;
                             if (publishApproval) {
                                 // ★Public remote without per-commit owner approval: stop BEFORE pushing.

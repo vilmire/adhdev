@@ -1,4 +1,4 @@
-import { useSyntheticPublicPushPatterns } from '../helpers/public-push-patterns'
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 import { describe, expect, it, vi } from 'vitest';
 import { DaemonCommandHandler } from '../../src/commands/handler.js';
 import {
@@ -231,6 +231,7 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
     git('init', '-q', '--bare', '-b', 'main', join(root, 'origin.git'));
     git('--git-dir=' + join(root, 'origin.git'), 'config', 'remote.origin.url', 'https://github.com/vilmire/adhdev-cloud.git');
     git('remote', 'add', 'mirror', join(root, 'origin.git'));
+    bindPushDestination(root, join(root, 'origin.git'), 'oss', 'mirror');
     git('config', 'user.name', identity === 'valid' ? 'vilmire' : 'Other'); git('config', 'user.email', identity === 'valid' ? 'vilmire@users.noreply.github.com' : 'other@example.com');
     mkdirSync(join(root, '.adhdev'));
     writeFileSync(join(root, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }));
@@ -244,7 +245,7 @@ it.each(['foreign', 'valid'])('round4 P1-C: git_push refuses without approval an
     const extra: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror', approvedPublishShas: [sha, 'abcdef0'] }, services);
     expect(extra.success).toBe(false);
     expect(extra.error).toContain('publish_approval_required');
-    const scanned: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror', approvedPublishShas: { root: [sha] }, setUpstream: true }, services);
+    const scanned: any = await handleGitCommand('git_push', { workspace: root, remote: 'mirror', approvedPublishShas: { oss: [sha] }, setUpstream: true }, services);
     if (identity === 'foreign') {
       expect(scanned.success).toBe(false);
       expect(scanned.error).toContain('identity');
