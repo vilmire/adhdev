@@ -124,7 +124,8 @@ describe('built-in specs are lint-clean', () => {
     it('claude-cli busy→idle end anchor (?![\\s\\S]) matches exactly like the old bare $', () => {
         const file = specFiles.find(f => f.endsWith(path.join('claude-cli', 'specs', '4.0.json')))!;
         const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-        const t = raw.transitions[4];
+        const t = raw.transitions.find((tr: { label?: string }) => tr.label === 'busy→idle');
+        expect(t).toBeDefined();
         expect(t.label).toBe('busy→idle');
         const src: string = t.when.all[1].matches;
         expect(src.endsWith('(?![\\s\\S])')).toBe(true);

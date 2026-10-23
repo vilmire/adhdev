@@ -166413,15 +166413,30 @@ ${text4}` : text4;
       return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
     }
     function stripToolAndCodeLines(raw) {
-      return raw.split("\n").filter((line) => {
+      let inToolBlock = false;
+      const out = [];
+      for (const line of raw.split("\n")) {
         const trimmed2 = line.trim();
-        if (!trimmed2) return false;
-        if (/^[⎿└├]/.test(trimmed2)) return false;
-        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) return false;
-        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) return false;
-        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed2)) return false;
-        return true;
-      }).join("\n");
+        if (!trimmed2) {
+          inToolBlock = false;
+          continue;
+        }
+        if (/^[⎿└├]/.test(trimmed2)) {
+          inToolBlock = true;
+          continue;
+        }
+        if (inToolBlock) {
+          if (/^[ \t]{2,}/.test(line) && !/^[ \t]*(?:[⏺✻✢✳✶✽❯›]|─{10,})/.test(line)) {
+            continue;
+          }
+          inToolBlock = false;
+        }
+        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) continue;
+        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) continue;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed2)) continue;
+        out.push(line);
+      }
+      return out.join("\n");
     }
     function detectProviderFailure(output, _exitCode) {
       const stripped = stripAnsi2(output).replace(/\r\n?/g, "\n");
@@ -167928,9 +167943,19 @@ ${text4}` : text4;
     }
     var TAIL_BYTES4 = 16 * 1024;
     var MIN_SUSPECT_AGE_MS = 5e3;
+    var MID_TURN_AUTH_CONFIRM_MS = 15e3;
+    var MID_TURN_QUIET_MS = 5e3;
     var ADVISORY_COOLDOWN_MS = 10 * 6e4;
     var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
     var KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
+    var ANCHORED_MID_TURN_AUTH_RE = /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:[^\n]*"type"\s*:\s*"authentication_error"\b|[^\n]*"error"\s*:\s*\{[^}\n]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"|(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)|(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b|login\s+expired\s*[·•—–-]\s*please\s+run\s+\/login\b|\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S)/i;
+    function hasAnchoredMidTurnAuthFailure(cliType, rawSurface) {
+      const masked = maskForeignProviderText(cliType, rawSurface);
+      const stripped = stripAnsi2(masked).replace(/\r\n?/g, "\n");
+      const filtered = stripToolAndCodeLines(stripped);
+      if (!filtered.trim()) return false;
+      return ANCHORED_MID_TURN_AUTH_RE.test(filtered);
+    }
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
@@ -167972,9 +167997,6 @@ ${text4}` : text4;
       const ageMs2 = now - suspect.suspectedAtMs;
       if (ageMs2 < MIN_SUSPECT_AGE_MS) return {};
       if (input.submitInFlight) return {};
-      if (input.midTurn) return {};
-      state2.suspect = null;
-      if (ctx.isCoordinator) return {};
       let screen = "";
       try {
         screen = input.readScreen() || "";
@@ -167982,12 +168004,21 @@ ${text4}` : text4;
         screen = "";
       }
       const surface = screen || input.tail;
+      if (input.midTurn) {
+        if (ageMs2 < MID_TURN_AUTH_CONFIRM_MS) return {};
+        if (input.quietMs !== void 0 && input.quietMs < MID_TURN_QUIET_MS) return {};
+        if (!hasAnchoredMidTurnAuthFailure(ctx.cliType, surface)) return {};
+      }
+      if (!input.midTurn || ctx.cliType !== "kimi") {
+        state2.suspect = null;
+      }
+      if (ctx.isCoordinator) return {};
       const confirmed = classifyAuthBillingOutput(ctx.cliType, surface);
       if (!confirmed) {
         LOG.info("SpecAdapter", `[${ctx.cliType}] live ${suspect.failure.failureKind} marker no longer on screen at turn boundary (session=${ctx.sessionLabel}) \u2014 dismissed as quoted content`);
         return { clearTail: true };
       }
-      if (ctx.cliType === "kimi" && KIMI_ANCHORED_PROVIDER_UI_ERROR_RE.test(surface)) {
+      if (!input.midTurn && ctx.cliType === "kimi" && KIMI_ANCHORED_PROVIDER_UI_ERROR_RE.test(surface)) {
         return { latch: confirmed };
       }
       if (now - state2.advisoryNotifiedAtMs < ADVISORY_COOLDOWN_MS) return { clearTail: true };
@@ -168930,9 +168961,13 @@ ${text4}` : text4;
       /** Resolve a pending live suspicion on the routine status poll (turn boundary). */
       maybeConfirmLiveAuthBillingSuspect() {
         if (!this.liveAuth?.suspect || this.providerFailure || this.exited) return;
+        const lastOutputAt = this.driver?.getLastOutputAt?.();
         const outcome = resolveLiveAuthSuspect(this.liveAuth, this.liveAuthContext(), {
-          // FSM status is idle | generating | approval — anything but idle is mid-turn.
-          midTurn: !!this.latestState && this.latestState.status !== "idle",
+          // FSM status is idle | generating | approval | waiting_external — anything
+          // other than a settled post-boot idle (`starting` defaults to status 'idle'
+          // in fsm-types before readySeen) is mid-turn / non-idle.
+          midTurn: !!this.latestState && (this.latestState.status !== "idle" || this.latestState.id === "starting"),
+          quietMs: typeof lastOutputAt === "number" && lastOutputAt > 0 ? Math.max(0, Date.now() - lastOutputAt) : void 0,
           readScreen: () => typeof this.driver?.snapshot === "function" ? this.driver.snapshot() : "",
           tail: this.rawTail.strippedTail(TAIL_BYTES4),
           submitInFlight: typeof this.driver?.hasInFlightSubmit === "function" && this.driver.hasInFlightSubmit()
@@ -171223,7 +171258,9 @@ ${buttons.join("\n")}`;
             host.completedDebounceTimer = null;
           }
           host.completedDebouncePending = null;
-          if (!host.generatingStartedAt) host.generatingStartedAt = now;
+          if (!host.generatingStartedAt && (adapterStatus.activeModal || host.turnStartedThisBoot || host.hasAdapterPendingResponse())) {
+            host.generatingStartedAt = now;
+          }
           host.busyEpoch++;
           const modal = adapterStatus.activeModal;
           LOG.info("CLI", `[${host.type}] approval modal: "${modal?.message?.slice(0, 80) ?? "none"}"`);
@@ -189613,10 +189650,13 @@ ${notice.notice}${supersededHint}`;
       const approval = state2.activeChat?.providerApproval;
       if (approval) {
         if (approval.lifecycle !== "pending" || approval.resolvedAt != null || approval.evidence !== "live") return null;
-        return typeof approval.modalKey === "string" && approval.modalKey ? `modal:${approval.modalKey}` : null;
+        if (typeof approval.modalKey === "string" && approval.modalKey) return `modal:${approval.modalKey}`;
+        if (approval.source === "status_only") return "status_only:waiting_external";
+        return null;
       }
       const modal = state2.activeChat?.activeModal;
-      if (!modal || !Array.isArray(modal.buttons) || modal.buttons.length === 0) return null;
+      if (!modal) return "status_only:waiting_external";
+      if (!Array.isArray(modal.buttons) || modal.buttons.length === 0) return null;
       return `legacy:${JSON.stringify([String(modal.message ?? ""), modal.buttons.map(String)])}`;
     }
     var MAX_ESCALATED_REMEMBERED = 512;

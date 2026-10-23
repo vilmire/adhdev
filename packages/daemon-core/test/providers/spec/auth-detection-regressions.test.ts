@@ -15,6 +15,7 @@ import {
     resolveLiveAuthSuspect,
 } from '../../../src/providers/spec/live-auth-advisory.js';
 import { projectAdapterStatus } from '../../../src/providers/spec/adapter-status-projection.js';
+import { CliProviderInstance } from '../../../src/providers/cli-provider-instance.js';
 import type {
     PtyTransportFactory,
     PtyRuntimeTransport,
@@ -162,10 +163,72 @@ const REPORT_MD_TOOL_AND_CODE_FALSE_POSITIVES = [
     `expect(res.status).toBe(401); expect(res.body).toEqual({ status: 401, error: 'Unauthorized' });`,
     // Tool output & code comments mentioning "not signed in", "401", "Unauthorized", "token_expired":
     `  ⎿  {"status": 401, "error": "Unauthorized", "code": "invalid_token"}`,
+    // Multi-line tool output block where 401 / authentication_error is on indented continuation lines under ⎿:
+    [
+        '  ⏺ Bash(curl -i https://api.anthropic.com/v1/messages)',
+        '  ⎿  HTTP/1.1 401 Unauthorized',
+        '     {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}',
+        '     API Error: 401 {"type":"error","error":{"type":"authentication_error"}} · Please run /login',
+    ].join('\n'),
     `  142: // Redirects when user is not signed in or session is not logged in`,
     `  + if (err.code === 'token_expired' || err.code === 'invalid_token') return reply.code(401).send({ error: 'Unauthorized' });`,
     `  ● Bash(command grep -n "401 Unauthorized" apps/api/tests/auth.test.ts)\n  ⎿  28:   it('returns HTTP 401 Unauthorized when user is not signed in', async () => {`,
 ];
+
+const CLAUDE_CONSOLE_SUBSCREEN = [
+    '',
+    '  Anthropic Console account',
+    '  How do you want to sign in?',
+    '  ❯ 1. Sign in with your Console account',
+    '    2. Enter API key',
+    '',
+].join('\n');
+
+const CLAUDE_OPENING_BROWSER_SUBSCREEN = [
+    '',
+    '  Welcome to Claude Code',
+    '  Opening browser to sign in…',
+    '',
+].join('\n');
+
+const CLAUDE_CLOUD_GATEWAY_SUBSCREEN = [
+    '',
+    '  Cloud gateway · sign in',
+    '  Browser didn\'t open? Visit:',
+    '  https://gateway.example.com/oauth/login?code=1234',
+    '',
+].join('\n');
+
+const CODEX_FINISH_BROWSER_SUBSCREEN = [
+    '',
+    '  Finish signing in via your browser',
+    '  If the link doesn\'t open automatically, open the following URL:',
+    '  http://localhost:1455/auth/callback',
+    '',
+].join('\n');
+
+const CODEX_PREPARING_DEVICE_CODE_SUBSCREEN = [
+    '',
+    '  Preparing device code login...',
+    '',
+].join('\n');
+
+const CODEX_API_KEY_BOX_SUBSCREEN = [
+    '',
+    '  Use your own OpenAI API key for usage-based billing',
+    '  Paste or type your API key below. It will be stored locally in auth.json.',
+    '  ╭──────────────────────────────────────────────────╮',
+    '  │ >                                                │',
+    '  ╰──────────────────────────────────────────────────╯',
+    '',
+].join('\n');
+
+const CODEX_API_KEY_DISABLED_SUBSCREEN = [
+    '',
+    '  Use your own OpenAI API key',
+    '  >API key login is disabled.',
+    '',
+].join('\n');
 
 describe('Requirement 1 & 3 — antigravity-cli genuine sign-in screen → signing_in (waiting_external), no input delivered', () => {
     const spec = loadProviderSpec('antigravity-cli', '4.0.json');
@@ -327,11 +390,11 @@ describe('Requirement 2 & 3 — tool output or code with "401", "Unauthorized", 
         }
     });
 
-    it('never confirms a live auth suspect mid-turn even when busy for more than 60s (STUCK_BUSY_ESCAPE_MS removed)', () => {
+    it('never confirms an unanchored or actively streaming auth suspect mid-turn even past 60s, but surfaces a quiet wedged busy session with an anchored 401/JSON error', () => {
         const state = createLiveAuthState();
         const t0 = 1_000_000;
 
-        // At 65s and 180s while still midTurn=true (busy/generating), confirmation MUST NOT fire
+        // 1. Unanchored/prose auth wording mid-turn (even at 65s and 120s) MUST NOT confirm
         for (const elapsed of [5_000, 60_106, 120_000]) {
             state.suspect = {
                 failure: { errorReason: 'auth_failed', failureKind: 'auth', message: 'test' },
@@ -339,11 +402,11 @@ describe('Requirement 2 & 3 — tool output or code with "401", "Unauthorized", 
             };
             const outcome = resolveLiveAuthSuspect(
                 state,
-                { cliType: 'claude-cli', sessionLabel: 'sess-14e361bc' },
+                { cliType: 'claude-cli', sessionLabel: 'sess-14e361bc', isCoordinator: false },
                 {
                     midTurn: true,
-                    readScreen: () => 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
-                    tail: 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+                    readScreen: () => 'The worker reported: Your session has expired. Please run /login to continue.',
+                    tail: 'The worker reported: Your session has expired. Please run /login to continue.',
                     submitInFlight: false,
                     now: t0 + elapsed,
                 },
@@ -351,6 +414,40 @@ describe('Requirement 2 & 3 — tool output or code with "401", "Unauthorized", 
             expect(outcome.advisory).toBeUndefined();
             expect(outcome.latch).toBeUndefined();
         }
+
+        // 2. Anchored 401/JSON error while still actively outputting (quietMs < 5s) or before mid-turn window (5s) defers
+        state.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: 'test' },
+            suspectedAtMs: t0,
+        };
+        const earlyOutcome = resolveLiveAuthSuspect(
+            state,
+            { cliType: 'claude-cli', sessionLabel: 'sess-wedged', isCoordinator: false },
+            {
+                midTurn: true,
+                readScreen: () => 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+                tail: 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+                submitInFlight: false,
+                now: t0 + 5_000,
+            },
+        );
+        expect(earlyOutcome.advisory).toBeUndefined();
+
+        // 3. Anchored 401/JSON error on a quiet wedged busy screen (age >= 15s, quiet >= 5s) MUST surface advisory
+        const wedgedOutcome = resolveLiveAuthSuspect(
+            state,
+            { cliType: 'claude-cli', sessionLabel: 'sess-wedged', isCoordinator: false },
+            {
+                midTurn: true,
+                quietMs: 10_000,
+                readScreen: () => 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+                tail: 'API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}} · Please run /login',
+                submitInFlight: false,
+                now: t0 + 20_000,
+            },
+        );
+        expect(wedgedOutcome.advisory).toBeDefined();
+        expect(wedgedOutcome.advisory?.kind).toBe('auth_error');
     });
 
     it('kimi does not hard-latch error mid-turn past 60s or from unanchored text', () => {
@@ -424,5 +521,402 @@ describe('Requirement 2 & 3 — tool output or code with "401", "Unauthorized", 
         adapter.maybeConfirmLiveAuthBillingSuspect();
         expect(signals).toEqual([]);
         expect(adapter.providerFailure).toBeNull();
+    });
+});
+
+describe('Review Finding 1 — healthy codex 0.133 and claude 2.1.309 sessions stay idle on tool output and always exit signing_in', () => {
+    it('codex 0.133+ idle screen with "Sign in with ChatGPT…" in recent tool output stays idle and exits signing_in when composer renders below login text', () => {
+        const spec = loadProviderSpec('codex-cli', '4.0.json');
+        const codexIdleWithToolOutput = [
+            '╭───────────────────────────────────────────────╮',
+            '│ >_ OpenAI Codex (v0.133.0)                    │',
+            '│ model:     gpt-5.4-codex   /model to change   │',
+            '│ directory: /tmp/ws                            │',
+            '╰───────────────────────────────────────────────╯',
+            '',
+            '• Ran grep -n "Sign in with ChatGPT" packages/auth/login.ts',
+            '  Sign in with ChatGPT to use Codex as part of your paid plan',
+            '  › 1. Sign in with ChatGPT',
+            '    2. Sign in with Device Code',
+            '',
+            '› Ask Codex to do anything',
+            '',
+            '  gpt-5.4-codex medium · /tmp/ws · 84% left',
+            '  ? for shortcuts',
+        ].join('\n');
+
+        const cursorRow = codexIdleWithToolOutput.split('\n').length - 4;
+        // Must NOT enter signing_in from idle
+        expect(evaluateFsm(spec, 'idle', codexIdleWithToolOutput, { row: cursorRow, col: 2 }, undefined, clk(5_000, 0)).fired).toBeNull();
+        // When user finishes signing in and composer renders below leftover login text, signing_in→idle MUST fire
+        expect(evaluateFsm(spec, 'signing_in', codexIdleWithToolOutput, { row: cursorRow, col: 2 }, undefined, clk(2_000, 0)).fired?.to).toBe('idle');
+    });
+
+    it('claude 2.1.309 idle screens (manual mode statusline and custom statusline) with "Select login method:" in recent tool output stay idle and exit signing_in', () => {
+        const spec = loadProviderSpec('claude-cli', '4.0.json');
+        const claudeManualModeScreen = [
+            ' ▐▛███▜▌   Claude Code v2.1.309',
+            '▝▜█████▛▘  Opus 4.6 · Claude Max',
+            '  ▘▘ ▝▝    /tmp/ws',
+            '',
+            '⏺ Bash(grep -n "Select login method:" src/cli.ts)',
+            '  ⎿  Select login method:',
+            '     ❯ 1. Claude account with subscription',
+            '       2. Anthropic Console account',
+            '',
+            '────────────────────────────────────────────────────────────────────────────────────────────────────',
+            '❯ ',
+            '────────────────────────────────────────────────────────────────────────────────────────────────────',
+            '  ⏸ manual mode on · ← for agents',
+        ].join('\n');
+
+        const claudeCustomStatuslineScreen = [
+            ' ▐▛███▜▌   Claude Code v2.1.309',
+            '⏺ Bash(cat login-fixture.txt)',
+            '  ⎿  Select login method:',
+            '     Browser didn\'t open? Use the url below to sign in',
+            '     Paste code here if prompted > ',
+            '',
+            '────────────────────────────────────────────────────────────────────────────────────────────────────',
+            '❯ ',
+            '────────────────────────────────────────────────────────────────────────────────────────────────────',
+            '  [main] 0↑ 0↓ · ctx 14% · $0.04',
+        ].join('\n');
+
+        for (const screen of [claudeManualModeScreen, claudeCustomStatuslineScreen]) {
+            const row = screen.split('\n').length - 3;
+            expect(evaluateFsm(spec, 'idle', screen, { row, col: 2 }, undefined, clk(5_000, 0)).fired).toBeNull();
+            expect(evaluateFsm(spec, 'starting', screen, { row, col: 2 }, undefined, clk(2_000, 0)).fired?.to).toBe('idle');
+            expect(evaluateFsm(spec, 'signing_in', screen, { row, col: 2 }, undefined, clk(2_000, 0)).fired?.to).toBe('idle');
+        }
+    });
+
+    it('every spec has both a live-chrome exit (composer below leftover login text) and a bounded timeout exit from signing_in', () => {
+        const cases: Array<{ cli: string; file: string; signedInBelowLogin: string }> = [
+            {
+                cli: 'antigravity-cli',
+                file: '4.0.json',
+                signedInBelowLogin: [
+                    AGY_SIGNIN_SELECTOR_SCREEN,
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '> Type your message or @path/to/file',
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '? for shortcuts                                          Gemini 3.7 Flash · high',
+                ].join('\n'),
+            },
+            {
+                cli: 'claude-cli',
+                file: '4.0.json',
+                signedInBelowLogin: [
+                    CLAUDE_SIGNIN_SCREEN,
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '❯ ',
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '  ⏸ manual mode on · ← for agents',
+                ].join('\n'),
+            },
+            {
+                cli: 'codex-cli',
+                file: '4.0.json',
+                signedInBelowLogin: [
+                    CODEX_SIGNIN_SCREEN,
+                    '› Ask Codex to do anything',
+                    '  gpt-5.4-codex medium · /tmp/ws · 92% left',
+                    '  ? for shortcuts',
+                ].join('\n'),
+            },
+            {
+                cli: 'cursor-cli',
+                file: '1.0.json',
+                signedInBelowLogin: [
+                    CURSOR_SIGNIN_SCREEN,
+                    '  Claude 4.5 Sonnet · 4.2%',
+                    '  /tmp/ws',
+                ].join('\n'),
+            },
+            {
+                cli: 'grok-cli',
+                file: '1.0.json',
+                signedInBelowLogin: [
+                    GROK_SIGNIN_SCREEN,
+                    '  │ ❯ ',
+                    '  Shift+Tab: mode · Ctrl+x: shortcuts',
+                ].join('\n'),
+            },
+            {
+                cli: 'kimi',
+                file: '1.0.json',
+                signedInBelowLogin: [
+                    KIMI_SIGNIN_DEVICE_CODE_SCREEN,
+                    '  ╭──────────────────────────────────────────╮',
+                    '  │ >                                        │',
+                    '  ╰──────────────────────────────────────────╯',
+                ].join('\n'),
+            },
+        ];
+
+        for (const c of cases) {
+            const spec = loadProviderSpec(c.cli, c.file);
+            // 1. Live composer below leftover login text exits signing_in -> idle within 2s
+            expect(
+                evaluateFsm(spec, 'signing_in', c.signedInBelowLogin, { row: 6, col: 2 }, undefined, clk(2_000, 0)).fired?.to,
+                `${c.cli} composer below login text`,
+            ).toBe('idle');
+            // 2. Bounded exit when login screen is cleared to a non-login screen
+            const clearedScreen = '  Signed in successfully.\n  Ready.\n';
+            const bounded = evaluateFsm(spec, 'signing_in', clearedScreen, { row: 1, col: 2 }, undefined, clk(65_000, 0)).fired?.to;
+            expect(['idle', 'approval'], `${c.cli} bounded exit from signing_in`).toContain(bounded);
+        }
+    });
+});
+
+describe('Review Finding 2 — Claude and Codex sign-in sub-screens never count as idle and never receive queued input', () => {
+    it.each([
+        ['Anthropic Console account sub-screen', CLAUDE_CONSOLE_SUBSCREEN],
+        ['forceLoginMethod Opening browser sub-screen', CLAUDE_OPENING_BROWSER_SUBSCREEN],
+        ['Cloud gateway sign-in sub-screen', CLAUDE_CLOUD_GATEWAY_SUBSCREEN],
+    ])('claude-cli sub-screen (%s): enters signing_in, blocks startup-grace and signing_in→idle, and holds queued input', async (_label, screen) => {
+        const spec = loadProviderSpec('claude-cli', '4.0.json');
+        expect(evaluateFsm(spec, 'starting', screen, { row: 3, col: 4 }, undefined, clk(2_000, 0)).fired?.to).toBe('signing_in');
+        expect(evaluateFsm(spec, 'starting', screen, { row: 3, col: 4 }, undefined, clk(15_000, 0)).fired?.to).toBe('signing_in');
+        expect(evaluateFsm(spec, 'signing_in', screen, { row: 3, col: 4 }, undefined, clk(30_000, 0)).fired).toBeNull();
+
+        vi.useFakeTimers();
+        try {
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('claude-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            driver.start();
+            const pty = factory.last!;
+            driver.dispatch({ kind: 'send_message', text: 'Do not drain into login UI' });
+            pty.feed(screen.replace(/\n/g, '\r\n'));
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(driver.currentStateId).toBe('signing_in');
+            expect(pty.writes.filter(w => w !== '\u001b[I')).toEqual([]);
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([
+        ['Finish signing in via your browser', CODEX_FINISH_BROWSER_SUBSCREEN],
+        ['Preparing device code login', CODEX_PREPARING_DEVICE_CODE_SUBSCREEN],
+        ['Use your own OpenAI API key with > box', CODEX_API_KEY_BOX_SUBSCREEN],
+        ['>API key login is disabled', CODEX_API_KEY_DISABLED_SUBSCREEN],
+    ])('codex-cli sub-screen (%s): enters signing_in, blocks startup-grace and signing_in→idle, and holds queued input', async (_label, screen) => {
+        const spec = loadProviderSpec('codex-cli', '4.0.json');
+        expect(evaluateFsm(spec, 'starting', screen, { row: 3, col: 4 }, undefined, clk(2_000, 0)).fired?.to).toBe('signing_in');
+        expect(evaluateFsm(spec, 'starting', screen, { row: 3, col: 4 }, undefined, clk(15_000, 0)).fired?.to).toBe('signing_in');
+        expect(evaluateFsm(spec, 'signing_in', screen, { row: 3, col: 4 }, undefined, clk(30_000, 0)).fired).toBeNull();
+
+        vi.useFakeTimers();
+        try {
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('codex-cli', '4.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            driver.start();
+            const pty = factory.last!;
+            driver.dispatch({ kind: 'send_message', text: 'Do not drain into codex login UI' });
+            pty.feed(screen.replace(/\n/g, '\r\n'));
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(driver.currentStateId).toBe('signing_in');
+            expect(pty.writes.filter(w => w !== '\u001b[I')).toEqual([]);
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe('Review Finding 3 — total exits from starting (no startup deadlock when sign-in text and idle chrome co-occur)', () => {
+    it('exits starting to idle when both sign-in text and idle chrome are in the viewport across antigravity-cli, claude-cli, codex-cli, cursor-cli, grok-cli, and kimi', () => {
+        const coOccurringScreens: Array<{ cli: string; file: string; screen: string }> = [
+            {
+                cli: 'antigravity-cli',
+                file: '4.0.json',
+                screen: [
+                    AGY_SIGNIN_SELECTOR_SCREEN,
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '> Type your message or @path/to/file',
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '? for shortcuts                                          Gemini 3.7 Flash · high',
+                ].join('\n'),
+            },
+            {
+                cli: 'claude-cli',
+                file: '4.0.json',
+                screen: [
+                    CLAUDE_SIGNIN_SCREEN,
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '❯ ',
+                    '────────────────────────────────────────────────────────────────────────────────',
+                    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+                ].join('\n'),
+            },
+            {
+                cli: 'codex-cli',
+                file: '4.0.json',
+                screen: [
+                    CODEX_SIGNIN_SCREEN,
+                    '› Ask Codex to do anything',
+                    '  gpt-5.4-codex medium · /tmp/ws · 100% left',
+                    '  ? for shortcuts',
+                ].join('\n'),
+            },
+            {
+                cli: 'cursor-cli',
+                file: '1.0.json',
+                screen: [
+                    CURSOR_SIGNIN_SCREEN,
+                    '  Claude 4.5 Sonnet · 2.1%',
+                    '  /tmp/ws',
+                ].join('\n'),
+            },
+            {
+                cli: 'grok-cli',
+                file: '1.0.json',
+                screen: [
+                    GROK_SIGNIN_SCREEN,
+                    '  │ ❯ ',
+                    '  Shift+Tab:mode │ Ctrl+x:shortcuts',
+                ].join('\n'),
+            },
+            {
+                cli: 'kimi',
+                file: '1.0.json',
+                screen: [
+                    KIMI_SIGNIN_DEVICE_CODE_SCREEN,
+                    '  │ >                                        │',
+                ].join('\n'),
+            },
+        ];
+
+        for (const item of coOccurringScreens) {
+            const spec = loadProviderSpec(item.cli, item.file);
+            const res = evaluateFsm(spec, 'starting', item.screen, { row: 4, col: 2 }, undefined, clk(16_000, 0));
+            expect(res.fired?.to, `${item.cli} starting deadlock check`).toBe('idle');
+        }
+    });
+});
+
+describe('Review Finding 4 — mid-turn busy→signing_in transitions and starting midTurn flag', () => {
+    it('all 6 specs transition busy → signing_in when an active sign-in screen replaces busy chrome mid-turn', () => {
+        const cases: Array<{ cli: string; file: string; screen: string }> = [
+            { cli: 'antigravity-cli', file: '4.0.json', screen: AGY_SIGNIN_SELECTOR_SCREEN },
+            { cli: 'claude-cli', file: '4.0.json', screen: CLAUDE_SIGNIN_SCREEN },
+            { cli: 'codex-cli', file: '4.0.json', screen: CODEX_SIGNIN_SCREEN },
+            { cli: 'cursor-cli', file: '1.0.json', screen: CURSOR_SIGNIN_SCREEN },
+            { cli: 'grok-cli', file: '1.0.json', screen: GROK_SIGNIN_SCREEN },
+            { cli: 'kimi', file: '1.0.json', screen: KIMI_SIGNIN_DEVICE_CODE_SCREEN },
+        ];
+        for (const c of cases) {
+            const spec = loadProviderSpec(c.cli, c.file);
+            expect(
+                evaluateFsm(spec, 'busy', c.screen, { row: 4, col: 4 }, undefined, clk(5_000, 0)).fired?.to,
+                `${c.cli} busy -> signing_in`,
+            ).toBe('signing_in');
+        }
+    });
+
+    it('SpecCliAdapter treats starting state as midTurn=true (not settled idle) and surfaces wedged busy anchored 401 after quiet window', () => {
+        const signals: any[] = [];
+        const adapter = Object.create(SpecCliAdapter.prototype) as any;
+        adapter.cliType = 'claude-cli';
+        adapter.owningSessionId = 'sess-starting-midturn';
+        adapter.runtimeSettings = {};
+        adapter.providerFailure = null;
+        adapter.exited = false;
+        adapter.liveAuth = createLiveAuthState();
+        const t0 = Date.now() - 7_000;
+        adapter.liveAuth.suspect = {
+            failure: { errorReason: 'auth_failed', failureKind: 'auth', message: 'test' },
+            suspectedAtMs: t0,
+        };
+        // During 'starting', status is 'idle' in fsm-types, but id is 'starting' -> must NOT treat as turn-boundary idle at 7s
+        adapter.latestState = { id: 'starting', label: 'Starting', title: null, status: 'idle' };
+        const unanchoredBanner = 'Your session has expired. Please run /login';
+        Object.defineProperty(adapter, 'rawTail', {
+            value: {
+                strippedTail: () => unanchoredBanner,
+                clearStrippedTail: () => {},
+            },
+        });
+        adapter.driver = {
+            snapshot: () => unanchoredBanner,
+            hasInFlightSubmit: () => false,
+        };
+        adapter.reportSignal = (sig: unknown) => signals.push(sig);
+        adapter.notifyChange = () => {};
+
+        adapter.maybeConfirmLiveAuthBillingSuspect();
+        expect(signals).toHaveLength(0);
+    });
+});
+
+describe('Review Finding 8 — completion ledger does not emit false turn completion when exiting signing_in (waiting_external) at boot', () => {
+    it('does not arm generatingStartedAt or completedDebouncePending when starting → signing_in (waiting_approval with activeModal: null) → idle before any turn', () => {
+        const events: any[] = [];
+        const inst = Object.create(CliProviderInstance.prototype) as any;
+        inst.type = 'claude-cli';
+        inst.provider = { name: 'Claude Code', settings: {} };
+        inst.workingDir = '/tmp/ws';
+        inst.instanceId = 'sess-signin-boot';
+        inst.settings = {};
+        inst.lastStatus = 'starting';
+        inst.generatingStartedAt = 0;
+        inst.turnStartedThisBoot = false;
+        inst.busyEpoch = 0;
+        inst.generatingDebouncePending = null;
+        inst.generatingDebounceTimer = null;
+        inst.completedDebouncePending = null;
+        inst.completedDebounceTimer = null;
+        inst.lastApprovalEventFingerprint = '';
+        inst.readyEventEmitted = false;
+        inst.autoApproveBusy = false;
+        inst.activeInteractivePrompt = null;
+        inst.monitor = { check: () => [] };
+        inst.checkMeshWorkerStall = () => {};
+        inst.maybeAutoApproveStatus = () => false;
+        inst.autoApproveMaskStalled = () => false;
+        inst.stabilizeFlappingApprovalStatus = (s: any) => s;
+        inst.hasAdapterPendingResponse = () => false;
+        inst.hasEmittedGenuineCompletionForCurrentEpoch = () => false;
+        inst.appendRuntimeSystemMessage = () => {};
+        inst.pushEvent = (ev: any) => events.push(ev);
+        inst.emitAgentReadyOnce = (chatTitle: string, ts: number) => {
+            if (!inst.readyEventEmitted) {
+                inst.readyEventEmitted = true;
+                events.push({ event: 'agent:ready', chatTitle, timestamp: ts });
+            }
+        };
+
+        let currentAdapterStatus: any = { status: 'waiting_approval', activeModal: null, fsmReadySeen: false };
+        inst.adapter = {
+            getStatus: () => currentAdapterStatus,
+            getScriptParsedStatus: () => ({ status: 'idle', messages: [] }),
+        };
+        inst.shouldSuppressFreshLaunchStartupReplay = () => false;
+
+        // 1. Boot enters signing_in (projected to waiting_approval, activeModal: null)
+        inst.detectStatusTransition();
+        expect(inst.lastStatus).toBe('waiting_approval');
+        expect(inst.generatingStartedAt).toBe(0);
+
+        // 2. User finishes sign-in -> transitions signing_in → idle
+        currentAdapterStatus = { status: 'idle', activeModal: null, fsmReadySeen: true };
+        inst.detectStatusTransition();
+        expect(inst.lastStatus).toBe('idle');
+        expect(inst.completedDebouncePending).toBeNull();
+        expect(events.some(e => e.event === 'agent:generating_completed')).toBe(false);
+        expect(events.some(e => e.event === 'agent:ready')).toBe(true);
     });
 });
