@@ -818,6 +818,23 @@ async function resolveCallerAuthority(
     };
 }
 
+interface ArtifactRegistrationRevisionState {
+    latestSeq: number;
+    lastConfirmedRecord: ArtifactRecord | null;
+}
+
+const registrationStateByStore = new WeakMap<object, Map<string, ArtifactRegistrationRevisionState>>();
+let nextArtifactRegistrationSeq = 0;
+
+function getStoreRegistrationStateMap(store: object): Map<string, ArtifactRegistrationRevisionState> {
+    let map = registrationStateByStore.get(store);
+    if (!map) {
+        map = new Map();
+        registrationStateByStore.set(store, map);
+    }
+    return map;
+}
+
 const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
     const ingress = verifyArtifactCommandIngress(args, 'register');
     if (!ingress.ok) return ingress.result;
@@ -841,6 +858,7 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
 
     try {
         const store = getArtifactStore(ctx);
+        const stateMap = getStoreRegistrationStateMap(store);
         const registered = store.register({
             sessionId: authority.sessionId,
             taskId: authority.taskId,
@@ -853,6 +871,13 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
             declaredKind,
             declaredMime,
             title,
+        });
+        const artifactId = registered.record.artifactId;
+        const mySeq = ++nextArtifactRegistrationSeq;
+        const prevState = stateMap.get(artifactId);
+        stateMap.set(artifactId, {
+            latestSeq: mySeq,
+            lastConfirmedRecord: prevState?.lastConfirmedRecord ?? null,
         });
 
         let finalRecord = registered.record;
@@ -867,14 +892,31 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
                 command: 'artifact_index_forwarded',
                 peerDaemonId: authority.hostDaemonId,
             });
+            const currentState = stateMap.get(artifactId);
             if (forwardAns.success !== true) {
-                if (!registered.isUpdate) {
+                const isStillLatestPending = !currentState || currentState.latestSeq === mySeq;
+                if (!registered.isUpdate && isStillLatestPending && !currentState?.lastConfirmedRecord) {
                     try {
                         getMeshRuntimeStore(ctx)
-                            .db.prepare('DELETE FROM session_artifacts WHERE artifact_id = ?')
-                            .run(registered.record.artifactId);
+                            .db.prepare(
+                                'DELETE FROM session_artifacts WHERE artifact_id = ? AND updated_at = ? AND sha256 = ?',
+                            )
+                            .run(
+                                registered.record.artifactId,
+                                registered.record.updatedAt,
+                                registered.record.sha256,
+                            );
+                        if (stateMap.get(artifactId)?.latestSeq === mySeq) {
+                            stateMap.delete(artifactId);
+                        }
                     } catch {
                         // Best-effort cleanup of unforwarded local artifact record.
+                    }
+                } else if (isStillLatestPending && currentState?.lastConfirmedRecord) {
+                    try {
+                        store.upsertForwardedArtifact(currentState.lastConfirmedRecord);
+                    } catch {
+                        // Best-effort restore of last host-confirmed record.
                     }
                 }
                 return {
@@ -884,10 +926,29 @@ const handleArtifactRegister: MedFamilyHandler = async (ctx, args) => {
                 };
             }
             if (forwardAns.artifact && typeof forwardAns.artifact === 'object') {
-                const synced = store.upsertForwardedArtifact(forwardAns.artifact as ArtifactRecord);
-                finalRecord = synced.record;
-                finalAttachment = synced.attachment;
+                if (!currentState || currentState.latestSeq === mySeq) {
+                    const synced = store.upsertForwardedArtifact(forwardAns.artifact as ArtifactRecord);
+                    finalRecord = synced.record;
+                    finalAttachment = synced.attachment;
+                } else {
+                    const existingLocal = store.getById(artifactId);
+                    if (existingLocal) {
+                        finalRecord = existingLocal;
+                    }
+                }
             }
+            const latestAfterConfirm = stateMap.get(artifactId);
+            if (!latestAfterConfirm || latestAfterConfirm.latestSeq === mySeq) {
+                stateMap.set(artifactId, {
+                    latestSeq: latestAfterConfirm?.latestSeq ?? mySeq,
+                    lastConfirmedRecord: finalRecord,
+                });
+            }
+        } else {
+            stateMap.set(artifactId, {
+                latestSeq: mySeq,
+                lastConfirmedRecord: finalRecord,
+            });
         }
 
         try {

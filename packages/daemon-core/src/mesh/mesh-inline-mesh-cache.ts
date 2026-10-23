@@ -496,12 +496,46 @@ function stripInlineMeshTransientNodeState(node: any): any {
         session_id: _sessionIdLegacy,
         providerType: _providerType,
         provider_type: _providerTypeLegacy,
+        originGrantPublicKey: _originGrantPublicKey,
         ...rest
     } = node as Record<string, unknown>;
     if (cachedStatus && !shouldDiscardCachedInlineMeshStatus(node)) {
         return { ...rest, cachedStatus };
     }
     return rest;
+}
+
+export function stripUntrustedInlineMeshGrantKeys(inlineMesh: any): any {
+    if (!inlineMesh || typeof inlineMesh !== 'object' || Array.isArray(inlineMesh)) return inlineMesh;
+    let changed = false;
+    let meshHost = inlineMesh.meshHost;
+    if (meshHost && typeof meshHost === 'object' && !Array.isArray(meshHost) && 'originGrantPublicKey' in meshHost) {
+        const { originGrantPublicKey: _ignored, ...restHost } = meshHost as Record<string, unknown>;
+        meshHost = restHost;
+        changed = true;
+    }
+    let nodes = inlineMesh.nodes;
+    if (Array.isArray(nodes)) {
+        let nodesChanged = false;
+        const nextNodes = nodes.map((node: any) => {
+            if (node && typeof node === 'object' && !Array.isArray(node) && 'originGrantPublicKey' in node) {
+                const { originGrantPublicKey: _ignored, ...restNode } = node as Record<string, unknown>;
+                nodesChanged = true;
+                return restNode;
+            }
+            return node;
+        });
+        if (nodesChanged) {
+            nodes = nextNodes;
+            changed = true;
+        }
+    }
+    if (!changed) return inlineMesh;
+    return {
+        ...inlineMesh,
+        ...(meshHost !== inlineMesh.meshHost ? { meshHost } : {}),
+        ...(nodes !== inlineMesh.nodes ? { nodes } : {}),
+    };
 }
 
 function hasInlineMeshTransientNodeState(node: any): boolean {
@@ -603,16 +637,17 @@ export function normalizeInlineMeshNodeIdentity(inlineMesh: any): any {
 
 export function sanitizeInlineMesh(inlineMesh: any): any {
     if (!inlineMesh || typeof inlineMesh !== 'object' || Array.isArray(inlineMesh)) return inlineMesh;
-    if (!Array.isArray(inlineMesh.nodes)) return inlineMesh;
+    const stripped = stripUntrustedInlineMeshGrantKeys(inlineMesh);
+    if (!Array.isArray(stripped.nodes)) return stripped;
     let changed = false;
-    const nodes = inlineMesh.nodes.map((node: any) => {
+    const nodes = stripped.nodes.map((node: any) => {
         if (!hasInlineMeshTransientNodeState(node)) return node;
         changed = true;
         return stripInlineMeshTransientNodeState(node);
     });
-    if (!changed) return inlineMesh;
+    if (!changed) return stripped;
     return {
-        ...inlineMesh,
+        ...stripped,
         nodes,
     };
 }
@@ -638,7 +673,9 @@ export function sanitizeInlineMesh(inlineMesh: any): any {
 // used to decide which SIDE's fields win on a genuine field-level conflict for
 // nodes both sides agree exist, but it is never again used to decide whether a
 // node exists at all.
-export function reconcileInlineMeshCache(cached: any, incoming: any, removedNodeIds?: ReadonlySet<string>): any {
+export function reconcileInlineMeshCache(rawCached: any, rawIncoming: any, removedNodeIds?: ReadonlySet<string>): any {
+    const cached = stripUntrustedInlineMeshGrantKeys(rawCached);
+    const incoming = stripUntrustedInlineMeshGrantKeys(rawIncoming);
     if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return incoming;
     if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return cached;
     const cachedNodes = Array.isArray(cached.nodes) ? cached.nodes : [];

@@ -60,6 +60,9 @@ function maskCommandLogValue(value: unknown, keyHint = '', depth = 0): unknown {
             ? `[${value.length} chars]`
             : '[masked]';
     }
+    if (typeof value === 'string') {
+        return redactCredentialString(value);
+    }
     if (Array.isArray(value)) {
         if (depth >= MAX_MASK_DEPTH) return '[MaxDepth]';
         return value.map((item) => maskCommandLogValue(item, '', depth + 1));

@@ -386,7 +386,7 @@ export class ArtifactStore {
                 .get(sessionId, resolved.relPath);
 
             if (existing) {
-                const updatedAt = Math.max(now, existing.updated_at);
+                const updatedAt = Math.max(now, existing.updated_at + 1);
                 const nextTaskId = input.taskId !== undefined ? (input.taskId ?? null) : existing.task_id;
                 const nextMeshId = meshId ?? existing.mesh_id ?? null;
                 const nextMissionId = missionId ?? existing.mission_id ?? null;

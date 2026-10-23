@@ -42,6 +42,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { canonicalDaemonId } from '@adhdev/mesh-shared';
 import { LOG } from '../../logging/logger.js';
 import { recordAuthenticatedPeerOriginGrantPublicKey } from '../mesh-host-memory.js';
+import { getHostOriginGrantPublicKey, isValidOriginGrantPublicKey } from '../origin-grant-keypair.js';
 import { maskDaemonId } from './mask-daemon-id.js';
 
 export const MESH_HANDSHAKE_PROTOCOL_VERSION = 1 as const;
@@ -319,15 +320,16 @@ export function createHandshakeInitiator(opts: HandshakeInitiatorOptions): Hands
             if (parsed.kind !== 'mesh_ok') return fail('bad_frame', true);
             if (canon(parsed.daemonId) !== canon(serverDaemonId) || !serverNonce) return fail('bad_frame', true);
             const peerPubKey = parsed.originGrantPublicKey || serverOriginGrantPublicKey;
-            if (peerPubKey) {
-                recordAuthenticatedPeerOriginGrantPublicKey(opts.meshId, canon(serverDaemonId), peerPubKey);
+            const validPeerPubKey = peerPubKey && isValidOriginGrantPublicKey(peerPubKey) ? peerPubKey : undefined;
+            if (validPeerPubKey) {
+                recordAuthenticatedPeerOriginGrantPublicKey(opts.meshId, canon(serverDaemonId), validPeerPubKey);
             }
             state = 'done';
             step = {
                 status: 'ok',
                 meshId: opts.meshId,
                 peerDaemonId: canon(serverDaemonId),
-                ...(peerPubKey ? { peerOriginGrantPublicKey: peerPubKey } : {}),
+                ...(validPeerPubKey ? { peerOriginGrantPublicKey: validPeerPubKey } : {}),
             };
             return step;
         },
@@ -422,15 +424,18 @@ export function createHandshakeResponder(opts: HandshakeResponderOptions): Hands
             // awaiting_proof
             if (parsed.kind !== 'mesh_proof') return fail('bad_frame', true);
             if (!proofsEqual(expectedClientProof, parsed.proof)) return fail('bad_proof', true);
-            if (clientOriginGrantPublicKey) {
-                recordAuthenticatedPeerOriginGrantPublicKey(meshId, peerDaemonId, clientOriginGrantPublicKey);
+            const validClientPubKey = clientOriginGrantPublicKey && isValidOriginGrantPublicKey(clientOriginGrantPublicKey)
+                ? clientOriginGrantPublicKey
+                : undefined;
+            if (validClientPubKey) {
+                recordAuthenticatedPeerOriginGrantPublicKey(meshId, peerDaemonId, validClientPubKey);
             }
             state = 'done';
             step = {
                 status: 'ok',
                 meshId,
                 peerDaemonId,
-                ...(clientOriginGrantPublicKey ? { peerOriginGrantPublicKey: clientOriginGrantPublicKey } : {}),
+                ...(validClientPubKey ? { peerOriginGrantPublicKey: validClientPubKey } : {}),
             };
             opts.send({
                 v: MESH_HANDSHAKE_PROTOCOL_VERSION,
@@ -518,8 +523,20 @@ export function performMeshHandshake(
             socket.send(JSON.stringify(frame));
         };
         const machine: { onFrame(frame: unknown): HandshakeStep; start?(): void } = side === 'initiator'
-            ? createHandshakeInitiator({ ...(opts as Omit<HandshakeInitiatorOptions, 'send'>), send })
-            : createHandshakeResponder({ ...(opts as Omit<HandshakeResponderOptions, 'send'>), send });
+            ? createHandshakeInitiator({
+                ...(opts as Omit<HandshakeInitiatorOptions, 'send'>),
+                originGrantPublicKey:
+                    (opts as Omit<HandshakeInitiatorOptions, 'send'>).originGrantPublicKey
+                    || getHostOriginGrantPublicKey((opts as Omit<HandshakeInitiatorOptions, 'send'>).daemonId),
+                send,
+            })
+            : createHandshakeResponder({
+                ...(opts as Omit<HandshakeResponderOptions, 'send'>),
+                originGrantPublicKey:
+                    (opts as Omit<HandshakeResponderOptions, 'send'>).originGrantPublicKey
+                    || getHostOriginGrantPublicKey((opts as Omit<HandshakeResponderOptions, 'send'>).localDaemonId),
+                send,
+            });
 
         const detach = (): void => {
             socket.off('open', onOpen);

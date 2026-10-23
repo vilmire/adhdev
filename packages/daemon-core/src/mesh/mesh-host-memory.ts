@@ -29,6 +29,11 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../config/config.js';
+import {
+    isValidOriginGrantPublicKey,
+    verifyOriginGrantKeyRotationProof,
+    type OriginGrantKeyRotationProof,
+} from './origin-grant-keypair.js';
 
 type MeshHostRecordSource = 'pairing' | 'session_stamp' | 'first_dispatch';
 
@@ -43,17 +48,17 @@ interface MeshHostRecord {
 const FILE_NAME = 'mesh-host-records.json';
 const authenticatedPeerPublicKeys = new Map<string, string>();
 
-function peerKey(meshId: string, peerDaemonId: string): string {
+function peerKey(meshId: string, peerDaemonId: string, configDir = getConfigDir()): string {
     const canon = canonicalDaemonId(peerDaemonId.trim()) || peerDaemonId.trim();
-    return `${meshId.trim()}\0${canon}`;
+    return `${configDir}\0${meshId.trim()}\0${canon}`;
 }
 
-function filePath(): string {
-    return join(getConfigDir(), FILE_NAME);
+function filePath(configDir = getConfigDir()): string {
+    return join(configDir, FILE_NAME);
 }
 
-function readAll(): Record<string, MeshHostRecord> {
-    const path = filePath();
+function readAll(configDir = getConfigDir()): Record<string, MeshHostRecord> {
+    const path = filePath(configDir);
     if (!existsSync(path)) return {};
     try {
         const parsed = JSON.parse(readFileSync(path, 'utf8'));
@@ -64,7 +69,7 @@ function readAll(): Record<string, MeshHostRecord> {
             const hostDaemonId = typeof value?.hostDaemonId === 'string' ? value.hostDaemonId.trim() : '';
             if (!meshId || !hostDaemonId) continue;
             const source: MeshHostRecordSource = value.source === 'pairing' || value.source === 'session_stamp' ? value.source : 'first_dispatch';
-            const originGrantPublicKey = typeof value?.originGrantPublicKey === 'string' && value.originGrantPublicKey.trim()
+            const originGrantPublicKey = source === 'pairing' && isValidOriginGrantPublicKey(value?.originGrantPublicKey)
                 ? value.originGrantPublicKey.trim()
                 : undefined;
             out[meshId] = {
@@ -81,8 +86,8 @@ function readAll(): Record<string, MeshHostRecord> {
     }
 }
 
-function writeAll(records: Record<string, MeshHostRecord>): void {
-    const path = filePath();
+function writeAll(records: Record<string, MeshHostRecord>, configDir = getConfigDir()): void {
+    const path = filePath(configDir);
     const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify({ version: 1, meshes: records }, null, 2), 'utf8');
     renameSync(tmp, path);
@@ -101,8 +106,9 @@ export function listMeshHostRecords(): MeshHostRecord[] {
 
 /**
  * Persist `hostDaemonId` as the host of `meshId`. A `pairing` record replaces
- * any record; a weaker source never overwrites an existing record. Returns
- * whether the record was written. Never throws.
+ * any record; a weaker source never overwrites an existing record.
+ * Only `source === 'pairing'` may pin or replace `originGrantPublicKey`.
+ * Returns whether the record was written. Never throws.
  */
 export function writeMeshHostRecord(
     meshId: string,
@@ -113,24 +119,23 @@ export function writeMeshHostRecord(
     const mesh = meshId.trim();
     const host = hostDaemonId.trim();
     if (!mesh || !host) return false;
-    const pubKey = typeof originGrantPublicKey === 'string' && originGrantPublicKey.trim()
+    const configDir = getConfigDir();
+    const pubKey = source === 'pairing' && isValidOriginGrantPublicKey(originGrantPublicKey)
         ? originGrantPublicKey.trim()
         : undefined;
     if (pubKey) {
-        authenticatedPeerPublicKeys.set(peerKey(mesh, host), pubKey);
+        authenticatedPeerPublicKeys.set(peerKey(mesh, host, configDir), pubKey);
     }
     try {
-        const all = readAll();
+        const all = readAll(configDir);
         const existing = all[mesh];
         if (existing && source !== 'pairing') {
-            if (pubKey && daemonIdsEquivalent(existing.hostDaemonId, host) && existing.originGrantPublicKey !== pubKey) {
-                all[mesh] = { ...existing, originGrantPublicKey: pubKey };
-                writeAll(all);
-                return true;
-            }
             return false;
         }
-        const effectivePubKey = pubKey || (existing && daemonIdsEquivalent(existing.hostDaemonId, host) ? existing.originGrantPublicKey : undefined);
+        const effectivePubKey = pubKey
+            || (existing && existing.source === 'pairing' && daemonIdsEquivalent(existing.hostDaemonId, host)
+                ? existing.originGrantPublicKey
+                : undefined);
         all[mesh] = {
             meshId: mesh,
             hostDaemonId: host,
@@ -138,7 +143,7 @@ export function writeMeshHostRecord(
             recordedAt: new Date().toISOString(),
             ...(effectivePubKey ? { originGrantPublicKey: effectivePubKey } : {}),
         };
-        writeAll(all);
+        writeAll(all, configDir);
         return true;
     } catch {
         return false;
@@ -149,36 +154,128 @@ export function recordAuthenticatedPeerOriginGrantPublicKey(
     meshId: string,
     peerDaemonId: string,
     originGrantPublicKey: string,
+    opts?: { env?: NodeJS.ProcessEnv; syncPeerSecrets?: boolean },
 ): void {
     const mesh = typeof meshId === 'string' ? meshId.trim() : '';
     const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
-    const pubKey = typeof originGrantPublicKey === 'string' ? originGrantPublicKey.trim() : '';
+    const pubKey = isValidOriginGrantPublicKey(originGrantPublicKey) ? originGrantPublicKey.trim() : '';
     if (!mesh || !peer || !pubKey) return;
-    authenticatedPeerPublicKeys.set(peerKey(mesh, peer), pubKey);
+    const configDir = getConfigDir(opts?.env);
+    authenticatedPeerPublicKeys.set(peerKey(mesh, peer, configDir), pubKey);
     try {
-        const all = readAll();
+        const all = readAll(configDir);
         const existing = all[mesh];
-        if (existing && daemonIdsEquivalent(existing.hostDaemonId, peer) && existing.originGrantPublicKey !== pubKey) {
-            all[mesh] = { ...existing, originGrantPublicKey: pubKey };
-            writeAll(all);
+        if (!existing || daemonIdsEquivalent(existing.hostDaemonId, peer)) {
+            all[mesh] = {
+                meshId: mesh,
+                hostDaemonId: existing?.hostDaemonId || peer,
+                source: 'pairing',
+                recordedAt: existing?.recordedAt || new Date().toISOString(),
+                originGrantPublicKey: pubKey,
+            };
+            writeAll(all, configDir);
         }
     } catch {
         // Best-effort durable update.
+    }
+    if (opts?.syncPeerSecrets !== false) {
+        try {
+            const secretsPath = join(configDir, 'mesh-peer-secrets.json');
+            if (existsSync(secretsPath)) {
+                const parsed = JSON.parse(readFileSync(secretsPath, 'utf8'));
+                if (parsed && typeof parsed === 'object' && Array.isArray(parsed.records)) {
+                    let updated = false;
+                    for (const rec of parsed.records) {
+                        if (
+                            rec &&
+                            typeof rec === 'object' &&
+                            rec.meshId === mesh &&
+                            typeof rec.peerDaemonId === 'string' &&
+                            daemonIdsEquivalent(rec.peerDaemonId, peer) &&
+                            rec.originGrantPublicKey !== pubKey
+                        ) {
+                            rec.originGrantPublicKey = pubKey;
+                            updated = true;
+                        }
+                    }
+                    if (updated) {
+                        const tmp = `${secretsPath}.tmp-${process.pid}`;
+                        writeFileSync(tmp, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+                        renameSync(tmp, secretsPath);
+                    }
+                }
+            }
+        } catch {
+            // Best-effort sync to peer secrets.
+        }
+    }
+}
+
+export function clearAuthenticatedPeerOriginGrantPublicKey(
+    meshId: string,
+    peerDaemonId: string,
+    opts?: { env?: NodeJS.ProcessEnv },
+): void {
+    const mesh = typeof meshId === 'string' ? meshId.trim() : '';
+    const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
+    if (!mesh || !peer) return;
+    const configDir = getConfigDir(opts?.env);
+    authenticatedPeerPublicKeys.delete(peerKey(mesh, peer, configDir));
+    try {
+        const all = readAll(configDir);
+        const existing = all[mesh];
+        if (existing && daemonIdsEquivalent(existing.hostDaemonId, peer) && existing.originGrantPublicKey) {
+            const { originGrantPublicKey: _removed, ...rest } = existing;
+            all[mesh] = rest;
+            writeAll(all, configDir);
+        }
+    } catch {
+        // Best-effort cleanup.
     }
 }
 
 export function readAuthenticatedPeerOriginGrantPublicKey(
     meshId: string,
     peerDaemonId: string,
+    opts?: { env?: NodeJS.ProcessEnv },
 ): string | null {
     const mesh = typeof meshId === 'string' ? meshId.trim() : '';
     const peer = typeof peerDaemonId === 'string' ? peerDaemonId.trim() : '';
     if (!mesh || !peer) return null;
-    const inMem = authenticatedPeerPublicKeys.get(peerKey(mesh, peer));
-    if (inMem) return inMem;
-    const rec = readMeshHostRecord(mesh);
-    if (rec && daemonIdsEquivalent(rec.hostDaemonId, peer) && rec.originGrantPublicKey) {
+    const configDir = getConfigDir(opts?.env);
+    const inMem = authenticatedPeerPublicKeys.get(peerKey(mesh, peer, configDir));
+    if (inMem && isValidOriginGrantPublicKey(inMem)) return inMem;
+    const rec = readAll(configDir)[mesh] ?? null;
+    if (
+        rec &&
+        rec.source === 'pairing' &&
+        daemonIdsEquivalent(rec.hostDaemonId, peer) &&
+        rec.originGrantPublicKey &&
+        isValidOriginGrantPublicKey(rec.originGrantPublicKey)
+    ) {
         return rec.originGrantPublicKey;
     }
     return null;
+}
+
+export function applyAuthenticatedHostKeyRotation(params: {
+    meshId: string;
+    hostDaemonId: string;
+    currentPinnedPublicKey: string;
+    rotationProof: unknown;
+    env?: NodeJS.ProcessEnv;
+}): { ok: true; newPublicKey: string; proof: OriginGrantKeyRotationProof } | { ok: false; reason: string } {
+    const verified = verifyOriginGrantKeyRotationProof(params.rotationProof, {
+        hostDaemonId: params.hostDaemonId,
+        currentPinnedPublicKey: params.currentPinnedPublicKey,
+    });
+    if (!verified.ok) return verified;
+    recordAuthenticatedPeerOriginGrantPublicKey(params.meshId, params.hostDaemonId, verified.newPublicKey, {
+        env: params.env,
+    });
+    return verified;
+}
+
+export function __resetAuthenticatedPeerKeysForTest(): void {
+    authenticatedPeerPublicKeys.clear();
 }

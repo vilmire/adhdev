@@ -1,11 +1,24 @@
 import * as crypto from 'node:crypto';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { canonicalDaemonId, daemonIdsEquivalent, meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
+import { daemonIdsEquivalent, meshNodeIdMatches, sessionIdsEquivalent } from '@adhdev/mesh-shared';
 import type { ArtifactRecord } from '../../artifacts/index.js';
-import { getConfigDir } from '../../config/config.js';
-import { readAuthenticatedPeerOriginGrantPublicKey } from '../../mesh/mesh-host-memory.js';
+import {
+    __resetAuthenticatedPeerKeysForTest,
+    applyAuthenticatedHostKeyRotation,
+    readAuthenticatedPeerOriginGrantPublicKey,
+} from '../../mesh/mesh-host-memory.js';
 import { readMeshNodeDaemonId } from '../../mesh/mesh-node-identity.js';
+import {
+    __resetOriginGrantKeyPairCacheForTest,
+    canonGrantDaemonId,
+    getHostOriginGrantPublicKey,
+    getLatestHostKeyRotationProof,
+    getOrCreateHostKeyPair,
+    isValidOriginGrantPublicKey,
+    parseOriginGrantPublicKeyObject,
+    rotateHostOriginGrantKeyPair,
+    verifyOriginGrantKeyRotationProof,
+    type OriginGrantKeyRotationProof,
+} from '../../mesh/origin-grant-keypair.js';
 import type { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
 import { getPeerSecret } from '../../mesh/transport/mesh-peer-secrets.js';
 import {
@@ -16,28 +29,19 @@ import {
 import { resolveForwardedWorkerIdentity } from '../../mesh/worker-report-forwarded.js';
 import type { CommandRouterResult } from '../router.js';
 
+export {
+    canonGrantDaemonId,
+    getHostOriginGrantPublicKey,
+    isValidOriginGrantPublicKey,
+    rotateHostOriginGrantKeyPair,
+    verifyOriginGrantKeyRotationProof,
+    applyAuthenticatedHostKeyRotation,
+    type OriginGrantKeyRotationProof,
+};
+
 export const ARTIFACT_ORIGIN_FETCH_GRANT_TTL_MS = 60_000;
 export const MAX_ORIGIN_GRANT_CLOCK_SKEW_MS = 30_000;
-const MAX_TRACKED_NONCES = 4_096;
-const ORIGIN_GRANT_KEYS_FILENAME = 'artifact-origin-grant-keys.json';
-
-interface StoredKeyPairRecord {
-    publicKey: string;
-    privateKey: string;
-    createdAt: string;
-}
-
-interface StoredKeyPairsFile {
-    version: number;
-    keys: Record<string, StoredKeyPairRecord>;
-}
-
-interface CachedKeyPair {
-    publicKey: string;
-    privateKeyObj: crypto.KeyObject;
-}
-
-const keyPairCache = new Map<string, CachedKeyPair>();
+export const MAX_TRACKED_NONCES = 4_096;
 
 interface ConsumedGrantNonceEntry {
     canonicalPayload: string;
@@ -58,135 +62,11 @@ export interface ArtifactOriginFetchGrant {
     expiresAt: number;
     nonce: string;
     signature: string;
+    keyRotation?: OriginGrantKeyRotationProof;
 }
 
 function trimStr(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
-}
-
-export function canonGrantDaemonId(daemonId: string): string {
-    const trimmed = trimStr(daemonId);
-    if (!trimmed) return '';
-    return canonicalDaemonId(trimmed) ?? trimmed;
-}
-
-function readStoredKeyPairs(filePath: string): Record<string, StoredKeyPairRecord> {
-    if (!fs.existsSync(filePath)) return {};
-    try {
-        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<StoredKeyPairsFile>;
-        if (!parsed || typeof parsed !== 'object' || !parsed.keys || typeof parsed.keys !== 'object') {
-            return {};
-        }
-        const out: Record<string, StoredKeyPairRecord> = {};
-        for (const [k, v] of Object.entries(parsed.keys)) {
-            if (
-                v &&
-                typeof v === 'object' &&
-                typeof v.publicKey === 'string' &&
-                v.publicKey.trim() &&
-                typeof v.privateKey === 'string' &&
-                v.privateKey.trim()
-            ) {
-                out[k] = {
-                    publicKey: v.publicKey.trim(),
-                    privateKey: v.privateKey.trim(),
-                    createdAt: typeof v.createdAt === 'string' ? v.createdAt : '',
-                };
-            }
-        }
-        return out;
-    } catch {
-        return {};
-    }
-}
-
-function writeStoredKeyPairs(filePath: string, keys: Record<string, StoredKeyPairRecord>): void {
-    try {
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        }
-        const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-        const payload: StoredKeyPairsFile = { version: 1, keys };
-        fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
-        fs.renameSync(tmp, filePath);
-        try {
-            fs.chmodSync(filePath, 0o600);
-        } catch {
-            // Ignore chmod errors on unsupported filesystems.
-        }
-    } catch {
-        // Ephemeral or read-only configDir falls back to in-memory cache.
-    }
-}
-
-function getOrCreateHostKeyPair(hostDaemonId?: string, env?: NodeJS.ProcessEnv): CachedKeyPair {
-    const configDir = getConfigDir(env);
-    const keyId = canonGrantDaemonId(hostDaemonId ?? '') || 'default';
-    const cacheKey = `${configDir}\0${keyId}`;
-    const cached = keyPairCache.get(cacheKey);
-    if (cached) return cached;
-
-    const filePath = path.join(configDir, ORIGIN_GRANT_KEYS_FILENAME);
-    const storedAll = readStoredKeyPairs(filePath);
-    const existing = storedAll[keyId];
-    if (existing) {
-        try {
-            const privateKeyObj = crypto.createPrivateKey({
-                key: Buffer.from(existing.privateKey, 'base64url'),
-                format: 'der',
-                type: 'pkcs8',
-            });
-            const entry: CachedKeyPair = { publicKey: existing.publicKey, privateKeyObj };
-            keyPairCache.set(cacheKey, entry);
-            return entry;
-        } catch {
-            // Regenerate if corrupt.
-        }
-    }
-
-    const generated = crypto.generateKeyPairSync('ed25519', {
-        publicKeyEncoding: { type: 'spki', format: 'der' },
-        privateKeyEncoding: { type: 'pkcs8', format: 'der' },
-    });
-    const publicKey = (generated.publicKey as Buffer).toString('base64url');
-    const privateKey = (generated.privateKey as Buffer).toString('base64url');
-    const privateKeyObj = crypto.createPrivateKey({
-        key: generated.privateKey as Buffer,
-        format: 'der',
-        type: 'pkcs8',
-    });
-    storedAll[keyId] = {
-        publicKey,
-        privateKey,
-        createdAt: new Date().toISOString(),
-    };
-    writeStoredKeyPairs(filePath, storedAll);
-    const entry: CachedKeyPair = { publicKey, privateKeyObj };
-    keyPairCache.set(cacheKey, entry);
-    return entry;
-}
-
-export function getHostOriginGrantPublicKey(hostDaemonId?: string, env?: NodeJS.ProcessEnv): string {
-    return getOrCreateHostKeyPair(hostDaemonId, env).publicKey;
-}
-
-function parsePublicKeyObject(rawPublicKey: string): crypto.KeyObject | null {
-    const trimmed = trimStr(rawPublicKey);
-    if (!trimmed) return null;
-    try {
-        if (trimmed.startsWith('-----BEGIN')) {
-            return crypto.createPublicKey(trimmed);
-        }
-        const der = Buffer.from(trimmed.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''), 'base64url');
-        return crypto.createPublicKey({
-            key: der,
-            format: 'der',
-            type: 'spki',
-        });
-    } catch {
-        return null;
-    }
 }
 
 function buildCanonicalGrantPayload(fields: {
@@ -225,7 +105,7 @@ function verifyCanonicalGrantSignature(
     signature: string,
     hostPublicKey: string,
 ): boolean {
-    const pubKeyObj = parsePublicKeyObject(hostPublicKey);
+    const pubKeyObj = parseOriginGrantPublicKeyObject(hostPublicKey);
     if (!pubKeyObj) return false;
     try {
         const normalizedSig = signature.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -274,24 +154,20 @@ function consumeOriginGrantNonce(
 
     if (db) {
         try {
+            const createTableSql = `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
+                nonce TEXT PRIMARY KEY,
+                mesh_id TEXT NOT NULL,
+                canonical_payload TEXT NOT NULL,
+                expires_at INTEGER NOT NULL
+            )`;
+            const createIndexSql = `CREATE INDEX IF NOT EXISTS idx_consumed_origin_grant_nonces_expires
+                ON consumed_artifact_origin_grant_nonces(expires_at)`;
             if (typeof db.exec === 'function') {
-                db.exec(
-                    `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
-                        nonce TEXT PRIMARY KEY,
-                        mesh_id TEXT NOT NULL,
-                        canonical_payload TEXT NOT NULL,
-                        expires_at INTEGER NOT NULL
-                    )`,
-                );
+                db.exec(createTableSql);
+                db.exec(createIndexSql);
             } else {
-                db.prepare(
-                    `CREATE TABLE IF NOT EXISTS consumed_artifact_origin_grant_nonces (
-                        nonce TEXT PRIMARY KEY,
-                        mesh_id TEXT NOT NULL,
-                        canonical_payload TEXT NOT NULL,
-                        expires_at INTEGER NOT NULL
-                    )`,
-                ).run();
+                db.prepare(createTableSql).run();
+                db.prepare(createIndexSql).run();
             }
             db.prepare('DELETE FROM consumed_artifact_origin_grant_nonces WHERE expires_at <= ?').run(nowMs);
             const existing = db
@@ -300,6 +176,21 @@ function consumeOriginGrantNonce(
             if (existing && typeof existing.expires_at === 'number' && existing.expires_at > nowMs) {
                 consumedOriginGrantNonces.set(nonce, { canonicalPayload, expiresAt: existing.expires_at });
                 return false;
+            }
+            const countRow = db
+                .prepare('SELECT COUNT(*) AS cnt FROM consumed_artifact_origin_grant_nonces')
+                .get() as { cnt?: number } | undefined;
+            const currentCount = typeof countRow?.cnt === 'number' ? countRow.cnt : 0;
+            if (currentCount >= MAX_TRACKED_NONCES) {
+                const overflow = currentCount - MAX_TRACKED_NONCES + 1;
+                db.prepare(
+                    `DELETE FROM consumed_artifact_origin_grant_nonces
+                     WHERE nonce IN (
+                         SELECT nonce FROM consumed_artifact_origin_grant_nonces
+                         ORDER BY expires_at ASC, rowid ASC
+                         LIMIT ?
+                     )`,
+                ).run(overflow);
             }
             db.prepare(
                 `INSERT OR REPLACE INTO consumed_artifact_origin_grant_nonces (nonce, mesh_id, canonical_payload, expires_at)
@@ -316,7 +207,8 @@ function consumeOriginGrantNonce(
 
 export function __resetOriginGrantStateForTest(): void {
     consumedOriginGrantNonces.clear();
-    keyPairCache.clear();
+    __resetOriginGrantKeyPairCacheForTest();
+    __resetAuthenticatedPeerKeysForTest();
 }
 
 export function mintArtifactOriginFetchGrant(args: {
@@ -350,12 +242,29 @@ export function mintArtifactOriginFetchGrant(args: {
     };
     const canonicalPayload = buildCanonicalGrantPayload(base);
     const signature = signCanonicalGrantPayload(canonicalPayload, hostDaemonId);
+    const keyRotation = getLatestHostKeyRotationProof(hostDaemonId);
     return {
         ...base,
         signature,
+        ...(keyRotation ? { keyRotation } : {}),
     };
 }
 
+/**
+ * Resolve the trusted Ed25519 SPKI public key for `hostDaemonId` on `meshId`.
+ *
+ * Security invariant (Round 6 Finding 1):
+ *   ONLY pin the host's grant public key from authenticated sources that an
+ *   attacker or non-host member cannot write:
+ *     1. Self-host key (`getHostOriginGrantPublicKey`) when this daemon itself
+ *        is the host of the mesh.
+ *     2. Authenticated host record / P2P HMAC handshake with the host
+ *        (`readAuthenticatedPeerOriginGrantPublicKey`).
+ *     3. Local 0600 pairing secret record (`getPeerSecret`).
+ *   NEVER read `originGrantPublicKey` from synchronized mesh config,
+ *   `inlineMesh`, `meshObj.meshHost`, `meshObj.nodes[]`, roster merges,
+ *   request arguments, or the server WS.
+ */
 export function resolveTrustedHostOriginGrantPublicKey(params: {
     meshObj?: any;
     meshId: string;
@@ -367,26 +276,16 @@ export function resolveTrustedHostOriginGrantPublicKey(params: {
     const hostDaemonId = trimStr(params.hostDaemonId);
     if (!meshId || !hostDaemonId) return '';
 
-    const fromMeshHost = trimStr(params.meshObj?.meshHost?.originGrantPublicKey);
-    if (fromMeshHost) return fromMeshHost;
-
-    const nodes: any[] = Array.isArray(params.meshObj?.nodes) ? params.meshObj.nodes : [];
-    for (const node of nodes) {
-        const nd = readMeshNodeDaemonId(node) || trimStr(node?.daemonId);
-        if (nd && daemonIdsEquivalent(nd, hostDaemonId)) {
-            const nodeKey = trimStr(node?.originGrantPublicKey);
-            if (nodeKey) return nodeKey;
-        }
+    if (params.isSelfHost && params.selfDaemonId && daemonIdsEquivalent(hostDaemonId, params.selfDaemonId)) {
+        return getHostOriginGrantPublicKey(hostDaemonId);
     }
 
     const fromHostMemory = readAuthenticatedPeerOriginGrantPublicKey(meshId, hostDaemonId);
     if (fromHostMemory) return fromHostMemory;
 
     const fromPeerSecret = getPeerSecret(meshId, hostDaemonId)?.originGrantPublicKey;
-    if (trimStr(fromPeerSecret)) return trimStr(fromPeerSecret);
-
-    if (params.isSelfHost && params.selfDaemonId && daemonIdsEquivalent(hostDaemonId, params.selfDaemonId)) {
-        return getHostOriginGrantPublicKey(hostDaemonId);
+    if (trimStr(fromPeerSecret) && isValidOriginGrantPublicKey(fromPeerSecret)) {
+        return trimStr(fromPeerSecret);
     }
 
     return '';
@@ -476,7 +375,7 @@ export function verifyArtifactOriginFetchGrant(
         }
     }
 
-    const trustedPublicKey =
+    let trustedPublicKey =
         trimStr(expected.hostPublicKey) ||
         resolveTrustedHostOriginGrantPublicKey({
             meshId,
@@ -484,6 +383,21 @@ export function verifyArtifactOriginFetchGrant(
         });
     if (!trustedPublicKey) {
         return { ok: false, reason: 'untrusted_or_missing_host_public_key' };
+    }
+
+    if (candidate.keyRotation && typeof candidate.keyRotation === 'object') {
+        const rotationObj = candidate.keyRotation as Record<string, unknown>;
+        if (trimStr(rotationObj.oldPublicKey) === trustedPublicKey) {
+            const rotated = applyAuthenticatedHostKeyRotation({
+                meshId,
+                hostDaemonId,
+                currentPinnedPublicKey: trustedPublicKey,
+                rotationProof: candidate.keyRotation,
+            });
+            if (rotated.ok) {
+                trustedPublicKey = rotated.newPublicKey;
+            }
+        }
     }
 
     const canonicalPayload = buildCanonicalGrantPayload({

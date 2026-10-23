@@ -27,6 +27,7 @@ import {
     readStringValue,
     reconcileInlineMeshCache,
     sanitizeInlineMesh,
+    stripUntrustedInlineMeshGrantKeys,
 } from '../mesh/mesh-node-identity.js';
 import type { DaemonCommandRouter } from './router.js';
 
@@ -174,7 +175,7 @@ export async function getMeshForCommand(host: InlineMeshRosterHost, meshId: stri
             if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
                 const merged = reconcileInlineMeshCache(
                     cached,
-                    applyInlineMeshNodeTombstones(host, meshId, inlineMesh as any),
+                    applyInlineMeshNodeTombstones(host, meshId, stripUntrustedInlineMeshGrantKeys(inlineMesh as any)),
                     host.removedInlineMeshNodeIds.get(meshId),
                 );
                 host.inlineMeshCache.set(meshId, sanitizeInlineMesh(normalizeInlineMeshNodeIdentity(merged)));
@@ -183,8 +184,9 @@ export async function getMeshForCommand(host: InlineMeshRosterHost, meshId: stri
             return { mesh: cached, inline: true, source: 'inline_cache' };
         }
         if (inlineMeshCarriesTransientNodeTruth(inlineMesh)) {
-            warmInlineMeshCache(host, meshId, inlineMesh);
-            return { mesh: inlineMesh, inline: true, source: 'inline_bootstrap' };
+            const stripped = stripUntrustedInlineMeshGrantKeys(inlineMesh as any);
+            warmInlineMeshCache(host, meshId, stripped);
+            return { mesh: stripped, inline: true, source: 'inline_bootstrap' };
         }
     }
     try {
@@ -217,9 +219,15 @@ export function updateInlineMeshNode(host: InlineMeshRosterHost, meshId: string,
         LOG.info('Mesh', `[NodeMembershipMerge] mesh=${meshId} droppedNodeId=${incomingId} reason=tombstoned_removal source=updateInlineMeshNode`);
         return;
     }
+    const sanitizedNode = node && typeof node === 'object' && !Array.isArray(node) && 'originGrantPublicKey' in node
+        ? (() => {
+            const { originGrantPublicKey: _ignored, ...rest } = node as Record<string, unknown>;
+            return rest;
+        })()
+        : node;
     const idx = mesh.nodes.findIndex((entry: any) => meshNodeIdMatches(entry, incomingId));
-    if (idx >= 0) mesh.nodes[idx] = node;
-    else mesh.nodes.push(node);
+    if (idx >= 0) mesh.nodes[idx] = sanitizedNode;
+    else mesh.nodes.push(sanitizedNode);
     mesh.updatedAt = new Date().toISOString();
     // Canonicalize node identity in place (id and nodeId kept equal): clone
     // nodes are created with `id` and re-inserted here (bypassing

@@ -35,6 +35,11 @@ import { dirname, join } from 'path';
 import { canonicalDaemonId, daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { getConfigDir } from '../../config/config.js';
 import { LOG } from '../../logging/logger.js';
+import {
+    clearAuthenticatedPeerOriginGrantPublicKey,
+    recordAuthenticatedPeerOriginGrantPublicKey,
+} from '../mesh-host-memory.js';
+import { isValidOriginGrantPublicKey } from '../origin-grant-keypair.js';
 
 /** Credentials file name under the config dir. NOT meshes.json — see header. */
 export const MESH_PEER_SECRETS_FILE = 'mesh-peer-secrets.json';
@@ -265,6 +270,14 @@ export function putPeerSecret(record: PeerSecretRecord, opts: PeerSecretStoreOpt
     const others = readRecords(path)
         .filter((rec) => !(rec.meshId === normalized.meshId && daemonIdsEquivalent(rec.peerDaemonId, normalized.peerDaemonId)));
     writeRecords(path, [...others, normalized]);
+    if (!opts.filePath && normalized.originGrantPublicKey && isValidOriginGrantPublicKey(normalized.originGrantPublicKey)) {
+        recordAuthenticatedPeerOriginGrantPublicKey(
+            normalized.meshId,
+            normalized.peerDaemonId,
+            normalized.originGrantPublicKey,
+            { env: opts.env, syncPeerSecrets: false },
+        );
+    }
     emit({
         kind: 'put',
         meshId: normalized.meshId,
@@ -289,6 +302,9 @@ export function removePeerSecret(
     if (!removed) return false;
     const kept = all.filter((rec) => !(rec.meshId === mesh && daemonIdsEquivalent(rec.peerDaemonId, canonical)));
     writeRecords(path, kept);
+    if (!opts.filePath) {
+        clearAuthenticatedPeerOriginGrantPublicKey(mesh, canonical, { env: opts.env });
+    }
     emit({ kind: 'remove', meshId: mesh, peerDaemonId: canonical, role: removed.role, filePath: path });
     return true;
 }

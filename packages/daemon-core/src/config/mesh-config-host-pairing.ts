@@ -456,7 +456,6 @@ function markMeshHostPairingJoinedUnlocked(
         ...(opts.hostDaemonId ? { hostDaemonId: opts.hostDaemonId } : {}),
         ...(opts.hostNodeId ? { hostNodeId: opts.hostNodeId } : {}),
         ...(opts.hostMeshId && opts.hostMeshId !== meshId ? { hostMeshId: opts.hostMeshId } : {}),
-        ...(opts.originGrantPublicKey?.trim() ? { originGrantPublicKey: opts.originGrantPublicKey.trim() } : {}),
         pairing: {
             ...(previous.pairing || {}),
             status: 'paired',

@@ -461,6 +461,7 @@ import {
     MESH_SENDER_DAEMON_ID_ARG,
     issueTrustedOwnerIngressProof,
     attachTrustedOwnerIngressProof,
+    writeMeshHostRecord,
 } from ${JSON.stringify(distIndexUrl)};
 
 const workspace = process.env.TEST_ORIGIN_WORKSPACE;
@@ -469,6 +470,8 @@ const hostDaemonId = process.env.TEST_HOST_DAEMON_ID;
 const originDaemonId = process.env.TEST_ORIGIN_DAEMON_ID;
 const workerDaemonId = process.env.TEST_WORKER_DAEMON_ID;
 const hostPublicKey = process.env.TEST_HOST_PUBLIC_KEY;
+
+writeMeshHostRecord(meshId, hostDaemonId, 'pairing', hostPublicKey);
 
 const sessionRegistry = new SessionRegistry();
 sessionRegistry.register({
@@ -483,10 +486,9 @@ const inlineMesh = {
     id: meshId,
     meshHost: {
         hostDaemonId,
-        originGrantPublicKey: hostPublicKey,
     },
     nodes: [
-        { id: 'node-host', daemonId: hostDaemonId, workspace, originGrantPublicKey: hostPublicKey },
+        { id: 'node-host', daemonId: hostDaemonId, workspace },
         { id: 'node-origin', daemonId: originDaemonId, workspace },
         { id: 'node-worker', daemonId: workerDaemonId, workspace, activeSessionId: 'sess-worker-two-proc' },
     ],

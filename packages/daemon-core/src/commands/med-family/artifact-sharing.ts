@@ -744,20 +744,6 @@ export async function fetchArtifactFromOriginDaemon(
         const attemptIdForGrant = effectiveAttemptId || latestAttempt?.attemptId || '';
         effectiveAttemptId = attemptIdForGrant;
         if (meshIdForGrant && attemptIdForGrant) {
-            try {
-                const cmdRes: any = await ctx.getMeshForCommand?.(meshIdForGrant, undefined, { preferInline: true });
-                const meshObj = cmdRes?.mesh ?? cmdRes ?? ctx.getCachedInlineMesh?.(meshIdForGrant);
-                if (meshObj && typeof meshObj === 'object') {
-                    if (!meshObj.meshHost || typeof meshObj.meshHost !== 'object') {
-                        meshObj.meshHost = { hostDaemonId: authority.originDaemonId };
-                    }
-                    if (!meshObj.meshHost.originGrantPublicKey) {
-                        meshObj.meshHost.originGrantPublicKey = getHostOriginGrantPublicKey(authority.originDaemonId);
-                    }
-                }
-            } catch {
-                // Best-effort attach on local mesh record.
-            }
             originFetchGrant = mintArtifactOriginFetchGrant({
                 meshId: meshIdForGrant,
                 hostDaemonId: authority.originDaemonId,
@@ -941,17 +927,6 @@ export const handleArtifactIndexForwarded: MedFamilyHandler = async (ctx, args) 
     };
 
     const selfDaemonId = trimString(ctx.deps?.statusInstanceId);
-    if (selfDaemonId && meshObj && typeof meshObj === 'object') {
-        const existingHostId = trimString(meshObj?.meshHost?.hostDaemonId) || trimString(meshObj?.hostDaemonId);
-        if (!existingHostId || daemonIdsEquivalent(existingHostId, selfDaemonId)) {
-            if (!meshObj.meshHost || typeof meshObj.meshHost !== 'object') {
-                meshObj.meshHost = { hostDaemonId: selfDaemonId };
-            }
-            if (!meshObj.meshHost.originGrantPublicKey) {
-                meshObj.meshHost.originGrantPublicKey = getHostOriginGrantPublicKey(selfDaemonId);
-            }
-        }
-    }
     const isSelfDaemon = selfDaemonId ? (d: string) => daemonIdsEquivalent(d, selfDaemonId) : undefined;
     const resolved = resolveForwardedWorkerIdentity(
         {

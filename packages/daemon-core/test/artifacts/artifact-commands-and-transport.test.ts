@@ -35,6 +35,8 @@ import {
     setArtifactCommandRuntimeForDeps,
     type ArtifactCommandContext,
 } from '../../src/commands/med-family/artifacts.js';
+import { getHostOriginGrantPublicKey } from '../../src/commands/med-family/artifact-origin-grant.js';
+import { writeMeshHostRecord } from '../../src/mesh/mesh-host-memory.js';
 import { buildTranscriptObservationFromReadChat } from '../../src/commands/transcript-observation-builder.js';
 import { SessionRegistry } from '../../src/sessions/registry.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
@@ -3692,6 +3694,7 @@ describe('Task B — Daemon Artifact Commands & Keyed-Chat Attachment Transport'
                 getMeshForCommand: async (id: string) => (id === 'mesh-r4-f5' ? { mesh: inlineMesh, source: 'inline' } : null),
                 getCachedInlineMesh: (id: string) => (id === 'mesh-r4-f5' ? inlineMesh : undefined),
             };
+            writeMeshHostRecord('mesh-r4-f5', 'daemon_host_f5', 'pairing', getHostOriginGrantPublicKey('daemon_host_f5'));
 
             deps.statusInstanceId = 'daemon_host_f5';
             deps.dispatchMeshCommand = async (targetDaemonId: string, command: string, payload: Record<string, unknown>) => {
