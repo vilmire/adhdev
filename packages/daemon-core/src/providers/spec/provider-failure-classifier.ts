@@ -77,8 +77,32 @@ function hasProviderFailureEnvelope(text: string): boolean {
         || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text);
 }
 
+/**
+ * Strip lines that are clearly tool-result blocks, diffs, line-numbered file
+ * dumps, code comments, JSON properties, or unit-test assertions so code/tool
+ * output containing "401", "Unauthorized", or "not signed in" cannot trigger
+ * live provider failure suspicions.
+ */
+function stripToolAndCodeLines(raw: string): string {
+    return raw
+        .split('\n')
+        .filter((line) => {
+            const trimmed = line.trim();
+            if (!trimmed) return false;
+            if (/^[⎿└├]/.test(trimmed)) return false;
+            if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed)) return false;
+            if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed)) return false;
+            if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed)) return false;
+            return true;
+        })
+        .join('\n');
+}
+
 export function detectProviderFailure(output: string, _exitCode?: number): ProviderFailure | null {
-    const text = stripAnsi(output).replace(/\s+/g, ' ').trim().toLowerCase();
+    const stripped = stripAnsi(output).replace(/\r\n?/g, '\n');
+    const filtered = stripToolAndCodeLines(stripped);
+    const linesText = filtered.replace(/[ \t]+/g, ' ').trim().toLowerCase();
+    const text = linesText.replace(/\s+/g, ' ').trim();
     if (!text) return null;
 
     // Entitlement EXHAUSTION — the account is fine, the usage window is spent.
@@ -127,34 +151,23 @@ export function detectProviderFailure(output: string, _exitCode?: number): Provi
     }
 
     const auth = [
-        /\b(?:authentication|authorization|login)\s*(?:error|failed|required)\b/,
-        /\b(?:access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)?(?:expired|invalid|rejected|revoked)\b/,
-        /\b(?:token_expired|invalid_token)\b/,
-        /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
-        /\b(?:not\s+(?:logged|signed)\s+in)\b/,
-        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/,
-        // AUTH-EXPIRY-GENERALIZATION (D4). The two rules above that could plausibly
-        // have matched claude-cli's live banner both miss it:
-        //   "Login expired · Please run /login"
-        // `login\s*(?:error|failed|required)` wants a failure NOUN after "login"
-        // ("expired" is not in that set), and the `please run login` rule wants the
-        // bare word — the banner says the slash command `/login`. So the session
-        // produced no classification at all and stayed dispatch-eligible for a day
-        // (incident session b23d10ee, 2026-09-20 → 09-21).
-        //
-        // These two rules are STATEMENT-ANCHORED rather than bare presence matches.
-        // The anchor (start of tail, or immediately after sentence punctuation such
-        // as `.` `!` `?` `·` `:` `;`) is what separates a banner the CLI printed from
-        // an agent narrating the same words mid-sentence. That distinction is not
-        // theoretical: the unanchored form classified
-        //   "I will add a test for the login expired banner rendering"
-        // as auth_failed, which would have stranded the very session doing that work
-        // — the overcorrection this gate must not commit. It is the structural
-        // equivalent of the quota bucket's failure-envelope precondition above,
-        // adapted to wording that carries no HTTP status.
-        /(?:^|[.!?·:;]\s*|\breason:\s*)(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
-        /(?:^|[.!?·:;]\s*)(?:please\s+)?(?:run|use)\s+\/login\b/,
-    ].some(pattern => pattern.test(text));
+        // Native provider error JSON payloads (Anthropic authentication_error, OpenAI/Codex token_revoked/invalid_api_key)
+        /"type"\s*:\s*"authentication_error"\b/,
+        /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
+        // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
+        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
+        /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
+        // Anchored CLI auth / token / not-signed-in statements
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
+        /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
+        // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
+        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/,
+    ].some(pattern => pattern.test(linesText));
     if (auth) {
         return {
             errorReason: 'auth_failed',

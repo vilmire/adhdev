@@ -166412,8 +166412,22 @@ ${text4}` : text4;
     function hasProviderFailureEnvelope(text4) {
       return /\bprovider\.[a-z_]*error\b/.test(text4) || /\b(?:http\s*)?(?:40[23])\b\s*(?:[-:—]|\bforbidden\b|\bpayment\b|you\b|your\b)/.test(text4) || /\bstatus(?:\s+code)?\s*[:=]?\s*40[23]\b/.test(text4);
     }
+    function stripToolAndCodeLines(raw) {
+      return raw.split("\n").filter((line) => {
+        const trimmed2 = line.trim();
+        if (!trimmed2) return false;
+        if (/^[⎿└├]/.test(trimmed2)) return false;
+        if (/^(?:(?!40[123]\b)\d+\s*[:→│]\s|[+-]\s+\S)/.test(trimmed2)) return false;
+        if (/^(?:\/\/|\/\*|\*\s)/.test(trimmed2)) return false;
+        if (/^(?:"[^"]+"\s*:|(?:const|let|var|function|return|throw|if|else|expect|it|test|describe|assert)\s*[\s(])/.test(trimmed2)) return false;
+        return true;
+      }).join("\n");
+    }
     function detectProviderFailure(output, _exitCode) {
-      const text4 = stripAnsi2(output).replace(/\s+/g, " ").trim().toLowerCase();
+      const stripped = stripAnsi2(output).replace(/\r\n?/g, "\n");
+      const filtered = stripToolAndCodeLines(stripped);
+      const linesText = filtered.replace(/[ \t]+/g, " ").trim().toLowerCase();
+      const text4 = linesText.replace(/\s+/g, " ").trim();
       if (!text4) return null;
       const quota = hasProviderFailureEnvelope(text4) && [
         /\b(?:usage|quota|credit)\s+limit\b/,
@@ -166441,34 +166455,23 @@ ${text4}` : text4;
         };
       }
       const auth = [
-        /\b(?:authentication|authorization|login)\s*(?:error|failed|required)\b/,
-        /\b(?:access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)?(?:expired|invalid|rejected|revoked)\b/,
-        /\b(?:token_expired|invalid_token)\b/,
-        /\b(?:unauthorized|http\s*401|status(?:\s+code)?\s*[:=]?\s*401)\b/,
-        /\b(?:not\s+(?:logged|signed)\s+in)\b/,
-        /\bplease\s+(?:run\s+)?(?:`?kimi`?\s+)?login\b/,
-        // AUTH-EXPIRY-GENERALIZATION (D4). The two rules above that could plausibly
-        // have matched claude-cli's live banner both miss it:
-        //   "Login expired · Please run /login"
-        // `login\s*(?:error|failed|required)` wants a failure NOUN after "login"
-        // ("expired" is not in that set), and the `please run login` rule wants the
-        // bare word — the banner says the slash command `/login`. So the session
-        // produced no classification at all and stayed dispatch-eligible for a day
-        // (incident session b23d10ee, 2026-09-20 → 09-21).
-        //
-        // These two rules are STATEMENT-ANCHORED rather than bare presence matches.
-        // The anchor (start of tail, or immediately after sentence punctuation such
-        // as `.` `!` `?` `·` `:` `;`) is what separates a banner the CLI printed from
-        // an agent narrating the same words mid-sentence. That distinction is not
-        // theoretical: the unanchored form classified
-        //   "I will add a test for the login expired banner rendering"
-        // as auth_failed, which would have stranded the very session doing that work
-        // — the overcorrection this gate must not commit. It is the structural
-        // equivalent of the quota bucket's failure-envelope precondition above,
-        // adapted to wording that carries no HTTP status.
-        /(?:^|[.!?·:;]\s*|\breason:\s*)(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
-        /(?:^|[.!?·:;]\s*)(?:please\s+)?(?:run|use)\s+\/login\b/
-      ].some((pattern) => pattern.test(text4));
+        // Native provider error JSON payloads (Anthropic authentication_error, OpenAI/Codex token_revoked/invalid_api_key)
+        /"type"\s*:\s*"authentication_error"\b/,
+        /"error"\s*:\s*\{[^}]*"code"\s*:\s*"(?:token_revoked|invalid_api_key|token_expired|invalid_token)"/,
+        // Anchored CLI / HTTP 401 error banners (never bare "401" or "Unauthorized" in code/tool output)
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:api\s+error|http\s+error|error)\s*:\s*(?:http\s*)?401\b(?:\s+unauthorized\b|\s*[—–\-:]|\s*\{)/,
+        /(?:^|\n)\s*(?:[●✗✖⚠!]\s+)?(?:codex|claude|antigravity|agy|kimi|cursor|grok)\b[^\n:]{0,40}(?:error|failed)\s*:\s*(?:http\s*)?401\s+unauthorized\b/,
+        /\bhttps?:\/\/(?:api\.anthropic\.com|chatgpt\.com\/backend-api|api\.openai\.com|open\.bigmodel\.cn|api\.moonshot\.(?:cn|ai)|api\.x\.ai)\/[^\s;]*\s+failed:\s*401\s+unauthorized\b/,
+        // Anchored CLI auth / token / not-signed-in statements
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:authentication|authorization|login)\s+(?:error|failed|required)(?:\s*[:.!—–\-·;\n]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:(?:your|the)\s+)?(?:oauth|access|refresh|auth(?:entication)?)\s+token\s+(?:has\s+|is\s+)(?:expired|invalid|rejected|revoked)(?:\s*[.!·:;\n—–-]|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:you\s+are\s+(?:currently\s+)?)?not\s+(?:logged|signed)\s+in(?:\s*(?:[.!·:;\n—–-]|to\s+(?:claude|codex|antigravity|kimi|cursor|grok)\b)|$)/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?please\s+(?:run\s+)?(?:`?(?:kimi|codex|claude|agy)`?\s+)?\/?login\b/,
+        /(?:^|\n)\s*\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+(?!403\b)\S/,
+        // AUTH-EXPIRY-GENERALIZATION (D4). Statement-anchored expired-login / /login banners.
+        /(?:^|[.!?·:;\n]\s*|\breason:\s*)(?:[●✗✖⚠!]\s+)?(?:your\s+|the\s+)?(?:login|session|credential)s?\s+(?:has\s+|have\s+|is\s+|are\s+)?expired\b/,
+        /(?:^|[.!?·:;\n]\s*)(?:[●✗✖⚠!]\s+)?(?:please\s+)?(?:run|use)\s+\/login\b/
+      ].some((pattern) => pattern.test(linesText));
       if (auth) {
         return {
           errorReason: "auth_failed",
@@ -167924,10 +167927,10 @@ ${text4}` : text4;
       return detectAuthFailureOnlyReply(maskForeignProviderText(cliType, reply));
     }
     var TAIL_BYTES4 = 16 * 1024;
-    var STUCK_BUSY_ESCAPE_MS = 6e4;
     var MIN_SUSPECT_AGE_MS = 5e3;
     var ADVISORY_COOLDOWN_MS = 10 * 6e4;
     var LIVE_AUTH_ADVISORY_RULE_ID = "builtin.live_auth_marker";
+    var KIMI_ANCHORED_PROVIDER_UI_ERROR_RE = /(?:^|\n)\s*(?:\[(?:provider\.auth_error|auth\.(?:login_required|token_unauthorized|token_missing))\]\s+\S|(?:✗\s+|Error:\s+)?(?:Authentication\s+failed:[^\n]*\bkimi\s+login\b|Payment\s+required:[^\n]*\bKimi\s+Code\b))/i;
     function createLiveAuthState() {
       return { suspect: null, advisoryNotifiedAtMs: 0, coordinatorMarkerLogged: false, stopRequested: false };
     }
@@ -167969,7 +167972,7 @@ ${text4}` : text4;
       const ageMs2 = now - suspect.suspectedAtMs;
       if (ageMs2 < MIN_SUSPECT_AGE_MS) return {};
       if (input.submitInFlight) return {};
-      if (input.midTurn && ageMs2 < STUCK_BUSY_ESCAPE_MS) return {};
+      if (input.midTurn) return {};
       state2.suspect = null;
       if (ctx.isCoordinator) return {};
       let screen = "";
@@ -167978,12 +167981,15 @@ ${text4}` : text4;
       } catch {
         screen = "";
       }
-      const confirmed = classifyAuthBillingOutput(ctx.cliType, screen || input.tail);
+      const surface = screen || input.tail;
+      const confirmed = classifyAuthBillingOutput(ctx.cliType, surface);
       if (!confirmed) {
         LOG.info("SpecAdapter", `[${ctx.cliType}] live ${suspect.failure.failureKind} marker no longer on screen at turn boundary (session=${ctx.sessionLabel}) \u2014 dismissed as quoted content`);
         return { clearTail: true };
       }
-      if (ctx.cliType === "kimi") return { latch: confirmed };
+      if (ctx.cliType === "kimi" && KIMI_ANCHORED_PROVIDER_UI_ERROR_RE.test(surface)) {
+        return { latch: confirmed };
+      }
       if (now - state2.advisoryNotifiedAtMs < ADVISORY_COOLDOWN_MS) return { clearTail: true };
       state2.advisoryNotifiedAtMs = now;
       LOG.warn("SpecAdapter", `[${ctx.cliType}] possible ${confirmed.failureKind} failure ON SCREEN at turn boundary (session=${ctx.sessionLabel}) \u2014 ADVISORY ONLY: session left running and dispatchable, coordinator notified; stopping it is the coordinator's decision`);
