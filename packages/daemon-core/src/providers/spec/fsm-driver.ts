@@ -355,6 +355,10 @@ export class FsmDriver implements ISpecDriver {
         this.adapter.updateMeta(meta, replace);
     }
 
+    getRuntimeMetadata(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata | null {
+        return this.adapter.getMetadata();
+    }
+
     /**
      * TX-FSM Stage 0 (shadow): receive the daemon-normalized signal
      * observation. The driver stores it verbatim — it does NOT poll, parse,

@@ -53,6 +53,14 @@ describe('canonicalDaemonId — single CANON producer form', () => {
         expect(canonicalDaemonId(`standalone_${MACH}`)).toBe(`daemon_${MACH}`)
     })
 
+    it('handles case-insensitive daemon_, standalone_, and mach_ prefixes', () => {
+        expect(machineCoreFromDaemonId(`DAEMON_${MACH}`)).toBe(MACH)
+        expect(machineCoreFromDaemonId(`Standalone_${MACH}`)).toBe(MACH)
+        expect(canonicalDaemonId(`DAEMON_${MACH}`)).toBe(`daemon_${MACH}`)
+        expect(canonicalDaemonId(`Standalone_${MACH}`)).toBe(`daemon_${MACH}`)
+        expect(canonicalDaemonId(`MACH_1b46842a15d3409d96ad33e767a916dd`)).toBe(`daemon_${MACH}`)
+    })
+
     it('is idempotent', () => {
         expect(canonicalDaemonId(canonicalDaemonId(MACH))).toBe(`daemon_${MACH}`)
     })

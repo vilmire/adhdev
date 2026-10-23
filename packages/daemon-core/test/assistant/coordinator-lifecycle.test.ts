@@ -39,6 +39,31 @@ describe('pickCoordinator', () => {
         expect(pickCoordinator([view('busy'), view('idle', { idle: true })])?.sessionId).toBe('idle');
         expect(pickCoordinator([view('old', { startedAt: 1 }), view('new', { startedAt: 2 })])?.sessionId).toBe('new');
     });
+
+    it('keeps a live PTY coordinator with parse_error overlay while excluding confirmed terminal candidates', () => {
+        const parseErrorLive = view('coord-parse-error', {
+            idle: true,
+            managedByAssistant: true,
+            status: 'error',
+            errorReason: 'parse_error',
+            connected: true,
+            disposed: false,
+            adapterAlive: true,
+            rawAdapterStatus: 'idle',
+            runtime: { runtimeId: 'coord-parse-error', lifecycle: 'running', surfaceKind: 'live_runtime' },
+        } as any);
+        const terminalStopped = view('coord-stopped', { idle: true, managedByAssistant: true, status: 'stopped' } as any);
+        const terminalRawError = view('coord-raw-error', { idle: true, managedByAssistant: true, status: 'error', rawAdapterStatus: 'error' } as any);
+        const terminalDeadPty = view('coord-dead-pty', { idle: true, managedByAssistant: true, adapterAlive: false } as any);
+        const terminalSnapshot = view('coord-snapshot', {
+            idle: true,
+            managedByAssistant: true,
+            runtime: { runtimeId: 'coord-snapshot', lifecycle: 'stopped', surfaceKind: 'recovery_snapshot' },
+        } as any);
+
+        expect(pickCoordinator([terminalStopped, terminalRawError, terminalDeadPty, terminalSnapshot])).toBeNull();
+        expect(pickCoordinator([terminalStopped, parseErrorLive])?.sessionId).toBe('coord-parse-error');
+    });
 });
 
 describe('ensureCoordinator', () => {

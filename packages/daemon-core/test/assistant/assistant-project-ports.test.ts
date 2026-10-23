@@ -58,4 +58,89 @@ describe('createDefaultProjectPorts', () => {
         setAssistantRelayHooks({ openThread });
         expect(createDefaultProjectPorts(ctx).relay.openThread).toBe(openThread);
     });
+
+    it('keeps a live coordinator with a parse_error overlay while excluding confirmed terminal runtimes', () => {
+        const mixedInstances = [
+            {
+                disposed: false,
+                adapter: {
+                    isAlive: () => true,
+                    getStatus: (opts?: { allowParse?: boolean }) => ({ status: opts?.allowParse === false ? 'idle' : 'error' }),
+                },
+                getDrainStatus: () => 'idle',
+                isModalParked: () => false,
+                getState: () => ({
+                    instanceId: 'coord-parse-error-live',
+                    connected: true,
+                    status: 'error',
+                    errorReason: 'parse_error',
+                    settings: { meshCoordinatorFor: 'mesh_a', managedByAssistant: true },
+                    runtime: { runtimeId: 'coord-parse-error-live', lifecycle: 'running', surfaceKind: 'live_runtime' },
+                }),
+            },
+            {
+                disposed: true,
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-disposed',
+                    connected: true,
+                    status: 'idle',
+                    settings: { meshCoordinatorFor: 'mesh_a' },
+                }),
+            },
+            {
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-disconnected',
+                    connected: false,
+                    status: 'idle',
+                    settings: { meshCoordinatorFor: 'mesh_a' },
+                }),
+            },
+            {
+                adapter: {
+                    isAlive: () => false,
+                    getStatus: () => ({ status: 'idle' }),
+                },
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-dead-adapter',
+                    connected: true,
+                    status: 'idle',
+                    settings: { meshCoordinatorFor: 'mesh_a' },
+                }),
+            },
+            {
+                adapter: {
+                    isAlive: () => true,
+                    getStatus: (opts?: { allowParse?: boolean }) => ({ status: opts?.allowParse === false ? 'error' : 'error' }),
+                },
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-raw-adapter-error',
+                    connected: true,
+                    status: 'error',
+                    settings: { meshCoordinatorFor: 'mesh_a' },
+                }),
+            },
+            {
+                getDrainStatus: () => 'idle',
+                getState: () => ({
+                    instanceId: 'coord-snapshot-only',
+                    connected: true,
+                    status: 'idle',
+                    settings: { meshCoordinatorFor: 'mesh_a' },
+                    runtime: { runtimeId: 'coord-snapshot-only', lifecycle: 'stopped', surfaceKind: 'recovery_snapshot' },
+                }),
+            },
+        ];
+        const mixedPorts = createDefaultProjectPorts({
+            components: () => ({ instanceManager: { getByCategory: () => mixedInstances } }) as any,
+            execute: async () => ({ success: true }),
+            selfDaemonId: 'daemon_mach_self',
+        });
+        expect(mixedPorts.coordinators('mesh_a')).toEqual([
+            { sessionId: 'coord-parse-error-live', idle: true, modalParked: false, managedByAssistant: true },
+        ]);
+    });
 });

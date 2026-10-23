@@ -83,6 +83,12 @@ export class SessionRegistry {
         this.transcriptTopicRelease = release;
     }
 
+    // Bounded terminal evidence for stale provider projections after PTY exit.
+    private readonly terminatedInstances = new Set<string>();
+    wasInstanceTerminated(instanceKey: string): boolean {
+        return this.terminatedInstances.has(instanceKey);
+    }
+
     private readonly bySessionId = new Map<string, SessionRuntimeTarget>();
     private readonly byManagerKey = new Map<string, Set<string>>();
     private readonly byInstanceKey = new Map<string, Set<string>>();
@@ -99,6 +105,7 @@ export class SessionRegistry {
         // re-register (attach-restore, meta refresh): the caller rarely knows
         // the antigravity conv uuid at register time, so a plain replace would
         // drop the SSOT binding and force a fresh (crosswire-prone) re-resolve.
+        if (target.instanceKey) this.terminatedInstances.delete(target.instanceKey);
         const prior = this.bySessionId.get(target.sessionId);
         const priorProviderSessionId = prior?.providerSessionId;
         this.detach(target.sessionId, !observationOnly);
@@ -267,6 +274,12 @@ export class SessionRegistry {
         const target = this.detach(sessionId);
         if (!target) return false;
         if (target.maintenanceObservation) return true;
+        if (target.instanceKey && !this.byInstanceKey.has(target.instanceKey)) {
+            this.terminatedInstances.add(target.instanceKey);
+            if (this.terminatedInstances.size > 4096) {
+                this.terminatedInstances.delete(this.terminatedInstances.values().next().value!);
+            }
+        }
         this.bus?.emit({
             kind: 'terminated',
             sessionId,

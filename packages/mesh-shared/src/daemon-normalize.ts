@@ -108,13 +108,15 @@ export function isPhantomDaemonEntry(
 export function machineCoreFromDaemonId(id: string | null | undefined): string | undefined {
     const trimmed = readString(id)
     if (!trimmed) return undefined
+    const lower = trimmed.toLowerCase()
     for (const prefix of DAEMON_ID_PREFIXES) {
-        if (trimmed.startsWith(prefix)) {
+        if (lower.startsWith(prefix)) {
             const core = trimmed.slice(prefix.length).trim()
-            return core || undefined
+            if (!core) return undefined
+            return /^mach_/i.test(core) ? `mach_${core.slice(5)}` : core
         }
     }
-    return trimmed
+    return /^mach_/i.test(trimmed) ? `mach_${trimmed.slice(5)}` : trimmed
 }
 
 /**
@@ -144,8 +146,8 @@ export function machineCoreFromDaemonId(id: string | null | undefined): string |
 export function canonicalDaemonId(id: string | null | undefined): string | undefined {
     const core = machineCoreFromDaemonId(id)
     if (!core) return undefined
-    if (!core.startsWith('mach_')) return core
-    return `daemon_${core}`
+    if (!/^mach_/i.test(core)) return core
+    return `daemon_mach_${core.slice(5)}`
 }
 
 /** True when both ids resolve to the same machine core — i.e. they are the same
