@@ -1,3 +1,11 @@
+export const PUBLIC_PUBLISH_APPROVAL_SCHEMA = {
+    oneOf: [
+        { type: 'array', items: { type: 'string' } },
+        { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } } },
+    ],
+    description: 'Owner approval for public or unknown destinations; otherwise publish_approval_required. Use a per-repo mapping such as {"oss": ["sha"], "adhdev-providers": ["sha"], "root": ["sha"]}. Keys are submodule paths or root. Each set must equal that repository pending commits exactly, with uniquely resolving SHAs. Flat arrays are accepted only when exactly one public repository is pending. Private pattern config must be available before publishing.',
+};
+
 /**
  * MCP tool schemas — Refinery and mesh configuration (mesh-tools-refine.ts /
  * mesh-tools-config handlers): refine node / batch / plan, the
@@ -19,6 +27,7 @@ export const MESH_REFINE_NODE_TOOL = {
             node_id: { type: 'string', description: 'Node ID of the completed worktree node to refine and merge.' },
             execute: { type: 'boolean', description: 'When true, run validation/merge/push/cleanup for this node. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the validation plan without merging. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
         },
         required: ['node_id'],
     },
@@ -41,6 +50,7 @@ export const MESH_REFINE_BATCH_TOOL = {
             },
             execute: { type: 'boolean', description: 'When true, run validation/rebase/merge for each node in order. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the ordering + per-node validation plan without executing. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
         },
         required: [],
     },

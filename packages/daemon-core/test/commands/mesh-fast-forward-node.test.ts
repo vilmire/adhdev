@@ -1,3 +1,4 @@
+import { useSyntheticPublicPushPatterns, bindPushDestination } from '../helpers/public-push-patterns'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
@@ -11,6 +12,7 @@ vi.mock('../../src/mesh/mesh-record.js', () => ({
   },
 }))
 
+import * as publicGuard from '../../src/git/public-push-guard.mjs'
 import { fastForwardMeshNode } from '../../src/mesh/mesh-fast-forward'
 
 beforeEach(() => { recorded.calls.length = 0 })
@@ -20,8 +22,8 @@ function git(cwd: string, args: string[]): string {
 }
 
 function configureUser(repo: string) {
-  git(repo, ['config', 'user.email', 'test@example.com'])
-  git(repo, ['config', 'user.name', 'Test User'])
+  git(repo, ['config', 'user.email', 'vilmire@users.noreply.github.com'])
+  git(repo, ['config', 'user.name', 'vilmire'])
 }
 
 function commitFile(repo: string, path: string, content: string, message: string) {
@@ -36,6 +38,7 @@ function createRemoteBackedRepo(root: string) {
   const work = join(root, 'work')
   mkdirSync(seed, { recursive: true })
   git(root, ['init', '--bare', '-q', origin])
+  git(origin, ['config', 'remote.origin.url', 'https://github.com/vilmire/adhdev-cloud.git'])
   git(seed, ['init', '-q', '-b', 'main'])
   configureUser(seed)
   commitFile(seed, 'README.md', 'base\n', 'init')
@@ -43,6 +46,8 @@ function createRemoteBackedRepo(root: string) {
   git(seed, ['push', '-q', '-u', 'origin', 'main'])
   git(root, ['clone', '-q', origin, work])
   configureUser(work)
+  bindPushDestination(work, origin, 'oss')
+  git(work, ['config', 'remote.origin.adhdev-private', 'true'])
   return { origin, seed, work }
 }
 
@@ -169,6 +174,7 @@ describe('fast_forward_mesh_node', () => {
         mode: 'push',
         execute: true,
         nodeId: 'node-push',
+        approvedPublishShas: { oss: [localHead] },
       })
 
       expect(result).toMatchObject({ success: true, allowed: true, willRun: true, executed: true, code: 'push_applied', mode: 'push' })
@@ -489,3 +495,86 @@ describe('fast_forward_mesh_node ledger — noop checks are not events', () => {
     }
   }, 60000)
 })
+
+
+describe('P2 submodule push visibility enforcement', () => {
+  it.each(['known-public', 'unknown', 'throwing', 'private'])('%s destination: only proven-private submodules can be pushed', async (visibility) => {
+    const root = mkdtempSync(join(tmpdir(), 'adhdev-ff-public-'))
+    let classification: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      const { work } = createRemoteBackedRepo(root)
+      const child = createRemoteBackedRepo(join(root, 'child'))
+      const sub = join(work, 'oss')
+      git(work, ['-c', 'protocol.file.allow=always', 'submodule', 'add', child.origin, 'oss'])
+      configureUser(sub)
+      if (visibility === 'private') git(sub, ['config', 'remote.origin.adhdev-private', 'true'])
+      const classify = publicGuard.pushDestinations
+      if (visibility === 'known-public' || visibility === 'throwing') classification = vi.spyOn(publicGuard, 'pushDestinations').mockImplementation(async (repo, remote) => {
+        if (repo === work) return classify(repo, remote)
+        if (visibility === 'throwing') throw new Error('unreadable destination')
+        return { urls: [child.origin], isPublic: true }
+      })
+      const before = git(child.origin, ['rev-parse', 'main'])
+      commitFile(sub, 'LOCAL.md', 'submodule change\n', 'submodule change')
+      git(work, ['add', '.'])
+      git(work, ['commit', '-qm', 'root gitlink'])
+      const rootPending = git(work, ['rev-list', 'origin/main..HEAD']).split('\n').filter(Boolean)
+      const result = await fastForwardMeshNode({ workspace: work, approvedPublishShas: { oss: rootPending }, execute: true, mode: 'push', pushSubmodules: true, allowAutoPublishSubmoduleMainCommits: true })
+      const entry = result.submodulePushes?.[0]
+      expect(entry).toBeDefined()
+      expect(entry).toMatchObject({ pushed: false, skipped: true, code: 'submodule_public_publish_requires_approval' })
+      expect(git(child.origin, ['rev-parse', 'main'])).toBe(before)
+    } finally {
+      classification?.mockRestore()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 60000)
+})
+
+it('round4 P1-C: workspace public push refuses without exact approval, then scans approved commits', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'adhdev-ff-public-'))
+  try {
+    const { origin, work } = createRemoteBackedRepo(root)
+    git(work, ['config', 'remote.origin.adhdev-private', 'false'])
+    const before = git(origin, ['rev-parse', 'main'])
+    git(work, ['config', 'user.name', 'Other'])
+    git(work, ['config', 'user.email', 'other@example.com'])
+    commitFile(work, 'new.txt', 'clean\n', 'new change')
+    const tip = git(work, ['rev-parse', 'HEAD'])
+    const denied = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true })
+    expect(denied.success).toBe(false)
+    expect(denied.operationError).toContain('publish_approval_required')
+    expect(git(origin, ['rev-parse', 'main'])).toBe(before)
+    mkdirSync(join(work, '.adhdev'), { recursive: true })
+    writeFileSync(join(work, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }))
+    git(work, ['add', '.adhdev'])
+    git(work, ['commit', '-q', '-m', 'configure patterns'])
+    const cfg = git(work, ['rev-parse', 'HEAD'])
+    const scanned = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: [tip, cfg] })
+    expect(scanned.success).toBe(false)
+    expect(scanned.operationError).toContain('identity')
+    expect(git(origin, ['rev-parse', 'main'])).toBe(before)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('round4 P1-C: exact mapped approval permits a clean public workspace push and extra SHAs refuse', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'adhdev-ff-approved-'))
+  try {
+    const { origin, work } = createRemoteBackedRepo(root)
+    git(work, ['config', 'remote.origin.adhdev-private', 'false'])
+    git(work, ['config', 'user.name', 'vilmire'])
+    git(work, ['config', 'user.email', 'vilmire@users.noreply.github.com'])
+    mkdirSync(join(root, '.adhdev'), { recursive: true })
+    writeFileSync(join(root, '.adhdev/public-push-patterns.json'), JSON.stringify({ ownerNames: ['fixture-owner'], knownHosts: ['FixtureHostZ'] }))
+    commitFile(work, 'new.txt', 'clean\n', 'clean public change')
+    const tip = git(work, ['rev-parse', 'HEAD'])
+    const extra = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: [tip, 'abcdef0'] })
+    expect(extra.success).toBe(false)
+    expect(extra.operationError).toContain('publish_approval_required')
+    const approved = await fastForwardMeshNode({ workspace: work, mode: 'push', execute: true, approvedPublishShas: { oss: [tip] } })
+    expect(approved.success, approved.operationError).toBe(true)
+    expect(git(origin, ['rev-parse', 'main'])).toBe(tip)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+useSyntheticPublicPushPatterns()

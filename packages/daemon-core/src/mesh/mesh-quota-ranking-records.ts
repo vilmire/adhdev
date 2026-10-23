@@ -4,7 +4,7 @@
  * last-ranking record surfaced to observability (with its rationale and claim
  * outcome), and the quota-headroom spread bonus the fitness ranking adds.
  */
-import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, expiryRiskForRanking, isWindowTrustworthy, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
+import { evaluateProviderQuotaGate, rankProvidersByQuotaGate, expiryRiskForRanking, isWindowTrustworthy, quotaAxesForTarget, antigravityPoolFromLeadingLabel, type ProviderQuotaGateTarget, type ProviderQuotaGateBlock, type ProviderQuotaRankingEvidence } from './mesh-quota-routing.js';
 import { resolveQuotaRoutingPolicy, type RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
 import { cloneSourceNodeFor, quotaEntryFor, remainingPercent, classifyAbsentQuotaReason, type QuotaFactsContext } from './mesh-quota-sources.js';
 
@@ -82,11 +82,13 @@ export function resolveRecoveryRelaunchProvider(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    failedTarget?: ProviderQuotaGateTarget | null,
+    alternativeTargets?: ReadonlyMap<string, ProviderQuotaGateTarget>,
 ): RecoveryRelaunchDecision {
     if (!failedProviderType) return { action: 'block' };
     // The ONLY quota question asked: is the failed provider's own snapshot
     // blocking RIGHT NOW? Fail-open covers unknown/stale/transient/opted-out.
-    const block = evaluateProviderQuotaGate(node, failedProviderType, policy, now, context);
+    const block = evaluateProviderQuotaGate(node, failedProviderType, policy, now, context, failedTarget);
     if (!block) return { action: 'keep', providerType: failedProviderType };
 
     // The failed provider is measurably out of quota. Prefer another provider
@@ -95,7 +97,7 @@ export function resolveRecoveryRelaunchProvider(
     // provider for another.
     const alternatives = nodeProviderTypes.filter(p => p && p !== failedProviderType);
     if (alternatives.length) {
-        const ranked = rankProvidersByQuotaGate(node, alternatives, policy, now, context);
+        const ranked = rankProvidersByQuotaGate(node, alternatives, policy, now, context, alternativeTargets);
         if (ranked.clear.length) {
             return { action: 'fallback', providerType: ranked.clear[0], block };
         }
@@ -309,6 +311,32 @@ export function recordLastQuotaRankingOutcome(
 }
 
 /**
+ * Per-provider gate targets derived from capability slots. A provider is given
+ * a target only when ALL of its slots resolve to the same Antigravity model
+ * pool (or it has a single slot); a provider whose slots span pools stays
+ * untargeted so the provider-keyed callers keep the headline rather than
+ * guessing one pool for it.
+ */
+export function quotaTargetsFromSlots(
+    slots: ReadonlyArray<{ provider?: string; providerType?: string; model?: string | null }>,
+): Map<string, ProviderQuotaGateTarget> {
+    const byProvider = new Map<string, Array<string | null | undefined>>();
+    for (const slot of slots) {
+        const provider = slot.provider ?? slot.providerType;
+        if (!provider) continue;
+        const models = byProvider.get(provider) ?? [];
+        models.push(slot.model);
+        byProvider.set(provider, models);
+    }
+    const out = new Map<string, ProviderQuotaGateTarget>();
+    for (const [provider, models] of byProvider) {
+        const pools = new Set(models.map(m => antigravityPoolFromLeadingLabel(m) ?? `raw:${m ?? ''}`));
+        if (pools.size === 1) out.set(provider, { model: models[0] });
+    }
+    return out;
+}
+
+/**
  * The SPREAD input: per-provider quota-headroom bonus (0..spreadBonusMax) for
  * every provider with a fresh, usable snapshot on this node. The bonus is
  * proportional to the TIGHTEST reported window's remaining headroom (the
@@ -324,6 +352,7 @@ export function quotaSpreadBonusByProvider(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    targetsByProvider?: ReadonlyMap<string, ProviderQuotaGateTarget>,
 ): Record<string, number> {
     const resolved = resolveQuotaRoutingPolicy(policy);
     const out: Record<string, number> = {};
@@ -350,9 +379,13 @@ export function quotaSpreadBonusByProvider(
         const windowsEligible = snapshot && typeof snapshot === 'object'
             && (snapshot.status === 'ok' || (snapshot as any).metadata?.lastGoodWindows === true);
         if (windowsEligible) {
+            // Antigravity: read the target slot's own model-group windows, not
+            // the blended worst-pool headline (a 0% Gemini pool must not zero
+            // the bonus of a healthy Claude/GPT slot, nor vice versa).
+            const axes = quotaAxesForTarget(provider, snapshot, targetsByProvider?.get(provider));
             const ratios = [
-                isWindowTrustworthy(snapshot.session, facts, snapshot, policy, now) ? remainingPercent(snapshot.session) : undefined,
-                isWindowTrustworthy(snapshot.weekly, facts, snapshot, policy, now) ? remainingPercent(snapshot.weekly) : undefined,
+                isWindowTrustworthy(axes.session, facts, snapshot, policy, now) ? remainingPercent(axes.session) : undefined,
+                isWindowTrustworthy(axes.weekly, facts, snapshot, policy, now) ? remainingPercent(axes.weekly) : undefined,
             ]
                 .filter((r): r is number => r !== undefined)
                 .map(r => r / 100);
@@ -394,8 +427,9 @@ export function quotaSpreadBonusDiagnosticsByProvider(
     policy?: RepoMeshQuotaRoutingPolicy | null,
     now: number = Date.now(),
     context?: QuotaFactsContext | null,
+    targetsByProvider?: ReadonlyMap<string, ProviderQuotaGateTarget>,
 ): ProviderQuotaBonusDiagnostic[] {
-    const bonuses = quotaSpreadBonusByProvider(node, policy, now, context);
+    const bonuses = quotaSpreadBonusByProvider(node, policy, now, context, targetsByProvider);
     return [...new Set(providerTypes)].map(providerType => {
         const value = bonuses[providerType] ?? 0;
         const entry = quotaEntryFor(node, providerType, context, now);
@@ -414,6 +448,7 @@ export function quotaSpreadBonusDiagnosticsByProvider(
         const failureKind = typeof (quota as any).metadata?.failureKind === 'string'
             ? (quota as any).metadata.failureKind
             : undefined;
+        const axes = quotaAxesForTarget(providerType, quota, targetsByProvider?.get(providerType));
         let zeroReason: QuotaSpreadBonusZeroReason | undefined;
         if (value === 0) {
             // Mirrors the calculator's eligibility order: provenance first
@@ -426,8 +461,8 @@ export function quotaSpreadBonusDiagnosticsByProvider(
                 zeroReason = failureKind === 'no-data' ? 'no-data' : 'snapshot-error';
             } else if (!quota.session && !quota.weekly) {
                 zeroReason = 'no-data';
-            } else if (!isWindowTrustworthy(quota.session, facts, quota, policy, now)
-                && !isWindowTrustworthy(quota.weekly, facts, quota, policy, now)) {
+            } else if (!isWindowTrustworthy(axes.session, facts, quota, policy, now)
+                && !isWindowTrustworthy(axes.weekly, facts, quota, policy, now)) {
                 zeroReason = 'stale';
             } else {
                 zeroReason = 'zero-headroom';

@@ -199,7 +199,7 @@ function coordinatorIsModalParked(instance: InstanceLike): boolean {
 }
 
 /** This daemon's live CLI coordinator sessions of one mesh (the deliver consumer's routing snapshot). */
-export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 'instanceManager'>, meshId: string): CoordinatorSessionView[] {
+export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 'instanceManager'> & Partial<Pick<DaemonComponents, 'sessionRegistry'>>, meshId: string): CoordinatorSessionView[] {
     const out: CoordinatorSessionView[] = [];
     for (const inst of components.instanceManager.getByCategory('cli') as unknown as InstanceLike[]) {
         const state = inst.getState();
@@ -207,6 +207,14 @@ export function listLocalCoordinatorSessions(components: Pick<DaemonComponents, 
         if (readText(settings.meshCoordinatorFor) !== meshId) continue;
         const sessionId = readText(state?.instanceId);
         if (!sessionId) continue;
+        const rawStatus = readText(state?.status).toLowerCase();
+        const drainStatus = typeof inst.getDrainStatus === 'function' ? readText(inst.getDrainStatus()).toLowerCase() : '';
+        // Parse/status overlays can be 'error' while the PTY is still live.
+        // Only terminal runtime evidence can remove a coordinator candidate.
+        const terminal = new Set(['exited', 'stopped', 'terminated']);
+        const runtimeLifecycle = readText((state?.runtime as { lifecycle?: unknown } | undefined)?.lifecycle).toLowerCase();
+        if (terminal.has(rawStatus) || terminal.has(drainStatus) || terminal.has(runtimeLifecycle)
+            || components.sessionRegistry?.wasInstanceTerminated?.(sessionId)) continue;
         out.push({ sessionId, idle: coordinatorIsIdle(inst), modalParked: coordinatorIsModalParked(inst) });
     }
     return out;

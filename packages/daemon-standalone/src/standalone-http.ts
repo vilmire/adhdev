@@ -62,6 +62,8 @@ import {
   buildClearedSessionCookie,
   StandaloneSessionStore,
   isStandaloneRequestAuthenticated,
+  isStandaloneHostAllowed,
+  isStandaloneOriginAllowed,
   type StandalonePasswordConfig,
 } from './standalone-auth.js';
 
@@ -95,6 +97,8 @@ export interface StandaloneHttpDeps {
   verifyArtifactWorkerCredential?(credential: string, args: Record<string, unknown>): boolean;
   /** Optional hook notified when owner auth epoch changes (logout, password change/clear). */
   onAuthEpochChanged?(): void;
+  /** Additional Host header values explicitly permitted alongside local interfaces/hostnames. */
+  allowedHosts?: Iterable<string>;
 }
 
 /**
@@ -183,6 +187,12 @@ function readMeshJoinString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** Artifact read verbs a no-auth daemon serves to the open dashboard (see captureUnauthenticatedArtifactReadGuard). */
+const UNAUTHENTICATED_ARTIFACT_READ_VERBS: ReadonlySet<string> = new Set([
+  'artifact_fetch', 'artifact_read', 'session_artifact_fetch',
+  'artifact_list', 'session_artifact_list',
+]);
+
 export class StandaloneHttpApi {
   authToken: string | null = null;
   /**
@@ -194,9 +204,14 @@ export class StandaloneHttpApi {
   passwordConfig: StandalonePasswordConfig | null = null;
   authSessions = new StandaloneSessionStore();
   listenHost = '127.0.0.1';
+  allowedHosts = new Set<string>();
   readonly meshJoinLimiter = new MeshJoinRateLimiter();
 
-  constructor(private readonly deps: StandaloneHttpDeps) {}
+  constructor(private readonly deps: StandaloneHttpDeps) {
+    if (deps.allowedHosts) {
+      for (const h of deps.allowedHosts) this.allowedHosts.add(h);
+    }
+  }
 
   /** Token auth (opt-in) and the persisted password config. */
   configureAuth(token: string | null): void {
@@ -220,6 +235,12 @@ export class StandaloneHttpApi {
     return !!this.passwordConfig;
   }
 
+  /** True when either loopback MCP credential header is present on the request. */
+  hasMcpCredentialHeader(req: IncomingMessage): boolean {
+    return req.headers[ADHDEV_INTERNAL_AUTH_HEADER] !== undefined
+      || req.headers[ADHDEV_WORKER_CREDENTIAL_HEADER] !== undefined;
+  }
+
   /**
    * Loopback-only scope of a daemon-launched MCP server's credential, or null.
    * Internal scope takes precedence even when dashboard authentication is also
@@ -227,13 +248,19 @@ export class StandaloneHttpApi {
    */
   resolveInternalAuthScope(req: IncomingMessage): StandaloneInternalAuthScope | null {
     if (!isLoopbackPeer(req)) return null;
-    const internal = singleHeader(req, ADHDEV_INTERNAL_AUTH_HEADER);
-    if (internal && this.internalAuthToken && secretsEqual(internal, this.internalAuthToken)) return 'coordinator';
-    const worker = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER);
-    if (worker) {
+    const hasInternal = req.headers[ADHDEV_INTERNAL_AUTH_HEADER] !== undefined;
+    const hasWorker = req.headers[ADHDEV_WORKER_CREDENTIAL_HEADER] !== undefined;
+    if (hasInternal && hasWorker) return null;
+    if (hasInternal) {
+      const internal = singleHeader(req, ADHDEV_INTERNAL_AUTH_HEADER);
+      return internal && this.internalAuthToken && secretsEqual(internal, this.internalAuthToken) ? 'coordinator' : null;
+    }
+    if (hasWorker) {
+      const worker = singleHeader(req, ADHDEV_WORKER_CREDENTIAL_HEADER);
+      if (!worker) return null;
       const verify = this.deps.verifyWorkerCredential ?? isLiveWorkerMcpCredential;
       try {
-        if (verify(worker)) return 'worker';
+        return verify(worker) ? 'worker' : null;
       } catch {
         return null;
       }
@@ -256,7 +283,7 @@ export class StandaloneHttpApi {
     const bearerToken = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
       ? authHeader.slice(7)
       : null;
-    const queryToken = new URL(rawUrl, `http://${req.headers.host || 'localhost'}`).searchParams.get('token');
+    const queryToken = new URL(rawUrl, 'http://localhost').searchParams.get('token');
     return { bearerToken, queryToken };
   }
 
@@ -273,7 +300,31 @@ export class StandaloneHttpApi {
   }
 
   isOwnerRequestAuthenticated(req: IncomingMessage, rawUrl: string): boolean {
-    return this.hasAnyAuth() && !this.resolveInternalAuthScope(req) && this.isRequestAuthenticated(req, rawUrl);
+    return this.hasAnyAuth()
+      && !this.hasMcpCredentialHeader(req)
+      && !this.resolveInternalAuthScope(req)
+      && this.isRequestAuthenticated(req, rawUrl);
+  }
+
+  /**
+   * Read-only owner grant for the artifact READ verbs on a daemon that has NO
+   * dashboard credential configured. Owner authority normally needs a token or
+   * password session, so a no-auth daemon demoted every dashboard command to an
+   * unverified `ipc` source — and `artifact_fetch` / `artifact_list` refuse that
+   * ("downgraded unverified owner ingress"), which broke the viewer's "View
+   * full". The open dashboard already reads status, chat and transcripts
+   * without credentials; artifact reads are the same class. Narrow on purpose:
+   * only the read verbs (never `artifact_register`), never when any auth is
+   * configured, never when an MCP-scope credential header is present (valid or
+   * invalid/expired), never cross-origin or via DNS rebinding, and revoked the
+   * instant auth is configured.
+   */
+  captureUnauthenticatedArtifactReadGuard(req: IncomingMessage, commandType: string): (() => boolean) | null {
+    if (!UNAUTHENTICATED_ARTIFACT_READ_VERBS.has(commandType)) return null;
+    if (this.hasAnyAuth() || this.hasMcpCredentialHeader(req) || this.resolveInternalAuthScope(req)) return null;
+    if (!this.isAllowedOrigin(req)) return null;
+    const capturedEpoch = this.authEpoch;
+    return () => !this.hasAnyAuth() && !this.hasMcpCredentialHeader(req) && this.authEpoch === capturedEpoch;
   }
 
   /**
@@ -349,31 +400,29 @@ export class StandaloneHttpApi {
   }
 
   /**
+   * Validate the request's `Host` header against this daemon's allow-list
+   * (`localhost`, `127.0.0.1`, `[::1]`, the configured bind address, this
+   * machine's own interface addresses and hostnames, plus `allowedHosts`).
+   */
+  isAllowedHost(req: IncomingMessage): boolean {
+    return isStandaloneHostAllowed({
+      req,
+      listenHost: this.listenHost,
+      allowedHosts: this.allowedHosts,
+    });
+  }
+
+  /**
    * Allow same-origin requests, requests without an Origin header (curl, native
    * fetches that omit it), and the well-known dashboard dev origins on
-   * loopback. Cross-origin browser requests from arbitrary websites are
-   * rejected — this is what blocks the no-auth-default exploitation reported
-   * by external researchers where a malicious page reads /api/v1/status or
-   * fires /api/v1/command on the locally-bound daemon.
+   * loopback — after validating the `Host` header against DNS rebinding.
    */
   isAllowedOrigin(req: IncomingMessage): boolean {
-    const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
-    if (!originHeader) return true;
-    try {
-      const origin = new URL(originHeader);
-      const host = req.headers.host || '';
-      if (origin.host === host) return true;
-      const hostname = (origin.hostname || '').toLowerCase();
-      const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
-      // Vite dev server (3000) and our own served dashboard ports we know
-      // about. Only honor when the request is coming TO a loopback bind.
-      if (isLoopback && (this.listenHost === '127.0.0.1' || this.listenHost === 'localhost' || this.listenHost === '::1' || this.listenHost === '0.0.0.0')) {
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
+    return isStandaloneOriginAllowed({
+      req,
+      listenHost: this.listenHost,
+      allowedHosts: this.allowedHosts,
+    });
   }
 
   private originHeaderFor(req: IncomingMessage): string | null {
@@ -404,11 +453,11 @@ export class StandaloneHttpApi {
     const url = req.url || '/';
     const method = req.method || 'GET';
 
-    // CORS — only advertise the request's own origin when allowed. Defaulting
-    // to '*' let any website read /api/v1/status and POST commands to the
-    // locally-bound daemon (reported by an external researcher; reproduced).
+    // CORS + DNS-rebinding Host allow-list — only advertise the request's own
+    // origin when both Host and Origin are allowed.
+    const hostAllowed = this.isAllowedHost(req);
     const requestOrigin = this.originHeaderFor(req);
-    const originAllowed = this.isAllowedOrigin(req);
+    const originAllowed = hostAllowed && this.isAllowedOrigin(req);
     if (requestOrigin) {
       res.setHeader('Vary', 'Origin');
       if (originAllowed) {
@@ -420,6 +469,11 @@ export class StandaloneHttpApi {
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (!hostAllowed) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Untrusted Host header rejected.' }));
+      return;
+    }
     if (method === 'OPTIONS') {
       if (requestOrigin && !originAllowed) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
@@ -438,7 +492,7 @@ export class StandaloneHttpApi {
       return;
     }
 
-    const parsedUrl = new URL(url, `http://${req.headers.host || 'localhost'}`);
+    const parsedUrl = new URL(url, 'http://localhost');
 
     if (parsedUrl.pathname === '/auth/session' && method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -617,11 +671,18 @@ export class StandaloneHttpApi {
     // (daemon-core standalone-mcp-auth.ts). Both scopes reach only the two
     // routes LocalTransport uses; the worker scope is further limited to its
     // own verbs (checked in the /command route) and a liveness-only status.
+    // When either MCP header is present on the request, it must verify or fail
+    // closed with 401 — even on a no-auth daemon (no fallback to anonymous read).
+    const hasMcpHeader = this.hasMcpCredentialHeader(req);
     const internalScope = this.resolveInternalAuthScope(req);
-    if (url.startsWith('/api/') && (internalScope || !this.isRequestAuthenticated(req, url))) {
+    if (url.startsWith('/api/') && (hasMcpHeader || internalScope || !this.isRequestAuthenticated(req, url))) {
       if (!internalScope) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized. Provide dashboard session cookie or token auth.' }));
+        res.end(JSON.stringify({
+          error: hasMcpHeader
+            ? 'Unauthorized. Invalid or expired MCP credential.'
+            : 'Unauthorized. Provide dashboard session cookie or token auth.',
+        }));
         return;
       }
       const isStatusRoute = parsedUrl.pathname === '/api/v1/status' && method === 'GET';
@@ -872,7 +933,10 @@ export class StandaloneHttpApi {
         try {
           const parsed = JSON.parse(body || '{}');
           const { type, payload } = normalizeCommandEnvelope(parsed);
-          if (internalScope !== null && this.resolveInternalAuthScope(req) !== internalScope) {
+          if (
+            (hasMcpHeader && internalScope === null)
+            || (internalScope !== null && this.resolveInternalAuthScope(req) !== internalScope)
+          ) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: 'MCP credential was revoked before command execution' }));
             return;
@@ -898,7 +962,9 @@ export class StandaloneHttpApi {
               && verify(credential, commandPayload) === true,
             );
           }
-          const ownerGuard = this.captureOwnerAuthGuard(req, url);
+          const ownerGuard = internalScope === null && !hasMcpHeader
+            ? (this.captureOwnerAuthGuard(req, url) ?? this.captureUnauthenticatedArtifactReadGuard(req, type))
+            : null;
           const isOwner = Boolean(ownerGuard && ownerGuard());
           const ownerProof = isOwner && ownerGuard
             ? issueTrustedOwnerIngressProof({

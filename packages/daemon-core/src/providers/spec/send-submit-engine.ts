@@ -36,7 +36,7 @@
 import { LOG } from '../../logging/logger.js';
 import { type CliSpecV4, type FsmStatus } from './fsm-types.js';
 import type { TerminalAdapter } from './adapter.js';
-import { evaluateConditionPreview, isStructuralOverrideTransition } from './fsm-evaluator.js';
+import { evaluateConditionPreview } from './fsm-evaluator.js';
 import { stripAnsi, stripToolAndCodeLines } from './provider-failure-classifier.js';
 import {
     WIN32_PTY_WRITE_CHUNK_CHARS,

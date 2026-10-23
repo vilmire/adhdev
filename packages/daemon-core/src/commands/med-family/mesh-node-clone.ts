@@ -1,3 +1,8 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { gitChildEnv } from '../../git/git-locale.js';
 /**
  * RF-ROUTER MED family — clone a worktree node (local git worktree + submodule
  * sync + bootstrap, or forwarded to the owning daemon) and re-run a node's
@@ -458,6 +463,8 @@ async function initClonedWorktreeSubmodules(worktreePath: string, sourceNode: an
             ['submodule', 'update', '--init', '--recursive'],
             { timeoutMs: 120000 },
         );
+        const hookInstaller = join(worktreePath, 'scripts/setup-hooks.mjs');
+        if (existsSync(hookInstaller)) await promisify(execFile)(process.execPath, [hookInstaller], { cwd: worktreePath, env: gitChildEnv(), timeout: 30_000, windowsHide: true });
         submodulesInitialized = true;
 
         if (gitUserName && gitUserEmail) {

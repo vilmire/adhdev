@@ -52,7 +52,7 @@ import { AssistantDigestScheduler } from './assistant-digest-scheduler.js';
 import { AssistantReviewScheduler } from './assistant-review-scheduler.js';
 import { setAssistantHumanInputSink } from './assistant-human-input.js';
 import { getAssistantProjectPorts, setAssistantRelayHooks, type AssistantProjectPorts } from './assistant-project-ports.js';
-import { AssistantRemoteRelayPoller, REMOTE_POLL_MS } from './assistant-remote-relay.js';
+import { AssistantRemoteRelayPoller, REMOTE_POLL_MS, isSelfHealableRevocationReason } from './assistant-remote-relay.js';
 
 export const ASSISTANT_RELAY_TICK_MS = 60_000;
 const METRICS_PRUNE_EVERY_MS = 60 * 60_000;
@@ -385,8 +385,8 @@ export function wireAssistantRuntime(
             ...(t.lastCursor !== undefined ? { lastCursor: t.lastCursor } : {}),
             ...(t.coordinatorSessionId !== undefined ? { coordinatorSessionId: t.coordinatorSessionId } : {}),
         })),
-        remoteTarget: (meshId) => {
-            const ports = projectPorts;
+        remoteTarget: async (meshId) => {
+            const ports = projectPorts ?? await loadProjectPorts();
             if (!ports) return null;
             const mesh = ports.listMeshes().find((m) => m.id === meshId);
             if (mesh) {
@@ -399,6 +399,35 @@ export function wireAssistantRuntime(
             return ports.followedRemoteHost(followed);
         },
         poll: async (target, args) => (await loadProjectPorts()).callHost(target, 'poll', args),
+        staleRevoked: async () => {
+            const ports = projectPorts ?? await loadProjectPorts();
+            if (!ports?.followedRemoteHost) return [];
+            return (ports.followedRemoteProjects?.() ?? registry.listFollowedRemoteProjects())
+                .filter((e) => e.state === 'revoked' && isSelfHealableRevocationReason(e.revokedReason ?? e.lastErrorCode))
+                .map((e) => ({ key: e.key, meshId: e.meshId, target: ports.followedRemoteHost!(e) }));
+        },
+        onAccessRecovered: (key) => {
+            const stale = registry.getFollowedRemoteProject(key)
+                ?? registry.listFollowedRemoteProjects().find((e) => e.key === key);
+            if (!stale || stale.state !== 'revoked' || !isSelfHealableRevocationReason(stale.revokedReason ?? stale.lastErrorCode)) {
+                return;
+            }
+            const cur = stale.lastCursor ?? null;
+            const sid = stale.coordinatorSessionId ?? null;
+            registry.updateFollowedRemoteProject(stale.key, {
+                state: 'followed',
+                revokedAt: undefined,
+                revokedReason: undefined,
+                lastErrorCode: undefined,
+            });
+            relay.openThread(stale.meshId);
+            store.setThreadCursor?.(stale.meshId, cur, sid, { reset: true });
+            remotePoller.noteSent(stale.meshId, cur, sid, { reset: true });
+        },
+        onAccessRefused: (meshId, code) => {
+            const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+            if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str(code) || 'host_refused' });
+        },
         relay,
         onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed) => {
             store.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
@@ -421,8 +450,11 @@ export function wireAssistantRuntime(
                 });
             }
         },
-        onAccessRevoked: (meshId, code) => {
-            const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
+        onAccessRevoked: (keyOrMeshId, code) => {
+            const followed = registry.getFollowedRemoteProject(keyOrMeshId)
+                ?? registry.listFollowedRemoteProjects().find((e) => e.key === keyOrMeshId)
+                ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === 'followed')
+                ?? registry.listFollowedRemoteProjects().find((e) => e.meshId === keyOrMeshId && e.state === 'revoked');
             if (followed) {
                 const reason = str(code) || 'host_revoked';
                 registry.updateFollowedRemoteProject(followed.key, {

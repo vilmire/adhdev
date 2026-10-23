@@ -1,5 +1,5 @@
 
-import { isTaskReadonly } from '@adhdev/daemon-core';
+import { isTaskReadonly, readSessionModel } from '@adhdev/daemon-core';
 import { readString } from '@adhdev/mesh-shared';
 
 export function readSessionRecordId(session: any): string | undefined {
@@ -18,6 +18,15 @@ export function extractStatusMetadataSessions(value: any): any[] {
         ? payload.status
         : payload;
     return Array.isArray(status?.sessions) ? status.sessions : [];
+}
+
+/**
+ * The model a session record is running, from the same fields the daemon's
+ * readSessionModel reads (control value, summary metadata, launch record,
+ * settings). Used to gate Antigravity sessions on their own model-group pool.
+ */
+export function readSessionRecordModel(session: any): string | undefined {
+    return readSessionModel(session);
 }
 
 export function resolveSessionProviderType(session: any): string {

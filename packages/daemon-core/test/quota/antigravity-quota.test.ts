@@ -463,6 +463,63 @@ describe('fetchAntigravityQuota', () => {
         expect(quota.session?.resetsAt).toBe(Date.parse('2026-10-18T09:35:01Z'));
     });
 
+    describe('per model group (owner screen 2026-10-23: Gemini weekly exhausted, Claude/GPT healthy)', () => {
+        const claudeGptGroup = {
+            displayName: 'Claude and GPT models',
+            buckets: [
+                { bucketId: '3p-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', remainingFraction: 0.5565, resetTime: '2026-10-29T02:30:00Z' },
+                { bucketId: '3p-5h', displayName: 'Five Hour Limit Remaining', window: '5h', remainingFraction: 1, resetTime: '2026-10-23T07:30:00Z' },
+            ],
+        };
+        // proto3 JSON drops a zero-valued scalar: the exhausted weekly bucket
+        // arrives WITHOUT remainingFraction; the 5h limit is disabled.
+        const geminiExhaustedOmitted = {
+            displayName: 'Gemini Models',
+            buckets: [
+                { bucketId: 'gemini-weekly', displayName: 'Weekly Limit Remaining', window: 'weekly', resetTime: '2026-10-24T14:40:00Z' },
+                { bucketId: 'gemini-5h', displayName: 'Five Hour Limit Remaining', window: '5h', disabled: true },
+            ],
+        };
+
+        it('keeps the exhausted Gemini weekly bucket (absent remainingFraction) instead of dropping it, tagged with its group', async () => {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const fetch = stubFetch(jsonResponse({ groups: [geminiExhaustedOmitted, claudeGptGroup] }));
+
+            const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+            expect(quota.status).toBe('ok');
+            const gemini = quota.buckets?.filter((b) => b.group === 'gemini');
+            const claudeGpt = quota.buckets?.filter((b) => b.group === 'claude-gpt');
+            expect(gemini).toHaveLength(1); // disabled 5h is not a bucket
+            expect(gemini?.[0].usedPercent).toBe(100);
+            expect(gemini?.[0].windowMinutes).toBe(WEEKLY_WINDOW_MINUTES);
+            expect(claudeGpt?.map((b) => b.usedPercent.toFixed(2))).toEqual(['44.35', '0.00']);
+        });
+
+        it('reads an explicit remainingFraction of 0 as exhausted too', async () => {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const gemini = {
+                displayName: 'Gemini Models',
+                buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0, resetTime: '2026-10-24T14:40:00Z' }],
+            };
+            const fetch = stubFetch(jsonResponse({ groups: [gemini, claudeGptGroup] }));
+
+            const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+            expect(quota.buckets?.find((b) => b.group === 'gemini')?.usedPercent).toBe(100);
+        });
+
+        it('both groups healthy: four group-tagged buckets, nothing exhausted', async () => {
+            const spawn = stubSpawn(keyringBlob(credentialPayload()));
+            const fetch = stubFetch(jsonResponse(CAPTURED_1_4_2_TWO_GROUP_RESPONSE));
+
+            const quota = await fetchAntigravityQuota(deps(spawn, fetch));
+
+            expect(quota.buckets?.map((b) => b.group)).toEqual(['gemini', 'gemini', 'claude-gpt', 'claude-gpt']);
+            expect(quota.buckets?.every((b) => b.usedPercent < 100)).toBe(true);
+        });
+    });
+
     it('maps the live response: window LABELS onto fixed axes', async () => {
         // ★`window` is "weekly"/"5h", NOT a Duration like "604800s". Parsing it
         // as a Duration returns null for every real bucket and leaves BOTH axes

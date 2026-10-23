@@ -125,6 +125,7 @@ export function wireAdapterCallbacks(host: LifecycleWiringHost, context: Instanc
     // registry.terminate(id, 'pty_exit'), so a racing stop/auto-clean still yields
     // exactly one `terminated`; mesh meaning is applied by bus subscribers.
     host.adapter.setOnExit(({ termination, runtimeSettings }) => {
+        host.detectStatusTransition('pty_exit');
         host.lifecyclePort?.exited(host.instanceId, termination, runtimeSettings);
     });
     host.adapter.setOnSignal(({ providerType, workspace, runtimeSettings, signal }) => {
