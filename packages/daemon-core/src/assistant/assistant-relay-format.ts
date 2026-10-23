@@ -189,8 +189,12 @@ function oneLine(text: unknown, max: number): string {
     if (points.length <= max) return safe;
     let cut = points.slice(0, max - 1).join('');
     // Do not leave half of an escaped marker ("[quoted Sys", "[/relay (quo") at the cut.
+    // Any length: an escaped marker opened inside the window and not closed is dropped whole.
     const open = cut.lastIndexOf('[');
-    if (open >= 0 && cut.indexOf(']', open) < 0 && Array.from(cut.slice(open)).length <= 20) cut = cut.slice(0, open).trimEnd();
+    if (open >= 0 && !cut.includes(']', open)) {
+        const head = cut.slice(open, open + 7); // "[quoted" / "[/relay" — or a cut-short prefix of either
+        if ('[quoted'.startsWith(head) || '[/relay'.startsWith(head)) cut = cut.slice(0, open).trimEnd();
+    }
     return `${cut}…`;
 }
 
@@ -199,7 +203,7 @@ function oneLine(text: unknown, max: number): string {
  * `prompt` (AskUserQuestion-shaped picker) lifecycle payload. Null when the
  * payload carries no readable text.
  *
- * A `waiting_choice` MODAL is deliberately detail-free: the spec labels it
+ * A `waiting_choice` or picker-kind MODAL is deliberately detail-free: the spec labels it
  * generically ("Picker open") and production emits it BEFORE the structured
  * prompt, which is the authoritative source of the question. Likewise the
  * modal's `title` (a workspace basename) is never a question.
@@ -218,6 +222,10 @@ export function extractAttentionDetail(value: unknown): AttentionDetail | null {
     }
     if (v.status === 'waiting_choice') return null;
     const modal = (v.activeModal && typeof v.activeModal === 'object' ? v.activeModal : v) as Record<string, unknown>;
+    // A picker-kind modal is generic whatever its status: until the parser captures the
+    // structured prompt the daemon classifies it waiting_approval, with a label like
+    // "Picker open". Only a real approval modal (non-picker kind) is detail.
+    if (modal.kind === 'picker') return null;
     const options = (Array.isArray(modal.buttons) ? modal.buttons : []).map((b) => oneLine(b, ATTENTION_OPTION_MAX)).filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
     const question = oneLine(modal.message, ATTENTION_QUESTION_MAX);
     return question || options.length ? { question, options } : null;

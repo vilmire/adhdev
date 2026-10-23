@@ -104762,7 +104762,10 @@ ${b.text}`).join("\n\n");
       if (points.length <= max) return safe;
       let cut = points.slice(0, max - 1).join("");
       const open = cut.lastIndexOf("[");
-      if (open >= 0 && cut.indexOf("]", open) < 0 && Array.from(cut.slice(open)).length <= 20) cut = cut.slice(0, open).trimEnd();
+      if (open >= 0 && !cut.includes("]", open)) {
+        const head = cut.slice(open, open + 7);
+        if ("[quoted".startsWith(head) || "[/relay".startsWith(head)) cut = cut.slice(0, open).trimEnd();
+      }
       return `${cut}\u2026`;
     }
     function extractAttentionDetail(value) {
@@ -104777,6 +104780,7 @@ ${b.text}`).join("\n\n");
       }
       if (v.status === "waiting_choice") return null;
       const modal = v.activeModal && typeof v.activeModal === "object" ? v.activeModal : v;
+      if (modal.kind === "picker") return null;
       const options = (Array.isArray(modal.buttons) ? modal.buttons : []).map((b) => oneLine2(b, ATTENTION_OPTION_MAX)).filter(Boolean).slice(0, ATTENTION_OPTIONS_MAX);
       const question = oneLine2(modal.message, ATTENTION_QUESTION_MAX);
       return question || options.length ? { question, options } : null;

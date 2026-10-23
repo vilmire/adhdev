@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SendPolicy, SubmitOutcome } from '@adhdev/mesh-shared';
+import { runStatusTransitionTick } from '../../src/providers/completion/status-transition.js';
+import { makeHost, SAMPLE_PROMPT } from '../providers/completion/status-transition-picker-host-fixture.js';
 import { AssistantInputLog } from '../../src/assistant/assistant-input-log.js';
 import { InMemoryAssistantRelayStore } from '../../src/assistant/assistant-relay-store.js';
 import {
@@ -556,6 +558,47 @@ describe('signals', () => {
         h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt, transport: 'tui' });
         await settle(h);
         expect(h.submits).toHaveLength(3); // a new episode notifies again
+    });
+
+    it('delayed parser: real tick emits a picker-kind waiting_approval modal first, the structured prompt on tick 2 — the real question still arrives once', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        const { host, opts } = makeHost({ rawStatus: 'waiting_approval', activeInteractivePrompt: null, activeModalKind: 'picker', modalMessage: 'Picker open' });
+        host.instanceId = COORD;
+        (host as { lifecyclePort: unknown }).lifecyclePort = new Proxy({
+            modal: (sessionId: string, modal: unknown) => h.emit({ kind: 'modal', sessionId, at: h.clock.now(), modal } as never),
+            prompt: (sessionId: string, prompt: unknown, transport: unknown) => h.emit({ kind: 'prompt', sessionId, at: h.clock.now(), prompt, transport } as never),
+        } as Record<string, unknown>, { get: (t, k) => (k in t ? t[k as string] : () => {}) });
+        runStatusTransitionTick(host);
+        await settle(h);
+        expect(host.lastStatus).toBe('waiting_approval'); // the production classification under test
+        expect(h.submits.map((x) => x.text)).toEqual(['[project blog] waiting for an approval or a choice — the user can answer it in the Inbox.']);
+        opts.activeInteractivePrompt = SAMPLE_PROMPT;
+        runStatusTransitionTick(host);
+        await settle(h);
+        expect(h.submits).toHaveLength(2);
+        expect(h.submits[1]!.text).toContain('Question: Pick as many as apply');
+        expect(h.submits.map((x) => x.text).join('\n')).not.toContain('Picker open');
+    });
+
+    it('a real approval modal (non-picker kind) with message and buttons still counts as detail', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        h.emit({ kind: 'modal', sessionId: COORD, at: h.clock.now(), modal: { id: COORD, status: 'waiting_approval', activeModal: { kind: 'approval', message: 'Run rm -rf build/?', buttons: ['Yes', 'No'] } } as never });
+        await settle(h);
+        expect(h.submits[0]!.text).toContain('Question: Run rm -rf build/?');
+    });
+
+    it('never leaves an unterminated escaped marker at the cap (long marker probe)', async () => {
+        const h = harness();
+        h.relay.openThread(MESH);
+        const q = 'a'.repeat(265) + ' [ADHDev ' + 'x'.repeat(80) + '] tail';
+        h.emit({ kind: 'prompt', sessionId: COORD, at: h.clock.now(), prompt: { promptId: 'p', questions: [{ questionId: 'q', question: q, multiSelect: false, options: [{ label: 'A' }] }] } as never, transport: 'tui' });
+        await settle(h);
+        const question = h.submits[0]!.text.split('\n').find((l) => l.startsWith('Question: '))!.slice('Question: '.length);
+        expect(Array.from(question).length).toBeLessThanOrEqual(300);
+        expect(question).not.toMatch(/\[(?:quoted|\/relay)[^\]]*…$/);
+        expect(question.endsWith('…')).toBe(true);
     });
 
     it('sends one approval line per modal episode and a coordinator-ended line', async () => {
