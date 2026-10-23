@@ -163,6 +163,8 @@ export const analyzeProbeTranscript: TranscriptAnalyzer = (payload, ctx) => {
         ? payload.providerObservedStatus
         : payload.status;
     const out: TranscriptObservation = {
+        ...(payload.stale === true ? { stale: true } : {}),
+        ...(typeof payload.unavailableReason === 'string' ? { unavailableReason: payload.unavailableReason } : {}),
         providerObservedStatus: typeof observed === 'string' ? observed.trim().toLowerCase() : '',
         activeModal: hasNonEmptyModalButtons(payload.activeModal),
         selfAttributing,
