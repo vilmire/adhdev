@@ -163,6 +163,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 allowAutoPublishSubmoduleMainCommits: autoPublishSubmoduleMainCommits.enabled,
                 autoPublishPolicySource: autoPublishSubmoduleMainCommits.source,
                 worktreeRoot: node.workspace,
+                approvedPublishShas: Array.isArray(ctx.args?.approvedPublishShas) ? ctx.args.approvedPublishShas.filter((v: unknown): v is string => typeof v === 'string') : undefined,
             });
             recordMeshRefineStage(refineStages, 'submodule_reachability', submoduleReachability.status, submoduleReachabilityStarted, {
                 checked: submoduleReachability.checked,
@@ -196,6 +197,7 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                     path: entry.path,
                     commit: entry.commit,
                     equivalentPublishedCommit: entry.equivalentPublishedCommit,
+                    publishApproval: entry.publishApproval,
                     publishRequired: entry.publishRequired === true,
                     autoPublishAllowed: entry.autoPublishAllowed,
                     autoPublishAttempted: entry.autoPublishAttempted,
@@ -220,10 +222,23 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                 // twin" — surface that distinct reason and guidance.
                 const convergeToPublished = submoduleReachability.unreachable.length > 0
                     && submoduleReachability.unreachable.every(entry => !!entry.equivalentPublishedCommit);
-                const blockedReason = convergeToPublished ? 'submodule_converge_to_published' : 'submodule_publish_required';
+                // ★Owner rule: a PUBLIC remote is never published without per-commit approval.
+                const approvalRequests = submoduleReachability.unreachable.filter(entry => !!entry.publishApproval);
+                const approvalRequired = approvalRequests.length > 0;
+                const blockedReason = approvalRequired ? 'publish_approval_required' : convergeToPublished ? 'submodule_converge_to_published' : 'submodule_publish_required';
                 return { kind: 'terminal', result: {
                     success: false,
-                    code: 'submodule_reachability_failed',
+                    code: approvalRequired ? 'publish_approval_required' : 'submodule_reachability_failed',
+                    ...(approvalRequired ? {
+                        publishApprovalRequired: approvalRequests.map(entry => ({
+                            path: entry.path,
+                            commit: entry.commit,
+                            remoteUrls: entry.publishApproval!.remoteUrls,
+                            remoteRef: entry.publishApproval!.remoteRef,
+                            commits: entry.publishApproval!.commits,
+                            unapproved: entry.publishApproval!.unapproved,
+                        })),
+                    } : {}),
                     convergenceStatus: 'blocked_review',
                     publishRequired: !convergeToPublished,
                     ...(convergeToPublished ? { convergeToPublished: true } : {}),
@@ -232,7 +247,11 @@ export async function refineSubmoduleReachabilityStage(self: DaemonCommandRouter
                         ? 'Refinery submodule reachability preflight found submodule gitlink commit(s) that are not reachable from their configured remote main branch, but each has an equivalent commit (identical tree) already published there; converge the gitlink(s) to the published commit(s) instead of publishing same-content twins. Merge/refine cleanup was not attempted.'
                         : 'Refinery submodule reachability preflight failed because one or more submodule gitlink commits are not reachable from their configured remote main branch; merge/refine cleanup was not attempted.',
                     nextStep,
-                    nextSteps: convergeToPublished ? [
+                    nextSteps: approvalRequired ? [
+                        'Nothing was pushed: the submodule remote is PUBLIC, and the Refinery never publishes to a public remote without per-commit owner approval.',
+                        'Show the owner every commit in publishApprovalRequired[].commits (sha, subject, author/committer, guardScan). Do not approve any commit whose guardScan is not "clean".',
+                        'After the owner approves, rerun with approved_publish_shas set to those commit SHAs (it must cover every listed commit).',
+                    ] : convergeToPublished ? [
                         'Do NOT publish the local submodule commit(s): an equivalent commit (identical tree) is already published on the submodule remote main branch for every unreachable gitlink.',
                         'Retarget each submodule gitlink to the already-published equivalent commit shown in the evidence (equivalentPublishedCommit), commit the root pointer update, and push the submodule checkout to that commit.',
                         'Rerun mesh_refine_node after the gitlink points at the published commit.',

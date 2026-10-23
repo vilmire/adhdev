@@ -19,6 +19,11 @@ export const MESH_REFINE_NODE_TOOL = {
             node_id: { type: 'string', description: 'Node ID of the completed worktree node to refine and merge.' },
             execute: { type: 'boolean', description: 'When true, run validation/merge/push/cleanup for this node. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the validation plan without merging. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            approved_publish_shas: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must cover every listed commit. Private remotes are unaffected.',
+            },
         },
         required: ['node_id'],
     },
@@ -41,6 +46,11 @@ export const MESH_REFINE_BATCH_TOOL = {
             },
             execute: { type: 'boolean', description: 'When true, run validation/rebase/merge for each node in order. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the ordering + per-node validation plan without executing. Defaults true unless execute=true; dry_run=true overrides execute.' },
+            approved_publish_shas: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Owner-approved commit SHAs (full or >=7-char abbreviated) for publishing to a PUBLIC submodule remote (e.g. the oss repo). The Refinery NEVER publishes to a public remote on its own: without this it stops BEFORE pushing with code publish_approval_required, listing every commit that would become public (sha, subject, author/committer, guard scan). Show that list to the owner, then rerun with the approved SHAs; the set must cover every listed commit. Private remotes are unaffected.',
+            },
         },
         required: [],
     },

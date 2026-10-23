@@ -20,6 +20,8 @@ import { runMeshRefineSubmoduleReachabilityGate } from '../../src/commands/route
 const GOOD = { name: 'vilmire', email: 'vilmire@users.noreply.github.com' }
 const BAD = { name: 'Test User', email: 'test@example.com' }
 const AUTO_PUBLISH_ON = { allowAutoPublishSubmoduleMainCommits: true } as const
+// A PUBLIC remote additionally needs the owner's per-commit approval; these tests exercise the guard BEHIND it.
+const approved = (f: { localOnly: string }) => ({ ...AUTO_PUBLISH_ON, approvedPublishShas: [f.localOnly] })
 const cleanups: string[] = []
 
 function git(cwd: string, args: string[], id = BAD): string {
@@ -72,7 +74,7 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
   it('★refuses a commit with a foreign author/committer identity — nothing reaches origin', async () => {
     const f = fixture({ originSubpath: 'vilmire/adhdev', id: BAD, content: 'clean\n' })
     const before = f.originMain()
-    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
     const [entry] = gate.unreachable
     expect(gate.status).toBe('failed')
     expect(entry.autoPublishSucceeded).toBe(false)
@@ -84,7 +86,7 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
 
   it('★refuses a personal home path in the pushed history even with the right identity', async () => {
     const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: `const p = '${['C:', 'Users', 'mallory', 'repo'].join('\\\\')}'\n` })  // built at runtime: the tree scan must not see a literal leak
-    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
     const [entry] = gate.unreachable
     expect(entry.autoPublishSucceeded).toBe(false)
     expect(entry.error).toContain('personal path')
@@ -93,7 +95,7 @@ describe('Refinery oss auto-publish runs the public-push guard itself', () => {
 
   it('a clean vilmire-noreply commit is still auto-published and verified (no over-blocking)', async () => {
     const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'clean\n' })
-    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
     expect(gate.status).toBe('passed')
     expect(f.originMain()).toContain(f.localOnly)
   })
@@ -141,11 +143,71 @@ describe('round 3 destination proof and push URL regressions', () => {
         }
       }
       const before = f.originMain()
-      const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+      const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, approved(f))
       expect(gate.status).toBe('failed')
       expect(gate.unreachable[0].error).toContain('public-oss push guard BLOCKED')
       expect(f.originMain()).toEqual(before)
       expect(git(publicOrigin, ['rev-parse', 'main'])).toBe(before[0])
     })
   }
+})
+
+
+describe('★owner rule: the Refinery never publishes to a PUBLIC remote without per-commit approval', () => {
+  function publicFixtureWithTwoCommits() {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: GOOD, content: 'one\n' })
+    const first = f.localOnly
+    writeFileSync(join(f.sub, 'second.txt'), 'two\n')
+    git(f.sub, ['add', 'second.txt'], GOOD)
+    git(f.sub, ['commit', '-q', '-m', 'second local commit'], GOOD)
+    const second = git(f.sub, ['rev-parse', 'HEAD'], GOOD)
+    git(f.base, ['add', 'sub'], GOOD)
+    git(f.base, ['commit', '-q', '-m', 'gitlink -> second'], GOOD)
+    return { ...f, first, second, mergedTree: git(f.base, ['rev-parse', 'HEAD^{tree}'], GOOD) }
+  }
+
+  it('no approval → blocked BEFORE pushing, with every would-be-public commit listed', async () => {
+    const f = publicFixtureWithTwoCommits()
+    const before = f.originMain()
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+    const [entry] = gate.unreachable
+    expect(gate.status).toBe('failed')
+    expect(entry.autoPublishAttempted).toBe(false)
+    expect(entry.autoPublishSkippedReason).toContain('publish_approval_required')
+    expect(entry.publishApproval?.commits.map(c => c.sha)).toEqual([f.first, f.second])
+    expect(entry.publishApproval?.commits[1]).toMatchObject({ subject: 'second local commit', author: 'vilmire <vilmire@users.noreply.github.com>', committer: 'vilmire <vilmire@users.noreply.github.com>', guardScan: 'clean', approved: false })
+    expect(f.originMain()).toEqual(before)
+  })
+
+  it('the exact approved set (abbreviated SHAs allowed) → published and verified', async () => {
+    const f = publicFixtureWithTwoCommits()
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, { ...AUTO_PUBLISH_ON, approvedPublishShas: [f.first.slice(0, 10), f.second] })
+    expect(gate.status).toBe('passed')
+    expect(f.originMain()).toContain(f.second)
+  })
+
+  it('an approved set that misses one commit → blocked, nothing pushed', async () => {
+    const f = publicFixtureWithTwoCommits()
+    const before = f.originMain()
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, { ...AUTO_PUBLISH_ON, approvedPublishShas: [f.second] })
+    const [entry] = gate.unreachable
+    expect(gate.status).toBe('failed')
+    expect(entry.publishApproval?.unapproved).toEqual([f.first])
+    expect(f.originMain()).toEqual(before)
+  })
+
+  it('a guard-blocked commit is reported as blocked in the approval request', async () => {
+    const f = fixture({ originSubpath: 'vilmire/adhdev', id: BAD, content: 'clean\n' })
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+    expect(gate.unreachable[0].publishApproval?.commits[0].guardScan).toBe('blocked')
+    expect(f.originMain()).not.toContain(f.localOnly)
+  })
+
+  it('a private remote is unchanged: auto-published with no approval argument', async () => {
+    const f = fixture({ originSubpath: 'someone/private-repo', id: GOOD, content: 'clean\n' })
+    const gate = await runMeshRefineSubmoduleReachabilityGate(f.base, f.mergedTree, AUTO_PUBLISH_ON)
+    expect(gate.status).toBe('passed')
+    expect(gate.entries[0].publishApproval).toBeUndefined()
+    expect(f.originMain()).toContain(f.localOnly)
+  })
 })

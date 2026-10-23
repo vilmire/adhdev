@@ -217,7 +217,7 @@ export async function meshWriteMeshJsonConfig(
 
 export async function meshRefineNode(
     ctx: MeshContext,
-    args: { node_id: string; execute?: boolean; dry_run?: boolean },
+    args: { node_id: string; execute?: boolean; dry_run?: boolean; approved_publish_shas?: string[] },
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
@@ -264,6 +264,7 @@ export async function meshRefineNode(
         nodeId: args.node_id,
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
+        ...(Array.isArray(args.approved_publish_shas) ? { approvedPublishShas: args.approved_publish_shas.filter((v): v is string => typeof v === 'string') } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,
@@ -283,7 +284,7 @@ export async function meshRefineNode(
 
 export async function meshRefineBatch(
     ctx: MeshContext,
-    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean } = {},
+    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean; approved_publish_shas?: string[] } = {},
 ): Promise<string> {
     // Refresh so auto-collection and explicit node IDs resolve against the latest
     // mesh membership (siblings may have been created/removed in this MCP session).
@@ -325,6 +326,7 @@ export async function meshRefineBatch(
         ...(nodeIds ? { nodeIds } : {}),
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
+        ...(Array.isArray(args.approved_publish_shas) ? { approvedPublishShas: args.approved_publish_shas.filter((v): v is string => typeof v === 'string') } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,

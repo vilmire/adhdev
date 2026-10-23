@@ -2,6 +2,7 @@ import type { GitRepoStatus, GitSubmoduleStatus } from '../git/git-types.js';
 import { getGitRepoStatus } from '../git/git-status.js';
 import { GitCommandError, runGit } from '../git/git-executor.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
+import { pushDestinations } from '../git/public-push-guard.mjs';
 
 export interface MeshFastForwardNodeArgs {
   nodeId?: string;
@@ -559,6 +560,14 @@ async function resolveSubmodulePushes(
       continue;
     }
     const refspec = `${submodule.commit}:refs/heads/${remoteBranch}`;
+    // ★Owner rule: no automatic publishing to a PUBLIC remote (per-commit approval is
+    // required via the Refinery's approved_publish_shas). Unknown URLs count as public.
+    let publicDestination = true;
+    try { publicDestination = (await pushDestinations(repoPath, 'origin')).isPublic; } catch { /* fail closed */ }
+    if (publicDestination) {
+      results.push({ ...base, pushed: false, skipped: true, code: 'submodule_public_publish_requires_approval', refspec, error: 'submodule origin is a public remote; publish it through mesh_refine_node with approved_publish_shas' });
+      continue;
+    }
     if (!execute) {
       results.push({ ...base, pushed: false, skipped: false, code: 'submodule_push_available', refspec });
       continue;

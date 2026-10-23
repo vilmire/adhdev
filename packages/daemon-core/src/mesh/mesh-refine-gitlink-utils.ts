@@ -18,7 +18,7 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { assertPublishableToPublicOss, pushDestinations } from '../git/public-push-guard.mjs';
+import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
 
@@ -636,6 +636,13 @@ export type MeshRefineSubmoduleReachabilityEntry = {
     autoPublishVerified?: boolean;
     autoPublishRefspec?: string;
     autoPublishSkippedReason?: string;
+    /**
+     * ★Set when the destination is a PUBLIC remote and the commits that would become
+     * public (origin/<branch>..commit) are not all covered by the caller's
+     * `approvedPublishShas`. Nothing was pushed. Carries everything the coordinator
+     * must show the owner before approving.
+     */
+    publishApproval?: MeshRefinePublishApprovalRequest;
     importedFromWorktree?: boolean;
     checkedLocal?: boolean;
     localReachable?: boolean;
@@ -703,10 +710,94 @@ export function buildSubmodulePublishRequiredNextStep(entries: MeshRefineSubmodu
     return parts.join(' ');
 }
 
+export type MeshRefinePublishCandidate = {
+    sha: string;
+    subject: string;
+    author: string;
+    committer: string;
+    /** 'clean' or 'blocked' (identity / personal-path violations) from the public-push guard. */
+    guardScan: 'clean' | 'blocked' | 'error';
+    guardDetails: string[];
+    approved: boolean;
+};
+
+export type MeshRefinePublishApprovalRequest = {
+    remoteUrls: string[];
+    remoteRef: string;
+    commits: MeshRefinePublishCandidate[];
+    unapproved: string[];
+};
+
+/**
+ * ★Owner rule: the Refinery never publishes to a PUBLIC remote's main on its own
+ * authority. Returns `undefined` when the destination is private (current behaviour
+ * unchanged) or when every commit that would become public is in `approvedShas`.
+ * Otherwise returns the request to show the owner. Fail-closed: if the push URLs
+ * cannot be read the destination is treated as public. An approval only has to
+ * COVER the pending commits — an extra approved SHA publishes nothing — so a stale
+ * approval can never smuggle in a commit that was added after the owner looked.
+ */
+export async function evaluatePublicPublishApproval(
+    submodulePath: string,
+    commit: string,
+    branch: string,
+    approvedShas: readonly string[] | undefined,
+): Promise<MeshRefinePublishApprovalRequest | undefined> {
+    let destinations: Awaited<ReturnType<typeof pushDestinations>> | undefined;
+    try { destinations = await pushDestinations(submodulePath, 'origin'); } catch { /* unknown URLs: treat as public */ }
+    if (destinations && !destinations.isPublic) return undefined;
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = async (args: string[]) => String((await promisify(execFile)(GIT, args, {
+        cwd: submodulePath, encoding: 'utf8', timeout: GIT_LOCAL_TIMEOUT_MS, windowsHide: true, env: gitChildEnv(),
+        maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
+    })).stdout || '');
+    const remoteRef = `refs/remotes/origin/${branch}`;
+    let range = `${remoteRef}..${commit}`;
+    try { await run(['rev-parse', '--verify', '--quiet', `${remoteRef}^{commit}`]); } catch { range = commit; }
+    const log = await run(['log', '--reverse', '--format=%H%x00%an <%ae>%x00%cn <%ce>%x00%s%x00', range]);
+    const fields = log.split('\0');
+    const rows: Array<{ sha: string; author: string; committer: string; subject: string }> = [];
+    for (let i = 0; i + 3 < fields.length; i += 4) {
+        rows.push({ sha: fields[i].replace(/^\n+/, ''), author: fields[i + 1], committer: fields[i + 2], subject: fields[i + 3] });
+    }
+
+    const violationsBySha = new Map<string, string[]>();
+    let scanError = '';
+    try {
+        for (const remoteUrl of destinations?.urls || [undefined]) {
+            const { violations } = await checkPublicPush(
+                [{ localRef: commit, localSha: commit, remoteRef: `refs/heads/${branch}`, remoteSha: '0'.repeat(40) }],
+                { cwd: submodulePath, remoteName: 'origin', remoteUrl },
+            );
+            for (const v of violations) {
+                const list = violationsBySha.get(v.sha) || [];
+                list.push(v.kind === 'identity' ? `identity: ${v.detail}` : `${v.file}:${v.line} personal path: ${v.detail}`);
+                violationsBySha.set(v.sha, list);
+            }
+        }
+    } catch (e: any) { scanError = e?.message || String(e); }
+
+    const approved = (approvedShas || []).map(s => String(s).trim().toLowerCase()).filter(s => /^[0-9a-f]{7,64}$/.test(s));
+    const commits: MeshRefinePublishCandidate[] = rows.map(row => {
+        const details = violationsBySha.get(row.sha) || [];
+        return {
+            ...row,
+            guardScan: scanError ? 'error' : details.length ? 'blocked' : 'clean',
+            guardDetails: scanError ? [scanError] : details,
+            approved: approved.some(a => row.sha.startsWith(a)),
+        };
+    });
+    const unapproved = commits.filter(c => !c.approved).map(c => c.sha);
+    if (unapproved.length === 0 && commits.length > 0) return undefined;
+    return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved };
+}
+
 export async function runMeshRefineSubmoduleReachabilityGate(
     repoRoot: string,
     mergedTree: string,
-    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string } = {},
+    options: { allowAutoPublishSubmoduleMainCommits?: boolean; autoPublishPolicySource?: string; worktreeRoot?: string; approvedPublishShas?: readonly string[] } = {},
 ): Promise<MeshRefineSubmoduleReachabilitySummary> {
     const startedAt = Date.now();
     const entries: MeshRefineSubmoduleReachabilityEntry[] = [];
@@ -940,7 +1031,16 @@ export async function runMeshRefineSubmoduleReachabilityGate(
                             entry.publishRequired = true;
                             const details = truncateValidationOutput(e?.stderr || e?.message || String(e));
                             entry.error = `Submodule remote main reachability check failed for origin/${submoduleDefaultBranch}: ${details}`;
-                            if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
+                            const publishApproval = options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true
+                                ? await evaluatePublicPublishApproval(submodulePath, gitlink.commit, submoduleDefaultBranch, options.approvedPublishShas)
+                                : undefined;
+                            if (publishApproval) {
+                                // ★Public remote without per-commit owner approval: stop BEFORE pushing.
+                                entry.autoPublishAllowed = true;
+                                entry.autoPublishAttempted = false;
+                                entry.publishApproval = publishApproval;
+                                entry.autoPublishSkippedReason = `publish_approval_required: ${publishApproval.commits.length} commit(s) would become public on ${entry.remoteUrl || 'origin'} ${publishApproval.remoteRef}; ${publishApproval.unapproved.length} not covered by approved_publish_shas`;
+                            } else if (options.allowAutoPublishSubmoduleMainCommits === true && entry.localReachable === true) {
                                 entry.autoPublishAllowed = true;
                                 entry.autoPublishAttempted = true;
                                 try {

@@ -124,3 +124,17 @@ test('meshRefineNode dry-run keeps the node in the cached mesh', async () => {
     assert.equal(result.dryRun, true);
     assert.ok(ctx.mesh.nodes.some((n: any) => n.id === 'node_wt_remote'), 'dry-run must not drop the node');
 });
+
+test('approved_publish_shas is forwarded as approvedPublishShas by both refine tools and declared in both schemas', async () => {
+    const { ALL_MESH_TOOLS } = await import('../src/tools/mesh-tool-schemas.js');
+    for (const name of ['mesh_refine_node', 'mesh_refine_batch']) {
+        const tool: any = (ALL_MESH_TOOLS as any[]).find(t => t.name === name);
+        assert.ok(tool.inputSchema.properties.approved_publish_shas, `${name} schema declares approved_publish_shas`);
+        assert.match(tool.inputSchema.properties.approved_publish_shas.description, /publish_approval_required/);
+    }
+    const { ctx, calls } = makeCtx();
+    await meshRefineNode(ctx, { node_id: 'node_wt_remote', execute: true, approved_publish_shas: ['abc1234', 7 as any] });
+    await meshRefineBatch(ctx, { execute: true, approved_publish_shas: ['abc1234'] });
+    assert.deepEqual(calls.find(c => c.command === 'refine_mesh_node')!.args.approvedPublishShas, ['abc1234']);
+    assert.deepEqual(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args.approvedPublishShas, ['abc1234']);
+});

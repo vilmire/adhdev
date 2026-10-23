@@ -935,7 +935,7 @@ function buildPolicySection(policy: RepoMeshPolicy): string {
     const rules: string[] = [];
     if (policy.requireApprovalForPush) rules.push('- **Ask for user approval** before pushing to remote (the refine path enforces it)');
     if (policy.allowAutoPublishSubmoduleMainCommits) {
-        rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to submodule origin/main (non-force, after validation and patch-equivalence pass)');
+        rules.push('- Refinery may auto-publish unreachable submodule gitlink commits to a PRIVATE submodule origin/main (non-force, after validation and patch-equivalence pass). A PUBLIC remote (e.g. the oss repo) is NEVER published automatically: the refine stops with `publish_approval_required` listing every commit (sha, subject, author/committer, guard scan). Show that list to the owner and, only after explicit approval, rerun with `approved_publish_shas` covering those commits');
     }
     rules.push('- **Ask for user approval** before destructive git operations (force push, reset, etc.)');
 
