@@ -5,10 +5,27 @@ import { persistedBindingEvidence, readHostedBindingOwner, resolveHostedBindingO
 import { getCoordinatorForSession, listCoordinatorsForMesh, loadMeshCoordinatorRegistry, registerMeshCoordinator,
     type CoordinatorRegistryEntry } from '../mesh/coordinator-registry.js';
 import { readCoordinatorMeshAssociation } from '../session-host/coordinator-association.js';
+import { LOG } from '../logging/logger.js';
 import { shouldRestoreHostedRuntime } from './hosted-runtime-restore.js';
 
 function refuseCoordinatorRestore(reason: string): never {
     throw Object.assign(new Error('coordinator_identity_conflict: ' + reason), { code: 'coordinator_identity_conflict' });
+}
+
+export function isCoordinatorRestoreConflict(error: unknown): boolean {
+    return !!error && typeof error === 'object' && ('code' in error && error.code === 'coordinator_identity_conflict'
+        || 'message' in error && typeof error.message === 'string' && error.message.startsWith('coordinator_identity_'));
+}
+
+/** A refused role is a per-runtime diagnostic, never authority to block its peers. */
+export function diagnoseCoordinatorRestoreConflict(runtimeId: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : 'coordinator evidence unverifiable';
+    LOG.warn('CLI', `coordinator_identity_conflict: runtime ${runtimeId} coordinator role refused: ${detail}`);
+}
+
+export interface CoordinatorRestorePlanning {
+    plans: Map<string, CoordinatorRestorePlan>;
+    registryAvailable: boolean;
 }
 
 function readCoordinatorEvidence(sessionId: string) {
@@ -92,27 +109,35 @@ function planCoordinatorRestore(record: HostedCliRuntimeDescriptor, owner: Hoste
 }
 
 export function planCoordinatorRestores(records: HostedCliRuntimeDescriptor[], owner: HostedBindingOwner | undefined,
-    liveIds: ReadonlySet<string>, inventory = records): Map<string, CoordinatorRestorePlan> {
-    loadMeshCoordinatorRegistry({ strict: true });
+    liveIds: ReadonlySet<string>, inventory = records): CoordinatorRestorePlanning {
     const plans = new Map<string, CoordinatorRestorePlan>();
-    const meshes = new Map<string, string>();
-    for (const record of records) {
-        const plan = planCoordinatorRestore(record, owner, liveIds);
-        if (!plan) continue;
-        const existing = meshes.get(plan.entry.meshId);
-        if (existing && existing !== record.runtimeId) refuseCoordinatorRestore('multiple hosted coordinator candidates for one mesh');
-        meshes.set(plan.entry.meshId, record.runtimeId);
-        plans.set(record.runtimeId, plan);
+    try { loadMeshCoordinatorRegistry({ strict: true }); }
+    catch (error) {
+        for (const record of records) {
+            if (record.meshCoordinatorFor || getCoordinatorForSession(record.runtimeId)) {
+                diagnoseCoordinatorRestoreConflict(record.runtimeId, error);
+            }
+        }
+        return { plans, registryAvailable: false };
     }
-    // Starting/stopping and foreign-managed sessions are not attach candidates,
-    // but a retained role mark still excludes a competing recovery for that mesh.
-    for (const [runtimeId, plan] of plans) for (const record of inventory) {
-        if (record.runtimeId !== runtimeId && (!record.lifecycle || ['starting', 'running', 'stopping', 'interrupted'].includes(record.lifecycle))
-            && readCoordinatorMeshAssociation(record.meshCoordinatorFor) === plan.entry.meshId) {
-            refuseCoordinatorRestore('another hosted coordinator candidate exists for this mesh');
+    for (const record of records) {
+        try {
+            const plan = planCoordinatorRestore(record, owner, liveIds);
+            if (!plan) continue;
+            // A verified exact registry owner wins over unbound retained marks.
+            // Only missing-row recovery must exclude all competing candidates,
+            // including starting/stopping and foreign-managed hosted sessions.
+            if (plan.recovered && inventory.some(peer => peer.runtimeId !== record.runtimeId
+                && (!peer.lifecycle || ['starting', 'running', 'stopping', 'interrupted'].includes(peer.lifecycle))
+                && readCoordinatorMeshAssociation(peer.meshCoordinatorFor) === plan.entry.meshId)) {
+                refuseCoordinatorRestore('another hosted coordinator candidate exists for this mesh');
+            }
+            plans.set(record.runtimeId, plan);
+        } catch (error) {
+            diagnoseCoordinatorRestoreConflict(record.runtimeId, error);
         }
     }
-    return plans;
+    return { plans, registryAvailable: true };
 }
 
 /** Called only after attach succeeds and its cancellation fence passes. Keep
@@ -141,7 +166,7 @@ export async function verifyCoordinatorRecoveryInventory(plan: CoordinatorRestor
     if (!exact || exact.cliType !== record.cliType || exact.workspace !== record.workspace
         || exact.startedAtMs !== record.startedAtMs || exact.providerSessionId !== record.providerSessionId
         || exact.meshCoordinatorFor !== record.meshCoordinatorFor) refuseCoordinatorRestore('recovered runtime absent or changed in hosted inventory');
-    const plans = planCoordinatorRestores(eligible, owner, new Set(inventory.map(r => r.runtimeId)), inventory);
+    const { plans } = planCoordinatorRestores(eligible, owner, new Set(inventory.map(r => r.runtimeId)), inventory);
     const current = plans.get(record.runtimeId);
     if (!current || current.registrySnapshot !== plan.registrySnapshot) refuseCoordinatorRestore('coordinator binding changed during recovery');
 }

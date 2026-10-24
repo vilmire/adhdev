@@ -1,4 +1,4 @@
-import { planCoordinatorRestores, repairCoordinatorBinding, verifyCoordinatorRecoveryInventory, type CoordinatorRestorePlan } from './coordinator-identity-restore.js';
+import { diagnoseCoordinatorRestoreConflict, isCoordinatorRestoreConflict, planCoordinatorRestores, repairCoordinatorBinding, verifyCoordinatorRecoveryInventory, type CoordinatorRestorePlan } from './coordinator-identity-restore.js';
 import { sameHostedBindingOwner, type HostedBindingOwner } from '../session-host/binding-owner.js';
 import { assistantRestoreCandidate } from '../assistant/assistant-identity.js';
 import { maintenanceHeld, readCooperativeMaintenance, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
@@ -57,12 +57,9 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
     const managerTag = host.deps.hostedRuntimeManagerTag;
 
     const restoredRuntimeIds = new Set(sessions.map(r => r.runtimeId));
-    const coordinatorPlans = planCoordinatorRestores(eligible, owner, restoredRuntimeIds, sessions);
-    if (records) for (const record of eligible) {
-        const plan = coordinatorPlans.get(record.runtimeId);
-        if (plan?.recovered) await verifyCoordinatorRecoveryInventory(plan, record, owner, host.deps.listHostedCliRuntimes);
-    }
-    signal?.throwIfAborted();
+    const coordinatorPlanning = planCoordinatorRestores(eligible, owner, restoredRuntimeIds, sessions);
+    const coordinatorPlans = coordinatorPlanning.plans;
+    let coordinatorPruneAllowed = coordinatorPlanning.registryAvailable;
 
     for (const record of sessions) {
         signal?.throwIfAborted();
@@ -102,7 +99,18 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
             );
             continue;
         }
-        const restoredSettings = buildRestoredSettings(host, record, normalizedType, coordinatorPlans.get(record.runtimeId), assistant?.runtimeId);
+        let coordinatorPlan = coordinatorPlans.get(record.runtimeId);
+        if (records && coordinatorPlan?.recovered) {
+            try {
+                await verifyCoordinatorRecoveryInventory(coordinatorPlan, record, owner, host.deps.listHostedCliRuntimes);
+            } catch (error) {
+                signal?.throwIfAborted();
+                diagnoseCoordinatorRestoreConflict(record.runtimeId, error);
+                coordinatorPlan = undefined;
+            }
+        }
+        signal?.throwIfAborted();
+        const restoredSettings = buildRestoredSettings(host, record, normalizedType, coordinatorPlan, assistant?.runtimeId);
         try {
             await host.registerCliInstance(
                 record.runtimeId,
@@ -142,7 +150,6 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
                 registry.bindSession({ sessionId: record.runtimeId, cliType: normalizedType, workspace: record.workspace,
                     hostOwner: owner, mcpConfigPath: entry?.mcpConfigPath, at: Date.now() });
             }
-            const coordinatorPlan = coordinatorPlans.get(record.runtimeId);
             if (coordinatorPlan?.recovered) {
                 await verifyCoordinatorRecoveryInventory(coordinatorPlan, record, host.deps.getHostedBindingOwner?.(), host.deps.listHostedCliRuntimes);
                 signal?.throwIfAborted();
@@ -152,14 +159,16 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
             restored += 1;
             LOG.info('CLI', `♻ Restored hosted runtime: ${record.runtimeKey || record.runtimeId} (${record.displayName || record.workspace})`);
         } catch (error: any) {
-            if (signal?.aborted || String(error?.message).startsWith('coordinator_identity_')) {
+            if (signal?.aborted || isCoordinatorRestoreConflict(error)) {
                 // Release only this daemon's attachment; the retained runtime is
                 // neither stopped nor sent input when recovery loses its fence.
                 host.adapters.get(record.runtimeId)?.detach?.();
                 host.adapters.delete(record.runtimeId);
                 instanceManager.removeInstance(record.runtimeId);
                 signal?.throwIfAborted();
-                throw error;
+                coordinatorPruneAllowed = false;
+                diagnoseCoordinatorRestoreConflict(record.runtimeId, error);
+                continue;
             }
             LOG.warn('CLI', `Failed to restore hosted runtime ${record.runtimeId}: ${error?.message || error}`);
             if (promoted || String(error?.message).startsWith('assistant_identity_conflict')) throw error;
@@ -168,7 +177,7 @@ async function restoreWritableHostedSessions(host: CliRestoreHost, records?: Hos
 
     if (promoted && restored !== sessions.length) throw new Error('maintenance_incomplete_writable_promotion');
     if (!records && typeof host.deps.listHostedCliRuntimes === 'function') {
-        pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, owner);
+        if (coordinatorPruneAllowed) pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, owner);
         pruneStaleAssistantBinding(sessions, restoredRuntimeIds, owner);
         reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds);
     }
@@ -189,6 +198,8 @@ function buildRestoredSettings(
     assistantRuntimeId?: string,
 ): Record<string, any> {
     const restoredSettings: Record<string, any> = { ...host.providerLoader.getSettings(normalizedType) };
+    // Provider defaults cannot grant a role whose exact coordinator proof failed.
+    delete restoredSettings.meshCoordinatorFor;
     const coordinatorEntry = coordinatorPlan?.entry;
     if (coordinatorEntry) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;

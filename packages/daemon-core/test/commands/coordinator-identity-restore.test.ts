@@ -1,10 +1,13 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DaemonCliManager } from '../../src/commands/cli-manager.js';
+import { LOG } from '../../src/logging/logger.js';
 import { restoreHostedSessions, type CliRestoreHost } from '../../src/commands/cli-manager-restore.js';
 import { toHostedCliRuntimeDescriptor } from '../../src/commands/low-family/session-host.js';
 import { listHostedCliRuntimes } from '../../src/session-host/runtime-support.js';
+import * as coordinatorRegistry from '../../src/mesh/coordinator-registry.js';
 import { getCoordinatorForSession, loadMeshCoordinatorRegistry, registerMeshCoordinator } from '../../src/mesh/coordinator-registry.js';
 import { listLocalCoordinatorSessions } from '../../src/mesh/mesh-event-forwarding.js';
 import { ensureCoordinator } from '../../src/assistant/coordinator-lifecycle.js';
@@ -65,6 +68,7 @@ beforeEach(() => {
     setAssistantRegistryForTests(assistant);
 });
 afterEach(() => {
+    vi.restoreAllMocks();
     setAssistantRegistryForTests(null);
     rmSync(config, { recursive: true, force: true });
     if (previousConfig === undefined) delete process.env.ADHDEV_CONFIG_DIR;
@@ -72,6 +76,125 @@ afterEach(() => {
 });
 
 describe('exact persisted coordinator identity recovery', () => {
+    // Reuse the independent review's four-record probe shape: old retained
+    // candidate without a row, exact current owner, ordinary worker, assistant.
+    function reviewedBatch(legacy: boolean | 'mismatched' = false) {
+        const old = runtime('retained-old');
+        if (legacy === true) delete old.meta.launchRecord;
+        if (legacy === 'mismatched') old.meta.launchRecord.sessionId = 'other-runtime';
+        const current = runtime('current-owner'); current.startedAt = 300;
+        const worker = runtime('ordinary-worker');
+        delete worker.meta.meshCoordinatorFor; delete worker.meta.launchRecord;
+        const asst = runtime('bound-assistant');
+        delete asst.meta.meshCoordinatorFor; delete asst.meta.launchRecord;
+        asst.meta.assistant = true;
+        inventory.records = [old, current, worker, asst];
+        inventory.records.forEach(r => persist(r));
+        const binding = { meshId: 'mesh-test', sessionId: current.sessionId, startedAt: 300,
+            cliType: 'test-cli', workspace: current.workspace, hostOwner: owner };
+        registerMeshCoordinator(binding);
+        assistant.bindSession({ sessionId: asst.sessionId, cliType: 'test-cli', workspace: asst.workspace, hostOwner: owner, at: 1 });
+        return { old, current, worker, asst, binding, records: inventory.records.map(r => toHostedCliRuntimeDescriptor(r)!) };
+    }
+
+    it.each([
+        ['boot', false], ['partial', false], ['boot', true], ['partial', true], ['boot', 'mismatched'], ['partial', 'mismatched'],
+    ] as const)('review B1 %s mixed batch restores all four and marks only the exact owner (legacy/mismatched=%s)', async (path, legacy) => {
+        const batch = reviewedBatch(legacy);
+        const fixture = host(batch.records);
+        const m = new DaemonCliManager({ ...fixture.deps, getP2p: () => null } as any, fixture.providerLoader);
+        const states: any[] = [];
+        const stop = vi.fn(), input = vi.fn();
+        const diagnostic = vi.spyOn(LOG, 'warn');
+        const writes = vi.spyOn(coordinatorRegistry, 'registerMeshCoordinator');
+        const attach = vi.spyOn(m, 'registerCliInstance').mockImplementation(async (id, type, _cli, workspace, _args, _provider, settings) => {
+            states.push({ instanceId: id, type, category: 'cli', status: 'idle', workspace, settings });
+            m.adapters.set(id, { stop, send: input, detach: vi.fn() } as any);
+        });
+        expect(await m.restoreHostedSessions(path === 'boot' ? undefined : batch.records)).toBe(4);
+        expect(m.hostedRestoreState).toBe('ready');
+        expect(attach.mock.calls.map(c => c[0])).toEqual(batch.records.map(r => r.runtimeId));
+        expect(states.map(s => s.settings.meshCoordinatorFor)).toEqual([undefined, 'mesh-test', undefined, undefined]);
+        expect(states[3].settings.assistant).toBe(true);
+        expect(getCoordinatorForSession(batch.old.sessionId)).toBeUndefined();
+        expect(writes.mock.calls.map(c => c[0].sessionId)).toEqual([batch.current.sessionId]);
+        expect(getCoordinatorForSession(batch.current.sessionId)).toEqual(batch.binding);
+        expect(assistant.reload()).toMatchObject({ sessionId: batch.asst.sessionId, hostOwner: owner });
+        expect(diagnostic.mock.calls.some(c => c.some(value => typeof value === 'string' && value.includes('coordinator_identity_conflict') && value.includes(batch.old.sessionId)))).toBe(true);
+        const launch = vi.fn();
+        const components = { instanceManager: { getByCategory: () => states.map(state => ({ getState: () => state })) } } as any;
+        expect(await ensureCoordinator('mesh-test', { coordinators: mesh => listLocalCoordinatorSessions(components, mesh)
+            .map(c => ({ ...c, managedByAssistant: false })), launch, hide: vi.fn() }))
+            .toMatchObject({ ok: true, sessionId: batch.current.sessionId, launched: false });
+        expect(launch).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+        expect(input).not.toHaveBeenCalled();
+    });
+
+    it.each(['boot', 'partial'])('review B1 %s strict registry failure drops marks without blocking sessions or writing registry', async path => {
+        const batch = reviewedBatch();
+        const registryPath = join(config, 'daemon', 'mesh-coordinators.json');
+        writeFileSync(registryPath, '{invalid');
+        const h = host(batch.records);
+        expect(await restoreHostedSessions(h, path === 'boot' ? undefined : batch.records)).toBe(4);
+        expect(vi.mocked(h.registerCliInstance).mock.calls.every(c => c[6].meshCoordinatorFor === undefined)).toBe(true);
+        expect(vi.mocked(h.registerCliInstance).mock.calls[3][6].assistant).toBe(true);
+        expect(readFileSync(registryPath, 'utf8')).toBe('{invalid');
+    });
+
+    it.each(['boot', 'partial'])('review M1 %s late conflict detaches only failed attachment and continues through later sessions', async path => {
+        const batch = reviewedBatch();
+        // The first candidate is initially the only coordinator of its mesh;
+        // the later exact coordinator belongs to a different mesh.
+        batch.current.meta.meshCoordinatorFor = 'mesh-other';
+        persist(batch.current);
+        registerMeshCoordinator({ ...batch.binding, meshId: 'mesh-other' });
+        batch.records = inventory.records.map(r => toHostedCliRuntimeDescriptor(r)!);
+        const fixture = host(batch.records);
+        const h = new DaemonCliManager({ ...fixture.deps, getP2p: () => null } as any, fixture.providerLoader);
+        const detach = vi.fn(), stop = vi.fn(), input = vi.fn();
+        const attach = vi.spyOn(h, 'registerCliInstance').mockImplementation(async id => {
+            h.adapters.set(id, { detach: id === batch.old.sessionId ? detach : vi.fn(), stop, send: input } as any);
+            if (id === batch.old.sessionId) registerMeshCoordinator({ meshId: 'mesh-test', sessionId: 'late-current-owner', startedAt: 500, hostOwner: owner });
+        });
+        expect(await h.restoreHostedSessions(path === 'boot' ? undefined : batch.records)).toBe(3);
+        expect(h.hostedRestoreState).toBe('ready');
+        expect(attach.mock.calls.map(c => c[0])).toEqual(batch.records.map(r => r.runtimeId));
+        expect(detach).toHaveBeenCalledOnce();
+        expect(h.adapters.has(batch.old.sessionId)).toBe(false);
+        expect(attach.mock.calls[1][6].meshCoordinatorFor).toBe('mesh-other');
+        expect(attach.mock.calls[3][6].assistant).toBe(true);
+        expect(getCoordinatorForSession('late-current-owner')?.startedAt).toBe(500);
+        expect(getCoordinatorForSession(batch.old.sessionId)).toBeUndefined();
+        expect(stop).not.toHaveBeenCalled(); expect(input).not.toHaveBeenCalled();
+    });
+
+    it.each(['boot', 'partial'])('review %s abort still stops the mixed batch and detaches only the in-flight attachment', async path => {
+        const batch = reviewedBatch();
+        const h = host(batch.records), abort = new AbortController();
+        const detach = vi.fn(), stop = vi.fn(), input = vi.fn();
+        const attach = vi.mocked(h.registerCliInstance).mockImplementationOnce(async id => {
+            h.adapters.set(id, { detach, stop, send: input } as any);
+            abort.abort();
+        });
+        await expect(restoreHostedSessions(h, path === 'boot' ? undefined : batch.records, abort.signal))
+            .rejects.toMatchObject({ name: 'AbortError' });
+        expect(attach).toHaveBeenCalledOnce();
+        expect(detach).toHaveBeenCalledOnce();
+        expect(stop).not.toHaveBeenCalled(); expect(input).not.toHaveBeenCalled();
+        expect(getCoordinatorForSession(batch.current.sessionId)).toEqual(batch.binding);
+        expect(getCoordinatorForSession(batch.old.sessionId)).toBeUndefined();
+    });
+
+    it('a refused candidate cannot acquire a coordinator mark from provider defaults', async () => {
+        const batch = reviewedBatch();
+        const h = host(batch.records);
+        vi.spyOn(h.providerLoader, 'getSettings').mockReturnValue({ meshCoordinatorFor: 'untrusted-default' });
+        expect(await restoreHostedSessions(h, batch.records)).toBe(4);
+        expect(vi.mocked(h.registerCliInstance).mock.calls.map(c => c[6].meshCoordinatorFor))
+            .toEqual([undefined, 'mesh-test', undefined, undefined]);
+    });
+
     it.each(['boot', 'resume'])('%s mapper restores only the genuine coordinator, repairs after attach and survives a second restart', async path => {
         const coordinator = runtime();
         persist(coordinator);
@@ -141,8 +264,8 @@ describe('exact persisted coordinator identity recovery', () => {
         const h = host();
         if (kind === 'owner') h.deps.getHostedBindingOwner = () => undefined;
         if (kind === 'manager') descriptor.managedBy = undefined;
-        await expect(restoreHostedSessions(h, [descriptor])).rejects.toThrow('coordinator_identity_');
-        expect(h.registerCliInstance).not.toHaveBeenCalled();
+        expect(await restoreHostedSessions(h, [descriptor])).toBe(1);
+        expect(vi.mocked(h.registerCliInstance).mock.calls[0][6].meshCoordinatorFor).toBeUndefined();
         expect(getCoordinatorForSession('coordinator')).toBeUndefined();
     });
 
@@ -161,20 +284,22 @@ describe('exact persisted coordinator identity recovery', () => {
             workspace: kind === 'different-workspace' ? '/other' : record.workspace, hostOwner: kind === 'foreign' ? foreign : owner };
         registerMeshCoordinator(newer);
         const h = host();
-        await expect(restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).rejects.toThrow('coordinator_identity_conflict');
-        expect(h.registerCliInstance).not.toHaveBeenCalled();
+        expect(await restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).toBe(1);
+        expect(vi.mocked(h.registerCliInstance).mock.calls[0][6].meshCoordinatorFor).toBeUndefined();
         expect(getCoordinatorForSession('newer')).toEqual(newer);
         expect(getCoordinatorForSession('coordinator')).toBeUndefined();
     });
 
-    it('refuses two genuine candidates for one mesh before attaching either', async () => {
+    it('attaches two ambiguous candidates as ordinary without granting either a coordinator mark', async () => {
         const records = [runtime(), runtime('second')]; records.forEach(r => persist(r));
         const h = host(records.map(r => toHostedCliRuntimeDescriptor(r)!));
-        await expect(restoreHostedSessions(h)).rejects.toThrow('coordinator_identity_conflict');
-        expect(h.registerCliInstance).not.toHaveBeenCalled();
+        expect(await restoreHostedSessions(h)).toBe(2);
+        expect(vi.mocked(h.registerCliInstance).mock.calls.every(c => c[6].meshCoordinatorFor === undefined)).toBe(true);
+        expect(getCoordinatorForSession('coordinator')).toBeUndefined();
+        expect(getCoordinatorForSession('second')).toBeUndefined();
     });
 
-    it.each(['starting', 'stopping', 'interrupted', 'foreign-managed'])('a newer %s candidate excludes recovery without being attached', async lifecycle => {
+    it.each(['starting', 'stopping', 'interrupted', 'foreign-managed'])('a newer %s candidate excludes coordinator recovery without violating lifecycle/manager fences', async lifecycle => {
         const record = runtime(); persist(record);
         const newer = runtime('newer'); newer.startedAt = 300;
         if (lifecycle === 'foreign-managed') newer.meta.managedBy = foreign.managedBy;
@@ -182,8 +307,8 @@ describe('exact persisted coordinator identity recovery', () => {
         inventory.records = [record, newer];
         const records = inventory.records.map(r => toHostedCliRuntimeDescriptor(r)!);
         const h = host(records);
-        await expect(restoreHostedSessions(h)).rejects.toMatchObject({ code: 'coordinator_identity_conflict' });
-        expect(h.registerCliInstance).not.toHaveBeenCalled();
+        expect(await restoreHostedSessions(h)).toBe(lifecycle === 'interrupted' ? 2 : 1);
+        expect(vi.mocked(h.registerCliInstance).mock.calls.every(c => c[6].meshCoordinatorFor === undefined)).toBe(true);
         expect(getCoordinatorForSession(record.sessionId)).toBeUndefined();
     });
 
@@ -213,7 +338,7 @@ describe('exact persisted coordinator identity recovery', () => {
             else if (kind === 'owner') h.deps.getHostedBindingOwner = () => foreign;
             else { record.termination = { lifecycle: 'stopped' }; persist(record); }
         });
-        await expect(restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).rejects.toThrow('coordinator_identity_');
+        expect(await restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).toBe(0);
         expect(detach).toHaveBeenCalledOnce();
         expect(stop).not.toHaveBeenCalled();
         if (kind === 'same-uuid-generation') expect(getCoordinatorForSession('coordinator')?.startedAt).toBe(999);
@@ -233,9 +358,12 @@ describe('exact persisted coordinator identity recovery', () => {
             if (kind === 'newer-during-attach') { persist(newer); inventory.records.push(newer); }
             if (kind === 'failure-during-attach') h.deps.listHostedCliRuntimes = async () => { throw new Error('inventory failed'); };
         });
-        await expect(restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).rejects.toMatchObject({ code: 'coordinator_identity_conflict' });
+        expect(await restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).toBe(kind.endsWith('during-attach') ? 0 : 1);
         if (kind.endsWith('during-attach')) expect(detach).toHaveBeenCalledOnce();
-        else expect(h.registerCliInstance).not.toHaveBeenCalled();
+        else {
+            expect(h.registerCliInstance).toHaveBeenCalledOnce();
+            expect(vi.mocked(h.registerCliInstance).mock.calls[0][6].meshCoordinatorFor).toBeUndefined();
+        }
         expect(getCoordinatorForSession(record.sessionId)).toBeUndefined();
     });
 
@@ -256,7 +384,9 @@ describe('exact persisted coordinator identity recovery', () => {
     it('requires an exact owned registry entry for legacy marks without launch provenance', async () => {
         const record = runtime(); delete record.meta.launchRecord; persist(record);
         const descriptor = toHostedCliRuntimeDescriptor(record)!;
-        await expect(restoreHostedSessions(host(), [descriptor])).rejects.toMatchObject({ code: 'coordinator_identity_conflict' });
+        const ordinary = host();
+        expect(await restoreHostedSessions(ordinary, [descriptor])).toBe(1);
+        expect(vi.mocked(ordinary.registerCliInstance).mock.calls[0][6].meshCoordinatorFor).toBeUndefined();
         const existing = { meshId: 'mesh-test', sessionId: record.sessionId, startedAt: 100, hostOwner: owner,
             systemPrompt: 'synthetic test prompt', injection: { mode: 'cli_arg' } };
         registerMeshCoordinator(existing);
@@ -274,8 +404,8 @@ describe('exact persisted coordinator identity recovery', () => {
         ]) {
             registerMeshCoordinator({ ...binding, sessionId: record.sessionId, startedAt: 100 });
             const h = host();
-            await expect(restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).rejects.toMatchObject({ code: 'coordinator_identity_conflict' });
-            expect(h.registerCliInstance).not.toHaveBeenCalled();
+            expect(await restoreHostedSessions(h, [toHostedCliRuntimeDescriptor(record)!])).toBe(1);
+            expect(vi.mocked(h.registerCliInstance).mock.calls[0][6].meshCoordinatorFor).toBeUndefined();
             expect(getCoordinatorForSession(record.sessionId)).toMatchObject(binding);
         }
     });
