@@ -3,6 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setManagedHostDisk, useHealthyManagedHostDisk } from '../helpers/managed-host-disk'
+
+useHealthyManagedHostDisk()
 
 const cp = vi.hoisted(() => ({
   execFileSync: vi.fn(),
@@ -13,6 +16,7 @@ vi.mock('child_process', () => cp)
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
 import { resetProcessInstanceContextForTests } from '../../src/config/instance-context'
 import { resolveSessionHostIpcKey } from '@adhdev/session-host-core'
+import { LowDiskSpaceError } from '../../src/diagnostics/disk-space-preflight'
 
 // Stage 3 POSIX instance isolation: the managed session-host factory must
 // derive its pid file, IPC endpoint, log dir, and spawned-child env from the
@@ -192,6 +196,24 @@ describe('managed session-host instance namespacing', () => {
     resetProcessInstanceContextForTests()
     expect(stable.getPid()).toBe(null)
     expect(stable.endpoint.path).toBe(stableEndpoint)
+  })
+
+  it('refuses to spawn or open the host log when disk preflight is critical', () => {
+    const configDir = makeTempHome()
+    process.env.ADHDEV_CONFIG_DIR = configDir
+    resetProcessInstanceContextForTests()
+    cp.spawn.mockClear()
+    setManagedHostDisk('critical')
+
+    const host = createManagedSessionHost({
+      appName: 'adhdev',
+      requiredRequestTypes: [],
+      spawnStdio: 'logfile',
+    })
+
+    expect(() => host.spawnHost()).toThrow(LowDiskSpaceError)
+    expect(cp.spawn).not.toHaveBeenCalled()
+    expect(fs.existsSync(path.join(configDir, 'logs', 'session-host.log'))).toBe(false)
   })
 
   it('logfile spawn stdio creates the session-host log under the instance logs dir', () => {

@@ -3,6 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useHealthyManagedHostDisk } from '../helpers/managed-host-disk'
+
+useHealthyManagedHostDisk()
 
 const state = vi.hoisted(() => ({
     currentEntry: '', calls: 0, callsAtSpawn: 0, alive: true, replaced: false,
