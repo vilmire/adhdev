@@ -18,6 +18,8 @@ import { __resetReportedSummariesForTest, __setHandoffNoteSinkForTests, WORKER_P
 import { __resetProgressSurfaceForTest, __setWorkerProgressNoticeSinkForTests } from '../../src/mesh/worker-report-progress.js';
 import { __setWorkerLateReportNoticeSinkForTests } from '../../src/mesh/worker-report-late.js';
 import { __resetWorkerDeliveryReplayForTests } from '../../src/mesh/worker-report-idempotency'
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import {
   __resetWorkerSessionBindsForTest,
@@ -78,6 +80,7 @@ beforeEach(() => {
   __setWorkerProgressNoticeSinkForTests((n) => { progressNotices.push({ taskId: n.taskId }) })
 })
 afterEach(() => {
+  setActiveTurnLedger(null)
   __setHandoffNoteSinkForTests(undefined)
   __setWorkerLateReportNoticeSinkForTests(undefined)
   __setWorkerProgressNoticeSinkForTests(undefined)
@@ -110,6 +113,7 @@ describe('deliveryId — a re-send of an accepted report lands exactly once', ()
   })
 
   it('a progress note re-sent with the same deliveryId pages the coordinator once and records one row', async () => {
+    setActiveTurnLedger(createMeshRuntimeTurnLedger({ selfDaemonId: OWNER_DAEMON, publisher: null }));
     const { meshId, sessionId, nodeId } = fresh()
     seedLiveTask(meshId, sessionId, nodeId, `${meshId}_task_p`, Date.now() - 60_000)
     const bind = mintWorkerSessionBind({ meshId, sessionId, nodeId }).bind
@@ -122,7 +126,8 @@ describe('deliveryId — a re-send of an accepted report lands exactly once', ()
     const first: any = await workerReportHandlers.worker_progress_update(ctx, args)
     if (first?.success !== true) throw new Error(`first progress refused: ${JSON.stringify(first)}`)
     const noticesAfterFirst = progressNotices.length
-    expect(noticesAfterFirst).toBe(first.surfacedToCoordinator ? 1 : 0)
+    expect(noticesAfterFirst).toBe(1) // Durable intent flushes after the receipt commit.
+    expect(first.surfacedToCoordinator).toBe(false) // The transactional response promises no external consumption.
     const again: any = await workerReportHandlers.worker_progress_update(ctx, args)
     expect(progressNotices).toHaveLength(noticesAfterFirst)
     expect(first).toMatchObject({ success: true, taskId: `${meshId}_task_p` })

@@ -42,7 +42,7 @@ function projectHotChatSessionStatesFromProviderState(state: ProviderState): Hot
 const LIVE_WORKING_STATUSES: ReadonlySet<string> = new Set(['generating', 'waiting_approval', 'waiting_choice', 'starting', 'streaming', 'working', 'no_progress', 'long_generating']);
 
 /** The working status an instance state reports (top-level or activeChat), or '' when it is not working. */
-function liveWorkingStatus(state: ProviderState): string {
+export function liveWorkingStatus(state: ProviderState): string {
     const status = (typeof state.status === 'string' ? state.status : '').toLowerCase();
     if (LIVE_WORKING_STATUSES.has(status)) return status;
     const chatStatus = (typeof state.activeChat?.status === 'string' ? state.activeChat.status : '').toLowerCase();

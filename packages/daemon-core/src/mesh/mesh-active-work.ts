@@ -38,6 +38,7 @@ function turnProjectionActiveWorkStatus(meshId: string, taskId: string): { statu
         case 'waiting_choice':
             return { status: 'awaiting_choice', attemptId: presentation.attemptId!, stage };
         case 'finalizing':
+        case 'stopping':
             return { status: 'finalizing', attemptId: presentation.attemptId!, stage };
         case 'completed':
             return { status: 'idle', attemptId: presentation.attemptId!, stage };

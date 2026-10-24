@@ -1,4 +1,5 @@
 import type { HostedBindingOwner } from '../session-host/binding-owner.js';
+import { stopExactMeshWriter } from './mesh-writer-stop.js';
 import { detectCLI } from '../detection/cli-detector.js';
 import { validateLaunchDefault } from '../launch-defaults/validate.js';
 import { createLaunchValidationPorts } from '../launch-defaults/ports.js';
@@ -775,6 +776,12 @@ export class DaemonCliManager {
 
     /** `stop_cli`: stop the addressed CLI session (hard or save mode). */
     async stopCli(args: any): Promise<CommandResult> {
+        if (args?.meshWriterStop) {
+            if (args.cliType !== args.meshWriterStop.providerType || args.targetSessionId !== args.meshWriterStop.sessionId || args.mode !== 'hard') {
+                return { success: false, code: 'writer_checkpoint_pending', error: 'Exact stop envelope identity differs from its captured writer.' };
+            }
+            return stopExactMeshWriter(this, args.meshWriterStop);
+        }
         const cliType = args?.cliType;
         const dir = args?.dir || '';
         const mode = args?.mode === 'save' ? 'save' : 'hard';

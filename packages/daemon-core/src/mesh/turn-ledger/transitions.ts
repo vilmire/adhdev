@@ -146,6 +146,9 @@ const awaitReport: readonly EffectTemplate[] = [
 ];
 
 export const TRANSITIONS: readonly TransitionRule[] = [
+    { id: 'WR', lane: 'current', from: ['stopping'], on: ALL_KINDS.filter(k => k !== 'coordinator_ack'), to: 'same', verdict: 'applied', effects: [
+        { e: 'record', note: 'writer_stop_checkpoint_pending' },
+    ] },
     // ── lane none: no attempt resolved ──────────────────────────────────
     { id: 'R1', lane: 'none', from: 'none', on: ['dispatch_accepted'], to: A, verdict: 'applied', effects: [
         { e: 'act', act: 'open_dispatch' },
@@ -417,9 +420,17 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     { id: 'R13t', lane: 'current', from: [C, G, S, F], on: ['hold_expired'], guard: 'hold_await_end', to: 'outcome', verdict: 'applied', effects: [
         { e: 'commit', outcome: 'from_recorded_report', strength: 'tool_report', reason: 'worker_reported', text: 'recorded_report' },
     ] },
-    { id: 'R17p', lane: 'current', from: 'nonterminal', on: ['worker_progress'], to: 'same', verdict: 'applied', effects: [
+    { id: 'R17ps', lane: 'current', from: [A, D], on: ['worker_progress'], to: C, verdict: 'applied', effects: [
+        { e: 'act', act: 'consume' },
+        { e: 'release', reasons: AWAITS },
+        livenessExtend,
+        { e: 'act', act: 'apply_held_suspension' },
         { e: 'bus', phase: 'progress' },
-        { e: 'notify', notify: 'progress' },
+    ] },
+    { id: 'R17p', lane: 'current', from: [C, G, S, F], on: ['worker_progress'], to: 'same', verdict: 'applied', effects: [
+        { e: 'act', act: 'activity' },
+        livenessExtend,
+        { e: 'bus', phase: 'progress' },
     ] },
 
     // ── terminal attempts ───────────────────────────────────────────────

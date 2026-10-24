@@ -47,6 +47,7 @@ export type TurnStage =
     | 'waiting_approval'
     | 'waiting_choice'
     | 'finalizing'
+    | 'stopping'
     | 'completed'
     | 'failed'
     | 'cancelled';
@@ -197,6 +198,7 @@ export function turnStageToSurfaceStatus(stage: TurnStage): ManagedStatus {
         case 'waiting_choice':
             return 'waiting_choice';
         case 'finalizing':
+        case 'stopping':
             return 'finalizing';
         case 'completed':
             return 'idle';

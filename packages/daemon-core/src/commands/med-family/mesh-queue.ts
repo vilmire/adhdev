@@ -121,6 +121,8 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             const reason = typeof args?.reason === 'string' ? args.reason : undefined;
             const task = cancelTask(meshId, taskId, { reason });
             if (!task) return { success: false, error: `Queue task '${taskId}' not found` };
+            if (task.status !== 'cancelled') return { success: false, code: 'writer_checkpoint_pending',
+                error: 'Cancellation is stopping the physical writer; ownership remains retained until quiescence.', task: summarizeQueueEntryInputForView(task) };
             // CANCEL-STICKY-TERMINAL (authoritative cancel): stop the worker that was bound to the
             // now-cancelled task. cancelTask already cleared the queue's assignment fields (so the
             // reclaim watchdog no longer sees it as a live assignment), but a still-running worker

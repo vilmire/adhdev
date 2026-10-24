@@ -38,6 +38,32 @@ completedDebouncePending?: unknown;
 generatingDebouncePending?: unknown;
 }
 
+export interface MeshAssignmentSnapshot {
+    settings: Record<string, any>;
+    injectedAt: number;
+    history: MeshTaskAttachment[];
+}
+/** Task metadata is separate from launch-time mesh enrollment. */
+export function nativeMeshAssignmentMeta(settings: Record<string, any>): Record<string, unknown> {
+    const ref = currentMeshAttemptRef(settings);
+    const assignment = ref && settings.meshNodeFor && settings.meshNodeId && settings.meshActiveTaskId && settings.meshCoordinatorDaemonId
+        ? { meshId: settings.meshNodeFor, nodeId: settings.meshNodeId, taskId: settings.meshActiveTaskId,
+            attemptId: ref.attemptId, generation: ref.generation, dispatchNonce: settings.meshActiveDispatchNonce ?? 0,
+            ownerDaemonId: settings.meshCoordinatorDaemonId } : null;
+    return { meshCoordinatorDaemonId: settings.meshCoordinatorDaemonId ?? null, [PERSISTED_ATTEMPT_REF_META_KEY]: ref, meshActiveAssignment: assignment };
+}
+export function captureMeshAssignment(host: MeshAssignmentHost): MeshAssignmentSnapshot {
+    const settings = Object.fromEntries(Object.entries(host.settings ?? {}).filter(([key]) => key.startsWith('mesh')));
+    return JSON.parse(JSON.stringify({ settings, injectedAt: host.meshTaskInjectedAt, history: host.meshTaskAttachmentHistory }));
+}
+export function restoreMeshAssignment(host: MeshAssignmentHost, snapshot: MeshAssignmentSnapshot): void {
+    host.settings = { ...Object.fromEntries(Object.entries(host.settings ?? {}).filter(([key]) => !key.startsWith('mesh'))), ...snapshot.settings };
+    host.meshTaskInjectedAt = snapshot.injectedAt;
+    host.meshTaskAttachmentHistory = snapshot.history;
+    host.adapter.updateRuntimeSettings?.(host.settings);
+    host.adapter.updateRuntimeMeta?.(nativeMeshAssignmentMeta(host.settings));
+}
+
 /**
  * Is a turn still running or still completing on this session? Only then can
  * an older attachment be the one a completion must be attributed to. A host
@@ -140,6 +166,7 @@ export function attachMeshAssignment(host: MeshAssignmentHost, assignment: { mes
     const meta: Record<string, unknown> = {
         ...(assignment.coordinatorDaemonId ? { meshCoordinatorDaemonId: assignment.coordinatorDaemonId } : {}),
         ...persistedAttemptRefMeta(host.settings, previousAttemptRef),
+        ...nativeMeshAssignmentMeta(host.settings),
     };
     if (Object.keys(meta).length > 0) {
         try {
@@ -179,7 +206,7 @@ function persistedAttemptRefMeta(settings: Record<string, any> | undefined, prev
 function persistAttemptRefChange(host: MeshAssignmentHost, previousKey: string): void {
     const meta = persistedAttemptRefMeta(host.settings, previousKey);
     if (Object.keys(meta).length === 0) return;
-    try { host.adapter.updateRuntimeMeta?.(meta); } catch { /* best-effort */ }
+    try { host.adapter.updateRuntimeMeta?.({ ...meta, ...nativeMeshAssignmentMeta(host.settings) }); } catch { /* best-effort */ }
 }
 
 /**

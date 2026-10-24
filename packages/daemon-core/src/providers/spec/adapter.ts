@@ -267,6 +267,12 @@ export class TerminalAdapter {
         if (!this.pty || typeof this.pty.getMetadata !== 'function') return null;
         return this.pty.getMetadata() ?? null;
     }
+    verifyMeta(expected: Record<string, unknown>): Promise<boolean> {
+        return this.pty?.verifyMeta?.(expected) ?? Promise.resolve(false);
+    }
+    stopMeshWriter(target: import('@adhdev/session-host-core').MeshWriterStopTarget): Promise<boolean> {
+        return this.pty?.stopMeshWriter?.(target) ?? Promise.resolve(false);
+    }
 
     /** Debug-only: most-recent PTY input/output/resize/cursor events, oldest
      *  first. Pure observation — never consulted by the FSM. */

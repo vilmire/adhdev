@@ -50,6 +50,8 @@
  *      Every later sender must match (step 2).
  * No evidence at all ⇒ refuse (`roster_unknown`).
  */
+import { readWriterStopCapture } from './mesh-writer-stop-journal.js';
+import type { CancelDispatchRequest } from '../mesh/turn-ledger/effects.js';
 import {
     ASSISTANT_REMOTE_PROJECT_COMMAND,
     daemonIdsEquivalent,
@@ -602,6 +604,19 @@ export async function evaluateMeshSender(
     // A daemon is authoritative about itself (the transport refuses self-dial,
     // so this only arises in tests / a looped-back relay).
     if (sameDaemon(sender, deps.selfDaemonId)) return { ok: true, sender, evidence: 'self' };
+    // A source crash may have removed the adapter after a stop was issued.
+    // Only the exact authenticated owner of the durable pre-stop capture can
+    // finish that same operation without a live session anchor.
+    if ((cmd === 'stop_cli' || (cmd === 'agent_command' && args.action === 'mesh_writer_stop_capability'))
+        && cls === 'session_coordinator' && record(args.meshWriterStop)) {
+        const request = args.meshWriterStop as unknown as CancelDispatchRequest;
+        if (request.sessionId === readCommandSessionId(args) && request.meshId === readCommandMeshId(args)
+            && sameDaemon(request.ownerDaemonId ?? undefined, sender) && typeof request.stopRequestId === 'string' && request.stopRequestId.length <= 512) {
+            try {
+                if (readWriterStopCapture(request)) return { ok: true, sender, evidence: 'captured_writer_stop_owner' };
+            } catch { /* An absent/mismatched capture grants no authority. */ }
+        }
+    }
     switch (cls) {
         case 'authenticated_peer':
             return { ok: true, sender, evidence: 'authenticated_peer' };

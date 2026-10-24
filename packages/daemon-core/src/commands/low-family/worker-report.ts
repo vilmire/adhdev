@@ -44,6 +44,7 @@ import { LOG } from '../../logging/logger.js';
 import { hashWorkerSessionBind, verifyWorkerSessionBind } from '../../runtime-defaults.js';
 import { normalizeWorkerDeliveryId, recallWorkerDelivery, rememberWorkerDelivery } from '../../mesh/worker-report-idempotency.js';
 import type { WorkerReportResult } from '../../mesh/worker-report.js';
+import { recoverHolderAttachRollback } from '../mesh-holder-attach.js';
 import type { WorkerProgressUpdateResult } from '../../mesh/worker-report-progress.js';
 import type { ForwardedReportSender, ForwardedWorkerReportClaim, RemoteWorkerIdentity, WorkerAssignmentStamp } from '../../mesh/worker-report-forwarded.js';
 import type { WorkerCompletionReport } from '../../mesh/worker-report-validation.js';
@@ -86,7 +87,9 @@ function assignmentStampReader(ctx: LowFamilyContext): (sessionId: string) => Wo
     return (sessionId: string) => {
         let settings: Record<string, any> | undefined;
         try {
-            const state: any = ctx?.deps?.instanceManager?.getInstance?.(sessionId)?.getState?.();
+            const instance = ctx?.deps?.instanceManager?.getInstance?.(sessionId);
+            if (instance) recoverHolderAttachRollback(instance as import('../../providers/cli-provider-instance.js').CliProviderInstance);
+            const state: any = instance?.getState?.();
             settings = state?.settings && typeof state.settings === 'object' ? state.settings : undefined;
         } catch {
             return null;
@@ -719,7 +722,7 @@ export const workerReportHandlers: Record<string, LowFamilyHandler> = {
                     return toProgressResponse(acceptWorkerProgressUpdateForIdentity({ token: '', ...prepared }, note, { deliveryId }));
                 });
             }
-            const result = acceptWorkerProgressUpdate(credential, note, { reportedAtMs });
+            const result = acceptWorkerProgressUpdate(credential, note, { reportedAtMs, deliveryId });
             if (!result.accepted) logLocalWorkerRefusal('progress note', credential, result.refusal ?? 'unauthenticated', result.detail);
             response = toProgressResponse(result);
             rememberWorkerDelivery('progress', credential, deliveryId, response);

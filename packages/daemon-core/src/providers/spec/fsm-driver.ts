@@ -358,6 +358,7 @@ export class FsmDriver implements ISpecDriver {
     getRuntimeMetadata(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata | null {
         return this.adapter.getMetadata();
     }
+    getRuntimeControl(): import('../../cli-adapters/pty-transport.js').PtyRuntimeControl { return this.adapter; }
 
     /**
      * TX-FSM Stage 0 (shadow): receive the daemon-normalized signal

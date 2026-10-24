@@ -24,6 +24,8 @@ import {
 import { __resetReportedSummariesForTest, __setHandoffNoteSinkForTests, acceptWorkerCompletionReport, WORKER_HANDOFF_EVENT_KIND, WORKER_PROGRESS_EVENT_KIND, WORKER_REPORT_EVENT_KIND } from '../../src/mesh/worker-report';
 import { __resetProgressSurfaceForTest, __setWorkerProgressNoticeSinkForTests } from '../../src/mesh/worker-report-progress.js';
 import { __setWorkerLateReportNoticeSinkForTests, WORKER_LATE_REPORT_GRACE_MS } from '../../src/mesh/worker-report-late.js';
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import {
   __resetWorkerSessionBindsForTest,
@@ -163,6 +165,7 @@ beforeEach(() => {
   __setWorkerLateReportNoticeSinkForTests((n) => { lateNotices.push({ taskId: n.taskId, attemptId: n.attemptId, coordinatorMessage: n.coordinatorMessage }) })
 })
 afterEach(() => {
+  setActiveTurnLedger(null)
   __setHandoffNoteSinkForTests(undefined)
   __setWorkerLateReportNoticeSinkForTests(undefined)
   __resetWorkerTaskTokensForTest()
@@ -580,6 +583,7 @@ describe('F7 progress axis — a remote worker\'s progress note is forwarded to 
   const NOTE = 'Finished the schema migration; now rewriting the three consumers of the old table.'
   let progressNotices: Array<{ taskId: string; note: string }> = []
   beforeEach(() => {
+    setActiveTurnLedger(createMeshRuntimeTurnLedger({ selfDaemonId: OWNER_DAEMON, publisher: null }));
     __resetProgressSurfaceForTest()
     progressNotices = []
     __setWorkerProgressNoticeSinkForTests((n) => { progressNotices.push({ taskId: n.taskId, note: n.note }) })
@@ -605,7 +609,7 @@ describe('F7 progress axis — a remote worker\'s progress note is forwarded to 
     expect(daemonId).toBe(OWNER_DAEMON)
     expect(cmd).toBe(WORKER_PROGRESS_FORWARD_COMMAND)
     expect(args).toEqual({ meshId: ids.meshId, taskId: ids.taskId, attemptId, sessionId: ids.sessionId, nodeId: ids.nodeId, generation: 0, note: NOTE })
-    expect(res).toMatchObject({ success: true, taskId: ids.taskId, surfacedToCoordinator: true })
+    expect(res).toMatchObject({ success: true, taskId: ids.taskId, surfacedToCoordinator: false })
     const rows = progressRows(ids.meshId, ids.taskId)
     expect(rows).toHaveLength(1)
     expect(rows[0].attemptId).toBe(attemptId)

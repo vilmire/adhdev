@@ -68,7 +68,7 @@ export function retireOpenQueueAttemptForRequeue(meshId: string, taskId: string,
     const store = MeshRuntimeStore.getInstance();
     const open = findOpenQueueAttempt(store.turnStore(), meshId, taskId);
     if (!open) return { kind: 'none' };
-    if (!opts.force && INJECTION_CLOSED_STATES.has(open.state)) return { kind: 'refused', attempt: open, reason: 'attempt_open' };
+    if (open.state === 'stopping' || (!opts.force && INJECTION_CLOSED_STATES.has(open.state))) return { kind: 'refused', attempt: open, reason: 'attempt_open' };
     const ledger = getActiveTurnLedger();
     if (!ledger) return { kind: 'refused', attempt: open, reason: 'no_ledger' };
     if (open.ownerDaemonId && !daemonIdsEquivalent(open.ownerDaemonId, ledger.selfDaemonId)) {
@@ -85,7 +85,7 @@ export function retireOpenQueueAttemptForRequeue(meshId: string, taskId: string,
         kind: 'cancel',
         reason: 'superseded',
     });
-    if (result.verdict !== 'applied') {
+    if (result.verdict !== 'applied' || !result.attempt?.terminal) {
         return { kind: 'refused', attempt: open, reason: 'cancel_not_applied', detail: `${result.verdict}${result.rejection ? ` (${result.rejection})` : ''}` };
     }
     // The retired attempt's worker tokens die with it (the task's do not): a

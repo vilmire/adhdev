@@ -382,6 +382,15 @@ export class MeshRuntimeStore {
     }
 
     updateQueueEntry(entry: MeshWorkQueueEntry): void {
+        const attempt = this.turnStore().findLatestAttemptForTask(entry.meshId, entry.id);
+        if (attempt?.state === 'stopping') {
+            const current = this.findQueueEntryById(entry.meshId, entry.id);
+            if (current && (entry.status !== current.status || entry.assignedSessionId !== current.assignedSessionId
+                || entry.assignedNodeId !== current.assignedNodeId || entry.attemptId !== current.attemptId
+                || entry.dispatchNonce !== current.dispatchNonce || entry.assignedProviderType !== current.assignedProviderType)) {
+                throw new Error('writer_checkpoint_pending: the physical writer claim cannot be released or rebound');
+            }
+        }
         const now = new Date().toISOString();
         entry.updatedAt = now;
         this.db.prepare(`

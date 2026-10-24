@@ -176,9 +176,10 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       await settle()
 
       const after = getQueue(meshId).find(t => t.id === task.id)!
-      // THE ASSERTION: not left `assigned` as if delivered — it was returned to pending
-      // (or terminalized), never booked as a live in-flight delivery.
-      expect(after.status).not.toBe('assigned')
+      // No delivery is inferred from a refusal. Exclusion remains assigned
+      // until the exact writer's quiescence is confirmed.
+      expect(after.status).toBe('assigned')
+      expect(lastAttempt(meshId, task.id)?.state).toBe('stopping')
       const attempt = lastAttempt(meshId, task.id)
       expect(attempt?.state).not.toBe('generating')
       // No `delivered` evidence exists for this attempt/task.
@@ -213,7 +214,8 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       await settle()
 
       const after = getQueue(meshId).find(t => t.id === task.id)!
-      expect(after.status).not.toBe('assigned')
+      expect(after.status).toBe('assigned')
+      expect(lastAttempt(meshId, task.id)?.state).toBe('stopping')
       const eventKinds = eventKindsForTask(meshId, task.id)
       expect(eventKinds).not.toContain('delivered')
       expect(eventKinds).toContain('dispatch_failed')
@@ -255,7 +257,8 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       await settle()
 
       const after = getQueue(meshId).find(t => t.id === task.id)!
-      expect(after.status).toBe('pending')
+      expect(after.status).toBe('assigned')
+      expect(lastAttempt(meshId, task.id)?.state).toBe('stopping')
       const eventKinds = eventKindsForTask(meshId, task.id)
       expect(eventKinds).not.toContain('delivered')
       expect(eventKinds).toContain('dispatch_failed')
@@ -293,7 +296,8 @@ describe('REFUSAL-BOOKED-AS-DELIVERED — a resolved {success:false} answer is a
       await settle()
 
       const after = getQueue(meshId).find(t => t.id === task.id)!
-      expect(after.status).not.toBe('assigned')
+      expect(after.status).toBe('assigned')
+      expect(lastAttempt(meshId, task.id)?.state).toBe('stopping')
       const eventKinds = eventKindsForTask(meshId, task.id)
       expect(eventKinds).not.toContain('delivered')
       expect(eventKinds).toContain('dispatch_failed')

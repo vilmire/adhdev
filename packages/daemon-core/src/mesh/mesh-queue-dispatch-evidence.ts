@@ -34,7 +34,7 @@ export function queueAttemptId(meshId: string, taskId: string, attemptNo: number
 }
 
 /** States in which the attempt already consumed a prompt — a second injection would double-execute. */
-export const INJECTION_CLOSED_STATES: ReadonlySet<TurnAttempt['state']> = new Set(['consumed', 'generating', 'suspended', 'finalizing']);
+export const INJECTION_CLOSED_STATES: ReadonlySet<TurnAttempt['state']> = new Set(['consumed', 'generating', 'suspended', 'finalizing', 'stopping']);
 
 /**
  * Open (dispatch_accepted → R1) or resume (after a reclaim the attempt is back

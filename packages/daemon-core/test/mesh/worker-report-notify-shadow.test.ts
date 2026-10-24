@@ -21,6 +21,8 @@ import {
   storeHandoffNote,
 } from '../../src/mesh/worker-handoff-notes'
 import { WORKER_HANDOFF_EVENT_KIND } from '../../src/mesh/worker-report'
+import { setActiveTurnLedger } from '../../src/mesh/turn-ledger/active-ledger.js';
+import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { defaultScopeForEvent } from '../../src/mesh/contracts'
 import { WORKER_PROGRESS_EVENT_NAME } from '../../src/mesh/worker-progress-notify'
@@ -51,6 +53,7 @@ beforeEach(() => {
   __resetWorkerTaskTokensForTest()
 })
 afterEach(() => {
+  setActiveTurnLedger(null)
   __setHandoffNoteSinkForTests(null)
   __setWorkerProgressNoticeSinkForTests(null)
   __resetReportedSummariesForTest()
@@ -266,9 +269,10 @@ describe('F4/F5 — a failed write is never reported as success', () => {
   })
 
   it('records a progress update when an attempt exists', () => {
+    setActiveTurnLedger(createMeshRuntimeTurnLedger({ selfDaemonId: 'test-daemon', publisher: null }));
     const ids = freshIds()
     seedMeshAttempt({ meshId: ids.meshId, taskId: ids.taskId, sessionId: `session-${ids.taskId}`, attemptId: ids.attemptId, stage: 'generating' })
-    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId: ids.attemptId })
+    const token = mintWorkerTaskToken({ meshId: ids.meshId, taskId: ids.taskId, attemptId: ids.attemptId, sessionId: `session-${ids.taskId}` })
     const result = acceptWorkerProgressUpdate(
       { token: token.token },
       'Finished the first sweep of the migration; starting verification now.',

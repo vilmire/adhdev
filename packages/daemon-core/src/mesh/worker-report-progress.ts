@@ -3,7 +3,9 @@
  * attempt, recorded on the ledger, and surfaced to the coordinator only when enough
  * time and text have accumulated since the last surfaced update.
  */
-import { afterBridgeCommit, inBridgeReceiptTransaction } from './worker-bridge-transaction.js';
+import { afterBridgeCommit, bridgeReceiptTransaction, inBridgeReceiptTransaction } from './worker-bridge-transaction.js';
+import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
+import { daemonIdsEquivalent } from '@adhdev/mesh-shared';
 import { resolveWorkerIdentity, classifyUnresolvedWorkerCredential, normalizeWorkerReportedAtMs, workerIdentityPostdates, WORKER_PROGRESS_EVENT_KIND, summaryKey, type WorkerReportRefusal } from './worker-report.js';
 import { resolveForwardedWorkerIdentity, type ForwardedWorkerReportClaim, type ForwardedReportSender, type ForwardedReportRefusalReason } from './worker-report-forwarded.js';
 import type { WorkerTokenExchangeResult } from './worker-mcp-isolation.js';
@@ -47,7 +49,7 @@ export interface WorkerProgressUpdateResult {
     taskId?: string;
     refusal?: WorkerReportRefusal;
     detail?: string;
-    /** Whether this note was judged worth paging the coordinator about (F3). */
+    /** Inline surfacing only; a durable notice intent does not promise external consumption. */
     surfacedToCoordinator?: boolean;
 }
 
@@ -91,6 +93,7 @@ export function acceptWorkerProgressUpdateForIdentity(
     identity: WorkerTokenExchangeResult,
     note: string,
     opts: { nowMs?: number; deliveryId?: string } = {},
+    localNoticeId?: string,
 ): WorkerProgressUpdateResult {
     // ★F4: previously `return { accepted: true }` without writing a single row.
     // The worker was told "Progress noted for task …" and nothing existed to
@@ -106,6 +109,21 @@ export function acceptWorkerProgressUpdateForIdentity(
     }
 
     const nowMs = opts.nowMs ?? Date.now();
+    const runtime = MeshRuntimeStore.getInstance();
+    // Local calls need the same outer commit boundary as relayed receipts: the
+    // audit dedupe, consumption and notice must either all survive or all roll back.
+    if (!inBridgeReceiptTransaction(runtime.db)) {
+        return bridgeReceiptTransaction(runtime.db, () => acceptWorkerProgressUpdateForIdentity(identity, note, opts,
+            `local:${identity.attemptId}:t${nowMs}`));
+    }
+    const ledger = getActiveTurnLedger();
+    const attempt = runtime.turnStore().getAttempt(identity.attemptId);
+    if (!attempt || attempt.terminal || attempt.taskId !== identity.taskId
+        || attempt.meshId !== identity.meshId || attempt.sessionId !== identity.sessionId
+        || (ledger && !daemonIdsEquivalent(attempt.ownerDaemonId, ledger.selfDaemonId))) {
+        return { accepted: false, taskId: identity.taskId, refusal: 'unauthenticated', detail: 'progress identity is not the current owner attempt' };
+    }
+    if (!ledger) return { accepted: false, taskId: identity.taskId, refusal: 'storage_failed', detail: 'the owner turn ledger is not ready to consume this progress; retry' };
     let recorded = false;
     try {
         recorded = MeshRuntimeStore.getInstance().turnStore().insertWorkerEvent({
@@ -151,10 +169,25 @@ export function acceptWorkerProgressUpdateForIdentity(
         };
     }
 
+    {
+        const result = ledger.observe({
+            eventId: `worker_progress:${attempt.attemptId}:g${attempt.generation}:${opts.deliveryId ?? nowMs}`,
+            kind: 'worker_progress', source: 'worker_tool', at: nowMs,
+            sessionId: attempt.sessionId, taskId: identity.taskId,
+            attemptRef: { attemptId: attempt.attemptId, generation: attempt.generation },
+            observedBy: ledger.selfDaemonId,
+        });
+        // Throw inside the receipt transaction so a rejected consume cannot
+        // leave an audit receipt which would suppress the next valid delivery.
+        if (result.verdict !== 'applied') throw new Error(`worker_progress_not_applied:${result.verdict}`);
+    }
+
     // ★F3: surface the note to the coordinator. The ledger row above is
     // content-free (length only), so the TEXT rides this call and nothing else.
     // Filtered, not firehosed — see shouldSurfaceProgressToCoordinator.
-    const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs, opts.deliveryId);
+    // Legacy calls without a transport delivery id still need an atomic local
+    // notice intent. This correlation never becomes a worker receipt or ACK.
+    const surfaced = notifyCoordinatorOfProgress(identity, note, nowMs, opts.deliveryId ?? localNoticeId);
     return { accepted: true, taskId: identity.taskId, surfacedToCoordinator: surfaced };
 }
 

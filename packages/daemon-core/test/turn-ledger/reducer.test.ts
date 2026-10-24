@@ -6,8 +6,22 @@ import { TRANSITIONS } from '../../src/mesh/turn-ledger/transitions.js';
 import type { TurnAttempt, TurnHold } from '../../src/mesh/turn-ledger/types.js';
 import { NOW, POLICY, REF, ev, expired, makeAttempt, makeHold } from './fixtures.js';
 
-const step = (attempt: TurnAttempt | null, evidence: TurnEvidence, holds: readonly TurnHold[] = [], nowMs = NOW): ReduceResult =>
-    reduce({ attempt, holds, evidence, policy: POLICY, nowMs });
+// Existing outcome-policy cases explicitly cross the new quiescent boundary.
+// Pending ownership and malformed receipts are exercised through real ingress,
+// ledger, command and native-process fixtures in remote-worker-ownership-rc28.
+const step = (attempt: TurnAttempt | null, evidence: TurnEvidence, holds: readonly TurnHold[] = [], nowMs = NOW): ReduceResult => {
+    const pending = reduce({ attempt, holds, evidence, policy: POLICY, nowMs });
+    if (pending.attempt?.state !== 'stopping') return pending;
+    expect(pending.attempt.terminal).toBeNull();
+    expect(pending.attempt.generation).toBe(attempt!.generation);
+    expect(pending.effects.some(e => e.kind === 'queue_status' || e.kind === 'task_terminal')).toBe(false);
+    const settled = reduce({ attempt: pending.attempt, holds: pending.holds, policy: POLICY, nowMs, stopConfirmed: true,
+        evidence: ev('operator_status', { status: 'failed', reason: 'operator_update' }, {
+            source: 'scheduler', sessionId: pending.attempt.sessionId,
+            attemptRef: { attemptId: pending.attempt.attemptId, generation: pending.attempt.generation },
+        }) });
+    return { ...settled, rule: pending.rule, effects: [...pending.effects.filter(e => e.kind === 'cancel_dispatch'), ...settled.effects] };
+};
 
 const LIVE_IDLE = { modal: false, adapterPending: false, trailingTool: false };
 
@@ -30,8 +44,8 @@ describe('generation rule — older/other-generation evidence is recorded, never
         // Generation is monotonic: the adoption commits under g, rebinding to the g−1 session.
         expect(result.attempt).toMatchObject({ state: 'completed', generation: 1, sessionId: 's0' });
         expect(result.attempt?.terminal).toMatchObject({ outcome: 'completed', strength: 'genuine', reason: 'turn_end', summary: REF });
-        expect(result.effects[0]).toEqual({ kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', revokeBind: true });
-        expect(result.effects.filter((e) => e.kind === 'notify_coordinator')).toEqual([
+        expect(result.effects[0]).toMatchObject({ kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', stopRequestId: expect.any(String) });
+        expect(result.effects.filter((e) => e.kind === 'notify_coordinator')).toMatchObject([
             { kind: 'notify_coordinator', attemptId: 'a1', generation: 1, notify: 'completed', taskId: 't1', coordinatorDaemonId: 'dc', coordinatorSessionId: 'coord', summary: REF },
         ]);
         expect(result.effects.filter((e) => e.kind === 'commit')).toHaveLength(1);
@@ -159,14 +173,14 @@ describe('reclaim', () => {
         expect(last.effects.map((e) => e.kind)).toContain('queue_status');
     });
 
-    it('reclaim cuts g−1 first: cancel_dispatch of the old session with a worker-bind revoke, even from accepted', () => {
+    it('reclaim requests the exact writer stop before crossing its confirmed settlement, even from accepted', () => {
         for (const state of ['accepted', 'delivered', 'generating'] as const) {
             const evidence = state === 'accepted'
                 ? ev('dispatch_failed', { workerAbsent: false, reason: 'transport_error' })
                 : ev('process_exit', { exitCode: 1 });
             const r = step(makeAttempt(state), evidence);
-            expect({ state, cancel: r.effects.find((e) => e.kind === 'cancel_dispatch') }).toEqual({
-                state, cancel: { kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', revokeBind: true },
+            expect({ state, cancel: r.effects.find((e) => e.kind === 'cancel_dispatch') }).toMatchObject({
+                state, cancel: { kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', stopRequestId: expect.any(String) },
             });
         }
     });
@@ -239,17 +253,17 @@ describe('mesh_direct reclaim → failed at once (nothing redelivers a direct di
             expect(r.effects.some((e) => e.kind === 'reclaim' || e.kind === 'hold')).toBe(false);
             expect(r.effects.some((e) => e.kind === 'queue_status' && e.status === 'pending')).toBe(false);
             // The session is cut exactly as a reclaim would have cut it.
-            expect(r.effects.filter((e) => e.kind === 'cancel_dispatch')).toEqual([
-                { kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', revokeBind: true },
+            expect(r.effects.filter((e) => e.kind === 'cancel_dispatch')).toMatchObject([
+                { kind: 'cancel_dispatch', attemptId: 'a1', generation: 1, sessionId: 's1', messageId: 'msg1', stopRequestId: expect.any(String) },
             ]);
         });
     }
 
-    it('an accepted direct attempt still naming the already-cut session emits no second cut', () => {
+    it('an accepted direct attempt needs fresh quiescence proof before releasing an already-cut session name', () => {
         const attempt = makeAttempt('accepted', { scope: 'mesh_direct', sessionId: 's0', prevGeneration: { sessionId: 's0', consumed: false } });
         const r = step(attempt, ev('dispatch_failed', { workerAbsent: false, reason: 'transport_error' }, { sessionId: 's0' }), [makeHold('await_delivery'), makeHold('hard_ceiling')]);
         expect(r.attempt?.terminal?.reason).toBe('dispatch_failed');
-        expect(r.effects.some((e) => e.kind === 'cancel_dispatch')).toBe(false);
+        expect(r.effects.filter((e) => e.kind === 'cancel_dispatch')).toHaveLength(1);
     });
 
     it('the reclaim budget is not consulted for a direct attempt (fails with the cause, not reclaim_budget_exhausted)', () => {

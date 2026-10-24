@@ -12,6 +12,7 @@ import { commitTaskTerminal, withQueueTerminalFence, type MeshTerminalCommitSour
 import { resolveOnDependencyFailurePolicy } from './mesh-dependency-failure.js';
 import {
     sessionIdsEquivalent,
+    daemonIdsEquivalent,
     MESH_TERMINAL_TASK_STATUSES as TERMINAL_TASK_STATUS_LIST,
     type MeshTaskDifficulty,
     type MeshTaskStatus,
@@ -125,6 +126,7 @@ export {
 import { terminalizeSiblingDispatch } from './mesh-direct-dispatch.js';
 import { retireOpenQueueAttemptForRequeue, type QueueAttemptRetirementRefusal } from './mesh-queue-attempt-guard.js';
 import type { TurnAttempt } from './turn-ledger/types.js';
+import { getActiveTurnLedger } from './turn-ledger/active-ledger.js';
 export { terminalizeSiblingDispatch };
 import { notifyQueueDependencyStopped } from './mesh-queue-dependency-notice.js';
 import { type MeshWorkQueueEntry, type MeshQueueMutationOptions, type MeshWorkQueueStats } from './mesh-work-queue-types.js';
@@ -469,6 +471,17 @@ export function cancelTask(
     const result = withQueueLock(meshId, () => {
         const entry = MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId);
         if (!entry) return null;
+        const active = MeshRuntimeStore.getInstance().turnStore().findLatestAttemptForTask(meshId, taskId);
+        if (active && !active.terminal) {
+            // Cancellation is a stop intent while a writer owns this task.
+            // Keep its queue binding and report authority until exact settlement.
+            const ledger = getActiveTurnLedger();
+            if (ledger && daemonIdsEquivalent(active.ownerDaemonId, ledger.selfDaemonId)) ledger.observe({ eventId: `queue-cancel:${active.attemptId}:g${active.generation}`,
+                kind: 'cancel', source: 'operator', at: Date.now(), observedBy: ledger.selfDaemonId,
+                sessionId: active.sessionId, taskId, attemptRef: { attemptId: active.attemptId, generation: active.generation },
+                reason: 'operator_cancel' });
+            return { entry: MeshRuntimeStore.getInstance().findQueueEntryById(meshId, taskId)!, cascaded: [] as MeshWorkQueueEntry[] };
+        }
         const now = new Date().toISOString();
         // CANCEL-STICKY-TERMINAL (authoritative cancel): capture the prior assignment BEFORE
         // clearing it, so the caller can stop the bound live worker. Leaving assignedNodeId/

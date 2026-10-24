@@ -25,7 +25,7 @@ import type {
 export type { HoldReason, TurnScope } from '@adhdev/mesh-shared';
 
 export const TURN_STATES = [
-    'accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing',
+    'accepted', 'delivered', 'consumed', 'generating', 'suspended', 'finalizing', 'stopping',
     'completed', 'failed', 'cancelled',
 ] as const;
 export type TurnState = typeof TURN_STATES[number];
@@ -49,6 +49,9 @@ interface TurnTerminal {
 
 /** Content-free annotations stored on the attempt (`data_json`). */
 export interface TurnAttemptData {
+    /** A cap/reclaim retains the exact writer until the stop port proves quiescence. */
+    writerStop?: { requestId: string; reason: TurnReason; requestedAt: number; tries: number; escalated: boolean; confirmed?: boolean;
+        terminal?: { outcome: TurnOutcome; strength: CommitStrength; adoptSessionId?: string; summary?: SummaryRef; textEventId?: string; source?: EvidenceSourceId } };
     providerSuspension?: { generation: number; modalKey: string | null; providerSetup?: boolean; at: number | null; resolvedAt: number | null };
     gitSideEffect?: { dirty: boolean; commitsSinceDispatch: number; attributable: boolean; at: number };
     /** R12r: how many report-awaiting idle ends the worker resumed from (false idles). Diagnostics only. */
@@ -171,7 +174,7 @@ export type TurnEffect =
      * report through the MCP after the cut. The decision is recorded inside
      * the ledger txn; the in-memory revocation runs post-commit.
      */
-    | { kind: 'cancel_dispatch'; attemptId: string; generation: number; sessionId: string; messageId?: string | null; revokeBind?: boolean }
+    | { kind: 'cancel_dispatch'; attemptId: string; generation: number; sessionId: string; messageId?: string | null; revokeBind?: boolean; stopRequestId?: string }
     | { kind: 'bus'; event: TurnBusEvent }
     /** Audit-only `turn_events` note (recorded / rejected verdicts). */
     | { kind: 'record'; note: string }

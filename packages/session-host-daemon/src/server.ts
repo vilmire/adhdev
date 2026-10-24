@@ -591,6 +591,33 @@ export class SessionHostServer extends EventEmitter {
           this.recordRuntimeTransition(request.payload.sessionId, 'stop_session', 'stopping', undefined, true);
           return { success: true, result: this.registry.getSession(request.payload.sessionId) };
         }
+        case 'stop_mesh_writer': {
+          const p = request.payload, record = this.registry.getSession(p.sessionId);
+          const active = record?.meta.meshActiveAssignment as Record<string, unknown> | undefined;
+          const launch = record?.meta.launchRecord as Record<string, unknown> | undefined;
+          const keys = ['meshId','nodeId','taskId','attemptId','generation','dispatchNonce','ownerDaemonId'] as const;
+          if (!record || !this.runtimes.has(p.sessionId) || record.termination || !['running','stopping'].includes(record.lifecycle)
+            || record.category !== 'cli' || record.providerType !== p.providerType || record.runtimeKey !== p.runtimeKey
+            || record.startedAt !== p.startedAt || record.osPid !== p.osPid || !record.writeOwner
+            || record.writeOwner.clientId !== p.clientId || record.writeOwner.ownerType !== 'agent'
+            || record.meta.assistant || record.meta.meshCoordinatorFor || launch?.launchedBy === 'assistant' || launch?.roleLaunch
+            || !Number.isSafeInteger(p.osPid) || p.osPid <= 0 || !Number.isSafeInteger(p.startedAt) || p.startedAt <= 0
+            || !active || !p.assignment || keys.some(key => {
+              const v = p.assignment[key];
+              return (key === 'generation' || key === 'dispatchNonce' ? !Number.isSafeInteger(v) || Number(v) < 0 : typeof v !== 'string' || !v)
+                || active[key] !== v;
+            })) {
+            return { success: false, error: 'mesh_writer_identity_or_ownership_changed' };
+          }
+          this.stopRequests.set(p.sessionId, 'stop');
+          this.registry.setLifecycle(p.sessionId, 'stopping');
+          this.persistNow(p.sessionId);
+          this.requireRuntime(p.sessionId).stop('SIGKILL');
+          this.recordRuntimeTransition(p.sessionId, 'stop_mesh_writer', 'stopping', undefined, true);
+          // A requested stop is not native quiescence. The owner retains its
+          // claim until a separate exact process-tree observation settles it.
+          return { success: true, result: { requested: true } };
+        }
         case 'delete_session': {
           const record = this.registry.getSession(request.payload.sessionId);
           if (!record) return { success: false, error: `Unknown session: ${request.payload.sessionId}` };

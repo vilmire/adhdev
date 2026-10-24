@@ -35,6 +35,9 @@
 // ---------------------------------------------------------------------------
 
 import type { DaemonComponents } from '../boot/daemon-components.js';
+import type { CancelDispatchRequest } from './turn-ledger/effects.js';
+import { unwrapMeshRelayResult } from '../commands/mesh-relay-result.js';
+import { readWriterStopCapture } from '../commands/mesh-writer-stop-journal.js';
 import { getMachineId } from '../config/config.js';
 import { getMesh, getMeshByRepo, listMeshes } from '../config/mesh-config.js';
 import { LOG } from '../logging/logger.js';
@@ -277,26 +280,27 @@ function runSessionDestructiveAction<T>(sessionKey: string, act: () => Promise<T
  */
 export function stopStaleMeshWorker(
     components: DaemonComponents,
-    args: { meshId: string; sessionId: string; nodeId?: string; providerType?: string; daemonId?: string; reason?: string },
-): void {
+    args: { meshId: string; sessionId: string; nodeId?: string; providerType?: string; daemonId?: string; reason?: string; writerStop?: CancelDispatchRequest },
+): Promise<unknown> {
     const { meshId, sessionId, providerType } = args;
-    void runSessionDestructiveAction(sessionId, () => {
+    return runSessionDestructiveAction(sessionId, async () => {
         const stopArgs: Record<string, unknown> = {
             targetSessionId: sessionId,
             ...(providerType ? { cliType: providerType } : {}),
             mode: 'hard',
             reason: args.reason ?? 'stale_mesh_dispatch_reclaimed',
+            ...(args.writerStop ? { meshWriterStop: args.writerStop, meshId,
+                meshContext: { meshId, coordinatorDaemonId: args.writerStop.ownerDaemonId, taskId: args.writerStop.taskId } } : {}),
         };
         try {
-            const isLocal = components.cliManager?.adapters?.has?.(sessionId) === true;
+            const isLocal = components.cliManager?.adapters?.has?.(sessionId) === true
+                || (args.writerStop && readWriterStopCapture(args.writerStop) !== null);
             if (isLocal) {
                 if (!stopArgs.cliType) {
                     const localType = components.cliManager?.adapters?.get?.(sessionId)?.cliType;
                     if (localType) stopArgs.cliType = localType;
                 }
-                Promise.resolve().then(() => components.cliManager.stopCli(stopArgs))
-                    .catch((e: any) => LOG.warn('MeshQueue', `Local stop of stale worker ${sessionId} failed: ${e?.message || e}`));
-                return;
+                return await components.cliManager.stopCli(stopArgs);
             }
             let daemonId = args.daemonId;
             if (!daemonId && args.nodeId) {
@@ -307,8 +311,20 @@ export function stopStaleMeshWorker(
                 } catch { /* best-effort */ }
             }
             if (daemonId && components.dispatchMeshCommand) {
-                Promise.resolve(components.dispatchMeshCommand(daemonId, 'stop_cli', withStatusProbeMarker(stopArgs)))
-                    .catch((e: any) => LOG.warn('MeshQueue', `Remote stop of stale worker ${sessionId} on daemon ${daemonId} failed: ${e?.message || e}`));
+                // Old daemons ignore the strict-stop payload on stop_cli.
+                // Probe a new read-only action first; an unknown action never
+                // falls through to a destructive legacy stop.
+                if (args.writerStop) {
+                    const capability = unwrapMeshRelayResult(await components.dispatchMeshCommand(daemonId, 'agent_command', {
+                        ...stopArgs, action: 'mesh_writer_stop_capability', agentType: providerType,
+                    }), { command: 'agent_command', peerDaemonId: daemonId });
+                    if (capability.success !== true || capability.meshWriterStopProtocol !== 1
+                        || capability.stopRequestId !== args.writerStop.stopRequestId) {
+                        return { success: false, code: 'writer_checkpoint_pending', reason: 'strict_stop_peer_capability_unconfirmed' };
+                    }
+                }
+                const result = await components.dispatchMeshCommand(daemonId, 'stop_cli', withStatusProbeMarker(stopArgs));
+                return unwrapMeshRelayResult(result, { command: 'stop_cli', peerDaemonId: daemonId });
             } else {
                 LOG.warn('MeshQueue', `Cannot stop stale worker ${sessionId}: no local adapter and no resolvable remote daemon id (node ${args.nodeId ?? '?'}).`);
             }
