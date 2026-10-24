@@ -37,6 +37,7 @@ declare function readVerifiedReplacementProvenance(options: {
     nowMs?: () => number;
     skipDynamicWrap?: boolean;
 }): SessionHostReplacementProvenance | undefined;
+
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
     /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
