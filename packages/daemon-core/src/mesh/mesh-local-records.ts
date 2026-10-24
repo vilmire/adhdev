@@ -65,6 +65,8 @@ interface TerminalRow {
     terminal_at: number | null;
 }
 
+const MAX_INLINE_PROVENANCE_IDS = 500;
+
 /**
  * One `task_completed` / `task_failed` view per committed queue/direct attempt
  * of a mesh. The payload carries the commit's closed-vocabulary fields plus
@@ -73,19 +75,48 @@ interface TerminalRow {
  * a cancel (`isIntentionalCleanupStopEntry` — a cancel is not a failure).
  */
 export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; taskId?: string; tail?: number; kinds?: readonly string[]; db?: Database; excludeIds?: readonly string[]; oldestFirst?: boolean } = {}): MeshLedgerEntry[] {
+    const db = opts.db ?? MeshRuntimeStore.getInstance().db;
+    const wantCompleted = !opts.kinds?.length || opts.kinds.includes('task_completed');
+    const wantBlocked = !opts.kinds?.length || opts.kinds.includes('task_blocked');
+    const wantFailed = !opts.kinds?.length || opts.kinds.includes('task_failed');
+    const wantCancelled = !opts.kinds?.length || opts.kinds.includes('task_cancelled');
+    if (!wantCompleted && !wantBlocked && !wantFailed && !wantCancelled) return [];
+    const proven = wantBlocked || wantFailed ? legacyWorkerBlockedTasks({ db }, meshId) : new Map();
+    const legacyAttemptIds = [...new Set([...proven.values()].map((p) => p.attemptId))];
+    const inlineProvenance = legacyAttemptIds.length <= MAX_INLINE_PROVENANCE_IDS;
     const where = ['mesh_id = ?', 'task_id IS NOT NULL', 'terminal_outcome IS NOT NULL'];
     const args: unknown[] = [meshId];
     if (opts.kinds && opts.kinds.length > 0) {
-        // kind → outcomes BEFORE the tail, so completions never crowd failures out.
-        const outcomes = [
-            ...(opts.kinds.includes('task_completed') ? ['completed'] : []),
-            ...(opts.kinds.includes('task_failed') || opts.kinds.includes('task_blocked') ? ['failed'] : []),
-            ...(opts.kinds.includes('task_blocked') ? ['blocked'] : []),
-            ...(opts.kinds.includes('task_cancelled') ? ['cancelled'] : []),
-        ];
-        if (outcomes.length === 0) return [];
-        where.push(`terminal_outcome IN (${outcomes.map(() => '?').join(', ')})`);
-        args.push(...outcomes);
+        // kind → effective outcomes BEFORE the tail, so completions, legacy-blocked rows,
+        // and genuine failures never crowd each other out of a bounded read.
+        if (wantBlocked !== wantFailed && legacyAttemptIds.length > 0 && inlineProvenance) {
+            const directOutcomes = [
+                ...(wantCompleted ? ['completed'] : []),
+                ...(wantBlocked ? ['blocked'] : []),
+                ...(wantCancelled ? ['cancelled'] : []),
+            ];
+            const legacyPlaceholders = legacyAttemptIds.map(() => '?').join(', ');
+            const failedClause = wantBlocked
+                ? `(terminal_outcome = 'failed' AND attempt_id IN (${legacyPlaceholders}))`
+                : `(terminal_outcome = 'failed' AND attempt_id NOT IN (${legacyPlaceholders}))`;
+            if (directOutcomes.length > 0) {
+                where.push(`(terminal_outcome IN (${directOutcomes.map(() => '?').join(', ')}) OR ${failedClause})`);
+                args.push(...directOutcomes, ...legacyAttemptIds);
+            } else {
+                where.push(failedClause);
+                args.push(...legacyAttemptIds);
+            }
+        } else {
+            const outcomes = [
+                ...(wantCompleted ? ['completed'] : []),
+                ...(wantFailed || (wantBlocked && legacyAttemptIds.length > 0) ? ['failed'] : []),
+                ...(wantBlocked ? ['blocked'] : []),
+                ...(wantCancelled ? ['cancelled'] : []),
+            ];
+            if (outcomes.length === 0) return [];
+            where.push(`terminal_outcome IN (${outcomes.map(() => '?').join(', ')})`);
+            args.push(...outcomes);
+        }
     }
     if (opts.sinceMs !== undefined) { where.push('terminal_at >= ?'); args.push(opts.sinceMs); }
     if (opts.taskId) { where.push('task_id = ?'); args.push(opts.taskId); }
@@ -93,14 +124,7 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
         where.push(`attempt_id || '#committed' NOT IN (${opts.excludeIds.map(() => '?').join(',')})`);
         args.push(...opts.excludeIds);
     }
-    const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : null;
-    const rows = (opts.db ?? MeshRuntimeStore.getInstance().db).prepare(
-        `SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_reason, terminal_strength,
-                terminal_source, terminal_at
-         FROM turn_attempts WHERE ${where.join(' AND ')} ORDER BY terminal_at ${opts.oldestFirst ? 'ASC, attempt_id ASC' : 'DESC, attempt_id DESC'}${tail ? ` LIMIT ${tail}` : ''}`,
-    ).all(...args) as TerminalRow[];
-    const proven = legacyWorkerBlockedTasks({ db: opts.db ?? MeshRuntimeStore.getInstance().db }, meshId);
-    return (opts.oldestFirst ? rows : rows.reverse()).map((row): MeshLedgerEntry => {
+    const toView = (row: TerminalRow): MeshLedgerEntry => {
         const completed = row.terminal_outcome === 'completed';
         const cancelled = row.terminal_outcome === 'cancelled';
         const provenance = proven.get(row.task_id);
@@ -129,7 +153,32 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
                 ...(cancelled ? { intentional: true, intentionalStopReason: 'operator_cleanup' } : {}),
             },
         };
-    }).filter(view => !opts.kinds?.length || opts.kinds.includes(view.kind));
+    };
+    const tail = opts.tail && opts.tail > 0 ? Math.floor(opts.tail) : null;
+    const baseSql = `SELECT attempt_id, task_id, session_id, node_id, provider_type, terminal_outcome, terminal_reason, terminal_strength,
+                terminal_source, terminal_at
+         FROM turn_attempts WHERE ${where.join(' AND ')} ORDER BY terminal_at ${opts.oldestFirst ? 'ASC, attempt_id ASC' : 'DESC, attempt_id DESC'}`;
+    if (!tail) {
+        const rows = db.prepare(baseSql).all(...args) as TerminalRow[];
+        return (opts.oldestFirst ? rows : rows.reverse()).map(toView).filter(view => !opts.kinds?.length || opts.kinds.includes(view.kind));
+    }
+    const pageSize = inlineProvenance ? tail : Math.min(Math.max(tail * 2, 32), 256);
+    const stmt = db.prepare(`${baseSql} LIMIT ? OFFSET ?`);
+    const matched: MeshLedgerEntry[] = [];
+    for (let offset = 0; matched.length < tail; ) {
+        const rows = stmt.all(...args, pageSize, offset) as TerminalRow[];
+        if (rows.length === 0) break;
+        for (const row of rows) {
+            const view = toView(row);
+            if (!opts.kinds?.length || opts.kinds.includes(view.kind)) {
+                matched.push(view);
+                if (matched.length >= tail) break;
+            }
+        }
+        if (rows.length < pageSize) break;
+        offset += rows.length;
+    }
+    return opts.oldestFirst ? matched : matched.reverse();
 }
 
 function byTime(a: MeshLedgerEntry, b: MeshLedgerEntry): number {

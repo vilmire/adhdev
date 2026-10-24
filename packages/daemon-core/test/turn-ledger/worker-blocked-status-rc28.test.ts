@@ -39,7 +39,7 @@ import { __resetWorkerTaskTokensForTest, mintWorkerTaskToken } from '../../src/m
 import { claimNextTask, getMeshQueueStats, updateTaskStatus, requeueTaskForLedgerReclaim } from '../../src/mesh/mesh-work-queue.js';
 import { summarizeMissionTasks, isMissionAllTasksTerminal, upsertMeshMission, maybeEmitMissionCloseCandidate, getMeshMission } from '../../src/mesh/mesh-missions.js';
 import { createTurnScheduler } from '../../src/mesh/turn-ledger/scheduler.js';
-import { getLocalRecordSummary, readTurnTerminalViews } from '../../src/mesh/mesh-local-records.js';
+import { getLocalRecordSummary, readLocalRecords, readTurnTerminalViews } from '../../src/mesh/mesh-local-records.js';
 import { computeMeshTaskStats, rollupMissionStats } from '../../src/mesh/mesh-task-stats.js';
 import { legacyWorkerBlockedTasks, projectWorkerOutcomeViews } from '../../src/mesh/mesh-worker-outcome-view.js';
 import { SUMMARY, evd, fakePublisher, recordingPorts } from './ledger-harness.js';
@@ -202,5 +202,99 @@ describe('RC28 recovery and compatibility in an isolated fixture database', () =
         expect(ledger.getAttempt(ref.attemptRef.attemptId)?.terminal).toMatchObject({ outcome: 'failed', reason: 'session_error' });
         expect(legacyWorkerBlockedTasks(store, mesh).size).toBe(0);
         await ledger.flushPublish();
+    });
+
+    async function finishReportedTurn(mesh: string, outcome: 'blocked' | 'failed', terminalAt: number, legacy = false) {
+        const r = setup(mesh);
+        setActiveTurnLedger(r.ledger);
+        const token = mintWorkerTaskToken({ meshId: mesh, taskId: r.task.id, attemptId: r.ref.attemptRef.attemptId, sessionId: 's1' });
+        expect(acceptWorkerCompletionReport({ token: token.token }, { outcome, summary: 'Fixture terminal', branchState: 'blocked_review' }).accepted).toBe(true);
+        r.ledger.observe(evd('turn_end', { strength: 'genuine' }, { ...r.ref, source: 'completion_flush_genuine' }));
+        await r.ledger.flushPublish();
+        if (legacy) {
+            const row = r.store.findQueueEntryById(mesh, r.task.id)!;
+            r.store.updateQueueEntry({ ...row, status: 'failed' });
+            const output = r.store.getLatestTaskOutput(r.task.id)!;
+            const envelope = { ...JSON.parse(output.envelopeJson), status: 'failed' };
+            r.store.db.prepare("UPDATE mesh_task_outputs SET status='failed', envelope_json=? WHERE task_id=?").run(JSON.stringify(envelope), r.task.id);
+            r.store.db.prepare("UPDATE turn_attempts SET state='failed', terminal_outcome='failed' WHERE attempt_id=?").run(r.ref.attemptRef.attemptId);
+        }
+        r.store.db.prepare('UPDATE turn_attempts SET terminal_at=? WHERE attempt_id=?').run(terminalAt, r.ref.attemptRef.attemptId);
+        return r;
+    }
+
+    it('blocked filter tail counts matching projected records rather than newer genuine failure', async () => {
+        const mesh = meshId();
+        const b = await finishReportedTurn(mesh, 'blocked', 20001, true);
+        await finishReportedTurn(mesh, 'failed', 20002);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'] }).map(v => v.payload?.taskId)).toEqual([b.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], tail: 1 }).map(v => v.payload?.taskId)).toEqual([b.task.id]);
+        expect(readLocalRecords(mesh, { kind: ['task_blocked'], tail: 1 }).map(v => v.taskId)).toEqual([b.task.id]);
+    });
+
+    it('failed filter tail counts genuine failure rather than newer projected legacy blocked', async () => {
+        const mesh = meshId();
+        const f = await finishReportedTurn(mesh, 'failed', 20001);
+        await finishReportedTurn(mesh, 'blocked', 20002, true);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_failed'] }).map(v => v.payload?.taskId)).toEqual([f.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_failed'], tail: 1 }).map(v => v.payload?.taskId)).toEqual([f.task.id]);
+        expect(readLocalRecords(mesh, { kind: ['task_failed'], tail: 1 }).map(v => v.taskId)).toEqual([f.task.id]);
+    });
+
+    it('preserves order, oldestFirst, sinceMs, excludeIds, and native vs legacy blocked distinction across mixed tails', async () => {
+        const mesh = meshId();
+        const t1 = await finishReportedTurn(mesh, 'blocked', 30001, true);
+        const t2 = await finishReportedTurn(mesh, 'failed', 30002);
+        const t3 = await finishReportedTurn(mesh, 'blocked', 30003, false);
+        const t4 = await finishReportedTurn(mesh, 'failed', 30004);
+        const t5 = await finishReportedTurn(mesh, 'blocked', 30005, true);
+
+        const newestTwoBlocked = readTurnTerminalViews(mesh, { kinds: ['task_blocked'], tail: 2 });
+        expect(newestTwoBlocked.map(v => v.taskId)).toEqual([t3.task.id, t5.task.id]);
+        expect(newestTwoBlocked[0].payload?.statusProvenance).toBeUndefined();
+        expect(newestTwoBlocked[1].payload?.statusProvenance).toMatchObject({ storedStatus: 'failed', attemptId: t5.ref.attemptRef.attemptId });
+
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], tail: 2, oldestFirst: true }).map(v => v.taskId)).toEqual([t1.task.id, t3.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_failed'], tail: 2 }).map(v => v.taskId)).toEqual([t2.task.id, t4.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_failed'], tail: 1, oldestFirst: true }).map(v => v.taskId)).toEqual([t2.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], tail: 1, excludeIds: [`${t5.ref.attemptRef.attemptId}#committed`] }).map(v => v.taskId)).toEqual([t3.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], tail: 1, sinceMs: 30004 }).map(v => v.taskId)).toEqual([t5.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_failed'], tail: 1, sinceMs: 30004 }).map(v => v.taskId)).toEqual([t4.task.id]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], taskId: t2.task.id, tail: 1 })).toEqual([]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], taskId: t1.task.id, tail: 1 }).map(v => v.taskId)).toEqual([t1.task.id]);
+
+        const query = (statuses: string[], view: boolean) => meshStoreIpcHandlers.queue_query({} as any, { v: TURN_IPC_PROTOCOL_VERSION, meshId: mesh, statuses, view });
+        expect(((await query(['blocked'], true)) as any).entries.map((e: any) => e.id)).toEqual([t1.task.id, t3.task.id, t5.task.id]);
+        expect(((await query(['failed'], true)) as any).entries.map((e: any) => e.id)).toEqual([t2.task.id, t4.task.id]);
+        expect(((await query(['blocked'], false)) as any).entries.map((e: any) => e.id)).toEqual([t3.task.id]);
+        expect(((await query(['failed'], false)) as any).entries.map((e: any) => e.id)).toEqual([t1.task.id, t2.task.id, t4.task.id, t5.task.id]);
+    });
+
+    it('enforces generation provenance, terminal conflict, and session binding controls', async () => {
+        const mesh = meshId();
+        const r = await finishReportedTurn(mesh, 'blocked', 40001, true);
+        expect(legacyWorkerBlockedTasks(r.store, mesh).has(r.task.id)).toBe(true);
+        const a = r.store.turnStore().getAttempt(r.ref.attemptRef.attemptId)!;
+        const data = { ...a.data, report: { ...(a.data as any).report, generation: 99 } };
+        r.store.db.prepare('UPDATE turn_attempts SET data_json=? WHERE attempt_id=?').run(JSON.stringify(data), r.ref.attemptRef.attemptId);
+        expect(legacyWorkerBlockedTasks(r.store, mesh).has(r.task.id)).toBe(false);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_blocked'], tail: 1 })).toEqual([]);
+        expect(readTurnTerminalViews(mesh, { kinds: ['task_failed'], tail: 1 }).map(v => v.taskId)).toEqual([r.task.id]);
+
+        const failedTurn = await finishReportedTurn(mesh, 'failed', 40002);
+        setActiveTurnLedger(failedTurn.ledger);
+        const lateToken = mintWorkerTaskToken({ meshId: mesh, taskId: failedTurn.task.id, attemptId: failedTurn.ref.attemptRef.attemptId, sessionId: 's1' });
+        const beforeOutput = failedTurn.store.getLatestTaskOutput(failedTurn.task.id);
+        expect(acceptWorkerCompletionReport({ token: lateToken.token }, { outcome: 'blocked', summary: 'Late review label', branchState: 'blocked_review' }).accepted).toBe(false);
+        expect(failedTurn.store.findQueueEntryById(mesh, failedTurn.task.id)?.status).toBe('failed');
+        expect(failedTurn.store.getLatestTaskOutput(failedTurn.task.id)).toEqual(beforeOutput);
+
+        const wrongSession = setup(mesh);
+        setActiveTurnLedger(wrongSession.ledger);
+        const wrongToken = mintWorkerTaskToken({ meshId: mesh, taskId: wrongSession.task.id, attemptId: wrongSession.ref.attemptRef.attemptId, sessionId: 'unrelated-session' });
+        expect(acceptWorkerCompletionReport({ token: wrongToken.token }, { outcome: 'blocked', summary: 'Unrelated session', branchState: 'blocked_review' }).accepted).toBe(false);
+        expect(wrongSession.store.findQueueEntryById(mesh, wrongSession.task.id)?.status).toBe('assigned');
+        expect(wrongSession.store.getLatestTaskOutput(wrongSession.task.id)).toBeNull();
+        await wrongSession.ledger.flushPublish();
     });
 });
