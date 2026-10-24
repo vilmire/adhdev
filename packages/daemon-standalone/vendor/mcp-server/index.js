@@ -93324,9 +93324,9 @@ ${result.stderr}`, result.code);
         return { kind: "gone" };
       }
     }
-    function abandoned(observed2, alive, now, maxAgeMs, startOf) {
-      if (observed2.kind === "owner") return !alive(observed2.owner.pid) || (observed2.owner.pid === process.pid || now - observed2.owner.acquiredAt >= OWNERLESS_STALE_MS) && pidReused(observed2.owner, startOf) || maxAgeMs !== void 0 && now - observed2.owner.acquiredAt >= maxAgeMs;
-      if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= (maxAgeMs ?? OWNERLESS_STALE_MS);
+    function abandoned(observed2, alive, now, options, startOf) {
+      if (observed2.kind === "owner") return !alive(observed2.owner.pid) || (observed2.owner.pid === process.pid || now - observed2.owner.acquiredAt >= OWNERLESS_STALE_MS) && pidReused(observed2.owner, startOf) || options.maxAgeMs !== void 0 && now - observed2.owner.acquiredAt >= options.maxAgeMs;
+      if (observed2.kind === "ownerless") return now - observed2.mtimeMs >= (options.ownerlessMaxAgeMs ?? options.maxAgeMs ?? OWNERLESS_STALE_MS);
       return false;
     }
     function pidReused(owner, startOf) {
@@ -93339,10 +93339,10 @@ ${result.stderr}`, result.code);
       if (a.kind === "owner" && b.kind === "owner") return a.owner.pid === b.owner.pid && a.owner.nonce === b.owner.nonce;
       return a.kind === "ownerless" && b.kind === "ownerless";
     }
-    function reclaim2(lock, alive, now, maxAgeMs, startOf) {
+    function reclaim2(lock, alive, now, options, startOf) {
       const observed2 = readOwner(lock);
       if (observed2.kind === "gone") return true;
-      if (!abandoned(observed2, alive, now(), maxAgeMs, startOf)) return false;
+      if (!abandoned(observed2, alive, now(), options, startOf)) return false;
       const guard2 = `${lock}.reclaim`;
       try {
         (0, import_node_fs12.mkdirSync)(guard2, { mode: 448 });
@@ -93352,7 +93352,7 @@ ${result.stderr}`, result.code);
       try {
         const recheck = readOwner(lock);
         if (recheck.kind === "gone") return true;
-        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now(), maxAgeMs, startOf)) return false;
+        if (!sameInstance(observed2, recheck) || !abandoned(recheck, alive, now(), options, startOf)) return false;
         try {
           (0, import_node_fs12.unlinkSync)((0, import_node_path11.join)(lock, OWNER_FILE));
         } catch {
@@ -93388,7 +93388,7 @@ ${result.stderr}`, result.code);
         } catch (error) {
           const errno = error.code;
           if (errno !== "EEXIST") return { ok: false, busy: false, ...errno ? { errno } : {}, reason: `write_lock_unavailable: ${lock}` };
-          if (!reclaim2(lock, alive, now, options.maxAgeMs, startOf)) return held();
+          if (!reclaim2(lock, alive, now, options, startOf)) return held();
           continue;
         }
         const startId = options.processStartId ? options.processStartId(process.pid) : ownProcessStartId;
@@ -144591,7 +144591,7 @@ ${output}` : "";
         const deadline = performance.now() + 10;
         let waitBudget = 10;
         for (; ; ) {
-          const acquired = acquireOwnedLock(lock, { maxAgeMs: 3e4 });
+          const acquired = acquireOwnedLock(lock, { ownerlessMaxAgeMs: 3e4 });
           if (acquired.ok) {
             try {
               return operation();

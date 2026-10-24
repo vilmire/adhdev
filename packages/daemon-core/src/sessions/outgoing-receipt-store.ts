@@ -34,12 +34,15 @@ export class OutgoingReceiptStore {
         if (!this.directory) return operation();
         fs.mkdirSync(this.directory, { recursive: true });
         const lock = this.filename(id) + '.lock';
-        // These transactions never await. Expire crashed/stalled ownership after
-        // 30 seconds, but spend at most 10 ms explicitly waiting on a live peer.
+        // A live writer may stall before rename and later resume. It must keep
+        // exclusive publication authority regardless of age: expiring it could
+        // authorize two fresh sends and overwrite submitted proof. Dead owners
+        // are reclaimable immediately; ownerless locks retain 30-second expiry.
+        // Spend at most 10 ms explicitly waiting on a live peer, then fail busy.
         const deadline = performance.now() + 10;
         let waitBudget = 10;
         for (;;) {
-            const acquired = acquireOwnedLock(lock, { maxAgeMs: 30_000 });
+            const acquired = acquireOwnedLock(lock, { ownerlessMaxAgeMs: 30_000 });
             if (acquired.ok) {
                 try { return operation(); } finally { acquired.release(); }
             }
