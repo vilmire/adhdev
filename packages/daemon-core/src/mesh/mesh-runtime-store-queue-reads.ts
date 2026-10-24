@@ -294,7 +294,7 @@ export function getQueueStatusCounts(
     self: MeshRuntimeStore,
     meshId: string,
     olderThanIso?: string,
-): { counts: Record<string, number>; oldHistoricalCount: number } {
+): { counts: Record<string, number>; oldHistoricalCount: number; legacyReportedBlockedCount?: number } {
     self.ensureLegacyQueueMigrated(meshId);
     const rows = self.db.prepare(
         `SELECT status, COUNT(*) AS n,
@@ -312,7 +312,7 @@ export function getQueueStatusCounts(
         counts.failed = (counts.failed ?? 0) - proven.size;
         counts.blocked = (counts.blocked ?? 0) + proven.size;
     }
-    return { counts, oldHistoricalCount };
+    return { counts, oldHistoricalCount, ...(proven.size ? { legacyReportedBlockedCount: proven.size } : {}) };
 }
 
 /** id / status / cancelReason for the given row ids (missing ids are absent). */

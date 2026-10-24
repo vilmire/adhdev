@@ -408,6 +408,8 @@ export interface MeshTaskBatchEntrySpec extends Omit<MeshEnqueueTaskOptions, 'id
 }
 
 export interface MeshWorkQueueStats {
+    /** Included in blocked; derived from matching legacy worker reports, with stored failed rows unchanged. */
+    legacyReportedBlockedCount?: number;
     total: number;
     active: number;
     historical: number;

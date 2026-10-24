@@ -25852,9 +25852,10 @@ ${renderWorkerProtocolFooter2(input)}`;
       return isRecord2(value) && hasOnlyKeys22(value, ["id", "status", "cancelReason"]) && typeof value.id === "string" && typeof value.status === "string" && (value.cancelReason === void 0 || typeof value.cancelReason === "string");
     }
     function isQueueQueryResponse2(value) {
-      if (!isRecord2(value) || !hasOnlyKeys22(value, ["entries", "counts", "oldHistoricalCount", "dependencyHeads"])) return false;
+      if (!isRecord2(value) || !hasOnlyKeys22(value, ["entries", "counts", "oldHistoricalCount", "legacyReportedBlockedCount", "dependencyHeads"])) return false;
       if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire2)) return false;
       if (value.counts !== void 0 && (!isRecord2(value.counts) || !Object.values(value.counts).every(isNonNegativeInt2))) return false;
+      if (value.legacyReportedBlockedCount !== void 0 && !isNonNegativeInt2(value.legacyReportedBlockedCount)) return false;
       if (value.oldHistoricalCount !== void 0 && !isNonNegativeInt2(value.oldHistoricalCount)) return false;
       if (value.dependencyHeads !== void 0 && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire2))) return false;
       return true;
@@ -43569,7 +43570,7 @@ ${error.message || ""}`;
         counts.failed = (counts.failed ?? 0) - proven.size;
         counts.blocked = (counts.blocked ?? 0) + proven.size;
       }
-      return { counts, oldHistoricalCount };
+      return { counts, oldHistoricalCount, ...proven.size ? { legacyReportedBlockedCount: proven.size } : {} };
     }
     function getQueueDependencyHeads(self, meshId, ids) {
       const unique = [...new Set(ids.filter((id4) => typeof id4 === "string" && id4))];
@@ -62152,9 +62153,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       return MeshRuntimeStore.getInstance().getQueueEntries(meshId, ["pending"]).some((entry) => Array.isArray(entry.dependsOn) && entry.dependsOn.includes(taskId));
     }
     function getMeshQueueStats(meshId) {
-      const rows = MeshRuntimeStore.getInstance().getQueueStatsByStatus(meshId);
-      const counts = {};
-      for (const r of rows) counts[r.status] = r.count;
+      const { counts, legacyReportedBlockedCount } = MeshRuntimeStore.getInstance().getQueueStatusCounts(meshId);
       const pending = counts["pending"] ?? 0;
       const assigned = counts["assigned"] ?? 0;
       const completed = counts["completed"] ?? 0;
@@ -62173,6 +62172,7 @@ CREATE TABLE IF NOT EXISTS sq_archive (
         cancelled,
         activeCounts: { pending, assigned },
         historicalCounts: { completed, blocked, failed, cancelled },
+        ...legacyReportedBlockedCount ? { legacyReportedBlockedCount } : {},
         activeAssignments: MeshRuntimeStore.getInstance().getActiveAssignmentDetails(meshId)
       };
     }
@@ -148204,18 +148204,24 @@ ${output}` : "";
       const req = decodeQueueQueryRequest(args);
       if (!req) return badRequest("queue_query");
       try {
-        let entries = getQueue(req.meshId, req.statuses ? { status: [...req.statuses] } : void 0);
+        const readStatuses = req.view && req.statuses?.some((status) => status === "blocked" || status === "failed") ? [.../* @__PURE__ */ new Set([...req.statuses, "failed", "blocked"])] : req.statuses;
+        let entries = getQueue(req.meshId, readStatuses ? { status: [...readStatuses] } : void 0);
+        if (req.view) {
+          entries = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), req.meshId, entries);
+          if (req.statuses?.length) entries = entries.filter((entry) => req.statuses.includes(entry.status));
+        }
         if (req.taskId) entries = entries.filter((e) => e.id === req.taskId);
         const holdStore = MeshRuntimeStore.getInstance();
         const blockerIds = [...new Set(entries.flatMap((entry) => entry.hold?.blockingTaskIds || []))];
         const holdQueue = blockerIds.map((id4) => holdStore.findQueueEntryById(req.meshId, id4)).filter((entry) => entry !== null);
-        const wire = req.view ? projectWorkerOutcomeViews(holdStore, req.meshId, entries).map((e) => ({ ...summarizeQueueEntryInputForView2(e), ...e.hold ? { hold: queueTaskHoldView(e, holdQueue) } : {} })) : entries;
+        const wire = req.view ? entries.map((e) => ({ ...summarizeQueueEntryInputForView2(e), ...e.hold ? { hold: queueTaskHoldView(e, holdQueue) } : {} })) : entries;
         const response = { entries: wire };
         const store2 = req.withCounts || req.withDependencyHeads ? MeshRuntimeStore.getInstance() : null;
         if (store2 && req.withCounts) {
           const olderThanIso = req.historicalOlderThanMs !== void 0 ? new Date(Date.now() - req.historicalOlderThanMs).toISOString() : void 0;
-          const { counts, oldHistoricalCount } = store2.getQueueStatusCounts(req.meshId, olderThanIso);
+          const { counts, oldHistoricalCount, legacyReportedBlockedCount } = store2.getQueueStatusCounts(req.meshId, olderThanIso);
           response.counts = counts;
+          if (legacyReportedBlockedCount) response.legacyReportedBlockedCount = legacyReportedBlockedCount;
           if (olderThanIso) response.oldHistoricalCount = oldHistoricalCount;
         }
         if (store2 && req.withDependencyHeads) {
@@ -152702,11 +152708,11 @@ ${output}` : "";
         try {
           const { getMeshQueueStats: getMeshQueueStats2, getQueue: getQueue2, describeTaskDependencyState: describeTaskDependencyState22, summarizeQueueEntryInputForView: summarizeQueueEntryInputForView22 } = await Promise.resolve().then(() => (init_mesh_work_queue(), mesh_work_queue_exports));
           const status = Array.isArray(args?.status) ? args.status.map((s2) => typeof s2 === "string" ? s2.trim() : "").filter(Boolean) : void 0;
-          const rawQueue = getQueue2(meshId, { status });
-          const allQueue = getQueue2(meshId);
+          const rawQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId)).filter((task) => !status?.length || status.includes(task.status));
+          const allQueue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, getQueue2(meshId));
           const statusById = new Map(allQueue.map((task) => [task.id, task.status]));
           const depMetaById = new Map(allQueue.map((task) => [task.id, task]));
-          const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map(summarizeQueueEntryInputForView22).map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
+          const queue = rawQueue.map(summarizeQueueEntryInputForView22).map((task) => Array.isArray(task.dependsOn) && task.dependsOn.length > 0 ? { ...task, ...describeTaskDependencyState22(task, statusById, depMetaById) } : task);
           const summary = getMeshQueueStats2(meshId);
           return {
             success: true,
@@ -195680,9 +195686,10 @@ function isQueueDependencyHeadWire(value) {
   return isRecord(value) && hasOnlyKeys2(value, ["id", "status", "cancelReason"]) && typeof value.id === "string" && typeof value.status === "string" && (value.cancelReason === void 0 || typeof value.cancelReason === "string");
 }
 function isQueueQueryResponse(value) {
-  if (!isRecord(value) || !hasOnlyKeys2(value, ["entries", "counts", "oldHistoricalCount", "dependencyHeads"])) return false;
+  if (!isRecord(value) || !hasOnlyKeys2(value, ["entries", "counts", "oldHistoricalCount", "legacyReportedBlockedCount", "dependencyHeads"])) return false;
   if (!Array.isArray(value.entries) || !value.entries.every(isQueueEntryWire)) return false;
   if (value.counts !== void 0 && (!isRecord(value.counts) || !Object.values(value.counts).every(isNonNegativeInt))) return false;
+  if (value.legacyReportedBlockedCount !== void 0 && !isNonNegativeInt(value.legacyReportedBlockedCount)) return false;
   if (value.oldHistoricalCount !== void 0 && !isNonNegativeInt(value.oldHistoricalCount)) return false;
   if (value.dependencyHeads !== void 0 && (!Array.isArray(value.dependencyHeads) || !value.dependencyHeads.every(isQueueDependencyHeadWire))) return false;
   return true;
@@ -196587,6 +196594,7 @@ async function readQueueActiveView(ctx) {
     activeRows: res.entries,
     counts: res.counts ?? {},
     oldHistoricalCount: res.oldHistoricalCount ?? 0,
+    ...res.legacyReportedBlockedCount ? { legacyReportedBlockedCount: res.legacyReportedBlockedCount } : {},
     dependencyHeads: [...res.dependencyHeads ?? []]
   };
 }
@@ -202162,7 +202170,7 @@ async function meshViewQueue(ctx, args) {
     const statusFilter = sanitizeQueueStatusFilter(args.status);
     const view = normalizeQueueViewMode(args.view);
     const activeView = compact ? await readQueueActiveView(ctx) : null;
-    const rawQueue = activeView ? activeView.activeRows : await readQueueFromDaemon(ctx);
+    const rawQueue = activeView ? activeView.activeRows : await readQueueFromDaemon(ctx, { view: true });
     const dependencyRows = activeView ? [...rawQueue, ...activeView.dependencyHeads] : rawQueue;
     const statusById = new Map(dependencyRows.map((task) => [task.id, task.status]));
     const depMetaById = new Map(dependencyRows.map((task) => [task.id, task]));
@@ -202221,11 +202229,12 @@ async function meshViewQueue(ctx, args) {
     return JSON.stringify({
       success: true,
       payloadMode: compact ? "compact" : "full",
+      ...activeView?.legacyReportedBlockedCount ? { legacyReportedBlockedCount: activeView.legacyReportedBlockedCount, legacyStatusProvenance: "worker_tool_report; stored failed rows unchanged" } : {},
       sourceOfTruth: {
         kind: "mesh_work_queue_file",
         activeStatuses: ["pending", "assigned"],
-        historicalStatuses: ["completed", "failed", "cancelled"],
-        notes: "pending/assigned are active work; completed/failed/cancelled are historical ledger records and never stale assignments."
+        historicalStatuses: ["completed", "blocked", "failed", "cancelled"],
+        notes: "pending/assigned are active work; completed/blocked/failed/cancelled are historical ledger records and never stale assignments."
       },
       filter: {
         view,
@@ -202233,7 +202242,7 @@ async function meshViewQueue(ctx, args) {
         filtered
       },
       queue: visibleQueue,
-      ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
+      ...compact ? { historicalRowsOmitted: true, historicalRowsHint: "Completed/blocked/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows." } : {},
       ...compact && compactQueueResult.omitted > 0 ? {
         activeRowsOmitted: compactQueueResult.omitted,
         activeRowsHint: `Showing the first ${COMPACT_MAX_ACTIVE_QUEUE_ROWS} active rows (per-row messages truncated). ${compactQueueResult.omitted} more active row(s) omitted \u2014 see activeCount/activeCounts for the complete total or use verbose=true.`

@@ -33,7 +33,7 @@ export async function meshViewQueue(
         const activeView = compact ? await readQueueActiveView(ctx) : null;
         const rawQueue = activeView
             ? activeView.activeRows as unknown as MeshWorkQueueEntry[]
-            : await readQueueFromDaemon(ctx);
+            : await readQueueFromDaemon(ctx, { view: true });
         // M1: annotate dependency state (waitingOn, dependenciesSatisfied) at view time.
         const dependencyRows: Array<{ id: string; status: string; cancelReason?: string }> = activeView
             ? [...rawQueue, ...activeView.dependencyHeads]
@@ -126,7 +126,7 @@ export async function meshViewQueue(
         const requestedHistoricalRows = queue.some((task: any) => HISTORICAL_QUEUE_STATUSES.has(String(task?.status || '')));
         const pollingGuidance = buildActiveWorkPollingGuidance(activeWorkEvidence.summary);
 
-        // Compact mode: completed/failed/cancelled historical row arrays are the main
+        // Compact mode: completed/blocked/failed/cancelled historical row arrays are the main
         // payload bloat (mesh_view_queue has overflowed 250k chars on busy meshes).
         // Drop them in favor of the status counts that summary/visibleSummary already
         // carry, but keep pending/assigned active rows — those drive coordinator
@@ -164,11 +164,12 @@ export async function meshViewQueue(
         return JSON.stringify({
             success: true,
             payloadMode: compact ? 'compact' : 'full',
+            ...(activeView?.legacyReportedBlockedCount ? { legacyReportedBlockedCount: activeView.legacyReportedBlockedCount, legacyStatusProvenance: 'worker_tool_report; stored failed rows unchanged' } : {}),
             sourceOfTruth: {
                 kind: 'mesh_work_queue_file',
                 activeStatuses: ['pending', 'assigned'],
-                historicalStatuses: ['completed', 'failed', 'cancelled'],
-                notes: 'pending/assigned are active work; completed/failed/cancelled are historical ledger records and never stale assignments.',
+                historicalStatuses: ['completed', 'blocked', 'failed', 'cancelled'],
+                notes: 'pending/assigned are active work; completed/blocked/failed/cancelled are historical ledger records and never stale assignments.',
             },
             filter: {
                 view,
@@ -176,7 +177,7 @@ export async function meshViewQueue(
                 filtered,
             },
             queue: visibleQueue,
-            ...(compact ? { historicalRowsOmitted: true, historicalRowsHint: 'Completed/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows.' } : {}),
+            ...(compact ? { historicalRowsOmitted: true, historicalRowsHint: 'Completed/blocked/failed/cancelled rows are omitted in compact mode; see historicalCounts. Call mesh_view_queue with verbose=true (or view=historical, compact=false) for full rows.' } : {}),
             ...(compact && compactQueueResult.omitted > 0 ? {
                 activeRowsOmitted: compactQueueResult.omitted,
                 activeRowsHint: `Showing the first ${COMPACT_MAX_ACTIVE_QUEUE_ROWS} active rows (per-row messages truncated). ${compactQueueResult.omitted} more active row(s) omitted — see activeCount/activeCounts for the complete total or use verbose=true.`,

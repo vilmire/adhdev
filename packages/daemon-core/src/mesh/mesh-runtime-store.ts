@@ -724,7 +724,7 @@ export class MeshRuntimeStore {
     }
 
     /** Whole-queue per-status counts (+ terminal rows older than `olderThanIso`) — columns only. */
-    getQueueStatusCounts(meshId: string, olderThanIso?: string): { counts: Record<string, number>; oldHistoricalCount: number } {
+    getQueueStatusCounts(meshId: string, olderThanIso?: string): { counts: Record<string, number>; oldHistoricalCount: number; legacyReportedBlockedCount?: number } {
         return getQueueStatusCountsImpl(this, meshId, olderThanIso);
     }
 

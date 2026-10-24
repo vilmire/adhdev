@@ -451,6 +451,8 @@ export interface RepoMeshQueueTask {
 }
 
 export interface RepoMeshQueueSummary {
+    /** Included in blocked; derived from matching legacy worker reports, with stored failed rows unchanged. */
+    legacyReportedBlockedCount?: number;
     total: number;
     active: number;
     historical: number;

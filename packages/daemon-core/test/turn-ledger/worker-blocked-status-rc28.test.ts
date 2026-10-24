@@ -28,6 +28,8 @@ vi.mock('../../src/config/mesh-config.js', () => ({
     listMeshes: vi.fn(() => [] as any[]),
 }));
 
+import { meshStoreIpcHandlers } from '../../src/commands/low-family/mesh-store-ipc.js';
+import { TURN_IPC_PROTOCOL_VERSION } from '@adhdev/mesh-shared';
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store.js';
 import { __resetMeshRuntimeStoreForTests, enqueueTask, getQueue } from '../../src/mesh/mesh-work-queue.js';
 import { createMeshRuntimeTurnLedger } from '../../src/mesh/turn-ledger/runtime-ledger.js';
@@ -169,7 +171,11 @@ describe('RC28 recovery and compatibility in an isolated fixture database', () =
         const view = projectWorkerOutcomeViews(store, mesh, [store.findQueueEntryById(mesh, task.id)!])[0] as any;
         expect(view).toMatchObject({ status: 'blocked', statusProvenance: { storedStatus: 'failed', derivedFrom: 'worker_tool_report', attemptId: ref.attemptRef.attemptId, outputVersion: 1 } });
         expect(getMeshQueueStats(mesh)).toMatchObject({ failed: 0, blocked: 1, active: 0 });
-        expect(store.getQueueStatusCounts(mesh).counts).toMatchObject({ failed: 0, blocked: 1 });
+        expect(store.getQueueStatusCounts(mesh)).toMatchObject({ counts: { failed: 0, blocked: 1 }, legacyReportedBlockedCount: 1 });
+        const query = (statuses: string[], view: boolean) => meshStoreIpcHandlers.queue_query({} as any, { v: TURN_IPC_PROTOCOL_VERSION, meshId: mesh, statuses, view, withCounts: true });
+        expect(await query(['blocked'], true)).toMatchObject({ success: true, entries: [{ id: task.id, status: 'blocked', statusProvenance: { storedStatus: 'failed' } }], legacyReportedBlockedCount: 1 });
+        expect(await query(['failed'], true)).toMatchObject({ success: true, entries: [] });
+        expect(await query(['failed'], false)).toMatchObject({ success: true, entries: [{ id: task.id, status: 'failed' }] });
         expect(summarizeMissionTasks(mesh, 'mission')).toMatchObject({ failed: 0, blocked: 1 });
         expect(readTurnTerminalViews(mesh)[0]).toMatchObject({ kind: 'task_blocked', payload: { outcome: 'blocked', statusProvenance: { storedStatus: 'failed' } } });
         expect(getLocalRecordSummary(mesh)).toMatchObject({ taskFailed: 0, taskBlocked: 1 });
