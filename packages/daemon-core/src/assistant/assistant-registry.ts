@@ -607,16 +607,20 @@ export class AssistantRegistry {
      */
     reconcileOwnerBinding(
         selfDaemonId: string,
-        opts?: { bumpRevision?: boolean; forceNewRevision?: boolean; recoverFollowed?: boolean; now?: string },
+        opts?: number | { bumpRevision?: boolean; forceNewRevision?: boolean; bindingRevision?: number; recoverFollowed?: boolean; now?: string },
     ): AssistantOwnerBindingReceipt {
         const canonicalSelf = canonicalDaemonId(selfDaemonId);
         if (!canonicalSelf) {
             throw new Error(`Invalid selfDaemonId for assistant owner binding: ${String(selfDaemonId)}`);
         }
-        const nowIso = opts?.now ?? new Date().toISOString();
+        const optObj = typeof opts === 'object' && opts !== null ? opts : undefined;
+        const explicitRevision = typeof opts === 'number'
+            ? (isPositiveSafeInt(opts) ? opts : undefined)
+            : (optObj && isPositiveSafeInt(optObj.bindingRevision) ? optObj.bindingRevision : undefined);
+        const nowIso = optObj?.now ?? new Date().toISOString();
         const base = this.ensureBaseEntry(Date.now());
         const existing = base.ownerBinding;
-        const bump = opts?.bumpRevision === true || opts?.forceNewRevision === true;
+        const bump = optObj?.bumpRevision === true || optObj?.forceNewRevision === true;
         const followedEntries = Object.values(base.followedRemoteProjects ?? {});
         const maxFollowedRevision = followedEntries.reduce(
             (max, e) => (e && isPositiveSafeInt(e.bindingRevision) && e.bindingRevision > max ? e.bindingRevision : max),
@@ -627,14 +631,17 @@ export class AssistantRegistry {
             && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT
             && daemonIdsEquivalent(existing.daemonId, canonicalSelf),
         );
-        const nextRevision = bump
-            ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1
-            : sameDaemon
-                ? existing!.bindingRevision
-                : maxFollowedRevision > 0
-                    ? maxFollowedRevision
-                    : (existing?.bindingRevision ?? 0) + 1;
-        const receipt: AssistantOwnerBindingReceipt = sameDaemon && !bump
+        const nextRevision = explicitRevision !== undefined
+            ? explicitRevision
+            : bump
+                ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1
+                : sameDaemon
+                    ? existing!.bindingRevision
+                    : maxFollowedRevision > 0
+                        ? maxFollowedRevision
+                        : (existing?.bindingRevision ?? 0) + 1;
+        const revisionChanged = !existing || existing.bindingRevision !== nextRevision;
+        const receipt: AssistantOwnerBindingReceipt = sameDaemon && !bump && !revisionChanged
             ? existing!
             : {
                 accountSlot: ASSISTANT_ACCOUNT_SLOT,
@@ -643,7 +650,7 @@ export class AssistantRegistry {
                 boundAt: nowIso,
             };
         let nextFollowed = base.followedRemoteProjects;
-        if (nextFollowed && opts?.recoverFollowed !== false) {
+        if (nextFollowed && optObj?.recoverFollowed !== false) {
             let recoveredAny = false;
             const copy: Record<string, FollowedRemoteProjectEntry> = { ...nextFollowed };
             for (const [k, entry] of Object.entries(copy)) {
@@ -668,7 +675,7 @@ export class AssistantRegistry {
             }
             if (recoveredAny) nextFollowed = copy;
         }
-        if (sameDaemon && !bump && nextFollowed === base.followedRemoteProjects) {
+        if (sameDaemon && !bump && !revisionChanged && nextFollowed === base.followedRemoteProjects) {
             return existing!;
         }
         this.write({

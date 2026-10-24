@@ -108,12 +108,25 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
             `).run(cursor, coordinatorSessionId ?? null, meshId);
             return;
         }
+        if (coordinatorSessionId === null) {
+            this.db.prepare(`
+                UPDATE assistant_threads
+                SET last_cursor = ?,
+                    coordinator_session_id = NULL
+                WHERE mesh_id = ?
+            `).run(cursor, meshId);
+            return;
+        }
         this.db.prepare(`
             UPDATE assistant_threads
-            SET last_cursor = COALESCE(?, last_cursor),
+            SET last_cursor = CASE
+                    WHEN ? IS NOT NULL THEN ?
+                    WHEN ? IS NOT NULL AND (coordinator_session_id IS NULL OR coordinator_session_id != ?) THEN NULL
+                    ELSE last_cursor
+                END,
                 coordinator_session_id = COALESCE(?, coordinator_session_id)
             WHERE mesh_id = ?
-        `).run(cursor, coordinatorSessionId ?? null, meshId);
+        `).run(cursor, cursor, coordinatorSessionId ?? null, coordinatorSessionId ?? null, coordinatorSessionId ?? null, meshId);
     }
 
     closeThread(meshId: string, at: number = Date.now()): void {

@@ -775,6 +775,8 @@ export function followerStatusView(
         : null;
     const coord = readText(raw.coordinator);
     const coordinator: CoordinatorState = coord === 'idle' || coord === 'working' || coord === 'waiting' ? coord : 'none';
+    const rawCoordinatorSessionId = readText(raw.coordinatorSessionId);
+    const coordinatorSessionId = coordinator !== 'none' && rawCoordinatorSessionId ? rawCoordinatorSessionId : null;
     return {
         name: readText(raw.name) || readText(mesh.name),
         repo: sanitizeRemoteRepoIdentity(rawRepo),
@@ -788,6 +790,7 @@ export function followerStatusView(
         failedTasks: queue ? queue.failed : null,
         pendingApprovals: typeof raw.pendingApprovals === 'number' && Number.isFinite(raw.pendingApprovals) ? raw.pendingApprovals : 0,
         coordinator,
+        coordinatorSessionId,
         threadOpen: null,
         lastRelayAt: null,
         ...(staleMissions.length > 0 ? { staleMissions } : {}),

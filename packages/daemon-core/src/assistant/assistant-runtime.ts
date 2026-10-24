@@ -431,13 +431,23 @@ export function wireAssistantRuntime(
             if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str(code) || 'host_refused' });
         },
         relay,
-        onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed) => {
-            store.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
+        onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed, opts) => {
+            store.setThreadCursor?.(meshId, cursor, coordinatorSessionId, opts);
             const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
             if (followed) {
+                const nextCoordinatorSessionId = coordinatorSessionId !== undefined
+                    ? (coordinatorSessionId !== null
+                        ? coordinatorSessionId
+                        : (observed && observed.coordinatorMissing === false ? (followed.coordinatorSessionId ?? null) : null))
+                    : (observed?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null);
+                const prevCoordinatorSessionId = followed.coordinatorSessionId ?? null;
+                const sessionChanged = Boolean(
+                    opts?.reset
+                    || (prevCoordinatorSessionId !== nextCoordinatorSessionId && (prevCoordinatorSessionId !== null || nextCoordinatorSessionId !== null)),
+                );
                 registry.updateFollowedRemoteProject(followed.key, {
-                    lastCursor: cursor ?? followed.lastCursor ?? null,
-                    coordinatorSessionId: coordinatorSessionId ?? (observed?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null),
+                    lastCursor: cursor ?? (sessionChanged || nextCoordinatorSessionId === null ? null : followed.lastCursor ?? null),
+                    coordinatorSessionId: nextCoordinatorSessionId,
                     ...(observed
                         ? {
                             lastObserved: {

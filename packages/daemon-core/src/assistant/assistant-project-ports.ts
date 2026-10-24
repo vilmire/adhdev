@@ -121,7 +121,7 @@ export interface AssistantProjectPorts {
     /** Mark a followed remote project as revoked by the host. */
     markFollowedRemoteRevoked?(key: string, reason?: string): void;
     /** Verify local durable owner-binding receipt for this assistant daemon. */
-    verifyOwnerBinding?(): { ok: true } | { ok: false; code: string; error: string };
+    verifyOwnerBinding?(): { ok: true; bindingRevision?: number } | { ok: false; code: string; error: string };
     /**
      * Ask the hosts of member meshes known here only by id for their name /
      * repoIdentity (member-meshes.ts). Bounded; never throws. Optional (fakes).
@@ -330,7 +330,9 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         },
         verifyOwnerBinding: () => {
             const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);
-            return v.ok ? { ok: true } : { ok: false, code: v.code, error: v.error };
+            return v.ok
+                ? { ok: true, bindingRevision: v.receipt?.bindingRevision ?? v.binding?.bindingRevision }
+                : { ok: false, code: v.code, error: v.error };
         },
         refreshMemberMeshes: () => refreshMemberMeshDescriptors(svc.listMeshes(), ctx.transport ?? {}),
         callHost: (target, op, args) => callRemoteHost(ctx.transport ?? {}, target, op, args),
