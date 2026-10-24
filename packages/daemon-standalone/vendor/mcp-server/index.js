@@ -93605,10 +93605,12 @@ ${result.stderr}`, result.code);
             if (!canonicalSelf) {
               throw new Error(`Invalid selfDaemonId for assistant owner binding: ${String(selfDaemonId)}`);
             }
-            const nowIso = opts?.now ?? (/* @__PURE__ */ new Date()).toISOString();
+            const optObj = typeof opts === "object" && opts !== null ? opts : void 0;
+            const explicitRevision = typeof opts === "number" ? isPositiveSafeInt(opts) ? opts : void 0 : optObj && isPositiveSafeInt(optObj.bindingRevision) ? optObj.bindingRevision : void 0;
+            const nowIso = optObj?.now ?? (/* @__PURE__ */ new Date()).toISOString();
             const base = this.ensureBaseEntry(Date.now());
             const existing = base.ownerBinding;
-            const bump = opts?.bumpRevision === true || opts?.forceNewRevision === true;
+            const bump = optObj?.bumpRevision === true || optObj?.forceNewRevision === true;
             const followedEntries = Object.values(base.followedRemoteProjects ?? {});
             const maxFollowedRevision = followedEntries.reduce(
               (max, e) => e && isPositiveSafeInt(e.bindingRevision) && e.bindingRevision > max ? e.bindingRevision : max,
@@ -93617,15 +93619,16 @@ ${result.stderr}`, result.code);
             const sameDaemon2 = Boolean(
               existing && existing.accountSlot === ASSISTANT_ACCOUNT_SLOT && daemonIdsEquivalent4(existing.daemonId, canonicalSelf)
             );
-            const nextRevision = bump ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1 : sameDaemon2 ? existing.bindingRevision : maxFollowedRevision > 0 ? maxFollowedRevision : (existing?.bindingRevision ?? 0) + 1;
-            const receipt = sameDaemon2 && !bump ? existing : {
+            const nextRevision = explicitRevision !== void 0 ? explicitRevision : bump ? Math.max(existing?.bindingRevision ?? 0, maxFollowedRevision) + 1 : sameDaemon2 ? existing.bindingRevision : maxFollowedRevision > 0 ? maxFollowedRevision : (existing?.bindingRevision ?? 0) + 1;
+            const revisionChanged = !existing || existing.bindingRevision !== nextRevision;
+            const receipt = sameDaemon2 && !bump && !revisionChanged ? existing : {
               accountSlot: ASSISTANT_ACCOUNT_SLOT,
               daemonId: canonicalSelf,
               bindingRevision: nextRevision,
               boundAt: nowIso
             };
             let nextFollowed = base.followedRemoteProjects;
-            if (nextFollowed && opts?.recoverFollowed !== false) {
+            if (nextFollowed && optObj?.recoverFollowed !== false) {
               let recoveredAny = false;
               const copy = { ...nextFollowed };
               for (const [k, entry] of Object.entries(copy)) {
@@ -93646,7 +93649,7 @@ ${result.stderr}`, result.code);
               }
               if (recoveredAny) nextFollowed = copy;
             }
-            if (sameDaemon2 && !bump && nextFollowed === base.followedRemoteProjects) {
+            if (sameDaemon2 && !bump && !revisionChanged && nextFollowed === base.followedRemoteProjects) {
               return existing;
             }
             this.write({
@@ -103008,7 +103011,7 @@ ${asText(streams.stderr)}
         },
         verifyOwnerBinding: () => {
           const v = lazy.assistantRegistry().verifyLocalOwnerBinding(ctx.selfDaemonId);
-          return v.ok ? { ok: true } : { ok: false, code: v.code, error: v.error };
+          return v.ok ? { ok: true, bindingRevision: v.receipt?.bindingRevision ?? v.binding?.bindingRevision } : { ok: false, code: v.code, error: v.error };
         },
         refreshMemberMeshes: () => refreshMemberMeshDescriptors(svc.listMeshes(), ctx.transport ?? {}),
         callHost: (target, op, args) => callRemoteHost(ctx.transport ?? {}, target, op, args),
@@ -104904,8 +104907,9 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
           setThreadCursor(meshId, cursor, coordinatorSessionId, opts) {
             const t = this.threads.get(meshId);
             if (!t) return;
-            const sessionChanged = coordinatorSessionId !== void 0 && t.coordinatorSessionId !== void 0 && t.coordinatorSessionId !== coordinatorSessionId;
-            if (opts?.reset || sessionChanged && cursor === null) {
+            const prevSessionId = t.coordinatorSessionId ?? null;
+            const sessionChanged = coordinatorSessionId !== void 0 && prevSessionId !== coordinatorSessionId && (prevSessionId !== null || coordinatorSessionId !== null);
+            if (opts?.reset || coordinatorSessionId === null || sessionChanged && cursor === null) {
               if (cursor !== null) t.lastCursor = cursor;
               else delete t.lastCursor;
               if (coordinatorSessionId !== void 0 && coordinatorSessionId !== null) t.coordinatorSessionId = coordinatorSessionId;
@@ -105109,7 +105113,7 @@ CREATE TABLE IF NOT EXISTS assistant_terminal_inflight (
             UPDATE assistant_threads
             SET last_cursor = CASE
                     WHEN ? IS NOT NULL THEN ?
-                    WHEN ? IS NOT NULL AND coordinator_session_id IS NOT NULL AND coordinator_session_id != ? THEN NULL
+                    WHEN ? IS NOT NULL AND (coordinator_session_id IS NULL OR coordinator_session_id != ?) THEN NULL
                     ELSE last_cursor
                 END,
                 coordinator_session_id = COALESCE(?, coordinator_session_id)
@@ -107228,6 +107232,11 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (followedRemote && out.kind === "refused" && out.code === "host_revoked") {
         ports?.markFollowedRemoteRevoked?.(followedRemote.key, out.code);
         ports?.relay.closeThread?.(where.meshId, { suppressPending: true });
+      } else if (followedRemote && ports && out.kind === "refused" && out.code === "coordinator_replaced") {
+        const active = verifyActiveFollowedRemoteEntry(ports, followedRemote, remote);
+        if (active) {
+          ports.updateFollowedRemoteObservation?.(active.key, { lastErrorCode: "coordinator_replaced" });
+        }
       }
       if (out.kind === "unreachable") {
         return fail4("project_unreachable", out.error, { ...where, host: remote.label, reason: out.reason });
@@ -107256,6 +107265,13 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       if (!daemonIdsEquivalent4(current4.hostDaemonId, snapshot.hostDaemonId) || current4.meshId !== snapshot.meshId) return null;
       if (current4.accountSlot !== snapshot.accountSlot) return null;
       if (current4.bindingRevision !== snapshot.bindingRevision || current4.grantRevision !== snapshot.grantRevision) return null;
+      if (binding && binding.ok && typeof binding.bindingRevision === "number" && binding.bindingRevision !== current4.bindingRevision) return null;
+      if (ports.followedRemoteHost) {
+        const currentHost = ports.followedRemoteHost(current4);
+        if (currentHost.followerAccess?.localBindingError) return null;
+        if (!currentHost.hostDaemonId || !daemonIdsEquivalent4(currentHost.hostDaemonId, snapshot.hostDaemonId)) return null;
+        if (currentHost.hostMeshId && currentHost.hostMeshId !== snapshot.meshId) return null;
+      }
       if (response) {
         if (typeof response.bindingRevision === "number" && response.bindingRevision !== snapshot.bindingRevision) return null;
         if (typeof response.grantRevision === "number" && response.grantRevision !== snapshot.grantRevision) return null;
@@ -107276,9 +107292,9 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         patch.coordinatorSessionId = nextSessionId;
         if (sessionChanged) {
           patch.lastCursor = null;
-          if (current4.lastErrorCode === "coordinator_replaced") {
-            patch.lastErrorCode = void 0;
-          }
+        }
+        if (current4.lastErrorCode === "coordinator_replaced") {
+          patch.lastErrorCode = void 0;
         }
       }
       if (observation.coordinatorState !== void 0 || observation.coordinatorMissing !== void 0) {
@@ -107294,6 +107310,53 @@ ${supplement}`] : [], ...blocks].join("\n\n");
       }
       if (sessionChanged) {
         ports.relay.remoteSent?.(current4.meshId, null, nextSessionId, { reset: true });
+      }
+    }
+    async function reconcileFollowedRemoteAfterSendRefusal(ports, p) {
+      if (!verifyActiveFollowedRemoteEntry(ports, p.followedRemote, p.remote)) return;
+      const statusOut = await callRemote(ports, p, "status", {});
+      if (statusOut.ok) {
+        const rawBody = remoteBody(statusOut);
+        const body = followerStatusView(rawBody, {
+          id: p.mesh.id,
+          name: p.mesh.name,
+          repoIdentity: p.followedRemote.sanitizedRepoIdentity || str10(rawBody.repo)
+        });
+        const coordState = str10(body.coordinator) || "none";
+        const statusSessionId = str10(body.coordinatorSessionId) || null;
+        const hasAuthoritativeSession = coordState === "none" || statusSessionId !== null;
+        if (hasAuthoritativeSession) {
+          reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
+            coordinatorSessionId: coordState === "none" ? null : statusSessionId,
+            coordinatorState: coordState,
+            coordinatorMissing: coordState === "none",
+            response: rawBody
+          });
+          return;
+        }
+      } else if (statusOut.kind === "unreachable" || SEND_LOOKUP_ABORT_REFUSAL_CODES.has(statusOut.code)) {
+        return;
+      }
+      const readOut = await callRemote(ports, p, "read", { tail: 1 });
+      if (!readOut.ok) return;
+      const rawRead = remoteBody(readOut);
+      if (rawRead.reportCursor !== void 0 || rawRead.attemptId !== void 0 || rawRead.taskId !== void 0) return;
+      const readSessionId = str10(rawRead.coordinatorSessionId) || null;
+      if (rawRead.live === true && readSessionId) {
+        const prevState = p.followedRemote.lastObserved?.coordinatorState;
+        reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
+          coordinatorSessionId: readSessionId,
+          coordinatorState: prevState && prevState !== "none" && prevState !== "missing" ? prevState : "idle",
+          coordinatorMissing: false,
+          response: rawRead
+        });
+      } else if (str10(rawRead.coordinator) === "none") {
+        reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
+          coordinatorSessionId: null,
+          coordinatorState: "none",
+          coordinatorMissing: true,
+          response: rawRead
+        });
       }
     }
     async function callRemote(ports, p, op, args) {
@@ -107444,6 +107507,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
     var import_os8;
     var import_path43;
     var ASSISTANT_PROJECTS_SOURCES;
+    var SEND_LOOKUP_ABORT_REFUSAL_CODES;
     var environment;
     var projects;
     var projectStatus;
@@ -107480,6 +107544,19 @@ ${supplement}`] : [], ...blocks].join("\n\n");
         init_discover_repos();
         init_mesh_config_store();
         ASSISTANT_PROJECTS_SOURCES = ["ipc", "standalone", "p2p", "ws"];
+        SEND_LOOKUP_ABORT_REFUSAL_CODES = /* @__PURE__ */ new Set([
+          "host_revoked",
+          "remote_access_denied",
+          "remote_op_forbidden",
+          "binding_revision_stale",
+          "binding_revision_mismatch",
+          "grant_revision_stale",
+          "local_owner_binding_missing",
+          "local_owner_binding_mismatch",
+          "local_owner_binding_unreadable",
+          "assistant_owner_binding_missing",
+          "assistant_owner_binding_mismatch"
+        ]);
         environment = assistantVerb(ASSISTANT_VERB2.environment, async (ports) => {
           await ports.refreshMemberMeshes?.();
           const meshes = ports.listMeshes();
@@ -107637,20 +107714,34 @@ ${supplement}`] : [], ...blocks].join("\n\n");
           const clientId = str10(args.messageId) || (0, import_crypto36.randomUUID)();
           const attached = composed.attached.length > 0 ? { attachedSkills: composed.attached } : {};
           if (p.remote) {
-            const expectedCoordinatorSessionId = str10(args.expectedCoordinatorSessionId) || str10(p.followedRemote?.coordinatorSessionId);
+            const explicitExpected = str10(args.expectedCoordinatorSessionId);
+            const expectedCoordinatorSessionId = explicitExpected || str10(p.followedRemote?.coordinatorSessionId);
             const out = await callRemote(ports, { ...p, remote: p.remote }, "send", {
               text: composed.text,
               clientId,
               ...expectedCoordinatorSessionId ? { expectedCoordinatorSessionId } : {}
             });
-            if (!out.ok) return remoteFailure(where, p.remote, out, ports, p.followedRemote);
+            if (!out.ok) {
+              if (p.followedRemote && !explicitExpected && out.kind === "refused" && out.code === "coordinator_replaced") {
+                const rawRefusal = out.result && typeof out.result === "object" ? out.result : {};
+                if (typeof rawRefusal.originalCoordinatorSessionId !== "string") {
+                  await reconcileFollowedRemoteAfterSendRefusal(ports, {
+                    ...p,
+                    remote: p.remote,
+                    followedRemote: p.followedRemote
+                  });
+                }
+              }
+              return remoteFailure(where, p.remote, out, ports, p.followedRemote);
+            }
             const body = remoteBody(out);
             const remoteCursor = str10(body.cursor) || null;
             const remoteCoordSessionId = str10(body.coordinatorSessionId) || null;
             const activeFollowed = p.followedRemote ? verifyActiveFollowedRemoteEntry(ports, p.followedRemote, p.remote, body) : null;
             if (!p.followedRemote || activeFollowed) {
+              const prevCoordSessionId = activeFollowed?.coordinatorSessionId ?? null;
               const sessionChanged = Boolean(
-                activeFollowed?.coordinatorSessionId && remoteCoordSessionId && activeFollowed.coordinatorSessionId !== remoteCoordSessionId
+                activeFollowed && remoteCoordSessionId && prevCoordSessionId !== remoteCoordSessionId
               );
               ports.relay.openThread?.(meshId);
               if (sessionChanged && remoteCursor === null) {
@@ -109467,7 +109558,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
               signaled: prev?.signaled ?? false,
               nextAt: 0
             });
-            this.ports.onCursorUpdated?.(meshId, nextCursor, nextSessionId);
+            this.ports.onCursorUpdated?.(meshId, nextCursor, nextSessionId, void 0, opts);
           }
           /** One pass over the open remote threads that are due. Overlapping calls share the pass. */
           tick() {
@@ -109610,7 +109701,7 @@ ${supplement}`] : [], ...blocks].join("\n\n");
             });
             if (newCursor) st.cursor = newCursor;
             else if (valid.length) st.cursor = valid[valid.length - 1].attemptId;
-            else if (sessionChanged || r.coordinatorMissing === true) st.cursor = null;
+            else if (sessionChanged || !st.coordinatorSessionId && sessionId || r.coordinatorMissing === true) st.cursor = null;
             if (sessionId) st.coordinatorSessionId = sessionId;
             else if (r.coordinatorMissing === true) st.coordinatorSessionId = null;
             const coordinatorState2 = r.coordinatorMissing === true ? "missing" : r.modal === true ? "waiting_approval" : r.open === true ? "working" : sessionId ? "idle" : "missing";
@@ -111735,16 +111826,17 @@ ${defangRelayBody(text4)}`;
           if (followed) registry.updateFollowedRemoteProject(followed.key, { lastErrorCode: str14(code) || "host_refused" });
         },
         relay,
-        onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed2) => {
-          store2.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
+        onCursorUpdated: (meshId, cursor, coordinatorSessionId, observed2, opts2) => {
+          store2.setThreadCursor?.(meshId, cursor, coordinatorSessionId, opts2);
           const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === "followed");
           if (followed) {
-            const nextCoordinatorSessionId = coordinatorSessionId !== void 0 ? coordinatorSessionId ?? (observed2?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null) : observed2?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null;
+            const nextCoordinatorSessionId = coordinatorSessionId !== void 0 ? coordinatorSessionId !== null ? coordinatorSessionId : observed2 && observed2.coordinatorMissing === false ? followed.coordinatorSessionId ?? null : null : observed2?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null;
+            const prevCoordinatorSessionId = followed.coordinatorSessionId ?? null;
             const sessionChanged = Boolean(
-              followed.coordinatorSessionId && nextCoordinatorSessionId !== followed.coordinatorSessionId
+              opts2?.reset || prevCoordinatorSessionId !== nextCoordinatorSessionId && (prevCoordinatorSessionId !== null || nextCoordinatorSessionId !== null)
             );
             registry.updateFollowedRemoteProject(followed.key, {
-              lastCursor: cursor ?? (sessionChanged ? null : followed.lastCursor ?? null),
+              lastCursor: cursor ?? (sessionChanged || nextCoordinatorSessionId === null ? null : followed.lastCursor ?? null),
               coordinatorSessionId: nextCoordinatorSessionId,
               ...observed2 ? {
                 lastObserved: {

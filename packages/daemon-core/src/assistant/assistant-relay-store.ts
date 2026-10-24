@@ -205,10 +205,11 @@ export class InMemoryAssistantRelayStore implements AssistantRelayStore {
     setThreadCursor(meshId: string, cursor: string | null, coordinatorSessionId?: string | null, opts?: { reset?: boolean }): void {
         const t = this.threads.get(meshId);
         if (!t) return;
+        const prevSessionId = t.coordinatorSessionId ?? null;
         const sessionChanged = coordinatorSessionId !== undefined
-            && t.coordinatorSessionId !== undefined
-            && t.coordinatorSessionId !== coordinatorSessionId;
-        if (opts?.reset || (sessionChanged && cursor === null)) {
+            && prevSessionId !== coordinatorSessionId
+            && (prevSessionId !== null || coordinatorSessionId !== null);
+        if (opts?.reset || coordinatorSessionId === null || (sessionChanged && cursor === null)) {
             if (cursor !== null) t.lastCursor = cursor;
             else delete t.lastCursor;
             if (coordinatorSessionId !== undefined && coordinatorSessionId !== null) t.coordinatorSessionId = coordinatorSessionId;

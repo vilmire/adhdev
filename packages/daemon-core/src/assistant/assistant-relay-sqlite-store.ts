@@ -121,7 +121,7 @@ export class SqliteAssistantRelayStore implements AssistantRelayStore {
             UPDATE assistant_threads
             SET last_cursor = CASE
                     WHEN ? IS NOT NULL THEN ?
-                    WHEN ? IS NOT NULL AND coordinator_session_id IS NOT NULL AND coordinator_session_id != ? THEN NULL
+                    WHEN ? IS NOT NULL AND (coordinator_session_id IS NULL OR coordinator_session_id != ?) THEN NULL
                     ELSE last_cursor
                 END,
                 coordinator_session_id = COALESCE(?, coordinator_session_id)

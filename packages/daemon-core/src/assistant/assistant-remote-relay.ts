@@ -82,6 +82,7 @@ export interface RemoteRelayPollerPorts {
             coordinatorMissing?: boolean;
             summary?: string;
         },
+        opts?: { reset?: boolean },
     ): void;
     /** Invoked when the remote host refuses with a revocation or authority mismatch code. */
     onAccessRevoked?(meshId: string, code: string, error: string): void;
@@ -161,7 +162,7 @@ export class AssistantRemoteRelayPoller {
             signaled: prev?.signaled ?? false,
             nextAt: 0,
         });
-        this.ports.onCursorUpdated?.(meshId, nextCursor, nextSessionId);
+        this.ports.onCursorUpdated?.(meshId, nextCursor, nextSessionId, undefined, opts);
     }
 
     /** One pass over the open remote threads that are due. Overlapping calls share the pass. */
@@ -302,7 +303,7 @@ export class AssistantRemoteRelayPoller {
         // The host's newest commit becomes the cursor whether or not it was relayed.
         if (newCursor) st.cursor = newCursor;
         else if (valid.length) st.cursor = valid[valid.length - 1]!.attemptId;
-        else if (sessionChanged || r.coordinatorMissing === true) st.cursor = null;
+        else if (sessionChanged || (!st.coordinatorSessionId && sessionId) || r.coordinatorMissing === true) st.cursor = null;
         if (sessionId) st.coordinatorSessionId = sessionId;
         else if (r.coordinatorMissing === true) st.coordinatorSessionId = null;
 

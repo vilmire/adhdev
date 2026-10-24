@@ -352,4 +352,59 @@ describe('remote relay poller → AssistantRelay', () => {
         expect(h.submits[1]!.text).not.toContain('commit cursor gap');
         expect(h.submits[1]!.text).toContain('new session turn');
     });
+
+    it('noteSent with explicit null coordinatorSessionId and { reset: true } forwards reset option and clears both store and AssistantRegistry without null-coalescing fallback', async () => {
+        const { mkdtempSync, rmSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { AssistantRegistry } = await import('../../src/assistant/assistant-registry.js');
+        const { wireAssistantRuntime } = await import('../../src/assistant/assistant-runtime.js');
+
+        const tmpDir = mkdtempSync(join(tmpdir(), 'rc28-notesent-null-'));
+        try {
+            const reg = new AssistantRegistry({ configDir: tmpDir });
+            reg.reconcileOwnerBinding('daemon_mach_asst_0001');
+            const entry = reg.upsertFollowedRemoteProject({
+                hostDaemonId: 'daemon_mach_host_0001',
+                hostLabel: 'Host1',
+                meshId: MESH,
+                name: 'Blog',
+                slug: 'blog',
+                sanitizedRepoIdentity: 'github.com/acme/blog',
+                bindingRevision: 1,
+                grantRevision: 1,
+                state: 'followed',
+                coordinatorSessionId: 'coord-old',
+                lastCursor: 'plain:coord-old:turn-1',
+            });
+            const memStore = new InMemoryAssistantRelayStore();
+            memStore.openThread(MESH, Date.now());
+            memStore.setThreadCursor(MESH, 'plain:coord-old:turn-1', 'coord-old');
+            const setCursorSpy = vi.spyOn(memStore, 'setThreadCursor');
+
+            const rt = wireAssistantRuntime(
+                {
+                    instanceManager: { getInstance: () => null, getByCategory: () => [] } as any,
+                    router: { execute: async () => ({ success: true }) } as any,
+                    cliManager: { input: { isParked: () => false, submit: async () => {} } } as any,
+                    bus: { on: () => () => {} } as any,
+                    statusInstanceId: 'daemon_mach_asst_0001',
+                },
+                { registry: reg, store: memStore },
+            );
+            try {
+                rt.remotePoller.noteSent(MESH, null, null, { reset: true });
+                expect(setCursorSpy).toHaveBeenLastCalledWith(MESH, null, null, { reset: true });
+                const afterNoteSent = reg.getFollowedRemoteProject(entry.key);
+                expect(afterNoteSent?.coordinatorSessionId).toBeNull();
+                expect(afterNoteSent?.lastCursor).toBeNull();
+                expect(memStore.openThreads()[0]?.coordinatorSessionId ?? null).toBeNull();
+                expect(memStore.openThreads()[0]?.lastCursor ?? null).toBeNull();
+            } finally {
+                rt.dispose();
+            }
+        } finally {
+            rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });
