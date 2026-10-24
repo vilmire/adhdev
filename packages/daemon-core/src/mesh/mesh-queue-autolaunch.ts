@@ -1,3 +1,7 @@
+import { realpathSync } from 'node:fs';
+import { preferEligible, pendingLaunchReservation, reviewRoutingRefusal } from './mesh-task-routing-contract.js';
+import { getMachineId } from '../config/config.js';
+import { currentPhysicalScope } from './mesh-physical-ownership.js';
 import { recordQueueTaskHold } from './mesh-queue-hold-store.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceAdmission } from '../maintenance/cooperative-gate.js';
 /**
@@ -18,7 +22,7 @@ import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceAdmis
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import { spendTaskAutoLaunchSpawnBudget, recordTaskAutoLaunchDispatchFailure } from './mesh-autolaunch-spawn-budget.js';
-import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, getQueueEntryById, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, requeueTask, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
+import { buildMeshNodeCapabilityTags, nodeSatisfiesRequiredTags, getQueue, getQueueEntryById, recordTaskAutoLaunch, isTaskReadonly, taskDependenciesSatisfied, meshTaskNotBeforeReady, meshTaskPriorityRank, parkTaskTargetPin, failRetentionExpiredParkedTask } from './mesh-work-queue.js';
 import { clearClaimDeferralForNode, noteClaimDeferredForNode, shouldRedriveDeferredClaim } from './mesh-claim-refusal.js';
 import { waitForRemoteSessionReady } from './mesh-remote-ready-wait.js';
 import { resolveProviderMaxParallel, resolveMaxReadonlyParallelTasks, resolveQuotaRoutingPolicy, resolveNodeMaxConcurrentSessions, resolveMeshPolicy } from '../repo-mesh-types.js';
@@ -33,7 +37,7 @@ import { decideSlotForModel, finalizeSlotSelection } from './slot-model-enforcem
 import { isWorkspaceAutoFastForwardInFlight, resolveAutoFastForwardPolicy } from './mesh-auto-fast-forward.js';
 import { dirtyWriteVerdict, readDirtyWriteGate } from './mesh-dirty-write-verdict.js';
 import { isActionableSkipReason, isTargetNodeTransientlyUnresolved, resolveDeadTargetVerdict, retractActionableSkipIfPreviouslyNotified, notifyCoordinatorOfActionableSkip, resolveTargetPinTtlVerdict, TARGET_SESSION_PIN_TTL_MS, TRANSIENT_TARGET_NODE_BOOTSTRAP_PENDING_REASON } from './mesh-skip-notify.js';
-import { PARKED_SKIP_REASON, noteTargetPinCleared, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
+import { PARKED_SKIP_REASON, parkExpiredTargetPin, settleParkedQueueTask, taskIsParked } from './mesh-task-parking.js';
 import { activeWriteAssignedCount, activeReadonlyAssignedCount, nodeHasActiveWriteAssignment, resolveSchedulingStrategy, orderEligibleNodes, activeProviderAssignedCount, slotCoversTaskDifficulty, slotHasCapacity, resolveLaunchAxis, taskRequiresDifficultyFloor, type RankableNode } from './mesh-scheduling-fitness.js';
 import { AUTO_LAUNCH_LEDGER_DEDUP_MAX, logAutoLaunchQuotaFallbackSuccess, recordAutoLaunchEvent } from './mesh-queue-observability.js';
 import { buildAutoLaunchRoutingDecision, type ResolvedProviderSelection } from './mesh-routing-decision.js';
@@ -342,6 +346,7 @@ function selectAutoLaunchCandidateNodes(components: DaemonComponents, meshId: st
             // dropped a target node whose identity arrived under a different form (a freshly
             // mesh_clone_node'd worktree), emptying candidateNodes and mislabelling the skip.
             if (task.targetNodeId && !meshNodeIdMatches(node, task.targetNodeId)) return false;
+            if (task.ownershipScope && !meshNodeIdMatches(node, task.ownershipScope.nodeId)) return false;
             // WTDISPATCH-FANOUT: a convergence task is base-only (it merges/pushes onto
             // base). Never auto-launch a worktree-clone session for it — that is the very
             // fan-out the claim guard refuses, so spinning the session up would only waste
@@ -431,7 +436,7 @@ function selectAutoLaunchCandidateNodes(components: DaemonComponents, meshId: st
             // include the quota-headroom spread bonus (fail-open when unset).
             { bumpCursor: true, task: { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, quotaRouting: mesh?.policy?.quotaRouting ?? null, quotaFactsContext: quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader) },
         ).map((c: RankableNode) => c.node);
-    return orderedCandidateNodes;
+    return preferEligible(orderedCandidateNodes, task.routingPreferences?.nodeIds, readMeshNodeId);
 }
 
 /**
@@ -449,6 +454,12 @@ function screenNodeForAutoLaunch(
     freshnessGate: Parameters<typeof isMeshNodeFreshEnoughToLaunch>[1],
     markSkip: AutoLaunchSkipMarker,
 ): ReturnType<typeof resolveAutoLaunchTarget> | null {
+    if (task.ownershipScope) {
+        const proof = task.ownedPaths && currentPhysicalScope(task.ownershipScope, task.ownedPaths);
+        let same = false;
+        try { same = !!proof && realpathSync.native(node.workspace) === proof.worktree && getMachineId() === proof.machineId; } catch { /* unresolved */ }
+        if (!same) { markSkip(nodeId, 'physical_context_changed'); return null; }
+    }
     const now = Date.now();
     const cooldownUntil = autoLaunchCooldownUntil.get(launchKey) || 0;
     if (cooldownUntil > 0 && now >= cooldownUntil) autoLaunchCooldownUntil.delete(launchKey);
@@ -730,7 +741,7 @@ async function resolveAutoLaunchPlan(
         markSkip(nodeId, 'owned_paths_conflict');
         return null;
     }
-    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id);
+    const resolved = await resolveUsableProvider(components, nodeId, node, meshId, task.requiredTags, { difficulty: (task as any).difficulty, requiredTags: task.requiredTags, routingPreferences: task.routingPreferences }, mesh?.policy?.quotaRouting ?? null, quotaFactsContextForLiveRouting(mesh, isLocalAutoLaunchNode, components.providerLoader), task.id, provider => reviewRoutingRefusal(task, task.review ? getQueueEntryById(meshId, task.review.sourceTaskId) : undefined, provider, isLocalAutoLaunchNode(node) ? { workspace: node.workspace, machineId: getMachineId() ?? '' } : undefined, getQueue(meshId)));
     if (!resolved.providerType) {
         // The QUOTA GATE now runs INSIDE resolveUsableProvider's selection
         // loop (a gated first-choice provider falls through to the node's
@@ -1093,6 +1104,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
     // write-task parallel cap. To prevent runaway auto-launch they get their own,
     // higher safety cap (default 2× the write cap).
     const maxReadonlyParallelTasks = resolveMaxReadonlyParallelTasks(maxParallelTasks);
+    let madeProgress = false;
     for (const task of pending) {
         // AUTOLAUNCH-TASK-RACE: take the per-TASK lock before ANY gate — everything below is
         // await-interruptible, so this is the only point that can serialize two overlapping
@@ -1113,7 +1125,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
             // claimNextQueueTask, producing orphan-session / re-launch churn. Skip it so
             // a later tick — after the dependency completes — launches it. Tasks with no
             // dependsOn pass through unchanged (predicate is true).
-            if (!taskDependenciesSatisfied(task, statusById)) {
+            if (!taskDependenciesSatisfied(task, statusById, new Map(queue.map(t => [t.id, t])))) {
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'dependencies_unsatisfied' });
                 continue;
             }
@@ -1126,12 +1138,13 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 continue;
             }
             const isReadonly = isTaskReadonly(task);
+            const reservations = getQueue(meshId).filter(t => t.id !== task.id && pendingLaunchReservation(t));
             if (isReadonly) {
-                if (activeReadonlyAssignedCount(meshId) >= maxReadonlyParallelTasks) {
+                if (activeReadonlyAssignedCount(meshId) + reservations.filter(isTaskReadonly).length >= maxReadonlyParallelTasks) {
                     markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_readonly_parallel_tasks_reached' });
                     continue;
                 }
-            } else if (activeWriteAssignedCount(meshId) >= maxParallelTasks) {
+            } else if (activeWriteAssignedCount(meshId) + reservations.filter(t => !isTaskReadonly(t)).length >= maxParallelTasks) {
                 // Write tasks are capped; skip this one but keep scanning so a later
                 // read-only task in the queue can still launch under its own cap.
                 markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'max_parallel_tasks_reached' });
@@ -1151,31 +1164,12 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 continue;
             }
             if (task.targetSessionId) {
-                // DEAD-TARGET-SELFHEAL: before the unconditional target_session_constraint skip,
-                // check whether the pinned session/node has DIED (absent from the live mesh). A
-                // hard-pinned task whose target is gone can NEVER re-enter 'assigned' (the claim
-                // gate refuses every non-matching session) and this skip fires forever with no
-                // liveness check — the triple-walled stranded-pending defect. If the pin is
-                // confirmed dead past the grace window, requeue it (clearing the dead session
-                // pin, and the node pin too when the NODE itself is gone) so a live idle session
-                // can claim it. requeueTask counts toward maxTaskRetries → bounded self-heal that
-                // auto-fails past the cap (the desired terminal state, unblocking dependents).
+                // Owner targets are hard constraints, including legacy pins. An unavailable
+                // target parks for an explicit revision/requeue; no automatic unpin/retry.
                 const deadTarget = resolveDeadTargetVerdict(components, meshId, mesh, task);
                 if (deadTarget.dead) {
-                    const requeued = requeueTask(meshId, task.id, {
-                        reason: deadTarget.reason,
-                        clearTargetSession: true,
-                        // Keep the node pin if only the SESSION died on a still-live node; clear it
-                        // when the NODE itself is absent (nothing to pin to).
-                        clearTargetNode: deadTarget.nodeDead,
-                    });
-                    if (requeued) {
-                        noteTargetPinCleared(deadTarget.reason);
-                        LOG.warn('MeshQueue', `DEAD-TARGET-SELFHEAL: task ${task.id} (mesh ${meshId}) was pinned to a dead target (${deadTarget.reason}); requeued${deadTarget.nodeDead ? ' and unpinned node' : ''} (requeueCount=${requeued.requeueCount ?? '?'}, status=${requeued.status}).`);
-                    }
-                    // Keep the skip for THIS tick (the requeue already flipped the row to
-                    // pending/failed); a later tick assigns/launches the now-unpinned task.
-                    markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'target_session_dead_requeued' });
+                    parkTaskTargetPin(meshId, task.id, { reason: `owner_hard_pin_unavailable:${deadTarget.reason}` });
+                    markAutoLaunch(meshId, task.id, { status: 'skipped', reason: 'owner_hard_pin_unavailable' });
                     continue;
                 }
                 // TARGET-PIN TTL → PARKING. The pin is NOT provably dead (a live session, or a
@@ -1193,7 +1187,7 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
             }
 
             const awaitClaim = driveAwaitClaimGuard(components, meshId, mesh, task);
-            if (awaitClaim === 'progress') return true;
+            if (awaitClaim === 'progress') { madeProgress = true; continue; }
             if (awaitClaim === 'skip') continue;
 
             // OWNED-PATHS ADMISSION BEFORE SPAWN: evaluate the shared claim-side
@@ -1247,13 +1241,15 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
                 try {
                     const plan = await resolveAutoLaunchPlan(components, meshId, mesh, task, node, nodeId, isReadonly, skippedCandidates, markSkip);
                     if (!plan) continue;
-                    return launchTarget.mode === 'remote'
+                    const launched = launchTarget.mode === 'remote'
                         ? await launchQueueTaskOnRemoteNode(components, meshId, task, node, nodeId, launchKey, launchTarget, plan)
                         : await launchQueueTaskOnLocalNode(components, meshId, task, node, nodeId, launchKey, plan);
+                    if (launched) { madeProgress = true; break; }
+                    // A failed launch on this target must not strand later eligible nodes/tasks.
                 } catch (e: any) {
                     markAutoLaunch(meshId, task.id, { status: 'failed', error: e?.message || String(e), nodeId });
                     autoLaunchCooldownUntil.set(launchKey, Date.now() + AUTO_LAUNCH_COOLDOWN_MS);
-                    return false;
+                    continue;
                 } finally {
                     autoLaunchInProgress.delete(launchKey);
                 }
@@ -1264,5 +1260,5 @@ async function autoLaunchUnderMaintenanceGate(components: DaemonComponents, mesh
             autoLaunchTaskInProgress.delete(taskLaunchKey);
         }
     }
-    return false;
+    return madeProgress;
 }

@@ -19,9 +19,10 @@ import { resolve as pathResolve } from 'path';
 import { LOG } from '../logging/logger.js';
 
 import { gitChildEnv, GIT_LOCAL_TIMEOUT_MS, GIT_NETWORK_TIMEOUT_MS } from '../git/git-locale.js';
-import { assertPublishableToPublicOss, checkPush as checkPublicPush, pushDestinations, publicPushRepoKeys, publicPushPendingCommits, loadPublicPushPatternsForRepo } from '../git/public-push-guard.mjs';
+import { checkPush as checkPublicPush, pushDestinations, publicPushRepoKeys, publicPushPendingCommits, loadPublicPushPatternsForRepo, readPushIntegrationBase } from '../git/public-push-guard.mjs';
 import { resolveWin32Executable } from '../cli-adapters/resolve-executable.js';
 import { resolveSubmoduleDefaultBranch } from './worktree-bootstrap-config.js';
+import { pushRefineryPinnedCommit } from './mesh-refine-pinned-push.js';
 
 export const GIT = process.platform === 'win32' ? resolveWin32Executable('git') : 'git';
 
@@ -742,8 +743,8 @@ export type MeshRefinePublishApprovalRequest = {
 
 /**
  * ★Owner rule: the Refinery never publishes to a PUBLIC remote's main on its own
- * authority. Returns `undefined` when the destination is private (current behaviour
- * unchanged) or when every commit that would become public is in `approvedShas`.
+ * authority. Private destinations retain their existing policy when no approval
+ * mapping was supplied. An explicit mapping constrains private destinations too.
  * Otherwise returns the request to show the owner. Fail-closed: if the push URLs
  * cannot be read the destination is treated as public. The approved set must EQUAL
  * the pending set: a missing commit was never approved, and an extra SHA means the
@@ -767,13 +768,15 @@ export async function evaluatePublicPublishApproval(
 ): Promise<MeshRefinePublishApprovalRequest | undefined> {
     const destinations = await pushDestinations(submodulePath, remoteName);
     const keyed = await publicPushRepoKeys(submodulePath, remoteName);
-    if (!destinations.isPublic) return undefined;
+    // Explicit approval mapping also fences the private root. It is authority
+    // for these exact commits, never permission to manufacture a merge SHA.
+    if (!destinations.isPublic && approvedShas === undefined) return undefined;
     const groups = new Map<string, string[]>();
     for (const { url, repoKey } of keyed) groups.set(repoKey, [...(groups.get(repoKey) || []), url]);
     const requests: MeshRefinePublishApprovalRequest[] = [];
     for (const [key, urls] of groups) {
         const request = await evaluatePublicPublishApprovalForDestinations(submodulePath, commit, branch,
-            approvalsForRepo(approvedShas, key, Math.max(publicRepoCount, groups.size)), remoteName, patternRepo, { urls, isPublic: true });
+            approvalsForRepo(approvedShas, key, Math.max(publicRepoCount, groups.size)), remoteName, patternRepo, { urls, isPublic: destinations.isPublic });
         if (request) requests.push(request);
     }
     if (!requests.length) return undefined;
@@ -823,10 +826,11 @@ async function evaluatePublicPublishApprovalForDestinations(
     const violationsBySha = new Map<string, string[]>();
     let scanError = '';
     try {
-        for (const remoteUrl of destinations?.urls || [undefined]) {
+        for (const remoteUrl of destinations.isPublic ? destinations.urls : []) {
+            const integrationBase = await readPushIntegrationBase(submodulePath, remoteUrl, `refs/heads/${branch}`);
             const { violations } = await checkPublicPush(
                 [{ localRef: commit, localSha: commit, remoteRef: `refs/heads/${branch}`, remoteSha: '0'.repeat(40) }],
-                { cwd: submodulePath, remoteName, remoteUrl, patterns: await loadPublicPushPatternsForRepo(patternRepo) },
+                { cwd: submodulePath, remoteName, remoteUrl, patterns: await loadPublicPushPatternsForRepo(patternRepo), integrationBase },
             );
             for (const v of violations) {
                 const list = violationsBySha.get(v.sha) || [];
@@ -863,26 +867,38 @@ async function evaluatePublicPublishApprovalForDestinations(
         };
     });
     const unapproved = commits.filter(c => !c.approved).map(c => c.sha);
-    if (!evidenceError && !scanError && invalidApproved.length === 0 && unapproved.length === 0 && extraApproved.length === 0) return undefined;
+    if (!evidenceError && !scanError && violationsBySha.size === 0 && invalidApproved.length === 0 && unapproved.length === 0 && extraApproved.length === 0) return undefined;
     return { remoteUrls: destinations?.urls || [], remoteRef: `refs/heads/${branch}`, commits, unapproved, extraApproved, invalidApproved, ...((evidenceError || scanError) ? { error: evidenceError || scanError } : {}) };
 }
 
 /** Approval errors carry the same evidence as the submodule terminal result. */
 export class PublicPublishApprovalRequired extends Error {
     constructor(public readonly approval: MeshRefinePublishApprovalRequest) {
-        super('publish_approval_required: public or unknown destination requires approved_publish_shas exactly matching pending commits and available private pattern config');
+        super('publish_approval_required: publication requires approved_publish_shas exactly matching pending commits and the applicable guard policy');
     }
 }
 
-export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: PublicPublishApprovals, remoteName = 'origin', repoKey?: string, publicRepoCount = 1): Promise<void> {
+export type RefineryIntegrationScan = { base: string; target: string; checked: number; policy: 'public' | 'private'; identityFindings: number; pathFindings: number };
+export async function assertRefineryPublishApproved(repo: string, commit: string, branch: string, approvedShas?: PublicPublishApprovals, remoteName = 'origin', repoKey?: string, publicRepoCount = 1, publication: { integrationBase?: string; onScan?: (scan: RefineryIntegrationScan) => void } = {}): Promise<void> {
     const keys = await publicPushRepoKeys(repo, remoteName);
     if (repoKey !== undefined && keys.some(destination => repoKey !== destination.repoKey)) throw new Error('public publish repository key mismatch');
     const request = await evaluatePublicPublishApproval(repo, commit, branch, approvedShas, remoteName, repo, publicRepoCount);
     if (request) throw new PublicPublishApprovalRequired(request);
     const destinations = await pushDestinations(repo, remoteName);
-    if (destinations.isPublic) {
+    if (destinations.isPublic || publication.integrationBase !== undefined) {
+        const patterns = await loadPublicPushPatternsForRepo(repo);
         for (const remoteUrl of destinations.urls) {
-            await assertPublishableToPublicOss(repo, commit, { remoteName, remoteUrl, remoteRef: `refs/heads/${branch}` });
+            const remoteRef = `refs/heads/${branch}`;
+            const base = publication.integrationBase ?? await readPushIntegrationBase(repo, remoteUrl, remoteRef);
+            await publicPushPendingCommits(repo, commit, remoteRef, [remoteUrl], base);
+            const scan = await checkPublicPush([{ localRef: commit, localSha: commit, remoteRef, remoteSha: base }], { cwd: repo, remoteName, remoteUrl, patterns, integrationBase: base });
+            const identityFindings = scan.violations.filter((v: any) => v.kind === 'identity').length;
+            const pathFindings = scan.violations.length - identityFindings;
+            publication.onScan?.({ base, target: commit, checked: scan.checked, policy: destinations.isPublic ? 'public' : 'private', identityFindings, pathFindings });
+            if (identityFindings || (destinations.isPublic && pathFindings)) throw new Error(`integration range guard blocked: ${scan.checked} commits, ${identityFindings} identity and ${pathFindings} path findings (${destinations.isPublic ? 'public' : 'private'} policy)`);
+            // Recheck the pinned branch after the potentially long scan. Normal
+            // non-force Git push additionally uses receive-pack's ref CAS.
+            await publicPushPendingCommits(repo, commit, remoteRef, [remoteUrl], base);
         }
     }
 }
@@ -915,6 +931,7 @@ export async function runMeshRefineSubmoduleReachabilityGate(
         const verifyRemoteMainContainsCommit = (submodulePath: string, commit: string, branch = 'main') =>
             verifyRemoteBranchContainsCommit(runGit, submodulePath, commit, branch);
         const publishCommitToRemoteMain = async (submodulePath: string, commit: string, branch = 'main'): Promise<{ stdout: string; stderr: string; refspec: string }> => {
+            const integrationScans: RefineryIntegrationScan[] = [];
             const refspec = `${commit}:refs/heads/${branch}`;
             // ★Public-oss push guard (owner rule 2026-10-22). This push does not depend on
             // the repo's pre-push hook being installed (an installed daemon has no root
@@ -922,24 +939,13 @@ export async function runMeshRefineSubmoduleReachabilityGate(
             // full-history personal-path scan run HERE, fail-closed, before anything is sent.
             // A throw lands in the caller's publishError path, so the publish is refused.
             // Public and unknown destinations, including providers, require the same guard.
-            let destinations: Awaited<ReturnType<typeof pushDestinations>> | undefined;
-            try { destinations = await pushDestinations(submodulePath, 'origin'); } catch { /* unknown URLs: guard full ancestry */ }
-            if (!destinations || destinations.isPublic) {
-                // Every push URL is a separate destination. Possession on one does
-                // not prove possession on another, so check each independently.
-                for (const remoteUrl of destinations?.urls || [undefined]) {
-                    await assertPublishableToPublicOss(submodulePath, commit, { remoteName: 'origin', remoteUrl, remoteRef: `refs/heads/${branch}`, patterns: await loadPublicPushPatternsForRepo(repoRoot) });
-                }
-            }
-            const { stdout, stderr } = await execFileAsync(GIT, ['push', 'origin', refspec], {
-                cwd: submodulePath,
-                encoding: 'utf8',
-                timeout: GIT_NETWORK_TIMEOUT_MS,
-                maxBuffer: REFINE_PATCH_EQUIVALENCE_OUTPUT_LIMIT_BYTES,
-                windowsHide: true,
-                env: realGitEnv(),
+            const integrationBase = (await runGit(submodulePath, ['rev-parse', `refs/remotes/origin/${branch}^{commit}`])).trim();
+            await assertRefineryPublishApproved(submodulePath, commit, branch, options.approvedPublishShas, 'origin', undefined, publicRepoCount, {
+                integrationBase,
+                onScan: scan => { integrationScans.push(scan); },
             });
-            return { stdout: String(stdout || ''), stderr: String(stderr || ''), refspec };
+            const { stdout, stderr } = await pushRefineryPinnedCommit(submodulePath, commit, branch, integrationBase);
+            return { stdout: `integration-range: ${JSON.stringify(integrationScans)}\n${String(stdout || '')}`, stderr: String(stderr || ''), refspec };
         };
         const importCommitFromWorktreeSubmodule = async (submodulePath: string, worktreeSubmodulePath: string, commit: string): Promise<boolean> => {
             if (!fs.existsSync(worktreeSubmodulePath)) return false;

@@ -28,6 +28,7 @@ export const CANONICAL_MESH_TOOL_NAMES = [
     'mesh_view_queue',
     'mesh_queue_cancel',
     'mesh_queue_requeue',
+    'mesh_queue_revise',
     'mesh_send_task',
     'mesh_read_chat',
     'mesh_read_debug',

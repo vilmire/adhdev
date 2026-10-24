@@ -135,7 +135,7 @@ test('approved_publish_shas is forwarded as approvedPublishShas by both refine t
     const { ctx, calls } = makeCtx();
     await meshRefineNode(ctx, { node_id: 'node_wt_remote', execute: true, approved_publish_shas: ['abc1234', 7 as any] });
     await meshRefineBatch(ctx, { execute: true, approved_publish_shas: ['abc1234'] });
-    assert.deepEqual(calls.find(c => c.command === 'refine_mesh_node')!.args.approvedPublishShas, ['abc1234']);
+    assert.deepEqual(calls.find(c => c.command === 'refine_mesh_node')!.args.approvedPublishShas, ['abc1234', 7]);
     assert.deepEqual(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args.approvedPublishShas, ['abc1234']);
 });
 
@@ -147,3 +147,34 @@ test('round4 P2-B: per-repo approval maps survive both MCP refine calls', async 
     assert.deepEqual(calls.find(c => c.command === 'refine_mesh_node')!.args.approvedPublishShas, approvals);
     assert.deepEqual(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args.approvedPublishShas, approvals);
 });
+
+test('rc28 FF-only mode and exact per-node target pins survive both MCP refine calls', async () => {
+    const { ALL_MESH_TOOLS } = await import('../src/tools/mesh-tool-schemas.js');
+    const { ctx, calls } = makeCtx();
+    const targets = { node_wt_remote: 'a'.repeat(40) };
+    await meshRefineNode(ctx, { node_id: 'node_wt_remote', execute: true, merge_mode: 'ff-only', approved_target_shas: targets });
+    const perNode = { node_wt_remote: { root: [targets.node_wt_remote] } };
+    await meshRefineBatch(ctx, { execute: true, merge_mode: 'ff-only', approved_target_shas: targets, approved_publish_shas_by_node: perNode });
+    assert.deepEqual(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args.approvedPublishShasByNode, perNode);
+    for (const command of ['refine_mesh_node', 'batch_refine_mesh_nodes']) {
+        assert.equal(calls.find(c => c.command === command)!.args.mergeMode, 'ff-only');
+        assert.deepEqual(calls.find(c => c.command === command)!.args.approvedTargetShas, targets);
+    }
+    for (const name of ['mesh_refine_node', 'mesh_refine_batch']) {
+        const tool: any = ALL_MESH_TOOLS.find(t => t.name === name);
+        assert.deepEqual(tool.inputSchema.properties.merge_mode.enum, ['merge', 'ff-only']);
+        assert.ok(tool.inputSchema.properties.approved_target_shas);
+    }
+});
+
+for (const value of [undefined, null, {}, { root: 'invalid' }, ['a'.repeat(40), 7]]) {
+    test(`R2 MCP retains explicit invalid authority ${JSON.stringify(value)} without filtering or legacy downgrade`, async () => {
+        const { ctx, calls } = makeCtx();
+        await meshRefineNode(ctx, { node_id: 'node_wt_remote', execute: true, approved_publish_shas: value as any });
+        await meshRefineBatch(ctx, { execute: true, approved_publish_shas_by_node: value as any });
+        const single = JSON.parse(JSON.stringify(calls.find(c => c.command === 'refine_mesh_node')!.args));
+        const batch = JSON.parse(JSON.stringify(calls.find(c => c.command === 'batch_refine_mesh_nodes')!.args));
+        assert.deepEqual(single.approvedPublishShas, value === undefined ? null : value);
+        assert.deepEqual(batch.approvedPublishShasByNode, value === undefined ? null : value);
+    });
+}

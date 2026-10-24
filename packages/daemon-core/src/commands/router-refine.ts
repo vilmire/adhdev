@@ -8,6 +8,7 @@
  * called by the daemon boot lifecycle). No stage order, event, log string, error
  * message, or result shape was changed — only physical location + `this.` → `self.`.
  */
+import { refinePublicationAuthorityRefusal, selectRefineNodePublicationArgs, snapshotRefinePublicationContract, type RefineCommandArgs } from '../mesh/mesh-refine-publication-contract.js';
 import { execFileSync } from 'node:child_process';
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
@@ -61,7 +62,10 @@ import {
      * context. Behavior — stage order, every early-exit, and every result shape —
      * is identical to the previous single inlined body.
      */
-export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRouter, meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
+export async function executeMeshRefineNodeSynchronously(self: DaemonCommandRouter, meshId: string, nodeId: string, args: RefineCommandArgs): Promise<CommandRouterResult> {
+        const refusal = refinePublicationAuthorityRefusal(args, nodeId);
+        if (refusal) return refusal;
+        args = selectRefineNodePublicationArgs(args, nodeId);
         const refineStages: Array<Record<string, unknown>> = [];
         try {
             const resolved = await refineResolveRefsStage(self, meshId, nodeId, args, refineStages);
@@ -408,7 +412,7 @@ async function runRefinePipelineOnce(
     self: DaemonCommandRouter,
     meshId: string,
     nodeId: string,
-    args: any,
+    args: RefineCommandArgs,
 ): Promise<Record<string, unknown>> {
     try {
         return await executeMeshRefineNodeSynchronously(self, meshId, nodeId, args) as Record<string, unknown>;
@@ -417,7 +421,7 @@ async function runRefinePipelineOnce(
     }
 }
 
-export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: MeshRefineJobHandle, args: any): Promise<void> {
+export async function finishMeshRefineJob(self: DaemonCommandRouter, handle: MeshRefineJobHandle, args: RefineCommandArgs): Promise<void> {
         const key = buildRefineJobKey(self, handle.meshId, handle.targetNodeId);
         // ★B1: a single-node refine is also minutes of silence, and its slow gates are the
         // same ones. The channel carries the job's own return address so progress routes
@@ -724,7 +728,7 @@ export async function refineBasePreflightStage(self: DaemonCommandRouter, ctx: R
     };
 }
 
-export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: string, nodeId: string, args: any): Promise<CommandRouterResult> {
+export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: string, nodeId: string, args: RefineCommandArgs): Promise<CommandRouterResult> {
         const key = buildRefineJobKey(self, meshId, nodeId);
         const terminal = self.terminalRefineJobs.get(key);
 
@@ -823,6 +827,7 @@ export async function startMeshRefineJob(self: DaemonCommandRouter, meshId: stri
             ? args.coordinatorSessionId.trim()
             : undefined;
         const handle = buildRefineJobHandle(self, { meshId, nodeId, node, jobId, interactionId, retryOfJobId: terminal?.jobId, coordinatorDaemonId, coordinatorSessionId });
+        handle.publicationContract = snapshotRefinePublicationContract(args);
         self.runningRefineJobs.set(key, handle);
         await appendRefineJobLedger(self, 'task_dispatched', handle);
         queueRefineJobEvent(self, 'refine:accepted', handle);

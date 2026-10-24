@@ -11,6 +11,7 @@
  * router-refine.ts; this module calls back into them, mirroring how
  * router-refine-resume.ts consumes single-node helpers.
  */
+import { refinePublicationAuthorityRefusal, type RefineCommandArgs } from '../mesh/mesh-refine-publication-contract.js';
 import type { DaemonCommandRouter, CommandRouterResult } from './router.js';
 import { LOG } from '../logging/logger.js';
 import { createInteractionId } from '../logging/debug-trace.js';
@@ -90,7 +91,7 @@ function emitRefineBatchProgress(
      * re-running patch-equivalence. No force-push, no reset — conflicting nodes are
      * isolated as blocked_review while the rest of the batch proceeds.
      */
-export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
+export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: RefineCommandArgs): Promise<CommandRouterResult> {
         // preferInline: same membership authority as refine_mesh_node — inline-cache-only
         // clone nodes (created in this MCP session) must resolve.
         const meshRecord = await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true });
@@ -128,6 +129,8 @@ export async function batchRefineMeshNodes(self: DaemonCommandRouter, meshId: st
             return { success: true, batch: true, dryRun: args?.dryRun !== false, nodeCount: 0, order: [], results: [], note: 'No convergeable local worktree nodes found.' };
         }
 
+        const authorityRefusal = targetNodes.map(node => refinePublicationAuthorityRefusal(args, node.id)).find(Boolean);
+        if (authorityRefusal) return authorityRefusal;
         const { execFile } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
@@ -301,7 +304,7 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
         meshId: string,
         orderedNodes: any[],
         ordering: { order: string[]; rationale?: unknown },
-        args: any,
+        args: RefineCommandArgs,
         /**
          * ★B1/B2 progress channel. Optional so the synchronous batch entry (and every
          * existing caller/test) keeps working unchanged — absent means no progress
@@ -309,6 +312,10 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
          */
         progressContext?: RefineProgressContext,
     ): Promise<CommandRouterResult> {
+        const authorityRefusal = orderedNodes.map(node => refinePublicationAuthorityRefusal(args, node.id)).find(Boolean);
+        if (authorityRefusal) return { ...authorityRefusal, batch: true, results: orderedNodes.map(node => ({
+            nodeId: node.id, workspace: node.workspace, convergence: 'blocked_review', code: authorityRefusal.code, error: authorityRefusal.error,
+        })) };
         type BatchNodeOutcome = {
             nodeId: string;
             workspace: string;
@@ -326,8 +333,10 @@ export async function runMeshRefineBatchConvergence(self: DaemonCommandRouter,
             try {
                 // ★B1: hand the node's pipeline the batch progress channel so slow gates
                 // are announced under the batch's job identity.
-                result = await executeMeshRefineNodeSynchronously(self, meshId, node.id,
-                    progressContext ? { ...args, progressContext } : args) as Record<string, unknown>;
+                result = await executeMeshRefineNodeSynchronously(self, meshId, node.id, {
+                    ...args,
+                    ...(progressContext ? { progressContext } : {}),
+                }) as Record<string, unknown>;
             } catch (e: any) {
                 result = { success: false, error: e?.message || String(e) };
             }
@@ -656,7 +665,7 @@ export async function finishMeshRefineBatchJob(self: DaemonCommandRouter,
         handle: MeshRefineBatchJobHandle,
         orderedNodes: any[],
         ordering: { order: string[]; rationale?: unknown },
-        args: any,
+        args: RefineCommandArgs,
     ): Promise<void> {
         const key = buildRefineBatchJobKey(self, handle.meshId);
         let result: Record<string, unknown>;
@@ -734,7 +743,7 @@ async function planThenRunMeshRefineBatchJob(self: DaemonCommandRouter,
         handle: MeshRefineBatchJobHandle,
         meshId: string,
         requestedNodeIds: string[] | undefined,
-        args: any,
+        args: RefineCommandArgs,
     ): Promise<void> {
         const key = buildRefineBatchJobKey(self, meshId);
         const failTerminally = async (error: string, extra?: Record<string, unknown>): Promise<void> => {
@@ -895,7 +904,7 @@ async function resolveBatchBaseRepoRoot(
     self: DaemonCommandRouter,
     meshId: string,
     requestedNodeIds: string[] | undefined,
-    args: any,
+    args: RefineCommandArgs,
 ): Promise<string | undefined> {
     const mesh = (await self.getMeshForCommand(meshId, args?.inlineMesh, { preferInline: true }))?.mesh;
     const allNodes: any[] = Array.isArray(mesh?.nodes) ? mesh.nodes : [];
@@ -924,7 +933,7 @@ async function attachBatchBasePreflightWarning(
     self: DaemonCommandRouter,
     meshId: string,
     requestedNodeIds: string[] | undefined,
-    args: any,
+    args: RefineCommandArgs,
     plan: CommandRouterResult,
 ): Promise<CommandRouterResult> {
     try {
@@ -944,7 +953,7 @@ async function attachBatchBasePreflightWarning(
     }
 }
 
-export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: any): Promise<CommandRouterResult> {
+export async function startMeshRefineBatchJob(self: DaemonCommandRouter, meshId: string, requestedNodeIds: string[] | undefined, args: RefineCommandArgs): Promise<CommandRouterResult> {
         // Dry-run: the plan IS the deliverable, so resolve it synchronously as before.
         // The med-family handler already routes dry-run to batchRefineMeshNodes directly,
         // so this is defence-in-depth for any other caller — the condition is kept

@@ -1,3 +1,5 @@
+import { queueRevise } from '../ipc/turn-commands.js';
+import type { QueueReviseRequest } from '@adhdev/mesh-shared';
 // Mesh tool implementations — queue management: viewing the queue, cancelling a
 // task (with the in-flight stop of the session that claimed it) and requeueing.
 // Enqueueing lives in mesh-tools-queue.ts; mesh-tools.ts is the tool barrel.
@@ -523,4 +525,11 @@ export async function meshQueueRequeue(
     } catch (e: any) {
         return JSON.stringify({ success: false, error: e.message });
     }
+}
+
+export async function meshQueueRevise(ctx: MeshContext, args: { task_id: string; expected_revision: number; patch: QueueReviseRequest['patch'] }): Promise<string> {
+    try {
+        const { task } = await queueRevise(ctx.transport, { meshId: ctx.mesh.id, taskId: args.task_id, expectedRevision: args.expected_revision, patch: args.patch });
+        return JSON.stringify({ success: true, task });
+    } catch (e: any) { return JSON.stringify({ success: false, error: e.message }); }
 }

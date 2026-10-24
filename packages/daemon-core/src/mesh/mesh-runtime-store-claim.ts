@@ -1,3 +1,8 @@
+import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
+import { realpathSync } from 'node:fs';
+import { reviewRoutingRefusal } from './mesh-task-routing-contract.js';
+import { comparePhysicalOwnership, currentPhysicalScope } from './mesh-physical-ownership.js';
+import type { PhysicalOwnershipScope } from '@adhdev/mesh-shared';
 import { queueHoldContext, setQueueTaskHold } from './mesh-queue-hold.js';
 /**
  * The queue claim transaction of MeshRuntimeStore: one session atomically claims
@@ -20,33 +25,51 @@ import type { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { dirtyWriteVerdict, describeDirtyWriteRefusal, type DirtyWriteGate } from './mesh-dirty-write-verdict.js';
 
 /** The MeshRuntimeStore members these functions read or call (compiler-checked; no cast). */
-export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
+export type MeshRuntimeStoreClaimHost = Pick<MeshRuntimeStore, 'activeProviderAssignmentCount' | 'activeSlotAssignmentCount' | 'assignedRowsMeshWide' | 'db' | 'getQueueEntries' | 'ensureLegacyQueueMigrated' | 'hasActiveNodeWriteAssignment' | 'hasActiveSessionAssignment' | 'maybeCheckpointWal' | 'transaction' | 'turnStore'>;
 
-/** Read all currently-assigned non-readonly queue entries with ownedPaths across the entire mesh. */
+export interface ScopedInFlightOwnership extends InFlightOwnership { ownershipScope?: PhysicalOwnershipScope }
+type OwnershipCandidate = Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode' | 'ownershipScope'> & Partial<Pick<MeshWorkQueueEntry, 'id'>>;
+const unknownWriterPaths = { paths: [{ path: '', subtree: true }] };
+type OwnershipHost = Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'> & Partial<Pick<MeshRuntimeStore, 'getQueueEntries'>>;
+
+/** Assigned writers, read leases and short-lived launch reservations, including legacy writers without declarations. */
 export function readInFlightOwnershipMeshWide(
-    host: Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'>,
+    host: OwnershipHost,
     meshId: string,
-): InFlightOwnership[] {
-    return host.assignedRowsMeshWide(meshId)
-        .map((row): InFlightOwnership | null => {
+): ScopedInFlightOwnership[] {
+    const reservations = host.getQueueEntries?.(meshId).filter(t => pendingLaunchReservation(t)).map(t => ({ payload: JSON.stringify(t) })) ?? [];
+    return [...host.assignedRowsMeshWide(meshId), ...reservations]
+        .map((row): ScopedInFlightOwnership | null => {
             try {
                 const parsed = JSON.parse(row.payload) as MeshWorkQueueEntry;
-                if (parsed.id === undefined) return null;
-                if (!parsed.ownedPaths || isTaskReadonly(parsed)) return null;
-                return { taskId: parsed.id, paths: parsed.ownedPaths };
-            } catch { return null; }
+                if (parsed.id === undefined) return { taskId: 'unproven_active_writer', paths: unknownWriterPaths };
+                if (isTaskReadonly(parsed)) {
+                    const scope = parsed.reviewInputScope;
+                    return scope ? { taskId: parsed.id, paths: { paths: scope.declaration }, ownershipScope: scope } : null;
+                }
+                return { taskId: parsed.id, paths: parsed.ownedPaths ?? unknownWriterPaths, ownershipScope: parsed.ownershipScope };
+            } catch { return { taskId: 'unproven_active_writer', paths: unknownWriterPaths }; }
         })
-        .filter((v): v is InFlightOwnership => v !== null);
+        .filter((v): v is ScopedInFlightOwnership => v !== null);
 }
 
 /** Find owned_paths conflicts for a candidate against the mesh-wide in-flight ownership set. */
 export function findTaskOwnedPathsConflicts(
-    candidate: Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode'>,
-    inFlightOwnership: readonly InFlightOwnership[],
+    candidate: OwnershipCandidate,
+    inFlightOwnership: readonly ScopedInFlightOwnership[],
 ) {
-    return candidate.ownedPaths && !isTaskReadonly(candidate)
-        ? findOwnershipConflicts(candidate.ownedPaths, inFlightOwnership)
-        : [];
+    if (isTaskReadonly(candidate)) return [];
+    const paths = candidate.ownedPaths ?? unknownWriterPaths;
+    const scope = currentPhysicalScope(candidate.ownershipScope, paths);
+    return inFlightOwnership.flatMap(other => {
+        if (other.taskId === candidate.id) return [];
+        const otherScope = currentPhysicalScope(other.ownershipScope, other.paths);
+        if (other.ownershipScope && !otherScope) return [{ taskId: other.taskId, overlappingPaths: ['unproven_active_physical_resource'] }];
+        const comparison = comparePhysicalOwnership(paths, scope, other.paths, otherScope);
+        if (!comparison.physicalConflict) return [];
+        const logical = findOwnershipConflicts(paths, [other]);
+        return logical.length ? logical : [{ taskId: other.taskId, overlappingPaths: ['physical_workspace_or_shared_resource'] }];
+    });
 }
 
 /** Format the diagnostic detail string for an owned_paths_conflict refusal. */
@@ -60,12 +83,12 @@ export function formatOwnedPathsConflictDetail(
 
 /** Shared authoritative owned_paths admission evaluator used before spawn, on claim, and on await-claim expiry. */
 export function evaluateTaskOwnedPathsAdmission(
-    host: Pick<MeshRuntimeStoreClaimHost, 'assignedRowsMeshWide'>,
+    host: OwnershipHost,
     meshId: string,
-    candidate: Pick<MeshWorkQueueEntry, 'ownedPaths' | 'readonly' | 'taskMode'> | undefined,
-    inFlightOwnership?: readonly InFlightOwnership[],
+    candidate: OwnershipCandidate | undefined,
+    inFlightOwnership?: readonly ScopedInFlightOwnership[],
 ): { allowed: boolean; conflicts: Array<{ taskId: string; overlappingPaths: readonly string[] }>; detail?: string } {
-    if (!candidate || !candidate.ownedPaths || isTaskReadonly(candidate)) {
+    if (!candidate || isTaskReadonly(candidate)) {
         return { allowed: true, conflicts: [] };
     }
     const inFlight = inFlightOwnership ?? readInFlightOwnershipMeshWide(host, meshId);
@@ -80,6 +103,7 @@ export function evaluateTaskOwnedPathsAdmission(
 
 // O(1) claim: transaction ensures only one session claims a pending task
 export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = [], opts?: {
+            physicalContext?: import('./mesh-task-routing-contract.js').ReviewRoutingContext;
             providerType?: string;
             providerMaxParallel?: number;
             assignedModel?: string;
@@ -249,8 +273,9 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // DEPENDSON-GATE-SYMMETRY: the claim gate shares the single
         // taskDependenciesSatisfied predicate with the auto-launch filter and
         // the cloud eager P2P push, so a task blocked here is blocked there too.
+        const dependencyGraph = new Map(host.getQueueEntries(meshId).map(t => [t.id, t]));
         const dependenciesSatisfied = (candidate: MeshWorkQueueEntry): boolean =>
-            taskDependenciesSatisfied(candidate, depStatus);
+            taskDependenciesSatisfied(candidate, depStatus, dependencyGraph);
 
         // Per-candidate node-conflict gate: write tasks require a node with no other
         // assigned WRITE row (an assigned read-only row does not count); read-only
@@ -259,7 +284,15 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // single predicate shared with the cap counters / auto-launch / guardrail).
         const nodeConflictAllows = (candidate: MeshWorkQueueEntry): boolean => {
             if (isTaskReadonly(candidate)) return true;
-            return !nodeWriteBusy;
+            if (nodeWriteBusy) return false;
+            // Review input is a read lease on the actual worktree, not a second writer.
+            return !host.assignedRowsMeshWide(meshId).some(row => {
+                const reader = JSON.parse(row.payload) as MeshWorkQueueEntry;
+                const scope = reader.reviewInputScope;
+                if (!scope) return false;
+                if (meshNodeIdMatches({ id: scope.nodeId }, nodeId)) return true;
+                try { return !!opts?.physicalContext && realpathSync.native(opts.physicalContext.workspace) === scope.worktree; } catch { return true; }
+            });
         };
 
         // H1 (path ownership, wiring-unification Phase H — docs/design/2026-09-23-
@@ -334,6 +367,19 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
         // node forms). A raw `!==` here permanently strands a node-pinned task as
         // an empty session. Accept the candidate when the target resolves to the
         // same node under ANY equivalent form; keep targetSessionId an exact match.
+        const reviewSource = (id: string): MeshWorkQueueEntry | undefined => {
+            const row = host.db.prepare('SELECT payload FROM mesh_queue WHERE mesh_id = ? AND id = ?').get(meshId, id) as { payload: string } | undefined;
+            return row ? JSON.parse(row.payload) : undefined;
+        };
+        const physicalContextMatches = (candidate: MeshWorkQueueEntry): boolean => {
+            if (candidate.ownershipScope) {
+                if (!meshNodeIdMatches({ id: candidate.ownershipScope.nodeId }, nodeId) || !candidate.ownedPaths || !opts?.physicalContext) return false;
+                const proof = currentPhysicalScope(candidate.ownershipScope, candidate.ownedPaths);
+                try { if (!proof || opts.physicalContext.machineId !== proof.machineId || realpathSync.native(opts.physicalContext.workspace) !== proof.worktree) return false; } catch { return false; }
+            }
+            return true;
+        };
+        const reviewRefusal = (candidate: MeshWorkQueueEntry) => reviewRoutingRefusal(candidate, candidate.review ? reviewSource(candidate.review.sourceTaskId) : undefined, providerType, opts?.physicalContext, host.getQueueEntries(meshId));
         const targetMatches = (candidate: MeshWorkQueueEntry): boolean => {
             // Session ids are single-form (unlike node/daemon ids with their 3
             // serialization forms requiring expandDaemonIdForms) — see the
@@ -397,6 +443,10 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
             { reason: 'attempt_injection_closed', test: attemptAllowsInjection },
             { reason: 'convergence_target_is_worktree', test: convergenceAllows },
             { reason: 'target_pin_unmatched', test: targetMatches },
+            { reason: 'physical_context_changed', test: physicalContextMatches },
+            { reason: 'review_independence_required', test: c => reviewRefusal(c) !== 'review_independence_required' && reviewRefusal(c) !== 'review_requires_readonly' },
+            { reason: 'review_input_unavailable', test: c => reviewRefusal(c) !== 'review_input_unavailable' },
+            { reason: 'review_input_busy', test: c => reviewRefusal(c) !== 'review_input_busy' },
             // When the claiming session's live model is unknown (!assignedModel) and the
             // candidate is already blocked mesh-wide by owned_paths_conflict (with node
             // and parallel caps clear), advance to owned_paths_conflict rather than
@@ -461,6 +511,14 @@ export function claimNextQueueTask(host: MeshRuntimeStoreClaimHost, meshId: stri
 
         const now = new Date().toISOString();
         entry.status = 'assigned';
+        if (entry.review) entry.reviewInputScope = reviewSource(entry.review.sourceTaskId)?.ownershipScope;
+        entry.revision = (entry.revision ?? 0) + 1;
+        if (entry.ownedPaths && entry.ownershipScope) {
+            const hard = new Set(findTaskOwnedPathsConflicts(entry, inFlightOwnership).map(c => c.taskId));
+            const warnings = findOwnershipConflicts(entry.ownedPaths, inFlightOwnership)
+                .filter(c => !hard.has(c.taskId)).map(c => ({ ...c, action: 'serialize_integration' as const }));
+            entry.logicalOverlapWarnings = [...new Map([...(entry.logicalOverlapWarnings ?? []), ...warnings].map(c => [c.taskId, c])).values()];
+        }
         delete entry.hold;
         delete entry.holdNoticeId;
         entry.assignedNodeId = nodeId;

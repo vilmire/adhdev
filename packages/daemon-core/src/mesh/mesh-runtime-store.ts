@@ -1,3 +1,4 @@
+import { assertSourceDependencyGraph } from './mesh-task-phase-dependencies.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { LOG } from '../logging/logger.js';
@@ -348,19 +349,22 @@ export class MeshRuntimeStore {
     }
 
     replaceQueue(meshId: string, queue: MeshWorkQueueEntry[]): void {
-        const deleteStmt = this.db.prepare('DELETE FROM mesh_queue WHERE mesh_id = ?');
-        const insert = this.db.prepare(`
-            INSERT INTO mesh_queue (
-                id, mesh_id, status, target_node_id, target_session_id,
-                assigned_node_id, assigned_session_id, created_at, updated_at, payload
-            ) VALUES (
-                @id, @meshId, @status, @targetNodeId, @targetSessionId,
-                @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
-            )
-        `);
-        deleteStmt.run(meshId);
-        for (const entry of queue) insert.run(this.toRow(entry));
-        this.maybeCheckpointWal();
+        this.transaction(() => {
+            assertSourceDependencyGraph(queue);
+            const deleteStmt = this.db.prepare('DELETE FROM mesh_queue WHERE mesh_id = ?');
+            const insert = this.db.prepare(`
+                INSERT INTO mesh_queue (
+                    id, mesh_id, status, target_node_id, target_session_id,
+                    assigned_node_id, assigned_session_id, created_at, updated_at, payload
+                ) VALUES (
+                    @id, @meshId, @status, @targetNodeId, @targetSessionId,
+                    @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
+                )
+            `);
+            deleteStmt.run(meshId);
+            for (const entry of queue) insert.run(this.toRow(entry));
+            this.maybeCheckpointWal();
+        });
     }
 
     deleteQueue(meshId: string): void {
@@ -369,33 +373,43 @@ export class MeshRuntimeStore {
     }
 
     insertQueueEntry(entry: MeshWorkQueueEntry): void {
-        this.db.prepare(`
-            INSERT INTO mesh_queue (
-                id, mesh_id, status, target_node_id, target_session_id,
-                assigned_node_id, assigned_session_id, created_at, updated_at, payload
-            ) VALUES (
-                @id, @meshId, @status, @targetNodeId, @targetSessionId,
-                @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
-            )
-        `).run(this.toRow(entry));
-        this.maybeCheckpointWal();
+        this.transaction(() => {
+            assertSourceDependencyGraph([...this.getQueueEntries(entry.meshId), entry]);
+            this.db.prepare(`
+                INSERT INTO mesh_queue (
+                    id, mesh_id, status, target_node_id, target_session_id,
+                    assigned_node_id, assigned_session_id, created_at, updated_at, payload
+                ) VALUES (
+                    @id, @meshId, @status, @targetNodeId, @targetSessionId,
+                    @assignedNodeId, @assignedSessionId, @createdAt, @updatedAt, @payload
+                )
+            `).run(this.toRow(entry));
+            this.maybeCheckpointWal();
+        });
     }
 
     updateQueueEntry(entry: MeshWorkQueueEntry): void {
-        const now = new Date().toISOString();
-        entry.updatedAt = now;
-        this.db.prepare(`
-            UPDATE mesh_queue SET
-                status = @status,
-                target_node_id = @targetNodeId,
-                target_session_id = @targetSessionId,
-                assigned_node_id = @assignedNodeId,
-                assigned_session_id = @assignedSessionId,
-                updated_at = @updatedAt,
-                payload = @payload
-            WHERE id = @id AND mesh_id = @meshId
-        `).run(this.toRow(entry));
-        this.maybeCheckpointWal();
+        this.transaction(() => {
+            const persisted = this.findQueueEntryById(entry.meshId, entry.id);
+            if (persisted?.phase !== entry.phase || JSON.stringify(persisted?.dependsOn ?? []) !== JSON.stringify(entry.dependsOn ?? [])) {
+                assertSourceDependencyGraph(this.getQueueEntries(entry.meshId).map(t => t.id === entry.id ? entry : t));
+            }
+            entry.revision = (persisted?.revision ?? 0) + 1;
+            const now = new Date().toISOString();
+            entry.updatedAt = now;
+            this.db.prepare(`
+                UPDATE mesh_queue SET
+                    status = @status,
+                    target_node_id = @targetNodeId,
+                    target_session_id = @targetSessionId,
+                    assigned_node_id = @assignedNodeId,
+                    assigned_session_id = @assignedSessionId,
+                    updated_at = @updatedAt,
+                    payload = @payload
+                WHERE id = @id AND mesh_id = @meshId
+            `).run(this.toRow(entry));
+            this.maybeCheckpointWal();
+        });
     }
 
     findQueueEntryById(meshId: string, id: string): MeshWorkQueueEntry | null {
@@ -635,6 +649,7 @@ export class MeshRuntimeStore {
         return count;
     }
     claimNextQueueTask(meshId: string, nodeId: string, sessionId: string, capabilityTags: string[] = [], opts?: {
+            physicalContext?: import('./mesh-task-routing-contract.js').ReviewRoutingContext;
             providerType?: string;
             providerMaxParallel?: number;
             assignedModel?: string;

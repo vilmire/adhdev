@@ -13,7 +13,7 @@
  * axis from the daemon axis and would pass under the defect.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -33,9 +33,12 @@ vi.mock('../../src/config/config.js', () => ({
 import {
     __replaceMeshQueueForTests,
     __resetMeshRuntimeStoreForTests,
-    claimNextTask,
+    claimNextTask as rawClaimNextTask,
     getQueue,
 } from '../../src/mesh/mesh-work-queue.js';
+import { execFileSync } from 'node:child_process';
+import { normalizeOwnedPaths } from '@adhdev/mesh-shared';
+import { attestLocalOwnership } from '../../src/mesh/mesh-physical-ownership.js';
 import { createMesh } from '../../src/config/mesh-config.js';
 import {
     resolveDaemonSiblingNodeIds,
@@ -70,6 +73,31 @@ const NODES = [
     { id: REMOTE, daemonId: 'daemon_mach_beta' },
 ];
 
+
+// Capacity controls need real independent writer proof. Node labels alone are
+// deliberately insufficient after R2. All capacity fixtures use local Git roots;
+// the REMOTE label below tests daemon cap accounting, not remote attestation.
+function physicalFixture(meshId: string, nodeId: string) {
+    const workspace = join(testTmpDir, meshId, nodeId);
+    if (!existsSync(workspace)) {
+        mkdirSync(workspace, { recursive: true });
+        execFileSync('git', ['init', '-q'], { cwd: workspace });
+        writeFileSync(join(workspace, 'file.ts'), 'export {};');
+    }
+    const ownedPaths = normalizeOwnedPaths(['file.ts']).declaration;
+    return { ownedPaths, phase: 'source' as const, ownershipScope: attestLocalOwnership({
+        repoIdentity: meshId, nodeId, machineId: 'capacity-fixture', workspace, phase: 'source', paths: ownedPaths,
+    }) };
+}
+function claimNextTask(...args: Parameters<typeof rawClaimNextTask>) {
+    const [meshId, nodeId] = args;
+    const proof = physicalFixture(meshId, nodeId);
+    __replaceMeshQueueForTests(meshId, getQueue(meshId).map(t =>
+        t.status === 'pending' && !t.readonly ? { ...t, ...proof } : t));
+    args[4] = { ...args[4], physicalContext: { workspace: proof.ownershipScope.worktree, machineId: 'capacity-fixture' } };
+    return rawClaimNextTask(...args);
+}
+
 /** Seed `assigned` rows: [nodeId, providerType, model, count]. */
 function occupy(meshId: string, rows: Array<[string, string, string | undefined, number]>): void {
     const out: any[] = [];
@@ -80,6 +108,7 @@ function occupy(meshId: string, rows: Array<[string, string, string | undefined,
                 id: `t_${i++}`,
                 meshId,
                 message: 'filler',
+                ...physicalFixture(meshId, nodeId),
                 status: 'assigned',
                 assignedNodeId: nodeId,
                 assignedProviderType: providerType,

@@ -1,8 +1,8 @@
 type PublicPublishApprovals = string[] | Record<string, string[]>;
-function normalizePublishApprovals(value: PublicPublishApprovals | undefined): PublicPublishApprovals | undefined {
-    if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, shas]) => [key, Array.isArray(shas) ? shas.filter(v => typeof v === 'string') : []]));
-    return undefined;
+interface RefinePublicationArgs {
+    merge_mode?: 'merge' | 'ff-only';
+    approved_target_shas?: Record<string, string>;
+    approved_publish_shas?: PublicPublishApprovals;
 }
 // Mesh tool implementations — refine domain.
 // Pure move out of mesh-tools.ts (no behavior change). Helpers are imported from the
@@ -223,7 +223,7 @@ export async function meshWriteMeshJsonConfig(
 
 export async function meshRefineNode(
     ctx: MeshContext,
-    args: { node_id: string; execute?: boolean; dry_run?: boolean; approved_publish_shas?: PublicPublishApprovals },
+    args: { node_id: string; execute?: boolean; dry_run?: boolean } & RefinePublicationArgs,
 ): Promise<string> {
     const node = await findNodeWithRefresh(ctx, args.node_id);
 
@@ -270,7 +270,9 @@ export async function meshRefineNode(
         nodeId: args.node_id,
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
-        ...(args.approved_publish_shas ? { approvedPublishShas: normalizePublishApprovals(args.approved_publish_shas) } : {}),
+        ...(Object.prototype.hasOwnProperty.call(args, 'approved_publish_shas') ? { approvedPublishShas: args.approved_publish_shas === undefined ? null : args.approved_publish_shas } : {}),
+        ...(args.merge_mode !== undefined ? { mergeMode: args.merge_mode } : {}),
+        ...(Object.prototype.hasOwnProperty.call(args, 'approved_target_shas') ? { approvedTargetShas: args.approved_target_shas === undefined ? null : args.approved_target_shas } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,
@@ -290,7 +292,7 @@ export async function meshRefineNode(
 
 export async function meshRefineBatch(
     ctx: MeshContext,
-    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean; approved_publish_shas?: PublicPublishApprovals } = {},
+    args: { node_ids?: string[]; execute?: boolean; dry_run?: boolean; approved_publish_shas_by_node?: Record<string, PublicPublishApprovals> } & RefinePublicationArgs = {},
 ): Promise<string> {
     // Refresh so auto-collection and explicit node IDs resolve against the latest
     // mesh membership (siblings may have been created/removed in this MCP session).
@@ -328,11 +330,14 @@ export async function meshRefineBatch(
     // contract as meshRefineNode above.
     const coordinatorDaemonId = resolveCoordinatorDaemonId(ctx);
     const result = await ctx.transport.command('batch_refine_mesh_nodes', {
+        ...(Object.prototype.hasOwnProperty.call(args, 'approved_publish_shas_by_node') ? { approvedPublishShasByNode: args.approved_publish_shas_by_node === undefined ? null : args.approved_publish_shas_by_node } : {}),
         meshId: ctx.mesh.id,
         ...(nodeIds ? { nodeIds } : {}),
         ...(args.execute !== undefined ? { execute: args.execute } : {}),
         ...(args.dry_run !== undefined ? { dryRun: args.dry_run } : {}),
-        ...(args.approved_publish_shas ? { approvedPublishShas: normalizePublishApprovals(args.approved_publish_shas) } : {}),
+        ...(Object.prototype.hasOwnProperty.call(args, 'approved_publish_shas') ? { approvedPublishShas: args.approved_publish_shas === undefined ? null : args.approved_publish_shas } : {}),
+        ...(args.merge_mode !== undefined ? { mergeMode: args.merge_mode } : {}),
+        ...(Object.prototype.hasOwnProperty.call(args, 'approved_target_shas') ? { approvedTargetShas: args.approved_target_shas === undefined ? null : args.approved_target_shas } : {}),
         ...(coordinatorDaemonId ? { coordinatorDaemonId } : {}),
         ...(ctx.coordinatorSessionId ? { coordinatorSessionId: ctx.coordinatorSessionId } : {}),
         inlineMesh: ctx.mesh,

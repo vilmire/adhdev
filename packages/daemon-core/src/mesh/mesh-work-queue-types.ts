@@ -48,6 +48,15 @@ export interface MeshTaskParking {
 }
 
 export interface MeshWorkQueueEntry {
+    /** Only host-authenticated pending revisions can install physical context. */
+    routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences;
+    review?: import('@adhdev/mesh-shared').MeshReviewConstraint;
+    reviewInputScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
+    ownershipScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope;
+    phase?: import('@adhdev/mesh-shared').MeshTaskPhase;
+    revision?: number;
+    revisionHistory?: Array<{ revision: number; at: string; actor: string; before: { message: string; ownedPaths?: OwnedPathsDeclaration; phase?: import('@adhdev/mesh-shared').MeshTaskPhase; dependsOn?: string[]; ownershipScope?: import('@adhdev/mesh-shared').PhysicalOwnershipScope; routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences; review?: import('@adhdev/mesh-shared').MeshReviewConstraint } }>;
+    logicalOverlapWarnings?: Array<{ taskId: string; overlappingPaths: readonly string[]; action: 'serialize_integration' }>;
     id: string;
     meshId: string;
     message: string;
@@ -263,6 +272,7 @@ export interface MeshWorkQueueEntry {
         reason?: string;
         nodeId?: string;
         providerType?: string;
+        model?: string;
         sessionId?: string;
         updatedAt: string;
     };

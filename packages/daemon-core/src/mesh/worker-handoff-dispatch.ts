@@ -58,6 +58,7 @@ export interface DispatchableTask {
     message: string;
     taskMode?: string;
     difficulty?: string;
+    phase?: import('@adhdev/mesh-shared').MeshTaskPhase;
     readonly?: boolean;
     missionId?: string;
     /** Files the task is expected to touch, when known — drives handoff-note relevance. */
@@ -101,9 +102,12 @@ export function resolveDispatchMessage(
     node: unknown,
     target: { workerMcp?: boolean } = {},
 ): string {
+    const phaseInstruction = task.phase === 'source'
+        ? '\n\nSource phase: finish uncommitted and not_mergeable. No commits/hooks, tracked generated/vendor outputs, gitlink changes, publication or restart. Scoped local ignored dependency builds are permitted. Deliver full root/OSS pins, tracked and untracked private patch/hash manifest, exact paths/tests/settled commands. Source-ready is not release-ready; integration, normal hooks/parity/gates and independent review remain dependent work.'
+        : '';
     if (hasWorkerProtocolFooter(task.message)) {
         LOG.debug('WorkerProtocol', `Task ${task.id} body already carries the worker protocol footer — not re-materializing`);
-        return task.message;
+        return task.message + phaseInstruction;
     }
 
     // D4: authored message → Upstream results. Independent of the worker-MCP
@@ -164,6 +168,7 @@ export function resolveDispatchMessage(
         } catch { /* best-effort — see comment above */ }
     }
 
+    body += phaseInstruction;
     return appendWorkerProtocolFooter(body, {
         taskId: task.id,
         ...(readNonEmpty(task.taskMode) ? { taskMode: task.taskMode!.trim() } : {}),

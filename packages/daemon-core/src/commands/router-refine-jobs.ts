@@ -302,6 +302,7 @@ export async function appendRefineJobLedger(self: DaemonCommandRouter, kind: 'ta
                         startedAt: handle.startedAt,
                         completedAt: handle.completedAt,
                         retryOfJobId: handle.retryOfJobId,
+                        publicationContract: handle.publicationContract,
                         ...(executorStamp ? { executor: executorStamp } : {}),
                     },
                     async: true,

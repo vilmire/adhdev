@@ -37,7 +37,7 @@ export {
 } from './mesh-tools-route-preview.js';
 
 export { meshEnqueueTask, meshEnqueueBatch } from './mesh-tools-queue.js';
-export { meshQueueCancel, meshQueueRequeue, meshViewQueue } from './mesh-tools-queue-manage.js';
+export { meshQueueCancel, meshQueueRequeue, meshQueueRevise, meshViewQueue } from './mesh-tools-queue-manage.js';
 
 export {
     meshMissionList,

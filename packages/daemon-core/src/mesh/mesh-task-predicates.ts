@@ -7,6 +7,7 @@
 // change; mesh-work-queue.ts re-exports every name for its importers.
 // ---------------------------------------------------------------------------
 
+import { sourceDependencyViolation } from './mesh-task-phase-dependencies.js';
 import { isMeshTaskPriority, type MeshTaskMode, type MeshTaskPriority, type MeshTaskStatus } from '@adhdev/mesh-shared';
 import { deriveDependencyFailures, type MeshDependencyFailure } from './mesh-dependency-failure.js';
 import type { MeshTaskInputEnvelope, MeshWorkQueueEntry } from './mesh-work-queue.js';
@@ -67,7 +68,9 @@ export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMo
 
 /**
  * M1: THE single dependency-gate predicate. A task is claimable from a
- * dependency standpoint iff every id in `dependsOn` has reached 'completed'.
+ * dependency standpoint iff every id in `dependsOn` has reached 'completed'
+ * and the reachable phase graph grants that completion authority. Admission
+ * callers supply the full graph so legacy persisted edges are checked too.
  *
  * DEPENDSON-GATE-SYMMETRY: every scheduler surface that decides whether a
  * pending task may run MUST route through this one predicate — the queue claim
@@ -80,10 +83,12 @@ export function isTaskReadonly(task: { readonly?: boolean; taskMode?: MeshTaskMo
  * do not fork them.
  */
 export function taskDependenciesSatisfied(
-    entry: Pick<MeshWorkQueueEntry, 'dependsOn'>,
+    entry: Pick<MeshWorkQueueEntry, 'dependsOn'> & Partial<Pick<MeshWorkQueueEntry, 'id' | 'phase'>>,
     statusById: Map<string, MeshTaskStatus | string>,
+    graph?: ReadonlyMap<string, MeshWorkQueueEntry>,
 ): boolean {
     const deps = Array.isArray(entry.dependsOn) ? entry.dependsOn : [];
+    if (graph && sourceDependencyViolation({ ...entry, id: entry.id ?? '' }, graph)) return false;
     return deps.every(depId => statusById.get(depId) === 'completed');
 }
 

@@ -4,12 +4,8 @@ import * as path from 'path'
 import { randomUUID } from 'crypto'
 import { tmpdir } from 'os'
 
-// DEAD-TARGET-SELFHEAL: a queued mesh task hard-pinned to a targetSessionId (+ optional
-// targetNodeId) whose session/node has DIED (absent from the live mesh) must NOT live
-// forever in 'pending' behind the unconditional `target_session_constraint` auto-launch
-// skip. maybeAutoLaunchOneQueueSession must detect the dead pin (past a grace window) and
-// requeueTask(clearTargetSession) so a live idle session can claim it — while NEVER
-// disturbing a task whose target is still LIVE (busy/generating).
+// Owner hard targets remain pinned when unavailable. The queue parks them for an
+// explicit coordinator action, preserving retries and dependent identity.
 
 const testTmpDir = path.join(tmpdir(), `adhdev-dead-target-selfheal-test-${randomUUID().slice(0, 8)}`)
 const testConfigDir = path.join(testTmpDir, '.adhdev')
@@ -123,10 +119,10 @@ function cleanup(meshId: string) {
   try { fs.rmSync(testTmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
 }
 
-describe('DEAD-TARGET-SELFHEAL — a pending task pinned to an absent session/node is unpinned-and-requeued', () => {
+describe('owner hard pins — unavailable targets park without automatic unpin', () => {
   afterEach(() => { vi.clearAllMocks() })
 
-  it('requeues (clearing the dead session pin) a task whose targetSessionId is absent on a LIVE local node', async () => {
+  it('parks a dead session pin on a live local node without changing its owner target', async () => {
     const meshId = `mesh_dt_sess_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId)
@@ -138,11 +134,10 @@ describe('DEAD-TARGET-SELFHEAL — a pending task pinned to an absent session/no
       await triggerMeshQueue(components, meshId)
 
       const after = task(meshId, t.id)!
-      // Session pin cleared; NODE pin kept (only the session died, node is still live).
-      expect(after.targetSessionId).toBeUndefined()
+      expect(after.targetSessionId).toBe('dead-session')
       expect(after.targetNodeId).toBe(NODE_ID)
-      expect(after.requeueReason).toBe('dead_target_session_absent')
-      expect(after.requeueCount).toBe(1)
+      expect(after.parked?.reason).toBe('owner_hard_pin_unavailable:dead_target_session_absent')
+      expect(after.requeueCount ?? 0).toBe(0)
       // No longer permanently walled behind target_session_constraint.
       expect(after.autoLaunch?.reason).not.toBe('target_session_constraint')
     } finally {
@@ -150,7 +145,7 @@ describe('DEAD-TARGET-SELFHEAL — a pending task pinned to an absent session/no
     }
   })
 
-  it('requeues AND unpins the node when the target NODE itself is absent from the live mesh', async () => {
+  it('preserves both owner pins when the target node is absent', async () => {
     const meshId = `mesh_dt_node_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId) // mesh has only NODE_ID
@@ -161,11 +156,10 @@ describe('DEAD-TARGET-SELFHEAL — a pending task pinned to an absent session/no
       await triggerMeshQueue(components, meshId)
 
       const after = task(meshId, t.id)!
-      // Both pins cleared — nothing to pin to.
-      expect(after.targetSessionId).toBeUndefined()
-      expect(after.targetNodeId).toBeUndefined()
-      expect(after.requeueReason).toBe('dead_target_node_absent')
-      expect(after.requeueCount).toBe(1)
+      expect(after.targetSessionId).toBe('dead-session')
+      expect(after.targetNodeId).toBe('node_dead')
+      expect(after.parked?.reason).toBe('owner_hard_pin_unavailable:dead_target_node_absent')
+      expect(after.requeueCount ?? 0).toBe(0)
     } finally {
       cleanup(meshId)
     }
@@ -212,19 +206,21 @@ describe('DEAD-TARGET-SELFHEAL — a pending task pinned to an absent session/no
     }
   })
 
-  it('BOUNDED: a repeatedly dead-target task auto-fails past the retry cap (dependents unblock)', async () => {
+  it('does not consume execution retries or release dependents merely because a hard pin is unavailable', async () => {
     const meshId = `mesh_dt_cap_${randomUUID().slice(0, 8)}`
     try {
       setMesh(meshId)
       const components = createComponents([])
-      // maxRetries:0 → the first dead-target requeue trips the cap and auto-fails the row.
+      // Unavailable addressing is a hold, not a failed execution attempt.
       const t = insertPendingTask(meshId, { targetNodeId: 'node_dead', targetSessionId: 'dead-session', maxRetries: 0, updatedAt: STALE_ISO })
 
       await triggerMeshQueue(components, meshId)
 
       const after = task(meshId, t.id)!
-      expect(after.status).toBe('failed')
-      expect(after.cancelReason).toMatch(/max_retries_exceeded/)
+      expect(after.status).toBe('pending')
+      expect(after.parked).toBeDefined()
+      expect(after.requeueCount ?? 0).toBe(0)
+      expect(after.targetNodeId).toBe('node_dead')
     } finally {
       cleanup(meshId)
     }

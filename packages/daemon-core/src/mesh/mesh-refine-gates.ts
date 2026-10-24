@@ -203,6 +203,8 @@ export type MeshRefineSubmoduleAlignmentSummary = {
 export type MeshRefineAsyncJobStatus = 'accepted' | 'completed' | 'failed';
 
 export type MeshRefineJobHandle = {
+    /** Durable authority: recovery must never downgrade an explicit mode. */
+    publicationContract?: import('./mesh-refine-publication-contract.js').RefinePublicationOptions;
     success: true;
     async: true;
     status: MeshRefineAsyncJobStatus;
@@ -458,7 +460,7 @@ export type RefineExecFileAsync = (file: string, args: string[], options: { cwd:
 export interface RefineContext {
     meshId: string;
     nodeId: string;
-    args: any;
+    args: import('./mesh-refine-publication-contract.js').RefineCommandArgs;
     refineStages: Array<Record<string, unknown>>;
     execFileAsync: RefineExecFileAsync;
     mesh: any;

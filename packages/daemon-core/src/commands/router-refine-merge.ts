@@ -15,6 +15,9 @@ import { probeRefineBaseCas, describeRefineBaseCasStage, buildRefineBaseCasBlock
 import { gitChildEnv } from '../git/git-locale.js';
 import { assertRefineryPublishApproved, PublicPublishApprovalRequired } from '../mesh/mesh-refine-gitlink-utils.js';
 import { resolveMeshPolicy } from '../repo-mesh-types.js';
+import { checkRefinePublicationContract, hasRefineApprovalContract } from '../mesh/mesh-refine-publication-contract.js';
+import { devNull } from 'node:os';
+import { pushRefineryPinnedCommit } from '../mesh/mesh-refine-pinned-push.js';
 
 /**
  * DS3: after a successful Refinery push advanced origin/<baseBranch>, bring the
@@ -204,10 +207,18 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                 }) };
             }
 
+            const contract = await checkRefinePublicationContract(ctx);
+            if (contract) return contract;
+
             let mergeResult: Record<string, unknown> | undefined;
             const mergeStarted = Date.now();
             try {
-                const result = await execFileAsync('git', ['merge', '--no-ff', branch, '-m', `Auto-merge branch '${branch}' via Refinery`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
+                // Merge the pinned object, never a movable branch name. FF-only
+                // bypasses every synthetic convergence/rebase path in sync_base.
+                const mergeArgs = args?.mergeMode === 'ff-only' || hasRefineApprovalContract(args)
+                    ? ['merge', '--ff-only', ctx.branchHead]
+                    : ['merge', '--no-ff', ctx.branchHead, '-m', `Auto-merge branch '${branch}' via Refinery`];
+                const result = await execFileAsync('git', mergeArgs, { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: { ...gitChildEnv(), GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: devNull } });
                 mergeResult = {
                     stdout: truncateValidationOutput(result.stdout),
                     stderr: truncateValidationOutput(result.stderr),
@@ -327,9 +338,14 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                     // below already reports) rather than an await that never settles.
                     const { stdout: tip } = await execFileAsync('git', ['--no-replace-objects', 'rev-parse', `${baseBranch}^{commit}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv() });
                     const publishCommit = tip.trim();
-                    await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas, 'origin', undefined, Math.max(1, submoduleReachability?.publicRepoCount || 0));
+                    const approvedTarget = args?.approvedTargetShas?.[nodeId];
+                    if (approvedTarget !== undefined && publishCommit !== approvedTarget) throw new Error('approved_target_mismatch: final publication target changed');
+                    await assertRefineryPublishApproved(repoRoot, publishCommit, baseBranch, args?.approvedPublishShas, 'origin', undefined, Math.max(1, submoduleReachability?.publicRepoCount || 0), {
+                        integrationBase: baseHead,
+                        onScan: scan => recordMeshRefineStage(refineStages, 'integration_range', scan.identityFindings || (scan.policy === 'public' && scan.pathFindings) ? 'failed' : 'passed', pushStarted, scan),
+                    });
                     // Push exactly what was approved/scanned, even if the branch moves.
-                    await execFileAsync('git', ['push', 'origin', `${publishCommit}:refs/heads/${baseBranch}`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true, env: gitChildEnv(), timeout: 30_000 });
+                    await pushRefineryPinnedCommit(repoRoot, publishCommit, baseBranch, baseHead, execFileAsync);
                     pushResult = { pushed: true, remote: 'origin', branch: baseBranch, durationMs: Date.now() - pushStarted };
                     recordMeshRefineStage(refineStages, 'push', 'passed', pushStarted, pushResult);
                 } catch (e: any) {
@@ -339,7 +355,7 @@ export async function runRefineMergeAndFinalizeLocked(self: DaemonCommandRouter,
                             success: false, code: 'publish_approval_required', convergenceStatus: 'blocked_review',
                             merged: true, mergedLocal: true, pushed: false, branch, into: baseBranch,
                             publishApprovalRequired: [{ path: '.', ...e.approval }],
-                            error: 'The local merge is retained; owner approval is required before publishing to a remote not proven private.',
+                            error: 'The local merge is retained; final publication must match the exact approved commit set and applicable guard policy.',
                             nextSteps: ['Show the owner every pending commit and its guard scan.', 'Rerun with approved_publish_shas resolving uniquely to exactly the listed full SHAs.'],
                             validationSummary, patchEquivalence, submoduleReachability, submoduleAlignment, mergeResult, refineStages,
                             finalBranchConvergenceState: { branch: baseBranch, mergedBranch: branch, baseBranch, merged: true, pushed: false, removed: false, status: 'merged_local_pending_push' },

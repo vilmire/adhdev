@@ -491,7 +491,7 @@ export function checkReportAgainstTaskMode(
     identity: WorkerTokenExchangeResult,
     report: WorkerCompletionReport,
 ): string | null {
-    let task: { readonly?: boolean; taskMode?: string } | null | undefined;
+    let task: { readonly?: boolean; taskMode?: string; phase?: string } | null | undefined;
     try {
         task = MeshRuntimeStore.getInstance().findQueueEntryById(identity.meshId, identity.taskId);
     } catch {
@@ -499,6 +499,11 @@ export function checkReportAgainstTaskMode(
     }
     if (!task) return null;
 
+    if (task.phase === 'source' && report.outcome === 'completed') {
+        if (report.branchState !== 'not_mergeable') return 'Source phase completion requires branchState=not_mergeable; integration acceptance is separate.';
+        const protectedPath = (report.touchedFiles ?? []).find(p => p === 'oss' || /(^|\/)(vendor|dist|node_modules|\.git)(\/|$)/.test(p));
+        if (protectedPath) return `Source phase cannot complete with generated/integration writes: ${protectedPath}`;
+    }
     const readonly = isTaskReadonly(task);
     const declaredFiles = [
         ...(report.touchedFiles || []),

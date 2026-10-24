@@ -38,7 +38,7 @@ import type { CanonicalMeshToolName } from '@adhdev/daemon-core';
 import type { MeshContext } from './mesh-tools.js';
 import {
     meshStatus, meshRoutePreview, meshListNodes, meshSendTask, meshReadChat,
-    meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue,
+    meshEnqueueTask, meshEnqueueBatch, meshViewQueue, meshQueueCancel, meshQueueRequeue, meshQueueRevise,
     meshReadDebug, meshReadTerminal, meshSendKeys,
     meshLaunchSession, meshGitStatus, meshReadNodeLogs, meshFastForwardNode, meshRestartDaemon,
     meshCheckpoint, meshApprove, meshAnswerQuestion, meshListPendingApprovals,
@@ -74,6 +74,7 @@ export const MESH_TOOL_DISPATCH: Readonly<Record<CanonicalMeshToolName, MeshTool
     mesh_enqueue_batch: (ctx, a) => meshEnqueueBatch(ctx, a as any),
     mesh_view_queue: (ctx, a) => meshViewQueue(ctx, a as any),
     mesh_queue_cancel: (ctx, a) => meshQueueCancel(ctx, a as any),
+    mesh_queue_revise: (ctx, a) => meshQueueRevise(ctx, a as any),
     mesh_queue_requeue: (ctx, a) => meshQueueRequeue(ctx, a as any),
     mesh_send_task: (ctx, a) => meshSendTask(ctx, a as any),
     mesh_read_chat: (ctx, a) => meshReadChat(ctx, a as any),

@@ -1,3 +1,4 @@
+import { getMachineId } from '../config/config.js';
 import { assertMaintenanceAdmission, assertMaintenanceNode, withMaintenanceEffect } from '../maintenance/cooperative-gate.js';
 import { findLocalCliInstance } from './cli-instance-lookup.js';
 export { readInstanceIdentity } from './cli-instance-lookup.js';
@@ -297,6 +298,7 @@ function buildClaimOptions(p: {
         capabilityTags: buildMeshNodeCapabilityTags(node, providerType),
         assignedTranscriptProfile,
         options: {
+            physicalContext: { workspace: readText(node?.workspace), machineId: getMachineId() ?? '' },
             providerType,
             ...(providerMaxParallel !== undefined ? { providerMaxParallel } : {}),
             ...(assignedModel ? { assignedModel } : {}),

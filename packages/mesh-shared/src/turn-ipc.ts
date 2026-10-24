@@ -132,6 +132,7 @@ export const TURN_IPC_COMMANDS = [
     'queue_enqueue_batch',
     'queue_cancel',
     'queue_requeue',
+    'queue_revise',
     'direct_dispatch_record',
     'active_work_query',
     'recovery_context_query',

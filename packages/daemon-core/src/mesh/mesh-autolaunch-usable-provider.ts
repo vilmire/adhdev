@@ -1,3 +1,4 @@
+import { preferEligible } from './mesh-task-routing-contract.js';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import { LOG } from '../logging/logger.js';
 import type { RepoMeshQuotaRoutingPolicy } from '../repo-mesh-types.js';
@@ -23,6 +24,7 @@ export async function resolveUsableProvider(
     quotaRouting?: RepoMeshQuotaRoutingPolicy | null,
     quotaFactsContext?: QuotaFactsContext | null,
     taskId?: string,
+    routingRefusal?: (provider: string) => string | undefined,
 ): Promise<ResolvedProviderSelection & {
     quotaGated?: Array<{ providerType: string; block: ProviderQuotaGateBlock }>;
     quotaClearOrder?: readonly string[];
@@ -70,6 +72,7 @@ export async function resolveUsableProvider(
     }
 
     const failed: string[] = [];
+    const routingRefusals: string[] = [];
     // ★PRE-SCORE EXCLUSIONS (prescore-exclusions-visibility): every slot this loop
     // rejects BEFORE it reaches usableSlots — required-tags mismatch or
     // slotProviderUnusableReason — is recorded here unconditionally, not only when
@@ -112,9 +115,12 @@ export async function resolveUsableProvider(
             preScoreExclusions.push({ providerType: requestedType, ...(slot.model ? { model: slot.model } : {}), reason: unusable });
             continue;
         }
+        const refusal = routingRefusal?.(normalizedType);
+        if (refusal) { routingRefusals.push(refusal); failed.push(`${requestedType}: ${refusal}`); preScoreExclusions.push({ providerType: normalizedType, reason: refusal }); continue; }
         usableSlots.push({ slot, providerType: normalizedType });
     }
     if (!usableSlots.length) {
+        if (routingRefusals.length) return { reason: routingRefusals.includes('review_input_unavailable') ? 'review_input_unavailable' : routingRefusals[0], preScoreExclusions };
         if (difficultyFloorRequired) {
             return { reason: `task_difficulty_floor_unavailable:${task!.difficulty}`, preScoreExclusions };
         }
@@ -133,7 +139,7 @@ export async function resolveUsableProvider(
     // reason so a quota WAIT is never conflated with a slot config error.
     const selection = selectProviderWithDiagnostics({
         node, nodeId, meshId, task: task!, taskId, quotaRouting, quotaFactsContext,
-        quotaBonusByProvider, difficultyFloorRequired, usableSlots, preScoreExclusions,
+        quotaBonusByProvider, difficultyFloorRequired, usableSlots: preferEligible(usableSlots, task?.routingPreferences?.providers, s => s.providerType), preScoreExclusions,
     });
     if (selection.reason) return { reason: selection.reason, preScoreExclusions };
     const { ranked, winner } = selection;

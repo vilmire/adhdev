@@ -202,3 +202,29 @@ export const MESH_QUEUE_REQUEUE_TOOL = {
         required: ['task_id'],
     },
 };
+
+export const MESH_QUEUE_REVISE_TOOL = {
+    name: 'mesh_queue_revise',
+    description: 'Atomically revise an existing PENDING task by expected revision (legacy revision is 0). Preserves id, mission, history and dependents. Edits message, ownership, source/integration phase or dependency graph; releases stale holds and reschedules immediately. Physical source migration requires an existing local node pin, attested by the host. Assigned/open attempts refuse; no force or active handoff in version 1. Source completion is uncommitted/not_mergeable, never release acceptance.',
+    inputSchema: {
+        type: 'object' as const, additionalProperties: false,
+        required: ['task_id', 'expected_revision', 'patch'],
+        properties: {
+            task_id: { type: 'string' }, expected_revision: { type: 'integer', minimum: 0 },
+            patch: { type: 'object', additionalProperties: false, minProperties: 1,
+                properties: {
+                    message: { type: 'string', minLength: 1 },
+                    ownedPaths: { type: 'array', minItems: 1, items: { type: 'string' } },
+                    phase: { type: 'string', enum: ['source', 'integration'] },
+                    dependsOn: { type: 'array', items: { type: 'string' } },
+                    routingPreferences: { type: 'object', additionalProperties: false, properties: {
+                        nodeIds: { type: 'array', items: { type: 'string' } }, providers: { type: 'array', items: { type: 'string' } },
+                    } },
+                    review: { type: 'object', additionalProperties: false, required: ['sourceTaskId', 'differentProvider'], properties: {
+                        sourceTaskId: { type: 'string' }, differentProvider: { const: true },
+                    } },
+                },
+            },
+        },
+    },
+};

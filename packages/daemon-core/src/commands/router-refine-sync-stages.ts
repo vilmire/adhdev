@@ -5,7 +5,9 @@
  * the extended RefineContext. Split out of router-refine.ts, which keeps the pipeline
  * driver and the later stages.
  */
+import type { RefineCommandArgs } from '../mesh/mesh-refine-publication-contract.js';
 import type { DaemonCommandRouter } from './router.js';
+import { checkRefinePublicationContract, hasRefineApprovalContract } from '../mesh/mesh-refine-publication-contract.js';
 import { RefineStageOutcome, recordMeshRefineStage, RefineExecFileAsync, RefineContext, runMeshRefinePatchEquivalenceGate, resolveRefineryAutoPublishSubmoduleMainCommits, convergeDivergedSubmoduleGitlinks, describeMintedUnpublishedCommits, buildSubmoduleConvergeDeclineDetails, describeSubmoduleConvergeDecline, collectTrivialFastForwardGitlinkResolutions, rootRebaseResolvingGitlinks, buildGeneratedBundleResolutionStageDetail, classifyAndWarnPatchEquivalenceFailure } from '../mesh/mesh-refine-gates.js';
 import { meshNodeIdMatches } from '@adhdev/mesh-shared';
 import { existsSync } from 'node:fs';
@@ -24,7 +26,7 @@ import { classifyRefineRebaseFailure, buildRefineRebaseFailureError } from '../m
 export async function refineResolveRefsStage(self: DaemonCommandRouter, 
         meshId: string,
         nodeId: string,
-        args: any,
+        args: RefineCommandArgs,
         refineStages: Array<Record<string, unknown>>,
     ): Promise<RefineStageOutcome> {
             // preferInline: same as startMeshRefineJob — inline-cache-only clone nodes must resolve.
@@ -234,6 +236,14 @@ async function computeBranchBaseDivergence(
      * no-op passed stage.
      */
 export async function refineSyncBaseStage(self: DaemonCommandRouter, ctx: RefineContext): Promise<RefineStageOutcome> {
+            const contract = await checkRefinePublicationContract(ctx);
+            if (contract) return contract;
+            if (ctx.args?.mergeMode === 'ff-only' || hasRefineApprovalContract(ctx.args)) {
+                recordMeshRefineStage(ctx.refineStages, 'sync_base', 'passed', Date.now(), {
+                    rebased: false, reason: 'approval_contract_preserves_candidate', target: ctx.branchHead,
+                });
+                return { kind: 'continue', ctx };
+            }
             const { repoRoot, baseHead, node, branch, baseBranch, refineStages, execFileAsync } = ctx;
             let branchHead = ctx.branchHead;
             // Converged submodule gitlink resolutions (path → rebased commit) from STEP 1;

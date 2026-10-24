@@ -1,5 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process';
+import { snapshotRefinePublicationContract } from '../../src/mesh/mesh-refine-publication-contract.js';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -9,6 +11,8 @@ import { resumePendingRefineJobsOnStartup } from '../../src/commands/router-refi
 import { createMesh, addNode } from '../../src/config/mesh-config'
 import { MeshRuntimeStore } from '../../src/mesh/mesh-runtime-store'
 import { insertLocalRecordRow } from '../helpers/local-records'
+import { readLocalRecords } from '../../src/mesh/mesh-local-records'
+import type { RefinePublicationOptions } from '../../src/mesh/mesh-refine-publication-contract'
 
 /**
  * JOBID-RESUME-PRESERVE regression suite.
@@ -55,7 +59,7 @@ function createRouter() {
 // timestamp. mesh-ledger.ts's own seedLocalRecord always stamps `new
 // Date().toISOString()`, which cannot express "dispatched N ms ago" for the
 // grace/cutoff tests below.
-function appendDispatchedEntry(meshId: string, nodeId: string, jobId: string, timestamp: string) {
+function appendDispatchedEntry(meshId: string, nodeId: string, jobId: string, timestamp: string, publicationContract?: RefinePublicationOptions) {
   insertLocalRecordRow({
     id: randomUUID(),
     meshId,
@@ -64,7 +68,7 @@ function appendDispatchedEntry(meshId: string, nodeId: string, jobId: string, ti
     nodeId,
     payload: {
       source: 'refine_mesh_node_async_job',
-      refineJob: { jobId, meshId, nodeId, status: 'accepted', startedAt: timestamp },
+      refineJob: { jobId, meshId, nodeId, status: 'accepted', startedAt: timestamp, publicationContract },
       async: true,
     },
   })
@@ -142,6 +146,54 @@ describe('resumePendingRefineJobsOnStartup — JOBID-RESUME-PRESERVE', () => {
     const key = `${meshId}:node-fresh-dispatch`
     expect((router as any).runningRefineJobs.has(key)).toBe(false)
   })
+
+  it('rc28 recovery preserves FF-only authority and records it on the resumed dispatch', async () => {
+    const nodeId = 'node-strict-dispatch';
+    const meshId = setUpMeshWithWorktreeNode(nodeId);
+    const contract: RefinePublicationOptions = { mergeMode: 'ff-only', approvedTargetShas: { [nodeId]: 'a'.repeat(40) }, approvedPublishShas: { root: ['a'.repeat(40)] } };
+    appendDispatchedEntry(meshId, nodeId, 'refine_strict_recovery', new Date(Date.now() - 600_000).toISOString(), contract);
+    const router = createRouter();
+    await resumePendingRefineJobsOnStartup(router);
+    // Recovery schedules async acceptance; wait for its durable dispatch rather
+    // than inspecting the synchronous slot-reservation placeholder.
+    await vi.waitFor(() => {
+      const dispatches = readLocalRecords(meshId, { kind: ['task_dispatched'], turnTerminals: false });
+      expect(dispatches.filter(e => JSON.stringify((e.payload as any).refineJob?.publicationContract) === JSON.stringify(contract)).length).toBe(2);
+    });
+  })
+
+  for (const kind of ['divergent approved batch node', 'undefined map', 'missing node', 'corrupt envelope'] as const) {
+    it(`R2 durable recovery ${kind} retains authority and refuses before rewrite/commit/push`, async () => {
+      const nodeId = 'node-recovery'; const meshId = setUpMeshWithWorktreeNode(nodeId);
+      const repo = join(root, 'repo'), worktree = join(root, 'worktree'), bare = join(root, 'remote.git');
+      const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      git(repo, 'init', '-q', '-b', 'main'); git(repo, 'config', 'user.name', 'vilmire'); git(repo, 'config', 'user.email', 'vilmire@users.noreply.github.com');
+      writeFileSync(join(repo, 'base'), 'base'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'Fixture base');
+      git(repo, 'init', '-q', '--bare', '-b', 'main', bare); git(repo, 'remote', 'add', 'origin', bare); git(repo, 'push', '-qu', 'origin', 'main');
+      git(repo, 'worktree', 'add', '-qb', 'feat/refine', worktree);
+      writeFileSync(join(worktree, 'candidate'), 'approved'); git(worktree, 'add', '.'); git(worktree, 'commit', '-qm', 'Approved candidate');
+      const target = git(worktree, 'rev-parse', 'HEAD');
+      writeFileSync(join(repo, 'advance'), 'main advanced'); git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'Main advance'); git(repo, 'push', '-q', 'origin', 'main');
+      const before = { refs: git(repo, 'show-ref', '--heads'), parents: git(worktree, 'show', '-s', '--format=%P', 'HEAD'), count: git(repo, 'cat-file', '--batch-all-objects', '--batch-check=%(objecttype)'), remote: git(bare, 'rev-parse', 'main') };
+      const contract = kind === 'corrupt envelope' ? null : snapshotRefinePublicationContract({ mergeMode: 'merge',
+        ...(kind === 'divergent approved batch node' ? { approvedPublishShasByNode: { [nodeId]: { root: [target] } } }
+          : kind === 'undefined map' ? { approvedPublishShasByNode: undefined } : { approvedPublishShasByNode: {} }),
+      });
+      appendDispatchedEntry(meshId, nodeId, 'refine_r2_recovery', new Date(Date.now() - 600_000).toISOString(), contract as any);
+      const trace = join(root, 'trace'); writeFileSync(trace, ''); const oldTrace = process.env.GIT_TRACE; process.env.GIT_TRACE = trace;
+      try {
+        const router = createRouter(); await resumePendingRefineJobsOnStartup(router);
+        await vi.waitFor(() => {
+          const terminal = readLocalRecords(meshId, { kind: ['task_failed'], turnTerminals: false }).find(e => (e.payload as any)?.refineJob?.jobId === 'refine_r2_recovery');
+          expect((terminal?.payload as any)?.result?.code).toBe(kind === 'divergent approved batch node' ? 'approved_history_requires_ff' : 'publish_approval_required');
+        }, { timeout: 15000 });
+        const dispatches = readLocalRecords(meshId, { kind: ['task_dispatched'], turnTerminals: false });
+        expect(dispatches.some(e => JSON.stringify((e.payload as any).refineJob?.publicationContract) === JSON.stringify(contract === null ? { approvedPublishShas: null } : contract))).toBe(true);
+        expect({ refs: git(repo, 'show-ref', '--heads'), parents: git(worktree, 'show', '-s', '--format=%P', 'HEAD'), count: git(repo, 'cat-file', '--batch-all-objects', '--batch-check=%(objecttype)'), remote: git(bare, 'rev-parse', 'main') }).toEqual(before);
+        expect(readFileSync(trace, 'utf8')).not.toMatch(/built-in: git (?:[^\n]* )?(?:rebase|commit|commit-tree|merge|push)(?: |$)/m);
+      } finally { if (oldTrace === undefined) delete process.env.GIT_TRACE; else process.env.GIT_TRACE = oldTrace; }
+    }, 30000);
+  }
 
   it('③closes out an ancient (past the zombie cutoff) dispatch as failed WITHOUT resuming it, and does not re-surface it on a later boot', async () => {
     const meshId = setUpMeshWithWorktreeNode('node-ancient-dispatch')

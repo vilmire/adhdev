@@ -1,3 +1,4 @@
+import { decodeQueueReviseResponse, type QueueReviseRequest, type QueueReviseResponse } from '@adhdev/mesh-shared';
 /**
  * turn-commands — typed client for the six C-W6 IPC commands
  * (`@adhdev/mesh-shared` `turn-ipc.ts`), executed in the daemon that owns the
@@ -547,4 +548,8 @@ export async function orphanedPinNotify(
     args: Omit<OrphanedPinNotifyRequest, 'v'>,
 ): Promise<OrphanedPinNotifyResponse> {
     return dispatch(transport, 'orphaned_pin_notify', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeOrphanedPinNotifyResponse);
+}
+
+export async function queueRevise(transport: CommandTransport, args: Omit<QueueReviseRequest, 'v'>): Promise<QueueReviseResponse> {
+    return dispatch(transport, 'queue_revise', { v: TURN_IPC_PROTOCOL_VERSION, ...args }, decodeQueueReviseResponse);
 }

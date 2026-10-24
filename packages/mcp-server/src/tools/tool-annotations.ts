@@ -227,6 +227,7 @@ export const TOOL_ANNOTATIONS: Record<string, ToolBehaviorAnnotations> = {
   mesh_queue_cancel: DESTRUCTIVE_LOCAL,
   // Returns a task to pending, optionally REWRITING its instruction (the
   // previous instruction is overwritten).
+  mesh_queue_revise: DESTRUCTIVE_LOCAL,
   mesh_queue_requeue: DESTRUCTIVE_LOCAL,
   // Restores held events back to pending. Explicitly documented as lossless.
 

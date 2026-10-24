@@ -47,6 +47,10 @@ export type MeshClaimRefusalReason =
     | 'convergence_target_is_worktree'
     /** The row is pinned to a different node/session than the one claiming. */
     | 'target_pin_unmatched'
+    | 'physical_context_changed'
+    | 'review_independence_required'
+    | 'review_input_unavailable'
+    | 'review_input_busy'
     /** The claiming session's slot/model does not clear the task's difficulty floor. */
     | 'difficulty_floor_unmet'
     /** The (daemon, provider) or per-slot maxParallel cap is already consumed. */

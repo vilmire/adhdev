@@ -238,7 +238,7 @@ async function networkEnv(cwd) {
 /** Fresh union of commits absent from each actual push destination branch.
  * Unlike the history scan's optional proof, unreadable approval evidence is fatal.
  */
-export async function publicPushPendingCommits(cwd, commit, remoteRef, urls) {
+export async function publicPushPendingCommits(cwd, commit, remoteRef, urls, expectedBase) {
   if (!urls.length || urls.every(url => !url)) throw new Error('no readable push destination');
   const pending = new Set();
   for (const destination of urls) {
@@ -252,9 +252,21 @@ export async function publicPushPendingCommits(cwd, commit, remoteRef, urls) {
       if (lines.length !== 1 || !/^[0-9a-f]{40,64}$/.test(fields[0]) || fields[1] !== remoteRef) throw new Error('invalid destination branch advertisement');
       remoteSha = fields[0];
     }
+    if (expectedBase !== undefined && (remoteSha || '0'.repeat(40)) !== expectedBase) throw new Error('integration base moved at push destination; refusing publication');
     for (const sha of await newCommits(cwd, 'origin', commit, remoteSha, [])) pending.add(sha);
   }
   return [...pending];
+}
+
+/** Pin the actual destination branch, never a cached remote-tracking ref. */
+export async function readPushIntegrationBase(cwd, destination, remoteRef) {
+  const rewritten = (await runGit(cwd, ['ls-remote', '--get-url', '--', destination])).trim();
+  if (rewritten !== destination) throw new Error('push destination rewritten during integration lookup');
+  const raw = (await runGit(cwd, ['ls-remote', '--refs', '--', destination, remoteRef], { env: await networkEnv(cwd) })).trim();
+  if (!raw) return '0'.repeat(40);
+  const fields = raw.split(/\s+/);
+  if (fields.length !== 2 || !/^[0-9a-f]{40,64}$/.test(fields[0]) || fields[1] !== remoteRef) throw new Error('invalid integration branch advertisement');
+  return fields[0];
 }
 
 /** Only fresh destination advertisements prove possession, never refs/remotes/*. */
@@ -540,7 +552,7 @@ async function tagViolations(reader, objectSha, scan, scanRef) {
  * @param entries [{ localRef, localSha, remoteRef, remoteSha }]
  * @returns {Promise<{ violations: object[], checked: number }>}
  */
-export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns } = {}) {
+export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'origin', remoteUrl, findLeaksFn, ownerNames = currentUserNames(), patterns, integrationBase } = {}) {
   if (!patterns && !findLeaksFn) patterns = await loadPublicPushPatternsForRepo(cwd);
   const names = new Set([...currentUserNames(), ...ownerNames, ...(patterns?.ownerNames || [])]);
   const scan = findLeaksFn || ((t) => patterns ? findLeaksWithPatterns(t, patterns, names) : findLeaks(t, names));
@@ -561,18 +573,27 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
   const reader = () => (batch ||= openBatchReader(cwd));
   try {
   const active = entries.filter((e) => e.localSha && !ZERO.test(e.localSha));
-  const proven = active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
-  proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
+  // An intended integration range is independent of ALL remote advertisements.
+  // Its base must be a real, pinned ancestor; missing objects fail closed.
+  if (integrationBase !== undefined && !/^[0-9a-f]{40,64}$/.test(integrationBase)) throw new Error('invalid integration base');
+  const proven = integrationBase !== undefined ? [] : active.length ? await destinationCommits(cwd, remoteName, remoteUrl) : [];
+  if (integrationBase === undefined) proven.push(...await locallyReadableCommits(cwd, new Set(entries.map((e) => e.remoteSha))));
   for (const e of entries) {
     if (!e.localSha || ZERO.test(e.localSha)) continue; // deleting a ref pushes no content
     const ref = e.localRef || e.localSha;
     const add = (list) => list.forEach((v) => violations.push({ ...v, ref }));
+    // Source-only checkpoints intentionally carry stale generated outputs. No
+    // remote advertisement, approved SHA list or private/public classification
+    // can turn a source tip into a publishable candidate.
+    const phaseMarkers = await runGit(cwd, ['ls-tree', '-z', e.localSha, '--', 'scripts/refine-source-phase.json', 'scripts/lib/refine-source-phase.json']);
+    if (phaseMarkers.trim()) add([{ kind: 'source_phase', sha: e.localSha, file: '(source phase)', line: 1, detail: 'source_not_publishable: combined generation and final gates required' }]);
     for (const l of scanRef(e.remoteRef || '')) add([{ kind: 'path', sha: e.localSha, file: '(destination ref)', line: l.line, detail: l.name || l.match }]);
     if (e.localRef?.startsWith('refs/tags/')) {
       for (const l of scanRef(e.localRef)) add([{ kind: 'path', sha: e.localSha, file: '(tag name)', line: l.line, detail: l.name || l.match }]);
     }
     if (e.localSha !== e.remoteSha) add(await tagViolations(reader(), e.localSha, scan, scanRef));
-    const shas = (await newCommits(cwd, remoteName, e.localSha, e.remoteSha, proven)).filter((s) => !seen.has(s));
+    if (integrationBase !== undefined && !ZERO.test(integrationBase)) await runGit(cwd, ['merge-base', '--is-ancestor', integrationBase, e.localSha]);
+    const shas = (await newCommits(cwd, remoteName, e.localSha, integrationBase ?? e.remoteSha, proven)).filter((s) => !seen.has(s));
     shas.forEach((s) => seen.add(s));
     add(await identityViolations(cwd, shas));
     add(await messageViolations(cwd, shas, scan));
@@ -584,6 +605,7 @@ export async function checkPush(entries, { cwd = process.cwd(), remoteName = 'or
 
 export function formatViolation(v) {
   if (v.kind === 'identity') return `  ${v.sha.slice(0, 12)} [${v.ref}] identity: ${v.detail}`;
+  if (v.kind === 'source_phase') return `  ${v.sha.slice(0, 12)} [${v.ref}] ${v.detail}`;
   return `  ${v.sha.slice(0, 12)} [${v.ref}] ${v.file}:${v.line}  personal path: ${v.detail}`;
 }
 
@@ -593,9 +615,9 @@ export const BLOCKED_HINT = `Required identity: ${REQUIRED_NAME} <${REQUIRED_EMA
  * Refinery/auto-publish entry point: throws (message = full report) unless
  * `commit` may be published to the public oss remote. Fail-closed: scan errors throw.
  */
-export async function assertPublishableToPublicOss(cwd, commit, { remoteName = 'origin', remoteUrl, remoteRef = 'refs/heads/main', patterns } = {}) {
+export async function assertPublishableToPublicOss(cwd, commit, { remoteName = 'origin', remoteUrl, remoteRef = 'refs/heads/main', patterns, integrationBase } = {}) {
   patterns ||= await loadPublicPushPatternsForRepo(cwd);
-  const { violations, checked } = await checkPush([{ localRef: commit, localSha: commit, remoteRef, remoteSha: '0'.repeat(40) }], { cwd, remoteName, remoteUrl, patterns });
+  const { violations, checked } = await checkPush([{ localRef: commit, localSha: commit, remoteRef, remoteSha: '0'.repeat(40) }], { cwd, remoteName, remoteUrl, patterns, integrationBase });
   if (violations.length) {
     throw new Error(`public-oss push guard BLOCKED ${violations.length} violation(s) in ${checked} commit(s):\n${violations.slice(0, 20).map(formatViolation).join('\n')}\n${BLOCKED_HINT}`);
   }

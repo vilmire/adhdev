@@ -491,3 +491,28 @@ function isRecoveryContextQueryResponse(value: unknown): value is RecoveryContex
 export function decodeRecoveryContextQueryResponse(value: unknown): RecoveryContextQueryResponse | null {
     return isRecoveryContextQueryResponse(value) ? value : null
 }
+
+// ── queue_revise: host-authenticated pending CAS, never a force requeue ──
+export interface QueueReviseRequest {
+    v: typeof TURN_IPC_PROTOCOL_VERSION
+    meshId: string
+    taskId: string
+    expectedRevision: number
+    patch: { message?: string; ownedPaths?: string[]; phase?: 'source' | 'integration'; dependsOn?: string[]; routingPreferences?: import('./task-source-phase').MeshRoutingPreferences; review?: import('./task-source-phase').MeshReviewConstraint }
+}
+export type QueueReviseResponse = QueueRequeueResponse
+export function decodeQueueReviseRequest(value: unknown): QueueReviseRequest | null {
+    if (!isRecord(value) || !hasOnlyKeys(value, ['v', 'meshId', 'taskId', 'expectedRevision', 'patch'])
+        || value.v !== TURN_IPC_PROTOCOL_VERSION || !isEvidenceIdentifier(value.meshId) || !isEvidenceIdentifier(value.taskId)
+        || !Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0
+        || !isRecord(value.patch) || !Object.keys(value.patch).length
+        || !hasOnlyKeys(value.patch, ['message', 'ownedPaths', 'phase', 'dependsOn', 'routingPreferences', 'review'])) return null
+    const p = value.patch
+    if (p.message !== undefined && (typeof p.message !== 'string' || !p.message.trim())) return null
+    if (p.phase !== undefined && p.phase !== 'source' && p.phase !== 'integration') return null
+    for (const key of ['ownedPaths', 'dependsOn']) {
+        if (p[key] !== undefined && (!Array.isArray(p[key]) || !(p[key] as unknown[]).every(x => typeof x === 'string' && !!x.trim()))) return null
+    }
+    return value as unknown as QueueReviseRequest
+}
+export const decodeQueueReviseResponse = decodeQueueRequeueResponse

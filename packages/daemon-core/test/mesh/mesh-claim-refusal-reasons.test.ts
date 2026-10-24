@@ -258,7 +258,7 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
     }
   })
 
-  it('owned_paths non-overlapping declarations across DIFFERENT daemons both claim fine', () => {
+  it('legacy non-overlapping paths across different daemon labels do not prove isolation', () => {
     const meshId = `mesh_refuse_ownedpaths_crossdaemon_ok_${randomUUID().slice(0, 8)}`
     const NODE_DESKTOPA = 'node_desktopa'
     const NODE_DEVLAPTOP = 'node_devlaptop'
@@ -278,8 +278,8 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
         ownedPaths: ['docs/OTHER.md'],
       })
       const { task, refusal } = claim(meshId, {}, { nodeId: NODE_DEVLAPTOP, sessionId: 'session_devlaptop' })
-      expect(task?.id).toBe(t2.id)
-      expect(refusal.reason).toBeUndefined()
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('owned_paths_conflict')
     } finally {
       cleanup(meshId)
     }
@@ -313,7 +313,7 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
     }
   })
 
-  it('owned_paths_conflict across daemons is OPT-IN — an in-flight task with no declaration never conflicts', () => {
+  it('legacy writers without declarations retain physical fences across daemon labels', () => {
     const meshId = `mesh_refuse_ownedpaths_crossdaemon_optin_${randomUUID().slice(0, 8)}`
     const NODE_DESKTOPA = 'node_desktopa'
     const NODE_DEVLAPTOP = 'node_devlaptop'
@@ -332,14 +332,14 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
         ownedPaths: ['docs/CONCEPTS.md'],
       })
       const { task, refusal } = claim(meshId, {}, { nodeId: NODE_DEVLAPTOP, sessionId: 'session_devlaptop' })
-      expect(task?.id).toBe(t2.id)
-      expect(refusal.reason).toBeUndefined()
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('owned_paths_conflict')
     } finally {
       cleanup(meshId)
     }
   })
 
-  it('owned_paths non-overlapping declarations on sibling nodes both claim fine', () => {
+  it('legacy non-overlapping paths on sibling nodes retain physical fences', () => {
     const meshId = `mesh_refuse_ownedpaths_ok_${randomUUID().slice(0, 8)}`
     const NODE_B = 'node_beta'
     const daemonNodeIds = [NODE_A, NODE_B]
@@ -353,21 +353,20 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
         taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/b.ts'],
       })
       const { task, refusal } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
-      expect(task?.id).toBe(second.id)
-      expect(refusal.reason).toBeUndefined()
+      expect(task).toBeNull()
+      expect(refusal.reason).toBe('owned_paths_conflict')
     } finally {
       cleanup(meshId)
     }
   })
 
-  it('owned_paths_conflict is OPT-IN — a candidate or in-flight task with no declaration never conflicts', () => {
+  it('legacy candidates and holders without declarations retain physical fences', () => {
     const meshId = `mesh_refuse_ownedpaths_optin_${randomUUID().slice(0, 8)}`
     const NODE_B = 'node_beta'
     const daemonNodeIds = [NODE_A, NODE_B]
     try {
-      // First task declares ownership; second declares NONE — must not conflict even
-      // though (hypothetically) they could touch the same files. Absent declaration
-      // performs no overlap check, by design (backward compat).
+      // First task declares paths; the second declares none. Neither carries
+      // physical proof, so the second writer must remain held conservatively.
       const first = enqueueTask(meshId, 'first work', {
         taskMode: 'code_change', difficulty: 'medium', ownedPaths: ['src/shared.ts'],
       })
@@ -375,7 +374,7 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
 
       const second = enqueueTask(meshId, 'second work', { taskMode: 'code_change', difficulty: 'medium' })
       const { task } = claim(meshId, { daemonNodeIds }, { nodeId: NODE_B, sessionId: 'session_beta' })
-      expect(task?.id).toBe(second.id)
+      expect(task).toBeNull()
     } finally {
       cleanup(meshId)
     }
@@ -542,7 +541,8 @@ describe('A6-SILENT-REFUSAL — every claim gate is individually attributable', 
         ownedPaths: ['oss/packages/daemon-core/src/mesh/mesh-work-queue.ts'],
       })
       const disjointAdmission = evaluateTaskOwnedPathsAdmission(store, meshId, disjoint)
-      expect(disjointAdmission.allowed).toBe(true)
+      expect(disjointAdmission.allowed).toBe(false)
+      expect(disjointAdmission.detail).toContain(holder.id)
     } finally {
       cleanup(meshId)
     }

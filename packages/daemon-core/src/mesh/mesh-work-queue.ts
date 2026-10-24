@@ -181,7 +181,8 @@ export function claimNextTask(
     sessionId: string,
     capabilityTags?: string[],
     opts?: {
-        providerType?: string;
+        physicalContext?: import('./mesh-task-routing-contract.js').ReviewRoutingContext;
+            providerType?: string;
         providerMaxParallel?: number;
         /** Model the claiming session launched with — stamped so per-slot caps can be counted. */
         assignedModel?: string;

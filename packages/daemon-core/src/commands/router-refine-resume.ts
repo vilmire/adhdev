@@ -1,3 +1,4 @@
+import { restoreRefinePublicationContract } from '../mesh/mesh-refine-publication-contract.js';
 /**
  * REFINE-RESUME-SCAN — the boot-time pass that reconciles refine dispatches the
  * ledger never closed in the LIVE set.
@@ -210,6 +211,7 @@ export async function resumePendingRefineJobsOnStartup(self: DaemonCommandRouter
                     LOG.info('Mesh', `[Refinery] Auto-resuming interrupted refine job for node ${nodeId} (jobId=${jobId})`);
                     const { startMeshRefineJob } = await import('./router-refine.js');
                     void startMeshRefineJob(self, meshId, nodeId, {
+                        ...(Object.prototype.hasOwnProperty.call(node || {}, 'publicationContract') ? restoreRefinePublicationContract(node.publicationContract) : {}),
                         jobId,
                         coordinatorDaemonId,
                         coordinatorSessionId,

@@ -1,3 +1,4 @@
+import { comparePhysicalOwnership, currentPhysicalScope } from './mesh-physical-ownership.js';
 import { findOwnershipConflicts, meshNodeIdMatches } from '@adhdev/mesh-shared';
 import type { MeshWorkQueueEntry } from './mesh-work-queue-types.js';
 
@@ -28,8 +29,14 @@ export function queueHoldContext(task: MeshWorkQueueEntry, reason: string, queue
     const overlaps: NonNullable<MeshQueueHold['detail']['overlappingPaths']> = [];
     if (reason === 'owned_paths_conflict' && task.ownedPaths) {
         for (const other of active) {
-            if (!other.ownedPaths || other.readonly || other.taskMode === 'live_debug_readonly') continue;
-            for (const owned of task.ownedPaths.paths) for (const blocking of other.ownedPaths.paths) {
+            const isReadonly = other.readonly || other.taskMode === 'live_debug_readonly';
+            const blockingScope = isReadonly ? other.reviewInputScope : other.ownershipScope;
+            const blockingPaths = isReadonly && blockingScope ? { paths: blockingScope.declaration } : other.ownedPaths;
+            if (!blockingPaths || (isReadonly && !blockingScope)) continue;
+            const physical = comparePhysicalOwnership(task.ownedPaths, currentPhysicalScope(task.ownershipScope, task.ownedPaths), blockingPaths, currentPhysicalScope(blockingScope, blockingPaths));
+            if (!physical.physicalConflict) continue;
+            if (!physical.logicalOverlap) overlaps.push({ taskId: other.id, ownedPath: 'physical_workspace_or_shared_resource', blockingPath: 'physical_workspace_or_shared_resource' });
+            for (const owned of task.ownedPaths.paths) for (const blocking of blockingPaths.paths) {
                 if (findOwnershipConflicts({ paths: [owned] }, [{ taskId: other.id, paths: { paths: [blocking] } }]).length) {
                     overlaps.push({ taskId: other.id, ownedPath: owned.path + (owned.subtree ? '/**' : ''), blockingPath: blocking.path + (blocking.subtree ? '/**' : '') });
                 }

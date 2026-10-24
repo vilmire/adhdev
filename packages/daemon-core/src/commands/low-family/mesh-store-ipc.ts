@@ -1,3 +1,8 @@
+import { getMesh } from '../../config/mesh-config.js';
+import { decodeQueueReviseRequest, daemonIdsEquivalent } from '@adhdev/mesh-shared';
+import { getMachineId } from '../../config/config.js';
+import { revisePendingTask } from '../../mesh/mesh-task-revision.js';
+import { triggerMeshQueue } from '../../mesh/mesh-queue-assignment.js';
 import { queueTaskHoldView } from '../../mesh/mesh-queue-hold.js';
 /**
  * mesh-store-ipc — daemon-side responders for the IPC commands through which
@@ -392,6 +397,30 @@ const queueRequeue: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any)
     }
 };
 
+/** Local IPC/standalone only; host identity and node paths come from daemon state. */
+const queueRevise: LowFamilyHandler = async (ctx, args: unknown) => {
+    const req = decodeQueueReviseRequest(args);
+    if (!req) return badRequest('queue_revise');
+    try {
+        const mesh = getMesh(req.meshId);
+        const self = ctx.deps.statusInstanceId;
+        const host = resolveMeshHostStatus(mesh, { localDaemonId: self });
+        if (!mesh || !self || host.role !== 'host' || !host.hostDaemonId || !daemonIdsEquivalent(host.hostDaemonId, self)) throw new Error('authenticated_mesh_host_required');
+        const task = MeshRuntimeStore.getInstance().findQueueEntryById(req.meshId, req.taskId);
+        const node = mesh.nodes?.find((n: { id?: string }) => n.id === task?.targetNodeId);
+        const localNode = node && daemonIdsEquivalent(node.daemonId, self) ? node : undefined;
+        const machineId = getMachineId();
+        if (!machineId || !mesh.repoIdentity) throw new Error('authenticated_repo_machine_required');
+        const edited = revisePendingTask(req.meshId, req.taskId, req.expectedRevision, req.patch, {
+            actor: self, repoIdentity: mesh.repoIdentity, machineId,
+            ...(localNode ? { nodeId: localNode.id, workspace: localNode.workspace } : {}),
+        });
+        // Admission commits first. Trigger from the host boundary, including non-MCP clients.
+        try { void triggerMeshQueue(ctx.components(), req.meshId).catch(e => LOG.warn('MeshQueue', `Revision reschedule: ${String(e)}`)); } catch { /* boot drain will retry */ }
+        return { success: true, task: queueWire(edited) };
+    } catch (e) { return failure(e); }
+};
+
 // ─── direct_dispatch_record ─────────────────────────────────────────────────
 
 const directDispatchRecord: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) => {
@@ -528,6 +557,7 @@ export const meshStoreIpcHandlers: Record<string, LowFamilyHandler> = {
     queue_enqueue_batch: queueEnqueueBatch,
     queue_cancel: queueCancel,
     queue_requeue: queueRequeue,
+    queue_revise: queueRevise,
     direct_dispatch_record: directDispatchRecord,
     active_work_query: activeWorkQuery,
     recovery_context_query: recoveryContextQuery,

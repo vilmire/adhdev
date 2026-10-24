@@ -3,7 +3,12 @@ export const PUBLIC_PUBLISH_APPROVAL_SCHEMA = {
         { type: 'array', items: { type: 'string' } },
         { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } } },
     ],
-    description: 'Owner approval for public or unknown destinations; otherwise publish_approval_required. Use a per-repo mapping such as {"oss": ["sha"], "adhdev-providers": ["sha"], "root": ["sha"]}. Keys are submodule paths or root. Each set must equal that repository pending commits exactly, with uniquely resolving SHAs. Flat arrays are accepted only when exactly one public repository is pending. Private pattern config must be available before publishing.',
+    description: 'Owner approval for public or unknown destinations; otherwise publish_approval_required. Use a per-repo mapping such as {"oss": ["sha"], "adhdev-providers": ["sha"], "root": ["sha"]}. An explicit mapping also constrains private root publication. Each set must equal that repository pending commits exactly, including generated commits, with uniquely resolving SHAs. Flat arrays are accepted only when exactly one public repository is pending. Private pattern config must be available before publishing.',
+};
+
+const REFINE_PUBLICATION_PROPERTIES = {
+    merge_mode: { type: 'string', enum: ['merge', 'ff-only'], description: 'Explicit convergence mode. Any explicit approval/target contract prohibits automatic rebase or generated history, including omitted/merge mode. If fast-forward is impossible, stop and ask for owner authorization. Without a contract, omitted/merge retains the existing workflow. ff-only additionally requires approved_target_shas for every node and lands the pinned SHA via merge --ff-only.' },
+    approved_target_shas: { type: 'object', additionalProperties: { type: 'string', pattern: '^[0-9a-f]{40,64}$' }, description: 'Exact final root SHA keyed by node ID, including every node in a batch. Required for ff-only. Also provide approved_publish_shas with the exact root and submodule commit sets; generated commits need their own explicit approval.' },
 };
 
 /**
@@ -20,7 +25,7 @@ export const MESH_REFINE_NODE_TOOL = {
         + 'Defaults to dry-run (plan only): returns the validation plan with mergeWillRun:false/cleanupWillRun:false and performs NO merge/push/cleanup. '
         + 'Pass execute=true to actually converge the node. execute=true is async: the immediate response includes async:true, status:\'accepted\', jobId, interactionId, target node, and startedAt; completion/failure evidence is delivered through pending mesh events and the mesh task ledger. '
         + 'dry_run=true overrides execute. Matches the mesh_refine_batch / mesh_fast_forward_node dry_run/execute contract. '
-        + 'Converges ONE node: to land two or more sibling worktrees that share a base branch, use mesh_refine_batch instead of calling this repeatedly — it orders the nodes conflict-aware and auto-rebases each one onto the base its predecessors advanced, which repeated single-node calls leave to you (and which can contend on the base lease as base_locked).',
+        + 'Converges ONE node: to land two or more sibling worktrees that share a base branch, use mesh_refine_batch instead of calling this repeatedly — it orders nodes conflict-aware and re-checks each against the advanced base. Approval contracts preserve history and refuse when fast-forward is impossible; only requests without approval contracts retain automatic rebase.',
     inputSchema: {
         type: 'object' as const,
         properties: {
@@ -28,6 +33,7 @@ export const MESH_REFINE_NODE_TOOL = {
             execute: { type: 'boolean', description: 'When true, run validation/merge/push/cleanup for this node. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the validation plan without merging. Defaults true unless execute=true; dry_run=true overrides execute.' },
             approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
+            ...REFINE_PUBLICATION_PROPERTIES,
         },
         required: ['node_id'],
     },
@@ -36,7 +42,7 @@ export const MESH_REFINE_NODE_TOOL = {
 export const MESH_REFINE_BATCH_TOOL = {
     name: 'mesh_refine_batch',
     description: 'Batch Refinery: converge multiple sibling worktree nodes onto the base branch in one conflict-aware sequential pipeline. '
-        + 'Orders nodes by change-area (non-submodule nodes first, submodule-touching nodes serialized last) so each merged sibling advances the base and the next node auto-rebases + re-checks patch-equivalence before its own merge. '
+        + 'Orders nodes by change-area (non-submodule nodes first, submodule-touching nodes serialized last) so each merged sibling advances the base and the next node re-checks patch-equivalence before its own merge. Explicit approval/target contracts never auto-rebase; a non-fast-forward candidate stops for owner authorization. '
         + 'Each node runs the same validation/patch-equivalence/submodule-reachability/merge/cleanup gates as mesh_refine_node. '
         + 'Conflicting or blocked nodes are isolated as blocked_review while the rest of the batch proceeds. Defaults to dry-run (plan only); set execute=true to converge. Never force-pushes or resets. '
         + 'execute=true is async: the immediate response is async:true / status:\'accepted\' with the batch jobId and ordered target node list; per-node convergence runs in the background and the aggregate completion/failure (with per-node merged / blocked_review / not_mergeable results) is delivered as a terminal refine event via pending mesh events and the ledger — do not re-invoke while a batch is in flight. dry_run returns the plan synchronously.',
@@ -48,9 +54,11 @@ export const MESH_REFINE_BATCH_TOOL = {
                 items: { type: 'string' },
                 description: 'Optional explicit node IDs to converge, in any order (the tool computes the safe merge order). When omitted, all local worktree nodes that need convergence are auto-collected.',
             },
-            execute: { type: 'boolean', description: 'When true, run validation/rebase/merge for each node in order. Defaults false/dry-run.' },
+            execute: { type: 'boolean', description: 'When true, run validation and merge for each node in order, preserving any approved history. Defaults false/dry-run.' },
             dry_run: { type: 'boolean', description: 'Preview the ordering + per-node validation plan without executing. Defaults true unless execute=true; dry_run=true overrides execute.' },
             approved_publish_shas: PUBLIC_PUBLISH_APPROVAL_SCHEMA,
+            ...REFINE_PUBLICATION_PROPERTIES,
+            approved_publish_shas_by_node: { type: 'object', additionalProperties: PUBLIC_PUBLISH_APPROVAL_SCHEMA, description: 'Exact per-repository approval sets keyed by node ID for each sequential batch step. When supplied, a node may use only its own entry, with no fallback to a different approval set.' },
         },
         required: [],
     },

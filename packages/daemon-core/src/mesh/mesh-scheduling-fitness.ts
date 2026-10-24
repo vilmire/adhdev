@@ -1,3 +1,4 @@
+import { pendingLaunchReservation } from './mesh-task-routing-contract.js';
 import { getQueue, isTaskReadonly } from './mesh-work-queue.js';
 import { MeshRuntimeStore } from './mesh-runtime-store.js';
 import { getActiveDirectDispatches } from './mesh-work-queue.js';
@@ -216,6 +217,7 @@ export function __buildSchedulingPoolForTests(
 export interface FitnessTask {
     difficulty?: string;
     requiredTags?: string[];
+    routingPreferences?: import('@adhdev/mesh-shared').MeshRoutingPreferences;
 }
 
 const ORDERED_DIFFICULTY_RANK: Partial<Record<MeshTaskDifficulty, number>> = {
@@ -517,9 +519,12 @@ export function activeProviderAssignedCount(
     providerType: string,
     daemonNodeIds?: readonly string[],
 ): number {
-    return getQueue(meshId, { status: ['assigned'] as any })
-        .filter(task => rowChargedToDaemon(task.assignedNodeId, nodeId, daemonNodeIds)
-            && task.assignedProviderType === providerType).length;
+    return getQueue(meshId).filter(task => {
+        const reserved = pendingLaunchReservation(task);
+        return (task.status === 'assigned' || reserved)
+            && rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds)
+            && (reserved ? task.autoLaunch?.providerType : task.assignedProviderType) === providerType;
+    }).length;
 }
 
 /**
@@ -541,10 +546,12 @@ function activeSlotAssignedCount(
     slot: NodeCapabilitySlot,
     daemonNodeIds?: readonly string[],
 ): number {
-    return getQueue(meshId, { status: ['assigned'] as any }).filter(task => {
-        if (!rowChargedToDaemon(task.assignedNodeId, nodeId, daemonNodeIds)) return false;
-        if (task.assignedProviderType !== providerType) return false;
-        const assignedModel = (task as any).assignedModel;
+    return getQueue(meshId).filter(task => {
+        const reserved = pendingLaunchReservation(task);
+        if (task.status !== 'assigned' && !reserved) return false;
+        if (!rowChargedToDaemon(reserved ? task.autoLaunch?.nodeId : task.assignedNodeId, nodeId, daemonNodeIds)) return false;
+        if ((reserved ? task.autoLaunch?.providerType : task.assignedProviderType) !== providerType) return false;
+        const assignedModel = reserved ? task.autoLaunch?.model : task.assignedModel;
         if (typeof assignedModel !== 'string' || !assignedModel.trim()) return true; // legacy row
         return isModelAllowedBySlot(assignedModel, slot);
     }).length;

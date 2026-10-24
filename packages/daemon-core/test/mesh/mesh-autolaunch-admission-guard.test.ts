@@ -1,3 +1,4 @@
+import { revisePendingTask } from '../../src/mesh/mesh-task-revision.js';
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -715,5 +716,76 @@ describe('Autolaunch Admission Guard — 7 durable invariants', () => {
     } finally {
       cleanup(meshId)
     }
+  })
+})
+
+
+describe('work-conserving queue scans', () => {
+  it('continues past a failed launch to later legal tasks in the same scan', async () => {
+    const meshId = `mesh_work_conserving_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = createMesh(meshId)
+      mesh.nodes.push({ ...mesh.nodes[0], id: 'node_later', workspace: '/repo/later', repoRoot: '/repo/later' })
+      const components = createComponents(mesh)
+      const first = enqueueTask(meshId, 'First target is temporarily unavailable', { difficulty: 'medium', targetNodeId: NODE_WORKER })
+      const later = enqueueTask(meshId, 'Independent later source', { difficulty: 'difficult', targetNodeId: 'node_later' })
+      components.cliManager.handleCliCommand.mockImplementation(async (command: string, args: any) => {
+        if (command === 'launch_cli') {
+          components.__launchCalls.push(args)
+          return args.settings.meshNodeId === NODE_WORKER ? { success: false, error: 'fixture unavailable' } : { success: true, sessionId: 'later-session' }
+        }
+        return { success: true }
+      })
+      expect(await maybeAutoLaunchOneQueueSession(components, meshId, mesh)).toBe(true)
+      expect(components.__launchCalls.map((a: any) => a.settings.meshNodeId)).toEqual([NODE_WORKER, 'node_later'])
+      expect(getQueueEntryById(meshId, first.id)?.autoLaunch?.status).toBe('failed')
+      expect(getQueueEntryById(meshId, later.id)?.autoLaunch?.sessionId).toBe('later-session')
+    } finally { cleanup(meshId) }
+  })
+})
+
+
+describe('eligible slots, preferences and launch reservations', () => {
+  it('retains a legal fallback for soft node/provider preferences', async () => {
+    const meshId = `mesh_soft_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = createMesh(meshId)
+      const components = createComponents(mesh)
+      const task = enqueueTask(meshId, 'Eligible difficult source', { difficulty: 'difficult' })
+      revisePendingTask(meshId, task.id, 0, { routingPreferences: { nodeIds: ['absent-pinned-worker'], providers: ['absent-provider'] } }, { actor: 'host', repoIdentity: 'repo', machineId: 'machine' })
+      expect(await maybeAutoLaunchOneQueueSession(components, meshId, mesh)).toBe(true)
+      expect(components.__launchCalls).toHaveLength(1)
+      expect(components.__launchCalls[0].settings.meshNodeId).toBe(NODE_WORKER)
+      expect(components.__launchCalls[0].cliType).toBe('claude-cli')
+    } finally { cleanup(meshId) }
+  })
+  it('keeps owner hard node/provider pins held while later legal work can launch', async () => {
+    const meshId = `mesh_hard_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = createMesh(meshId)
+      const components = createComponents(mesh)
+      const hard = enqueueTask(meshId, 'Owner chose Pinned worker', { difficulty: 'difficult', targetNodeId: 'absent-pinned-worker', requiredTags: ['provider=claude-cli'] })
+      const provider = enqueueTask(meshId, 'Owner chose Codex', { difficulty: 'medium', requiredTags: ['provider=codex-cli'] })
+      const legal = enqueueTask(meshId, 'Independent eligible Mac source', { difficulty: 'difficult', targetNodeId: NODE_WORKER })
+      expect(await maybeAutoLaunchOneQueueSession(components, meshId, mesh)).toBe(true)
+      expect(components.__launchCalls).toHaveLength(1)
+      expect(getQueueEntryById(meshId, hard.id)?.targetNodeId).toBe('absent-pinned-worker')
+      expect(getQueueEntryById(meshId, hard.id)?.hold?.reason).toBe('target_node_id_unmatched')
+      expect(getQueueEntryById(meshId, provider.id)?.hold?.reason).toBe('no_node_satisfies_required_tags')
+      expect(getQueueEntryById(meshId, legal.id)?.autoLaunch?.sessionId).toBe('spawned-1')
+    } finally { cleanup(meshId) }
+  })
+  it('counts a successful pending launch against the global write cap during the same pass', async () => {
+    const meshId = `mesh_reservation_${randomUUID().slice(0, 8)}`
+    try {
+      const mesh = createMesh(meshId, { policy: { maxParallelTasks: 1 } })
+      mesh.nodes.push({ ...mesh.nodes[0], id: 'other-node', workspace: '/repo/other' })
+      const components = createComponents(mesh)
+      enqueueTask(meshId, 'First writer', { difficulty: 'medium', targetNodeId: NODE_WORKER })
+      const later = enqueueTask(meshId, 'Later writer', { difficulty: 'difficult', targetNodeId: 'other-node' })
+      expect(await maybeAutoLaunchOneQueueSession(components, meshId, mesh)).toBe(true)
+      expect(components.__launchCalls).toHaveLength(1)
+      expect(getQueueEntryById(meshId, later.id)?.hold?.reason).toBe('max_parallel_tasks_reached')
+    } finally { cleanup(meshId) }
   })
 })
