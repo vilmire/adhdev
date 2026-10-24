@@ -212,7 +212,103 @@ export function remoteFailure(
     if (out.kind === 'unreachable') {
         return fail('project_unreachable', out.error, { ...where, host: remote.label, reason: out.reason });
     }
-    return fail(out.code, out.error, { ...where, host: remote.label, ...(out.code === 'host_unsupported' ? { reason: 'host_unsupported' } : {}) });
+    const raw = out.result && typeof out.result === 'object' ? out.result as Record<string, unknown> : {};
+    const replacementDetail = out.code === 'coordinator_replaced'
+        ? {
+            ...(typeof raw.expectedCoordinatorSessionId === 'string' ? { expectedCoordinatorSessionId: raw.expectedCoordinatorSessionId } : {}),
+            ...(typeof raw.originalCoordinatorSessionId === 'string' ? { originalCoordinatorSessionId: raw.originalCoordinatorSessionId } : {}),
+            ...(typeof raw.currentCoordinatorSessionId === 'string' || raw.currentCoordinatorSessionId === null
+                ? { currentCoordinatorSessionId: raw.currentCoordinatorSessionId }
+                : {}),
+        }
+        : {};
+    return fail(out.code, out.error, {
+        ...where,
+        host: remote.label,
+        ...(out.code === 'host_unsupported' ? { reason: 'host_unsupported' } : {}),
+        ...replacementDetail,
+    });
+}
+
+/**
+ * Re-verify that the followed remote project entry and local owner binding
+ * remain active and at the exact host/mesh/bindingRevision/grantRevision
+ * used for an authenticated remote call before persisting any observation.
+ */
+function verifyActiveFollowedRemoteEntry(
+    ports: AssistantProjectPorts,
+    snapshot: FollowedRemoteProjectEntry,
+    remote: RemoteHostView,
+    response?: Record<string, unknown>,
+): FollowedRemoteProjectEntry | null {
+    const binding = ports.verifyOwnerBinding?.();
+    if (binding && !binding.ok) return null;
+    if (!remote.hostDaemonId || !daemonIdsEquivalent(remote.hostDaemonId, snapshot.hostDaemonId)) return null;
+    if (remote.hostMeshId && remote.hostMeshId !== snapshot.meshId) return null;
+    const currentList = ports.followedRemoteProjects?.();
+    const current = currentList ? currentList.find((e) => e.key === snapshot.key) : snapshot;
+    if (!current || current.state !== 'followed') return null;
+    if (!daemonIdsEquivalent(current.hostDaemonId, snapshot.hostDaemonId) || current.meshId !== snapshot.meshId) return null;
+    if (current.accountSlot !== snapshot.accountSlot) return null;
+    if (current.bindingRevision !== snapshot.bindingRevision || current.grantRevision !== snapshot.grantRevision) return null;
+    if (response) {
+        if (typeof response.bindingRevision === 'number' && response.bindingRevision !== snapshot.bindingRevision) return null;
+        if (typeof response.grantRevision === 'number' && response.grantRevision !== snapshot.grantRevision) return null;
+        if (typeof response.hostDaemonId === 'string' && response.hostDaemonId.trim() && !daemonIdsEquivalent(response.hostDaemonId, snapshot.hostDaemonId)) return null;
+        if (typeof response.meshId === 'string' && response.meshId.trim() && response.meshId.trim() !== snapshot.meshId) return null;
+    }
+    return current;
+}
+
+/**
+ * Converge a followed remote project's expected coordinator session identity
+ * and align relay thread/poller state when an authenticated fresh host read or
+ * status response proves the current live coordinator changed.
+ */
+function reconcileFollowedRemoteCoordinator(
+    ports: AssistantProjectPorts,
+    snapshot: FollowedRemoteProjectEntry,
+    remote: RemoteHostView,
+    observation: {
+        coordinatorSessionId?: string | null;
+        coordinatorState?: string;
+        coordinatorMissing?: boolean;
+        response?: Record<string, unknown>;
+    },
+): void {
+    const current = verifyActiveFollowedRemoteEntry(ports, snapshot, remote, observation.response);
+    if (!current) return;
+
+    const prevSessionId = current.coordinatorSessionId ?? null;
+    const hasAuthoritativeSession = observation.coordinatorSessionId !== undefined;
+    const nextSessionId = hasAuthoritativeSession ? observation.coordinatorSessionId ?? null : prevSessionId;
+    const sessionChanged = hasAuthoritativeSession && nextSessionId !== prevSessionId;
+
+    const patch: Partial<FollowedRemoteProjectEntry> = {};
+    if (hasAuthoritativeSession) {
+        patch.coordinatorSessionId = nextSessionId;
+        if (sessionChanged) {
+            patch.lastCursor = null;
+            if (current.lastErrorCode === 'coordinator_replaced') {
+                patch.lastErrorCode = undefined;
+            }
+        }
+    }
+    if (observation.coordinatorState !== undefined || observation.coordinatorMissing !== undefined) {
+        patch.lastObserved = {
+            ...current.lastObserved,
+            observedAt: new Date().toISOString(),
+            ...(observation.coordinatorState !== undefined ? { coordinatorState: observation.coordinatorState } : {}),
+            ...(observation.coordinatorMissing !== undefined ? { coordinatorMissing: observation.coordinatorMissing } : {}),
+        };
+    }
+
+    if (Object.keys(patch).length > 0) {
+        ports.updateFollowedRemoteObservation?.(current.key, patch);
+    }
+    if (sessionChanged) {
+        ports.relay.remoteSent?.(current.meshId, null, nextSessionId, { reset: true });
+    }
 }
 
 /** Call the host of a remote-hosted project; an unreachable host is refused before any call. */
@@ -369,10 +465,12 @@ const projects = assistantVerb(ASSISTANT_VERB.projects, async (ports) => {
 export async function localProjectStatus(ports: AssistantProjectPorts, mesh: LocalMeshEntry): Promise<Record<string, unknown>> {
     const meshId = mesh.id;
     const view = await ports.execute('mesh_status_view', { meshId, compact: true });
+    const coords = ports.coordinators(meshId);
+    const liveCoord = pickCoordinator(coords);
     const status = compactProjectStatus(view.success ? view : {}, {
         queue: ports.queueCounts(meshId),
         pendingApprovals: ports.pendingApprovals(meshId),
-        coordinator: coordinatorState(ports.coordinators(meshId)),
+        coordinator: coordinatorState(coords),
         threadOpen: ports.relay.isThreadOpen ? ports.relay.isThreadOpen(meshId) : null,
         lastRelayAt: ports.relay.lastRelayAt ? ports.relay.lastRelayAt(meshId) : null,
         ...(ports.relay.missedReports ? { missedReports: ports.relay.missedReports(meshId) } : {}),
@@ -395,7 +493,15 @@ export async function localProjectStatus(ports: AssistantProjectPorts, mesh: Loc
     const sessions: SessionRow[] = ports.liveSessionStates
         ? sessionRows(ports.liveSessionStates(), { meshId })
         : [];
-    return { name: mesh.name, repo: mesh.repoIdentity, ...status, routing, sessions, ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }) };
+    return {
+        name: mesh.name,
+        repo: mesh.repoIdentity,
+        ...status,
+        coordinatorSessionId: liveCoord?.sessionId ?? null,
+        routing,
+        sessions,
+        ...(view.success ? {} : { statusError: str(view.error) || 'mesh_status_view failed' }),
+    };
 }
 
 const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, args) => {
@@ -434,12 +540,13 @@ const projectStatus = assistantVerb(ASSISTANT_VERB.projectStatus, async (ports, 
         : rawBody;
     if (p.followedRemote) {
         const coordState = str(body.coordinator) || 'none';
-        ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
-            lastObserved: {
-                observedAt: new Date().toISOString(),
-                coordinatorState: coordState,
-                coordinatorMissing: coordState === 'none',
-            },
+        const statusSessionId = str(body.coordinatorSessionId) || null;
+        const hasAuthoritativeSession = coordState === 'none' || statusSessionId !== null;
+        reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
+            ...(hasAuthoritativeSession ? { coordinatorSessionId: coordState === 'none' ? null : statusSessionId } : {}),
+            coordinatorState: coordState,
+            coordinatorMissing: coordState === 'none',
+            response: rawBody,
         });
     }
     // The thread and relay times live HERE (this daemon's assistant), not on the host.
@@ -493,15 +600,30 @@ const projectSend = assistantVerb(ASSISTANT_VERB.projectSend, async (ports, args
         const body = remoteBody(out);
         const remoteCursor = str(body.cursor) || null;
         const remoteCoordSessionId = str(body.coordinatorSessionId) || null;
-        ports.relay.openThread?.(meshId);
-        ports.relay.remoteSent?.(meshId, remoteCursor, remoteCoordSessionId);
-        if (p.followedRemote) {
-            ports.updateFollowedRemoteObservation?.(p.followedRemote.key, {
-                ...(remoteCursor !== null ? { lastCursor: remoteCursor } : {}),
-                ...(remoteCoordSessionId !== null ? { coordinatorSessionId: remoteCoordSessionId } : {}),
-            });
+        const activeFollowed = p.followedRemote
+            ? verifyActiveFollowedRemoteEntry(ports, p.followedRemote, p.remote, body)
+            : null;
+        if (!p.followedRemote || activeFollowed) {
+            const sessionChanged = Boolean(
+                activeFollowed?.coordinatorSessionId
+                && remoteCoordSessionId
+                && activeFollowed.coordinatorSessionId !== remoteCoordSessionId,
+            );
+            ports.relay.openThread?.(meshId);
+            if (sessionChanged && remoteCursor === null) {
+                ports.relay.remoteSent?.(meshId, remoteCursor, remoteCoordSessionId, { reset: true });
+            } else {
+                ports.relay.remoteSent?.(meshId, remoteCursor, remoteCoordSessionId);
+            }
+            if (activeFollowed) {
+                ports.updateFollowedRemoteObservation?.(activeFollowed.key, {
+                    ...(remoteCursor !== null ? { lastCursor: remoteCursor } : sessionChanged ? { lastCursor: null } : {}),
+                    ...(remoteCoordSessionId !== null ? { coordinatorSessionId: remoteCoordSessionId } : {}),
+                    ...(activeFollowed.lastErrorCode === 'coordinator_replaced' ? { lastErrorCode: undefined } : {}),
+                });
+            }
+            if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
         }
-        if (composed.attached.length > 0) ports.relay.recordSkillAttaches?.(meshId, composed.attached.length);
         return wrap(p.slug, meshId, {
             status: str(body.status) || 'accepted',
             ...(body.receiptUnverified ? { receiptUnverified: true, deliveryNote: body.deliveryNote } : {}),
@@ -598,8 +720,34 @@ const projectRead = assistantVerb(ASSISTANT_VERB.projectRead, async (ports, args
     if (p.remote) {
         const out = await callRemote(ports, { ...p, remote: p.remote }, 'read', { tail, ...(continuation ?? {}) });
         if (!out.ok) return remoteFailure({ project: p.slug, meshId }, p.remote, out, ports, p.followedRemote);
-        acknowledge(remoteBody(out));
-        return wrap(p.slug, meshId, { ...remoteBody(out), host: p.remote.label, via: 'relay' });
+        const rawBody = remoteBody(out);
+        if (
+            p.followedRemote
+            && !continuation
+            && rawBody.reportCursor === undefined
+            && rawBody.attemptId === undefined
+            && rawBody.taskId === undefined
+        ) {
+            const readSessionId = str(rawBody.coordinatorSessionId) || null;
+            if (rawBody.live === true && readSessionId) {
+                const prevState = p.followedRemote.lastObserved?.coordinatorState;
+                reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
+                    coordinatorSessionId: readSessionId,
+                    coordinatorState: prevState && prevState !== 'none' && prevState !== 'missing' ? prevState : 'idle',
+                    coordinatorMissing: false,
+                    response: rawBody,
+                });
+            } else if (str(rawBody.coordinator) === 'none') {
+                reconcileFollowedRemoteCoordinator(ports, p.followedRemote, p.remote, {
+                    coordinatorSessionId: null,
+                    coordinatorState: 'none',
+                    coordinatorMissing: true,
+                    response: rawBody,
+                });
+            }
+        }
+        acknowledge(rawBody);
+        return wrap(p.slug, meshId, { ...rawBody, host: p.remote.label, via: 'relay' });
     }
     const r = await localProjectRead(ports, meshId, tail, continuation);
     if (!r.ok) return fail('project_read_failed', r.error, { project: p.slug, meshId, coordinatorSessionId: r.coordinatorSessionId });

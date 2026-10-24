@@ -435,9 +435,16 @@ export function wireAssistantRuntime(
             store.setThreadCursor?.(meshId, cursor, coordinatorSessionId);
             const followed = registry.listFollowedRemoteProjects().find((e) => e.meshId === meshId && e.state === 'followed');
             if (followed) {
+                const nextCoordinatorSessionId = coordinatorSessionId !== undefined
+                    ? (coordinatorSessionId ?? (observed?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null))
+                    : (observed?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null);
+                const sessionChanged = Boolean(
+                    followed.coordinatorSessionId
+                    && nextCoordinatorSessionId !== followed.coordinatorSessionId,
+                );
                 registry.updateFollowedRemoteProject(followed.key, {
-                    lastCursor: cursor ?? followed.lastCursor ?? null,
-                    coordinatorSessionId: coordinatorSessionId ?? (observed?.coordinatorMissing ? null : followed.coordinatorSessionId ?? null),
+                    lastCursor: cursor ?? (sessionChanged ? null : followed.lastCursor ?? null),
+                    coordinatorSessionId: nextCoordinatorSessionId,
                     ...(observed
                         ? {
                             lastObserved: {

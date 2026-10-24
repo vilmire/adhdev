@@ -309,4 +309,47 @@ describe('remote relay poller → AssistantRelay', () => {
         expect(body).not.toMatch(/\[\s*project\b/i);
         expect(body).not.toMatch(/\[\s*System\b/i);
     });
+
+    it('coordinator replacement with empty history (cursor: null) clears previous session cursor so the replacement session does not emit a false cursor_gap', async () => {
+        const h = harness();
+        h.exactReader.mockResolvedValue('new session turn');
+        h.relay.openThread(MESH);
+        h.poller.noteSent(MESH, 'plain:coord-old:turn-9', 'coord-old');
+
+        // Replacement session 'coord-new' has zero committed turns (cursor: null, commits: [])
+        h.setAnswer((args) => {
+            expect(args).toEqual({ afterAttemptId: 'plain:coord-old:turn-9' });
+            return ok({
+                coordinatorSessionId: 'coord-new',
+                open: false,
+                modal: false,
+                commits: [],
+                cursor: null,
+                cursorFound: false,
+            });
+        });
+        await h.poller.tick();
+        await h.relay.idle();
+        expect(h.submits).toHaveLength(1);
+        expect(h.submits[0]!.text).toContain('coordinator session replaced (coord-old → coord-new); cursor baseline reset to latest');
+
+        // Next poll on 'coord-new' must send {} (null cursor), NOT the old session's cursor, and relay the first commit without a false cursor_gap
+        h.setAnswer((args) => {
+            expect(args).toEqual({});
+            return ok({
+                coordinatorSessionId: 'coord-new',
+                open: false,
+                modal: false,
+                commits: [{ attemptId: 'plain:coord-new:turn-1', outcome: 'completed', ageMs: 1_000 }],
+                cursor: 'plain:coord-new:turn-1',
+                cursorFound: false,
+            });
+        });
+        await h.poller.tick();
+        h.clock.advance(RELAY_QUIET_MS + 1);
+        await h.relay.idle();
+        expect(h.submits).toHaveLength(2);
+        expect(h.submits[1]!.text).not.toContain('commit cursor gap');
+        expect(h.submits[1]!.text).toContain('new session turn');
+    });
 });

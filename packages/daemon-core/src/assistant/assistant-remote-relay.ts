@@ -302,6 +302,7 @@ export class AssistantRemoteRelayPoller {
         // The host's newest commit becomes the cursor whether or not it was relayed.
         if (newCursor) st.cursor = newCursor;
         else if (valid.length) st.cursor = valid[valid.length - 1]!.attemptId;
+        else if (sessionChanged || r.coordinatorMissing === true) st.cursor = null;
         if (sessionId) st.coordinatorSessionId = sessionId;
         else if (r.coordinatorMissing === true) st.coordinatorSessionId = null;
 

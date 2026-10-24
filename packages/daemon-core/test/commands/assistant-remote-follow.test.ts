@@ -88,6 +88,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
     let assistantDir: string;
     let hostExecute: ReturnType<typeof vi.fn>;
     let hostCoordinators: Record<string, AssistantCoordinatorView[]>;
+    let hostLastCoord: Record<string, string | null>;
     let hostTurns: Record<string, CoordinatorTurns>;
     let hostLiveSessions: unknown[];
     let hostMeshes: LocalMeshEntry[];
@@ -171,7 +172,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
                 isHostedHere: (m: LocalMeshEntry) => m.id === MESH_PREFEX_SIM || m.id === MESH_SECOND,
                 aliases: () => ({}),
                 coordinators: (meshId: string) => hostCoordinators[meshId] ?? [],
-                lastCoordinatorSessionId: (meshId: string) => hostCoordinators[meshId]?.[0]?.sessionId ?? null,
+                lastCoordinatorSessionId: (meshId: string) => hostCoordinators[meshId]?.[0]?.sessionId ?? hostLastCoord[meshId] ?? null,
                 queueCounts: () => ({ pending: 0, assigned: 0, failed: 0 }),
                 activeMissionCount: () => 0,
                 pendingApprovals: () => 0,
@@ -188,7 +189,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
         try {
             return await fn();
         } finally {
-            if (prevDir === assistantDir && activeAssistantRelayHooks !== null) {
+            if (activeAssistantRelayHooks !== null) {
                 installAssistantEnv(activeAssistantRelayHooks);
             } else if (prevDir !== undefined) {
                 process.env.ADHDEV_CONFIG_DIR = prevDir;
@@ -302,6 +303,7 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             [MESH_PREFEX_SIM]: [{ sessionId: 'coord-alpha-1', idle: true, modalParked: false, managedByAssistant: false }],
             [MESH_SECOND]: [{ sessionId: 'coord-beta-1', idle: true, modalParked: false, managedByAssistant: false }],
         };
+        hostLastCoord = {};
         hostLiveSessions = [
             {
                 instanceId: 'coord-alpha-1',
@@ -6105,6 +6107,452 @@ describe('rc24 checkout-less remote assistant project follow & narrow host ACL',
             });
         } finally {
             nowSpy.mockRestore();
+        }
+    });
+
+    it('24. [rc28] missing-baseline / idle-closed thread coordinator replacement (including empty history) converges on authenticated project_read and project_status without skipping undelivered history, while preserving replacement-race fail-closed, revision/host/revoke fences, and old-receipt replay refusal', async () => {
+        const { wireAssistantRuntime } = await import('../../src/assistant/assistant-runtime.js');
+        const { SqliteAssistantRelayStore } = await import('../../src/assistant/assistant-relay-sqlite-store.js');
+
+        await withHostEnv(() =>
+            createRouter(HOST_A).execute(
+                ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                { action: 'grant', meshId: MESH_PREFEX_SIM, activeDaemonId: ASSISTANT_B, bindingRevision: 1 },
+                'p2p',
+                { ownerVerified: true },
+            ),
+        );
+
+        hostCoordinators[MESH_PREFEX_SIM] = [
+            { sessionId: 'coord-alpha-1', idle: true, modalParked: false, managedByAssistant: false },
+        ];
+        hostTurns['coord-alpha-1'] = {
+            open: false,
+            committed: [{ attemptId: 'plain:coord-alpha-1:turn-0', outcome: 'completed', at: Date.now() - 60_000 }],
+        };
+
+        const sqliteStore = new SqliteAssistantRelayStore(MeshRuntimeStore.getInstance().db);
+        const runtime = wireAssistantRuntime(
+            {
+                instanceManager: { getInstance: () => null, getByCategory: () => [] } as any,
+                router: { execute: vi.fn(async () => ({ success: true })) } as any,
+                cliManager: { input: { isParked: () => false, submit: vi.fn() } } as any,
+                bus: { on: () => () => {} } as any,
+                statusInstanceId: ASSISTANT_B,
+            },
+            { registry: assistantRegistry, store: sqliteStore },
+        );
+
+        try {
+            installAssistantEnv({
+                openThread: (meshId) => sqliteStore.openThread(meshId, Date.now()),
+                closeThread: (meshId) => sqliteStore.closeThread(meshId, Date.now()),
+                isThreadOpen: (meshId) => sqliteStore.isThreadOpen(meshId),
+                remoteSent: (meshId, cursor, coordinatorSessionId, opts) =>
+                    runtime.remotePoller.noteSent(meshId, cursor, coordinatorSessionId, opts),
+            });
+
+            const asstRouter = createRouter(ASSISTANT_B);
+            const followRes: any = await asstRouter.execute(
+                ASSISTANT_REMOTE_FOLLOW_COMMAND,
+                {
+                    action: 'follow',
+                    hostDaemonId: HOST_A,
+                    hostLabel: 'Host-A',
+                    meshId: MESH_PREFEX_SIM,
+                    name: 'AlphaSim',
+                    sanitizedRepoIdentity: 'github.com/acme/alpha-sim',
+                    grantRevision: 1,
+                    bindingRevision: 1,
+                },
+                'p2p',
+                { ownerVerified: true },
+            );
+            expect(followRes).toMatchObject({
+                success: true,
+                coordinatorSessionId: 'coord-alpha-1',
+                cursor: 'plain:coord-alpha-1:turn-0',
+            });
+
+            const key = followedRemoteProjectKey(HOST_A, MESH_PREFEX_SIM);
+            expect(assistantRegistry.getFollowedRemoteProject(key)).toMatchObject({
+                coordinatorSessionId: 'coord-alpha-1',
+                lastCursor: 'plain:coord-alpha-1:turn-0',
+            });
+            expect(sqliteStore.isThreadOpen(MESH_PREFEX_SIM)).toBe(true);
+
+            // 1. Simulate idle-closed relay thread (10m grace elapsed with 0 active missions) + host coordinator replacement with EMPTY history
+            const coordinatorSink: Array<Record<string, unknown>> = [];
+            sqliteStore.closeThread(MESH_PREFEX_SIM, Date.now());
+            expect(sqliteStore.isThreadOpen(MESH_PREFEX_SIM)).toBe(false);
+
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-2', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            hostTurns['coord-alpha-2'] = { open: false, committed: [] };
+            hostExecute.mockImplementation(async (cmd: string, args: any) => {
+                if (cmd === 'read_chat') {
+                    return { success: true, messages: [] };
+                }
+                if (cmd === 'send_chat') {
+                    const entry = { ...args, timestamp: Date.now() };
+                    coordinatorSink.push(entry);
+                    return { success: true, queued: true, messageId: args.messageId };
+                }
+                if (cmd === 'mesh_status_view') {
+                    return {
+                        success: true,
+                        routes: { 'n-host-a': { route: 'local' } },
+                        status: { nodes: [{ nodeId: 'n-host-a', machineNickname: 'Host-A', reportedPlatform: 'darwin' }] },
+                        missions: { list: { missions: [] } },
+                    };
+                }
+                return { success: true };
+            });
+
+            // Background poller does not poll closed threads -> no baseline notice, expectation stays 'coord-alpha-1'
+            await runtime.remotePoller.tick();
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-1');
+
+            // 2. Without prior read/status, project_send refuses fail-closed with actionable coordinator_replaced across multiple new messageIds
+            const staleSend1: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Attempt 1 before read', messageId: 'rc28-stale-1' },
+                'standalone',
+            );
+            expect(staleSend1).toMatchObject({
+                success: false,
+                code: 'coordinator_replaced',
+                expectedCoordinatorSessionId: 'coord-alpha-1',
+                currentCoordinatorSessionId: 'coord-alpha-2',
+            });
+            const staleSend2: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Attempt 2 before read', messageId: 'rc28-stale-2' },
+                'standalone',
+            );
+            expect(staleSend2).toMatchObject({
+                success: false,
+                code: 'coordinator_replaced',
+                expectedCoordinatorSessionId: 'coord-alpha-1',
+                currentCoordinatorSessionId: 'coord-alpha-2',
+            });
+            expect(coordinatorSink).toHaveLength(0);
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-1');
+
+            // 3. Negatives before convergence: historical continuation read, live:false fallback read, and unreachable cached status MUST NOT rebind
+            const continuationRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                {
+                    project: 'alpha-sim',
+                    attemptId: 'plain:coord-alpha-2:turn-0',
+                    coordinatorSessionId: 'coord-alpha-2',
+                    offset: 0,
+                },
+                'standalone',
+            );
+            expect(continuationRead).toBeDefined();
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-1');
+
+            hostCoordinators[MESH_PREFEX_SIM] = [];
+            hostLastCoord[MESH_PREFEX_SIM] = 'coord-dead-fallback';
+            const deadFallbackRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                { project: 'alpha-sim', tail: 5 },
+                'standalone',
+            );
+            expect(deadFallbackRead).toMatchObject({
+                success: true,
+                result: { coordinatorSessionId: 'coord-dead-fallback', live: false, messages: [] },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-1');
+
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-2', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            hostOnline = false;
+            const cachedStatus: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectStatus,
+                { project: 'alpha-sim' },
+                'standalone',
+            );
+            expect(cachedStatus).toMatchObject({
+                success: true,
+                result: { via: 'cached_observation', observationOnly: true },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-1');
+            hostOnline = true;
+
+            // 4. Authenticated live project_read (even with empty transcript messages: []) converges expectation and clears stale cursor from old session
+            const liveRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                { project: 'alpha-sim', tail: 5 },
+                'standalone',
+            );
+            expect(liveRead).toMatchObject({
+                success: true,
+                result: { coordinatorSessionId: 'coord-alpha-2', live: true, messages: [] },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)).toMatchObject({
+                coordinatorSessionId: 'coord-alpha-2',
+                lastCursor: null,
+            });
+            // Closed thread stays closed on read, but its stored cursor/session in SQLite and poller are aligned to coord-alpha-2 + null cursor
+            expect(sqliteStore.isThreadOpen(MESH_PREFEX_SIM)).toBe(false);
+            const closedThreadRow = MeshRuntimeStore.getInstance().db
+                .prepare('SELECT last_cursor, coordinator_session_id FROM assistant_threads WHERE mesh_id = ?')
+                .get(MESH_PREFEX_SIM) as { last_cursor: string | null; coordinator_session_id: string | null };
+            expect(closedThreadRow).toEqual({
+                last_cursor: null,
+                coordinator_session_id: 'coord-alpha-2',
+            });
+
+            // Subsequent project_send now succeeds on coord-alpha-2 and reopens the thread
+            const sendAfterRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Converged after project_read', messageId: 'rc28-after-read-1' },
+                'standalone',
+            );
+            expect(sendAfterRead).toMatchObject({
+                success: true,
+                result: {
+                    status: 'queued',
+                    coordinatorSessionId: 'coord-alpha-2',
+                    launched: false,
+                },
+            });
+            expect(coordinatorSink).toHaveLength(1);
+            expect(coordinatorSink[0]?.targetSessionId).toBe('coord-alpha-2');
+            expect(sqliteStore.isThreadOpen(MESH_PREFEX_SIM)).toBe(true);
+
+            // 5. Status-before-send convergence & replacement-race fail-closed check
+            sqliteStore.closeThread(MESH_PREFEX_SIM, Date.now());
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-3', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            hostTurns['coord-alpha-3'] = { open: false, committed: [] };
+
+            const liveStatus: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectStatus,
+                { project: 'alpha-sim' },
+                'standalone',
+            );
+            expect(liveStatus).toMatchObject({
+                success: true,
+                result: {
+                    via: 'relay',
+                    coordinator: 'idle',
+                    coordinatorSessionId: 'coord-alpha-3',
+                },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)).toMatchObject({
+                coordinatorSessionId: 'coord-alpha-3',
+                lastCursor: null,
+            });
+
+            // Concurrent replacement race between status and send ('coord-alpha-3' -> 'coord-alpha-4') must still fail closed!
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-4', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            hostTurns['coord-alpha-4'] = { open: false, committed: [] };
+            const racedSend: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Raced send after status', messageId: 'rc28-raced-1' },
+                'standalone',
+            );
+            expect(racedSend).toMatchObject({
+                success: false,
+                code: 'coordinator_replaced',
+                expectedCoordinatorSessionId: 'coord-alpha-3',
+                currentCoordinatorSessionId: 'coord-alpha-4',
+            });
+            expect(coordinatorSink).toHaveLength(1);
+
+            // Re-observing via project_status converges to 'coord-alpha-4' and next send succeeds
+            const reStatus: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectStatus,
+                { project: 'alpha-sim' },
+                'standalone',
+            );
+            expect(reStatus).toMatchObject({
+                success: true,
+                result: { via: 'relay', coordinatorSessionId: 'coord-alpha-4' },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-4');
+
+            const sendAfterStatus: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Converged after project_status', messageId: 'rc28-after-status-1' },
+                'standalone',
+            );
+            expect(sendAfterStatus).toMatchObject({
+                success: true,
+                result: { status: 'queued', coordinatorSessionId: 'coord-alpha-4' },
+            });
+            expect(coordinatorSink).toHaveLength(2);
+            expect(coordinatorSink[1]?.targetSessionId).toBe('coord-alpha-4');
+
+            // 6. Open-thread read/status convergence does NOT skip undelivered commits on the replacement coordinator
+            const committedTurnId = 'plain:coord-alpha-5:turn-unpolled';
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-5', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            hostTurns['coord-alpha-5'] = {
+                open: false,
+                committed: [{ attemptId: committedTurnId, outcome: 'completed', at: Date.now() }],
+            };
+
+            // Read converges coordinatorSessionId to 'coord-alpha-5' with lastCursor: null (never advancing to high-water)
+            const readBeforePoll: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                { project: 'alpha-sim', tail: 5 },
+                'standalone',
+            );
+            expect(readBeforePoll).toMatchObject({
+                success: true,
+                result: { coordinatorSessionId: 'coord-alpha-5', live: true },
+            });
+            expect(assistantRegistry.getFollowedRemoteProject(key)).toMatchObject({
+                coordinatorSessionId: 'coord-alpha-5',
+                lastCursor: null,
+            });
+
+            // When poller ticks on the open thread, the unpolled commit on coord-alpha-5 is recorded & not skipped
+            const recordSpy = vi.spyOn(sqliteStore, 'recordCommitted');
+            await runtime.remotePoller.tick();
+            await new Promise((r) => setTimeout(r, 20));
+            runtime.relay.stop();
+            installAssistantEnv(activeAssistantRelayHooks ?? {});
+            expect(recordSpy).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    attemptId: committedTurnId,
+                     meshId: MESH_PREFEX_SIM,
+                    coordinatorSessionId: 'coord-alpha-5',
+                }),
+            );
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.lastCursor).toBe(committedTurnId);
+
+            // 7. Receipt dedupe, body-hash mismatch, and old-receipt replay refusal across coordinator replacement
+            const dedupeSend1: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Exact idempotent payload', messageId: 'rc28-dedupe-msg' },
+                'standalone',
+            );
+            expect(dedupeSend1).toMatchObject({
+                success: true,
+                result: { status: 'queued', coordinatorSessionId: 'coord-alpha-5' },
+            });
+            expect(coordinatorSink).toHaveLength(3);
+
+            // Same messageId + same body on same coordinator -> duplicate (not re-delivered)
+            const dedupeSend2: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Exact idempotent payload', messageId: 'rc28-dedupe-msg' },
+                'standalone',
+            );
+            expect(dedupeSend2).toMatchObject({
+                success: true,
+                result: { status: 'duplicate', coordinatorSessionId: 'coord-alpha-5' },
+            });
+            expect(coordinatorSink).toHaveLength(3);
+
+            // Same messageId + different body -> idempotency_body_mismatch
+            const bodyMismatchSend: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Tampered payload', messageId: 'rc28-dedupe-msg' },
+                'standalone',
+            );
+            expect(bodyMismatchSend).toMatchObject({
+                success: false,
+                code: 'idempotency_body_mismatch',
+            });
+
+            // Replace coordinator ('coord-alpha-5' -> 'coord-alpha-6') and converge via project_read
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-6', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            hostTurns['coord-alpha-6'] = { open: false, committed: [] };
+            await asstRouter.execute(ASSISTANT_VERB.projectRead, { project: 'alpha-sim', tail: 5 }, 'standalone');
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-6');
+
+            // Replaying the ALREADY-ACCEPTED 'rc28-dedupe-msg' after converging to 'coord-alpha-6' MUST STILL REFUSE with coordinator_replaced!
+            const replayOldReceiptAfterConverge: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectSend,
+                { project: 'alpha-sim', message: 'Exact idempotent payload', messageId: 'rc28-dedupe-msg' },
+                'standalone',
+            );
+            expect(replayOldReceiptAfterConverge).toMatchObject({
+                success: false,
+                code: 'coordinator_replaced',
+                originalCoordinatorSessionId: 'coord-alpha-5',
+                currentCoordinatorSessionId: 'coord-alpha-6',
+            });
+            expect(coordinatorSink).toHaveLength(3);
+
+            // 8. Stale grantRevision / wrong host / legacy status without coordinatorSessionId / revoked grant fail closed and never mutate coordinatorSessionId
+            const { followerStatusView } = await import('../../src/assistant/project-views.js');
+            const legacyProjected = followerStatusView(
+                {
+                    name: 'AlphaSim',
+                    repo: 'github.com/acme/alpha-sim',
+                    coordinator: 'idle',
+                    sessions: [
+                        {
+                            sessionId: 'coord-unauthoritative-session-row',
+                            provider: 'claude',
+                            status: 'idle',
+                            meshId: MESH_PREFEX_SIM,
+                            isCoordinator: true,
+                            assistant: false,
+                        },
+                    ],
+                },
+                { id: MESH_PREFEX_SIM, name: 'AlphaSim', repoIdentity: 'github.com/acme/alpha-sim', nodes: [] } as any,
+            );
+            expect(legacyProjected.coordinatorSessionId).toBeNull();
+
+            hostCoordinators[MESH_PREFEX_SIM] = [
+                { sessionId: 'coord-alpha-7', idle: true, modalParked: false, managedByAssistant: false },
+            ];
+            assistantRegistry.updateFollowedRemoteProject(key, { grantRevision: 999 });
+            const staleGrantRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                { project: 'alpha-sim', tail: 5 },
+                'standalone',
+            );
+            expect(staleGrantRead).toMatchObject({ success: false, code: 'remote_access_denied' });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-6');
+
+            // Wrong meshId / ungranted project on same host fails closed and leaves alpha-sim untouched
+            const wrongProjectRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                { project: followedRemoteProjectKey(HOST_A, MESH_SECOND), tail: 5 },
+                'standalone',
+            );
+            expect(wrongProjectRead).toMatchObject({ success: false, code: 'project_not_found' });
+            expect(assistantRegistry.getFollowedRemoteProject(key)?.coordinatorSessionId).toBe('coord-alpha-6');
+
+            assistantRegistry.updateFollowedRemoteProject(key, { grantRevision: 1 });
+            await withHostEnv(() =>
+                createRouter(HOST_A).execute(
+                    ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND,
+                    { action: 'revoke', meshId: MESH_PREFEX_SIM },
+                    'p2p',
+                    { ownerVerified: true },
+                ),
+            );
+            const revokedRead: any = await asstRouter.execute(
+                ASSISTANT_VERB.projectRead,
+                { project: 'alpha-sim', tail: 5 },
+                'standalone',
+            );
+            expect(revokedRead).toMatchObject({ success: false, code: 'host_revoked' });
+            expect(assistantRegistry.getFollowedRemoteProject(key)).toMatchObject({
+                state: 'revoked',
+                coordinatorSessionId: 'coord-alpha-6',
+            });
+        } finally {
+            runtime.dispose();
         }
     });
 });
