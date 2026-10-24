@@ -191,6 +191,7 @@ export interface ISpecDriver {
      */
     supportsMidGenerationQueue?(): boolean;
     updateMeta(meta: Record<string, unknown>, replace?: boolean): void;
+    getRuntimeMetadata?(): import('../../cli-adapters/pty-transport.js').PtyRuntimeMetadata | null;
     snapshot(): string;
     getCursorPosition(): { row: number; col: number };
     getScreen(): string;

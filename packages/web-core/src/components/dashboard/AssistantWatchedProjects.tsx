@@ -297,6 +297,45 @@ export default function AssistantWatchedProjects({
         await refresh()
     }
 
+    const toggleCoordinatorLaunch = async (target: { key: string; hostDaemonId: string; meshId: string; allowCoordinatorLaunch: boolean }) => {
+        if (!daemonId) return
+        setBusy(`policy:${target.key}`)
+        setOwnerRequired(false)
+        setActionError(null)
+        try {
+            const out = unwrapStagedAnswer(await sendCommand(target.hostDaemonId, ASSISTANT_REMOTE_PROJECT_ACCESS_COMMAND, {
+                action: 'set_policy',
+                meshId: target.meshId,
+                allowCoordinatorLaunch: target.allowCoordinatorLaunch,
+            }))
+            if (isOwnerAuthRefusal(out)) {
+                setOwnerRequired(true)
+                setBusy(null)
+                return
+            }
+            if (!out?.success) {
+                setActionError(String(out?.error || out?.code || 'policy_update_failed'))
+                setBusy(null)
+                return
+            }
+            setCatalogProjects(prev => prev.map(p => (
+                p.meshId === target.meshId && daemonIdsEquivalent(p.hostDaemonId, target.hostDaemonId)
+                    ? {
+                        ...p,
+                        allowCoordinatorLaunch: target.allowCoordinatorLaunch,
+                        capabilities: {
+                            ...p.capabilities,
+                            allowCoordinatorLaunch: target.allowCoordinatorLaunch,
+                        },
+                    }
+                    : p
+            )))
+        } catch (err) {
+            setActionError(err instanceof Error ? err.message : String(err))
+        }
+        setBusy(null)
+    }
+
     const allowAndFollow = async (project: RemoteProjectCatalogItem, hostLabel: string) => {
         if (!daemonId) return
         const key = followedRemoteProjectKey(project.hostDaemonId, project.meshId)
@@ -566,6 +605,7 @@ export default function AssistantWatchedProjects({
                                                     const isFollowed = localEntry?.state === 'followed'
                                                     const isUnfollowed = localEntry?.state === 'unfollowed'
                                                     const isRevoked = localEntry?.state === 'revoked'
+                                                    const allowCoordinatorLaunch = project.allowCoordinatorLaunch ?? localEntry?.allowCoordinatorLaunch ?? true
                                                     return (
                                                         <li
                                                             key={key}
@@ -589,6 +629,25 @@ export default function AssistantWatchedProjects({
                                                             )}
                                                             {isRevoked && (
                                                                 <div className="text-[11px] leading-4 text-status-warning">{t('assistantWatched.stateRevoked')}</div>
+                                                            )}
+                                                            {(isFollowed || isUnfollowed) && (
+                                                                <label className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-4 text-text-secondary">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        data-testid={`toggle-coordinator-wake-${project.meshId}`}
+                                                                        checked={allowCoordinatorLaunch}
+                                                                        disabled={busy === `policy:${key}`}
+                                                                        onChange={e => {
+                                                                            void toggleCoordinatorLaunch({
+                                                                                key,
+                                                                                hostDaemonId: project.hostDaemonId,
+                                                                                meshId: project.meshId,
+                                                                                allowCoordinatorLaunch: e.target.checked,
+                                                                            })
+                                                                        }}
+                                                                    />
+                                                                    <span>{t('assistantWatched.allowCoordinatorLaunch')}</span>
+                                                                </label>
                                                             )}
                                                             <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                                                                 {!isFollowed && (

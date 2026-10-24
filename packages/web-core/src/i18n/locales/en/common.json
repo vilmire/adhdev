@@ -1654,6 +1654,7 @@
         "hostStateOffline": "offline",
         "coordinatorState": "coordinator: {{state}}",
         "removedProject": "Removed project",
+        "allowCoordinatorLaunch": "Allow assistant to wake offline coordinator",
         "ownerRequired": "Only the owner can manage followed projects or remote access. Sign in to this dashboard (set a dashboard password) or use the cloud dashboard."
     },
     "assistantExecution": {

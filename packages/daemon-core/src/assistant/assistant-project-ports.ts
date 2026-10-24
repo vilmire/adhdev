@@ -20,7 +20,11 @@ import type { MeshNodeFacts } from '@adhdev/mesh-shared';
 import { daemonIdsEquivalent, type FollowedRemoteProjectEntry } from '@adhdev/mesh-shared';
 import type { DaemonComponents } from '../boot/daemon-components.js';
 import type { LocalMeshEntry } from '../repo-mesh-types.js';
-import type { AssistantCoordinatorView } from './coordinator-lifecycle.js';
+import {
+    isConfirmedTerminalCoordinator,
+    isLiveSessionHostRuntimeMetadata,
+    type AssistantCoordinatorView,
+} from './coordinator-lifecycle.js';
 import { getAssistantServices } from './assistant-services.js';
 import {
     callRemoteHost, describeFollowedRemoteHost, describeRemoteHost,
@@ -75,6 +79,18 @@ export interface CoordinatorTurns {
     committed: Array<{ attemptId: string; outcome: string; at: number }>;
 }
 
+export type CoordinatorLiveness = 'live' | 'dead' | 'unknown';
+
+/**
+ * Maximum wait for `sessionHostControl.listSessions()` during coordinator
+ * liveness verification. A stalled session-host IPC probe adds at most ~1.5s
+ * latency to a follower send before timing out to `'unknown'` (which preserves
+ * the existing coordinator without triggering a cold wake) and runs outside
+ * `withMeshRemoteAccessMutex` so owner grant/revoke/set_policy calls are never
+ * delayed.
+ */
+export const SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS = 1_500;
+
 export interface AssistantProjectPorts {
     selfDaemonId(): string;
     localNodeFacts?(): MeshNodeFacts;
@@ -83,6 +99,8 @@ export interface AssistantProjectPorts {
     isHostedHere(mesh: LocalMeshEntry): boolean;
     aliases(): Record<string, string>;
     coordinators(meshId: string): AssistantCoordinatorView[];
+    /** Verify a coordinator runtime liveness ('live' | 'dead' | 'unknown') using real session-host runtime evidence. */
+    isCoordinatorLive?(sessionId: string): Promise<CoordinatorLiveness | boolean> | CoordinatorLiveness | boolean;
     /** Newest coordinator registry session of the mesh (live or not) — read_chat history fallback. */
     lastCoordinatorSessionId(meshId: string): string | null;
     queueCounts(meshId: string): QueueCounts | null;
@@ -186,20 +204,87 @@ export function createDefaultProjectPorts(ctx: ProjectPortsContext): AssistantPr
         isHostedHere: (mesh) => (svc.isMeshHostedHere ? svc.isMeshHostedHere(mesh) : lazy.hostedMeshes(ctx.components(), [mesh]).length > 0),
         aliases: () => lazy.assistantAliases(),
         coordinators: (meshId) => {
+            const components = ctx.components();
             const started = new Map(lazy.listCoordinatorsForMesh(meshId).map((e) => [e.sessionId, e.startedAt]));
             const settingsOf = new Map<string, Record<string, unknown>>();
+            const terminalIds = new Set<string>();
             for (const inst of cliInstances(ctx)) {
                 const state = inst.getState?.();
                 const id = readText(state?.instanceId);
-                if (id && state?.settings && typeof state.settings === 'object') settingsOf.set(id, state.settings);
+                if (!id) continue;
+                if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) {
+                    terminalIds.add(id);
+                    continue;
+                }
+                if (state?.settings && typeof state.settings === 'object') settingsOf.set(id, state.settings);
             }
-            return lazy.listLocalCoordinatorSessions(ctx.components(), meshId).map((v) => ({
-                sessionId: v.sessionId,
-                idle: v.idle,
-                modalParked: v.modalParked,
-                managedByAssistant: settingsOf.get(v.sessionId)?.managedByAssistant === true,
-                ...(started.has(v.sessionId) ? { startedAt: started.get(v.sessionId) } : {}),
-            }));
+            return lazy.listLocalCoordinatorSessions(components, meshId)
+                .filter((v) => !terminalIds.has(v.sessionId))
+                .map((v) => ({
+                    sessionId: v.sessionId,
+                    idle: v.idle,
+                    modalParked: v.modalParked,
+                    managedByAssistant: settingsOf.get(v.sessionId)?.managedByAssistant === true,
+                    ...(started.has(v.sessionId) ? { startedAt: started.get(v.sessionId) } : {}),
+                }));
+        },
+        isCoordinatorLive: async (sessionId): Promise<CoordinatorLiveness> => {
+            const id = readText(sessionId);
+            if (!id) return 'dead';
+            let components: DaemonComponents | undefined;
+            try {
+                components = ctx.components();
+            } catch {
+                return 'live';
+            }
+            if (!components) return 'live';
+            if (components.sessionRegistry?.wasInstanceTerminated?.(id)) return 'dead';
+
+            const byCat = typeof components.instanceManager?.getByCategory === 'function'
+                ? (components.instanceManager.getByCategory('cli') as unknown as CliInstanceLike[])
+                : [];
+            const allInstances = Array.isArray(byCat) ? byCat : [];
+            const inst = (components.instanceManager?.getInstance?.(id)
+                ?? allInstances.find((i) => readText(i?.getState?.()?.instanceId) === id)) as Record<string, any> | undefined;
+            if (inst) {
+                if (isConfirmedTerminalCoordinator(inst, components.sessionRegistry)) return 'dead';
+                const state = inst.getState?.();
+                const adapter = inst.adapter ?? (typeof inst.getAdapter === 'function' ? inst.getAdapter() : undefined);
+                const runtimeMeta = (typeof adapter?.getRuntimeMetadata === 'function' ? adapter.getRuntimeMetadata() : undefined)
+                    ?? state?.runtime;
+                if (runtimeMeta && typeof runtimeMeta === 'object' && !isLiveSessionHostRuntimeMetadata(runtimeMeta)) {
+                    return 'dead';
+                }
+            }
+
+            const sessionHostControl = (components as any).router?.deps?.sessionHostControl
+                ?? (components as any).sessionHost?.control
+                ?? (components as any).sessionHostControl;
+            if (sessionHostControl && typeof sessionHostControl.listSessions === 'function') {
+                const timedOut = Symbol('session_host_liveness_timeout');
+                let timer: ReturnType<typeof setTimeout> | undefined;
+                try {
+                    const records = await Promise.race([
+                        Promise.resolve().then(() => sessionHostControl.listSessions()),
+                        new Promise<typeof timedOut>((resolve) => {
+                            timer = setTimeout(() => resolve(timedOut), SESSION_HOST_LIVENESS_PROBE_TIMEOUT_MS);
+                            timer.unref?.();
+                        }),
+                    ]);
+                    if (records === timedOut) return 'unknown';
+                    if (Array.isArray(records)) {
+                        const record = records.find((r: any) => readText(r?.sessionId ?? r?.runtimeId) === id);
+                        if (!record || !isLiveSessionHostRuntimeMetadata(record)) return 'dead';
+                        return 'live';
+                    }
+                    return 'unknown';
+                } catch {
+                    return 'unknown';
+                } finally {
+                    if (timer !== undefined) clearTimeout(timer);
+                }
+            }
+            return 'live';
         },
         lastCoordinatorSessionId: (meshId) => lazy.listCoordinatorsForMesh(meshId)[0]?.sessionId ?? null,
         queueCounts: (meshId) => {

@@ -76,6 +76,7 @@ export function normalizeAssistantRemoteAccessBinding(
     const rawOps = Array.isArray(rec.allowedOps) ? rec.allowedOps : ASSISTANT_FOLLOWER_ALLOWED_OPS;
     const allowedOps = rawOps.filter(isAssistantFollowerAllowedOp);
     if (allowedOps.length === 0) return null;
+    const allowCoordinatorLaunch = rec.allowCoordinatorLaunch !== false;
     return {
         hostDaemonId,
         meshId,
@@ -85,6 +86,7 @@ export function normalizeAssistantRemoteAccessBinding(
         grantRevision,
         status,
         allowedOps,
+        allowCoordinatorLaunch,
         grantedAt,
         ...(revokedAt !== undefined ? { revokedAt } : {}),
     };

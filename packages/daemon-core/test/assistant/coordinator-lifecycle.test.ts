@@ -39,6 +39,31 @@ describe('pickCoordinator', () => {
         expect(pickCoordinator([view('busy'), view('idle', { idle: true })])?.sessionId).toBe('idle');
         expect(pickCoordinator([view('old', { startedAt: 1 }), view('new', { startedAt: 2 })])?.sessionId).toBe('new');
     });
+
+    it('keeps a live PTY coordinator with parse_error overlay while excluding confirmed terminal candidates', () => {
+        const parseErrorLive = view('coord-parse-error', {
+            idle: true,
+            managedByAssistant: true,
+            status: 'error',
+            errorReason: 'parse_error',
+            connected: true,
+            disposed: false,
+            adapterAlive: true,
+            rawAdapterStatus: 'idle',
+            runtime: { runtimeId: 'coord-parse-error', lifecycle: 'running', surfaceKind: 'live_runtime' },
+        } as any);
+        const terminalStopped = view('coord-stopped', { idle: true, managedByAssistant: true, status: 'stopped' } as any);
+        const terminalRawError = view('coord-raw-error', { idle: true, managedByAssistant: true, status: 'error', rawAdapterStatus: 'error' } as any);
+        const terminalDeadPty = view('coord-dead-pty', { idle: true, managedByAssistant: true, adapterAlive: false } as any);
+        const terminalSnapshot = view('coord-snapshot', {
+            idle: true,
+            managedByAssistant: true,
+            runtime: { runtimeId: 'coord-snapshot', lifecycle: 'stopped', surfaceKind: 'recovery_snapshot' },
+        } as any);
+
+        expect(pickCoordinator([terminalStopped, terminalRawError, terminalDeadPty, terminalSnapshot])).toBeNull();
+        expect(pickCoordinator([terminalStopped, parseErrorLive])?.sessionId).toBe('coord-parse-error');
+    });
 });
 
 describe('ensureCoordinator', () => {
@@ -80,6 +105,33 @@ describe('ensureCoordinator', () => {
     it('a hide failure does not fail the send precondition', async () => {
         const p = ports({ hide: vi.fn(async () => { throw new Error('nope'); }) });
         expect(await ensureCoordinator('mesh_a', p)).toMatchObject({ ok: true, launched: true });
+    });
+
+    it('rechecks beforeLaunch inside the per-mesh lock when an earlier launch exited immediately', async () => {
+        let launchesAllowed = 1;
+        const p = ports({
+            beforeLaunch: vi.fn(async () => {
+                if (launchesAllowed <= 0) {
+                    return { success: false, code: 'wake_rate_limited', error: 'cooldown', reason: 'cooldown' };
+                }
+                launchesAllowed -= 1;
+                return { success: true };
+            }),
+            launch: vi.fn(async () => {
+                await new Promise((r) => setTimeout(r, 5));
+                // Coordinator exits immediately before registering as live in p.live
+                return { success: true, sessionId: 'coord-ephemeral' };
+            }),
+        } as any);
+        const results = await Promise.all([
+            ensureCoordinator('mesh_a', p),
+            ensureCoordinator('mesh_a', p),
+            ensureCoordinator('mesh_a', p),
+        ]);
+        expect(p.launch).toHaveBeenCalledTimes(1);
+        expect(results[0]).toMatchObject({ ok: true, sessionId: 'coord-ephemeral', launched: true });
+        expect(results[1]).toMatchObject({ ok: false, code: 'wake_rate_limited', detail: { reason: 'cooldown' } });
+        expect(results[2]).toMatchObject({ ok: false, code: 'wake_rate_limited', detail: { reason: 'cooldown' } });
     });
 });
 

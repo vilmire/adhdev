@@ -187,6 +187,7 @@ export interface AssistantRemoteAccessBinding {
     grantRevision: number
     status: 'active' | 'revoked'
     allowedOps: readonly AssistantFollowerAllowedOp[]
+    allowCoordinatorLaunch?: boolean
     grantedAt: number
     revokedAt?: number
 }
@@ -232,6 +233,7 @@ export interface FollowedRemoteProjectEntry {
     accountSlot: AssistantAccountSlot
     bindingRevision: number
     grantRevision: number
+    allowCoordinatorLaunch?: boolean
     state: FollowedRemoteProjectState
     followedAt: number | string
     updatedAt: number | string
@@ -261,6 +263,7 @@ export interface RemoteProjectCatalogItem {
     name: string
     sanitizedRepoIdentity: string | null
     coordinatorState?: 'none' | 'idle' | 'working' | 'waiting' | string
+    allowCoordinatorLaunch?: boolean
     capabilities: {
         status: true
         read: true
@@ -268,6 +271,7 @@ export interface RemoteProjectCatalogItem {
         report: true
         send: true
         coordinatorPresent?: boolean
+        allowCoordinatorLaunch?: boolean
     }
     observedAt: number | string
 }

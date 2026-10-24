@@ -1657,6 +1657,7 @@
         "hostStateOffline": "sin conexión",
         "coordinatorState": "coordinador: {{state}}",
         "removedProject": "Proyecto eliminado",
+        "allowCoordinatorLaunch": "Permitir que el asistente despierte al coordinador inactivo",
         "ownerRequired": "Solo el propietario puede gestionar los proyectos seguidos o el acceso remoto. Inicia sesión en este panel (define una contraseña) o usa el panel en la nube."
     },
     "assistantExecution": {
