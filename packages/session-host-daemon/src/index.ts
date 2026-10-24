@@ -15,12 +15,24 @@ import {
   type SessionHostRecord,
 } from '@adhdev/session-host-core';
 import { resolveGuardianArtifact, type GuardianArtifactPins } from './guardian-artifact.js';
-import { SessionHostServer } from './server.js';
+import {
+  SessionHostServer,
+  isManagedSessionHostCommandLine,
+  sessionHostInstanceArg,
+} from './server.js';
 import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
 
-export { SessionHostServer } from './server.js';
+export {
+  SessionHostServer,
+  isManagedSessionHostCommandLine,
+  readVerifiedReplacementProvenance,
+  sessionHostInstanceArg,
+} from './server.js';
 export { startThreadpoolWatchdog } from './threadpool-watchdog.js';
-export type { SessionHostServerOptions } from './server.js';
+export type {
+  SessionHostReplacementProvenance,
+  SessionHostServerOptions,
+} from './server.js';
 export { resolveGuardianArtifact } from './guardian-artifact.js';
 export type { GuardianArtifactPins } from './guardian-artifact.js';
 export type { HostUpgradeBinding } from './upgrade-lease.js';
@@ -44,6 +56,29 @@ function getSessionHostEndpoint() {
 
 function getSessionHostStorageRoot(): string {
   return path.join(INSTANCE_CONFIG_DIR, 'session-host', SESSION_HOST_APP_NAME);
+}
+
+export function getSessionHostReplacementProvenanceFile(
+  appName: string,
+  configDir: string = INSTANCE_CONFIG_DIR,
+): string {
+  const dir = configDir;
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${appName}-session-host-replacement.json`);
+}
+
+export function removeSessionHostReplacementProvenance(
+  appName: string,
+  configDir: string = INSTANCE_CONFIG_DIR,
+): void {
+  try {
+    const provenanceFile = path.join(configDir, `${appName}-session-host-replacement.json`);
+    if (fs.existsSync(provenanceFile)) {
+      fs.unlinkSync(provenanceFile);
+    }
+  } catch {
+    // noop
+  }
 }
 
 function getSessionHostPidFile(appName: string): string {
@@ -73,17 +108,31 @@ function parseArgs(argv: string[]) {
   const readOnly = rest.includes('--read-only');
   const takeover = rest.includes('--takeover');
   const showAll = rest.includes('--all');
-  const positional = rest.filter((arg) => arg !== '--read-only' && arg !== '--takeover' && arg !== '--all');
+  const instanceKeyArgs = rest.filter((arg) => arg.startsWith('--instance-config-key='));
+  const positional = rest.filter(
+    (arg) =>
+      arg !== '--read-only'
+      && arg !== '--takeover'
+      && arg !== '--all'
+      && !arg.startsWith('--instance-config-key='),
+  );
   return {
     command: command || 'serve',
     positional,
     readOnly,
     takeover,
     showAll,
+    instanceKeyArgs,
   };
 }
 
-async function runServer(): Promise<void> {
+async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
+  if (
+    instanceKeyArgs.length > 1
+    || (instanceKeyArgs.length === 1 && instanceKeyArgs[0] !== sessionHostInstanceArg(INSTANCE_CONFIG_DIR))
+  ) {
+    throw new Error('session_host_instance_config_key_mismatch');
+  }
   let upgradeBinding;
   const pinFile = process.env.ADHDEV_WORKER_GUARDIAN_PINS_FILE;
   if (pinFile) {
@@ -94,11 +143,13 @@ async function runServer(): Promise<void> {
         pins.stateDir !== path.join(INSTANCE_CONFIG_DIR, 'session-host')) throw new Error('guardian_launch_executable_or_instance_mismatch');
     upgradeBinding = resolveGuardianArtifact(pins);
   }
+  const endpoint = getSessionHostEndpoint();
   const server = new SessionHostServer({
     appName: SESSION_HOST_APP_NAME,
     upgradeBinding,
-    endpoint: getSessionHostEndpoint(),
+    endpoint,
     storageRootDir: getSessionHostStorageRoot(),
+    instanceConfigDir: INSTANCE_CONFIG_DIR,
     pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
   });
   await server.start();
@@ -402,9 +453,9 @@ async function attachRuntime(target: string, readOnly = false, takeover = false)
 }
 
 async function main(): Promise<void> {
-  const { command, positional, readOnly, takeover, showAll } = parseArgs(process.argv.slice(2));
+  const { command, positional, readOnly, takeover, showAll, instanceKeyArgs } = parseArgs(process.argv.slice(2));
   if (command === 'serve') {
-    await runServer();
+    await runServer(instanceKeyArgs);
     return;
   }
   if (command === 'list') {

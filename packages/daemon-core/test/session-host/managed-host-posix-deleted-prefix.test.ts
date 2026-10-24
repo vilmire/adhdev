@@ -4,9 +4,8 @@
 // daemon then reattached to the old host still serving the socket; node-pty's
 // spawn helper lived in the deleted prefix, so every create_session failed with
 // `posix_spawn failed: No such file or directory`. The host reports its own
-// entry path over the socket, so the daemon replaces it when that path is gone —
-// and leaves a host from another prefix that still exists alone (its sessions
-// are live and it can still spawn).
+// entry path over the socket; a missing prefix now diagnoses incompatibility
+// and refuses automatic takeover while retaining the host and its sessions.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -88,18 +87,17 @@ describe('managed session-host on POSIX: host from a deleted prefix', () => {
     }
   }
 
-  // The guard's own decision. (A later "nothing reachable → respawn" path in
-  // this fake environment may also signal the pid, so kills alone do not tell
-  // the cases apart.)
+  // A warning diagnoses the prefix; zero signals/spawns prove containment.
   const guardStopped = () => warnSpy.mock.calls.some((c) => String(c[1]).includes('Reachable session-host reports it is running from'))
   const sigtermsToStale = () => killSpy.mock.calls.filter((c) => c[0] === STALE_PID && c[1] === 'SIGTERM')
 
-  it('stops the host when the entry it reports no longer exists', async () => {
+  it('diagnoses a deleted entry and refuses automatic takeover without stopping the host', async () => {
     const { appName, configDir } = stage()
     host.reportedEntry = path.join(configDir, 'Cellar', 'adhdev', '1.0.61', 'vendor', 'session-host-daemon', 'index.js')
     await ensure(appName)
     expect(guardStopped()).toBe(true)
-    expect(sigtermsToStale().length).toBeGreaterThan(0)
+    expect(sigtermsToStale()).toHaveLength(0)
+    expect(cp.spawn).not.toHaveBeenCalled()
   })
 
   it('leaves a host from another prefix alone while that prefix still exists', async () => {

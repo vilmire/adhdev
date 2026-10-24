@@ -30,6 +30,14 @@ import type {
 import { PtySessionRuntime } from './runtime.js';
 import { HostUpgradeLease, type HostUpgradeBinding } from './upgrade-lease.js';
 import { SessionHostStorage } from './storage.js';
+import type { SessionHostReplacementProvenance } from './prior-host-identity.js';
+
+export {
+  sessionHostInstanceArg,
+  isManagedSessionHostCommandLine,
+  readVerifiedReplacementProvenance,
+} from './prior-host-identity.js';
+export type { SessionHostReplacementProvenance } from './prior-host-identity.js';
 import {
   buildHostDiagnostics,
   pushRecent,
@@ -47,60 +55,6 @@ import {
 
 export const DEFAULT_EVICT_SIGKILL_GRACE_MS = 4_000;
 
-export function isManagedSessionHostCommandLine(commandLine: string | null | undefined): boolean {
-  if (!commandLine) return false;
-  const tokens: string[] = [];
-  const tokenRegex = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = tokenRegex.exec(commandLine)) !== null) {
-    tokens.push(match[1] ?? match[2] ?? match[3] ?? '');
-  }
-  if (tokens.length === 0) return false;
-
-  const execBase = path.basename(tokens[0].replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
-  if (execBase === 'adhdev-sessiond') {
-    const subcommand = tokens[1]?.toLowerCase();
-    return !subcommand || subcommand === 'serve';
-  }
-  if (execBase !== 'node') return false;
-
-  const valueFlags = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '--conditions', '-C']);
-  let idx = 1;
-  while (idx < tokens.length) {
-    const token = tokens[idx];
-    if (token === '--') {
-      idx += 1;
-      break;
-    }
-    if (token === '-e' || token === '--eval' || token === '-p' || token === '--print') {
-      return false;
-    }
-    if (valueFlags.has(token)) {
-      idx += 2;
-      continue;
-    }
-    if (token.startsWith('-')) {
-      idx += 1;
-      continue;
-    }
-    break;
-  }
-
-  const scriptToken = tokens[idx];
-  if (!scriptToken) return false;
-  const normalizedScript = scriptToken.replace(/\\/g, '/').toLowerCase();
-  const isSessionHostEntry =
-    normalizedScript.endsWith('/session-host-daemon/dist/index.js')
-    || normalizedScript.endsWith('/session-host-daemon/dist/index.mjs')
-    || normalizedScript.endsWith('/session-host-daemon/index.js')
-    || normalizedScript.endsWith('/session-host-daemon/src/index.ts')
-    || path.basename(normalizedScript) === 'adhdev-sessiond';
-  if (!isSessionHostEntry) return false;
-
-  const subcommand = tokens[idx + 1]?.toLowerCase();
-  return !subcommand || subcommand === 'serve' || subcommand.startsWith('-');
-}
-
 export interface SessionHostServerOptions {
   endpoint?: SessionHostEndpoint;
   /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
@@ -108,11 +62,25 @@ export interface SessionHostServerOptions {
   appName?: string;
   /** Explicit session-host state root (runtime records + tombstones). */
   storageRootDir?: string;
+  /** Instance config directory used to verify single matching --instance-config-key on prior owners. */
+  instanceConfigDir?: string;
   /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
   pidFilePath?: string;
+  /** Optional predicate override for testing whether a prior pid is alive. */
+  isPidAlive?: (pid: number) => boolean;
   /** Optional predicate override for testing whether a prior pid is a managed session-host. */
   isManagedOwnerPid?: (pid: number) => boolean;
-  /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
+  /** Unsupported legacy replacement context; ordinary startup rejects its presence. */
+  replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
+  /** Optional native birth probe override (`ps -o lstart=`). */
+  getOwnerBirth?: (pid: number) => string | null;
+  /** Optional unix socket owner PID probe override (`lsof -t`). */
+  getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+  /** Cancellation is checked after blocking reads and before startup effects. */
+  isCancelled?: () => boolean;
+  /** Optional process command-line probe override (`ps -o args=`). */
+  readOwnerArgs?: (pid: number) => string | null;
+  /** Legacy option retained for source compatibility; automatic live eviction is unsupported. */
   evictGraceMs?: number;
 }
 
@@ -122,9 +90,14 @@ export class SessionHostServer extends EventEmitter {
   private runtimes = new Map<string, PtySessionRuntime>();
   private readonly storage: SessionHostStorage;
   private readonly upgradeLease: HostUpgradeLease | null;
+  private readonly instanceConfigDir: string | null;
   private readonly pidFilePath: string | null;
-  private readonly isManagedOwnerPid?: (pid: number) => boolean;
-  private readonly evictGraceMs: number;
+  private readonly isPidAliveOverride?: (pid: number) => boolean;
+  private readonly getOwnerBirth?: (pid: number) => string | null;
+  private readonly getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+  private readonly isCancelled?: () => boolean;
+  private startupFence: (() => void) | null = null;
+  private readonly hasReplacementContext: boolean;
   private restorePending = true;
   private mutatingRequests = 0;
   private endpointInode: bigint | null = null;
@@ -160,9 +133,13 @@ export class SessionHostServer extends EventEmitter {
     }
     this.upgradeLease = options.upgradeBinding
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
+    this.instanceConfigDir = options.instanceConfigDir || null;
     this.pidFilePath = options.pidFilePath || null;
-    this.isManagedOwnerPid = options.isManagedOwnerPid;
-    this.evictGraceMs = options.evictGraceMs ?? DEFAULT_EVICT_SIGKILL_GRACE_MS;
+    this.isPidAliveOverride = options.isPidAlive;
+    this.hasReplacementContext = Object.prototype.hasOwnProperty.call(options, 'replacementProvenance');
+    this.getOwnerBirth = options.getOwnerBirth;
+    this.getSocketOwnerPids = options.getSocketOwnerPids;
+    this.isCancelled = options.isCancelled;
     this.storage = new SessionHostStorage({
       appName: options.appName || 'adhdev',
       rootDir: options.storageRootDir,
@@ -171,19 +148,22 @@ export class SessionHostServer extends EventEmitter {
 
   private isPidAlive(pid: number): boolean {
     if (!Number.isFinite(pid) || pid <= 0) return false;
+    if (this.isPidAliveOverride) return this.isPidAliveOverride(pid);
     try {
       process.kill(pid, 0);
       return true;
     } catch (error: any) {
-      return error?.code === 'EPERM';
+      // Only ESRCH positively proves death; other probe failures stay contained.
+      return error?.code !== 'ESRCH';
     }
   }
 
-  private readProcessArgs(pid: number): string | null {
+  private readProcessBirth(pid: number): string | null {
+    if (this.getOwnerBirth) return this.getOwnerBirth(pid);
     if (process.platform === 'win32') return null;
     try {
       return String(
-        execFileSync('/bin/ps', ['-o', 'args=', '-p', String(pid)], {
+        execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'ignore'],
           timeout: 2_000,
@@ -195,98 +175,128 @@ export class SessionHostServer extends EventEmitter {
     }
   }
 
-  private isManagedSessionHostPid(pid: number): boolean {
-    if (pid === process.pid || !Number.isFinite(pid) || pid <= 0) return false;
-    if (this.isManagedOwnerPid) return this.isManagedOwnerPid(pid);
-    const cmd = this.readProcessArgs(pid);
-    return isManagedSessionHostCommandLine(cmd);
+  private readSocketOwnerPids(): number[] | null {
+    if (this.getSocketOwnerPids) return this.getSocketOwnerPids(this.endpoint.path);
+    if (process.platform === 'win32' || !fs.existsSync(this.endpoint.path)) return [];
+    const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
+    try {
+      // IMPORTANT (C1): never pass `-U` without `-a` — lsof ORs selectors by default,
+      // which would enumerate every unix-socket process on the machine. Passing only
+      // the file path `-- <endpoint.path>` restricts lsof to this exact socket file.
+      const out = String(
+        execFileSync(lsofBin, ['-n', '-t', '--', this.endpoint.path], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          timeout: 2_000,
+          windowsHide: true,
+        }),
+      );
+      const pids: number[] = [];
+      for (const line of out.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (!/^\d+$/.test(trimmed)) return null;
+        const pid = Number.parseInt(trimmed, 10);
+        if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+        pids.push(pid);
+      }
+      return pids;
+    } catch (error: any) {
+      if (error?.status === 1 && String(error?.stdout ?? '').trim() === '') return [];
+      return null;
+    }
+  }
+
+  private assertNoAutomaticReplacementContext(): void {
+    // Even a callback returning undefined is an unsupported replacement context.
+    // Never consume or delete failure evidence to make ordinary startup pass.
+    if (this.isCancelled?.()) throw new Error('session_host_start_cancelled');
+    if (this.hasReplacementContext) throw new Error('session_host_live_owner_replacement_unauthorized');
+    if (this.instanceConfigDir && fs.existsSync(this.instanceConfigDir)) {
+      if (fs.readdirSync(this.instanceConfigDir).some(name => name.endsWith('-session-host-replacement.json'))) {
+        throw new Error('session_host_live_owner_replacement_unauthorized');
+      }
+    }
+    if (this.isCancelled?.()) throw new Error('session_host_start_cancelled');
   }
 
   private async evictPriorEndpointOwners(): Promise<void> {
+    this.assertNoAutomaticReplacementContext();
     if (this.endpoint.kind !== 'unix') return;
-    const candidatePids = new Set<number>();
-    if (this.pidFilePath && fs.existsSync(this.pidFilePath)) {
+    const identity = (file: string): string => {
       try {
-        const pid = Number.parseInt(fs.readFileSync(this.pidFilePath, 'utf8').trim(), 10);
-        if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-          candidatePids.add(pid);
-        }
-      } catch {
-        // noop
+        const stat = fs.lstatSync(file, { bigint: true });
+        return `${stat.dev}:${stat.ino}:${stat.mode}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+        throw error;
       }
-    }
-    if (process.platform !== 'win32' && fs.existsSync(this.endpoint.path)) {
-      const lsofBin = process.platform === 'darwin' ? '/usr/sbin/lsof' : 'lsof';
+    };
+    const configIdentity = this.instanceConfigDir ? identity(this.instanceConfigDir) : null;
+    const endpointParent = fs.realpathSync(path.dirname(this.endpoint.path));
+    const initialEndpoint = identity(this.endpoint.path);
+    const readPid = (): string => {
+      if (!this.pidFilePath) return 'missing';
       try {
-        // IMPORTANT (C1): never pass `-U` without `-a` — lsof ORs selectors by default,
-        // which would enumerate every unix-socket process on the machine. Passing only
-        // the file path `-- <endpoint.path>` restricts lsof to this exact socket file.
-        const out = String(
-          execFileSync(lsofBin, ['-n', '-t', '--', this.endpoint.path], {
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore'],
-            timeout: 2_000,
-            windowsHide: true,
-          }),
-        );
-        for (const line of out.split(/\r?\n/)) {
-          const pid = Number.parseInt(line.trim(), 10);
-          if (Number.isFinite(pid) && pid > 0 && pid !== process.pid) {
-            candidatePids.add(pid);
-          }
+        const raw = fs.readFileSync(this.pidFilePath, 'utf8').trim();
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
+          throw new Error('session_host_prior_owner_pidfile_corrupt');
         }
-      } catch {
-        // noop
+        return raw;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+        throw error;
       }
+    };
+    const initialPid = readPid();
+    const initialBirth = initialPid === 'missing' ? null : this.readProcessBirth(Number(initialPid));
+    const assertGeneration = (expectedEndpoint: string): void => {
+      this.assertNoAutomaticReplacementContext();
+      const currentPid = readPid();
+      const birth = initialPid === 'missing' ? null : this.readProcessBirth(Number(initialPid));
+      const alive = initialPid !== 'missing' && this.isPidAlive(Number(initialPid));
+      if (currentPid !== initialPid || birth !== initialBirth || alive
+          || (this.instanceConfigDir && identity(this.instanceConfigDir) !== configIdentity)
+          || fs.realpathSync(path.dirname(this.endpoint.path)) !== endpointParent
+          || identity(this.endpoint.path) !== expectedEndpoint || readPid() !== initialPid) {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      this.assertNoAutomaticReplacementContext();
+    };
+    if (initialPid !== 'missing' && this.isPidAlive(Number(initialPid))) {
+      throw new Error('session_host_live_owner_replacement_unauthorized');
     }
-
-    for (const pid of candidatePids) {
-      if (!this.isPidAlive(pid) || !this.isManagedSessionHostPid(pid)) continue;
-      const cmd = this.readProcessArgs(pid) || 'managed-session-host';
-      this.recordHostLog(
-        'warn',
-        `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd})`,
-      );
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch {
-        continue;
+    if (initialEndpoint !== 'missing') {
+      if (this.upgradeLease) throw new Error('native_host_endpoint_owner_unproved');
+      // No PID plus an existing endpoint is UNKNOWN, even when lsof returns [].
+      if (initialPid === 'missing') throw new Error('session_host_prior_owner_socket_unverified');
+      for (let check = 0; check < 2; check++) {
+        const owners = this.readSocketOwnerPids();
+        if (owners === null) throw new Error('session_host_prior_owner_socket_unverified');
+        if (owners.length !== 0) throw new Error('session_host_endpoint_changed_during_recovery');
+        assertGeneration(initialEndpoint);
       }
-      const deadline = Date.now() + this.evictGraceMs;
-      while (Date.now() < deadline && this.isPidAlive(pid)) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      if (this.isPidAlive(pid)) {
-        this.recordHostLog(
-          'warn',
-          `prior session-host pid=${pid} did not exit within ${this.evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
-        );
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          // noop
-        }
-      }
+      fs.unlinkSync(this.endpoint.path);
     }
+    // start() awaits this method; recheck the same generation after that seam
+    // and immediately before helper/createServer/listen effects.
+    this.startupFence = () => assertGeneration('missing');
+    this.startupFence();
   }
 
   async start(): Promise<void> {
+    this.assertNoAutomaticReplacementContext();
+    if (this.upgradeLease && fs.existsSync(this.endpoint.path)) {
+      throw new Error('native_host_endpoint_owner_unproved');
+    }
+    await this.evictPriorEndpointOwners();
+    this.startupFence?.();
     if (this.upgradeLease) {
       await this.upgradeLease.start();
-      // A stale socket requires separate native ownership recovery; never unlink on assertion.
-      if (fs.existsSync(this.endpoint.path)) {
-        await this.upgradeLease.close();
-        throw new Error('native_host_endpoint_owner_unproved');
-      }
+      try { this.startupFence?.(); }
+      catch (error) { await this.upgradeLease.close(); throw error; }
     }
-    if (!this.upgradeLease && this.endpoint.kind === 'unix') {
-      await this.evictPriorEndpointOwners();
-      try {
-        fs.unlinkSync(this.endpoint.path);
-      } catch {
-        // noop
-      }
-    }
+    this.startupFence?.();
 
     this.ipcServer = net.createServer((socket) => {
       this.sockets.add(socket);
@@ -350,6 +360,7 @@ export class SessionHostServer extends EventEmitter {
       await new Promise<void>((resolve, reject) => {
         this.ipcServer?.once('listening', () => resolve());
         this.ipcServer?.once('error', reject);
+        this.startupFence?.();
         this.ipcServer?.listen(this.endpoint.path);
       });
     } catch (error) {

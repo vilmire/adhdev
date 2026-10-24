@@ -11,6 +11,10 @@ const cp = vi.hoisted(() => ({
   spawn: vi.fn(() => ({ unref: vi.fn(), pid: 4242 })),
 }))
 vi.mock('child_process', () => cp)
+vi.mock('@adhdev/session-host-core', async original => ({ ...await original<any>(), SessionHostClient: class {
+  async connect() { throw new Error('owned transport unavailable') }
+  async close() {}
+} }))
 
 import { sessionHostInstanceArg } from '../../src/commands/process-lifecycle'
 import { createManagedSessionHost } from '../../src/session-host/managed-host'
@@ -21,6 +25,10 @@ let originalConfigDir: string | undefined
 
 describe('managed session-host prefix guard', () => {
   beforeEach(() => {
+    vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal: unknown) => {
+      if (signal === 0) return true
+      throw new Error('unexpected signal')
+    }) as any)
     cp.execFileSync.mockReset()
     cp.spawn.mockReset()
     cp.spawn.mockImplementation(() => ({ unref: vi.fn(), pid: 4242 }))
@@ -30,6 +38,7 @@ describe('managed session-host prefix guard', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     if (platformDescriptor) {
       Object.defineProperty(process, 'platform', platformDescriptor)
     }
@@ -44,7 +53,7 @@ describe('managed session-host prefix guard', () => {
     return dir
   }
 
-  it('stops a reachable session-host that is running from a different prefix', async () => {
+  it('refuses a different-prefix host without stopping or spawning', async () => {
     const homeDir = makeTempHome()
     const originalHome = process.env.HOME
     process.env.HOME = homeDir
@@ -74,13 +83,13 @@ describe('managed session-host prefix guard', () => {
     try {
       await host.ensureReady()
     } catch {
-      // The spawn will fail because there is no real session-host daemon; we only
-      // care that the stale host was detected and killed before the spawn attempt.
+      // Incompatibility must refuse before any stop or spawn.
     }
 
     const taskkillCalls = cp.execFileSync.mock.calls.filter((c: any[]) => c[0] === 'taskkill')
-    expect(taskkillCalls.length).toBeGreaterThan(0)
-    expect(taskkillCalls.some((c: any[]) => c[1].includes(String(stalePid)))).toBe(true)
+    expect(taskkillCalls).toHaveLength(0)
+    expect(cp.spawn).not.toHaveBeenCalled()
+    expect(fs.readFileSync(pidFile, 'utf8')).toBe(String(stalePid))
     process.env.HOME = originalHome
   })
 
@@ -99,9 +108,7 @@ describe('managed session-host prefix guard', () => {
     const host = createManagedSessionHost({ appName, isManagedPid: () => true, requiredRequestTypes: ['delete_session'], timeoutMs: 200 })
     const currentEntry = host.resolveEntry()
 
-    // Record spawn/taskkill ordering across both mocks. The guard runs before the
-    // first spawn, so a guard-triggered kill would land before any spawn; the
-    // retry stop (after the first spawn fails to connect) lands after it.
+    // Neither the prefix probe nor retries may stop or spawn a host.
     const events: string[] = []
     cp.spawn.mockImplementation(() => {
       events.push('spawn')
@@ -127,12 +134,10 @@ describe('managed session-host prefix guard', () => {
       // spawn expected to fail because there is no real session-host daemon
     }
 
-    // The defensive prefix guard must not kill a host that is already executing
-    // from the current entry: no taskkill may precede the first spawn. A later
-    // retry stop (after the spawn fails to connect) is unrelated to the guard.
+    // A connection failure never authorizes automatic stop or spawn.
     const firstSpawn = events.indexOf('spawn')
     const firstTaskkill = events.indexOf('taskkill')
-    expect(firstSpawn).toBeGreaterThan(-1)
+    expect(firstSpawn).toBe(-1)
     expect(firstTaskkill === -1 || firstTaskkill > firstSpawn).toBe(true)
     process.env.HOME = originalHome
   })
@@ -218,12 +223,12 @@ describe('managed session-host prefix guard', () => {
         .filter((c: any[]) => c[0] === 'taskkill' && c[1].includes(String(unverifiablePid)))
       // Neither the prefix guard nor readiness retry can signal an unproven PID.
       const spawnsInSecondPass = cp.spawn.mock.calls.length
-      expect(spawnsInSecondPass).toBeGreaterThan(0)
+      expect(spawnsInSecondPass).toBe(0)
       expect(guardKillsInSecondPass.length).toBeLessThanOrEqual(afterFirst)
       process.env.HOME = originalHome
     })
 
-    it('stops a different prefix only when argv proves this instance', async () => {
+    it('refuses a different prefix even when argv proves this instance', async () => {
       const homeDir = makeTempHome()
       const originalHome = process.env.HOME
       process.env.HOME = homeDir
@@ -232,7 +237,7 @@ describe('managed session-host prefix guard', () => {
       const stalePid = 14724
       stageUnverifiablePid(appName, stalePid, homeDir)
 
-      // A matching instance identity and stale prefix allow recovery.
+      // A matching instance identity diagnoses incompatibility without takeover authority.
       const events: string[] = []
       cp.spawn.mockImplementation(() => {
         events.push('spawn')
@@ -257,8 +262,8 @@ describe('managed session-host prefix guard', () => {
 
       const firstSpawn = events.indexOf('spawn')
       const firstTaskkill = events.indexOf('taskkill')
-      expect(firstTaskkill).toBeGreaterThan(-1)
-      expect(firstTaskkill).toBeLessThan(firstSpawn)
+      expect(firstTaskkill).toBe(-1)
+      expect(firstSpawn).toBe(-1)
       process.env.HOME = originalHome
     })
   })

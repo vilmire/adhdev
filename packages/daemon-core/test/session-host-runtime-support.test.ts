@@ -144,7 +144,7 @@ describe('session host runtime support compatibility', () => {
     expect(events).toEqual([])
   })
 
-  it('stops the existing host before spawning a replacement when canConnect persistently fails (no split-brain)', async () => {
+  it('refuses a persistent live-host connection failure before the automatic stop callback', async () => {
     const events: string[] = []
     let existingAlive = true
     const beforeSpawnHost = vi.fn(() => {
@@ -168,9 +168,9 @@ describe('session host runtime support compatibility', () => {
       verifyRetryDelayMs: 5,
       requiredRequestTypes: ['delete_session'],
       timeoutMs: 50,
-    } as any)).resolves.toEqual({ kind: 'unix', path: '/tmp/adhdev-persistent-wedge-session-host.sock' })
+    } as any)).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
 
-    expect(events).toEqual(['stop-existing', 'spawn'])
+    expect(events).toEqual([])
   })
 
   it('never kills or replaces a live host when connect fails with ENFILE (or when socket path exists), throwing session_host_unavailable_transient', async () => {
@@ -252,7 +252,7 @@ describe('session host runtime support compatibility', () => {
     await expect(ensureSessionHostReady({
       appName: 'adhdev-dead-host',
       spawnHost,
-      isExistingHostAlive: () => false,
+      existingHostState: () => 'dead',
       isExistingSocketPresent: () => true,
       beforeSpawnHost,
       canConnectRetries: 2,
@@ -265,27 +265,80 @@ describe('session host runtime support compatibility', () => {
     expect(spawnHost).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['unix', 'pipe'] as const)('bounds fresh-connection request timeouts across ensure calls before replacing a wedged %s host', async (kind) => {
+  it.each(['unix', 'pipe'] as const)('never replaces a live %s host on >=3 connected diagnostics timeouts across >=2 ensure calls spanning >=30s without explicit replacement authority', async (kind) => {
+    vi.useFakeTimers()
     const spawnHost = vi.fn()
     const beforeSpawnHost = vi.fn()
+    const endpoint = { kind, path: `/tmp/fresh-wedge-r2-${kind}.sock` }
     const options = {
-      endpoint: { kind, path: `/tmp/fresh-wedge-r2-${kind}.sock` }, spawnHost, beforeSpawnHost,
+      endpoint, spawnHost, beforeSpawnHost,
+      existingHostIdentity: () => 'pid-54321:birth-1',
       isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
-      canConnectRetries: 0, timeoutMs: 100,
+      canConnectRetries: 1, canConnectRetryDelayMs: 1, timeoutMs: 15_000,
     }
-    const start = Date.now()
-    const now = vi.spyOn(Date, 'now').mockReturnValue(start)
-    for (let count = 0; count < 2; count++) {
-      now.mockReturnValue(start + count * 15_000)
-      mocks.state.diagnosticsResults = [new Error('Session host request timed out after 10ms (get_host_diagnostics)')]
-      await expect(ensureSessionHostReady(options)).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
-      expect(spawnHost).not.toHaveBeenCalled()
-    }
-    now.mockReturnValue(start + 30_000)
-    mocks.state.diagnosticsResults = [new Error('Session host request timed out after 10ms (get_host_diagnostics)')]
-    await expect(ensureSessionHostReady(options)).resolves.toBeDefined()
-    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
-    expect(spawnHost).toHaveBeenCalledTimes(1)
+    const structuredTimeout = () => Object.assign(
+      new Error('Session host request timed out after 3s (get_host_diagnostics)'),
+      {
+        code: 'SESSION_HOST_REQUEST_TIMEOUT',
+        requestType: 'get_host_diagnostics',
+        scheduledTimeoutMs: 3_000,
+        actualElapsedMs: 3_000,
+        wallElapsedMs: 3_000,
+        observerLagMs: 0,
+      },
+    )
+    // Invocation 1: two connected diagnostic timeouts at t=0
+    mocks.state.diagnosticsResults = [structuredTimeout(), structuredTimeout()]
+    const call1 = ensureSessionHostReady(options).then((r) => ({ r }), (e) => ({ e }))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(await call1).toMatchObject({ e: { code: 'session_host_unavailable_transient' } })
+    expect(spawnHost).not.toHaveBeenCalled()
+
+    // Invocation 2 at t=30s with remaining budget (12s left of 15s deadline): >=3 timeouts, >=2 calls, >=30s span
+    await vi.advanceTimersByTimeAsync(30_000)
+    mocks.state.diagnosticsResults = [structuredTimeout(), structuredTimeout()]
+    const call2 = ensureSessionHostReady(options).then((r) => ({ r }), (e) => ({ e }))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(await call2).toMatchObject({ e: { code: 'session_host_unavailable_transient' } })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('refuses takeover on 28-31s observer starvation / late timer delivery across >=3 timeouts and >=2 calls with budget remaining', async () => {
+    vi.useFakeTimers()
+    const spawnHost = vi.fn()
+    const beforeSpawnHost = vi.fn()
+    const endpoint = { kind: 'unix' as const, path: '/tmp/observer-starvation-r3.sock' }
+    const starvedTimeout = (lagMs: number) => Object.assign(
+      new Error('Session host request timed out after 3s (get_host_diagnostics)'),
+      {
+        code: 'SESSION_HOST_REQUEST_TIMEOUT',
+        requestType: 'get_host_diagnostics',
+        scheduledTimeoutMs: 3_000,
+        actualElapsedMs: 3_000 + lagMs,
+        wallElapsedMs: 3_000 + lagMs,
+        observerLagMs: lagMs,
+      },
+    )
+    const inv1 = runtimeSupport.createSessionHostProbeInvocation()
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, starvedTimeout(28_500), 'pid-500:birth-a', inv1)).toBe(false)
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, starvedTimeout(29_000), 'pid-500:birth-a', inv1)).toBe(false)
+    await vi.advanceTimersByTimeAsync(31_000)
+    mocks.state.diagnosticsResults = [starvedTimeout(30_200)]
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => 'pid-500:birth-a',
+      isExistingHostAlive: () => true,
+      isExistingSocketPresent: () => true,
+      canConnectRetries: 0,
+      timeoutMs: 15_000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
   })
 
   it('probes through a fresh client after an explicitly supplied controller has dropped its socket', async () => {
@@ -299,21 +352,92 @@ describe('session host runtime support compatibility', () => {
     expect(dropped.request).not.toHaveBeenCalled()
   })
 
-  it('carries a foreign-entry diagnostic timeout into ensure after that client disconnects', async () => {
+  it('carries a foreign-entry diagnostic timeout into ensure after that client disconnects without authorizing live-host eviction', async () => {
+    vi.useFakeTimers()
     const endpoint = { kind: 'unix' as const, path: '/tmp/preflight-evidence-r2.sock' }
-    const timeout = new Error('Session host request timed out after 10ms (get_host_diagnostics)')
-    const record = (runtimeSupport as any).recordSessionHostProbeFailure
-    expect(record).toBeTypeOf('function')
+    const timeout = Object.assign(new Error('diagnostics_rpc_timeout'), {
+      code: 'SESSION_HOST_REQUEST_TIMEOUT',
+      requestType: 'get_host_diagnostics',
+      scheduledTimeoutMs: 3_000,
+      actualElapsedMs: 3_000,
+      wallElapsedMs: 3_000,
+      observerLagMs: 0,
+    })
+    const record = runtimeSupport.recordSessionHostProbeFailure
     const invocation = runtimeSupport.createSessionHostProbeInvocation()
-    record(endpoint, timeout, 'pid-42', invocation)
-    record(endpoint, timeout, 'pid-42', invocation)
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000)
+    expect(record(endpoint, timeout, 'pid-42:birth-1', invocation)).toBe(false)
+    expect(record(endpoint, timeout, 'pid-42:birth-1', invocation)).toBe(false)
+    await vi.advanceTimersByTimeAsync(30_000)
     mocks.state.diagnosticsResults = [timeout]
     const spawnHost = vi.fn()
-    await expect(ensureSessionHostReady({ endpoint, spawnHost, existingHostIdentity: () => 'pid-42',
+    const beforeSpawnHost = vi.fn()
+    await expect(ensureSessionHostReady({ endpoint, spawnHost, beforeSpawnHost, existingHostIdentity: () => 'pid-42:birth-1',
       isExistingHostAlive: () => true, isExistingSocketPresent: () => true,
-      canConnectRetries: 0, timeoutMs: 100 } as any)).resolves.toEqual(endpoint)
+      canConnectRetries: 0, timeoutMs: 15_000 } as any)).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+  })
+
+  it('wall clock jumps without monotonic elapsed time do not satisfy the 30s diagnostic timeout span', () => {
+    const endpoint = { kind: 'unix' as const, path: '/tmp/wall-clock-jump-r3.sock' }
+    const timeout = Object.assign(new Error('structured-timeout-without-prose'), {
+      code: 'SESSION_HOST_REQUEST_TIMEOUT',
+      requestType: 'get_host_diagnostics',
+      scheduledTimeoutMs: 3_000,
+      actualElapsedMs: 3_000,
+      wallElapsedMs: 3_000,
+      observerLagMs: 0,
+    })
+    const inv1 = runtimeSupport.createSessionHostProbeInvocation()
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, 'pid-99:birth-1', inv1)).toBe(false)
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, 'pid-99:birth-1', inv1)).toBe(false)
+    const wallStart = Date.now()
+    // Jump wall clock +45s while monotonic clock does not advance
+    vi.spyOn(Date, 'now').mockReturnValue(wallStart + 45_000)
+    const inv2 = runtimeSupport.createSessionHostProbeInvocation()
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, 'pid-99:birth-1', inv2)).toBe(false)
+  })
+
+  it('coalesces concurrent ensureSessionHostReady calls on a dead endpoint so replacement spawns only once', async () => {
+    const endpoint = { kind: 'unix' as const, path: '/tmp/concurrent-dead-recovery-r3.sock' }
+    let spawned = false
+    const beforeSpawnHost = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+    const spawnHost = vi.fn(() => {
+      spawned = true
+    })
+    mocks.state.connectResults = ['fail', 'fail', 'ok', 'ok']
+    mocks.state.diagnosticsResults = [
+      { success: true, result: { supportedRequestTypes: ['delete_session'], hostStartedAt: 777 } },
+      { success: true, result: { supportedRequestTypes: ['delete_session'], hostStartedAt: 777 } },
+    ]
+    const [resA, resB] = await Promise.all([
+      ensureSessionHostReady({
+        endpoint,
+        spawnHost,
+        beforeSpawnHost,
+        existingHostState: () => spawned ? 'alive' : 'dead',
+        isExistingSocketPresent: () => true,
+        canConnectRetries: 0,
+        timeoutMs: 500,
+        requiredRequestTypes: ['delete_session'],
+      }),
+      ensureSessionHostReady({
+        endpoint,
+        spawnHost,
+        beforeSpawnHost,
+        existingHostState: () => spawned ? 'alive' : 'dead',
+        isExistingSocketPresent: () => true,
+        canConnectRetries: 0,
+        timeoutMs: 500,
+        requiredRequestTypes: ['delete_session'],
+      }),
+    ])
+    expect(resA).toEqual(endpoint)
+    expect(resB).toEqual(endpoint)
     expect(spawnHost).toHaveBeenCalledTimes(1)
+    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
   })
 
   it.each(['ENFILE', 'EMFILE', 'EAGAIN', 'ENOBUFS'])('never treats repeated %s connects as proof, including on Windows pipes', async (code) => {
@@ -345,30 +469,49 @@ describe('session host runtime support compatibility', () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it.each(['success', 'connect failure', 'PID change', 'expired window'])('discards old timeout evidence after %s', async (reset) => {
+  it.each(['success', 'connect failure', 'PID change', 'birth generation change', 'expired window'])('discards old timeout evidence after %s', async (reset) => {
+    vi.useFakeTimers()
     const endpoint = { kind: 'unix' as const, path: `/tmp/evidence-reset-r2-${reset}.sock` }
-    const timeout = new Error('Session host request timed out after 10ms (get_host_diagnostics)')
+    const timeout = Object.assign(new Error('Session host request timed out after 10ms (get_host_diagnostics)'), {
+      code: 'SESSION_HOST_REQUEST_TIMEOUT',
+      requestType: 'get_host_diagnostics',
+      scheduledTimeoutMs: 10,
+      actualElapsedMs: 10,
+      wallElapsedMs: 10,
+      observerLagMs: 0,
+    })
     const record = runtimeSupport.recordSessionHostProbeFailure
     const invocation = runtimeSupport.createSessionHostProbeInvocation()
-    record(endpoint, timeout, 'pid-1', invocation)
-    record(endpoint, timeout, 'pid-1', invocation)
+    record(endpoint, timeout, 'pid-1:birth-a', invocation)
+    record(endpoint, timeout, 'pid-1:birth-a', invocation)
     if (reset === 'success') runtimeSupport.recordSessionHostProbeSuccess(endpoint)
-    if (reset === 'connect failure') record(endpoint, new Error('connect failed'), 'pid-1')
-    const now = Date.now()
-    vi.spyOn(Date, 'now').mockReturnValue(now + (reset === 'expired window' ? 90_001 : 30_000))
-    try {
-      expect(record(endpoint, timeout, reset === 'PID change' ? 'pid-2' : 'pid-1', runtimeSupport.createSessionHostProbeInvocation())).toBe(false)
-    } finally { vi.restoreAllMocks() }
+    if (reset === 'connect failure') record(endpoint, new Error('connect failed'), 'pid-1:birth-a')
+    await vi.advanceTimersByTimeAsync(reset === 'expired window' ? 90_001 : 30_000)
+    const nextIdentity =
+      reset === 'PID change'
+        ? 'pid-2:birth-a'
+        : reset === 'birth generation change'
+          ? 'pid-1:birth-b'
+          : 'pid-1:birth-a'
+    expect(record(endpoint, timeout, nextIdentity, runtimeSupport.createSessionHostProbeInvocation())).toBe(false)
   })
 
   it('never replaces on ENFILE even after earlier connected timeout evidence reached the bound', async () => {
+    vi.useFakeTimers()
     const endpoint = { kind: 'unix' as const, path: '/tmp/prior-proof-enfile-r2.sock' }
-    const timeout = new Error('Session host request timed out (get_host_diagnostics)')
+    const timeout = Object.assign(new Error('Session host request timed out (get_host_diagnostics)'), {
+      code: 'SESSION_HOST_REQUEST_TIMEOUT',
+      requestType: 'get_host_diagnostics',
+      scheduledTimeoutMs: 3_000,
+      actualElapsedMs: 3_000,
+      wallElapsedMs: 3_000,
+      observerLagMs: 0,
+    })
     const invocation = runtimeSupport.createSessionHostProbeInvocation()
-    runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, undefined, invocation)
-    runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, undefined, invocation)
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 30_000)
-    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, undefined, runtimeSupport.createSessionHostProbeInvocation())).toBe(true)
+    runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, 'pid-1:birth-a', invocation)
+    runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, 'pid-1:birth-a', invocation)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(runtimeSupport.recordSessionHostProbeFailure(endpoint, timeout, 'pid-1:birth-a', runtimeSupport.createSessionHostProbeInvocation())).toBe(true)
     mocks.state.connectResults = [Object.assign(new Error('ENFILE'), { code: 'ENFILE' })]
     const spawnHost = vi.fn()
     await expect(ensureSessionHostReady({ endpoint, spawnHost, canConnectRetries: 0,
@@ -500,6 +643,173 @@ describe('session host runtime support compatibility', () => {
       ),
     ).toBeNull()
     expect(sessionRegistry.get(ghostId)).toBeUndefined()
+  })
+
+  it.each(['alive', 'unknown'] as const)('R4 refuses complete count-zero authority for a %s host before disconnect or admission', async (hostState) => {
+    const spawnHost = vi.fn(), beforeSpawnHost = vi.fn()
+    mocks.state.connectResults = ['fail']
+    await expect(ensureSessionHostReady({
+      endpoint: { kind: 'unix', path: '/tmp/r4-automatic-refusal.sock' },
+      existingHostState: () => hostState,
+      existingHostIdentity: () => 'pid-777:birth-Sat Oct 24 06:00:00 2026',
+      replacementAuthority: {
+        expectedPid: 777, expectedBirth: 'Sat Oct 24 06:00:00 2026',
+        expectedInstanceConfigDir: '/tmp/owned-config', expectedBootId: 'fixture-boot',
+        expectedEpoch: 3, expectedOwner: 'fixture_owner', activeRuntimeCount: 0,
+      },
+      spawnHost, beforeSpawnHost, canConnectRetries: 0, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('R4 revalidates dead state after asynchronous admission before every effect', async () => {
+    const spawnHost = vi.fn()
+    let hostState: 'dead' | 'alive' = 'dead'
+    mocks.state.connectResults = ['fail']
+    await expect(ensureSessionHostReady({
+      endpoint: { kind: 'unix', path: '/tmp/r4-post-admission.sock' },
+      existingHostState: () => hostState,
+      beforeSpawnHost: async () => { hostState = 'alive' },
+      spawnHost, canConnectRetries: 0, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('R4 refuses an in-flight join for a different config/PID/birth generation on the same endpoint', async () => {
+    const endpoint = { kind: 'unix' as const, path: '/tmp/r4-inflight-generation.sock' }
+    let generation = 'config-a:pid-7:birth-a'
+    let release!: () => void
+    const admitted = new Promise<void>(resolve => { release = resolve })
+    const spawnHost = vi.fn()
+    const beforeSpawnHost = vi.fn(() => admitted)
+    mocks.state.connectResults = ['fail', 'fail', 'ok']
+    const options = { endpoint, existingHostState: () => 'dead' as const,
+      existingHostGeneration: () => generation, spawnHost, beforeSpawnHost,
+      canConnectRetries: 0, timeoutMs: 1000 }
+    const first = ensureSessionHostReady(options)
+    await new Promise(resolve => setImmediate(resolve))
+    generation = 'config-b:pid-8:birth-b'
+    const second = ensureSessionHostReady(options).then(value => ({ value }), error => ({ error }))
+    await new Promise(resolve => setImmediate(resolve))
+    generation = 'config-a:pid-7:birth-a'
+    release()
+    expect(await second).toMatchObject({ error: { code: 'session_host_unavailable_transient' } })
+    await expect(first).resolves.toEqual(endpoint)
+    expect(spawnHost).toHaveBeenCalledTimes(1)
+    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['generation', 'cancel-after-native-read'] as const)('R4 refuses %s changes after admission and before disconnect/spawn', async (fault) => {
+    let generation = 'initial', cancelled = false, reads = 0
+    const spawnHost = vi.fn()
+    mocks.state.connectResults = ['fail']
+    await expect(ensureSessionHostReady({
+      endpoint: { kind: 'unix', path: '/tmp/r4-effect-generation.sock' },
+      existingHostState: () => 'dead',
+      existingHostGeneration: () => { if (++reads >= 3 && fault === 'cancel-after-native-read') cancelled = true; return generation },
+      isCancelled: () => cancelled,
+      beforeSpawnHost: () => { if (fault === 'generation') generation = 'changed' },
+      spawnHost, canConnectRetries: 0, timeoutMs: 1000,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(spawnHost).not.toHaveBeenCalled()
+    expect(mocks.state.disconnectClientsCalls).toBe(0)
+  })
+
+  it('rejects partial caller replacementAuthority ({ activeRuntimeCount: 0 } alone) and refuses when observed runtimeCount > 0 or cancelled during identity check', async () => {
+    const spawnHost = vi.fn()
+    const beforeSpawnHost = vi.fn()
+    const endpoint = { kind: 'unix' as const, path: '/tmp/adhdev-r2-auth-shape.sock' }
+    mocks.state.connectResults = ['fail', 'fail', 'fail', 'fail']
+
+    // 1. Partial authority ({ activeRuntimeCount: 0 } alone) must be rejected
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => 'pid-777:birth-1',
+      existingHostState: () => 'alive',
+      replacementAuthority: { activeRuntimeCount: 0 } as any,
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+
+    // 2. Complete valid authority (passing shape check) is rejected if a previous probe observed runtimeCount > 0 on this endpoint
+    const canonicalBirth = 'Sat Oct 24 06:00:00 2026'
+    const canonicalIdentity = `pid-777:birth-${canonicalBirth}`
+    const validFullAuthority = {
+      expectedPid: 777,
+      expectedBirth: canonicalBirth,
+      expectedInstanceConfigDir: '/tmp/cfg',
+      expectedBootId: 'boot-idle-1',
+      expectedEpoch: 1,
+      expectedOwner: 'rollout_owner_01',
+      expectedIdentity: canonicalIdentity,
+      activeRuntimeCount: 0 as const,
+    }
+    expect(runtimeSupport.isValidReplacementAuthorizationShape(validFullAuthority)).toBe(true)
+
+    runtimeSupport.recordSessionHostProbeSuccess(endpoint, { runtimeCount: 2 } as any)
+    expect(runtimeSupport.getObservedSessionHostRuntimeCount(endpoint)).toBe(2)
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => canonicalIdentity,
+      existingHostState: () => 'alive',
+      replacementAuthority: validFullAuthority,
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+
+    // 3. Cancellation occurring during existingHostIdentity() query prevents beforeSpawnHost and spawnHost
+    runtimeSupport.recordSessionHostProbeSuccess(endpoint, { runtimeCount: 0 } as any)
+    expect(runtimeSupport.getObservedSessionHostRuntimeCount(endpoint)).toBe(0)
+    let cancelled = false
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => {
+        cancelled = true
+        return canonicalIdentity
+      },
+      existingHostState: () => 'alive',
+      replacementAuthority: () => ({
+        ...validFullAuthority,
+        isCancelled: () => cancelled,
+      }),
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+
+    // R4 / R3-14: count zero with identical canonical authority is also unsupported.
+    cancelled = false
+    beforeSpawnHost.mockImplementationOnce(async () => {
+      throw new runtimeSupport.SessionHostUnavailableTransientError(endpoint)
+    })
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => canonicalIdentity,
+      existingHostState: () => 'alive',
+      replacementAuthority: () => ({
+        ...validFullAuthority,
+        isCancelled: () => cancelled,
+      }),
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
   })
 })
 

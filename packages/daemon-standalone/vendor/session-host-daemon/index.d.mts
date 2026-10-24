@@ -12,6 +12,32 @@ interface HostUpgradeBinding {
     stateDir: string;
 }
 
+declare function sessionHostInstanceArg(configDir: string): string;
+declare function isManagedSessionHostCommandLine(commandLine: string | null | undefined, configDir?: string): boolean;
+interface SessionHostReplacementProvenance {
+    expectedPid: number;
+    expectedBirth: string;
+    instanceConfigDir?: string;
+    instanceConfigKey?: string;
+    expectedEndpointInode?: bigint;
+    expectedBootId?: string;
+    expectedEpoch?: number;
+    expectedOwner?: string;
+    expectedTokenHash?: string;
+    activeRuntimeCount?: number;
+    isCancelled?: () => boolean;
+}
+declare function readVerifiedReplacementProvenance(options: {
+    provenanceFile?: string;
+    provenanceFilePath?: string;
+    instanceConfigDir: string;
+    appName?: string;
+    endpointPath: string;
+    leaseStateDir?: string;
+    nowMs?: () => number;
+    skipDynamicWrap?: boolean;
+}): SessionHostReplacementProvenance | undefined;
+
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
     /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
@@ -19,11 +45,25 @@ interface SessionHostServerOptions {
     appName?: string;
     /** Explicit session-host state root (runtime records + tombstones). */
     storageRootDir?: string;
+    /** Instance config directory used to verify single matching --instance-config-key on prior owners. */
+    instanceConfigDir?: string;
     /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
     pidFilePath?: string;
+    /** Optional predicate override for testing whether a prior pid is alive. */
+    isPidAlive?: (pid: number) => boolean;
     /** Optional predicate override for testing whether a prior pid is a managed session-host. */
     isManagedOwnerPid?: (pid: number) => boolean;
-    /** Grace period between SIGTERM and SIGKILL when evicting an unresponsive prior host (defaults to 4000ms). */
+    /** Unsupported legacy replacement context; ordinary startup rejects its presence. */
+    replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
+    /** Optional native birth probe override (`ps -o lstart=`). */
+    getOwnerBirth?: (pid: number) => string | null;
+    /** Optional unix socket owner PID probe override (`lsof -t`). */
+    getSocketOwnerPids?: (endpointPath: string) => number[] | null;
+    /** Cancellation is checked after blocking reads and before startup effects. */
+    isCancelled?: () => boolean;
+    /** Optional process command-line probe override (`ps -o args=`). */
+    readOwnerArgs?: (pid: number) => string | null;
+    /** Legacy option retained for source compatibility; automatic live eviction is unsupported. */
     evictGraceMs?: number;
 }
 declare class SessionHostServer extends EventEmitter {
@@ -32,9 +72,14 @@ declare class SessionHostServer extends EventEmitter {
     private runtimes;
     private readonly storage;
     private readonly upgradeLease;
+    private readonly instanceConfigDir;
     private readonly pidFilePath;
-    private readonly isManagedOwnerPid?;
-    private readonly evictGraceMs;
+    private readonly isPidAliveOverride?;
+    private readonly getOwnerBirth?;
+    private readonly getSocketOwnerPids?;
+    private readonly isCancelled?;
+    private startupFence;
+    private readonly hasReplacementContext;
     private restorePending;
     private mutatingRequests;
     private endpointInode;
@@ -52,8 +97,9 @@ declare class SessionHostServer extends EventEmitter {
     private stopPromise;
     constructor(options?: SessionHostServerOptions);
     private isPidAlive;
-    private readProcessArgs;
-    private isManagedSessionHostPid;
+    private readProcessBirth;
+    private readSocketOwnerPids;
+    private assertNoAutomaticReplacementContext;
     private evictPriorEndpointOwners;
     start(): Promise<void>;
     stop(): Promise<void>;
@@ -143,9 +189,11 @@ interface GuardianArtifactPins {
 /** The manifest pin must come from the supervisor's immutable artifact plan. */
 declare function resolveGuardianArtifact(pins: GuardianArtifactPins): HostUpgradeBinding;
 
+declare function getSessionHostReplacementProvenanceFile(appName: string, configDir?: string): string;
+declare function removeSessionHostReplacementProvenance(appName: string, configDir?: string): void;
 declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: number): (now: number) => {
     exit: boolean;
     countInWindow: number;
 };
 
-export { type GuardianArtifactPins, type HostUpgradeBinding, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, resolveGuardianArtifact, startThreadpoolWatchdog };
+export { type GuardianArtifactPins, type HostUpgradeBinding, type SessionHostReplacementProvenance, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, getSessionHostReplacementProvenanceFile, isManagedSessionHostCommandLine, readVerifiedReplacementProvenance, removeSessionHostReplacementProvenance, resolveGuardianArtifact, sessionHostInstanceArg, startThreadpoolWatchdog };

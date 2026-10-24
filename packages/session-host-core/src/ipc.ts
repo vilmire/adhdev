@@ -311,9 +311,24 @@ export class SessionHostClient {
       request,
     };
     const timeoutLabel = timeoutMs % 1000 === 0 ? `${timeoutMs / 1000}s` : `${timeoutMs}ms`;
+    const startedAt = Date.now();
+    const startedMonotonicAt = performance.now();
     return new Promise<SessionHostResponse<T>>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        const timeoutError = Object.assign(new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`), { code: 'SESSION_HOST_REQUEST_TIMEOUT', requestType: request.type });
+        const actualElapsedMs = Math.max(0, Math.round(performance.now() - startedMonotonicAt));
+        const wallElapsedMs = Math.max(0, Date.now() - startedAt);
+        const observerLagMs = Math.max(0, actualElapsedMs - timeoutMs);
+        const timeoutError = Object.assign(
+          new Error(`Session host request timed out after ${timeoutLabel} (${request.type})`),
+          {
+            code: 'SESSION_HOST_REQUEST_TIMEOUT',
+            requestType: request.type,
+            scheduledTimeoutMs: timeoutMs,
+            actualElapsedMs,
+            wallElapsedMs,
+            observerLagMs,
+          },
+        );
         if (this.socket === socket) {
           this.disconnect(timeoutError);
         } else {
@@ -414,8 +429,22 @@ export class SessionHostClient {
         const connected = () => { cleanup(); establishedSockets.add(socket); resolve(); };
         const failed = (error: Error) => { cleanup(); reject(error); };
         const closed = () => failed(new Error('Session host connection closed before connect'));
+        const connectStartedAt = Date.now();
+        const connectStartedMonotonicAt = performance.now();
         const timer = setTimeout(() => {
-          const error = Object.assign(new Error(`Session host connect timed out after ${timeoutMs}ms`), { code: 'SESSION_HOST_CONNECT_TIMEOUT' });
+          const actualElapsedMs = Math.max(0, Math.round(performance.now() - connectStartedMonotonicAt));
+          const wallElapsedMs = Math.max(0, Date.now() - connectStartedAt);
+          const observerLagMs = Math.max(0, actualElapsedMs - timeoutMs);
+          const error = Object.assign(
+            new Error(`Session host connect timed out after ${timeoutMs}ms`),
+            {
+              code: 'SESSION_HOST_CONNECT_TIMEOUT',
+              scheduledTimeoutMs: timeoutMs,
+              actualElapsedMs,
+              wallElapsedMs,
+              observerLagMs,
+            },
+          );
           failed(error);
           if (this.socket === socket) this.disconnect(error);
         }, timeoutMs);
@@ -462,12 +491,26 @@ export class SessionHostClient {
     // client; that task may have started with the normal 30s timeout.
     if (options.timeoutMs !== undefined) {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const raceStartedAt = Date.now();
+      const raceStartedMonotonicAt = performance.now();
       try {
         await Promise.race([
           this.connect(timeoutMs),
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(() => {
-              const error = Object.assign(new Error(`Session host connect timed out after ${timeoutMs}ms`), { code: 'SESSION_HOST_CONNECT_TIMEOUT' });
+              const actualElapsedMs = Math.max(0, Math.round(performance.now() - raceStartedMonotonicAt));
+              const wallElapsedMs = Math.max(0, Date.now() - raceStartedAt);
+              const observerLagMs = Math.max(0, actualElapsedMs - timeoutMs);
+              const error = Object.assign(
+                new Error(`Session host connect timed out after ${timeoutMs}ms`),
+                {
+                  code: 'SESSION_HOST_CONNECT_TIMEOUT',
+                  scheduledTimeoutMs: timeoutMs,
+                  actualElapsedMs,
+                  wallElapsedMs,
+                  observerLagMs,
+                },
+              );
               reject(error);
               this.disconnect(error);
             }, timeoutMs);
