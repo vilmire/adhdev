@@ -28,9 +28,10 @@ interface SessionHostReplacementProvenance {
     isCancelled?: () => boolean;
 }
 declare function readVerifiedReplacementProvenance(options: {
-    provenanceFile: string;
+    provenanceFile?: string;
+    provenanceFilePath?: string;
     instanceConfigDir: string;
-    appName: string;
+    appName?: string;
     endpointPath: string;
     leaseStateDir?: string;
     nowMs?: () => number;
@@ -47,6 +48,8 @@ interface SessionHostServerOptions {
     instanceConfigDir?: string;
     /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
     pidFilePath?: string;
+    /** Optional predicate override for testing whether a prior pid is alive. */
+    isPidAlive?: (pid: number) => boolean;
     /** Optional predicate override for testing whether a prior pid is a managed session-host. */
     isManagedOwnerPid?: (pid: number) => boolean;
     /** Explicit replacement provenance required before evicting any live prior session-host process. */
@@ -68,6 +71,7 @@ declare class SessionHostServer extends EventEmitter {
     private readonly upgradeLease;
     private readonly instanceConfigDir;
     private readonly pidFilePath;
+    private readonly isPidAliveOverride?;
     private readonly isManagedOwnerPid?;
     private readonly replacementProvenance?;
     private readonly getOwnerBirth?;

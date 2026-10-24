@@ -753,6 +753,85 @@ test('R2 pure eviction and provenance fences: unknown socket owner with dead pid
     await (srvDeadClean as any).evictPriorEndpointOwners()
     assert.equal(fs.existsSync(sock5), false)
     assert.deepEqual(signaled, [])
+
+    // 6. Placeholder births ('win32'/'unknown') and post-parent-kill (liveCandidates.length === 0) provenance mismatches fail closed
+    for (const placeholderBirth of ['win32', 'unknown']) {
+      writeValidProvenanceAndLease()
+      const rawProv = JSON.parse(fs.readFileSync(provFile, 'utf8'))
+      rawProv.expectedBirth = placeholderBirth
+      fs.writeFileSync(provFile, JSON.stringify(rawProv), { mode: 0o600 })
+      assert.equal(
+        readVerifiedReplacementProvenance({
+          provenanceFilePath: provFile,
+          instanceConfigDir: configDir,
+          appName,
+          endpointPath: sock4,
+          leaseStateDir: leaseDir,
+        }),
+        undefined,
+      )
+    }
+
+    const sock6 = path.join(tmp, 'post-parent-kill.sock')
+    const pidFile6 = path.join(tmp, 'post-parent-kill.pid')
+    fs.writeFileSync(sock6, 'swapped-socket-inode', { mode: 0o600 })
+    const sock6ActualIno = fs.lstatSync(sock6, { bigint: true }).ino
+    fs.writeFileSync(
+      provFile,
+      JSON.stringify({
+        schema: 1,
+        schemaVersion: 1,
+        appName,
+        instanceConfigDir: path.resolve(configDir),
+        instanceConfigKey: instanceArgFor(configDir),
+        endpointPath: sock6,
+        expectedEndpointInode: (sock6ActualIno + 99999n).toString(),
+        expectedPid: priorPid,
+        expectedBirth: 'Sat Oct 24 06:00:00 2026',
+        expectedBootId: 'boot-r2',
+        expectedEpoch: 7,
+        expectedOwner: 'owner-r2',
+        expectedTokenHash: tokenHash,
+        activeRuntimeCount: 0,
+        issuedAtMs: Date.now(),
+      }),
+      { mode: 0o600 },
+    )
+    fs.writeFileSync(
+      leaseFile,
+      JSON.stringify({
+        schema: 1,
+        endpoint: sock6,
+        epoch: 7,
+        held: true,
+        owner: 'owner-r2',
+        tokenHash,
+      }),
+      { mode: 0o600 },
+    )
+    const srvPostParentKillMismatch = new SessionHostServer({
+      appName,
+      endpoint: { kind: 'unix', path: sock6 },
+      storageRootDir: path.join(tmp, 's6'),
+      instanceConfigDir: configDir,
+      pidFilePath: pidFile6,
+      isPidAlive: () => false,
+      getSocketOwnerPids: () => [],
+      replacementProvenance: () =>
+        readVerifiedReplacementProvenance({
+          provenanceFilePath: provFile,
+          instanceConfigDir: configDir,
+          appName,
+          endpointPath: sock6,
+          leaseStateDir: leaseDir,
+        }),
+    })
+    await assert.rejects(
+      () => (srvPostParentKillMismatch as any).evictPriorEndpointOwners(),
+      /session_host_prior_owner_endpoint_inode_mismatch/,
+    )
+    assert.equal(fs.existsSync(sock6), true)
+    removeSessionHostReplacementProvenance(appName, configDir)
   } finally {
     process.kill = realKill
     fs.rmSync(tmp, { recursive: true, force: true })

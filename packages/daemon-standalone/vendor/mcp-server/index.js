@@ -65665,8 +65665,8 @@ CREATE TABLE IF NOT EXISTS sq_archive (
       const branch = readStringValue(node.worktreeBranch, node.worktree_branch);
       if (branch) return `\u2387 ${branch}`;
       const workspace = readStringValue(node.workspace, node.repoRoot, node.repo_root);
-      const basename33 = workspace ? workingDirBasename(workspace) : void 0;
-      return basename33 || (nodeId ? nodeId.slice(0, 8) : "node");
+      const basename34 = workspace ? workingDirBasename(workspace) : void 0;
+      return basename34 || (nodeId ? nodeId.slice(0, 8) : "node");
     }
     function buildMeshNodeDisplayLabel(node, nodeId, _providerPriority) {
       return buildMeshNodeMachineLabel(node, nodeId);
@@ -128027,8 +128027,8 @@ ${marker2}`,
           if ((0, import_fs26.existsSync)(bundledCli)) resolvedCli = bundledCli;
         }
         if (!resolvedCli && appPath && os48 === "win32") {
-          const { dirname: dirname56 } = await import("path");
-          const appDir = dirname56(appPath);
+          const { dirname: dirname57 } = await import("path");
+          const appDir = dirname57(appPath);
           const candidates = [
             `${appDir}\\\\bin\\\\${def.cli}.cmd`,
             `${appDir}\\\\bin\\\\${def.cli}`,
@@ -131928,17 +131928,17 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
     }
     function readSession(sessionPath) {
       if (!sessionPath || !path62.isAbsolute(sessionPath)) return null;
-      const basename33 = path62.basename(sessionPath, ".jsonl");
-      if (!isSafeFilename(basename33)) return null;
+      const basename34 = path62.basename(sessionPath, ".jsonl");
+      if (!isSafeFilename(basename34)) return null;
       if (!fs56.existsSync(sessionPath)) return null;
       const sourceMtimeMs = statMtimeMs(sessionPath);
-      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename33, void 0, sourceMtimeMs);
+      const { messages, usageRecords } = parseTranscriptFile(sessionPath, basename34, void 0, sourceMtimeMs);
       if (messages.length === 0) return null;
       const firstSystem = messages.find((m) => m.kind === "session_start");
       const workspace = firstSystem?.workspace || firstSystem?.content || void 0;
       const session = {
         messages,
-        providerSessionId: basename33,
+        providerSessionId: basename34,
         source: "provider-native",
         sourcePath: sessionPath,
         sourceMtimeMs,
@@ -131947,7 +131947,7 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       };
       if (usageRecords.length > 0) {
         session.usage = foldUsageRecords(usageRecords, {
-          providerSessionId: basename33,
+          providerSessionId: basename34,
           agent: "claude-cli"
         });
       }
@@ -132333,8 +132333,8 @@ ${formatManifestValidationIssues2(validation2.issues)}`);
       if (!fs57.existsSync(sessionPath)) return null;
       const meta = readSessionMeta(sessionPath);
       const metaId = String(meta?.id ?? "").trim();
-      const basename33 = path63.basename(sessionPath, ".jsonl");
-      const uuidMatch = basename33.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const basename34 = path63.basename(sessionPath, ".jsonl");
+      const uuidMatch = basename34.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
       const filenameUuid2 = uuidMatch ? uuidMatch[1] : "";
       if (metaId && filenameUuid2 && metaId !== filenameUuid2) return null;
       const sessionId = metaId || filenameUuid2;
@@ -152302,7 +152302,7 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { mkdirSync: mkdirSync61, writeFileSync: writeFileSync51 } = await import("fs");
-          const { dirname: dirname56, join: join139 } = await import("path");
+          const { dirname: dirname57, join: join139 } = await import("path");
           const scaffold = buildMeshJsonConfigScaffold2(mesh);
           const scaffoldJson = serializeMeshJsonConfigScaffold2(scaffold);
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
@@ -152342,7 +152342,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist to the repo (commit target). meshes.json is untouched."
             };
           }
-          mkdirSync61(dirname56(absolutePath), { recursive: true });
+          mkdirSync61(dirname57(absolutePath), { recursive: true });
           writeFileSync51(absolutePath, `${scaffoldJson}
 `, "utf-8");
           return {
@@ -152412,7 +152412,7 @@ ${output}` : "";
             MESH_JSON_CONFIG_LOCATIONS: MESH_JSON_CONFIG_LOCATIONS2
           } = await Promise.resolve().then(() => (init_mesh_json_config(), mesh_json_config_exports));
           const { existsSync: existsSync121, readFileSync: readFileSync110, mkdirSync: mkdirSync61, writeFileSync: writeFileSync51 } = await import("fs");
-          const { dirname: dirname56, join: join139 } = await import("path");
+          const { dirname: dirname57, join: join139 } = await import("path");
           const yaml3 = await Promise.resolve().then(() => (init_js_yaml(), js_yaml_exports));
           const relativePath = MESH_JSON_CONFIG_LOCATIONS2[0];
           let baseDoc = { version: 1 };
@@ -152476,7 +152476,7 @@ ${output}` : "";
               note: "Dry-run: nothing written. Re-run with write=true to persist. Only the providerDefaults zone is merged; other repo zones are preserved."
             };
           }
-          mkdirSync61(dirname56(absolutePath), { recursive: true });
+          mkdirSync61(dirname57(absolutePath), { recursive: true });
           writeFileSync51(absolutePath, serialized, "utf-8");
           return {
             success: true,
@@ -154099,7 +154099,7 @@ ${ptyResult.output.slice(-2e3)}`);
             };
           }
           const { existsSync: existsSync121, readFileSync: readFileSync110, writeFileSync: writeFileSync51, mkdirSync: mkdirSync61 } = await import("fs");
-          const { dirname: dirname56 } = await import("path");
+          const { dirname: dirname57 } = await import("path");
           const mcpConfigPath = cliType === "claude-cli" ? resolveClaudeCoordinatorMcpConfigPath({ configPath: coordinatorSetup.configPath, workspace, meshId, configDir: getConfigDir2() }) : coordinatorSetup.configPath;
           let mcpServerEnv;
           if (args?.inlineMesh) {
@@ -154127,7 +154127,7 @@ ${ptyResult.output.slice(-2e3)}`);
             }
           } else {
             try {
-              mkdirSync61(dirname56(mcpConfigPath), { recursive: true });
+              mkdirSync61(dirname57(mcpConfigPath), { recursive: true });
             } catch (error) {
               const message = `Could not prepare MCP config path for automatic setup: ${error?.message || error}`;
               LOG.error("MeshCoordinator", message);
@@ -185921,9 +185921,18 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
       const wallSpanMs = wallNow - evidence.firstWallAt;
       return evidence.count >= UNRESPONSIVE_TIMEOUT_COUNT && evidence.invocations.size >= UNRESPONSIVE_INVOCATION_COUNT && monotonicSpanMs >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS && wallSpanMs >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS;
     }
-    function recordSessionHostProbeSuccess(endpoint, diagnostics) {
+    function recordSessionHostProbeSuccess(endpoint, diagnostics, explicitRuntimeCount) {
       const key4 = endpointKey(endpoint);
       probeEvidence2.delete(key4);
+      if (typeof diagnostics === "string") {
+        if (diagnostics.trim()) {
+          hostIdentities.set(key4, diagnostics.trim());
+        }
+        if (typeof explicitRuntimeCount === "number" && Number.isFinite(explicitRuntimeCount)) {
+          hostRuntimeCounts.set(key4, explicitRuntimeCount);
+        }
+        return;
+      }
       if (typeof diagnostics?.hostStartedAt === "number") {
         hostIdentities.set(key4, `started:${diagnostics.hostStartedAt}`);
       }
@@ -186149,6 +186158,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         const env2 = (0, import_session_host_core18.sanitizeSpawnEnv)(baseEnv);
         env2.ADHDEV_SESSION_HOST_NAME = appName;
         env2.ADHDEV_CONFIG_DIR = instance().configDir;
+        if (typeof baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE === "string" && baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE.trim()) {
+          env2.ADHDEV_WORKER_GUARDIAN_PINS_FILE = baseEnv.ADHDEV_WORKER_GUARDIAN_PINS_FILE.trim();
+        }
         return env2;
       }
       function resolveEntry() {
@@ -186217,16 +186229,33 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         }
         fs114.renameSync(tmp, target);
       }
+      let inFlightReplacementAuth;
       function verifyLeaseJournalForReplacement(endpoint, auth) {
         const leaseJournal = path106.join(instance().configDir, "session-host", "upgrade-lease.json");
         if (!fs114.existsSync(leaseJournal)) return true;
         try {
           const stat2 = fs114.lstatSync(leaseJournal);
-          if (!stat2.isFile() || stat2.isSymbolicLink() || (stat2.mode & 63) !== 0 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
+          if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1 || (stat2.mode & 63) !== 0 || typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
             return false;
           }
           const parsed = JSON.parse(fs114.readFileSync(leaseJournal, "utf8"));
-          if (parsed?.schema !== 1 || parsed.held !== true || parsed.endpoint !== endpoint.path || parsed.epoch !== auth.expectedEpoch || parsed.owner !== auth.expectedOwner || typeof parsed.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(parsed.tokenHash)) {
+          const canonicalEndpointDir = fs114.existsSync(path106.dirname(endpoint.path)) ? fs114.realpathSync(path106.dirname(endpoint.path)) : path106.resolve(path106.dirname(endpoint.path));
+          const canonicalEndpointPath = path106.join(canonicalEndpointDir, path106.basename(endpoint.path));
+          const leaseEndpointDir = typeof parsed?.endpoint === "string" && fs114.existsSync(path106.dirname(parsed.endpoint)) ? fs114.realpathSync(path106.dirname(parsed.endpoint)) : typeof parsed?.endpoint === "string" ? path106.resolve(path106.dirname(parsed.endpoint)) : "";
+          const leaseEndpointPath = typeof parsed?.endpoint === "string" ? path106.join(leaseEndpointDir, path106.basename(parsed.endpoint)) : "";
+          if (parsed?.schema !== 1 || parsed.held !== true || leaseEndpointPath !== canonicalEndpointPath || parsed.epoch !== auth.expectedEpoch || parsed.owner !== auth.expectedOwner || typeof parsed.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(parsed.tokenHash)) {
+            return false;
+          }
+          if (parsed.bootId !== void 0 && parsed.bootId !== auth.expectedBootId) {
+            return false;
+          }
+          if (parsed.pid !== void 0 && parsed.pid !== auth.expectedPid) {
+            return false;
+          }
+          if (parsed.expiresAt !== void 0 && (typeof parsed.expiresAt !== "number" || !Number.isFinite(parsed.expiresAt) || parsed.expiresAt <= Date.now())) {
+            return false;
+          }
+          if (auth.expectedTokenHash === void 0 && auth.leaseToken === void 0) {
             return false;
           }
           if (auth.expectedTokenHash !== void 0 && parsed.tokenHash !== auth.expectedTokenHash) {
@@ -186240,6 +186269,62 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         } catch {
           return false;
         }
+      }
+      function hasNonLeaseStrictBridgeArtifact(configDir) {
+        try {
+          let root = path106.resolve(configDir);
+          let rootStat;
+          try {
+            rootStat = fs114.lstatSync(root);
+          } catch (error) {
+            if (error.code !== "ENOENT") return true;
+          }
+          if (rootStat) {
+            if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return true;
+            root = fs114.realpathSync(root);
+          }
+          for (const name of [
+            "worker-bridge-supervisor.json",
+            "worker-bridge-launchd-exclusion.json",
+            "worker-bridge-lifecycle-fence.json"
+          ]) {
+            try {
+              fs114.lstatSync(path106.join(root, name));
+              return true;
+            } catch (error) {
+              if (error.code !== "ENOENT") return true;
+            }
+          }
+          const ledgerDir = path106.join(root, "mesh-ledger");
+          try {
+            fs114.lstatSync(ledgerDir);
+            return true;
+          } catch (error) {
+            if (error.code !== "ENOENT") return true;
+          }
+          return false;
+        } catch {
+          return true;
+        }
+      }
+      function assertManagedHostBridgeAdmission(operation, authorizedReplacement) {
+        const configDir = instance().configDir;
+        const leaseJournal = path106.join(configDir, "session-host", "upgrade-lease.json");
+        let leaseExists = false;
+        try {
+          fs114.lstatSync(leaseJournal);
+          leaseExists = true;
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            assertWorkerBridgeLifecycleAdmission(operation, configDir);
+            return;
+          }
+        }
+        if (!leaseExists || !authorizedReplacement || authorizedReplacement.isCancelled?.() || !verifyLeaseJournalForReplacement(getEndpoint(), authorizedReplacement) || hasNonLeaseStrictBridgeArtifact(configDir)) {
+          assertWorkerBridgeLifecycleAdmission(operation, configDir);
+          return;
+        }
+        assertMaintenanceLifecycle(operation, configDir);
       }
       function readPidFileState() {
         try {
@@ -186290,7 +186375,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           if (!lines.every((line) => /^\d+$/.test(line))) return null;
           return lines.map((line) => Number.parseInt(line, 10)).filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid);
         } catch (error) {
-          if (error?.status === 1 && String(error?.stdout ?? "").trim() === "") return [];
+          if (error?.status === 1 && String(error?.stdout ?? "").trim() === "" || error?.message === "no socket owner" && error?.status === void 0 && error?.code === void 0 && error?.signal === void 0) {
+            return [];
+          }
           return null;
         }
       }
@@ -186316,19 +186403,27 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         if (existingPid === process.pid) return "unknown";
         if (!isPidAlive(existingPid)) {
           if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
-            const owners = getSocketOwnerPids(endpoint.path);
-            if (owners && owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
-              return "unknown";
+            if (process.platform !== "win32") {
+              const owners = getSocketOwnerPids(endpoint.path);
+              if (owners === null) {
+                return "unknown";
+              }
+              if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
+                return "unknown";
+              }
             }
           }
           return "dead";
         }
         if (!canSignalPid(existingPid)) return "unknown";
         const birth = getProcessBirth(existingPid);
-        if (!birth) return "unknown";
+        if (!birth || birth === "win32" || birth === "unknown") return "unknown";
         if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path)) {
-          const owners = getSocketOwnerPids(endpoint.path);
-          if (owners !== null) {
+          if (process.platform !== "win32") {
+            const owners = getSocketOwnerPids(endpoint.path);
+            if (owners === null) {
+              return "unknown";
+            }
             if (owners.length > 0 && !owners.includes(existingPid)) return "unknown";
             if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return "unknown";
           }
@@ -186388,8 +186483,10 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         LOG.info("SessionHost", `conpty prebuild verified before spawn at ${found}`);
       }
       function spawnHost() {
+        const activeReplacementAuth = inFlightReplacementAuth;
+        inFlightReplacementAuth = void 0;
         assertMaintenanceLifecycle("session_host_spawn", instance().configDir);
-        assertWorkerBridgeLifecycleAdmission("session_host_spawn", instance().configDir);
+        assertManagedHostBridgeAdmission("session_host_spawn", activeReplacementAuth);
         const entry = resolveEntry();
         verifyConptyPrebuildBeforeSpawn(entry);
         preflightDiskSpace(instance().configDir, "spawn the session host");
@@ -186615,8 +186712,9 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
                 return void 0;
               }
             }
-            const owners = getSocketOwnerPids(endpoint.path);
-            if (owners !== null) {
+            if (process.platform !== "win32") {
+              const owners = getSocketOwnerPids(endpoint.path);
+              if (owners === null) return void 0;
               if (owners.length > 0 && !owners.includes(currentPid)) return void 0;
               if (owners.some((ownerPid) => ownerPid !== currentPid && isPidAlive(ownerPid))) return void 0;
             }
@@ -186642,6 +186740,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
         };
         const evictGraceMs = options.evictGraceMs ?? 4e3;
         const beforeSpawnHost = async (endpoint) => {
+          inFlightReplacementAuth = void 0;
           const state2 = inspectExistingHostState();
           if (state2 === "unknown") {
             throw new SessionHostUnavailableTransientError(endpoint);
@@ -186686,7 +186785,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               throw new SessionHostUnavailableTransientError(endpoint);
             }
             assertMaintenanceLifecycle("session_host_kill", instance().configDir);
-            assertWorkerBridgeLifecycleAdmission("session_host_stop", instance().configDir);
+            assertManagedHostBridgeAdmission("session_host_stop", auth);
             writeReplacementProvenanceFile({
               endpoint,
               expectedEndpointInode: initialEndpointStat?.ino ?? auth.expectedEndpointInode,
@@ -186715,6 +186814,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
                 fs114.unlinkSync(getPidFile());
               } catch {
               }
+              inFlightReplacementAuth = auth;
               return;
             }
             if (process.platform !== "win32" && isPidAlive(existingPid)) {
@@ -186760,11 +186860,18 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
               fs114.unlinkSync(getPidFile());
             } catch {
             }
+            inFlightReplacementAuth = auth;
             return;
           }
           const deadPidState = readPidFileState();
           if (deadPidState.status === "corrupt" || deadPidState.status === "missing" && endpoint.kind === "unix" && fs114.existsSync(endpoint.path) || deadPidState.status === "ok" && isPidAlive(deadPidState.pid)) {
             throw new SessionHostUnavailableTransientError(endpoint);
+          }
+          if (endpoint.kind === "unix" && fs114.existsSync(endpoint.path) && process.platform !== "win32") {
+            const owners = getSocketOwnerPids(endpoint.path);
+            if (owners === null || deadPidState.status === "ok" && owners.some((ownerPid) => ownerPid !== deadPidState.pid && isPidAlive(ownerPid))) {
+              throw new SessionHostUnavailableTransientError(endpoint);
+            }
           }
           disconnectEndpointClients(endpoint);
           if (deadPidState.status === "ok" && !isPidAlive(deadPidState.pid)) {
@@ -186790,6 +186897,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
             requiredRequestTypes: options.requiredRequestTypes
           });
         } finally {
+          inFlightReplacementAuth = void 0;
           removeReplacementProvenanceFile();
         }
       }

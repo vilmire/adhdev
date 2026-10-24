@@ -281,9 +281,22 @@ export function recordSessionHostProbeFailure(endpoint: SessionHostEndpoint, err
         && wallSpanMs >= SESSION_HOST_UNRESPONSIVE_MIN_SPAN_MS;
 }
 
-export function recordSessionHostProbeSuccess(endpoint: SessionHostEndpoint, diagnostics?: SessionHostDiagnostics): void {
+export function recordSessionHostProbeSuccess(
+    endpoint: SessionHostEndpoint,
+    diagnostics?: SessionHostDiagnostics | string,
+    explicitRuntimeCount?: number,
+): void {
     const key = endpointKey(endpoint);
     probeEvidence.delete(key);
+    if (typeof diagnostics === 'string') {
+        if (diagnostics.trim()) {
+            hostIdentities.set(key, diagnostics.trim());
+        }
+        if (typeof explicitRuntimeCount === 'number' && Number.isFinite(explicitRuntimeCount)) {
+            hostRuntimeCounts.set(key, explicitRuntimeCount);
+        }
+        return;
+    }
     if (typeof diagnostics?.hostStartedAt === 'number') {
         hostIdentities.set(key, `started:${diagnostics.hostStartedAt}`);
     }

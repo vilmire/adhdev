@@ -665,24 +665,30 @@ describe('session host runtime support compatibility', () => {
     expect(beforeSpawnHost).not.toHaveBeenCalled()
     expect(spawnHost).not.toHaveBeenCalled()
 
-    // 2. Complete authority is rejected if a previous probe observed runtimeCount > 0 on this endpoint
-    runtimeSupport.recordSessionHostProbeSuccess(endpoint, 'pid-777:birth-1', 2)
+    // 2. Complete valid authority (passing shape check) is rejected if a previous probe observed runtimeCount > 0 on this endpoint
+    const canonicalBirth = 'Sat Oct 24 06:00:00 2026'
+    const canonicalIdentity = `pid-777:birth-${canonicalBirth}`
+    const validFullAuthority = {
+      expectedPid: 777,
+      expectedBirth: canonicalBirth,
+      expectedInstanceConfigDir: '/tmp/cfg',
+      expectedBootId: 'boot-idle-1',
+      expectedEpoch: 1,
+      expectedOwner: 'rollout_owner_01',
+      expectedIdentity: canonicalIdentity,
+      activeRuntimeCount: 0 as const,
+    }
+    expect(runtimeSupport.isValidReplacementAuthorizationShape(validFullAuthority)).toBe(true)
+
+    runtimeSupport.recordSessionHostProbeSuccess(endpoint, { runtimeCount: 2 } as any)
+    expect(runtimeSupport.getObservedSessionHostRuntimeCount(endpoint)).toBe(2)
     await expect(ensureSessionHostReady({
       endpoint,
       spawnHost,
       beforeSpawnHost,
-      existingHostIdentity: () => 'pid-777:birth-1',
+      existingHostIdentity: () => canonicalIdentity,
       existingHostState: () => 'alive',
-      replacementAuthority: {
-        expectedPid: 777,
-        expectedBirth: 'Sat Oct 24 06:00:00 2026',
-        expectedInstanceConfigDir: '/tmp/cfg',
-        expectedBootId: 'boot-1',
-        expectedEpoch: 1,
-        expectedOwner: 'owner-1',
-        expectedIdentity: 'pid-777:birth-1',
-        activeRuntimeCount: 0,
-      },
+      replacementAuthority: validFullAuthority,
       canConnectRetries: 0,
       timeoutMs: 50,
     })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
@@ -690,7 +696,8 @@ describe('session host runtime support compatibility', () => {
     expect(spawnHost).not.toHaveBeenCalled()
 
     // 3. Cancellation occurring during existingHostIdentity() query prevents beforeSpawnHost and spawnHost
-    runtimeSupport.recordSessionHostProbeSuccess(endpoint, 'pid-777:birth-1', 0)
+    runtimeSupport.recordSessionHostProbeSuccess(endpoint, { runtimeCount: 0 } as any)
+    expect(runtimeSupport.getObservedSessionHostRuntimeCount(endpoint)).toBe(0)
     let cancelled = false
     await expect(ensureSessionHostReady({
       endpoint,
@@ -698,18 +705,11 @@ describe('session host runtime support compatibility', () => {
       beforeSpawnHost,
       existingHostIdentity: () => {
         cancelled = true
-        return 'pid-777:birth-1'
+        return canonicalIdentity
       },
       existingHostState: () => 'alive',
       replacementAuthority: () => ({
-        expectedPid: 777,
-        expectedBirth: 'Sat Oct 24 06:00:00 2026',
-        expectedInstanceConfigDir: '/tmp/cfg',
-        expectedBootId: 'boot-1',
-        expectedEpoch: 1,
-        expectedOwner: 'owner-1',
-        expectedIdentity: 'pid-777:birth-1',
-        activeRuntimeCount: 0,
+        ...validFullAuthority,
         isCancelled: () => cancelled,
       }),
       canConnectRetries: 0,
@@ -717,6 +717,26 @@ describe('session host runtime support compatibility', () => {
     })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
     expect(beforeSpawnHost).not.toHaveBeenCalled()
     expect(spawnHost).not.toHaveBeenCalled()
+
+    // 4. Positive control: identical canonical authority with runtimeCount === 0 and !cancelled reaches beforeSpawnHost
+    cancelled = false
+    beforeSpawnHost.mockImplementationOnce(async () => {
+      throw new runtimeSupport.SessionHostUnavailableTransientError(endpoint)
+    })
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => canonicalIdentity,
+      existingHostState: () => 'alive',
+      replacementAuthority: () => ({
+        ...validFullAuthority,
+        isCancelled: () => cancelled,
+      }),
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).toHaveBeenCalledTimes(1)
   })
 })
 

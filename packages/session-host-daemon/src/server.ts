@@ -159,33 +159,41 @@ interface PersistedReplacementProvenanceFile {
 }
 
 export function readVerifiedReplacementProvenance(options: {
-  provenanceFile: string;
+  provenanceFile?: string;
+  provenanceFilePath?: string;
   instanceConfigDir: string;
-  appName: string;
+  appName?: string;
   endpointPath: string;
   leaseStateDir?: string;
   nowMs?: () => number;
   skipDynamicWrap?: boolean;
 }): SessionHostReplacementProvenance | undefined {
   const now = options.nowMs ? options.nowMs() : Date.now();
+  const provenanceFile = options.provenanceFile ?? options.provenanceFilePath;
   try {
-    if (!fs.existsSync(options.provenanceFile)) return undefined;
-    const stat = fs.lstatSync(options.provenanceFile);
-    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+    if (!provenanceFile || !fs.existsSync(provenanceFile)) return undefined;
+    const stat = fs.lstatSync(provenanceFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0) {
       return undefined;
     }
     if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
       return undefined;
     }
-    const parsed = JSON.parse(fs.readFileSync(options.provenanceFile, 'utf8')) as Partial<PersistedReplacementProvenanceFile>;
+    const parsed = JSON.parse(fs.readFileSync(provenanceFile, 'utf8')) as Partial<PersistedReplacementProvenanceFile>;
     if (!parsed || (parsed.schemaVersion !== 1 && parsed.schema !== 1)) return undefined;
-    if (parsed.appName !== options.appName) return undefined;
+    if (options.appName !== undefined && parsed.appName !== undefined && parsed.appName !== options.appName) {
+      return undefined;
+    }
     const canonicalDir = resolveInstanceConfigDir({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
     if (
       typeof parsed.instanceConfigDir !== 'string'
       || resolveInstanceConfigDir({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir
     ) {
       return undefined;
+    }
+    if (fs.existsSync(canonicalDir)) {
+      const provenanceFiles = fs.readdirSync(canonicalDir).filter((entry) => entry.endsWith('-session-host-replacement.json'));
+      if (provenanceFiles.length > 1) return undefined;
     }
     const expectedKey = sessionHostInstanceArg(canonicalDir);
     if (parsed.instanceConfigKey !== expectedKey) return undefined;
@@ -205,7 +213,8 @@ export function readVerifiedReplacementProvenance(options: {
     if (typeof parsed.expectedPid !== 'number' || !Number.isFinite(parsed.expectedPid) || parsed.expectedPid <= 0) {
       return undefined;
     }
-    if (typeof parsed.expectedBirth !== 'string' || !parsed.expectedBirth.trim()) {
+    const trimmedBirth = typeof parsed.expectedBirth === 'string' ? parsed.expectedBirth.trim() : '';
+    if (!trimmedBirth || trimmedBirth.toLowerCase() === 'win32' || trimmedBirth.toLowerCase() === 'unknown') {
       return undefined;
     }
     if (typeof parsed.expectedBootId !== 'string' || !parsed.expectedBootId.trim()) {
@@ -214,7 +223,7 @@ export function readVerifiedReplacementProvenance(options: {
     if (typeof parsed.expectedEpoch !== 'number' || !Number.isFinite(parsed.expectedEpoch) || parsed.expectedEpoch < 0) {
       return undefined;
     }
-    if (typeof parsed.expectedOwner !== 'string' || !parsed.expectedOwner.trim()) {
+    if (typeof parsed.expectedOwner !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(parsed.expectedOwner.trim())) {
       return undefined;
     }
     if (parsed.activeRuntimeCount !== 0) {
@@ -237,11 +246,12 @@ export function readVerifiedReplacementProvenance(options: {
       expectedEndpointInode = BigInt(parsed.expectedEndpointInode);
     }
 
-    if (options.leaseStateDir) {
-      const leaseFile = path.join(options.leaseStateDir, 'upgrade-lease.json');
+    const effectiveLeaseStateDir = options.leaseStateDir ?? path.join(canonicalDir, 'session-host');
+    if (effectiveLeaseStateDir) {
+      const leaseFile = path.join(effectiveLeaseStateDir, 'upgrade-lease.json');
       if (fs.existsSync(leaseFile)) {
         const leaseStat = fs.lstatSync(leaseFile);
-        if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || (leaseStat.mode & 0o077) !== 0) {
+        if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || leaseStat.nlink !== 1 || (leaseStat.mode & 0o077) !== 0) {
           return undefined;
         }
         if (typeof process.getuid === 'function' && leaseStat.uid !== process.getuid()) {
@@ -267,7 +277,19 @@ export function readVerifiedReplacementProvenance(options: {
         ) {
           return undefined;
         }
-        if (parsed.expectedTokenHash && parsed.expectedTokenHash !== lease.tokenHash) {
+        if (lease.bootId !== undefined && lease.bootId !== parsed.expectedBootId) {
+          return undefined;
+        }
+        if (lease.pid !== undefined && lease.pid !== parsed.expectedPid) {
+          return undefined;
+        }
+        if (
+          lease.expiresAt !== undefined
+          && (typeof lease.expiresAt !== 'number' || !Number.isFinite(lease.expiresAt) || lease.expiresAt <= now)
+        ) {
+          return undefined;
+        }
+        if (!parsed.expectedTokenHash || parsed.expectedTokenHash !== lease.tokenHash) {
           return undefined;
         }
       }
@@ -275,7 +297,7 @@ export function readVerifiedReplacementProvenance(options: {
 
     return {
       expectedPid: parsed.expectedPid,
-      expectedBirth: parsed.expectedBirth.trim(),
+      expectedBirth: trimmedBirth,
       instanceConfigDir: canonicalDir,
       instanceConfigKey: expectedKey,
       expectedEndpointInode,
@@ -308,6 +330,8 @@ export interface SessionHostServerOptions {
   instanceConfigDir?: string;
   /** Optional pidfile path checked before unlinking/rebinding a unix socket endpoint. */
   pidFilePath?: string;
+  /** Optional predicate override for testing whether a prior pid is alive. */
+  isPidAlive?: (pid: number) => boolean;
   /** Optional predicate override for testing whether a prior pid is a managed session-host. */
   isManagedOwnerPid?: (pid: number) => boolean;
   /** Explicit replacement provenance required before evicting any live prior session-host process. */
@@ -330,6 +354,7 @@ export class SessionHostServer extends EventEmitter {
   private readonly upgradeLease: HostUpgradeLease | null;
   private readonly instanceConfigDir: string | null;
   private readonly pidFilePath: string | null;
+  private readonly isPidAliveOverride?: (pid: number) => boolean;
   private readonly isManagedOwnerPid?: (pid: number) => boolean;
   private readonly replacementProvenance?: SessionHostReplacementProvenance | (() => SessionHostReplacementProvenance | undefined);
   private readonly getOwnerBirth?: (pid: number) => string | null;
@@ -373,6 +398,7 @@ export class SessionHostServer extends EventEmitter {
       ? new HostUpgradeLease(options.upgradeBinding, this.endpoint.path) : null;
     this.instanceConfigDir = options.instanceConfigDir || null;
     this.pidFilePath = options.pidFilePath || null;
+    this.isPidAliveOverride = options.isPidAlive;
     this.isManagedOwnerPid = options.isManagedOwnerPid;
     this.replacementProvenance = options.replacementProvenance;
     this.getOwnerBirth = options.getOwnerBirth;
@@ -387,6 +413,7 @@ export class SessionHostServer extends EventEmitter {
 
   private isPidAlive(pid: number): boolean {
     if (!Number.isFinite(pid) || pid <= 0) return false;
+    if (this.isPidAliveOverride) return this.isPidAliveOverride(pid);
     try {
       process.kill(pid, 0);
       return true;
@@ -534,13 +561,15 @@ export class SessionHostServer extends EventEmitter {
       const prov = typeof this.replacementProvenance === 'function'
         ? this.replacementProvenance()
         : this.replacementProvenance;
+      const trimmedBirth = typeof prov?.expectedBirth === 'string' ? prov.expectedBirth.trim() : '';
       if (
         !prov
         || prov.isCancelled?.()
         || !Number.isFinite(prov.expectedPid)
         || prov.expectedPid <= 0
-        || typeof prov.expectedBirth !== 'string'
-        || !prov.expectedBirth.trim()
+        || !trimmedBirth
+        || trimmedBirth.toLowerCase() === 'win32'
+        || trimmedBirth.toLowerCase() === 'unknown'
         || (prov.activeRuntimeCount !== undefined && prov.activeRuntimeCount !== 0)
       ) {
         throw new Error('session_host_live_owner_replacement_unauthorized');
@@ -555,7 +584,51 @@ export class SessionHostServer extends EventEmitter {
       return prov;
     };
 
+    const hasDiskProvenanceArtifact = (): boolean => {
+      const dirsToCheck = new Set<string>();
+      if (this.instanceConfigDir) dirsToCheck.add(this.instanceConfigDir);
+      dirsToCheck.add(resolvedEndpointDir);
+      for (const dir of dirsToCheck) {
+        try {
+          if (!fs.existsSync(dir)) continue;
+          const entries = fs.readdirSync(dir);
+          if (entries.some((entry) => entry.endsWith('-session-host-replacement.json'))) {
+            return true;
+          }
+        } catch {
+          return true;
+        }
+      }
+      return false;
+    };
+
     const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
+    const currentProvenanceValue = typeof this.replacementProvenance === 'function'
+      ? this.replacementProvenance()
+      : this.replacementProvenance;
+    const mustValidateProvenance = liveCandidates.length > 0
+      || currentProvenanceValue !== undefined
+      || (this.replacementProvenance !== undefined && typeof this.replacementProvenance !== 'function')
+      || hasDiskProvenanceArtifact();
+
+    if (mustValidateProvenance) {
+      const provenance = resolveActiveProvenance();
+      if (
+        provenance.instanceConfigDir
+        && this.instanceConfigDir
+        && sessionHostInstanceArg(provenance.instanceConfigDir) !== sessionHostInstanceArg(this.instanceConfigDir)
+      ) {
+        throw new Error('session_host_prior_owner_instance_mismatch');
+      }
+      if (
+        provenance.expectedEndpointInode !== undefined
+        && initialSocketInode !== null
+        && provenance.expectedEndpointInode !== initialSocketInode
+      ) {
+        throw new Error('session_host_prior_owner_endpoint_inode_mismatch');
+      }
+    }
+
     if (liveCandidates.length > 0) {
       const provenance = resolveActiveProvenance();
       const targetConfigDir = provenance.instanceConfigDir ?? this.instanceConfigDir ?? undefined;
@@ -725,8 +798,14 @@ export class SessionHostServer extends EventEmitter {
           throw new Error('session_host_endpoint_changed_during_recovery');
         }
       }
-      if (liveCandidates.length > 0) {
-        resolveActiveProvenance();
+      if (mustValidateProvenance) {
+        const finalProvenance = resolveActiveProvenance();
+        if (
+          finalProvenance.expectedEndpointInode !== undefined
+          && beforeFinalQueryEndpoint.ino !== finalProvenance.expectedEndpointInode
+        ) {
+          throw new Error('session_host_prior_owner_endpoint_inode_mismatch');
+        }
       }
       const rightBeforeUnlinkEndpoint = readEndpointIdentity();
       if (
@@ -747,10 +826,25 @@ export class SessionHostServer extends EventEmitter {
   async start(): Promise<void> {
     if (this.upgradeLease) {
       await this.upgradeLease.start();
-      // A stale socket requires separate native ownership recovery; never unlink on assertion.
+      // A stale socket requires separate native ownership recovery or verified replacement provenance; never unlink on assertion.
       if (fs.existsSync(this.endpoint.path)) {
-        await this.upgradeLease.close();
-        throw new Error('native_host_endpoint_owner_unproved');
+        const prov = typeof this.replacementProvenance === 'function'
+          ? this.replacementProvenance()
+          : this.replacementProvenance;
+        if (!prov || this.endpoint.kind !== 'unix') {
+          await this.upgradeLease.close();
+          throw new Error('native_host_endpoint_owner_unproved');
+        }
+        try {
+          await this.evictPriorEndpointOwners();
+        } catch (error) {
+          await this.upgradeLease.close();
+          throw error;
+        }
+        if (fs.existsSync(this.endpoint.path)) {
+          await this.upgradeLease.close();
+          throw new Error('native_host_endpoint_owner_unproved');
+        }
       }
     }
     if (!this.upgradeLease && this.endpoint.kind === 'unix') {
