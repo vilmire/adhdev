@@ -1,6 +1,16 @@
+import { existsSync } from 'node:fs'
 import tailwindcss from '@tailwindcss/vite'
 import { playwright } from '@vitest/browser-playwright'
+import { chromium } from 'playwright'
 import { defineConfig } from 'vitest/config'
+
+const hasPlaywrightChromiumCache = (() => {
+    try {
+        return existsSync(chromium.executablePath())
+    } catch {
+        return false
+    }
+})()
 
 export default defineConfig({
     plugins: [tailwindcss()],
@@ -25,7 +35,11 @@ export default defineConfig({
         browser: {
             enabled: true,
             // Match the largest tested iframe so screenshots are saved at scale 1.
-            provider: playwright({ contextOptions: { viewport: { width: 1280, height: 844 } } }),
+            // Fall back to the system-installed Chrome channel when Playwright's browser cache was cleaned.
+            provider: playwright({
+                ...(hasPlaywrightChromiumCache ? {} : { launchOptions: { channel: 'chrome' } }),
+                contextOptions: { viewport: { width: 1280, height: 844 } },
+            }),
             headless: true,
             instances: [{ browser: 'chromium' }],
         },

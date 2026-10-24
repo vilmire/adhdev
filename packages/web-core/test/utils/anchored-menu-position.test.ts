@@ -4,6 +4,10 @@
 // clipped away. The overlay must flip/clamp instead — these cases cover
 // below/above preference, both-axis clamping, visualViewport offsets and the
 // safe-area "subtract exactly once" rule.
+import fs from 'node:fs'
+import path from 'node:path'
+import vm from 'node:vm'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -126,5 +130,125 @@ describe('resolveVisibleViewport — offsets and safe area, consumed exactly onc
             visualViewport: { offsetTop: 0, offsetLeft: 0, width: 390, height: 824 },
             safeAreaInsets: { top: 0, right: 0, bottom: 34, left: 0 },
         })).toEqual({ top: 0, left: 0, width: 390, height: 824 - 14 })
+    })
+})
+
+describe('browser hit-test guard helper (actual source from mobile-inbox-row-menu-overlay.browser.test.tsx)', () => {
+    function loadActualHitTestHelpers(getHit: () => unknown) {
+        const browserTestFile = path.resolve(
+            __dirname,
+            '../../test-browser/components/mobile-inbox-row-menu-overlay.browser.test.tsx',
+        )
+        const sourceText = fs.readFileSync(browserTestFile, 'utf8')
+        const ast = ts.createSourceFile(browserTestFile, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+        const extracted = ast.statements
+            .filter(
+                (node): node is ts.FunctionDeclaration =>
+                    ts.isFunctionDeclaration(node) &&
+                    ['center', 'hitTest', 'expectHitTestable'].includes(node.name?.text ?? ''),
+            )
+            .map(node => node.getText(ast))
+            .join('\n')
+        const transpiled = ts.transpileModule(extracted, {
+            compilerOptions: { target: ts.ScriptTarget.ES2022 },
+        }).outputText
+        let lastAssertionOk: boolean | undefined
+        let lastAssertionMessage = ''
+        const context = {
+            document: {
+                elementFromPoint: () => getHit(),
+            },
+            expect: (ok: boolean, message: string) => ({
+                toBe: (expected: boolean) => {
+                    lastAssertionOk = ok
+                    lastAssertionMessage = message
+                    if (ok !== expected) {
+                        throw new Error(message)
+                    }
+                },
+            }),
+        }
+        vm.createContext(context)
+        vm.runInContext(transpiled, context)
+        return {
+            expectHitTestable: (context as unknown as { expectHitTestable: (el: unknown, ctx: string) => void }).expectHitTestable,
+            getLastResult: () => ({ ok: lastAssertionOk, message: lastAssertionMessage }),
+        }
+    }
+
+    const childPath = { tagName: ' path', className: '', contains: (node: unknown) => node === childPath }
+    const childSvg = {
+        tagName: 'svg',
+        className: 'lucide-eye-off',
+        contains: (node: unknown) => node === childSvg || node === childPath,
+    }
+    const childSpan = {
+        tagName: 'SPAN',
+        className: 'menu-label',
+        contains: (node: unknown) => node === childSpan,
+    }
+    const targetMenuItem = {
+        tagName: 'BUTTON',
+        className: 'mobile-inbox-hide-button',
+        getBoundingClientRect: () => ({ x: 200, y: 300, width: 160, height: 44 }),
+        contains: (node: unknown) =>
+            node === targetMenuItem || node === childSpan || node === childSvg || node === childPath,
+    }
+    const wrongMenuItem = {
+        tagName: 'BUTTON',
+        className: 'mobile-inbox-mute-button',
+        contains: (node: unknown) => node === wrongMenuItem,
+    }
+    const menuContainer = {
+        tagName: 'DIV',
+        className: 'fixed z-[var(--z-popover)]',
+        contains: (node: unknown) =>
+            node === menuContainer || targetMenuItem.contains(node) || wrongMenuItem.contains(node),
+    }
+    const otherRow = {
+        tagName: 'DIV',
+        className: 'group',
+        contains: (node: unknown) => node === otherRow,
+    }
+    const hiddenTabsToggle = {
+        tagName: 'BUTTON',
+        className: 'mobile-hidden-tabs-toggle',
+        contains: (node: unknown) => node === hiddenTabsToggle,
+    }
+    const documentBody = {
+        tagName: 'BODY',
+        className: '',
+        contains: () => true,
+    }
+
+    it('accepts the intended menuitem itself and genuine descendant span/svg/path elements', () => {
+        let currentHit: unknown = targetMenuItem
+        const { expectHitTestable, getLastResult } = loadActualHitTestHelpers(() => currentHit)
+
+        for (const positive of [targetMenuItem, childSpan, childSvg, childPath]) {
+            currentHit = positive
+            expect(() => expectHitTestable(targetMenuItem, 'positive control')).not.toThrow()
+            expect(getLastResult().ok).toBe(true)
+        }
+    })
+
+    it('rejects document.body, null, ancestor menu container, other row, Hidden tabs button, and wrong sibling menuitem', () => {
+        let currentHit: unknown = null
+        const { expectHitTestable, getLastResult } = loadActualHitTestHelpers(() => currentHit)
+
+        for (const [label, negative] of [
+            ['document.body', documentBody],
+            ['null', null],
+            ['ancestor menu container', menuContainer],
+            ['other row', otherRow],
+            ['Hidden tabs toggle', hiddenTabsToggle],
+            ['wrong menuitem', wrongMenuItem],
+        ] as const) {
+            currentHit = negative
+            expect(() => expectHitTestable(targetMenuItem, `negative ${label}`)).toThrow(
+                /must hit the item itself or its descendant/,
+            )
+            expect(getLastResult().ok).toBe(false)
+        }
     })
 })

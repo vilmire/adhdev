@@ -66,8 +66,8 @@ function hitTest(element: Element): Element | null {
 
 function expectHitTestable(element: Element, context: string) {
     const hit = hitTest(element)
-    const ok = hit === element || (hit != null && element.contains(hit)) || (hit != null && (hit as Element).contains?.(element))
-    expect(ok, `${context}: center of ${(element as HTMLElement).className} must hit the item itself, got ${hit ? (hit as HTMLElement).tagName + '.' + (hit as HTMLElement).className : 'null'}`).toBe(true)
+    const ok = hit != null && (hit === element || element.contains(hit))
+    expect(ok, `${context}: center of ${(element as HTMLElement).className} must hit the item itself or its descendant, got ${hit ? (hit as HTMLElement).tagName + '.' + (hit as HTMLElement).className : 'null'}`).toBe(true)
 }
 
 describe('MobileInboxRowMenu overlay (RC28 clipping fix)', () => {
@@ -88,7 +88,7 @@ describe('MobileInboxRowMenu overlay (RC28 clipping fix)', () => {
     beforeEach(async () => {
         localStorage.setItem('lang', 'en')
         initI18n()
-        ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+        ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
         host = document.createElement('div')
         host.style.cssText = 'height:100dvh;display:flex;flex-direction:column'
         document.body.append(host)
@@ -388,5 +388,59 @@ describe('MobileInboxRowMenu overlay (RC28 clipping fix)', () => {
             </MemoryRouter>,
         ))
         expect(openMenu(), 'unmounting the anchored row removes its portaled menu').toBeNull()
+    })
+
+    it('expectHitTestable guard rejects body/null/ancestor/other-row/hidden-tabs/wrong-item and accepts genuine child span/SVG; last card above expanded Hidden tabs stays hit-testable', async () => {
+        // Expand Hidden tabs first so the hidden conversations list is rendered directly below the last EARLIER card.
+        const hiddenToggle = host.querySelector<HTMLButtonElement>('[data-testid="mobile-hidden-tabs-toggle"]')!
+        await act(async () => hiddenToggle.click())
+        expect(hiddenToggle.getAttribute('aria-expanded')).toBe('true')
+
+        await act(async () => { scroller().scrollTop = scroller().scrollHeight })
+        const lastIndex = triggers().length - 1
+        await openRowMenu(lastIndex)
+
+        const menu = openMenu()!
+        const mute = muteButton()!
+        const hide = hideButton()!
+        const otherRow = triggers()[0].closest('.group')!
+
+        // Both items must be genuinely hit-testable above the expanded Hidden tabs list.
+        expectHitTestable(mute, 'last-card above expanded Hidden tabs mute')
+        expectHitTestable(hide, 'last-card above expanded Hidden tabs hide')
+        // Verify canonical --z-popover (1100) stacking on the portaled menu.
+        expect(getComputedStyle(menu).zIndex).toBe('1100')
+
+        // Exercise the ACTUAL expectHitTestable helper against positive descendant hits and negative non-target hits.
+        const childSvg = hide.querySelector('svg')!
+        const childSvgGraphic = childSvg.firstElementChild as Element
+        const tempSpan = document.createElement('span')
+        tempSpan.textContent = 'Hide label child'
+        hide.appendChild(tempSpan)
+
+        const elementFromPointSpy = vi.spyOn(document, 'elementFromPoint')
+        try {
+            // Positive controls: target menuitem itself, genuine child <span>, genuine child <svg> and nested SVG child.
+            for (const positiveTarget of [hide, tempSpan, childSvg, childSvgGraphic]) {
+                elementFromPointSpy.mockReturnValueOnce(positiveTarget)
+                expect(() => expectHitTestable(hide, 'positive control')).not.toThrow()
+            }
+
+            // Negative controls: document.body, null, ancestor [role="menu"], other row, Hidden tabs button, wrong sibling menuitem.
+            for (const [label, negativeTarget] of [
+                ['document.body', document.body],
+                ['null', null],
+                ['ancestor menu container', menu],
+                ['other row card', otherRow],
+                ['Hidden tabs toggle', hiddenToggle],
+                ['wrong sibling menuitem', mute],
+            ] as const) {
+                elementFromPointSpy.mockReturnValueOnce(negativeTarget)
+                expect(() => expectHitTestable(hide, `negative ${label}`)).toThrow(/must hit the item itself or its descendant/)
+            }
+        } finally {
+            elementFromPointSpy.mockRestore()
+            tempSpan.remove()
+        }
     })
 })
