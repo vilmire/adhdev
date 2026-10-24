@@ -96774,10 +96774,8 @@ ${detail.join("\n")}` : stripped;
     });
     var fsm_evaluator_exports = {};
     __export2(fsm_evaluator_exports, {
-      STATES_OUTRANKING_SIGN_IN: () => STATES_OUTRANKING_SIGN_IN,
       evaluateConditionPreview: () => evaluateConditionPreview,
       evaluateFsm: () => evaluateFsm,
-      isStructuralOverrideTransition: () => isStructuralOverrideTransition,
       stableRegionKey: () => stableRegionKey
     });
     function stableRegionKey(cond) {
@@ -96927,12 +96925,6 @@ ${detail.join("\n")}` : stripped;
       }
       return { kind: "all", result: false, detail: "unknown condition" };
     }
-    function fromIncludes(from, stateId) {
-      return Array.isArray(from) ? from.includes(stateId) : from === stateId;
-    }
-    function isStructuralOverrideTransition(t) {
-      return STATES_OUTRANKING_SIGN_IN.has(t.to) && !(t.label ?? "").includes("timeout") && (fromIncludes(t.from, "starting") || fromIncludes(t.from, "idle"));
-    }
     function fromLabel(t) {
       const from = Array.isArray(t.from) ? t.from.join("|") : t.from;
       return t.label ?? `${from}\u2192${t.to}`;
@@ -96998,7 +96990,6 @@ ${detail.join("\n")}` : stripped;
       return evalCond(cond, resolved, cleanScreen, cursor, void 0, clock, [], "preview");
     }
     var WHOLE_SCREEN;
-    var STATES_OUTRANKING_SIGN_IN;
     var init_fsm_evaluator = __esm2({
       "src/providers/spec/fsm-evaluator.ts"() {
         "use strict";
@@ -97006,14 +96997,6 @@ ${detail.join("\n")}` : stripped;
         init_fsm_types();
         init_signal_envelope();
         WHOLE_SCREEN = -1;
-        STATES_OUTRANKING_SIGN_IN = /* @__PURE__ */ new Set([
-          "trust",
-          "consent_banner",
-          "approval",
-          "picker",
-          "choice",
-          "busy"
-        ]);
       }
     });
     var mesh_refine_executor_liveness_exports = {};
@@ -164899,6 +164882,9 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           continue;
         }
         if (candidate.startsWith(" ")) {
+          if (expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew && SIGN_IN_SCREEN_HEADER_RE.test(candidate)) {
+            break;
+          }
           oldSeen += 1;
           newSeen += 1;
           lastDiffIdx = j;
@@ -164910,11 +164896,8 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
         }
         break;
       }
-      if (lastDiffIdx === -1) return -1;
-      if (expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew || sawDiffChange) {
-        return lastDiffIdx;
-      }
-      return -1;
+      if (lastDiffIdx === -1 || !sawDiffChange) return -1;
+      return lastDiffIdx;
     }
     function stripToolAndCodeLines(raw) {
       let inToolBlock = false;
@@ -165015,7 +164998,7 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           const isStrongTurnBoundary = STRONG_TURN_BOUNDARY_LINE_RE.test(line) || TOOL_HEADER_LINE_RE.test(line);
           const isComposerBoundary = COL0_COMPOSER_DIVIDER_LINE_RE.test(line) && i + 1 < lines.length && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]);
           diffHunkLines += 1;
-          if (isStrongTurnBoundary || isComposerBoundary || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
+          if (isStrongTurnBoundary || isComposerBoundary || SIGN_IN_SCREEN_HEADER_RE.test(line) || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
             inDiffHunk = false;
             diffHunkCloseIdx = -1;
             diffHunkLines = 0;
@@ -165334,6 +165317,35 @@ Every project-level tool answers \`{project, meshId, result}\`. Name the project
           return true;
         }
       }
+      return false;
+    }
+    var CREDENTIAL_PROMPT_LINE_RE = /(?:^|\n)[ \t]*(?:[│┃|›❯>][ \t]*)?(?:Paste (?:or type )?your [^\n]*API key\b|Enter (?:your )?(?:[A-Za-z0-9_-]+ )?API key\b|Paste or type your API key below\b|Your key will be saved to [^\n]*config\.toml|If you aren't automatically redirected,\s*paste the authorization code below:|Enter (?:the )?(?:device|verification|authorization) code\b|Verification code:\s+[A-Z0-9-]+|Preparing device code login\b)/gi;
+    var POST_CREDENTIAL_ACTIVE_UI_RE = /(?:^|\n)[ \t]*(?:[│┃|❯›>▶●•][ \t]*)?(?:1[.)][ \t]+(?!Sign in\b|Log in\b|Authorize\b|Enter API key\b|Paste API key\b|Provide your own API key\b|Use Gemini API key\b)\S|1[ \t]*\([●○]\)[ \t]+(?!Sign in\b|Paste your\b)\S)|(?:\? for shortcuts|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│[ \t]*>[ \t]*│)/i;
+    function hasCredentialInputPromptInViewport(viewport) {
+      if (!viewport) return false;
+      const stripped = stripAnsi2(viewport).replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/(?:\n[ \t]*)+$/, "");
+      if (!stripped.trim()) return false;
+      const cleaned = stripToolAndCodeLines(stripped);
+      if (!cleaned.trim()) return false;
+      for (const candidate of [stripped, cleaned]) {
+        CREDENTIAL_PROMPT_LINE_RE.lastIndex = 0;
+        let lastMatch = null;
+        let m;
+        while ((m = CREDENTIAL_PROMPT_LINE_RE.exec(candidate)) !== null) {
+          lastMatch = m;
+        }
+        if (!lastMatch) return false;
+        const tailAfterPrompt = candidate.slice(lastMatch.index + lastMatch[0].length);
+        const nonEmptyTailLines = tailAfterPrompt.split("\n").filter((l) => l.trim().length > 0);
+        if (nonEmptyTailLines.length > 12) return false;
+        if (POST_CREDENTIAL_ACTIVE_UI_RE.test(tailAfterPrompt)) return false;
+      }
+      return true;
+    }
+    function isSignInOrCredentialViewport(viewport, spec) {
+      if (!viewport) return false;
+      if (hasCredentialInputPromptInViewport(viewport)) return true;
+      if (spec && isAnchoredSignInViewport(viewport, spec)) return true;
       return false;
     }
     var SendSubmitEngine = class {
@@ -166826,6 +166838,16 @@ trust_level = "trusted"
       if (!m) return false;
       const btn = m.buttons.find((b) => b.index === index);
       if (!btn) return false;
+      if (ctx.readViewport) {
+        try {
+          const viewport = ctx.readViewport();
+          if (viewport && isSignInOrCredentialViewport(viewport, ctx.spec)) {
+            LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 live viewport contains an anchored sign-in screen or credential input prompt. No keys written.`);
+            return false;
+          }
+        } catch {
+        }
+      }
       if (isMultiSelectCheckboxPicker(ctx.state, ctx.readScrollbackLines)) {
         LOG.warn("FsmDriver", `[${ctx.specId}] click_modal_button(${index}) refused \u2014 multi-select checkbox picker cannot be answered by a raw modal press (needs the structured interactive-prompt path: digit per selection + Tab + review Enter). No keys written.`);
         return false;
@@ -167964,6 +167986,8 @@ trust_level = "trusted"
           modal: this.currentEval?.modal,
           state: stateById(this.spec, this.currentStateId),
           specId: this.spec.id,
+          spec: this.spec,
+          readViewport: () => this.adapter.snapshot(),
           readScrollbackLines: () => this.scrollbackLines(),
           sendKeys: (keys) => this.adapter.send_keys(keys),
           submitConfirm: (keys) => this.submitModalConfirm(keys)
@@ -172909,7 +172933,38 @@ ${JSON.stringify(replies)}
       const picked = pickLeastPrivilegeApprovalButton(buttons, host.provider);
       return picked.index >= 0 ? picked : null;
     }
+    var LOGIN_BUTTON_LABEL_RE = /^(?:\d+[.)\s]*(?:\([●○]\)\s*)?)?(?:Sign in\b|Log in\b|Authorize via browser\b|Provide your own API key\b|Use Gemini API key\b|Paste your (?:xAI )?API key\b|Enter (?:your )?API key\b)/i;
+    function isAutoApproveBlockedBySignInViewport(host, adapterStatus, modal) {
+      if (adapterStatus?.isAnchoredSignInViewport === true) return true;
+      const rawButtons = Array.isArray(modal?.buttons) ? modal.buttons : [];
+      if (rawButtons.some((b) => LOGIN_BUTTON_LABEL_RE.test(String(b || "").trim()))) {
+        return true;
+      }
+      const adapterAny = host?.adapter;
+      if (typeof adapterAny?.isAnchoredSignInViewport === "function") {
+        try {
+          if (adapterAny.isAnchoredSignInViewport() === true) return true;
+        } catch {
+        }
+      }
+      let viewport = "";
+      if (typeof adapterStatus?.viewport === "string") {
+        viewport = adapterStatus.viewport;
+      } else if (typeof adapterStatus?.screenText === "string") {
+        viewport = adapterStatus.screenText;
+      } else {
+        try {
+          viewport = host?.adapter?.getTerminalScreenSnapshot?.()?.text ?? adapterAny?.driver?.snapshot?.() ?? adapterAny?.snapshot?.() ?? "";
+        } catch {
+          viewport = "";
+        }
+      }
+      if (!viewport) return false;
+      const spec = adapterStatus?.spec ?? adapterAny?.spec ?? adapterAny?.driver?.spec;
+      return isSignInOrCredentialViewport(viewport, spec);
+    }
     function approvableModalSignature(host, modal, providerApproval) {
+      if (isAutoApproveBlockedBySignInViewport(host, void 0, modal)) return null;
       const buttons = Array.isArray(modal?.buttons) ? modal.buttons.map((b) => String(b || "").trim()).filter(Boolean) : [];
       if (!modal || buttons.length === 0) return null;
       const modalKind = typeof modal?.kind === "string" ? modal.kind : "approval";
@@ -172980,6 +173035,10 @@ ${JSON.stringify(replies)}
     }
     function maybeAutoApproveStatus(host, adapterStatus, now = Date.now()) {
       if (!host.shouldUsePtyAutoApprove()) {
+        resetPtyAutoApproveState(host);
+        return false;
+      }
+      if (adapterStatus?.status === "waiting_approval" && isAutoApproveBlockedBySignInViewport(host, adapterStatus, adapterStatus?.activeModal)) {
         resetPtyAutoApproveState(host);
         return false;
       }

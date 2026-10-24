@@ -145,6 +145,9 @@ function findClosedDiffHunkEnd(lines: string[], openIdx: number): number {
             continue;
         }
         if (candidate.startsWith(' ')) {
+            if (expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew && SIGN_IN_SCREEN_HEADER_RE.test(candidate)) {
+                break;
+            }
             oldSeen += 1;
             newSeen += 1;
             lastDiffIdx = j;
@@ -156,11 +159,8 @@ function findClosedDiffHunkEnd(lines: string[], openIdx: number): number {
         }
         break;
     }
-    if (lastDiffIdx === -1) return -1;
-    if ((expectedOld > 0 && expectedNew > 0 && oldSeen >= expectedOld && newSeen >= expectedNew) || sawDiffChange) {
-        return lastDiffIdx;
-    }
-    return -1;
+    if (lastDiffIdx === -1 || !sawDiffChange) return -1;
+    return lastDiffIdx;
 }
 
 /**
@@ -272,7 +272,7 @@ export function stripToolAndCodeLines(raw: string): string {
                 && i + 1 < lines.length
                 && COMPOSER_PROMPT_LINE_RE.test(lines[i + 1]);
             diffHunkLines += 1;
-            if (isStrongTurnBoundary || isComposerBoundary || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
+            if (isStrongTurnBoundary || isComposerBoundary || SIGN_IN_SCREEN_HEADER_RE.test(line) || diffHunkLines > MAX_OPEN_BLOCK_SPAN_LINES) {
                 inDiffHunk = false;
                 diffHunkCloseIdx = -1;
                 diffHunkLines = 0;

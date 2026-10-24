@@ -5,13 +5,14 @@
  * current FSM state + screen; the driver supplies the keystroke sinks.
  */
 import { sectionText, extractTitle, extractButtonsFromRule, type ResolvedSection } from './evaluator.js';
-import { modalKindForState, type FsmState } from './fsm-types.js';
+import { modalKindForState, type CliSpecV4, type FsmState } from './fsm-types.js';
 import type { ModalSnapshot } from './fsm-driver-types.js';
 // MULTISELECT-REMOTE-DEADLOCK: the checkbox-marker detector the interactive-prompt
 // CAPTURE path uses to set `multiSelect`. Reused (not reimplemented) so the raw
 // modal-press refusal below can never disagree with the structured answer path
 // about whether a picker is multi-select.
 import { detectClaudeTuiMultiSelect } from '../types/interactive-prompt.js';
+import { isSignInOrCredentialViewport } from './send-submit-engine.js';
 import { LOG } from '../../logging/logger.js';
 
 export function deriveModal(
@@ -130,6 +131,8 @@ export interface ModalPressContext {
     /** The FSM state the driver is currently in. */
     state: FsmState | undefined;
     specId: string;
+    spec?: CliSpecV4;
+    readViewport?: () => string;
     readScrollbackLines(): string[];
     sendKeys(keys: string): void;
     /** Write a confirm sequence (win32-aware — see FsmDriver.submitModalConfirm). */
@@ -172,6 +175,16 @@ export function pressModalButton(ctx: ModalPressContext, index: number): boolean
     if (!m) return false;
     const btn = m.buttons.find(b => b.index === index);
     if (!btn) return false;
+
+    if (ctx.readViewport) {
+        try {
+            const viewport = ctx.readViewport();
+            if (viewport && isSignInOrCredentialViewport(viewport, ctx.spec)) {
+                LOG.warn('FsmDriver', `[${ctx.specId}] click_modal_button(${index}) refused — live viewport contains an anchored sign-in screen or credential input prompt. No keys written.`);
+                return false;
+            }
+        } catch { /* ignore snapshot failure */ }
+    }
 
     // MULTISELECT-REMOTE-DEADLOCK: a raw modal-button press CANNOT answer a
     // multi-select (checkbox) picker, and pressing one silently CORRUPTS it.

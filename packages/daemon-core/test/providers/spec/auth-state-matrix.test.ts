@@ -2117,6 +2117,38 @@ const LOGIN_WITH_QUOTED_APPROVAL_CASES: MatrixCase[] = LOGIN_CASES.flatMap((lc):
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ROUND 9 MEDIUM-1b MIRROR CASES: full multi-line approval cards (question +
+// option rows + footer, and question + 1st option row) quoted above every real
+// login screen for all 6 providers → must classify as signing_in with
+// preSendGuard=true and no approval buttons across starting, idle, busy, and
+// signing_in.
+// ─────────────────────────────────────────────────────────────────────────────
+const LOGIN_WITH_QUOTED_FULL_APPROVAL_CARD_CASES: MatrixCase[] = LOGIN_CASES.flatMap((lc): MatrixCase[] => {
+    const approvalTemplates = TEMPLATES.filter(
+        t => t.provider === lc.provider && t.category === 'b_approval',
+    );
+    return approvalTemplates.flatMap((tpl): MatrixCase[] => {
+        const fullCard = [...tpl.header, ...tpl.body, ...tpl.controlsAndFooter].join('\n');
+        const firstOptionLine = tpl.controlsAndFooter.find(l => l.trim().length > 0) ?? '';
+        const partialCardWithFirstOption = [...tpl.header, ...tpl.body, firstOptionLine].join('\n');
+        return [
+            {
+                ...lc,
+                variant: 'quoted_above_question',
+                name: `${lc.name} [full approval card quoted above login: ${tpl.name}]`,
+                screen: `${fullCard}\n${lc.screen}`,
+            },
+            {
+                ...lc,
+                variant: 'quoted_above_question',
+                name: `${lc.name} [approval question + 1st option row quoted above login: ${tpl.name}]`,
+                screen: `${partialCardWithFirstOption}\n${lc.screen}`,
+            },
+        ];
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // EXPLICIT ROUND-6 REVIEW REPROS (180b479b)
 // ─────────────────────────────────────────────────────────────────────────────
 const ROUND6_REVIEW_REPROS: MatrixCase[] = [
@@ -2301,11 +2333,62 @@ const ROUND6_REVIEW_REPROS: MatrixCase[] = [
         expectedPreSendGuard: false,
         expectedModalButtons: true,
     },
+
+    // 8. grok: stale radio sign-in menu in scrollback above a real grok approval or radio picker
+    {
+        provider: 'grok-cli',
+        category: 'b_approval',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'round-9 nit — stale grok radio sign-in menu in scrollback above a real grok approval',
+        screen: [
+            '  Welcome to Grok CLI',
+            '  Sign in to Grok Build',
+            '  1 (●) Sign in with browser (xAI account)',
+            '  2 (○) Paste your xAI API key',
+            '  1/2:select │ Enter:confirm',
+            '  ╭──────────────────────────────────────────────────────────────────────────╮',
+            '  │ ◆ Run Bash (npm test)                                                    │',
+            '  ╰──────────────────────────────────────────────────────────────────────────╯',
+            '  ┃',
+            "  ┃ 1 (●) Yes, and don't ask again in /workspace/adhdev",
+            '  ┃ 2 (○) Yes, proceed',
+            '  ┃ 3 (○) No, reject (tell Grok what to do instead)',
+            '  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛',
+            '  1/3:select │ Tab:next option │ Enter:confirm',
+        ].join('\n'),
+        expectedState: 'approval',
+        expectedPreSendGuard: false,
+        expectedModalButtons: true,
+    },
+    {
+        provider: 'grok-cli',
+        category: 'c_picker',
+        variant: 'quoted_in_viewport_transcript',
+        name: 'round-9 nit — stale grok radio sign-in menu in scrollback above a real grok radio picker',
+        screen: [
+            '  Welcome to Grok CLI',
+            '  Sign in to Grok Build',
+            '  1 (●) Sign in with browser (xAI account)',
+            '  2 (○) Paste your xAI API key',
+            '  1/2:select │ Enter:confirm',
+            '  ╭──────────────────────────────────────────────────────────────────────────╮',
+            '  │ ◆ Select a model                                                         │',
+            '  ╰──────────────────────────────────────────────────────────────────────────╯',
+            '  ┃ 1 (●) grok-4 (default)',
+            '  ┃ 2 (○) grok-3-mini',
+            '  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛',
+            '  1/2:select │ Enter:confirm │ Esc:cancel',
+        ].join('\n'),
+        expectedState: 'approval',
+        expectedPreSendGuard: false,
+        expectedModalButtons: true,
+    },
 ];
 
 export const ALL_MATRIX_CASES: MatrixCase[] = [
     ...LOGIN_CASES,
     ...LOGIN_WITH_QUOTED_APPROVAL_CASES,
+    ...LOGIN_WITH_QUOTED_FULL_APPROVAL_CARD_CASES,
     ...TEMPLATES.flatMap(buildVariantsFromTemplate),
     ...IDLE_CASES,
     ...ROUND6_REVIEW_REPROS,

@@ -189,6 +189,54 @@ export function isAnchoredSignInViewport(viewport: string, spec?: CliSpecV4): bo
     return false;
 }
 
+const CREDENTIAL_PROMPT_LINE_RE = /(?:^|\n)[ \t]*(?:[│┃|›❯>][ \t]*)?(?:Paste (?:or type )?your [^\n]*API key\b|Enter (?:your )?(?:[A-Za-z0-9_-]+ )?API key\b|Paste or type your API key below\b|Your key will be saved to [^\n]*config\.toml|If you aren't automatically redirected,\s*paste the authorization code below:|Enter (?:the )?(?:device|verification|authorization) code\b|Verification code:\s+[A-Z0-9-]+|Preparing device code login\b)/gi;
+
+const POST_CREDENTIAL_ACTIVE_UI_RE = /(?:^|\n)[ \t]*(?:[│┃|❯›>▶●•][ \t]*)?(?:1[.)][ \t]+(?!Sign in\b|Log in\b|Authorize\b|Enter API key\b|Paste API key\b|Provide your own API key\b|Use Gemini API key\b)\S|1[ \t]*\([●○]\)[ \t]+(?!Sign in\b|Paste your\b)\S)|(?:\? for shortcuts|Shift\+Tab:\s*mode|Ctrl\+x:\s*shortcuts|│[ \t]*>[ \t]*│)/i;
+
+/**
+ * DEFENCE IN DEPTH: detects a live credential or device-code input prompt at
+ * the bottom of the viewport (with no active approval modal, ready composer,
+ * or busy spinner below it), independent of FSM state transitions.
+ */
+export function hasCredentialInputPromptInViewport(viewport: string): boolean {
+    if (!viewport) return false;
+    const stripped = stripAnsi(viewport)
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/(?:\n[ \t]*)+$/, '');
+    if (!stripped.trim()) return false;
+    const cleaned = stripToolAndCodeLines(stripped);
+    if (!cleaned.trim()) return false;
+
+    for (const candidate of [stripped, cleaned]) {
+        CREDENTIAL_PROMPT_LINE_RE.lastIndex = 0;
+        let lastMatch: RegExpExecArray | null = null;
+        let m: RegExpExecArray | null;
+        while ((m = CREDENTIAL_PROMPT_LINE_RE.exec(candidate)) !== null) {
+            lastMatch = m;
+        }
+        if (!lastMatch) return false;
+        const tailAfterPrompt = candidate.slice(lastMatch.index + lastMatch[0].length);
+        const nonEmptyTailLines = tailAfterPrompt.split('\n').filter(l => l.trim().length > 0);
+        if (nonEmptyTailLines.length > 12) return false;
+        if (POST_CREDENTIAL_ACTIVE_UI_RE.test(tailAfterPrompt)) return false;
+    }
+    return true;
+}
+
+/**
+ * True when the live viewport is an anchored sign-in screen OR displays a
+ * bottom-most credential/device-code input prompt. Used by auto-approve and
+ * modal-press paths as defence-in-depth so no keystroke can be sent into an
+ * API-key or device-code field even if a caller presents a synthetic approval.
+ */
+export function isSignInOrCredentialViewport(viewport: string, spec?: CliSpecV4): boolean {
+    if (!viewport) return false;
+    if (hasCredentialInputPromptInViewport(viewport)) return true;
+    if (spec && isAnchoredSignInViewport(viewport, spec)) return true;
+    return false;
+}
+
 /**
  * A body parked in the FIFO, keyed by the `OutboundMessage.messageId` it was
  * submitted under (wiring-unification D2). `text` is the BUILT body the driver

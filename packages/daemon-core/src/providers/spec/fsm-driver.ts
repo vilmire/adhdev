@@ -1179,7 +1179,7 @@ export class FsmDriver implements ISpecDriver {
         return pressModalButton({
             modal: this.currentEval?.modal,
             state: stateById(this.spec, this.currentStateId),
-            specId: this.spec.id,
+            specId: this.spec.id, spec: this.spec, readViewport: () => this.adapter.snapshot(),
             readScrollbackLines: () => this.scrollbackLines(),
             sendKeys: (keys) => this.adapter.send_keys(keys),
             submitConfirm: (keys) => this.submitModalConfirm(keys),

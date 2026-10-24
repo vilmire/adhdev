@@ -322,38 +322,22 @@ function evalCond(
  * Canonical state-classification precedence (single source of truth shared by
  * evaluateFsm and SendSubmitEngine.isAnchoredSignInViewport):
  *
- *   1. Active structural modals / choice prompts (`trust`, `consent_banner`,
- *      `approval`, `picker`, `choice`) — identified by modal question/header
- *      anchors, non-login radio/numbered cursor rows, and modal footers.
- *   2. Active streaming / generation (`busy`) — identified by live spinners,
+ *   1. Active sign-in frame (`signing_in`) — identified by a login header in
+ *      the active bottom UI frame when no settled composer, live busy spinner/
+ *      footer, or bottom-anchored modal outranks it via its own vetoes.
+ *   2. Active structural modals / choice prompts (`trust`, `consent_banner`,
+ *      `approval`, `picker`, `choice`) — when the modal is the bottom-most
+ *      interactive block in the live viewport (no login screen below it).
+ *   3. Active streaming / generation (`busy`) — identified by live spinners,
  *      background-task markers, and non-login generating footers.
- *   3. Active sign-in frame (`signing_in`) — identified by a login header in
- *      the active bottom UI frame when no modal, picker, choice, busy, or
- *      ready-composer chrome is active.
  *   4. Settled ready composer (`idle`) / startup grace.
  *
- * Non-timeout transitions into ranks 1–2 (`STATES_OUTRANKING_SIGN_IN`) take
- * precedence over `signing_in`, and `signing_in` takes precedence over `idle`.
+ * Each provider's `→signing_in` transition carries explicit vetoes for settled
+ * composer chrome, live busy spinners/footers, and active bottom-anchored
+ * modals. When `signing_in` still fires after those vetoes, a real login screen
+ * is present at the bottom of the live viewport and `signing_in` takes
+ * precedence over any lower-confidence transition (see lines below).
  */
-export const STATES_OUTRANKING_SIGN_IN: ReadonlySet<string> = new Set([
-    'trust',
-    'consent_banner',
-    'approval',
-    'picker',
-    'choice',
-    'busy',
-]);
-
-function fromIncludes(from: string | string[], stateId: string): boolean {
-    return Array.isArray(from) ? from.includes(stateId) : from === stateId;
-}
-
-export function isStructuralOverrideTransition(t: { from: string | string[]; to: string; label?: string }): boolean {
-    return STATES_OUTRANKING_SIGN_IN.has(t.to)
-        && !(t.label ?? '').includes('timeout')
-        && (fromIncludes(t.from, 'starting') || fromIncludes(t.from, 'idle'));
-}
-
 function fromLabel(t: FsmTransition): string {
     const from = Array.isArray(t.from) ? t.from.join('|') : t.from;
     return t.label ?? `${from}→${t.to}`;

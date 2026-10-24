@@ -8,7 +8,12 @@ import { evaluateFsm, type FsmClock } from '../../../src/providers/spec/fsm-eval
 import { stateById, statusForState, type CliSpecV4 } from '../../../src/providers/spec/fsm-types.js';
 import { FsmDriver } from '../../../src/providers/spec/fsm-driver.js';
 import { TerminalAdapter } from '../../../src/providers/spec/adapter.js';
-import { isAnchoredSignInViewport } from '../../../src/providers/spec/send-submit-engine.js';
+import {
+    hasCredentialInputPromptInViewport,
+    isAnchoredSignInViewport,
+    isSignInOrCredentialViewport,
+} from '../../../src/providers/spec/send-submit-engine.js';
+import { approvableModalSignature, APPROVAL_SETTLE_MS } from '../../../src/providers/completion/approval-gate.js';
 import { SpecCliAdapter } from '../../../src/providers/spec/cli-adapter.js';
 import { detectAuthFailureOnlyReply, detectProviderFailure } from '../../../src/providers/spec/provider-failure-classifier.js';
 import {
@@ -2637,6 +2642,272 @@ describe('Round 8 — MEDIUM-2: cursor and grok idle workers with quoted login m
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+describe('Round 9 — MEDIUM-1b & Defence in Depth: full approval cards quoted above login screens and Grok auto-approve end-to-end', () => {
+    const grokFullCardAboveApiKeyScreen = [
+        '  ╭──────────────────────────────────────────────────────────────────────────╮',
+        '  │ ◆ Run Bash (npm test)                                                    │',
+        '  ╰──────────────────────────────────────────────────────────────────────────╯',
+        '  ┃',
+        "  ┃ 1 (●) Yes, and don't ask again in /workspace/adhdev",
+        '  ┃ 2 (○) Yes, proceed',
+        '  ┃ 3 (○) No, reject (tell Grok what to do instead)',
+        '  ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛',
+        '  1/3:select │ Tab:next option │ Enter:confirm',
+        '  Welcome to Grok CLI!',
+        '  Paste your xAI API key to continue:',
+        '  > ',
+    ].join('\n');
+
+    it('grok auto-approve end-to-end: full approval card quoted above "Paste your xAI API key to continue: >" resolves to signing_in with guard=true and sends NO keystroke even under auto-approve', async () => {
+        const grokSpec = loadProviderSpec('grok-cli', '1.0.json');
+        expect(isAnchoredSignInViewport(grokFullCardAboveApiKeyScreen, grokSpec)).toBe(true);
+        expect(hasCredentialInputPromptInViewport(grokFullCardAboveApiKeyScreen)).toBe(true);
+        expect(isSignInOrCredentialViewport(grokFullCardAboveApiKeyScreen, grokSpec)).toBe(true);
+
+        for (const from of ['starting', 'idle', 'busy'] as const) {
+            const ev = evaluateFsm(grokSpec, from, grokFullCardAboveApiKeyScreen, { row: 11, col: 4 }, undefined, clk(5_000, 0));
+            expect(ev.fired?.to, `from ${from}`).toBe('signing_in');
+        }
+
+        vi.useFakeTimers();
+        try {
+            const factory = new DrivableFactory();
+            const driver = new FsmDriver({
+                specPath: resolveProviderSpecPath('grok-cli', '1.0.json'),
+                workingDir: os.tmpdir(),
+                hotReload: false,
+                transportFactory: factory,
+            });
+            let activeModal: any = null;
+            driver.subscribe(ev => {
+                if (ev.kind === 'state_changed') activeModal = ev.modal;
+            });
+            driver.start();
+            const pty = factory.last!;
+            const nonFocusWrites = () => pty.writes.filter(w => w !== '\u001b[I');
+
+            pty.feed('\u001b[2J\u001b[H' + grokFullCardAboveApiKeyScreen.replace(/\n/g, '\r\n') + '\r\n');
+            await vi.advanceTimersByTimeAsync(500);
+            expect(driver.currentStateId).toBe('signing_in');
+            expect(activeModal).toBeNull();
+
+            // Wire CliProviderInstance maybeAutoApproveStatus against this live driver/viewport
+            const resolves: number[] = [];
+            const inst = Object.create(CliProviderInstance.prototype) as any;
+            inst.type = 'grok-cli';
+            inst.workingDir = os.tmpdir();
+            inst.provider = { name: 'Grok CLI', settings: {} };
+            inst.settings = { autoApprove: true };
+            inst.autoApproveBusy = false;
+            inst.autoApproveBusyTimer = null;
+            inst.autoApproveSettleTimer = null;
+            inst.lastAutoApprovalSignature = '';
+            inst.pendingAutoApprovalSignature = '';
+            inst.pendingAutoApprovalSince = 0;
+            inst.autoApproveInactiveSince = 0;
+            inst.autoApproveMaskSince = 0;
+            inst.stalledApprovalNudgeEpisode = 0;
+            inst.autoApproveLastModalSeenAt = 0;
+            inst.manualAttendance = { isAttended: () => false, remainingMs: () => 0 };
+            inst.adapter = {
+                spec: grokSpec,
+                driver,
+                getTerminalScreenSnapshot: () => ({ text: driver.snapshot() }),
+                getLastApprovalResolvedAt: () => 0,
+                getStatus: () => ({ status: 'waiting_approval', activeModal }),
+                resolveModalMatched: (idx: number) => {
+                    resolves.push(idx);
+                    return driver.clickModalButton(idx + 1);
+                },
+                resolveModal: (idx: number) => {
+                    resolves.push(idx);
+                    driver.clickModalButton(idx + 1);
+                },
+            };
+            inst.appendRuntimeSystemMessage = () => {};
+            inst.pushEvent = () => {};
+
+            // 1. Real status from signing_in (activeModal: null)
+            expect(inst.maybeAutoApproveStatus(inst.adapter.getStatus(), 1_000)).toBe(false);
+            expect(inst.maybeAutoApproveStatus(inst.adapter.getStatus(), 1_000 + APPROVAL_SETTLE_MS + 100)).toBe(false);
+            await vi.advanceTimersByTimeAsync(100);
+            expect(resolves).toEqual([]);
+            expect(nonFocusWrites()).toEqual([]);
+
+            // 2. Defence-in-depth: even if a synthetic approval modal with yes/no buttons is
+            // passed into maybeAutoApproveStatus or clickModalButton while the viewport shows
+            // the API-key prompt or an anchored sign-in screen, auto-approve refuses and sends
+            // zero keystrokes.
+            const syntheticApprovalStatus = {
+                status: 'waiting_approval',
+                activeModal: {
+                    kind: 'approval',
+                    message: '◆ Run Bash (npm test)',
+                    buttons: [
+                        "Yes, and don't ask again in /workspace/adhdev",
+                        'Yes, proceed',
+                        'No, reject (tell Grok what to do instead)',
+                    ],
+                },
+            };
+            expect(approvableModalSignature(inst, syntheticApprovalStatus.activeModal)).toBeNull();
+            expect(inst.maybeAutoApproveStatus(syntheticApprovalStatus, 2_000)).toBe(false);
+            expect(inst.maybeAutoApproveStatus(syntheticApprovalStatus, 2_000 + APPROVAL_SETTLE_MS + 100)).toBe(false);
+            await vi.advanceTimersByTimeAsync(100);
+            expect(resolves).toEqual([]);
+            expect(driver.clickModalButton(1)).toBe(false);
+            expect(driver.clickModalButton(2)).toBe(false);
+            expect(nonFocusWrites()).toEqual([]);
+
+            driver.shutdown();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('maybeAutoApproveStatus refuses when isAnchoredSignInViewport is true or when any credential/device-code prompt is in the viewport across providers', async () => {
+        const credentialViewports: Array<{ cli: string; specFile: string; viewport: string }> = [
+            {
+                cli: 'codex-cli',
+                specFile: '4.0.json',
+                viewport: '  Use your own OpenAI API key\n  Paste or type your API key below\n  > ',
+            },
+            {
+                cli: 'codex-cli',
+                specFile: '4.0.json',
+                viewport: '  Preparing device code login...\n  https://auth.openai.com/codex/device',
+            },
+            {
+                cli: 'antigravity-cli',
+                specFile: '4.0.json',
+                viewport: "  Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth\n  If you aren't automatically redirected, paste the authorization code below:\n  > ",
+            },
+            {
+                cli: 'kimi',
+                specFile: '1.0.json',
+                viewport: '  Sign in to Kimi Code\n  Your key will be saved to ~/.kimi/config.toml\n  API Key: ',
+            },
+            {
+                cli: 'kimi',
+                specFile: '1.0.json',
+                viewport: '  Sign in to Kimi Code\n  Visit the URL below in your browser to authorize:\n  Verification code: ABCD-1234',
+            },
+            {
+                cli: 'claude-cli',
+                specFile: '4.0.json',
+                viewport: "  Browser didn't open? Use the url below to sign in\n  Paste code here if prompted > ",
+            },
+            {
+                cli: 'cursor-cli',
+                specFile: '1.0.json',
+                viewport: '  Welcome to Cursor Agent\n  ▸ Press Enter to sign in',
+            },
+        ];
+
+        for (const tc of credentialViewports) {
+            const spec = loadProviderSpec(tc.cli, tc.specFile);
+            expect(isSignInOrCredentialViewport(tc.viewport, spec), `${tc.cli} isSignInOrCredentialViewport`).toBe(true);
+            const resolves: number[] = [];
+            const inst = Object.create(CliProviderInstance.prototype) as any;
+            inst.type = tc.cli;
+            inst.workingDir = os.tmpdir();
+            inst.provider = { name: tc.cli, settings: {} };
+            inst.settings = { autoApprove: true };
+            inst.autoApproveBusy = false;
+            inst.autoApproveBusyTimer = null;
+            inst.autoApproveSettleTimer = null;
+            inst.lastAutoApprovalSignature = '';
+            inst.pendingAutoApprovalSignature = '';
+            inst.pendingAutoApprovalSince = 0;
+            inst.autoApproveInactiveSince = 0;
+            inst.autoApproveMaskSince = 0;
+            inst.stalledApprovalNudgeEpisode = 0;
+            inst.autoApproveLastModalSeenAt = 0;
+            inst.manualAttendance = { isAttended: () => false, remainingMs: () => 0 };
+            inst.adapter = {
+                spec,
+                getTerminalScreenSnapshot: () => ({ text: tc.viewport }),
+                getLastApprovalResolvedAt: () => 0,
+                getStatus: () => ({ status: 'waiting_approval' }),
+                resolveModalMatched: (idx: number) => { resolves.push(idx); return true; },
+            };
+            inst.appendRuntimeSystemMessage = () => {};
+            inst.pushEvent = () => {};
+
+            const statusWithYesNo = {
+                status: 'waiting_approval',
+                activeModal: {
+                    kind: 'approval',
+                    message: 'Do you want to proceed?',
+                    buttons: ['Yes', 'No'],
+                },
+            };
+            expect(inst.maybeAutoApproveStatus(statusWithYesNo, 1_000), `${tc.cli} t0`).toBe(false);
+            expect(inst.maybeAutoApproveStatus(statusWithYesNo, 1_000 + APPROVAL_SETTLE_MS + 100), `${tc.cli} t1`).toBe(false);
+            expect(resolves, `${tc.cli} resolves`).toEqual([]);
+        }
+    });
+});
+
+describe('Round 9 — Nits: Cursor approval regex and Grok FSM evaluator stay linear at 5,000 and 10,000 lines', () => {
+    it('cursor-cli approval regex evaluates 5,000 raw lines in under 200ms (was 34s)', () => {
+        const cursorSpec = loadProviderSpec('cursor-cli', '1.0.json');
+        const approvalTransition = cursorSpec.transitions.find(t => t.label === '→approval')!;
+        const cond = (approvalTransition.when as any).all[0];
+        const re = new RegExp(cond.matches, cond.flags);
+
+        const rawLines: string[] = [];
+        for (let i = 0; i < 5_000; i += 1) {
+            if (i % 5 === 0) rawLines.push('  Run this command: npm run test -- --watch=false');
+            else if (i % 5 === 1) rawLines.push('  Allow permission to read config and trust workspace');
+            else if (i % 5 === 2) rawLines.push('  │   some indented output line in scrollback');
+            else if (i % 5 === 3) rawLines.push('      ');
+            else rawLines.push('  Do you want to continue checking files?');
+        }
+        const raw5k = rawLines.join('\n');
+        const start = performance.now();
+        const matched = re.test(raw5k);
+        const elapsedMs = performance.now() - start;
+
+        expect(matched).toBe(false);
+        expect(elapsedMs).toBeLessThan(200);
+    });
+
+    it('grok-cli evaluateFsm scales linearly at 5,000 and 10,000 lines (under 60ms)', () => {
+        const grokSpec = loadProviderSpec('grok-cli', '1.0.json');
+        const makeGrokScreen = (lineCount: number) => {
+            const lines: string[] = [];
+            for (let i = 0; i < lineCount - 4; i += 1) {
+                if (i % 4 === 0) lines.push('  Do you trust the contents of this directory?');
+                else if (i % 4 === 1) lines.push('  Help improve Grok by sharing usage data');
+                else if (i % 4 === 2) lines.push('      ');
+                else lines.push(`  output line ${i}`);
+            }
+            lines.push('  ╭──────────────────────────────────────────────────────────────────────────╮');
+            lines.push('  │ ❯                                                                        │');
+            lines.push('  ╰──────────────────────────────────────────────────────────────────────────╯');
+            lines.push('  Shift+Tab:mode │ Ctrl+x:shortcuts');
+            return lines.join('\n');
+        };
+
+        const screen5k = makeGrokScreen(5_000);
+        const screen10k = makeGrokScreen(10_000);
+
+        const t0 = performance.now();
+        const ev5k = evaluateFsm(grokSpec, 'idle', screen5k, { row: 4998, col: 4 }, undefined, clk(5_000, 0));
+        const ms5k = performance.now() - t0;
+
+        const t1 = performance.now();
+        const ev10k = evaluateFsm(grokSpec, 'idle', screen10k, { row: 9998, col: 4 }, undefined, clk(5_000, 0));
+        const ms10k = performance.now() - t1;
+
+        expect(ev5k.fired).toBeNull();
+        expect(ev10k.fired).toBeNull();
+        expect(ms5k).toBeLessThan(60);
+        expect(ms10k).toBeLessThan(100);
     });
 });
 
