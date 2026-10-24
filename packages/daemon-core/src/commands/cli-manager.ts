@@ -100,6 +100,8 @@ export interface HostedCliRuntimeDescriptor {
     managedBy?: string;
     /** Positive role mark persisted in session-host meta; never inferred from workspace/title. */
     assistant?: boolean;
+    /** Persisted coordinator mesh association; restore verifies exact host/launch evidence. */
+    meshCoordinatorFor?: string;
     /**
      * Real spawn time (ms epoch) of the underlying session-host runtime — a PAST
      * timestamp recorded when the runtime first started. Threaded through so an

@@ -200,13 +200,8 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     expect(getCoordinatorForSession('coordinator-elsewhere')?.meshId).toBe('mesh-elsewhere');
   }, 15000);
 
-  it('keeps a live coordinator entry adopted via the workspace rebind fallback (runtimeId changed across restart)', async () => {
-    // The entry's registered sessionId no longer matches any live runtime (the
-    // coordinator re-attached under a NEW runtimeId), yet the entry belongs to
-    // a LIVE coordinator: the workspace rebind fallback adopts it during this
-    // very restore. A naive "not in the live list → prune" rule would delete
-    // the entry the fallback just used and reintroduce the badge loss on the
-    // next restart.
+  it('does not exempt a missing coordinator UUID merely because a workspace sibling exists', async () => {
+    // Full verified inventory, rather than a workspace guess, controls pruning.
     const loader = setupLoader();
     registerMeshCoordinator({ hostOwner: OWNER, meshId: 'mesh-renamed', sessionId: 'old-coordinator-id', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
 
@@ -226,9 +221,7 @@ describe('boot-time stale mesh coordinator pruning (restoreHostedSessions full r
     const restored = await manager.restoreHostedSessions();
 
     expect(restored).toBe(1);
-    // Fallback adopted the entry (single unambiguous coordinator for the
-    // workspace) — and the adopted entry is exempt from the post-loop prune.
-    expect(getCoordinatorForSession('old-coordinator-id')?.meshId).toBe('mesh-renamed');
-    expect(readPersistedRegistry(configDir).map(e => e.sessionId)).toEqual(['old-coordinator-id']);
+    expect(getCoordinatorForSession('old-coordinator-id')).toBeUndefined();
+    expect(readPersistedRegistry(configDir)).toEqual([]);
   }, 15000);
 });

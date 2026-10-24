@@ -1,3 +1,4 @@
+import { readCoordinatorMeshAssociation } from './coordinator-association.js';
 import * as fs from 'fs';
 import {
     SessionHostClient,
@@ -282,6 +283,7 @@ export async function listHostedCliRuntimes(endpoint: SessionHostEndpoint): Prom
                 cliArgs: Array.isArray(record.meta?.cliArgs) ? (record.meta.cliArgs as string[]) : [],
                 providerSessionId: typeof record.meta?.providerSessionId === 'string' ? String(record.meta.providerSessionId) : undefined,
                 assistant: record.meta?.assistant === true ? true : undefined,
+                meshCoordinatorFor: readCoordinatorMeshAssociation(record.meta?.meshCoordinatorFor),
                 startedAtMs: record.startedAt,
                 managedBy: typeof record.meta?.managedBy === 'string' ? String(record.meta.managedBy) : undefined,
                 // Session-level mesh membership (rc.20 rebound relay envelope) —

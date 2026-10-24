@@ -79,13 +79,17 @@ function isValidRecordedSeparators(sep: unknown): sep is RecordedWrapperSeparato
     );
 }
 
-/** Load persisted coordinator registry from disk into in-memory map. Called once on daemon boot. */
-export function loadMeshCoordinatorRegistry(): void {
+/** Load the persisted registry. Restore uses strict reads to reject uncertainty and stale cached bindings. */
+export function loadMeshCoordinatorRegistry(options: { strict?: boolean } = {}): void {
     const path = getRegistryPath();
-    if (!existsSync(path)) return;
+    if (!options.strict && !existsSync(path)) return;
     try {
         const raw = JSON.parse(readFileSync(path, 'utf-8'));
-        if (!Array.isArray(raw)) return;
+        if (!Array.isArray(raw) || (options.strict && raw.some(entry =>
+            typeof entry?.sessionId !== 'string' || !entry.sessionId || typeof entry?.meshId !== 'string' || !entry.meshId))) {
+            if (options.strict) throw new Error('invalid coordinator registry');
+            return;
+        }
         _registry.clear();
         for (const entry of raw) {
             if (typeof entry?.sessionId === 'string' && typeof entry?.meshId === 'string') {
@@ -103,7 +107,14 @@ export function loadMeshCoordinatorRegistry(): void {
                 }
             }
         }
-    } catch { /* ignore corrupt file */ }
+    } catch (error) {
+        if (options.strict && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+            _registry.clear();
+            return;
+        }
+        if (options.strict) throw Object.assign(new Error('coordinator_identity_conflict: coordinator registry unavailable or invalid'),
+            { code: 'coordinator_identity_conflict' });
+    }
 }
 
 function saveRegistry(): void {
@@ -302,11 +313,8 @@ export function getCoordinatorForSession(sessionId: string): CoordinatorRegistry
  * unregisterMeshCoordinator only runs on explicit stop/exit paths (auto-clean,
  * stopSessionWithMode, orphan force-remove) — a daemon upgrade/restart takes
  * none of them, so dead coordinator entries accumulate in
- * mesh-coordinators.json across boot generations. Those stale entries break
- * the workspace-scoped coordinator rebind in restoreHostedSessions: its
- * "exactly one registered coordinator" unambiguity condition goes permanently
- * false, which is the mechanism behind the lost coordinator badge / unrouted
- * mesh events after a restart.
+ * mesh-coordinators.json across boot generations. Prune them only against a
+ * complete verified census from the owning host.
  *
  * Callers MUST pass the FULL live-runtime id set (the boot-time restore
  * batch), and its verified host owner — never a partial/ad-hoc restore list.

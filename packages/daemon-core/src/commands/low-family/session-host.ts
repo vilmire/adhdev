@@ -1,3 +1,4 @@
+import { readCoordinatorMeshAssociation } from '../../session-host/coordinator-association.js';
 import { detectCLI } from '../../detection/cli-detector.js';
 import { getAssistantRegistry } from '../../assistant/assistant-registry.js';
 import { getCoordinatorForSession } from '../../mesh/coordinator-registry.js';
@@ -24,10 +25,11 @@ export function toHostedCliRuntimeDescriptor(record: any): HostedCliRuntimeDescr
     const runtimeId = typeof record.sessionId === 'string' ? record.sessionId : '';
     const cliType = typeof record.providerType === 'string' ? record.providerType : '';
     const workspace = typeof record.workspace === 'string' ? record.workspace : '';
-    if (!runtimeId || !cliType || !workspace) return null;
+    if (!runtimeId || !cliType || !workspace || record.termination) return null;
     return {
         runtimeId,
         assistant: record.meta?.assistant === true ? true : undefined,
+        meshCoordinatorFor: readCoordinatorMeshAssociation(record.meta?.meshCoordinatorFor),
         autoApproveMode: typeof record.meta?.autoApproveMode === 'string' ? record.meta.autoApproveMode : undefined,
         managedBy: typeof record.meta?.managedBy === 'string' ? record.meta.managedBy : undefined,
         runtimeKey: typeof record.runtimeKey === 'string' ? record.runtimeKey : undefined,

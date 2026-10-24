@@ -169,7 +169,7 @@ describe('restoreHostedSessions — assistant re-bind', () => {
     expect(m.hostedRestoreState).toBe('ready');
   });
 
-  it('migrates a coordinator adopted through the workspace fallback', async () => {
+  it('does not migrate a coordinator owner through a workspace-only guess', async () => {
     registerMeshCoordinator({ meshId: 'mesh-fallback', sessionId: 'coord-1', workspace, cliType: 'sample-cli', startedAt: 1 });
     const runtimes = join(configDir, 'session-host', previewOwner.namespace, 'runtimes');
     mkdirSync(runtimes, { recursive: true });
@@ -178,7 +178,7 @@ describe('restoreHostedSessions — assistant re-bind', () => {
     const m = manager(setupLoader(), vi.fn());
     vi.spyOn(m, 'registerCliInstance').mockResolvedValue(undefined);
     await m.restoreHostedSessions([{ runtimeId: 'new-coordinator-id', cliType: 'sample-cli', workspace }]);
-    expect(getCoordinatorForSession('coord-1')?.hostOwner).toEqual(previewOwner);
+    expect(getCoordinatorForSession('coord-1')?.hostOwner).toBeUndefined();
   });
 
   it.each([foreignOwner, { ...previewOwner, endpoint: foreignOwner.endpoint }])('a foreign empty inventory preserves assistant and both coordinator bindings across a fresh preview restore (%j)', async foreign => {
