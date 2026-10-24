@@ -70400,12 +70400,15 @@ ${includeRefs[0]}`;
         sep22 && typeof sep22 === "object" && typeof sep22.leading === "string" && typeof sep22.trailing === "string" && typeof sep22.createdFile === "boolean"
       );
     }
-    function loadMeshCoordinatorRegistry() {
+    function loadMeshCoordinatorRegistry(options = {}) {
       const path108 = getRegistryPath();
-      if (!(0, import_fs21.existsSync)(path108)) return;
+      if (!options.strict && !(0, import_fs21.existsSync)(path108)) return;
       try {
         const raw = JSON.parse((0, import_fs21.readFileSync)(path108, "utf-8"));
-        if (!Array.isArray(raw)) return;
+        if (!Array.isArray(raw) || options.strict && raw.some((entry) => typeof entry?.sessionId !== "string" || !entry.sessionId || typeof entry?.meshId !== "string" || !entry.meshId)) {
+          if (options.strict) throw new Error("invalid coordinator registry");
+          return;
+        }
         _registry.clear();
         for (const entry of raw) {
           if (typeof entry?.sessionId === "string" && typeof entry?.meshId === "string") {
@@ -70423,7 +70426,15 @@ ${includeRefs[0]}`;
             }
           }
         }
-      } catch {
+      } catch (error) {
+        if (options.strict && error.code === "ENOENT") {
+          _registry.clear();
+          return;
+        }
+        if (options.strict) throw Object.assign(
+          new Error("coordinator_identity_conflict: coordinator registry unavailable or invalid"),
+          { code: "coordinator_identity_conflict" }
+        );
       }
     }
     function saveRegistry() {
@@ -147452,6 +147463,9 @@ ${output}` : "";
       // check them against, so any authenticated peer may send them.
       meshSender: "authenticated_peer"
     }));
+    function readCoordinatorMeshAssociation(value) {
+      return typeof value === "string" && value.trim() ? value.trim() : void 0;
+    }
     init_cli_detector();
     init_assistant_registry();
     init_coordinator_registry();
@@ -147466,10 +147480,11 @@ ${output}` : "";
       const runtimeId = typeof record7.sessionId === "string" ? record7.sessionId : "";
       const cliType = typeof record7.providerType === "string" ? record7.providerType : "";
       const workspace = typeof record7.workspace === "string" ? record7.workspace : "";
-      if (!runtimeId || !cliType || !workspace) return null;
+      if (!runtimeId || !cliType || !workspace || record7.termination) return null;
       return {
         runtimeId,
         assistant: record7.meta?.assistant === true ? true : void 0,
+        meshCoordinatorFor: readCoordinatorMeshAssociation(record7.meta?.meshCoordinatorFor),
         autoApproveMode: typeof record7.meta?.autoApproveMode === "string" ? record7.meta.autoApproveMode : void 0,
         managedBy: typeof record7.meta?.managedBy === "string" ? record7.meta.managedBy : void 0,
         runtimeKey: typeof record7.runtimeKey === "string" ? record7.runtimeKey : void 0,
@@ -180604,6 +180619,131 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       }
       return false;
     }
+    init_dist();
+    init_binding_owner();
+    init_coordinator_registry();
+    init_logger();
+    function refuseCoordinatorRestore(reason) {
+      throw Object.assign(new Error("coordinator_identity_conflict: " + reason), { code: "coordinator_identity_conflict" });
+    }
+    function isCoordinatorRestoreConflict(error) {
+      return !!error && typeof error === "object" && ("code" in error && error.code === "coordinator_identity_conflict" || "message" in error && typeof error.message === "string" && error.message.startsWith("coordinator_identity_"));
+    }
+    function diagnoseCoordinatorRestoreConflict(runtimeId, error) {
+      const detail = error instanceof Error ? error.message : "coordinator evidence unverifiable";
+      LOG.warn("CLI", `coordinator_identity_conflict: runtime ${runtimeId} coordinator role refused: ${detail}`);
+    }
+    function readCoordinatorEvidence(sessionId) {
+      try {
+        return persistedBindingEvidence(sessionId);
+      } catch {
+        refuseCoordinatorRestore("persisted coordinator evidence unavailable or invalid");
+      }
+    }
+    function hasCoordinatorLaunch(record7) {
+      const launch = parseSessionLaunchRecord(record7.launchRecord);
+      return !!launch && launch.sessionId === record7.runtimeId && launch.providerType === record7.cliType && (!launch.workspace || launch.workspace === record7.workspace) && launch.roleLaunch?.role === "coordinator" && launch.roleLaunch.selection.provider === record7.cliType && (launch.launchedBy === "mesh" || launch.launchedBy === "restore");
+    }
+    function verifyPersistedCoordinator(record7, owner) {
+      if (!readHostedBindingOwner(owner) || !owner?.namespace || record7.managedBy !== owner.managedBy || !Number.isFinite(record7.startedAtMs) || !(record7.startedAtMs > 0) || !hasCoordinatorLaunch(record7)) refuseCoordinatorRestore("unverified coordinator launch or host owner");
+      if (record7.assistant === true) refuseCoordinatorRestore("conflicting assistant and coordinator roles");
+      const evidence = readCoordinatorEvidence(record7.runtimeId);
+      if (evidence.length !== 1 || evidence[0].namespace !== owner.namespace || evidence[0].terminal) {
+        refuseCoordinatorRestore("missing, foreign, ambiguous or terminated runtime evidence");
+      }
+      const persisted = evidence[0].record;
+      if (persisted.category !== "cli" || !["running", "interrupted"].includes(persisted.lifecycle) || persisted.providerType !== record7.cliType || persisted.workspace !== record7.workspace || persisted.meta?.managedBy !== owner.managedBy || persisted.meta?.assistant === true || persisted.meta?.providerSessionId !== record7.providerSessionId || persisted.startedAt !== record7.startedAtMs || readCoordinatorMeshAssociation(persisted.meta?.meshCoordinatorFor) !== record7.meshCoordinatorFor || !hasCoordinatorLaunch({ ...record7, launchRecord: persisted.meta?.launchRecord })) {
+        refuseCoordinatorRestore("persisted runtime identity or coordinator provenance does not match");
+      }
+    }
+    function meshSnapshot(meshId) {
+      return JSON.stringify(listCoordinatorsForMesh(meshId));
+    }
+    function planCoordinatorRestore(record7, owner, liveIds) {
+      const exact = getCoordinatorForSession(record7.runtimeId);
+      const meshId = readCoordinatorMeshAssociation(record7.meshCoordinatorFor);
+      let owned = false;
+      try {
+        owned = !!exact && sameHostedBindingOwner(
+          resolveHostedBindingOwner(exact.sessionId, exact.hostOwner, owner, liveIds),
+          owner
+        );
+      } catch {
+        refuseCoordinatorRestore("coordinator binding owner unverifiable");
+      }
+      if (exact && !owned) {
+        if (meshId) refuseCoordinatorRestore("exact binding belongs to a foreign or unknown host");
+        return void 0;
+      }
+      if (!exact && !meshId) return void 0;
+      const evidence = readCoordinatorEvidence(record7.runtimeId);
+      if (evidence.some((e) => e.namespace === owner?.namespace && e.terminal)) refuseCoordinatorRestore("terminated coordinator runtime");
+      if (exact && (meshId && meshId !== exact.meshId || exact.cliType && exact.cliType !== record7.cliType || exact.workspace && exact.workspace !== record7.workspace)) refuseCoordinatorRestore("registry and runtime identity disagree");
+      const recovered = !exact;
+      if (recovered || meshId && record7.launchRecord !== void 0) verifyPersistedCoordinator(record7, owner);
+      const entry = exact ? { ...exact, hostOwner: owner } : {
+        sessionId: record7.runtimeId,
+        meshId,
+        cliType: record7.cliType,
+        workspace: record7.workspace,
+        startedAt: record7.startedAtMs ?? 0,
+        hostOwner: owner
+      };
+      if (listCoordinatorsForMesh(entry.meshId).some((e) => e.sessionId !== record7.runtimeId)) {
+        refuseCoordinatorRestore("another coordinator binding already exists for this mesh");
+      }
+      return { entry, registrySnapshot: meshSnapshot(entry.meshId), recovered };
+    }
+    function planCoordinatorRestores(records, owner, liveIds, inventory = records) {
+      const plans = /* @__PURE__ */ new Map();
+      try {
+        loadMeshCoordinatorRegistry({ strict: true });
+      } catch (error) {
+        for (const record7 of records) {
+          if (record7.meshCoordinatorFor || getCoordinatorForSession(record7.runtimeId)) {
+            diagnoseCoordinatorRestoreConflict(record7.runtimeId, error);
+          }
+        }
+        return { plans, registryAvailable: false };
+      }
+      for (const record7 of records) {
+        try {
+          const plan = planCoordinatorRestore(record7, owner, liveIds);
+          if (!plan) continue;
+          if (plan.recovered && inventory.some((peer) => peer.runtimeId !== record7.runtimeId && (!peer.lifecycle || ["starting", "running", "stopping", "interrupted"].includes(peer.lifecycle)) && readCoordinatorMeshAssociation(peer.meshCoordinatorFor) === plan.entry.meshId)) {
+            refuseCoordinatorRestore("another hosted coordinator candidate exists for this mesh");
+          }
+          plans.set(record7.runtimeId, plan);
+        } catch (error) {
+          diagnoseCoordinatorRestoreConflict(record7.runtimeId, error);
+        }
+      }
+      return { plans, registryAvailable: true };
+    }
+    function repairCoordinatorBinding(plan, record7, owner, liveIds) {
+      loadMeshCoordinatorRegistry({ strict: true });
+      if (meshSnapshot(plan.entry.meshId) !== plan.registrySnapshot) refuseCoordinatorRestore("binding changed during attach");
+      if (plan.recovered) verifyPersistedCoordinator(record7, owner);
+      const current4 = planCoordinatorRestore(record7, owner, liveIds);
+      if (!current4 || current4.entry.meshId !== plan.entry.meshId) refuseCoordinatorRestore("coordinator identity changed during attach");
+      registerMeshCoordinator(current4.entry);
+    }
+    async function verifyCoordinatorRecoveryInventory(plan, record7, owner, list2) {
+      if (!list2) refuseCoordinatorRestore("complete hosted inventory required for coordinator recovery");
+      let inventory;
+      try {
+        inventory = await list2();
+      } catch {
+        refuseCoordinatorRestore("coordinator recovery inventory unavailable");
+      }
+      if (!Array.isArray(inventory)) refuseCoordinatorRestore("coordinator recovery inventory unavailable");
+      const eligible = inventory.filter((r) => (!r.lifecycle || ["running", "interrupted"].includes(r.lifecycle)) && shouldRestoreHostedRuntime(r, owner?.managedBy));
+      const exact = eligible.find((r) => r.runtimeId === record7.runtimeId);
+      if (!exact || exact.cliType !== record7.cliType || exact.workspace !== record7.workspace || exact.startedAtMs !== record7.startedAtMs || exact.providerSessionId !== record7.providerSessionId || exact.meshCoordinatorFor !== record7.meshCoordinatorFor) refuseCoordinatorRestore("recovered runtime absent or changed in hosted inventory");
+      const { plans } = planCoordinatorRestores(eligible, owner, new Set(inventory.map((r) => r.runtimeId)), inventory);
+      const current4 = plans.get(record7.runtimeId);
+      if (!current4 || current4.registrySnapshot !== plan.registrySnapshot) refuseCoordinatorRestore("coordinator binding changed during recovery");
+    }
     init_binding_owner();
     init_cooperative_gate();
     init_coordinator_registry();
@@ -180639,15 +180779,10 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
       let restored = 0;
       const restoredBindings = /* @__PURE__ */ new Set();
       const managerTag = host.deps.hostedRuntimeManagerTag;
-      const restoredRuntimeIds = /* @__PURE__ */ new Set();
-      const workspaceTypeCounts = /* @__PURE__ */ new Map();
-      for (const r of sessions) {
-        if (!r?.runtimeId || !r?.cliType || !r?.workspace) continue;
-        restoredRuntimeIds.add(r.runtimeId);
-        const key5 = `${r.workspace}::${r.cliType}`;
-        workspaceTypeCounts.set(key5, (workspaceTypeCounts.get(key5) || 0) + 1);
-      }
-      const rebindAdoptedSessionIds = /* @__PURE__ */ new Set();
+      const restoredRuntimeIds = new Set(sessions.map((r) => r.runtimeId));
+      const coordinatorPlanning = planCoordinatorRestores(eligible, owner, restoredRuntimeIds, sessions);
+      const coordinatorPlans = coordinatorPlanning.plans;
+      let coordinatorPruneAllowed = coordinatorPlanning.registryAvailable;
       for (const record7 of sessions) {
         signal?.throwIfAborted();
         if (!record7?.runtimeId || !record7?.cliType || !record7?.workspace) continue;
@@ -180685,7 +180820,18 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
           );
           continue;
         }
-        const restoredSettings = buildRestoredSettings(host, record7, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds, assistant?.runtimeId);
+        let coordinatorPlan = coordinatorPlans.get(record7.runtimeId);
+        if (records && coordinatorPlan?.recovered) {
+          try {
+            await verifyCoordinatorRecoveryInventory(coordinatorPlan, record7, owner, host.deps.listHostedCliRuntimes);
+          } catch (error) {
+            signal?.throwIfAborted();
+            diagnoseCoordinatorRestoreConflict(record7.runtimeId, error);
+            coordinatorPlan = void 0;
+          }
+        }
+        signal?.throwIfAborted();
+        const restoredSettings = buildRestoredSettings(host, record7, normalizedType, coordinatorPlan, assistant?.runtimeId);
         try {
           await host.registerCliInstance(
             record7.runtimeId,
@@ -180715,12 +180861,7 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
               })
             }
           );
-          if (signal?.aborted) {
-            host.adapters.get(record7.runtimeId)?.detach?.();
-            host.adapters.delete(record7.runtimeId);
-            instanceManager.removeInstance(record7.runtimeId);
-            signal.throwIfAborted();
-          }
+          signal?.throwIfAborted();
           if (restoredSettings.assistant === true) {
             const latest = registry.reload();
             if (latest?.sessionId && latest.sessionId !== record7.runtimeId || latest?.sessionId && latest.hostOwner && !sameHostedBindingOwner(latest.hostOwner, owner)) {
@@ -180735,65 +180876,41 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
               at: Date.now()
             });
           }
-          const coordinator = getCoordinatorForSession(record7.runtimeId) ?? listCoordinatorsForWorkspace(record7.workspace).find((e) => rebindAdoptedSessionIds.has(e.sessionId) && e.meshId === restoredSettings.meshCoordinatorFor);
-          if (coordinator && owner && sameHostedBindingOwner(
-            resolveHostedBindingOwner(coordinator.sessionId, coordinator.hostOwner, owner, restoredRuntimeIds),
-            owner
-          )) {
-            registerMeshCoordinator({ ...coordinator, hostOwner: owner });
+          if (coordinatorPlan?.recovered) {
+            await verifyCoordinatorRecoveryInventory(coordinatorPlan, record7, host.deps.getHostedBindingOwner?.(), host.deps.listHostedCliRuntimes);
+            signal?.throwIfAborted();
           }
+          if (coordinatorPlan) repairCoordinatorBinding(coordinatorPlan, record7, host.deps.getHostedBindingOwner?.(), restoredRuntimeIds);
           restoredBindings.add(bindingKey);
           restored += 1;
           LOG.info("CLI", `\u267B Restored hosted runtime: ${record7.runtimeKey || record7.runtimeId} (${record7.displayName || record7.workspace})`);
         } catch (error) {
-          signal?.throwIfAborted();
+          if (signal?.aborted || isCoordinatorRestoreConflict(error)) {
+            host.adapters.get(record7.runtimeId)?.detach?.();
+            host.adapters.delete(record7.runtimeId);
+            instanceManager.removeInstance(record7.runtimeId);
+            signal?.throwIfAborted();
+            coordinatorPruneAllowed = false;
+            diagnoseCoordinatorRestoreConflict(record7.runtimeId, error);
+            continue;
+          }
           LOG.warn("CLI", `Failed to restore hosted runtime ${record7.runtimeId}: ${error?.message || error}`);
           if (promoted || String(error?.message).startsWith("assistant_identity_conflict")) throw error;
         }
       }
       if (promoted && restored !== sessions.length) throw new Error("maintenance_incomplete_writable_promotion");
       if (!records && typeof host.deps.listHostedCliRuntimes === "function") {
-        pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds, owner);
+        if (coordinatorPruneAllowed) pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, owner);
         pruneStaleAssistantBinding(sessions, restoredRuntimeIds, owner);
         reconcileWorkerBindsAfterRestore(sessions, restoredRuntimeIds);
       }
       return restored;
     }
-    function buildRestoredSettings(host, record7, normalizedType, restoredRuntimeIds, workspaceTypeCounts, rebindAdoptedSessionIds, assistantRuntimeId) {
+    function buildRestoredSettings(host, record7, normalizedType, coordinatorPlan, assistantRuntimeId) {
       const restoredSettings = { ...host.providerLoader.getSettings(normalizedType) };
-      const owner = host.deps.getHostedBindingOwner?.();
-      let coordinatorEntry = getCoordinatorForSession(record7.runtimeId);
-      if (coordinatorEntry && !sameHostedBindingOwner(
-        resolveHostedBindingOwner(coordinatorEntry.sessionId, coordinatorEntry.hostOwner, owner, restoredRuntimeIds),
-        owner
-      )) coordinatorEntry = void 0;
-      if (!coordinatorEntry?.meshId && record7.workspace) {
-        const workspaceCoordinators = listCoordinatorsForWorkspace(record7.workspace).filter((e) => e.meshId && (!e.cliType || e.cliType === record7.cliType) && sameHostedBindingOwner(resolveHostedBindingOwner(e.sessionId, e.hostOwner, owner, restoredRuntimeIds), owner));
-        if (workspaceCoordinators.length === 1) {
-          const candidate = workspaceCoordinators[0];
-          const coordinatorPresentById = !!candidate.sessionId && restoredRuntimeIds.has(candidate.sessionId);
-          const siblingCount = workspaceTypeCounts.get(`${record7.workspace}::${record7.cliType}`) || 1;
-          if (!coordinatorPresentById && siblingCount === 1) {
-            coordinatorEntry = candidate;
-            if (candidate.sessionId) rebindAdoptedSessionIds.add(candidate.sessionId);
-            LOG.info(
-              "CLI",
-              `\u21BB Rebound coordinator mark by workspace for ${record7.runtimeKey || record7.runtimeId} (mesh ${candidate.meshId} @ ${record7.workspace}); registry key did not match runtimeId`
-            );
-          } else {
-            LOG.info(
-              "CLI",
-              `\u21B7 Skipping workspace coordinator rebind for ${record7.runtimeKey || record7.runtimeId} (${record7.cliType} @ ${record7.workspace}): ${coordinatorPresentById ? "registered coordinator is restoring under its own id \u2014 this is a delegated worker" : `ambiguous (${siblingCount} sessions share this workspace+cliType)`}`
-            );
-          }
-        } else if (workspaceCoordinators.length === 0) {
-          LOG.debug(
-            "CLI",
-            `No registered coordinator for workspace ${record7.workspace} \u2014 workspace rebind fallback empty for ${record7.runtimeKey || record7.runtimeId} (${record7.cliType}); the session stays unmarked`
-          );
-        }
-      }
-      if (coordinatorEntry?.meshId) {
+      delete restoredSettings.meshCoordinatorFor;
+      const coordinatorEntry = coordinatorPlan?.entry;
+      if (coordinatorEntry) {
         restoredSettings.meshCoordinatorFor = coordinatorEntry.meshId;
         if (normalizedType === "antigravity-cli" || coordinatorEntry.cliType === "antigravity-cli") {
           try {
@@ -180857,12 +180974,11 @@ Run '${IDENTITY2.binaryName} doctor' for detailed diagnostics.`
         LOG.warn("CLI", `assistant binding prune failed: ${e?.message || e}`);
       }
     }
-    function pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, rebindAdoptedSessionIds, owner) {
+    function pruneStaleCoordinatorEntries(sessions, restoredRuntimeIds, owner) {
       const liveSessionIds = new Set(restoredRuntimeIds);
       for (const r of sessions) {
         if (r?.runtimeId) liveSessionIds.add(r.runtimeId);
       }
-      for (const sessionId of rebindAdoptedSessionIds) liveSessionIds.add(sessionId);
       for (const entry of pruneDeadMeshCoordinators(liveSessionIds, owner)) {
         LOG.info(
           "CLI",
@@ -187444,6 +187560,7 @@ ${CUSTOM_PROVIDERS_DOCS_URL}
           cliArgs: Array.isArray(record7.meta?.cliArgs) ? record7.meta.cliArgs : [],
           providerSessionId: typeof record7.meta?.providerSessionId === "string" ? String(record7.meta.providerSessionId) : void 0,
           assistant: record7.meta?.assistant === true ? true : void 0,
+          meshCoordinatorFor: readCoordinatorMeshAssociation(record7.meta?.meshCoordinatorFor),
           startedAtMs: record7.startedAt,
           managedBy: typeof record7.meta?.managedBy === "string" ? String(record7.meta.managedBy) : void 0,
           // Session-level mesh membership (rc.20 rebound relay envelope) —

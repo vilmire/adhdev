@@ -815,6 +815,15 @@ describe('session host runtime support compatibility', () => {
 
 
 describe('assistant runtime provenance inventory', () => {
+  it.each([' mesh-test ', '', '   ', 42, null])('validates the persisted coordinator mesh association (%j)', async value => {
+    mocks.state.inventoryResults = [{ success: true, result: [
+      { sessionId: 'coordinator', providerType: 'test-cli', category: 'cli', lifecycle: 'running',
+        workspace: '/test', meta: { meshCoordinatorFor: value } },
+    ] }];
+    const [record] = await listHostedCliRuntimes({ kind: 'unix', path: '/tmp/test.sock' });
+    expect(record.meshCoordinatorFor).toBe(value === ' mesh-test ' ? 'mesh-test' : undefined);
+  });
+
   it('projects positive meta.assistant and launch provenance, while ignoring ordinary sessions', async () => {
     const launchRecord = { launchedBy: 'assistant' };
     mocks.state.inventoryResults = [{ success: true, result: [

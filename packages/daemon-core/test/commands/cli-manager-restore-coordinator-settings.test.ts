@@ -157,11 +157,8 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
     expect(context.settings).toMatchObject({ autoApproveMode: 'pty-parse' });
   }, 15000);
 
-  it('CORDBADGE: rebinds the coordinator mark by workspace when the runtimeId no longer matches the registered sessionId', async () => {
-    // The coordinator was registered under one sessionId, but on restart its runtime
-    // re-attaches under a DIFFERENT runtimeId (registry survived, key no longer lines
-    // up). The exact by-id lookup misses; the workspace-scoped fallback must recover the
-    // mark from the single unambiguous coordinator registered for this workspace.
+  it('does not infer coordinator identity from workspace when the exact runtimeId differs', async () => {
+    // A same-workspace/provider runtime is not proof of a renamed coordinator.
     const loader = setupLoader();
     const meshId = 'mesh-rebind';
     registerMeshCoordinator({ hostOwner: OWNER, meshId, sessionId: 'old-coordinator-sessionid', workspace: workingDir, startedAt: 1, cliType: 'sample-cli' });
@@ -178,7 +175,8 @@ describe('DaemonCliManager.restoreHostedSessions re-establishes launch settings'
 
       expect(restored).toBe(1);
       const context = addInstance.mock.calls[0][2] as any;
-      expect(context.settings).toMatchObject({ autoApprove: true, meshCoordinatorFor: meshId });
+      expect(context.settings).toMatchObject({ autoApprove: true });
+      expect(context.settings.meshCoordinatorFor).toBeUndefined();
     } finally {
       unregisterMeshCoordinator('old-coordinator-sessionid');
     }
