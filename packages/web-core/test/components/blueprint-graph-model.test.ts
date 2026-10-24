@@ -333,3 +333,13 @@ describe('narrowPaneViewport — phone fit on width', () => {
         expect(narrowPaneViewport(0, lanes)).toBeNull()
     })
 })
+
+it('review-blocked tasks have a distinct settled tone and leave their dependent unsatisfied', () => {
+    const model = buildBlueprintGraphModel([
+        task('blocked', 'blocked'), task('failed', 'failed'), task('child', 'pending', { dependsOn: ['blocked'] }),
+    ])
+    expect(model.nodes.find(node => node.id === 'task:blocked')).toMatchObject({ tone: 'blocked', rawStatus: 'blocked' })
+    expect(model.groups[0].counts.failed).toBeLessThanOrEqual(1)
+    expect(model.groups.reduce((n, group) => n + group.counts.blocked, 0)).toBe(1)
+    expect(model.edges[0].state).not.toBe('satisfied')
+})

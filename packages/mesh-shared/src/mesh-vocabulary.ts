@@ -17,10 +17,12 @@
 
 export { MESH_TASK_DIFFICULTIES, type MeshTaskDifficulty } from './brain-routing'
 
-export const MESH_TASK_STATUSES = ['pending', 'assigned', 'completed', 'failed', 'cancelled'] as const
+/** `blocked` ends a worker attempt pending external follow-up; only completed satisfies dependencies.
+ * Branch convergence (including blocked_review) remains an independent axis. */
+export const MESH_TASK_STATUSES = ['pending', 'assigned', 'completed', 'blocked', 'failed', 'cancelled'] as const
 export type MeshTaskStatus = typeof MESH_TASK_STATUSES[number]
 
-export const MESH_TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'] as const
+export const MESH_TERMINAL_TASK_STATUSES = ['completed', 'blocked', 'failed', 'cancelled'] as const
 export type MeshTerminalTaskStatus = typeof MESH_TERMINAL_TASK_STATUSES[number]
 
 export const MESH_TASK_MODES = ['code_change', 'validation', 'live_debug_readonly', 'launch_app', 'convergence'] as const

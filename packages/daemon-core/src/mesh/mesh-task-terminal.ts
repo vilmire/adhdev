@@ -32,7 +32,7 @@ import { canonicalJson } from './mesh-untrusted-evidence.js';
 import { sha256Hex } from '../system/hash.js';
 
 /** Terminal statuses the choke point accepts. */
-export type MeshTerminalCommitStatus = 'completed' | 'failed' | 'cancelled';
+export type MeshTerminalCommitStatus = 'completed' | 'blocked' | 'failed' | 'cancelled';
 
 /** Normalized completion envelope input. Optional for non-completion terminals. */
 export interface MeshTerminalCompletionEnvelope {

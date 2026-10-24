@@ -1,3 +1,4 @@
+import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 import { queueTaskHoldView } from '../../mesh/mesh-queue-hold.js';
 /**
  * mesh-store-ipc — daemon-side responders for the IPC commands through which
@@ -289,7 +290,7 @@ const queueQuery: LowFamilyHandler = async (_ctx: LowFamilyContext, args: any) =
         const holdStore = MeshRuntimeStore.getInstance();
         const blockerIds = [...new Set(entries.flatMap(entry => entry.hold?.blockingTaskIds || []))];
         const holdQueue = blockerIds.map(id => holdStore.findQueueEntryById(req.meshId, id)).filter((entry): entry is MeshWorkQueueEntry => entry !== null);
-        const wire = (req.view ? entries.map(e => ({ ...summarizeQueueEntryInputForView(e), ...(e.hold ? { hold: queueTaskHoldView(e, holdQueue) } : {}) })) : entries) as unknown as QueueEntryWire[];
+        const wire = (req.view ? projectWorkerOutcomeViews(holdStore, req.meshId, entries).map(e => ({ ...summarizeQueueEntryInputForView(e), ...(e.hold ? { hold: queueTaskHoldView(e, holdQueue) } : {}) })) : entries) as unknown as QueueEntryWire[];
         const response: QueueQueryResponse = { entries: wire };
         const store = (req.withCounts || req.withDependencyHeads) ? MeshRuntimeStore.getInstance() : null;
         // Whole-queue counts from columns — a view that reads only active rows can

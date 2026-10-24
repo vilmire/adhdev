@@ -1,3 +1,4 @@
+import { legacyWorkerBlockedTasks } from './mesh-worker-outcome-view.js';
 // ---------------------------------------------------------------------------
 // mesh-local-records — the read API over this daemon's mesh records (C-W9a)
 // ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ export const MAX_LOCAL_RECORD_SLICE_LIMIT = 500;
 const RECENT_FAILURE_WINDOW_MS = 30 * 60 * 1000;
 
 
-const TERMINAL_KINDS: ReadonlySet<string> = new Set(['task_completed', 'task_failed', 'task_cancelled']);
+const TERMINAL_KINDS: ReadonlySet<string> = new Set(['task_completed', 'task_blocked', 'task_failed', 'task_cancelled']);
 
 function sinceToMs(since: string | undefined): number | undefined {
     if (typeof since !== 'string') return undefined;
@@ -78,7 +79,8 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
         // kind → outcomes BEFORE the tail, so completions never crowd failures out.
         const outcomes = [
             ...(opts.kinds.includes('task_completed') ? ['completed'] : []),
-            ...(opts.kinds.includes('task_failed') ? ['failed'] : []),
+            ...(opts.kinds.includes('task_failed') || opts.kinds.includes('task_blocked') ? ['failed'] : []),
+            ...(opts.kinds.includes('task_blocked') ? ['blocked'] : []),
             ...(opts.kinds.includes('task_cancelled') ? ['cancelled'] : []),
         ];
         if (outcomes.length === 0) return [];
@@ -97,14 +99,18 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
                 terminal_source, terminal_at
          FROM turn_attempts WHERE ${where.join(' AND ')} ORDER BY terminal_at ${opts.oldestFirst ? 'ASC, attempt_id ASC' : 'DESC, attempt_id DESC'}${tail ? ` LIMIT ${tail}` : ''}`,
     ).all(...args) as TerminalRow[];
+    const proven = legacyWorkerBlockedTasks({ db: opts.db ?? MeshRuntimeStore.getInstance().db }, meshId);
     return (opts.oldestFirst ? rows : rows.reverse()).map((row): MeshLedgerEntry => {
         const completed = row.terminal_outcome === 'completed';
         const cancelled = row.terminal_outcome === 'cancelled';
+        const provenance = proven.get(row.task_id);
+        const legacyBlocked = provenance?.attemptId === row.attempt_id ? provenance : undefined;
+        const blocked = row.terminal_outcome === 'blocked' || !!legacyBlocked;
         return {
             id: `${row.attempt_id}#committed`,
             meshId,
             timestamp: new Date(row.terminal_at ?? 0).toISOString(),
-            kind: completed ? 'task_completed' : (cancelled ? 'task_cancelled' : 'task_failed'),
+            kind: completed ? 'task_completed' : blocked ? 'task_blocked' : (cancelled ? 'task_cancelled' : 'task_failed'),
             sessionId: row.session_id,
             ...(row.node_id ? { nodeId: row.node_id } : {}),
             ...(row.provider_type ? { providerType: row.provider_type } : {}),
@@ -113,16 +119,17 @@ export function readTurnTerminalViews(meshId: string, opts: { sinceMs?: number; 
                 taskId: row.task_id,
                 attemptId: row.attempt_id,
                 source: 'turn_ledger',
-                outcome: row.terminal_outcome,
+                outcome: blocked ? 'blocked' : row.terminal_outcome,
+                ...(legacyBlocked ? { statusProvenance: legacyBlocked } : {}),
                 ...(row.terminal_reason ? { reason: row.terminal_reason } : {}),
                 ...(row.terminal_strength ? { strength: row.terminal_strength } : {}),
                 ...(row.terminal_source ? { terminalSource: row.terminal_source } : {}),
                 ...(completed && row.terminal_strength === 'weak' ? { evidenceLevel: 'weak' } : {}),
-                ...(!completed && !cancelled && row.terminal_reason ? { error: row.terminal_reason } : {}),
+                ...(!completed && !blocked && !cancelled && row.terminal_reason ? { error: row.terminal_reason } : {}),
                 ...(cancelled ? { intentional: true, intentionalStopReason: 'operator_cleanup' } : {}),
             },
         };
-    });
+    }).filter(view => !opts.kinds?.length || opts.kinds.includes(view.kind));
 }
 
 function byTime(a: MeshLedgerEntry, b: MeshLedgerEntry): number {
@@ -135,7 +142,7 @@ function byTime(a: MeshLedgerEntry, b: MeshLedgerEntry): number {
  * same kind (refine jobs / the dispatch-failure auto-fail still write one).
  */
 function withTurnTerminals(meshId: string, local: MeshLedgerEntry[], kinds: readonly string[] | undefined, opts: { sinceMs?: number; tail?: number }): MeshLedgerEntry[] {
-    const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ['task_completed', 'task_failed', 'task_cancelled'];
+    const wanted = kinds && kinds.length > 0 ? kinds.filter((k) => TERMINAL_KINDS.has(k)) : ['task_completed', 'task_blocked', 'task_failed', 'task_cancelled'];
     if (wanted.length === 0) return local;
     let views: MeshLedgerEntry[];
     try {
@@ -252,6 +259,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
     } catch { /* store unavailable → empty summary */ }
     const recentFailureCutoff = Date.now() - RECENT_FAILURE_WINDOW_MS;
     let taskCompleted = counts.get('task_completed') ?? 0;
+    let taskBlocked = counts.get('task_blocked') ?? 0;
     let taskFailed = 0;
     let taskStalled = 0;
     let recentFailures = 0;
@@ -278,6 +286,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
         const at = new Date(view.timestamp).getTime();
         if (lastAtMs === null || at > lastAtMs) lastAtMs = at;
         if (view.kind === 'task_completed') { taskCompleted++; continue; }
+        if (view.kind === 'task_blocked') { taskBlocked++; continue; }
         if (isIntentionalCleanupStopEntry(view)) continue;
         taskFailed++;
         if (at >= recentFailureCutoff) recentFailures++;
@@ -287,6 +296,7 @@ export function getLocalRecordSummary(meshId: string): MeshLedgerSummary {
         totalEntries: total,
         taskDispatched: counts.get('task_dispatched') ?? 0,
         taskCompleted,
+        taskBlocked,
         taskFailed,
         taskStalled,
         sessionLaunched: counts.get('session_launched') ?? 0,

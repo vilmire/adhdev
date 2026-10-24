@@ -48,12 +48,13 @@ export type TurnStage =
     | 'waiting_choice'
     | 'finalizing'
     | 'completed'
+    | 'blocked'
     | 'failed'
     | 'cancelled';
 
-type TurnTerminalOutcome = Extract<TurnStage, 'completed' | 'failed' | 'cancelled'>;
+type TurnTerminalOutcome = Extract<TurnStage, 'completed' | 'blocked' | 'failed' | 'cancelled'>;
 
-const TURN_TERMINAL_STAGES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
+const TURN_TERMINAL_STAGES: ReadonlySet<string> = new Set(['completed', 'blocked', 'failed', 'cancelled']);
 
 export function isTerminalTurnStage(stage: string): boolean {
     return TURN_TERMINAL_STAGES.has(stage);
@@ -199,6 +200,7 @@ export function turnStageToSurfaceStatus(stage: TurnStage): ManagedStatus {
         case 'finalizing':
             return 'finalizing';
         case 'completed':
+        case 'blocked':
             return 'idle';
         case 'failed':
             return 'error';

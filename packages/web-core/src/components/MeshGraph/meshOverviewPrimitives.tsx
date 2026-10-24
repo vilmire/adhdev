@@ -141,6 +141,7 @@ export function healthTone(health: string): Tone {
 export function queueTaskTone(status: RepoMeshQueueTask['status']): Tone {
     switch (status) {
         case 'completed': return 'emerald'
+        case 'blocked': return 'amber'
         case 'failed': return 'rose'
         case 'cancelled': return 'muted'
         case 'assigned': return 'sky'
@@ -153,6 +154,7 @@ export function queueTaskTone(status: RepoMeshQueueTask['status']): Tone {
 export function queueTaskStatusLabel(status: RepoMeshQueueTask['status'], t: (key: string) => string): string {
     switch (status) {
         case 'completed': return t('mesh.overview.statCompleted')
+        case 'blocked': return t('mesh.overview.statBlocked')
         case 'failed': return t('mesh.overview.statFailed')
         case 'cancelled': return t('mesh.overview.statCancelled')
         case 'assigned': return t('mesh.overview.statAssigned')

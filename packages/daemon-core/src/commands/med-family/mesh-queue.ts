@@ -1,3 +1,5 @@
+import { MeshRuntimeStore } from '../../mesh/mesh-runtime-store.js';
+import { projectWorkerOutcomeViews } from '../../mesh/mesh-worker-outcome-view.js';
 /**
  * RF-ROUTER MED family — mesh work-queue commands.
  *
@@ -89,7 +91,7 @@ export const meshQueueHandlers: Record<string, MedFamilyHandler> = {
             const statusById = new Map(allQueue.map(task => [task.id, task.status]));
             const depMetaById = new Map(allQueue.map(task => [task.id, task] as const));
             // IPC load audit 2026-09-23: never echo a persisted image envelope from a view command.
-            const queue = rawQueue.map(summarizeQueueEntryInputForView).map(task =>
+            const queue = projectWorkerOutcomeViews(MeshRuntimeStore.getInstance(), meshId, rawQueue).map(summarizeQueueEntryInputForView).map(task =>
                 Array.isArray(task.dependsOn) && task.dependsOn.length > 0
                     ? { ...task, ...describeTaskDependencyState(task, statusById, depMetaById) }
                     : task);

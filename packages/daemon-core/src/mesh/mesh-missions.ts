@@ -334,6 +334,7 @@ function accumulateMissionTask(
     if (task.status === 'pending') aggregate.pending += 1;
     else if (task.status === 'assigned') aggregate.assigned += 1;
     else if (task.status === 'completed') aggregate.completed += 1;
+    else if (task.status === 'blocked') aggregate.blocked += 1;
     else if (task.status === 'failed') aggregate.failed += 1;
     else if (task.status === 'cancelled') aggregate.cancelled += 1;
     // A failed/cancelled predecessor is derived at view time.
@@ -377,7 +378,7 @@ function withMissionStats<T extends { id: string }>(meshId: string, summaries: T
  * candidate — an empty mission is a freshly-created plan, not a finished one.
  */
 export function isMissionAllTasksTerminal(aggregate: MeshMissionTaskAggregate): boolean {
-    return aggregate.total > 0 && aggregate.pending === 0 && aggregate.assigned === 0;
+    return aggregate.total > 0 && aggregate.pending === 0 && aggregate.assigned === 0 && aggregate.blocked === 0;
 }
 
 /**

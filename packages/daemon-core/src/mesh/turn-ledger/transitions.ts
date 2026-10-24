@@ -172,7 +172,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     ] },
     // g is running (or already terminal): never mutate g; record g−1's verdict
     // and tell the coordinator, who decides whether to salvage g−1's work.
-    { id: 'R27', lane: 'stale', from: [C, G, S, F, 'completed', 'failed', 'cancelled'], on: ['turn_end', 'worker_report', 'transcript_final'], guard: 'prev_generation_completion', to: 'same', verdict: 'recorded', effects: [
+    { id: 'R27', lane: 'stale', from: [C, G, S, F, 'completed', 'blocked', 'failed', 'cancelled'], on: ['turn_end', 'worker_report', 'transcript_final'], guard: 'prev_generation_completion', to: 'same', verdict: 'recorded', effects: [
         { e: 'record', note: 'late_completion_prev_generation' },
         { e: 'notify', notify: 'late_completion', generation: 'evidence' },
     ] },
@@ -538,7 +538,7 @@ export const TRANSITIONS: readonly TransitionRule[] = [
 ];
 
 const NONTERMINAL: readonly TurnState[] = [A, D, C, G, S, F];
-const TERMINAL: readonly TurnState[] = ['completed', 'failed', 'cancelled'];
+const TERMINAL: readonly TurnState[] = ['completed', 'blocked', 'failed', 'cancelled'];
 
 /** Does a rule's `from` admit this state (`null` = lane none, no attempt)? */
 export function ruleAdmitsState(from: RuleFrom, state: TurnState | null): boolean {

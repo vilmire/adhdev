@@ -172,7 +172,7 @@ export function mapLegacyTerminal(reason: string | null, outcome: TurnOutcome): 
     if (r === 'reassigned:reclaim_after_unknown_grace') return pick('session_dead', 'scheduler');
     if (r.startsWith('reassigned:')) return pick('assigned_stranded_dispatch_unconfirmed', 'scheduler');
     if (r === 'superseded_by_attempt' || r === 'superseded_by_queue_terminal') return pick('superseded', 'scheduler', 'operator');
-    const fallback: Record<TurnOutcome, TurnReason> = { completed: 'turn_end', failed: 'session_error', cancelled: 'operator_cancel' };
+    const fallback: Record<TurnOutcome, TurnReason> = { blocked: 'worker_reported', completed: 'turn_end', failed: 'session_error', cancelled: 'operator_cancel' };
     return {
         reason: fallback[outcome],
         source: outcome === 'cancelled' ? 'operator' : 'scheduler',

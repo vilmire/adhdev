@@ -384,6 +384,7 @@ function LedgerCard({ meshTheme, ledgerSummary, entries, resolveNodeLabel, onSel
             <div className="grid grid-cols-3 gap-1.5">
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statDispatched')} value={ledgerSummary.taskDispatched} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCompleted')} value={ledgerSummary.taskCompleted} tone="emerald" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statBlocked')} value={ledgerSummary.taskBlocked ?? 0} tone={(ledgerSummary.taskBlocked ?? 0) > 0 ? 'amber' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statFailed')} value={ledgerSummary.taskFailed} tone={ledgerSummary.taskFailed > 0 ? 'rose' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statStalled')} value={ledgerSummary.taskStalled} tone={ledgerSummary.taskStalled > 0 ? 'amber' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statSessions')} value={ledgerSummary.sessionLaunched} />
@@ -460,6 +461,7 @@ function QueueCard({ meshTheme, queueSummary, tasks, onSelect }: {
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statAssigned')} value={queueSummary.assigned} tone={queueSummary.assigned > 0 ? 'sky' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statActive')} value={queueSummary.active} tone={queueSummary.active > 0 ? 'sky' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCompleted')} value={queueSummary.completed} tone="emerald" />
+                <StatTile meshTheme={meshTheme} label={t('mesh.overview.statBlocked')} value={queueSummary.blocked ?? 0} tone={(queueSummary.blocked ?? 0) > 0 ? 'amber' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statFailed')} value={queueSummary.failed} tone={queueSummary.failed > 0 ? 'rose' : undefined} />
                 <StatTile meshTheme={meshTheme} label={t('mesh.overview.statCancelled')} value={queueSummary.cancelled} tone="muted" />
             </div>

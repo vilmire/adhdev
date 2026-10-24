@@ -67,8 +67,8 @@ export interface MeshQueueSummary {
     active: number
     historical: number
     activeCounts: { pending: number; assigned: number }
-    historicalCounts: { completed: number; failed: number }
-    counts: { pending: number; assigned: number; completed: number; failed: number }
+    historicalCounts: { completed: number; blocked?: number; failed: number }
+    counts: { pending: number; assigned: number; completed: number; blocked?: number; failed: number }
     staleAssignedCount: number
     recent: MeshQueueEntry[]
 }

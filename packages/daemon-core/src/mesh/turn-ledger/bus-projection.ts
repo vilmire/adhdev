@@ -31,7 +31,7 @@ export interface TurnWireEvent {
     timestamp: number;
 }
 
-/** completed → generating_completed; failed / cancelled → stopped. */
+/** completed → generating_completed; blocked / failed / cancelled → stopped (the explicit outcome travels with it). */
 export function turnWireEventName(outcome: TurnOutcome): TurnWireEventName {
     return outcome === 'completed' ? 'agent:generating_completed' : 'agent:stopped';
 }

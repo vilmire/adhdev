@@ -154,7 +154,7 @@ export const HOLD_REASONS = [
 ] as const
 export type HoldReason = typeof HOLD_REASONS[number]
 
-export const TURN_OUTCOMES = ['completed', 'failed', 'cancelled'] as const
+export const TURN_OUTCOMES = ['completed', 'blocked', 'failed', 'cancelled'] as const
 export type TurnOutcome = typeof TURN_OUTCOMES[number]
 
 export const COMMIT_STRENGTHS = ['genuine', 'weak', 'tool_report', 'operator'] as const
@@ -186,7 +186,7 @@ export type TurnReason = typeof TURN_REASONS[number]
  * owner's local `turn_events.payload_json` and is rendered at deliver time.
  */
 export const NOTIFY_KINDS = [
-    'completed', 'failed', 'cancelled', 'stopped', 'approval', 'choice', 'approval_resolved',
+    'completed', 'blocked', 'failed', 'cancelled', 'stopped', 'approval', 'choice', 'approval_resolved',
     'candidate', 'no_progress', 'progress', 'late_completion', 'mesh_event',
 ] as const
 export type NotifyKind = typeof NOTIFY_KINDS[number]

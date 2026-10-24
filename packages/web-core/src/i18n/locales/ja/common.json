@@ -1490,6 +1490,7 @@
             "statAssigned": "割り当て済み",
             "statPending": "保留中",
             "statFailed": "失敗",
+            "legacyWorkerBlocked": "ワーカー報告: ブロック中・従来の保存状態: 失敗",
             "statBlocked": "ブロック済み",
             "statCancelled": "キャンセル済み",
             "statWallClock": "実時間",

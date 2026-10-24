@@ -19,6 +19,7 @@ export type MeshUserEvent =
 const KIND_TO_EVENT: Record<string, MeshUserEvent> = {
     task_dispatched: 'taskStarted',
     task_claimed: 'taskStarted',
+    task_blocked: 'needsInput',
     task_completed: 'taskFinished',
     task_failed: 'taskFailed',
     task_stalled: 'taskFailed',
@@ -51,6 +52,7 @@ export const MESH_USER_EVENT_LABEL_KEYS: Record<MeshUserEvent, string> = {
 /** Kinds whose own label says more than their event's ("Machine joined or left"
  *  for a worktree a coordinator just created was misleading). */
 const KIND_LABEL_KEYS: Record<string, string> = {
+    task_blocked: 'mesh.overview.statBlocked',
     node_cloned: 'mesh.activity.worktreeCreated',
     node_joined: 'mesh.activity.nodeJoined',
     node_removed: 'mesh.activity.nodeRemoved',

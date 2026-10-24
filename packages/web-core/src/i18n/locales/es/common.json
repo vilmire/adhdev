@@ -1493,6 +1493,7 @@
             "statAssigned": "Asignadas",
             "statPending": "Pendientes",
             "statFailed": "Fallidas",
+            "legacyWorkerBlocked": "El trabajador informó de un bloqueo; estado histórico guardado: fallido",
             "statBlocked": "Bloqueadas",
             "statCancelled": "Canceladas",
             "statWallClock": "Tiempo real",

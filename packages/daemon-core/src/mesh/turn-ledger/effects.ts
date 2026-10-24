@@ -120,7 +120,7 @@ export function isPublishableAttempt(attempt: TurnAttempt | null): attempt is Tu
     return !!attempt && attempt.scope !== 'plain' && typeof attempt.meshId === 'string' && attempt.meshId.length > 0;
 }
 
-const TERMINAL_NOTIFY: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['completed', 'failed', 'cancelled', 'stopped']);
+const TERMINAL_NOTIFY: ReadonlySet<NotifyKind> = new Set<NotifyKind>(['completed', 'blocked', 'failed', 'cancelled', 'stopped']);
 
 export function commitEventId(evidenceEventId: string): string {
     return `${evidenceEventId}#committed`;
@@ -421,5 +421,5 @@ export function runPostCommitEffects(ports: TurnLedgerPorts, effects: readonly T
 
 /** States after which an attempt still owns a session (for the open-session constraint). */
 export function isOpenState(state: TurnState): boolean {
-    return state !== 'completed' && state !== 'failed' && state !== 'cancelled';
+    return state !== 'completed' && state !== 'blocked' && state !== 'failed' && state !== 'cancelled';
 }

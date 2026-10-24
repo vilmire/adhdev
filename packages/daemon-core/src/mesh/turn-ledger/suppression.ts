@@ -58,6 +58,7 @@ export function evaluateNotifySuppression(input: NotifySuppressionInput): Notify
         case 'no_progress':
         case 'progress':
             return isTerminalTurnState(attempt.state) ? 'attempt_terminal' : null;
+        case 'blocked':
         case 'completed':
         case 'failed':
         case 'cancelled':

@@ -36,6 +36,7 @@ export type MeshLedgerKind =
     // to the transport): claim precedes dispatch and marks the lifecycle handoff.
     // payload: { taskId, nodeId, sessionId, providerType?, claimedAt }
     | 'task_claimed'
+    | 'task_blocked'
     | 'task_completed'
     | 'task_failed'
     | 'task_cancelled'
@@ -390,6 +391,7 @@ export interface MeshLedgerSummary {
     totalEntries: number;
     taskDispatched: number;
     taskCompleted: number;
+    taskBlocked?: number;
     taskFailed: number;
     taskStalled: number;
     sessionLaunched: number;

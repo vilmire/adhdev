@@ -1032,18 +1032,20 @@ export function getMeshQueueStats(meshId: string): MeshWorkQueueStats {
     const assigned = counts['assigned'] ?? 0;
     const completed = counts['completed'] ?? 0;
     const failed = counts['failed'] ?? 0;
+    const blocked = counts['blocked'] ?? 0;
     const cancelled = counts['cancelled'] ?? 0;
     return {
-        total: pending + assigned + completed + failed + cancelled,
+        total: pending + assigned + completed + blocked + failed + cancelled,
         active: pending + assigned,
-        historical: completed + failed + cancelled,
+        historical: completed + blocked + failed + cancelled,
         pending,
         assigned,
         completed,
+        blocked,
         failed,
         cancelled,
         activeCounts: { pending, assigned },
-        historicalCounts: { completed, failed, cancelled },
+        historicalCounts: { completed, blocked, failed, cancelled },
         activeAssignments: MeshRuntimeStore.getInstance().getActiveAssignmentDetails(meshId),
     };
 }

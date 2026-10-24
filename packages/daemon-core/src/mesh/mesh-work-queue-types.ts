@@ -414,6 +414,7 @@ export interface MeshWorkQueueStats {
     pending: number;
     assigned: number;
     completed: number;
+    blocked: number;
     failed: number;
     cancelled: number;
     /** Source-of-truth active queue counters; only pending/assigned are live work. */

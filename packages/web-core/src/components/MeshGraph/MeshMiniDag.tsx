@@ -36,6 +36,7 @@ const MINI_EDGE_COLORS: Record<'satisfied' | 'waiting' | 'failed', { color: stri
 const MINI_DOT_TONES: Record<string, { dot: string; pulse?: boolean }> = {
     pending: { dot: 'bg-text-muted' },
     assigned: { dot: 'bg-accent', pulse: true },
+    blocked: { dot: 'bg-status-warning' },
     completed: { dot: 'bg-status-online' },
     failed: { dot: 'bg-status-error' },
     cancelled: { dot: 'bg-status-offline' },

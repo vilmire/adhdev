@@ -271,14 +271,14 @@ export function buildBlueprintGroups(
         const awaitingChoice = Boolean(activity?.awaitingChoice && !activity?.awaitingApproval)
         // Blocked means "will not advance without a human or an upstream
         // change": a live approval/choice hold, failed upstream, or unmet deps.
-        // Terminal rows are never blocked — whatever held them is history now.
-        const isBlocked = !isTerminal && (
+        // A worker blocked terminal still needs external follow-up; keep it in attention.
+        const isBlocked = task.status === 'blocked' || !isTerminal && (
             awaitingApproval || awaitingChoice
             || node.waitingOn.length > 0 || (task.dependencyFailures?.length ?? 0) > 0
         )
         const row: BlueprintTaskRow = {
             kind: 'task',
-            section: isTerminal ? 'history' : isBlocked ? 'blocked' : 'running',
+            section: isBlocked ? 'blocked' : isTerminal ? 'history' : 'running',
             task,
             statusToken: activity?.generating ? 'generating' : task.status,
             waitingOn: node.waitingOn,
@@ -295,8 +295,8 @@ export function buildBlueprintGroups(
             hasPlan: edgeTouched.has(task.id),
             timeKey: taskTimeKey(task),
         }
-        if (isTerminal) terminal.push(row)
-        else if (isBlocked) blockedTasks.push(row)
+        if (isBlocked) blockedTasks.push(row)
+        else if (isTerminal) terminal.push(row)
         else running.push(row)
     }
 

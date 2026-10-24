@@ -1490,6 +1490,7 @@
             "statAssigned": "할당됨",
             "statPending": "대기 중",
             "statFailed": "실패",
+            "legacyWorkerBlocked": "작업자 보고: 차단됨 · 기존 저장 상태: 실패",
             "statBlocked": "차단됨",
             "statCancelled": "취소됨",
             "statWallClock": "경과 시간",

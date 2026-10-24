@@ -66,7 +66,7 @@ function report(r: Rig, atS: number, outcome: 'completed' | 'failed' | 'blocked'
 function completionNotices(r: Rig) {
     return rowsOf(r.db, 'notify', 'a1')
         .map((row) => ({ row, payload: JSON.parse(String(row.payload_json)) as { notify?: string; textEventId?: string; entry?: Record<string, unknown> } }))
-        .filter(({ payload }) => payload.notify === 'completed' || payload.notify === 'failed');
+        .filter(({ payload }) => payload.notify === 'completed' || payload.notify === 'blocked' || payload.notify === 'failed');
 }
 
 function renderedCompletion(r: Rig): string {
@@ -148,14 +148,16 @@ describe('rc.44 run 12 — a report recorded before the idle edge commits on it,
         });
     }
 
-    it('a blocked report before the idle edge commits failed on the idle end', () => {
+    it('a blocked report before the idle edge commits blocked on the idle end', () => {
         const r = rig();
         toResumed(r, 'mesh_direct');
         expect(report(r, 344, 'blocked').rule).toBe('R17g');
         r.at(355 * S);
         expect(r.ledger.observe(evd('turn_end', { strength: 'genuine', reportExpected: true }, { source: 'completion_flush_genuine', at: T0 + 355 * S })).rule).toBe('R9t');
-        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'failed', strength: 'tool_report', reason: 'worker_reported' });
-        expect(completionNotices(r).map((n) => n.payload.notify)).toEqual(['failed']);
+        expect(r.ledger.getAttempt('a1')!.terminal).toMatchObject({ outcome: 'blocked', strength: 'tool_report', reason: 'worker_reported' });
+        expect(completionNotices(r).map((n) => n.payload.notify)).toEqual(['blocked']);
+        expect(renderedCompletion(r)).toContain(SUMMARY_TEXT);
+        expect(renderedCompletion(r)).toContain('reported blocked');
     });
 
     it('a re-called report dedupes (same attempt/generation/outcome)', () => {

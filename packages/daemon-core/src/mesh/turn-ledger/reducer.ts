@@ -698,12 +698,12 @@ function newAttempt(ev: TurnEvidence, fields: Partial<TurnAttempt> & Pick<TurnAt
     };
 }
 
-const TERMINAL_NOTIFY_KINDS: readonly NotifyKind[] = ['completed', 'failed', 'cancelled', 'stopped'];
+const TERMINAL_NOTIFY_KINDS: readonly NotifyKind[] = ['completed', 'blocked', 'failed', 'cancelled', 'stopped'];
 
 /** The terminal a genuine g−1 completion commits when R27a adopts it. */
 function adoptedTerminal(ev: TurnEvidence): { outcome: TurnOutcome; strength: TurnCommitStrength; reason: TurnReason } {
     if (ev.kind === 'worker_report') {
-        return { outcome: ev.outcome === 'completed' ? 'completed' : 'failed', strength: 'tool_report', reason: 'worker_reported' };
+        return { outcome: ev.outcome, strength: 'tool_report', reason: 'worker_reported' };
     }
     if (ev.kind === 'transcript_final') return { outcome: 'completed', strength: 'genuine', reason: 'transcript_final' };
     return { outcome: 'completed', strength: 'genuine', reason: 'turn_end' };
@@ -907,7 +907,7 @@ function proposedOutcome(ev: TurnEvidence): TurnOutcome | null {
         case 'turn_end': return ev.afterFinalizationTimeout || ev.hollow ? 'failed' : 'completed';
         case 'transcript_final':
         case 'no_progress': return 'completed';
-        case 'worker_report': return ev.outcome === 'completed' ? 'completed' : 'failed';
+        case 'worker_report': return ev.outcome;
         case 'session_error': return 'failed';
         case 'process_exit': return 'failed';
         case 'cancel': return 'cancelled';
@@ -971,10 +971,10 @@ function applyTemplate(template: EffectTemplate, draft: Draft): void {
         case 'commit': {
             let outcome: TurnOutcome;
             if (template.outcome === 'from_report') {
-                outcome = (ev as TurnEvidenceOf<'worker_report'>).outcome === 'completed' ? 'completed' : 'failed';
+                outcome = (ev as TurnEvidenceOf<'worker_report'>).outcome;
             } else if (template.outcome === 'from_recorded_report') {
-                // 'blocked' is not a terminal the ledger knows: failed (as R17).
-                outcome = draft.attempt!.data.report?.outcome === 'completed' ? 'completed' : 'failed';
+                // The generation-scoped report guard proves this report exists.
+                outcome = draft.attempt!.data.report!.outcome;
             } else if (template.outcome === 'from_operator') {
                 outcome = (ev as TurnEvidenceOf<'operator_status'>).status;
             } else {

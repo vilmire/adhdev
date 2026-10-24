@@ -66,7 +66,7 @@ function isTurnObserveResponse(value: unknown): value is TurnObserveResponse {
         && (value.outcome === undefined || isTurnOutcomeValue(value.outcome))
 }
 
-const TURN_OUTCOMES_LOCAL = ['completed', 'failed', 'cancelled'] as const
+const TURN_OUTCOMES_LOCAL = ['completed', 'blocked', 'failed', 'cancelled'] as const
 function isTurnOutcomeValue(value: unknown): value is TurnOutcome {
     return typeof value === 'string' && (TURN_OUTCOMES_LOCAL as readonly string[]).includes(value)
 }
