@@ -1,6 +1,7 @@
 import { readCooperativeMaintenance, assertMaintenanceLifecycle, verifyRetainedMaintenanceHost } from '../maintenance/cooperative-gate.js';
 import { assertWorkerBridgeLifecycleAdmission } from '../commands/worker-bridge-lifecycle-admission.js';
 import { spawn, type StdioOptions } from 'child_process';
+import { createHash, randomUUID } from 'crypto';
 import { hiddenExecFileSync } from '../process/hidden-spawn.js';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -22,6 +23,7 @@ import { preflightDiskSpace } from '../diagnostics/disk-space-preflight.js';
 import {
     ensureSessionHostReady as ensureSharedSessionHostReady,
     isResourceExhaustionError,
+    isValidReplacementAuthorizationShape,
     SESSION_HOST_PROBE_TIMEOUT_MS,
     recordSessionHostProbeFailure,
     recordSessionHostProbeSuccess,
@@ -125,12 +127,19 @@ export interface ManagedSessionHost {
     readonly appName: string;
     readonly endpoint: SessionHostEndpoint;
     getPidFile(): string;
+    getReplacementProvenanceFile(): string;
     getPid(): number | null;
     buildEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
     resolveEntry(): string;
     killPid(pid: number): boolean;
     spawnHost(): void;
     stopManagedSessionHostProcess(): boolean;
+    acquireIdleReplacementAuthority(options: {
+        owner: string;
+        token: string;
+        timeoutMs?: number;
+        isCancelled?: () => boolean;
+    }): Promise<SessionHostReplacementAuthorization>;
     ensureReady(ensureOptions?: {
         replacementAuthority?: SessionHostReplacementAuthorization | (() => SessionHostReplacementAuthorization | undefined);
     }): Promise<SessionHostEndpoint>;
@@ -193,6 +202,105 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         return path.join(instance().configDir, `${appName}-session-host.pid`);
     }
 
+    function getReplacementProvenanceFile(): string {
+        return path.join(instance().configDir, `${appName}-session-host-replacement.json`);
+    }
+
+    function removeReplacementProvenanceFile(): void {
+        try {
+            fs.unlinkSync(getReplacementProvenanceFile());
+        } catch {
+            // noop
+        }
+    }
+
+    function writeReplacementProvenanceFile(params: {
+        endpoint: SessionHostEndpoint;
+        expectedEndpointInode?: bigint;
+        auth: SessionHostReplacementAuthorization;
+    }): void {
+        const dir = instance().configDir;
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const target = getReplacementProvenanceFile();
+        const tmp = `${target}.${randomUUID()}.tmp`;
+        const expectedTokenHash = params.auth.expectedTokenHash
+            ?? (params.auth.leaseToken ? createHash('sha256').update(params.auth.leaseToken).digest('hex') : undefined);
+        const nowMs = Date.now();
+        const payload = {
+            schema: 1,
+            schemaVersion: 1,
+            appName,
+            instanceConfigDir: dir,
+            instanceConfigKey: sessionHostInstanceArg(dir),
+            endpointPath: params.endpoint.path,
+            expectedEndpointInode: params.expectedEndpointInode !== undefined ? String(params.expectedEndpointInode) : null,
+            expectedPid: params.auth.expectedPid,
+            expectedBirth: params.auth.expectedBirth.trim(),
+            expectedBootId: params.auth.expectedBootId,
+            expectedEpoch: params.auth.expectedEpoch,
+            expectedOwner: params.auth.expectedOwner,
+            expectedTokenHash: expectedTokenHash ?? null,
+            activeRuntimeCount: 0,
+            issuedAt: nowMs,
+            issuedAtMs: nowMs,
+        };
+        const fd = fs.openSync(tmp, 'wx', 0o600);
+        try {
+            fs.writeFileSync(fd, JSON.stringify(payload), 'utf8');
+        } finally {
+            fs.closeSync(fd);
+        }
+        fs.renameSync(tmp, target);
+    }
+
+    function verifyLeaseJournalForReplacement(
+        endpoint: SessionHostEndpoint,
+        auth: SessionHostReplacementAuthorization,
+    ): boolean {
+        const leaseJournal = path.join(instance().configDir, 'session-host', 'upgrade-lease.json');
+        if (!fs.existsSync(leaseJournal)) return true;
+        try {
+            const stat = fs.lstatSync(leaseJournal);
+            if (
+                !stat.isFile()
+                || stat.isSymbolicLink()
+                || (stat.mode & 0o077) !== 0
+                || (typeof process.getuid === 'function' && stat.uid !== process.getuid())
+            ) {
+                return false;
+            }
+            const parsed = JSON.parse(fs.readFileSync(leaseJournal, 'utf8')) as {
+                schema?: unknown;
+                endpoint?: unknown;
+                epoch?: unknown;
+                held?: unknown;
+                owner?: unknown;
+                tokenHash?: unknown;
+            };
+            if (
+                parsed?.schema !== 1
+                || parsed.held !== true
+                || parsed.endpoint !== endpoint.path
+                || parsed.epoch !== auth.expectedEpoch
+                || parsed.owner !== auth.expectedOwner
+                || typeof parsed.tokenHash !== 'string'
+                || !/^[a-f0-9]{64}$/.test(parsed.tokenHash)
+            ) {
+                return false;
+            }
+            if (auth.expectedTokenHash !== undefined && parsed.tokenHash !== auth.expectedTokenHash) {
+                return false;
+            }
+            if (auth.leaseToken !== undefined) {
+                const tokenDigest = createHash('sha256').update(auth.leaseToken).digest('hex');
+                if (parsed.tokenHash !== tokenDigest) return false;
+            }
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
     function readPidFileState(): { status: 'missing' } | { status: 'corrupt' } | { status: 'ok'; pid: number } {
         try {
             const pidFile = getPidFile();
@@ -213,7 +321,7 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
 
     function getProcessBirth(pid: number): string | null {
         if (options.getProcessBirth) return options.getProcessBirth(pid);
-        if (process.platform === 'win32') return 'win32';
+        if (process.platform === 'win32') return null;
         try {
             const out = String(
                 hiddenExecFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
@@ -257,6 +365,42 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
         if (pid === null) return 'unknown';
         const birth = getProcessBirth(pid);
         return birth ? `pid-${pid}:birth-${birth}` : `pid-${pid}:birth-unknown`;
+    }
+
+    function inspectExistingHostState(): 'alive' | 'dead' | 'unknown' {
+        const endpoint = getEndpoint();
+        const pidState = readPidFileState();
+        if (pidState.status === 'corrupt') {
+            return 'unknown';
+        }
+        if (pidState.status === 'missing') {
+            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                return 'unknown';
+            }
+            return 'dead';
+        }
+        const existingPid = pidState.pid;
+        if (existingPid === process.pid) return 'unknown';
+        if (!isPidAlive(existingPid)) {
+            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                const owners = getSocketOwnerPids(endpoint.path);
+                if (owners && owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
+                    return 'unknown';
+                }
+            }
+            return 'dead';
+        }
+        if (!canSignalPid(existingPid)) return 'unknown';
+        const birth = getProcessBirth(existingPid);
+        if (!birth) return 'unknown';
+        if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+            const owners = getSocketOwnerPids(endpoint.path);
+            if (owners !== null) {
+                if (owners.length > 0 && !owners.includes(existingPid)) return 'unknown';
+                if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return 'unknown';
+            }
+        }
+        return 'alive';
     }
 
     function killPid(pid: number): boolean {
@@ -711,66 +855,64 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             }
         }
 
-        const inspectExistingHostState = (): 'alive' | 'dead' | 'unknown' => {
-            const endpoint = getEndpoint();
-            const pidState = readPidFileState();
-            if (pidState.status === 'corrupt') {
-                return 'unknown';
-            }
-            if (pidState.status === 'missing') {
-                if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path) && !options.extraStop) {
-                    return 'unknown';
-                }
-                return 'dead';
-            }
-            const existingPid = pidState.pid;
-            if (existingPid === process.pid) return 'unknown';
-            if (!isPidAlive(existingPid)) {
-                if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
-                    const owners = getSocketOwnerPids(endpoint.path);
-                    if (owners && owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) {
-                        return 'unknown';
-                    }
-                }
-                return 'dead';
-            }
-            if (!canSignalPid(existingPid)) return 'unknown';
-            const birth = getProcessBirth(existingPid);
-            if (!birth) return 'unknown';
-            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
-                const owners = getSocketOwnerPids(endpoint.path);
-                if (owners !== null) {
-                    if (owners.length > 0 && !owners.includes(existingPid)) return 'unknown';
-                    if (owners.some((ownerPid) => ownerPid !== existingPid && isPidAlive(ownerPid))) return 'unknown';
-                }
-            }
-            return 'alive';
-        };
-
         const isExistingHostAlive = (): boolean => inspectExistingHostState() === 'alive';
 
-        const resolveVerifiedReplacementAuthority = (): SessionHostReplacementAuthorization | undefined => {
+        const resolveRawReplacementAuthority = (): SessionHostReplacementAuthorization | undefined => {
             const source = ensureOptions?.replacementAuthority ?? options.replacementAuthority;
-            const raw = typeof source === 'function' ? source() : source;
-            if (!raw) return undefined;
-            if (raw.isCancelled?.()) return undefined;
-            if (typeof raw.activeRuntimeCount !== 'number' || raw.activeRuntimeCount !== 0) return undefined;
-            if (raw.expectedInstanceConfigDir !== undefined) {
-                if (sessionHostInstanceArg(raw.expectedInstanceConfigDir) !== sessionHostInstanceArg(instance().configDir)) {
-                    return undefined;
+            return typeof source === 'function' ? source() : source;
+        };
+
+        const resolveVerifiedReplacementAuthority = (): SessionHostReplacementAuthorization | undefined => {
+            const raw = resolveRawReplacementAuthority();
+            if (!isValidReplacementAuthorizationShape(raw)) return undefined;
+            if (sessionHostInstanceArg(raw.expectedInstanceConfigDir) !== sessionHostInstanceArg(instance().configDir)) {
+                return undefined;
+            }
+            const expectedBirth = raw.expectedBirth.trim();
+            const canonicalIdentity = `pid-${raw.expectedPid}:birth-${expectedBirth}`;
+            const currentPid = getPid();
+            if (currentPid === null || currentPid !== raw.expectedPid) return undefined;
+            if (!isPidAlive(currentPid)) return undefined;
+            if (!canSignalPid(currentPid)) return undefined;
+            const currentBirth = getProcessBirth(currentPid);
+            if (!currentBirth || currentBirth !== expectedBirth) return undefined;
+            const endpoint = getEndpoint();
+            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
+                if (raw.expectedEndpointInode !== undefined) {
+                    try {
+                        if (fs.lstatSync(endpoint.path, { bigint: true }).ino !== raw.expectedEndpointInode) {
+                            return undefined;
+                        }
+                    } catch {
+                        return undefined;
+                    }
+                }
+                const owners = getSocketOwnerPids(endpoint.path);
+                if (owners !== null) {
+                    if (owners.length > 0 && !owners.includes(currentPid)) return undefined;
+                    if (owners.some((ownerPid) => ownerPid !== currentPid && isPidAlive(ownerPid))) return undefined;
                 }
             }
-            const currentPid = getPid();
-            if (currentPid !== null && raw.expectedPid !== undefined && currentPid !== raw.expectedPid) return undefined;
-            if (currentPid !== null && isPidAlive(currentPid)) {
-                if (!canSignalPid(currentPid)) return undefined;
-                const currentBirth = getProcessBirth(currentPid);
-                if (!currentBirth) return undefined;
-                if (raw.expectedBirth !== undefined && currentBirth !== raw.expectedBirth) return undefined;
+            if (!verifyLeaseJournalForReplacement(endpoint, raw)) {
+                return undefined;
+            }
+            const latestRaw = resolveRawReplacementAuthority();
+            if (!isValidReplacementAuthorizationShape(latestRaw) || latestRaw.isCancelled?.()) {
+                return undefined;
+            }
+            if (
+                latestRaw.expectedPid !== raw.expectedPid
+                || latestRaw.expectedBirth.trim() !== expectedBirth
+                || latestRaw.expectedBootId !== raw.expectedBootId
+                || latestRaw.expectedEpoch !== raw.expectedEpoch
+                || latestRaw.expectedOwner !== raw.expectedOwner
+            ) {
+                return undefined;
             }
             return {
-                ...raw,
-                expectedIdentity: raw.expectedIdentity ?? getExistingHostIdentity(),
+                ...latestRaw,
+                expectedBirth,
+                expectedIdentity: canonicalIdentity,
             };
         };
 
@@ -786,49 +928,113 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                 throw new SessionHostUnavailableTransientError(endpoint);
             }
             if (state === 'alive') {
-                const auth = resolveVerifiedReplacementAuthority();
                 const existingPid = getPid();
-                if (!auth || existingPid === null || existingPid === process.pid) {
+                if (existingPid === null || existingPid === process.pid) {
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                const initialEndpointStat = endpoint.kind === 'unix' && fs.existsSync(endpoint.path)
+                    ? (() => {
+                        try {
+                            const s = fs.lstatSync(endpoint.path, { bigint: true });
+                            return { dev: s.dev, ino: s.ino };
+                        } catch {
+                            return null;
+                        }
+                    })()
+                    : null;
+                const cmd = getProcessCommandLine(existingPid);
+                if (!isManagedPid(existingPid) || !isManagedSessionHostCommandLine(cmd, instance().configDir)) {
                     throw new SessionHostUnavailableTransientError(endpoint);
                 }
                 const initialBirth = getProcessBirth(existingPid);
-                if (!initialBirth || !canSignalPid(existingPid)) {
+                if (!initialBirth) {
                     throw new SessionHostUnavailableTransientError(endpoint);
                 }
-                if (auth.expectedPid !== undefined && auth.expectedPid !== existingPid) {
+                const auth = resolveVerifiedReplacementAuthority();
+                if (
+                    !auth
+                    || auth.expectedPid !== existingPid
+                    || auth.expectedBirth !== initialBirth
+                    || auth.isCancelled?.()
+                    || getPid() !== existingPid
+                ) {
                     throw new SessionHostUnavailableTransientError(endpoint);
                 }
-                if (auth.expectedBirth !== undefined && auth.expectedBirth !== initialBirth) {
+                if (initialEndpointStat !== null) {
+                    try {
+                        const currentStat = fs.lstatSync(endpoint.path, { bigint: true });
+                        if (currentStat.dev !== initialEndpointStat.dev || currentStat.ino !== initialEndpointStat.ino) {
+                            throw new SessionHostUnavailableTransientError(endpoint);
+                        }
+                    } catch {
+                        throw new SessionHostUnavailableTransientError(endpoint);
+                    }
+                }
+                const preTermAuth = resolveRawReplacementAuthority();
+                if (!isValidReplacementAuthorizationShape(preTermAuth) || preTermAuth.isCancelled?.()) {
                     throw new SessionHostUnavailableTransientError(endpoint);
                 }
+                assertMaintenanceLifecycle('session_host_kill', instance().configDir);
+                assertWorkerBridgeLifecycleAdmission('session_host_stop', instance().configDir);
+                writeReplacementProvenanceFile({
+                    endpoint,
+                    expectedEndpointInode: initialEndpointStat?.ino ?? auth.expectedEndpointInode,
+                    auth,
+                });
                 disconnectEndpointClients(endpoint);
-                const cmd = getProcessCommandLine(existingPid);
                 LOG.warn(
                     'SessionHost',
                     `Stopping unresponsive session-host pid ${existingPid} before spawning replacement ` +
                         `(endpoint=${endpoint.path}, cmd=${cmd || 'unverified'})`,
                 );
-                stopManagedSessionHostProcess();
+                try {
+                    if (process.platform === 'win32') {
+                        hiddenExecFileSync('taskkill', ['/PID', String(existingPid), '/T', '/F'], { stdio: 'ignore' });
+                    } else {
+                        process.kill(existingPid, 'SIGTERM');
+                    }
+                } catch {
+                    // noop
+                }
+                if (!isPidAlive(existingPid)) {
+                    const postTermRaw = resolveRawReplacementAuthority();
+                    if (!isValidReplacementAuthorizationShape(postTermRaw) || postTermRaw.isCancelled?.()) {
+                        removeReplacementProvenanceFile();
+                        throw new SessionHostUnavailableTransientError(endpoint);
+                    }
+                    try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
+                    return;
+                }
                 if (process.platform !== 'win32' && isPidAlive(existingPid)) {
                     const deadline = Math.min(ensureDeadline, Date.now() + evictGraceMs);
                     while (Date.now() < deadline && isPidAlive(existingPid)) {
+                        const graceBirth = getProcessBirth(existingPid);
+                        const graceSignalable = canSignalPid(existingPid);
+                        const graceAuth = resolveVerifiedReplacementAuthority();
                         if (
-                            !resolveVerifiedReplacementAuthority()
+                            !graceAuth
+                            || graceAuth.isCancelled?.()
                             || getPid() !== existingPid
-                            || getProcessBirth(existingPid) !== initialBirth
-                            || !canSignalPid(existingPid)
+                            || graceBirth !== initialBirth
+                            || !graceSignalable
                         ) {
+                            removeReplacementProvenanceFile();
                             throw new SessionHostUnavailableTransientError(endpoint);
                         }
                         await new Promise((resolve) => setTimeout(resolve, 25));
                     }
                     if (isPidAlive(existingPid)) {
+                        const killBirth = getProcessBirth(existingPid);
+                        const killSignalable = canSignalPid(existingPid);
+                        const killAuth = resolveVerifiedReplacementAuthority();
                         if (
-                            !resolveVerifiedReplacementAuthority()
+                            !killAuth
+                            || killAuth.isCancelled?.()
                             || getPid() !== existingPid
-                            || getProcessBirth(existingPid) !== initialBirth
-                            || !canSignalPid(existingPid)
+                            || killBirth !== initialBirth
+                            || !killSignalable
                         ) {
+                            removeReplacementProvenanceFile();
                             throw new SessionHostUnavailableTransientError(endpoint);
                         }
                         LOG.warn(
@@ -836,36 +1042,192 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
                             `Unresponsive session-host pid ${existingPid} did not exit within ${evictGraceMs}ms after SIGTERM; escalating to SIGKILL`,
                         );
                         try { process.kill(existingPid, 'SIGKILL'); } catch { /* noop */ }
-                        try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
                     }
                 }
-                if (isPidAlive(existingPid)) throw new SessionHostUnavailableTransientError(endpoint);
+                if (isPidAlive(existingPid)) {
+                    removeReplacementProvenanceFile();
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                const postKillRaw = resolveRawReplacementAuthority();
+                if (!isValidReplacementAuthorizationShape(postKillRaw) || postKillRaw.isCancelled?.()) {
+                    removeReplacementProvenanceFile();
+                    throw new SessionHostUnavailableTransientError(endpoint);
+                }
+                try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
                 return;
             }
-            disconnectEndpointClients(endpoint);
-            const deadPid = getPid();
-            if (deadPid !== null && !isPidAlive(deadPid)) {
-                try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
+            const deadPidState = readPidFileState();
+            if (
+                deadPidState.status === 'corrupt'
+                || (deadPidState.status === 'missing' && endpoint.kind === 'unix' && fs.existsSync(endpoint.path))
+                || (deadPidState.status === 'ok' && isPidAlive(deadPidState.pid))
+            ) {
+                throw new SessionHostUnavailableTransientError(endpoint);
             }
-            if (endpoint.kind === 'unix' && fs.existsSync(endpoint.path)) {
-                options.extraStop?.(endpoint);
+            disconnectEndpointClients(endpoint);
+            if (deadPidState.status === 'ok' && !isPidAlive(deadPidState.pid)) {
+                try { fs.unlinkSync(getPidFile()); } catch { /* noop */ }
             }
         };
 
-        return ensureSharedSessionHostReady({
-            appName,
-            probeInvocation,
-            endpoint: getEndpoint(),
-            spawnHost,
-            beforeSpawnHost,
-            onHostReplaced: options.onHostReplaced,
-            isExistingHostAlive,
-            existingHostState: inspectExistingHostState,
-            existingHostIdentity: getExistingHostIdentity,
-            replacementAuthority: resolveVerifiedReplacementAuthority,
-            timeoutMs: Math.max(1, ensureDeadline - Date.now()),
-            requiredRequestTypes: options.requiredRequestTypes,
-        });
+        try {
+            return await ensureSharedSessionHostReady({
+                appName,
+                probeInvocation,
+                endpoint: getEndpoint(),
+                spawnHost,
+                beforeSpawnHost,
+                onHostReplaced: options.onHostReplaced,
+                isExistingHostAlive,
+                existingHostState: inspectExistingHostState,
+                existingHostIdentity: getExistingHostIdentity,
+                replacementAuthority: resolveVerifiedReplacementAuthority,
+                timeoutMs: Math.max(1, ensureDeadline - Date.now()),
+                requiredRequestTypes: options.requiredRequestTypes,
+            });
+        } finally {
+            removeReplacementProvenanceFile();
+        }
+    }
+
+    async function acquireIdleReplacementAuthority(leaseOptions: {
+        owner: string;
+        token: string;
+        timeoutMs?: number;
+        isCancelled?: () => boolean;
+    }): Promise<SessionHostReplacementAuthorization> {
+        if (!leaseOptions || typeof leaseOptions !== 'object') {
+            throw new Error('session_host_replacement_authority_invalid');
+        }
+        if (typeof leaseOptions.owner !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(leaseOptions.owner)) {
+            throw new Error('session_host_replacement_owner_invalid');
+        }
+        if (typeof leaseOptions.token !== 'string' || !/^[a-f0-9]{64}$/.test(leaseOptions.token)) {
+            throw new Error('session_host_replacement_token_invalid');
+        }
+        if (leaseOptions.isCancelled !== undefined && typeof leaseOptions.isCancelled !== 'function') {
+            throw new Error('session_host_replacement_authority_invalid');
+        }
+        if (leaseOptions.isCancelled?.()) {
+            throw new Error('session_host_replacement_cancelled');
+        }
+        const endpoint = getEndpoint();
+        if (inspectExistingHostState() !== 'alive') {
+            throw new Error('session_host_replacement_target_not_verified_alive');
+        }
+        const existingPid = getPid();
+        if (existingPid === null || existingPid === process.pid || !isPidAlive(existingPid) || !canSignalPid(existingPid)) {
+            throw new Error('session_host_replacement_target_not_verified_alive');
+        }
+        const expectedBirth = getProcessBirth(existingPid);
+        if (!expectedBirth || expectedBirth === 'win32' || expectedBirth === 'unknown') {
+            throw new Error('session_host_replacement_birth_unverified');
+        }
+        const expectedEndpointInode = endpoint.kind === 'unix' && fs.existsSync(endpoint.path)
+            ? fs.lstatSync(endpoint.path, { bigint: true }).ino
+            : undefined;
+        const rpcBudget = Math.max(1, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, leaseOptions.timeoutMs ?? SESSION_HOST_PROBE_TIMEOUT_MS));
+        const client = new SessionHostClient({ endpoint, requestTimeoutMs: rpcBudget, registerAsShared: false });
+        try {
+            await client.connect(rpcBudget);
+            const leaseStateResp = await client.request<{
+                bootId: string;
+                pid: number;
+                endpoint: string;
+                epoch: number;
+                held: boolean;
+                owner: string | null;
+            }>({ type: 'get_upgrade_lease', payload: {} }, { timeoutMs: rpcBudget });
+            if (!leaseStateResp.success || !leaseStateResp.result) {
+                throw new Error(leaseStateResp.error || 'session_host_upgrade_lease_unavailable');
+            }
+            const proof = leaseStateResp.result;
+            if (
+                proof.pid !== existingPid
+                || proof.endpoint !== endpoint.path
+                || typeof proof.bootId !== 'string'
+                || !proof.bootId.trim()
+                || typeof proof.epoch !== 'number'
+                || !Number.isSafeInteger(proof.epoch)
+                || proof.epoch < 0
+            ) {
+                throw new Error('session_host_upgrade_lease_identity_mismatch');
+            }
+            const acquireResp = await client.request<{
+                bootId: string;
+                pid: number;
+                endpoint: string;
+                epoch: number;
+                held: boolean;
+                owner: string | null;
+            }>({
+                type: 'acquire_upgrade_lease',
+                payload: {
+                    bootId: proof.bootId,
+                    epoch: proof.epoch,
+                    owner: leaseOptions.owner,
+                    token: leaseOptions.token,
+                },
+            }, { timeoutMs: rpcBudget });
+            if (!acquireResp.success || !acquireResp.result || acquireResp.result.held !== true) {
+                throw new Error(acquireResp.error || 'session_host_upgrade_lease_not_acquired');
+            }
+            if (
+                acquireResp.result.pid !== existingPid
+                || acquireResp.result.bootId !== proof.bootId
+                || acquireResp.result.epoch !== proof.epoch
+                || acquireResp.result.owner !== leaseOptions.owner
+            ) {
+                throw new Error('session_host_upgrade_lease_identity_mismatch');
+            }
+            const diagResp = await client.request<SessionHostDiagnostics>({
+                type: 'get_host_diagnostics',
+                payload: { includeSessions: false },
+            }, { timeoutMs: rpcBudget });
+            if (!diagResp.success || !diagResp.result) {
+                throw new Error(diagResp.error || 'session_host_diagnostics_unavailable');
+            }
+            recordSessionHostProbeSuccess(endpoint, diagResp.result);
+            if (typeof diagResp.result.runtimeCount !== 'number' || diagResp.result.runtimeCount !== 0) {
+                throw new Error('session_host_not_idle');
+            }
+            if (
+                getPid() !== existingPid
+                || !isPidAlive(existingPid)
+                || !canSignalPid(existingPid)
+                || getProcessBirth(existingPid) !== expectedBirth
+            ) {
+                throw new Error('session_host_replacement_target_changed');
+            }
+            if (leaseOptions.isCancelled?.()) {
+                throw new Error('session_host_replacement_cancelled');
+            }
+            const expectedTokenHash = createHash('sha256').update(leaseOptions.token).digest('hex');
+            const authRecord: SessionHostReplacementAuthorization = {
+                reason: 'idle_maintenance_upgrade',
+                expectedIdentity: `pid-${existingPid}:birth-${expectedBirth}`,
+                expectedPid: existingPid,
+                expectedBirth,
+                expectedInstanceConfigDir: instance().configDir,
+                expectedBootId: proof.bootId,
+                expectedEpoch: proof.epoch,
+                expectedOwner: leaseOptions.owner,
+                leaseToken: leaseOptions.token,
+                expectedTokenHash,
+                expectedEndpointInode,
+                expectedHostStartedAt: diagResp.result.hostStartedAt,
+                activeRuntimeCount: 0,
+                isCancelled: () =>
+                    Boolean(leaseOptions.isCancelled?.())
+                    || !verifyLeaseJournalForReplacement(endpoint, authRecord),
+            };
+            if (!verifyLeaseJournalForReplacement(endpoint, authRecord)) {
+                throw new Error('session_host_upgrade_lease_journal_mismatch');
+            }
+            return authRecord;
+        } finally {
+            await client.close().catch(() => {});
+        }
     }
 
     return {
@@ -874,12 +1236,14 @@ export function createManagedSessionHost(options: ManagedSessionHostOptions): Ma
             return getEndpoint();
         },
         getPidFile,
+        getReplacementProvenanceFile,
         getPid,
         buildEnv,
         resolveEntry,
         killPid,
         spawnHost,
         stopManagedSessionHostProcess,
+        acquireIdleReplacementAuthority,
         ensureReady,
         getStatusPaths() {
             return { pidFile: getPidFile(), endpoint: getEndpoint() };

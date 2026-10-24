@@ -20,8 +20,22 @@ interface SessionHostReplacementProvenance {
     instanceConfigDir?: string;
     instanceConfigKey?: string;
     expectedEndpointInode?: bigint;
+    expectedBootId?: string;
+    expectedEpoch?: number;
+    expectedOwner?: string;
+    expectedTokenHash?: string;
+    activeRuntimeCount?: number;
     isCancelled?: () => boolean;
 }
+declare function readVerifiedReplacementProvenance(options: {
+    provenanceFile: string;
+    instanceConfigDir: string;
+    appName: string;
+    endpointPath: string;
+    leaseStateDir?: string;
+    nowMs?: () => number;
+    skipDynamicWrap?: boolean;
+}): SessionHostReplacementProvenance | undefined;
 interface SessionHostServerOptions {
     endpoint?: SessionHostEndpoint;
     /** Opt-in pinned native binding; absent hosts cannot attest an upgrade idle lease. */
@@ -170,9 +184,11 @@ interface GuardianArtifactPins {
 /** The manifest pin must come from the supervisor's immutable artifact plan. */
 declare function resolveGuardianArtifact(pins: GuardianArtifactPins): HostUpgradeBinding;
 
+declare function getSessionHostReplacementProvenanceFile(appName: string, configDir?: string): string;
+declare function removeSessionHostReplacementProvenance(appName: string, configDir?: string): void;
 declare function createUncaughtExceptionLimiter(windowMs?: number, limit?: number): (now: number) => {
     exit: boolean;
     countInWindow: number;
 };
 
-export { type GuardianArtifactPins, type HostUpgradeBinding, type SessionHostReplacementProvenance, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, isManagedSessionHostCommandLine, resolveGuardianArtifact, sessionHostInstanceArg, startThreadpoolWatchdog };
+export { type GuardianArtifactPins, type HostUpgradeBinding, type SessionHostReplacementProvenance, SessionHostServer, type SessionHostServerOptions, createUncaughtExceptionLimiter, getSessionHostReplacementProvenanceFile, isManagedSessionHostCommandLine, readVerifiedReplacementProvenance, removeSessionHostReplacementProvenance, resolveGuardianArtifact, sessionHostInstanceArg, startThreadpoolWatchdog };

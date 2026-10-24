@@ -644,6 +644,80 @@ describe('session host runtime support compatibility', () => {
     ).toBeNull()
     expect(sessionRegistry.get(ghostId)).toBeUndefined()
   })
+
+  it('rejects partial caller replacementAuthority ({ activeRuntimeCount: 0 } alone) and refuses when observed runtimeCount > 0 or cancelled during identity check', async () => {
+    const spawnHost = vi.fn()
+    const beforeSpawnHost = vi.fn()
+    const endpoint = { kind: 'unix' as const, path: '/tmp/adhdev-r2-auth-shape.sock' }
+    mocks.state.connectResults = ['fail', 'fail', 'fail', 'fail']
+
+    // 1. Partial authority ({ activeRuntimeCount: 0 } alone) must be rejected
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => 'pid-777:birth-1',
+      existingHostState: () => 'alive',
+      replacementAuthority: { activeRuntimeCount: 0 } as any,
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+
+    // 2. Complete authority is rejected if a previous probe observed runtimeCount > 0 on this endpoint
+    runtimeSupport.recordSessionHostProbeSuccess(endpoint, 'pid-777:birth-1', 2)
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => 'pid-777:birth-1',
+      existingHostState: () => 'alive',
+      replacementAuthority: {
+        expectedPid: 777,
+        expectedBirth: 'Sat Oct 24 06:00:00 2026',
+        expectedInstanceConfigDir: '/tmp/cfg',
+        expectedBootId: 'boot-1',
+        expectedEpoch: 1,
+        expectedOwner: 'owner-1',
+        expectedIdentity: 'pid-777:birth-1',
+        activeRuntimeCount: 0,
+      },
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+
+    // 3. Cancellation occurring during existingHostIdentity() query prevents beforeSpawnHost and spawnHost
+    runtimeSupport.recordSessionHostProbeSuccess(endpoint, 'pid-777:birth-1', 0)
+    let cancelled = false
+    await expect(ensureSessionHostReady({
+      endpoint,
+      spawnHost,
+      beforeSpawnHost,
+      existingHostIdentity: () => {
+        cancelled = true
+        return 'pid-777:birth-1'
+      },
+      existingHostState: () => 'alive',
+      replacementAuthority: () => ({
+        expectedPid: 777,
+        expectedBirth: 'Sat Oct 24 06:00:00 2026',
+        expectedInstanceConfigDir: '/tmp/cfg',
+        expectedBootId: 'boot-1',
+        expectedEpoch: 1,
+        expectedOwner: 'owner-1',
+        expectedIdentity: 'pid-777:birth-1',
+        activeRuntimeCount: 0,
+        isCancelled: () => cancelled,
+      }),
+      canConnectRetries: 0,
+      timeoutMs: 50,
+    })).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+    expect(beforeSpawnHost).not.toHaveBeenCalled()
+    expect(spawnHost).not.toHaveBeenCalled()
+  })
 })
 
 

@@ -131,7 +131,170 @@ export interface SessionHostReplacementProvenance {
   instanceConfigDir?: string;
   instanceConfigKey?: string;
   expectedEndpointInode?: bigint;
+  expectedBootId?: string;
+  expectedEpoch?: number;
+  expectedOwner?: string;
+  expectedTokenHash?: string;
+  activeRuntimeCount?: number;
   isCancelled?: () => boolean;
+}
+
+interface PersistedReplacementProvenanceFile {
+  schema?: 1;
+  schemaVersion?: 1;
+  appName: string;
+  instanceConfigDir: string;
+  instanceConfigKey: string;
+  endpointPath: string;
+  expectedEndpointInode: string | null;
+  expectedPid: number;
+  expectedBirth: string;
+  expectedBootId: string;
+  expectedEpoch: number;
+  expectedOwner: string;
+  expectedTokenHash: string | null;
+  activeRuntimeCount: 0;
+  issuedAt?: number;
+  issuedAtMs?: number;
+}
+
+export function readVerifiedReplacementProvenance(options: {
+  provenanceFile: string;
+  instanceConfigDir: string;
+  appName: string;
+  endpointPath: string;
+  leaseStateDir?: string;
+  nowMs?: () => number;
+  skipDynamicWrap?: boolean;
+}): SessionHostReplacementProvenance | undefined {
+  const now = options.nowMs ? options.nowMs() : Date.now();
+  try {
+    if (!fs.existsSync(options.provenanceFile)) return undefined;
+    const stat = fs.lstatSync(options.provenanceFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
+      return undefined;
+    }
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fs.readFileSync(options.provenanceFile, 'utf8')) as Partial<PersistedReplacementProvenanceFile>;
+    if (!parsed || (parsed.schemaVersion !== 1 && parsed.schema !== 1)) return undefined;
+    if (parsed.appName !== options.appName) return undefined;
+    const canonicalDir = resolveInstanceConfigDir({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
+    if (
+      typeof parsed.instanceConfigDir !== 'string'
+      || resolveInstanceConfigDir({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir
+    ) {
+      return undefined;
+    }
+    const expectedKey = sessionHostInstanceArg(canonicalDir);
+    if (parsed.instanceConfigKey !== expectedKey) return undefined;
+    const canonicalEndpointDir = fs.existsSync(path.dirname(options.endpointPath))
+      ? fs.realpathSync(path.dirname(options.endpointPath))
+      : path.resolve(path.dirname(options.endpointPath));
+    const canonicalEndpointPath = path.join(canonicalEndpointDir, path.basename(options.endpointPath));
+    const parsedEndpointDir = typeof parsed.endpointPath === 'string' && fs.existsSync(path.dirname(parsed.endpointPath))
+      ? fs.realpathSync(path.dirname(parsed.endpointPath))
+      : typeof parsed.endpointPath === 'string'
+        ? path.resolve(path.dirname(parsed.endpointPath))
+        : '';
+    const parsedEndpointPath = typeof parsed.endpointPath === 'string'
+      ? path.join(parsedEndpointDir, path.basename(parsed.endpointPath))
+      : '';
+    if (parsedEndpointPath !== canonicalEndpointPath) return undefined;
+    if (typeof parsed.expectedPid !== 'number' || !Number.isFinite(parsed.expectedPid) || parsed.expectedPid <= 0) {
+      return undefined;
+    }
+    if (typeof parsed.expectedBirth !== 'string' || !parsed.expectedBirth.trim()) {
+      return undefined;
+    }
+    if (typeof parsed.expectedBootId !== 'string' || !parsed.expectedBootId.trim()) {
+      return undefined;
+    }
+    if (typeof parsed.expectedEpoch !== 'number' || !Number.isFinite(parsed.expectedEpoch) || parsed.expectedEpoch < 0) {
+      return undefined;
+    }
+    if (typeof parsed.expectedOwner !== 'string' || !parsed.expectedOwner.trim()) {
+      return undefined;
+    }
+    if (parsed.activeRuntimeCount !== 0) {
+      return undefined;
+    }
+    const issuedAtMs = parsed.issuedAtMs ?? parsed.issuedAt;
+    if (
+      typeof issuedAtMs !== 'number'
+      || !Number.isFinite(issuedAtMs)
+      || now - issuedAtMs > 60_000
+      || issuedAtMs - now > 5_000
+    ) {
+      return undefined;
+    }
+    let expectedEndpointInode: bigint | undefined;
+    if (parsed.expectedEndpointInode !== null && parsed.expectedEndpointInode !== undefined) {
+      if (typeof parsed.expectedEndpointInode !== 'string' || !/^\d+$/.test(parsed.expectedEndpointInode)) {
+        return undefined;
+      }
+      expectedEndpointInode = BigInt(parsed.expectedEndpointInode);
+    }
+
+    if (options.leaseStateDir) {
+      const leaseFile = path.join(options.leaseStateDir, 'upgrade-lease.json');
+      if (fs.existsSync(leaseFile)) {
+        const leaseStat = fs.lstatSync(leaseFile);
+        if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || (leaseStat.mode & 0o077) !== 0) {
+          return undefined;
+        }
+        if (typeof process.getuid === 'function' && leaseStat.uid !== process.getuid()) {
+          return undefined;
+        }
+        const lease = JSON.parse(fs.readFileSync(leaseFile, 'utf8')) as Record<string, unknown>;
+        const leaseEndpointDir = typeof lease.endpoint === 'string' && fs.existsSync(path.dirname(lease.endpoint))
+          ? fs.realpathSync(path.dirname(lease.endpoint))
+          : typeof lease.endpoint === 'string'
+            ? path.resolve(path.dirname(lease.endpoint))
+            : '';
+        const leaseEndpointPath = typeof lease.endpoint === 'string'
+          ? path.join(leaseEndpointDir, path.basename(lease.endpoint))
+          : '';
+        if (
+          lease.schema !== 1
+          || lease.held !== true
+          || leaseEndpointPath !== canonicalEndpointPath
+          || lease.epoch !== parsed.expectedEpoch
+          || lease.owner !== parsed.expectedOwner
+          || typeof lease.tokenHash !== 'string'
+          || !/^[a-f0-9]{64}$/.test(lease.tokenHash)
+        ) {
+          return undefined;
+        }
+        if (parsed.expectedTokenHash && parsed.expectedTokenHash !== lease.tokenHash) {
+          return undefined;
+        }
+      }
+    }
+
+    return {
+      expectedPid: parsed.expectedPid,
+      expectedBirth: parsed.expectedBirth.trim(),
+      instanceConfigDir: canonicalDir,
+      instanceConfigKey: expectedKey,
+      expectedEndpointInode,
+      expectedBootId: parsed.expectedBootId.trim(),
+      expectedEpoch: parsed.expectedEpoch,
+      expectedOwner: parsed.expectedOwner.trim(),
+      expectedTokenHash: parsed.expectedTokenHash ?? undefined,
+      activeRuntimeCount: 0,
+      isCancelled: options.skipDynamicWrap
+        ? undefined
+        : () =>
+            readVerifiedReplacementProvenance({
+              ...options,
+              skipDynamicWrap: true,
+            }) === undefined,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export interface SessionHostServerOptions {
@@ -251,7 +414,7 @@ export class SessionHostServer extends EventEmitter {
 
   private readProcessBirth(pid: number): string | null {
     if (this.getOwnerBirth) return this.getOwnerBirth(pid);
-    if (process.platform === 'win32') return 'win32';
+    if (process.platform === 'win32') return null;
     try {
       return String(
         execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
@@ -309,9 +472,22 @@ export class SessionHostServer extends EventEmitter {
 
   private async evictPriorEndpointOwners(): Promise<void> {
     if (this.endpoint.kind !== 'unix') return;
-    const initialSocketInode = fs.existsSync(this.endpoint.path)
-      ? fs.lstatSync(this.endpoint.path, { bigint: true }).ino
-      : null;
+    const targetEndpointDir = path.dirname(this.endpoint.path);
+    const resolvedEndpointDir = fs.existsSync(targetEndpointDir)
+      ? fs.realpathSync(targetEndpointDir)
+      : path.resolve(targetEndpointDir);
+    const targetEndpointPath = path.join(resolvedEndpointDir, path.basename(this.endpoint.path));
+    const readEndpointIdentity = (): { dev: bigint; ino: bigint } | null => {
+      if (!fs.existsSync(targetEndpointPath)) return null;
+      try {
+        const stat = fs.lstatSync(targetEndpointPath, { bigint: true });
+        return { dev: stat.dev, ino: stat.ino };
+      } catch {
+        return null;
+      }
+    };
+    const initialEndpoint = readEndpointIdentity();
+    const initialSocketInode = initialEndpoint?.ino ?? null;
 
     let pidFileCandidate: number | null = null;
     const candidatePids = new Set<number>();
@@ -336,26 +512,52 @@ export class SessionHostServer extends EventEmitter {
     }
 
     let socketOwners: number[] | null = [];
-    if (initialSocketInode !== null) {
+    if (initialEndpoint !== null) {
       socketOwners = this.readSocketOwnerPids();
-      if (socketOwners === null && pidFileCandidate === null) {
+      if (socketOwners === null) {
         throw new Error('session_host_prior_owner_socket_unverified');
       }
-      if (socketOwners !== null) {
-        for (const pid of socketOwners) {
-          if (pid !== process.pid) candidatePids.add(pid);
-        }
+      const postQueryEndpoint = readEndpointIdentity();
+      if (
+        !postQueryEndpoint
+        || postQueryEndpoint.dev !== initialEndpoint.dev
+        || postQueryEndpoint.ino !== initialEndpoint.ino
+      ) {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      for (const pid of socketOwners) {
+        if (pid !== process.pid) candidatePids.add(pid);
       }
     }
 
-    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
-    if (liveCandidates.length > 0) {
-      const provenance = typeof this.replacementProvenance === 'function'
+    const resolveActiveProvenance = (): SessionHostReplacementProvenance => {
+      const prov = typeof this.replacementProvenance === 'function'
         ? this.replacementProvenance()
         : this.replacementProvenance;
-      if (!provenance || provenance.isCancelled?.()) {
+      if (
+        !prov
+        || prov.isCancelled?.()
+        || !Number.isFinite(prov.expectedPid)
+        || prov.expectedPid <= 0
+        || typeof prov.expectedBirth !== 'string'
+        || !prov.expectedBirth.trim()
+        || (prov.activeRuntimeCount !== undefined && prov.activeRuntimeCount !== 0)
+      ) {
         throw new Error('session_host_live_owner_replacement_unauthorized');
       }
+      if (
+        prov.instanceConfigKey !== undefined
+        && this.instanceConfigDir
+        && prov.instanceConfigKey !== sessionHostInstanceArg(this.instanceConfigDir)
+      ) {
+        throw new Error('session_host_prior_owner_instance_mismatch');
+      }
+      return prov;
+    };
+
+    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
+    if (liveCandidates.length > 0) {
+      const provenance = resolveActiveProvenance();
       const targetConfigDir = provenance.instanceConfigDir ?? this.instanceConfigDir ?? undefined;
       if (
         provenance.instanceConfigDir
@@ -410,6 +612,22 @@ export class SessionHostServer extends EventEmitter {
         if (birthBeforeTerm !== provenance.expectedBirth) {
           throw new Error('session_host_prior_owner_birth_mismatch');
         }
+        const provenanceBeforeTerm = resolveActiveProvenance();
+        if (
+          provenanceBeforeTerm.expectedPid !== pid
+          || provenanceBeforeTerm.expectedBirth !== birthBeforeTerm
+        ) {
+          throw new Error('session_host_live_owner_replacement_unauthorized');
+        }
+        if (initialEndpoint !== null) {
+          const endpointBeforeTerm = readEndpointIdentity();
+          if (
+            endpointBeforeTerm !== null
+            && (endpointBeforeTerm.dev !== initialEndpoint.dev || endpointBeforeTerm.ino !== initialEndpoint.ino)
+          ) {
+            throw new Error('session_host_endpoint_changed_during_recovery');
+          }
+        }
 
         this.recordHostLog(
           'warn',
@@ -426,7 +644,11 @@ export class SessionHostServer extends EventEmitter {
           if (!currentBirth || currentBirth !== provenance.expectedBirth) {
             throw new Error('session_host_prior_owner_birth_mismatch');
           }
-          if (provenance.isCancelled?.()) {
+          const provenanceDuringWait = resolveActiveProvenance();
+          if (
+            provenanceDuringWait.expectedPid !== pid
+            || provenanceDuringWait.expectedBirth !== provenance.expectedBirth
+          ) {
             throw new Error('session_host_live_owner_replacement_unauthorized');
           }
           await new Promise((resolve) => setTimeout(resolve, 25));
@@ -436,8 +658,21 @@ export class SessionHostServer extends EventEmitter {
           if (!birthBeforeKill || birthBeforeKill !== provenance.expectedBirth) {
             throw new Error('session_host_prior_owner_birth_mismatch');
           }
-          if (provenance.isCancelled?.()) {
+          const provenanceBeforeKill = resolveActiveProvenance();
+          if (
+            provenanceBeforeKill.expectedPid !== pid
+            || provenanceBeforeKill.expectedBirth !== provenance.expectedBirth
+          ) {
             throw new Error('session_host_live_owner_replacement_unauthorized');
+          }
+          if (initialEndpoint !== null) {
+            const endpointBeforeKill = readEndpointIdentity();
+            if (
+              endpointBeforeKill !== null
+              && (endpointBeforeKill.dev !== initialEndpoint.dev || endpointBeforeKill.ino !== initialEndpoint.ino)
+            ) {
+              throw new Error('session_host_endpoint_changed_during_recovery');
+            }
           }
           this.recordHostLog(
             'warn',
@@ -452,22 +687,57 @@ export class SessionHostServer extends EventEmitter {
       }
     }
 
-    if (initialSocketInode !== null && fs.existsSync(this.endpoint.path)) {
-      let currentInode: bigint;
-      try {
-        currentInode = fs.lstatSync(this.endpoint.path, { bigint: true }).ino;
-      } catch {
-        throw new Error('session_host_endpoint_changed_during_recovery');
+    if (initialEndpoint !== null && fs.existsSync(targetEndpointPath)) {
+      const beforeFinalQueryEndpoint = readEndpointIdentity();
+      if (!beforeFinalQueryEndpoint) {
+        return;
       }
-      if (currentInode !== initialSocketInode) {
+      if (
+        beforeFinalQueryEndpoint.dev !== initialEndpoint.dev
+        || beforeFinalQueryEndpoint.ino !== initialEndpoint.ino
+      ) {
         throw new Error('session_host_endpoint_changed_during_recovery');
       }
       const remainingOwners = this.readSocketOwnerPids();
-      if (remainingOwners && remainingOwners.some((ownerPid) => this.isPidAlive(ownerPid))) {
+      if (remainingOwners === null) {
+        throw new Error('session_host_prior_owner_socket_unverified');
+      }
+      if (remainingOwners.length > 0) {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      if (pidFileCandidate !== null && this.isPidAlive(pidFileCandidate)) {
+        throw new Error('session_host_endpoint_changed_during_recovery');
+      }
+      if (this.pidFilePath && fs.existsSync(this.pidFilePath)) {
+        try {
+          const rawCurrentPid = fs.readFileSync(this.pidFilePath, 'utf8').trim();
+          if (!/^\d+$/.test(rawCurrentPid)) {
+            throw new Error('session_host_endpoint_changed_during_recovery');
+          }
+          const currentPid = Number.parseInt(rawCurrentPid, 10);
+          if (currentPid !== process.pid && currentPid !== pidFileCandidate) {
+            throw new Error('session_host_endpoint_changed_during_recovery');
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message === 'session_host_endpoint_changed_during_recovery') {
+            throw error;
+          }
+          throw new Error('session_host_endpoint_changed_during_recovery');
+        }
+      }
+      if (liveCandidates.length > 0) {
+        resolveActiveProvenance();
+      }
+      const rightBeforeUnlinkEndpoint = readEndpointIdentity();
+      if (
+        !rightBeforeUnlinkEndpoint
+        || rightBeforeUnlinkEndpoint.dev !== initialEndpoint.dev
+        || rightBeforeUnlinkEndpoint.ino !== initialEndpoint.ino
+      ) {
         throw new Error('session_host_endpoint_changed_during_recovery');
       }
       try {
-        fs.unlinkSync(this.endpoint.path);
+        fs.unlinkSync(targetEndpointPath);
       } catch {
         // noop
       }

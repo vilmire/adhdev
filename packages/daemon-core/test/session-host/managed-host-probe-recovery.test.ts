@@ -46,7 +46,37 @@ vi.mock('@adhdev/session-host-core', async (original) => {
                 throw Object.assign(new Error(`connect ${state.connectErrorCode}`), { code: state.connectErrorCode })
             }
         }
-        async request(_request: unknown, options?: { timeoutMs: number }) {
+        constructor(public options?: any) {}
+        async request(request: any, options?: { timeoutMs: number }) {
+            if (request?.type === 'get_upgrade_lease') {
+                return {
+                    success: true,
+                    result: {
+                        bootId: 'boot-idle-1',
+                        pid: 54321,
+                        endpoint: this.options?.endpoint?.path ?? '',
+                        epoch: 4,
+                        held: false,
+                        owner: null,
+                    },
+                }
+            }
+            if (request?.type === 'acquire_upgrade_lease') {
+                if (state.runtimeCount !== 0) {
+                    return { success: false, error: 'native_host_upgrade_busy' }
+                }
+                return {
+                    success: true,
+                    result: {
+                        bootId: 'boot-idle-1',
+                        pid: 54321,
+                        endpoint: this.options?.endpoint?.path ?? '',
+                        epoch: 4,
+                        held: true,
+                        owner: request.payload.owner,
+                    },
+                }
+            }
             state.calls++
             const budget = options?.timeoutMs ?? 30_000
             state.budgets.push(budget)
@@ -332,5 +362,167 @@ describe('managed host bounded recovery including the foreign-entry preflight', 
         expect(state.alive).toBe(true)
         expect(state.spawn).not.toHaveBeenCalled()
         expect(state.calls).toBe(0)
+    })
+
+    it('cloud extraStop must not turn missing pidfile plus live socket into kill authority', async () => {
+        const host = managed({
+            timeoutMs: 500,
+            extraStop: () => {
+                host.killPid(54321)
+            },
+        })
+        fs.writeFileSync(host.endpoint.path, 'live-socket-missing-pidfile')
+        fs.unlinkSync(host.getPidFile())
+        try {
+            await expect(host.ensureReady()).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+            expect(state.spawn).not.toHaveBeenCalled()
+            expect(state.disconnectCount).toBe(0)
+        } finally {
+            fs.rmSync(host.endpoint.path, { force: true })
+        }
+    })
+
+    it('caller count alone is not authenticated idle-generation authority', async () => {
+        const host = managed({
+            timeoutMs: 500,
+            replacementAuthority: () => ({ activeRuntimeCount: 0 } as any),
+        })
+        fs.writeFileSync(host.endpoint.path, 'live-socket-unverified-count')
+        try {
+            await expect(host.ensureReady()).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+            expect(state.spawn).not.toHaveBeenCalled()
+        } finally {
+            fs.rmSync(host.endpoint.path, { force: true })
+        }
+    })
+
+    it('cancellation occurring during blocking native birth query before SIGTERM aborts before sending SIGTERM', async () => {
+        let cancelled = false
+        let birthChecks = 0
+        const host = managed({
+            evictGraceMs: 0,
+            timeoutMs: 1_000,
+            getProcessBirth: () => {
+                birthChecks += 1
+                if (birthChecks >= 3) {
+                    cancelled = true
+                }
+                return state.birth
+            },
+            replacementAuthority: () => ({
+                expectedPid: 54321,
+                expectedBirth: state.birth,
+                expectedInstanceConfigDir: configDir,
+                expectedBootId: 'boot-idle-1',
+                expectedEpoch: 3,
+                expectedOwner: 'rollout_owner_01',
+                activeRuntimeCount: 0,
+                isCancelled: () => cancelled,
+            }),
+        })
+        fs.writeFileSync(host.endpoint.path, 'cancel-before-term-socket')
+        try {
+            await expect(host.ensureReady()).rejects.toMatchObject({ code: 'session_host_unavailable_transient' })
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGKILL')
+            expect(state.spawn).not.toHaveBeenCalled()
+        } finally {
+            fs.rmSync(host.endpoint.path, { force: true })
+        }
+    })
+
+    it('acquires idle replacement authority via upgrade-lease protocol, verifies upgrade-lease.json, writes private 0o600 provenance file, and refuses on active runtimes or mismatched lease journal', async () => {
+        state.healthyDiagnostics = true
+        state.runtimeCount = 2
+        const host = managed({ evictGraceMs: 0, timeoutMs: 1_000 })
+        fs.writeFileSync(host.endpoint.path, 'protocol-idle-socket')
+
+        try {
+            const leaseToken = 'a'.repeat(64)
+            const tokenHash = createHash('sha256').update(leaseToken).digest('hex')
+            // 1. Refuses to acquire replacement authority while runtimeCount > 0
+            await expect(
+                host.acquireIdleReplacementAuthority({ owner: 'rollout_owner_01', token: leaseToken }),
+            ).rejects.toThrow(/native_host_upgrade_busy/)
+
+            // 2. Acquires complete replacement authority when runtimeCount === 0
+            state.runtimeCount = 0
+            const auth = await host.acquireIdleReplacementAuthority({ owner: 'rollout_owner_01', token: leaseToken })
+            expect(auth).toMatchObject({
+                expectedPid: 54321,
+                expectedBirth: state.birth,
+                expectedInstanceConfigDir: configDir,
+                expectedBootId: 'boot-idle-1',
+                expectedEpoch: 4,
+                expectedOwner: 'rollout_owner_01',
+                expectedTokenHash: tokenHash,
+                activeRuntimeCount: 0,
+            })
+
+            // 3. Authorized replacement writes private 0o600 provenance file for child startup and replaces idle host
+            state.healthyDiagnostics = false
+            let provenanceSnapshot: any = null
+            let provenanceMode = 0
+            state.spawn.mockImplementationOnce(() => {
+                const provFile = host.getReplacementProvenanceFile()
+                expect(fs.existsSync(provFile)).toBe(true)
+                provenanceMode = fs.lstatSync(provFile).mode & 0o777
+                provenanceSnapshot = JSON.parse(fs.readFileSync(provFile, 'utf8'))
+                state.replaced = true
+                return { pid: 4242, unref() {}, on() {} }
+            })
+            const authorizedHost = managed({
+                evictGraceMs: 0,
+                timeoutMs: 1_000,
+                replacementAuthority: () => auth,
+            })
+            await expect(authorizedHost.ensureReady()).resolves.toEqual(host.endpoint)
+            expect(provenanceMode).toBe(0o600)
+            expect(provenanceSnapshot).toMatchObject({
+                schemaVersion: 1,
+                expectedPid: 54321,
+                expectedBirth: state.birth,
+                expectedBootId: 'boot-idle-1',
+                expectedEpoch: 4,
+                expectedOwner: 'rollout_owner_01',
+                expectedTokenHash: tokenHash,
+                activeRuntimeCount: 0,
+            })
+
+            // 4. Mismatched upgrade-lease.json journal invalidates auth.isCancelled() and refuses replacement
+            state.alive = true
+            state.replaced = false
+            vi.mocked(process.kill).mockClear()
+            const leaseDir = path.join(configDir, 'session-host')
+            fs.mkdirSync(leaseDir, { recursive: true })
+            const leaseFile = path.join(leaseDir, 'upgrade-lease.json')
+            fs.writeFileSync(
+                leaseFile,
+                JSON.stringify({
+                    schema: 1,
+                    endpoint: host.endpoint.path,
+                    epoch: 4,
+                    held: false,
+                    owner: null,
+                    tokenHash: null,
+                }),
+                { mode: 0o600 },
+            )
+            fs.chmodSync(leaseFile, 0o600)
+            expect(auth.isCancelled?.()).toBe(true)
+            const hostWithBrokenLease = managed({
+                evictGraceMs: 0,
+                timeoutMs: 500,
+                replacementAuthority: () => auth,
+            })
+            await expect(hostWithBrokenLease.ensureReady()).rejects.toMatchObject({
+                code: 'session_host_unavailable_transient',
+            })
+            expect(process.kill).not.toHaveBeenCalledWith(54321, 'SIGTERM')
+        } finally {
+            fs.rmSync(host.endpoint.path, { force: true })
+        }
     })
 })

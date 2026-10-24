@@ -380,15 +380,15 @@ var PtySessionRuntime = class {
    */
   flushPendingWrites() {
     if (this.pendingWriteCount <= 0) return Promise.resolve();
-    return new Promise((resolve3) => {
-      this.snapshotWaiters.push(resolve3);
+    return new Promise((resolve4) => {
+      this.snapshotWaiters.push(resolve4);
     });
   }
   flushSnapshotWaiters() {
     if (this.pendingWriteCount > 0 || this.snapshotWaiters.length === 0) return;
     const waiters = this.snapshotWaiters;
     this.snapshotWaiters = [];
-    for (const resolve3 of waiters) resolve3();
+    for (const resolve4 of waiters) resolve4();
   }
   async getSnapshotText() {
     await this.flushPendingWrites();
@@ -518,7 +518,7 @@ var HostUpgradeLease = class {
     child.on("error", () => {
       this.healthy = false;
     });
-    await new Promise((resolve3, reject) => {
+    await new Promise((resolve4, reject) => {
       const timer = setTimeout(() => {
         child.stdin.end();
         reject(new Error("native_host_lock_timeout"));
@@ -539,7 +539,7 @@ var HostUpgradeLease = class {
           return;
         }
         this.healthy = true;
-        resolve3();
+        resolve4();
       });
     });
     try {
@@ -623,8 +623,8 @@ var HostUpgradeLease = class {
     const child = this.child;
     this.child = null;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise((resolve3) => {
-      child.once("exit", () => resolve3());
+    await new Promise((resolve4) => {
+      child.once("exit", () => resolve4());
       child.stdin.end();
     });
   }
@@ -1012,6 +1012,101 @@ function isManagedSessionHostCommandLine(commandLine, configDir) {
   if (subcommand && subcommand !== "serve" && !subcommand.startsWith("-")) return false;
   return matchesInstanceArg();
 }
+function readVerifiedReplacementProvenance(options) {
+  const now = options.nowMs ? options.nowMs() : Date.now();
+  try {
+    if (!fs5.existsSync(options.provenanceFile)) return void 0;
+    const stat2 = fs5.lstatSync(options.provenanceFile);
+    if (!stat2.isFile() || stat2.isSymbolicLink() || (stat2.mode & 63) !== 0) {
+      return void 0;
+    }
+    if (typeof process.getuid === "function" && stat2.uid !== process.getuid()) {
+      return void 0;
+    }
+    const parsed = JSON.parse(fs5.readFileSync(options.provenanceFile, "utf8"));
+    if (!parsed || parsed.schemaVersion !== 1 && parsed.schema !== 1) return void 0;
+    if (parsed.appName !== options.appName) return void 0;
+    const canonicalDir = resolveInstanceConfigDir2({ ADHDEV_CONFIG_DIR: options.instanceConfigDir });
+    if (typeof parsed.instanceConfigDir !== "string" || resolveInstanceConfigDir2({ ADHDEV_CONFIG_DIR: parsed.instanceConfigDir }) !== canonicalDir) {
+      return void 0;
+    }
+    const expectedKey = sessionHostInstanceArg(canonicalDir);
+    if (parsed.instanceConfigKey !== expectedKey) return void 0;
+    const canonicalEndpointDir = fs5.existsSync(path5.dirname(options.endpointPath)) ? fs5.realpathSync(path5.dirname(options.endpointPath)) : path5.resolve(path5.dirname(options.endpointPath));
+    const canonicalEndpointPath = path5.join(canonicalEndpointDir, path5.basename(options.endpointPath));
+    const parsedEndpointDir = typeof parsed.endpointPath === "string" && fs5.existsSync(path5.dirname(parsed.endpointPath)) ? fs5.realpathSync(path5.dirname(parsed.endpointPath)) : typeof parsed.endpointPath === "string" ? path5.resolve(path5.dirname(parsed.endpointPath)) : "";
+    const parsedEndpointPath = typeof parsed.endpointPath === "string" ? path5.join(parsedEndpointDir, path5.basename(parsed.endpointPath)) : "";
+    if (parsedEndpointPath !== canonicalEndpointPath) return void 0;
+    if (typeof parsed.expectedPid !== "number" || !Number.isFinite(parsed.expectedPid) || parsed.expectedPid <= 0) {
+      return void 0;
+    }
+    if (typeof parsed.expectedBirth !== "string" || !parsed.expectedBirth.trim()) {
+      return void 0;
+    }
+    if (typeof parsed.expectedBootId !== "string" || !parsed.expectedBootId.trim()) {
+      return void 0;
+    }
+    if (typeof parsed.expectedEpoch !== "number" || !Number.isFinite(parsed.expectedEpoch) || parsed.expectedEpoch < 0) {
+      return void 0;
+    }
+    if (typeof parsed.expectedOwner !== "string" || !parsed.expectedOwner.trim()) {
+      return void 0;
+    }
+    if (parsed.activeRuntimeCount !== 0) {
+      return void 0;
+    }
+    const issuedAtMs = parsed.issuedAtMs ?? parsed.issuedAt;
+    if (typeof issuedAtMs !== "number" || !Number.isFinite(issuedAtMs) || now - issuedAtMs > 6e4 || issuedAtMs - now > 5e3) {
+      return void 0;
+    }
+    let expectedEndpointInode;
+    if (parsed.expectedEndpointInode !== null && parsed.expectedEndpointInode !== void 0) {
+      if (typeof parsed.expectedEndpointInode !== "string" || !/^\d+$/.test(parsed.expectedEndpointInode)) {
+        return void 0;
+      }
+      expectedEndpointInode = BigInt(parsed.expectedEndpointInode);
+    }
+    if (options.leaseStateDir) {
+      const leaseFile = path5.join(options.leaseStateDir, "upgrade-lease.json");
+      if (fs5.existsSync(leaseFile)) {
+        const leaseStat = fs5.lstatSync(leaseFile);
+        if (!leaseStat.isFile() || leaseStat.isSymbolicLink() || (leaseStat.mode & 63) !== 0) {
+          return void 0;
+        }
+        if (typeof process.getuid === "function" && leaseStat.uid !== process.getuid()) {
+          return void 0;
+        }
+        const lease = JSON.parse(fs5.readFileSync(leaseFile, "utf8"));
+        const leaseEndpointDir = typeof lease.endpoint === "string" && fs5.existsSync(path5.dirname(lease.endpoint)) ? fs5.realpathSync(path5.dirname(lease.endpoint)) : typeof lease.endpoint === "string" ? path5.resolve(path5.dirname(lease.endpoint)) : "";
+        const leaseEndpointPath = typeof lease.endpoint === "string" ? path5.join(leaseEndpointDir, path5.basename(lease.endpoint)) : "";
+        if (lease.schema !== 1 || lease.held !== true || leaseEndpointPath !== canonicalEndpointPath || lease.epoch !== parsed.expectedEpoch || lease.owner !== parsed.expectedOwner || typeof lease.tokenHash !== "string" || !/^[a-f0-9]{64}$/.test(lease.tokenHash)) {
+          return void 0;
+        }
+        if (parsed.expectedTokenHash && parsed.expectedTokenHash !== lease.tokenHash) {
+          return void 0;
+        }
+      }
+    }
+    return {
+      expectedPid: parsed.expectedPid,
+      expectedBirth: parsed.expectedBirth.trim(),
+      instanceConfigDir: canonicalDir,
+      instanceConfigKey: expectedKey,
+      expectedEndpointInode,
+      expectedBootId: parsed.expectedBootId.trim(),
+      expectedEpoch: parsed.expectedEpoch,
+      expectedOwner: parsed.expectedOwner.trim(),
+      expectedTokenHash: parsed.expectedTokenHash ?? void 0,
+      activeRuntimeCount: 0,
+      isCancelled: options.skipDynamicWrap ? void 0 : () => readVerifiedReplacementProvenance({
+        ...options,
+        skipDynamicWrap: true
+      }) === void 0
+    };
+  } catch {
+    return void 0;
+  }
+}
 var SessionHostServer = class extends EventEmitter {
   endpoint;
   registry = new SessionHostRegistry();
@@ -1098,7 +1193,7 @@ var SessionHostServer = class extends EventEmitter {
   }
   readProcessBirth(pid) {
     if (this.getOwnerBirth) return this.getOwnerBirth(pid);
-    if (process.platform === "win32") return "win32";
+    if (process.platform === "win32") return null;
     try {
       return String(
         execFileSync2("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
@@ -1150,7 +1245,20 @@ var SessionHostServer = class extends EventEmitter {
   }
   async evictPriorEndpointOwners() {
     if (this.endpoint.kind !== "unix") return;
-    const initialSocketInode = fs5.existsSync(this.endpoint.path) ? fs5.lstatSync(this.endpoint.path, { bigint: true }).ino : null;
+    const targetEndpointDir = path5.dirname(this.endpoint.path);
+    const resolvedEndpointDir = fs5.existsSync(targetEndpointDir) ? fs5.realpathSync(targetEndpointDir) : path5.resolve(targetEndpointDir);
+    const targetEndpointPath = path5.join(resolvedEndpointDir, path5.basename(this.endpoint.path));
+    const readEndpointIdentity = () => {
+      if (!fs5.existsSync(targetEndpointPath)) return null;
+      try {
+        const stat2 = fs5.lstatSync(targetEndpointPath, { bigint: true });
+        return { dev: stat2.dev, ino: stat2.ino };
+      } catch {
+        return null;
+      }
+    };
+    const initialEndpoint = readEndpointIdentity();
+    const initialSocketInode = initialEndpoint?.ino ?? null;
     let pidFileCandidate = null;
     const candidatePids = /* @__PURE__ */ new Set();
     if (this.pidFilePath && fs5.existsSync(this.pidFilePath)) {
@@ -1173,23 +1281,32 @@ var SessionHostServer = class extends EventEmitter {
       }
     }
     let socketOwners = [];
-    if (initialSocketInode !== null) {
+    if (initialEndpoint !== null) {
       socketOwners = this.readSocketOwnerPids();
-      if (socketOwners === null && pidFileCandidate === null) {
+      if (socketOwners === null) {
         throw new Error("session_host_prior_owner_socket_unverified");
       }
-      if (socketOwners !== null) {
-        for (const pid of socketOwners) {
-          if (pid !== process.pid) candidatePids.add(pid);
-        }
+      const postQueryEndpoint = readEndpointIdentity();
+      if (!postQueryEndpoint || postQueryEndpoint.dev !== initialEndpoint.dev || postQueryEndpoint.ino !== initialEndpoint.ino) {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      for (const pid of socketOwners) {
+        if (pid !== process.pid) candidatePids.add(pid);
       }
     }
-    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
-    if (liveCandidates.length > 0) {
-      const provenance = typeof this.replacementProvenance === "function" ? this.replacementProvenance() : this.replacementProvenance;
-      if (!provenance || provenance.isCancelled?.()) {
+    const resolveActiveProvenance = () => {
+      const prov = typeof this.replacementProvenance === "function" ? this.replacementProvenance() : this.replacementProvenance;
+      if (!prov || prov.isCancelled?.() || !Number.isFinite(prov.expectedPid) || prov.expectedPid <= 0 || typeof prov.expectedBirth !== "string" || !prov.expectedBirth.trim() || prov.activeRuntimeCount !== void 0 && prov.activeRuntimeCount !== 0) {
         throw new Error("session_host_live_owner_replacement_unauthorized");
       }
+      if (prov.instanceConfigKey !== void 0 && this.instanceConfigDir && prov.instanceConfigKey !== sessionHostInstanceArg(this.instanceConfigDir)) {
+        throw new Error("session_host_prior_owner_instance_mismatch");
+      }
+      return prov;
+    };
+    const liveCandidates = [...candidatePids].filter((pid) => this.isPidAlive(pid));
+    if (liveCandidates.length > 0) {
+      const provenance = resolveActiveProvenance();
       const targetConfigDir = provenance.instanceConfigDir ?? this.instanceConfigDir ?? void 0;
       if (provenance.instanceConfigDir && this.instanceConfigDir && sessionHostInstanceArg(provenance.instanceConfigDir) !== sessionHostInstanceArg(this.instanceConfigDir)) {
         throw new Error("session_host_prior_owner_instance_mismatch");
@@ -1229,6 +1346,16 @@ var SessionHostServer = class extends EventEmitter {
         if (birthBeforeTerm !== provenance.expectedBirth) {
           throw new Error("session_host_prior_owner_birth_mismatch");
         }
+        const provenanceBeforeTerm = resolveActiveProvenance();
+        if (provenanceBeforeTerm.expectedPid !== pid || provenanceBeforeTerm.expectedBirth !== birthBeforeTerm) {
+          throw new Error("session_host_live_owner_replacement_unauthorized");
+        }
+        if (initialEndpoint !== null) {
+          const endpointBeforeTerm = readEndpointIdentity();
+          if (endpointBeforeTerm !== null && (endpointBeforeTerm.dev !== initialEndpoint.dev || endpointBeforeTerm.ino !== initialEndpoint.ino)) {
+            throw new Error("session_host_endpoint_changed_during_recovery");
+          }
+        }
         this.recordHostLog(
           "warn",
           `evicting prior session-host process pid=${pid} on ${this.endpoint.path} (grace=${this.evictGraceMs}ms, cmd=${cmd || "managed-session-host"})`
@@ -1243,18 +1370,26 @@ var SessionHostServer = class extends EventEmitter {
           if (!currentBirth || currentBirth !== provenance.expectedBirth) {
             throw new Error("session_host_prior_owner_birth_mismatch");
           }
-          if (provenance.isCancelled?.()) {
+          const provenanceDuringWait = resolveActiveProvenance();
+          if (provenanceDuringWait.expectedPid !== pid || provenanceDuringWait.expectedBirth !== provenance.expectedBirth) {
             throw new Error("session_host_live_owner_replacement_unauthorized");
           }
-          await new Promise((resolve3) => setTimeout(resolve3, 25));
+          await new Promise((resolve4) => setTimeout(resolve4, 25));
         }
         if (this.isPidAlive(pid)) {
           const birthBeforeKill = this.readProcessBirth(pid);
           if (!birthBeforeKill || birthBeforeKill !== provenance.expectedBirth) {
             throw new Error("session_host_prior_owner_birth_mismatch");
           }
-          if (provenance.isCancelled?.()) {
+          const provenanceBeforeKill = resolveActiveProvenance();
+          if (provenanceBeforeKill.expectedPid !== pid || provenanceBeforeKill.expectedBirth !== provenance.expectedBirth) {
             throw new Error("session_host_live_owner_replacement_unauthorized");
+          }
+          if (initialEndpoint !== null) {
+            const endpointBeforeKill = readEndpointIdentity();
+            if (endpointBeforeKill !== null && (endpointBeforeKill.dev !== initialEndpoint.dev || endpointBeforeKill.ino !== initialEndpoint.ino)) {
+              throw new Error("session_host_endpoint_changed_during_recovery");
+            }
           }
           this.recordHostLog(
             "warn",
@@ -1267,22 +1402,50 @@ var SessionHostServer = class extends EventEmitter {
         }
       }
     }
-    if (initialSocketInode !== null && fs5.existsSync(this.endpoint.path)) {
-      let currentInode;
-      try {
-        currentInode = fs5.lstatSync(this.endpoint.path, { bigint: true }).ino;
-      } catch {
-        throw new Error("session_host_endpoint_changed_during_recovery");
+    if (initialEndpoint !== null && fs5.existsSync(targetEndpointPath)) {
+      const beforeFinalQueryEndpoint = readEndpointIdentity();
+      if (!beforeFinalQueryEndpoint) {
+        return;
       }
-      if (currentInode !== initialSocketInode) {
+      if (beforeFinalQueryEndpoint.dev !== initialEndpoint.dev || beforeFinalQueryEndpoint.ino !== initialEndpoint.ino) {
         throw new Error("session_host_endpoint_changed_during_recovery");
       }
       const remainingOwners = this.readSocketOwnerPids();
-      if (remainingOwners && remainingOwners.some((ownerPid) => this.isPidAlive(ownerPid))) {
+      if (remainingOwners === null) {
+        throw new Error("session_host_prior_owner_socket_unverified");
+      }
+      if (remainingOwners.length > 0) {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      if (pidFileCandidate !== null && this.isPidAlive(pidFileCandidate)) {
+        throw new Error("session_host_endpoint_changed_during_recovery");
+      }
+      if (this.pidFilePath && fs5.existsSync(this.pidFilePath)) {
+        try {
+          const rawCurrentPid = fs5.readFileSync(this.pidFilePath, "utf8").trim();
+          if (!/^\d+$/.test(rawCurrentPid)) {
+            throw new Error("session_host_endpoint_changed_during_recovery");
+          }
+          const currentPid = Number.parseInt(rawCurrentPid, 10);
+          if (currentPid !== process.pid && currentPid !== pidFileCandidate) {
+            throw new Error("session_host_endpoint_changed_during_recovery");
+          }
+        } catch (error) {
+          if (error instanceof Error && error.message === "session_host_endpoint_changed_during_recovery") {
+            throw error;
+          }
+          throw new Error("session_host_endpoint_changed_during_recovery");
+        }
+      }
+      if (liveCandidates.length > 0) {
+        resolveActiveProvenance();
+      }
+      const rightBeforeUnlinkEndpoint = readEndpointIdentity();
+      if (!rightBeforeUnlinkEndpoint || rightBeforeUnlinkEndpoint.dev !== initialEndpoint.dev || rightBeforeUnlinkEndpoint.ino !== initialEndpoint.ino) {
         throw new Error("session_host_endpoint_changed_during_recovery");
       }
       try {
-        fs5.unlinkSync(this.endpoint.path);
+        fs5.unlinkSync(targetEndpointPath);
       } catch {
       }
     }
@@ -1340,8 +1503,8 @@ var SessionHostServer = class extends EventEmitter {
       socket.on("data", parser);
     });
     try {
-      await new Promise((resolve3, reject) => {
-        this.ipcServer?.once("listening", () => resolve3());
+      await new Promise((resolve4, reject) => {
+        this.ipcServer?.once("listening", () => resolve4());
         this.ipcServer?.once("error", reject);
         this.ipcServer?.listen(this.endpoint.path);
       });
@@ -1409,7 +1572,7 @@ var SessionHostServer = class extends EventEmitter {
         server.unref();
         server.removeAllListeners();
       } else {
-        await new Promise((resolve3) => server.close(() => resolve3()));
+        await new Promise((resolve4) => server.close(() => resolve4()));
       }
     }
     if (this.endpoint.kind === "unix" && !endpointReplaced) {
@@ -1858,7 +2021,7 @@ var SessionHostServer = class extends EventEmitter {
     if (!this.runtimes.has(sessionId)) {
       return Promise.resolve(this.registry.getSession(sessionId)?.lifecycle === "failed" ? 1 : 0);
     }
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve4, reject) => {
       const timeout = setTimeout(() => {
         const waiters2 = this.exitWaiters.get(sessionId) || [];
         this.exitWaiters.set(sessionId, waiters2.filter((waiter) => waiter !== onExit));
@@ -1866,7 +2029,7 @@ var SessionHostServer = class extends EventEmitter {
       }, timeoutMs);
       const onExit = (exitCode) => {
         clearTimeout(timeout);
-        resolve3(exitCode);
+        resolve4(exitCode);
       };
       const waiters = this.exitWaiters.get(sessionId) || [];
       waiters.push(onExit);
@@ -2153,6 +2316,20 @@ function getSessionHostEndpoint() {
 function getSessionHostStorageRoot() {
   return path6.join(INSTANCE_CONFIG_DIR, "session-host", SESSION_HOST_APP_NAME);
 }
+function getSessionHostReplacementProvenanceFile(appName, configDir = INSTANCE_CONFIG_DIR) {
+  const dir = configDir;
+  if (!fs7.existsSync(dir)) fs7.mkdirSync(dir, { recursive: true });
+  return path6.join(dir, `${appName}-session-host-replacement.json`);
+}
+function removeSessionHostReplacementProvenance(appName, configDir = INSTANCE_CONFIG_DIR) {
+  try {
+    const provenanceFile = path6.join(configDir, `${appName}-session-host-replacement.json`);
+    if (fs7.existsSync(provenanceFile)) {
+      fs7.unlinkSync(provenanceFile);
+    }
+  } catch {
+  }
+}
 function getSessionHostPidFile(appName) {
   const dir = INSTANCE_CONFIG_DIR;
   if (!fs7.existsSync(dir)) fs7.mkdirSync(dir, { recursive: true });
@@ -2202,15 +2379,27 @@ async function runServer(instanceKeyArgs = []) {
     if (pins.nodePath !== fs7.realpathSync(process.execPath) || pins.hostEntryPath !== fs7.realpathSync(process.argv[1]) || pins.stateDir !== path6.join(INSTANCE_CONFIG_DIR, "session-host")) throw new Error("guardian_launch_executable_or_instance_mismatch");
     upgradeBinding = resolveGuardianArtifact(pins);
   }
+  const endpoint = getSessionHostEndpoint();
   const server = new SessionHostServer({
     appName: SESSION_HOST_APP_NAME,
     upgradeBinding,
-    endpoint: getSessionHostEndpoint(),
+    endpoint,
     storageRootDir: getSessionHostStorageRoot(),
     instanceConfigDir: INSTANCE_CONFIG_DIR,
-    pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME)
+    pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
+    replacementProvenance: () => readVerifiedReplacementProvenance({
+      provenanceFile: getSessionHostReplacementProvenanceFile(SESSION_HOST_APP_NAME),
+      instanceConfigDir: INSTANCE_CONFIG_DIR,
+      appName: SESSION_HOST_APP_NAME,
+      endpointPath: endpoint.path,
+      leaseStateDir: path6.join(INSTANCE_CONFIG_DIR, "session-host")
+    })
   });
-  await server.start();
+  try {
+    await server.start();
+  } finally {
+    removeSessionHostReplacementProvenance(SESSION_HOST_APP_NAME);
+  }
   writeSessionHostPid(SESSION_HOST_APP_NAME);
   const shutdown = async () => {
     const deadline = setTimeout(() => {
@@ -2578,7 +2767,10 @@ ${err?.stack || ""}`);
 export {
   SessionHostServer,
   createUncaughtExceptionLimiter,
+  getSessionHostReplacementProvenanceFile,
   isManagedSessionHostCommandLine,
+  readVerifiedReplacementProvenance,
+  removeSessionHostReplacementProvenance,
   resolveGuardianArtifact,
   sessionHostInstanceArg,
   startThreadpoolWatchdog

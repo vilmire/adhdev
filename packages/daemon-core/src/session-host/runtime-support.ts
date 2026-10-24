@@ -119,15 +119,21 @@ export interface SessionHostReplacementAuthorization {
     /** Expected host identity (e.g. pid-<pid>:birth-<birth>) that was verified idle. */
     expectedIdentity?: string;
     /** Expected PID of the live host authorized for replacement. */
-    expectedPid?: number;
+    expectedPid: number;
     /** Expected native process birth string (`ps -o lstart=`) of the live host. */
-    expectedBirth?: string | null;
+    expectedBirth: string;
     /** Expected instance config directory for the managed host. */
-    expectedInstanceConfigDir?: string;
+    expectedInstanceConfigDir: string;
     /** Expected boot / rollout / lease provenance metadata. */
-    expectedBootId?: string;
-    expectedEpoch?: number;
-    expectedOwner?: string;
+    expectedBootId: string;
+    expectedEpoch: number;
+    expectedOwner: string;
+    /** Optional lease bearer token (64-hex) verified against held upgrade-lease.json tokenHash. */
+    leaseToken?: string;
+    /** Optional sha256(leaseToken) (64-hex) from held upgrade-lease.json. */
+    expectedTokenHash?: string;
+    /** Optional expected unix socket inode at authorization time. */
+    expectedEndpointInode?: bigint;
     /** Expected hostStartedAt from diagnostics, if observed. */
     expectedHostStartedAt?: number;
     /** Confirmed active runtime/PTY session count at authorization time (must be 0). */
@@ -146,12 +152,70 @@ const probeEvidence = new Map<string, {
 let probeInvocationSequence = 0;
 export function createSessionHostProbeInvocation(): number { return ++probeInvocationSequence; }
 const hostIdentities = new Map<string, string>();
+const hostRuntimeCounts = new Map<string, number>();
 const inFlightReplacements = new Map<string, Promise<SessionHostEndpoint>>();
 let spawnGeneration = 0;
 const endpointKey = (endpoint: SessionHostEndpoint): string => `${endpoint.kind}:${endpoint.path}`;
 
 export function getObservedSessionHostIdentity(endpoint: SessionHostEndpoint): string | undefined {
     return hostIdentities.get(endpointKey(endpoint));
+}
+
+export function isValidReplacementAuthorizationShape(
+    auth: unknown,
+): auth is SessionHostReplacementAuthorization {
+    if (!auth || typeof auth !== 'object') return false;
+    const candidate = auth as SessionHostReplacementAuthorization;
+    if (candidate.isCancelled !== undefined && typeof candidate.isCancelled !== 'function') return false;
+    if (candidate.isCancelled?.()) return false;
+    if (
+        typeof candidate.activeRuntimeCount !== 'number'
+        || !Number.isSafeInteger(candidate.activeRuntimeCount)
+        || candidate.activeRuntimeCount !== 0
+    ) {
+        return false;
+    }
+    if (
+        typeof candidate.expectedPid !== 'number'
+        || !Number.isSafeInteger(candidate.expectedPid)
+        || candidate.expectedPid <= 0
+        || candidate.expectedPid === process.pid
+    ) {
+        return false;
+    }
+    if (typeof candidate.expectedBirth !== 'string') return false;
+    const birth = candidate.expectedBirth.trim();
+    if (!birth || birth === 'win32' || birth === 'unknown') return false;
+    if (typeof candidate.expectedInstanceConfigDir !== 'string' || !candidate.expectedInstanceConfigDir.trim()) {
+        return false;
+    }
+    if (typeof candidate.expectedBootId !== 'string' || !candidate.expectedBootId.trim()) {
+        return false;
+    }
+    if (
+        typeof candidate.expectedEpoch !== 'number'
+        || !Number.isSafeInteger(candidate.expectedEpoch)
+        || candidate.expectedEpoch < 0
+    ) {
+        return false;
+    }
+    if (typeof candidate.expectedOwner !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(candidate.expectedOwner)) {
+        return false;
+    }
+    if (candidate.leaseToken !== undefined && (typeof candidate.leaseToken !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.leaseToken))) {
+        return false;
+    }
+    if (
+        candidate.expectedTokenHash !== undefined
+        && (typeof candidate.expectedTokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.expectedTokenHash))
+    ) {
+        return false;
+    }
+    const canonicalIdentity = `pid-${candidate.expectedPid}:birth-${birth}`;
+    if (candidate.expectedIdentity !== undefined && candidate.expectedIdentity !== canonicalIdentity) {
+        return false;
+    }
+    return true;
 }
 
 function isDiagnosticsRequestTimeoutError(error: unknown): boolean {
@@ -218,10 +282,18 @@ export function recordSessionHostProbeFailure(endpoint: SessionHostEndpoint, err
 }
 
 export function recordSessionHostProbeSuccess(endpoint: SessionHostEndpoint, diagnostics?: SessionHostDiagnostics): void {
-    probeEvidence.delete(endpointKey(endpoint));
+    const key = endpointKey(endpoint);
+    probeEvidence.delete(key);
     if (typeof diagnostics?.hostStartedAt === 'number') {
-        hostIdentities.set(endpointKey(endpoint), `started:${diagnostics.hostStartedAt}`);
+        hostIdentities.set(key, `started:${diagnostics.hostStartedAt}`);
     }
+    if (typeof diagnostics?.runtimeCount === 'number' && Number.isFinite(diagnostics.runtimeCount)) {
+        hostRuntimeCounts.set(key, diagnostics.runtimeCount);
+    }
+}
+
+export function getObservedSessionHostRuntimeCount(endpoint: SessionHostEndpoint): number | undefined {
+    return hostRuntimeCounts.get(endpointKey(endpoint));
 }
 
 async function probeHost(
@@ -313,21 +385,31 @@ export async function ensureSessionHostReady(options: {
     };
 
     const isReplacementAuthorized = (): boolean => {
-        const auth = typeof options.replacementAuthority === 'function'
+        const resolveAuth = () => typeof options.replacementAuthority === 'function'
             ? options.replacementAuthority()
             : options.replacementAuthority;
-        if (!auth) return false;
-        if (auth.isCancelled?.()) return false;
-        if (typeof auth.activeRuntimeCount !== 'number' || auth.activeRuntimeCount !== 0) return false;
-        if (auth.expectedIdentity !== undefined) {
-            const currentIdentity = options.existingHostIdentity?.();
-            if (!currentIdentity || currentIdentity !== auth.expectedIdentity) return false;
+        const auth = resolveAuth();
+        if (!isValidReplacementAuthorizationShape(auth)) return false;
+        const canonicalIdentity = `pid-${auth.expectedPid}:birth-${auth.expectedBirth.trim()}`;
+        const currentIdentity = options.existingHostIdentity?.();
+        if (!currentIdentity || currentIdentity !== canonicalIdentity) return false;
+        const observedRuntimeCount = hostRuntimeCounts.get(key);
+        if (typeof observedRuntimeCount === 'number' && observedRuntimeCount > 0) {
+            return false;
         }
         if (auth.expectedHostStartedAt !== undefined) {
             const observed = getObservedSessionHostIdentity(endpoint);
             if (observed && observed.startsWith('started:') && observed !== `started:${auth.expectedHostStartedAt}`) {
                 return false;
             }
+        }
+        const postIdentityAuth = resolveAuth();
+        if (!isValidReplacementAuthorizationShape(postIdentityAuth)) return false;
+        if (
+            postIdentityAuth.expectedPid !== auth.expectedPid
+            || postIdentityAuth.expectedBirth.trim() !== auth.expectedBirth.trim()
+        ) {
+            return false;
         }
         return true;
     };
@@ -367,21 +449,36 @@ export async function ensureSessionHostReady(options: {
     }
 
     const replacementTask = (async (): Promise<SessionHostEndpoint> => {
-        if (hostState === 'alive' && !isReplacementAuthorized()) {
+        const currentState = resolveHostState();
+        if (
+            currentState === 'unknown'
+            || (currentState === 'alive' && !isReplacementAuthorized())
+        ) {
             throw new SessionHostUnavailableTransientError(endpoint, lastError);
         }
-        (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
+        if (!options.beforeSpawnHost || currentState === 'dead') {
+            (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
+        }
         await options.beforeSpawnHost?.(endpoint);
         // Eviction may consume the remaining budget. Never start another unbounded
         // probe loop (or a second replacement) in this ensure call.
-        const postEvictionAuth = typeof options.replacementAuthority === 'function'
-            ? options.replacementAuthority()
-            : options.replacementAuthority;
-        if (remaining() <= 0 || (hostState === 'alive' && (!postEvictionAuth || postEvictionAuth.isCancelled?.()))) {
+        const postEvictionAuth = !options.beforeSpawnHost
+            ? (typeof options.replacementAuthority === 'function'
+                ? options.replacementAuthority()
+                : options.replacementAuthority)
+            : undefined;
+        if (
+            remaining() <= 0
+            || (currentState === 'alive' && !options.beforeSpawnHost && (!isValidReplacementAuthorizationShape(postEvictionAuth) || postEvictionAuth.isCancelled?.()))
+        ) {
             throw new SessionHostUnavailableTransientError(endpoint, lastError);
+        }
+        if (currentState === 'alive' && options.beforeSpawnHost) {
+            (SessionHostClient as { disconnectClients?: (ep: SessionHostEndpoint) => void }).disconnectClients?.(endpoint);
         }
         options.spawnHost();
         probeEvidence.delete(key);
+        hostRuntimeCounts.delete(key);
         hostIdentities.set(key, `spawn:${++spawnGeneration}`);
         while (remaining() > 0) {
             const result = await probeHost(endpoint, required, Math.min(SESSION_HOST_PROBE_TIMEOUT_MS, remaining()));

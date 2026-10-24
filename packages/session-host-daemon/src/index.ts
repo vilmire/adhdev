@@ -18,6 +18,7 @@ import { resolveGuardianArtifact, type GuardianArtifactPins } from './guardian-a
 import {
   SessionHostServer,
   isManagedSessionHostCommandLine,
+  readVerifiedReplacementProvenance,
   sessionHostInstanceArg,
 } from './server.js';
 import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watchdog.js';
@@ -25,6 +26,7 @@ import { startThreadpoolWatchdog, writeStderrLineSync } from './threadpool-watch
 export {
   SessionHostServer,
   isManagedSessionHostCommandLine,
+  readVerifiedReplacementProvenance,
   sessionHostInstanceArg,
 } from './server.js';
 export { startThreadpoolWatchdog } from './threadpool-watchdog.js';
@@ -55,6 +57,29 @@ function getSessionHostEndpoint() {
 
 function getSessionHostStorageRoot(): string {
   return path.join(INSTANCE_CONFIG_DIR, 'session-host', SESSION_HOST_APP_NAME);
+}
+
+export function getSessionHostReplacementProvenanceFile(
+  appName: string,
+  configDir: string = INSTANCE_CONFIG_DIR,
+): string {
+  const dir = configDir;
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${appName}-session-host-replacement.json`);
+}
+
+export function removeSessionHostReplacementProvenance(
+  appName: string,
+  configDir: string = INSTANCE_CONFIG_DIR,
+): void {
+  try {
+    const provenanceFile = path.join(configDir, `${appName}-session-host-replacement.json`);
+    if (fs.existsSync(provenanceFile)) {
+      fs.unlinkSync(provenanceFile);
+    }
+  } catch {
+    // noop
+  }
 }
 
 function getSessionHostPidFile(appName: string): string {
@@ -119,15 +144,28 @@ async function runServer(instanceKeyArgs: string[] = []): Promise<void> {
         pins.stateDir !== path.join(INSTANCE_CONFIG_DIR, 'session-host')) throw new Error('guardian_launch_executable_or_instance_mismatch');
     upgradeBinding = resolveGuardianArtifact(pins);
   }
+  const endpoint = getSessionHostEndpoint();
   const server = new SessionHostServer({
     appName: SESSION_HOST_APP_NAME,
     upgradeBinding,
-    endpoint: getSessionHostEndpoint(),
+    endpoint,
     storageRootDir: getSessionHostStorageRoot(),
     instanceConfigDir: INSTANCE_CONFIG_DIR,
     pidFilePath: getSessionHostPidFile(SESSION_HOST_APP_NAME),
+    replacementProvenance: () =>
+      readVerifiedReplacementProvenance({
+        provenanceFile: getSessionHostReplacementProvenanceFile(SESSION_HOST_APP_NAME),
+        instanceConfigDir: INSTANCE_CONFIG_DIR,
+        appName: SESSION_HOST_APP_NAME,
+        endpointPath: endpoint.path,
+        leaseStateDir: path.join(INSTANCE_CONFIG_DIR, 'session-host'),
+      }),
   });
-  await server.start();
+  try {
+    await server.start();
+  } finally {
+    removeSessionHostReplacementProvenance(SESSION_HOST_APP_NAME);
+  }
   writeSessionHostPid(SESSION_HOST_APP_NAME);
 
   const shutdown = async () => {
